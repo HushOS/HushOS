@@ -821,7 +821,7 @@ export function createAuthClient(
                 }
             }),
         // Signing out removes this device on the server; its key goes here too, so the next
-        // sign-in in this browser is a new device.
+        // sign-in in this browser is a new device. The device databases are deleted, not emptied.
         logout: () =>
             exclusive(async () => {
                 listen();
@@ -836,6 +836,9 @@ export function createAuthClient(
                 store.setState({
                     lockRevision: Math.max(Date.now(), store.getState().lockRevision + 1),
                 });
+                // Signed out, nothing of the saved unlock stays: its entry goes (other tabs lock on
+                // that), and the store writes none back until a sign-in saves a device (store.ts).
+                store.persist.clearStorage();
             }),
     };
 }

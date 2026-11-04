@@ -1,9 +1,10 @@
 import type { GroupView } from '@hushos/crypto';
+import { entryCommitment, keyCommitment, pinKeysOfServed } from '@hushos/crypto/pins';
 import { GroupApiError, isNotMember, lapsedPlansIn, type LapsedPlanNamed } from './api';
 import type { GroupContext } from './context';
-import { refusalCopy } from './copy';
+import { namesInWords, refusalCopy } from './copy';
 import { fillGrants, markDepartedLeft, renewHold, stageChange, type StageOutcome } from './outbox';
-import { fetchIdentities, syncGroup, type AreaState } from './sync';
+import { fetchIdentities, syncGroup, type AreaState, type SyncResult } from './sync';
 
 /*
  * Taking someone out of a family, and the work a manager's device does on its
@@ -36,6 +37,12 @@ export type RemovalOutcome =
     | { status: 'held'; heldBy: string | null; targetManages: boolean }
     /* They are not an active member any more (left, removed by someone else meanwhile). */
     | { status: 'changed' }
+    /*
+     * The server said the member list moved (`members-changed`) while they are still an active
+     * member, or it couldn't be read again: nothing was changed, and the remover looks again.
+     * Never said as them being gone.
+     */
+    | { status: 'moved' }
     /* Kept on this device and sent again later: an unknown outcome, or a fix it could not make now. */
     | { status: 'pending'; message: string }
     | { status: 'failed'; message: string }
@@ -56,8 +63,30 @@ function manages(view: GroupView | null, userId: string) {
     return Boolean(entry && entry.status === 'active' && entry.roles.includes('members'));
 }
 
-/* A stageChange outcome other than landed, as a removal says it. */
-function failure(staged: StageOutcome, family: string): RemovalOutcome | null {
+/*
+ * The server's `members-changed`, said as what the family is now (read again, so the page shows
+ * it too): this account let go of is wiped, the person no longer active is changed, and anything
+ * else (still active, or a read that didn't answer) is moved, never "isn't in the family" about
+ * someone who is.
+ */
+async function membersChanged(
+    ctx: GroupContext,
+    groupId: string,
+    userId: string,
+): Promise<RemovalOutcome> {
+    const synced = await syncGroup(ctx, groupId).catch(() => null);
+    if (synced?.status === 'wiped') return { status: 'wiped' };
+    if (synced?.status !== 'accepted') return { status: 'moved' };
+    const active = synced.view.members.some((m) => m.userId === userId && m.status === 'active');
+    return active ? { status: 'moved' } : { status: 'changed' };
+}
+
+/* A stageChange outcome other than landed, as a removal says it (`changed`: a members-changed answer's). */
+async function failure(
+    staged: StageOutcome,
+    family: string,
+    changed: () => Promise<RemovalOutcome>,
+): Promise<RemovalOutcome | null> {
     if (staged.status === 'not-synced')
         return staged.sync.status === 'wiped'
             ? { status: 'wiped' }
@@ -65,7 +94,7 @@ function failure(staged: StageOutcome, family: string): RemovalOutcome | null {
                   status: 'failed',
                   message:
                       staged.sync.status === 'fork'
-                          ? `${family}’s member list was shown differently to you.`
+                          ? `${family} looks different on this device.`
                           : `Couldn’t check ${family}. Try again.`,
               };
     if (staged.status !== 'sent') return { status: 'failed', message: 'Nothing was changed.' };
@@ -83,7 +112,7 @@ function failure(staged: StageOutcome, family: string): RemovalOutcome | null {
             return { status: 'wiped' };
         case 'membership-moved':
             return outcome.code === 'members-changed'
-                ? { status: 'changed' }
+                ? await changed()
                 : {
                       status: 'failed',
                       message: refusalCopy(outcome.code, outcome.data, { family }),
@@ -122,6 +151,7 @@ export async function removeMember(
     } = {},
 ): Promise<RemovalOutcome> {
     const family = options.family ?? 'The family';
+    const changed = () => membersChanged(ctx, groupId, userId);
     const rotations = ctx.rotations;
     if (!rotations)
         return { status: 'failed', message: 'Open the family’s folders, then try again.' };
@@ -159,7 +189,7 @@ export async function removeMember(
             userId,
             roles: entry.roles.filter((role) => role !== 'members'),
         });
-        const stopped = failure(demoted, family);
+        const stopped = await failure(demoted, family, changed);
         if (stopped) return stopped;
         // Read again: the view from before the demotion would still say they manage the family.
         synced = await syncGroup(ctx, groupId);
@@ -182,10 +212,7 @@ export async function removeMember(
                 heldBy: await whoHolds(ctx, groupId),
                 targetManages: manages(synced.view, userId),
             };
-        if (error instanceof GroupApiError && error.code === 'members-changed') {
-            await syncGroup(ctx, groupId).catch(() => null);
-            return { status: 'changed' };
-        }
+        if (error instanceof GroupApiError && error.code === 'members-changed') return changed();
         throw error;
     }
 
@@ -199,7 +226,7 @@ export async function removeMember(
                 heldBy: await whoHolds(ctx, groupId),
                 targetManages: synced.status === 'accepted' && manages(synced.view, userId),
             };
-        if (refused.code === 'members-changed') return { status: 'changed' };
+        if (refused.code === 'members-changed') return changed();
         return {
             status: 'failed',
             message: refusalCopy(refused.code ?? '', refused.data, { family }),
@@ -264,20 +291,20 @@ export async function removeMember(
                 // left themselves meanwhile, marking them left is the whole removal.
                 const marked = await markDepartedLeft(ctx, groupId, departed);
                 if (marked.status !== 'sent' || marked.outcome.status !== 'landed') {
-                    const stopped = failure(marked as StageOutcome, family);
+                    const stopped = await failure(marked as StageOutcome, family, changed);
                     return stopped ?? { status: 'failed', message: 'Nothing was changed.' };
                 }
                 if (departed.includes(userId)) return { status: 'removed' };
-            } else return { status: 'changed' };
+            } else return changed();
         } else if (staged.status === 'sent' && staged.outcome.status === 'stale') {
             // Another manager's change landed first: built again on top of it.
         } else {
-            const stopped = failure(staged, family);
+            const stopped = await failure(staged, family, changed);
             return stopped ?? { status: 'removed' };
         }
         const again = await syncGroup(ctx, groupId);
         if (again.status !== 'accepted')
-            return failure({ status: 'not-synced', sync: again }, family)!;
+            return (await failure({ status: 'not-synced', sync: again }, family, changed))!;
         synced = again;
         if (!synced.view.members.some((m) => m.userId === userId && m.status === 'active'))
             return { status: 'removed' };
@@ -345,7 +372,23 @@ export async function foldIn(ctx: GroupContext, groupId: string, userIds: readon
     if (staged.status === 'nothing') return { needsCheck: staged.needsCheck, landed: false };
     if (staged.status !== 'sent' || staged.outcome.status !== 'landed')
         return { needsCheck: staged.status === 'sent' ? staged.needsCheck : [], landed: false };
-    const sync = staged.outcome.sync;
+    await resealFolded(ctx, groupId, staged.outcome.sync, members, identities);
+    return { needsCheck: staged.needsCheck, landed: true };
+}
+
+/*
+ * After a fold-in landed: the family key sealed again (route 9) to those of
+ * `members` who still manage the family on the roster it made, under their
+ * new keys. A manager let back in on a Continue over keys nobody checked has
+ * lost the role on that roster (the worker's foldIn), so is sealed nothing.
+ */
+export async function resealFolded(
+    ctx: GroupContext,
+    groupId: string,
+    sync: SyncResult | null,
+    members: readonly { userId: string }[],
+    identities: Awaited<ReturnType<typeof fetchIdentities>>,
+) {
     const holders =
         sync?.status === 'accepted'
             ? sync.view.members.filter(
@@ -356,17 +399,15 @@ export async function foldIn(ctx: GroupContext, groupId: string, userIds: readon
                       members.some((member) => member.userId === entry.userId),
               )
             : [];
-    if (holders.length > 0) {
-        const { seals } = await ctx.rpc('groupReseal', {
-            groupId,
-            holders: holders.map((holder) => ({
-                userId: holder.userId,
-                kemPublicKey: identities.get(holder.userId)!.identity!.kemPublicKey,
-            })),
-        });
-        await ctx.api.putKeySeals(groupId, seals);
-    }
-    return { needsCheck: staged.needsCheck, landed: true };
+    if (holders.length === 0) return;
+    const { seals } = await ctx.rpc('groupReseal', {
+        groupId,
+        holders: holders.map((holder) => ({
+            userId: holder.userId,
+            kemPublicKey: identities.get(holder.userId)!.identity!.kemPublicKey,
+        })),
+    });
+    await ctx.api.putKeySeals(groupId, seals);
 }
 
 /*
@@ -452,4 +493,97 @@ export async function runDue(
     }
     if ((await repairPreviousRoots(ctx, groupId, options.areas)) > 0) report.done.push('repair');
     return report;
+}
+
+/*
+ * Another member waiting on their own Continue: their account changed and
+ * their entry still names the keys they had. Every family folder's new key
+ * is owed to every active member, to the keys their entry names, and this
+ * device has only those keys' digests, never the keys: so while one is
+ * waiting, no other can be let back in alone (docs/optional-verification.md
+ * 3.3). Said up front, naming them, rather than refused by the worker.
+ */
+export class AnotherChangeWaitsError extends Error {
+    override name = 'AnotherChangeWaitsError';
+    constructor(
+        readonly other: string,
+        readonly who: string,
+    ) {
+        super(
+            `${other}’s account changed too. HushOS can’t give ${who} the family folders again while ${other}’s change is waiting.`,
+        );
+    }
+}
+
+/*
+ * Continue on members' account changes (6.9), once this account pins the
+ * keys HushOS serves for each of them now: one roster that writes those keys
+ * into their entries and gives every family folder new keys (3.3), however
+ * many are let back in, on POST rosters. A manager among them keeps the role,
+ * and gets the family key sealed to their new keys, only over a verified pin;
+ * otherwise the same roster takes the role (the server allows that there for
+ * an entry with new keys), so nothing of the family's is sealed to keys
+ * nobody checked. Everyone whose account changed is let back in together:
+ * every folder's new keys go to every member, so one left out would be sealed
+ * to the keys their account no longer has. A change waiting for someone not
+ * named is refused, naming them, before anything is signed.
+ */
+export async function continueFoldIn(
+    ctx: GroupContext,
+    groupId: string,
+    userIds: readonly string[],
+    names: Record<string, string> = {},
+) {
+    const rotations = ctx.rotations;
+    if (!rotations) throw new Error('Open the family’s folders, then try again.');
+    if (userIds.length === 0) throw new Error('No one is waiting to be let back in.');
+    const named = new Set(userIds.map((id) => id.toLowerCase()));
+    const synced = await syncGroup(ctx, groupId);
+    if (synced.status !== 'accepted') throw new Error('HushOS couldn’t check this right now.');
+    const identities = await fetchIdentities(ctx, groupId);
+    const members = userIds.map((userId) => {
+        const served = identities.get(userId);
+        if (!served?.identity) throw new Error('HushOS couldn’t load their keys. Try again.');
+        return { userId, served: served.identity, links: served.links };
+    });
+    for (const entry of synced.view.members) {
+        if (
+            entry.status !== 'active' ||
+            named.has(entry.userId.toLowerCase()) ||
+            entry.userId === ctx.userId
+        )
+            continue;
+        const theirs = identities.get(entry.userId)?.identity;
+        if (!theirs) continue;
+        const [listed, now] = await Promise.all([
+            entryCommitment(entry),
+            pinKeysOfServed(theirs, 'seen').then(keyCommitment, () => null),
+        ]);
+        if (listed !== null && now !== null && listed !== now)
+            throw new AnotherChangeWaitsError(
+                names[entry.userId] ?? 'Someone else in the family',
+                namesInWords(userIds.map((userId) => names[userId] ?? 'them')),
+            );
+    }
+    const areas = Object.keys(synced.view.areas).map((workspaceId) => ({ workspaceId, kinds: [] }));
+    const staged = await stageChange(
+        ctx,
+        groupId,
+        {
+            kind: 'foldIn',
+            members,
+            continued: [...userIds],
+            rotations: await rotations.read(groupId, areas),
+        },
+        { writers: await rotations.writers(groupId) },
+    );
+    if (staged.status === 'sent' && staged.outcome.status === 'landed')
+        await resealFolded(
+            ctx,
+            groupId,
+            staged.outcome.sync,
+            userIds.map((userId) => ({ userId })),
+            await fetchIdentities(ctx, groupId),
+        );
+    return staged;
 }

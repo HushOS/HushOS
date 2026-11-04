@@ -74,7 +74,7 @@ export function AccessDemo() {
         setPeople(people.map((entry) => (entry.id === id ? { ...entry, role } : entry)));
         if (role && !before)
             setNote(
-                `Once you’ve checked it’s ${name} (twelve words, compared when you add them), your device locks a copy of the folder’s key for ${name}, so only ${name}’s devices can open it. ${name} ${role === 'edit' ? 'can add and change files' : 'can open and download'}.`,
+                `Once you’ve added ${name}, your device locks a copy of the folder’s key for ${name}, so only ${name}’s devices can open it. ${name} ${role === 'edit' ? 'can add and change files' : 'can open and download'}.`,
             );
         else if (role)
             setNote(
@@ -102,7 +102,7 @@ export function AccessDemo() {
         <figure
             aria-labelledby="access-demo-title"
             // The app's cell rings its avatars in `card`; here that is the raised panel.
-            className="mt-14 [--card:var(--id-raised,var(--card))] rounded-xl border border-rule bg-[var(--id-raised,var(--card))] p-5 sm:p-8"
+            className="mt-14 [--card:var(--id-raised,var(--card))] [--panel:var(--id-raised,var(--card))] rounded-xl border border-rule bg-[var(--id-raised,var(--card))] p-5 sm:p-8"
         >
             <h3 id="access-demo-title" className="text-xl font-bold">
                 Try it: who can open?

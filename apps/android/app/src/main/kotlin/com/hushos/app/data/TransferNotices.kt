@@ -134,6 +134,36 @@ object TransferNotices {
         post(context, pending)
     }
 
+    /*
+     * A job ended having nothing to say (a file's job that found its saves already sent): nothing is gathered for it, but
+     * it no longer holds back the summary of what others gathered, which goes out now if no other job is left.
+     */
+    fun settled(context: Context, jobId: String) {
+        if (onScreen) { forgetPending(context); return }
+        val pending = synchronized(this) {
+            val gathered = read(context)
+            if (gathered.isEmpty()) return
+            val reported = gathered.map { it.id }.toSet() + jobId
+            val active = runCatching { WorkManager.getInstance(context).getWorkInfosByTag(TransferQueue.TAG).get() }.getOrDefault(emptyList())
+                .any { !it.state.isFinished && it.id.toString() !in reported && it.state != WorkInfo.State.CANCELLED }
+            if (active) return
+            File(context.filesDir, FILE).delete()
+            gathered
+        }
+        post(context, pending)
+    }
+
+    /* Outcomes gathered for these jobs, not posted yet, go (failures a later upload of the same file made moot). */
+    fun retire(context: Context, jobIds: Collection<String>) {
+        if (jobIds.isEmpty()) return
+        synchronized(this) {
+            val gathered = read(context)
+            if (gathered.none { it.id in jobIds }) return
+            val left = gathered.filter { it.id !in jobIds }
+            if (left.isEmpty()) File(context.filesDir, FILE).delete() else write(context, left)
+        }
+    }
+
     private fun post(context: Context, ended: List<Outcome>) {
         val manager = NotificationManagerCompat.from(context)
         if (ended.isEmpty() || !manager.areNotificationsEnabled()) return
@@ -222,7 +252,8 @@ class RetryReceiver : BroadcastReceiver() {
         val pending = goAsync()
         Thread {
             try {
-                for (failed in FailedTransfers.of(context).all().filter { it.id in ids && TransferNotices.canRetry(it) }) TransferQueue.retry(context, failed)
+                // One that can't be handed over stays failed, its row on the panel; the rest go on.
+                for (failed in FailedTransfers.of(context).all().filter { it.id in ids && TransferNotices.canRetry(it) }) runCatching { TransferQueue.retry(context, failed) }
                 NotificationManagerCompat.from(context).cancel(intent.getIntExtra("notification", 0))
             } finally {
                 pending.finish()

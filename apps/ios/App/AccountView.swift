@@ -25,18 +25,37 @@ struct AccountView: View {
     @State private var showingWords = false
     @State private var signingOut = false
     @State private var showingTrash = false
+    /* Account has finished appearing: a link may push onto its stack. */
+    @State private var onScreen = false
+
+    /* A family pushed by the app (a join just finished), as Account's own Families row pushes it. */
+    /*
+     * Account's stack, as values: a family the app opens (a join just finished) goes in as the same
+     * FamilyRoute its row pushes, so a folder pushed from it stacks above it and Back returns to it.
+     * A view-based destination beside value links popped the family page when a folder was pushed.
+     */
+    @State private var path = NavigationPath()
+
+    private func openFamily(_ groupId: String?) {
+        guard onScreen, let groupId else { return }
+        store.familyToOpen = nil
+        path.append(FamilyRoute.family(groupId))
+    }
+
+    private func openTrash(_ link: AppLink?) {
+        guard onScreen, link == .trash else { return }
+        store.route = nil
+        showingTrash = true
+    }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             List {
-                Section {} header: {
-                    VStack(alignment: .leading, spacing: Alpine.Space.s3) {
-                        ScreenHeader(title: "Account")
-                        if store.offline { OfflineCapsule() }
-                        profile
-                    }
-                    .textCase(nil)
-                    .listRowInsets(EdgeInsets(top: Alpine.Space.s2, leading: 0, bottom: 0, trailing: 0))
+                // Who is signed in, as the first row (iOS Settings' account row, Android's AccountScreen): a tap edits the name.
+                Section {
+                    Button { editName() } label: { profile }.alpineRow()
+                } header: {
+                    if store.offline { OfflineCapsule().textCase(nil).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: Alpine.Space.s3, trailing: 0)) }
                 }
                 Section {
                     NavigationLink { PlansView(allowance: allowance, billing: billing, breakdown: breakdown) { await load() }.environment(store) } label: { planCard }
@@ -56,7 +75,7 @@ struct AccountView: View {
                         row("laptopcomputer.and.iphone", "Devices", "Where you’re signed in")
                     }
                     .alpineRow()
-                    Button { showingPeople = true } label: { row("person.2", "Contacts", "Check it’s them before you share anything sensitive", chevron: true) }.alpineRow()
+                    Button { showingPeople = true } label: { row("person.2", "Contacts", nil, chevron: true) }.alpineRow()
                     Button { showingWords = true } label: { row("person.text.rectangle", "Your twelve words", "Read these to someone checking it’s you", chevron: true) }.alpineRow()
                 } header: {
                     sectionLabel("Sign-in and recovery")
@@ -86,7 +105,7 @@ struct AccountView: View {
             .alpineGrouped()
             .listSectionSpacing(Alpine.Space.s4)
             .navigationTitle("Account")
-            .screenChrome(title: "Account")
+            .screenChrome(title: "Account", root: true)
             .navigationDestination(isPresented: $showingTrash) { TrashView().environment(store) }
             // Families, a family folder and its subfolders, all pushed by value and declared at the stack's root (FamilyRoute).
             .navigationDestination(for: FamilyRoute.self) { route in
@@ -99,6 +118,10 @@ struct AccountView: View {
             .sheet(isPresented: $changingPassword) { ChangePasswordSheet().environment(store) }
             .sheet(isPresented: $showingPhrase) { RecoveryPhraseSheet().environment(store) }
             .sheet(isPresented: $showingPeople) { PeopleView().environment(store) }
+            #if DEBUG
+            // Evidence runs: -HushOSPeople YES opens Contacts (DebugStart).
+            .task { if DebugStart.people { showingPeople = true } }
+            #endif
             .sheet(isPresented: $showingWords) { OwnWordsSheet().environment(store) }
             .alert("Sign out of HushOS?", isPresented: $signingOut) {
                 Button("Cancel", role: .cancel) {}
@@ -107,12 +130,11 @@ struct AccountView: View {
                 // Signing out removes the kept copies; say so only when there are some.
                 Text("This iPhone leaves your list of devices, and you’ll need your email and password to sign back in on it." + (Offline.entries().isEmpty ? "" : " Files kept on this iPhone are removed."))
             }
-            .onChange(of: store.route, initial: true) { _, link in
-                if link == .trash {
-                    store.route = nil
-                    showingTrash = true
-                }
-            }
+            // A link to the Trash pushes it once Account has finished appearing, as a tap would (Appeared.swift).
+            .onFinishedAppearing { onScreen = true }
+            .onChange(of: store.route, initial: true) { _, link in openTrash(link) }
+            .onChange(of: onScreen) { _, _ in openTrash(store.route); openFamily(store.familyToOpen) }
+            .onChange(of: store.familyToOpen, initial: true) { _, groupId in openFamily(groupId) }
             .refreshable {
                 await load()
                 await store.refreshFamilies()
@@ -122,6 +144,8 @@ struct AccountView: View {
                 await load()
                 await store.refreshFamilies()
             }
+            // Left a family: its pool and plan stop showing here.
+            .onChange(of: store.accountGeneration) { _, _ in Task { await load() } }
         }
     }
 
@@ -131,19 +155,23 @@ struct AccountView: View {
         breakdown = try? await store.vault.storageBreakdown()
     }
 
+    /* Avatar, name and email, with the chevron that says the row opens something (the name). */
     private var profile: some View {
-        VStack(spacing: Alpine.Space.s1) {
-            PersonAvatar(name: model.user?.name.isEmpty == false ? model.user!.name : (model.user?.email ?? ""), seed: model.user?.id ?? "", size: 76)
-            Text(model.user.map { $0.name.isEmpty ? "Signed in" : $0.name } ?? "Signed in").font(.title2.weight(.bold)).foregroundStyle(Alpine.ink).padding(.top, Alpine.Space.s2)
-            if let email = model.user?.email, !email.isEmpty { Text(email).font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted) }
-            Button("Edit name") { editName() }
-                .font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.primary)
-                .padding(.horizontal, Alpine.Space.s4).frame(minHeight: 36)
-                .background(Alpine.ink.opacity(0.07), in: Capsule())
-                .buttonStyle(.plain).padding(.top, Alpine.Space.s2)
+        HStack(spacing: Alpine.Space.s3) {
+            PersonAvatar(name: model.user?.name.isEmpty == false ? model.user!.name : (model.user?.email ?? ""), seed: model.user?.id ?? "", size: 52)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(model.user.map { $0.name.isEmpty ? "Signed in" : $0.name } ?? "Signed in").font(Theme.Text.headline).foregroundStyle(Alpine.ink)
+                if let email = model.user?.email, !email.isEmpty {
+                    Text(email).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted).lineLimit(1).truncationMode(.middle)
+                }
+            }
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(Alpine.inkMuted).accessibilityHidden(true)
         }
-        .frame(maxWidth: .infinity)
         .padding(.vertical, Alpine.Space.s2)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityHint("Edit name")
     }
 
     private var plan: PlanDisplay { PlanDisplay(allowance: allowance, billing: billing) }
@@ -297,7 +325,6 @@ struct PlansView: View {
         List {
             Section {} header: {
                 VStack(alignment: .leading, spacing: Alpine.Space.s3) {
-                    ScreenHeader(title: "Plan and storage", back: { dismiss() }).padding(.bottom, Alpine.Space.s2)
                     HStack(alignment: .firstTextBaseline, spacing: Alpine.Space.s2) {
                         Text(formatSpace(used)).font(Theme.Text.titleLarge).foregroundStyle(Alpine.ink)
                         Text("of \(formatQuota(allowance?.quota ?? 0)) used").font(.body).foregroundStyle(Alpine.inkMuted)
@@ -372,7 +399,7 @@ struct PlansView: View {
         .listStyle(.insetGrouped)
         .alpineGrouped()
         .navigationTitle("Plan and storage")
-        .screenChrome(title: "Plan and storage", back: { dismiss() })
+        .screenChrome(title: "Plan and storage")
         .alert("Remove earlier versions?", isPresented: $removing) {
             Button("Cancel", role: .cancel) {}
             Button("Remove", role: .destructive) { removeVersions() }
@@ -520,10 +547,6 @@ struct AdvancedView: View {
 
     var body: some View {
         List {
-            Section {} header: {
-                ScreenHeader(title: "Advanced", back: { dismiss() })
-                    .listRowInsets(EdgeInsets(top: Alpine.Space.s2, leading: 0, bottom: 0, trailing: 0))
-            }
             Section {
                 Button { replacing = true } label: {
                     HStack(spacing: Alpine.Space.s3) {
@@ -596,7 +619,7 @@ struct AdvancedView: View {
         .listStyle(.insetGrouped)
         .alpineGrouped()
         .navigationTitle("Advanced")
-        .screenChrome(title: "Advanced", back: { dismiss() })
+        .screenChrome(title: "Advanced")
         .sheet(isPresented: $resetting) { ResetKeysSheet().environment(store) }
         .sheet(isPresented: $replacing) { ReplaceKeysSheet().environment(store) }
         .sheet(isPresented: $deleting) { DeleteAccountSheet() }

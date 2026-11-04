@@ -1,18 +1,26 @@
 import type {
     CryptoResults,
+    NodeAttributes,
     NodeMetadata,
     UploadBytes,
     SignatureForm,
     UploadPartProgress,
     UploadPartResult,
 } from '@hushos/crypto';
-import { CONTENT_SUITE, chunkCount, ciphertextSize, contentLength } from '@hushos/crypto/drive';
+import {
+    CONTENT_SUITE,
+    chunkCount,
+    ciphertextSize,
+    contentLength,
+    wellFormed,
+} from '@hushos/crypto/drive';
 import { KEY_CHANGE_PENDING } from '@hushos/crypto/protocol';
 import { newId as mintScopedId, type IdKind } from '@hushos/crypto/ids';
 import type { DriveApi, NodeView, PartUrl } from './api';
 import type { DriveErrorCode } from './protocol';
 import { DriveApiError } from './api';
 import type { DriveNode, Rpc } from './client';
+import { holdFolder } from './walk-holds';
 import type {
     IdSeeds,
     JournalEntry,
@@ -140,6 +148,12 @@ export type EnqueueInput = {
     stash?: string;
     /* A move: the file this one is a re-encrypted copy of. */
     move?: UploadMove;
+    /*
+     * The attributes the new file's record carries (a copy's or a move's are
+     * its source's). Absent: a replacement's "keep both" copy takes the
+     * replaced file's, anything else has none.
+     */
+    attributes?: NodeAttributes;
 };
 
 /* Where the app keeps the bytes of uploads that have no file on disk, by name. */
@@ -163,10 +177,27 @@ export type UploadStash = {
     sweep?(keep: Set<string>): Promise<void>;
 };
 
+/*
+ * Which session of the account uploads are for (the app's device session): `open` is false
+ * from a sign-out until the next sign-in, and `generation` moves on at every sign-out, so work
+ * that began before one (a copy still reading its bytes) can be told apart from work after.
+ */
+export type UploadSession = { open(): boolean; generation(): number };
+
+/* An enqueue refused because the person signed out of this browser after it began. */
+export class SignedOutError extends Error {
+    constructor() {
+        super('You signed out of this browser, so this wasn’t added.');
+        this.name = 'SignedOutError';
+    }
+}
+
 export type TransferManagerOptions = {
     rpc: Rpc;
     api: DriveApi;
     journal?: UploadJournal;
+    /* Without one, every enqueue is taken (tests, and pages with no account). */
+    session?: UploadSession;
     stash?: UploadStash;
     /*
      * Opens the keys a restored upload needs, parents first, and returns the parent
@@ -251,6 +282,8 @@ type Internal = {
     /* The seeds the ids were derived from, sent with begin; null until minted. */
     seeds: IdSeeds | null;
     signAs: UploadSignatures;
+    /* What the new node's record carries beside the name (EnqueueInput.attributes); journaled. */
+    attributes: NodeAttributes | undefined;
     uploadId: string | null;
     keyEpoch: number;
     /* The journal row, once begin has succeeded; null before, and for finished uploads. */
@@ -295,6 +328,11 @@ function signaturesOf(origin: UploadOrigin, signAs: UploadSignatures | undefined
     if (signAs) return signAs;
     const form: SignatureForm = origin === 'copy' ? 'resealed' : 'ordinary';
     return { metadata: form, version: form };
+}
+
+/* Attributes to carry, or undefined for none: `{}` is none, as sealMetadata writes it. */
+function attributesOf(attributes: NodeAttributes | undefined) {
+    return attributes && Object.keys(attributes).length ? { ...attributes } : undefined;
 }
 
 /* Every upload lands in its folder's workspace: the owner's, for a folder shared with an editor. */
@@ -458,6 +496,8 @@ export function createTransferManager(options: TransferManagerOptions) {
     } = options;
     const uploads = new Map<string, Internal>();
     const order: string[] = [];
+    /* Begins on their way to the server: the upload id each will answer, or null if it fails. */
+    const beginning = new Map<Internal, { workspaceId: string; answer: Promise<string | null> }>();
     const listeners = new Set<() => void>();
     /*
      * Key epochs come from the server in ranges, one range per workspace per
@@ -970,6 +1010,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             mime: u.item.mime,
             size: u.item.size,
             modified: file.lastModified ? new Date(file.lastModified).toISOString() : null,
+            ...(u.attributes ? { attributes: u.attributes } : {}),
         };
         // Sealed, then begun; sealed again from a fresh look each time the server says a key
         // change has not reached the folder yet (409 rotating), until it takes it or the wait
@@ -1037,22 +1078,25 @@ export function createTransferManager(options: TransferManagerOptions) {
                     u.keyEpoch = u.replaces.keyEpoch;
                 } else {
                     const from = await takeEpoch(workspaceId);
-                    const { nodes } = await rpc('driveCreateNodes', {
-                        workspaceId,
-                        nodes: [
-                            {
-                                id: u.nodeId,
-                                kind: 'file',
-                                parentId: parent.id,
-                                parentKeyEpoch: parent.keyEpoch,
-                                keyEpoch: from,
-                                metadata,
-                                // A saved copy is signed by where it came from: saved from a link,
-                                // re-locked when the original did not verify, ordinary when it did.
-                                signAs: u.signAs.metadata,
-                            },
-                        ],
-                    });
+                    // Never under a key a walk's batch holds pending in the folder (walk-holds.ts).
+                    const { nodes } = await holdFolder(rpc, workspaceId, parent, () =>
+                        rpc('driveCreateNodes', {
+                            workspaceId,
+                            nodes: [
+                                {
+                                    id: u.nodeId,
+                                    kind: 'file',
+                                    parentId: parent.id,
+                                    parentKeyEpoch: parent.keyEpoch,
+                                    keyEpoch: from,
+                                    metadata,
+                                    // A saved copy is signed by where it came from: saved from a link,
+                                    // re-locked when the original did not verify, ordinary when it did.
+                                    signAs: u.signAs.metadata,
+                                },
+                            ],
+                        }),
+                    );
                     u.keyEpoch = from;
                     nodeEnvelopes = {
                         keyEnvelope: nodes[0]!.keyEnvelope,
@@ -1100,8 +1144,10 @@ export function createTransferManager(options: TransferManagerOptions) {
             // Padded: the object has the chunks of its bucket, which may be more than the file needs.
             set(u, { total: prepared.ciphertextSize, chunkCount: prepared.chunkCount });
             let begun: Awaited<ReturnType<DriveApi['beginUpload']>>;
+            // Known while on its way, so a release can wait for the reservation it makes.
+            let answer: Promise<string | null> | undefined;
             try {
-                begun = await api.beginUpload(workspaceId, {
+                const request = api.beginUpload(workspaceId, {
                     node,
                     versionId: u.versionId,
                     versionIdSeed: seeds.version,
@@ -1117,6 +1163,12 @@ export function createTransferManager(options: TransferManagerOptions) {
                     // transaction (UploadMove).
                     ...(u.item.move && { moveOf: u.item.move.of }),
                 });
+                answer = request.then(
+                    (result) => result.upload.id,
+                    () => null,
+                );
+                beginning.set(u, { workspaceId, answer });
+                begun = await request;
             } catch (error) {
                 // Without a way to look the folder up again there is nothing to seal afresh from.
                 if (!options.openNodes || !u.queued) throw error;
@@ -1128,6 +1180,8 @@ export function createTransferManager(options: TransferManagerOptions) {
                 if (!(await keyChangeRefused(u, generation, error as DriveApiError, parent)))
                     return;
                 continue;
+            } finally {
+                if (answer && beginning.get(u)?.answer === answer) beginning.delete(u);
             }
             sealed = { nodeEnvelopes, prepared, begun };
         }
@@ -1169,6 +1223,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             handle: u.handle,
             origin: u.item.origin,
             signAs: u.signAs,
+            ...(u.attributes ? { attributes: u.attributes } : {}),
             stash: u.stash,
             move: u.item.move ?? null,
             parts: {},
@@ -1413,27 +1468,31 @@ export function createTransferManager(options: TransferManagerOptions) {
         const from = await takeEpoch(workspaceId);
         const { id: nodeId, seed: nodeIdSeed } = await newId('node', workspaceId);
         const name = conflictCopyName(u.item.name);
-        const { nodes } = await rpc('driveCreateNodes', {
-            workspaceId,
-            nodes: [
-                {
-                    id: nodeId,
-                    kind: 'file',
-                    parentId: parent.id,
-                    parentKeyEpoch: parent.keyEpoch,
-                    keyEpoch: from,
-                    metadata: {
-                        name,
-                        mime: u.item.mime,
-                        size: u.item.size,
-                        modified: u.file?.lastModified
-                            ? new Date(u.file.lastModified).toISOString()
-                            : null,
+        const { nodes } = await holdFolder(rpc, workspaceId, parent, () =>
+            rpc('driveCreateNodes', {
+                workspaceId,
+                nodes: [
+                    {
+                        id: nodeId,
+                        kind: 'file',
+                        parentId: parent.id,
+                        parentKeyEpoch: parent.keyEpoch,
+                        keyEpoch: from,
+                        metadata: {
+                            name,
+                            mime: u.item.mime,
+                            size: u.item.size,
+                            modified: u.file?.lastModified
+                                ? new Date(u.file.lastModified).toISOString()
+                                : null,
+                            // The copy kept beside the version it found stands for the same file.
+                            ...(u.attributes ? { attributes: u.attributes } : {}),
+                        },
+                        signAs: u.signAs.metadata,
                     },
-                    signAs: u.signAs.metadata,
-                },
-            ],
-        });
+                ],
+            }),
+        );
         const { contentKeyEnvelope, versionSignature } = await rpc('driveUploadRewrap', {
             workspaceId,
             objectId: u.objectId,
@@ -1543,6 +1602,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             objectId: '',
             seeds: null,
             signAs: signaturesOf(item.origin, undefined),
+            attributes: undefined,
             uploadId: null,
             keyEpoch: 0,
             entry: null,
@@ -1567,7 +1627,18 @@ export function createTransferManager(options: TransferManagerOptions) {
         };
     }
 
-    function enqueue(inputs: EnqueueInput[]) {
+    /*
+     * Queues `inputs`. `from` is the session generation the caller took when its work began
+     * (a copy reading its bytes, a move): if the person signed out since, or is signed out
+     * now, nothing is queued, so nothing is journaled after sign-out deleted the journal.
+     */
+    function enqueue(inputs: EnqueueInput[], from?: { generation: number }) {
+        const session = options.session;
+        if (
+            session &&
+            (!session.open() || (from !== undefined && from.generation !== session.generation()))
+        )
+            throw new SignedOutError();
         const ids: string[] = [];
         for (const input of inputs) {
             const id = crypto.randomUUID();
@@ -1575,7 +1646,9 @@ export function createTransferManager(options: TransferManagerOptions) {
             const u = makeInternal(
                 {
                     id,
-                    name: input.name ?? input.file.name,
+                    // A File's name is a DOMString, which may hold a lone surrogate (a Windows
+                    // file's): it lands with U+FFFD in its place rather than be refused.
+                    name: wellFormed(input.name ?? input.file.name),
                     size,
                     mime: input.file.type || null,
                     parentId: input.parent.id,
@@ -1603,6 +1676,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             u.handle = input.handle ?? null;
             u.stash = input.stash ?? null;
             u.signAs = signaturesOf(u.item.origin, input.signAs);
+            u.attributes = attributesOf(input.attributes ?? input.replaces?.metadata?.attributes);
             if (input.replaces) u.nodeId = input.replaces.id;
             // On disk before anything else happens, so a reload forgets no file that was waiting.
             u.queued = {
@@ -1621,6 +1695,7 @@ export function createTransferManager(options: TransferManagerOptions) {
                 handle: u.handle,
                 origin: u.item.origin,
                 signAs: u.signAs,
+                ...(u.attributes ? { attributes: u.attributes } : {}),
                 stash: u.stash,
                 move: u.item.move ?? null,
                 createdAt: now(),
@@ -2086,6 +2161,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             u.handle = entry.handle;
             u.stash = stash;
             u.signAs = signaturesOf(u.item.origin, entry.signAs);
+            u.attributes = attributesOf(entry.attributes);
             u.nodeId = entry.nodeId;
             u.versionId = entry.versionId;
             u.objectId = entry.objectId;
@@ -2139,6 +2215,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             u.handle = queued.handle;
             u.stash = queued.stash;
             u.signAs = signaturesOf(u.item.origin, queued.signAs);
+            u.attributes = attributesOf(queued.attributes);
             u.queued = queued;
             if (queued.replacesId) u.nodeId = queued.replacesId;
             restoredItem(u);
@@ -2199,9 +2276,60 @@ export function createTransferManager(options: TransferManagerOptions) {
         }
     }
 
+    /*
+     * Another tab signed out: every upload here is dropped without touching the journal (that
+     * tab deletes it). Each upload's generation moves on, and every step that writes the
+     * journal checks its own first, so an answer that lands later (a begin, a part, a
+     * completion) writes nothing back: a begun upload is aborted instead.
+     */
+    function invalidate() {
+        for (const u of uploads.values()) {
+            u.generation++;
+            clearBackoff(u);
+            u.inFlight.clear();
+        }
+        uploads.clear();
+        order.length = 0;
+        emit();
+    }
+
+    /*
+     * Another tab is signing out and waits on this one: every upload here stops at once, as
+     * invalidate does, and then what each had reserved is released while the session still
+     * answers. The server's reservations (which would otherwise hold quota until they expire)
+     * are aborted at once, those of begins still on their way as soon as they answer, apart
+     * from the worker's state for each, which is dropped beside them: a worker that hangs
+     * never holds up the network. Never longer than FORGET_TIMEOUT_MS, and nothing is written
+     * to the journal, which that tab deletes.
+     */
+    async function releaseAll() {
+        const held = [...uploads.values()];
+        const begins = [...beginning.values()];
+        invalidate();
+        const abort = (workspaceId: string, uploadId: string) =>
+            api.abortUpload(workspaceId, uploadId).catch(() => {});
+        await Promise.race([
+            Promise.allSettled([
+                ...held.flatMap((u) => (u.uploadId ? [abort(workspaceOf(u), u.uploadId)] : [])),
+                ...begins.map(({ workspaceId, answer }) =>
+                    answer.then((uploadId) =>
+                        uploadId ? abort(workspaceId, uploadId) : undefined,
+                    ),
+                ),
+                ...held.map(async (u) => {
+                    await rpc('driveUploadCancel', { objectId: u.objectId }).catch(() => {});
+                    await rpc('driveUploadForget', { objectId: u.objectId }).catch(() => {});
+                }),
+            ]),
+            new Promise((resolve) => setTimeout(resolve, FORGET_TIMEOUT_MS)),
+        ]);
+    }
+
     return {
         enqueue,
         forgetAll,
+        invalidate,
+        releaseAll,
         pause,
         resume,
         retry,

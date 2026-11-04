@@ -22,6 +22,8 @@ struct FileViewer: View {
     @State private var failed = false
     @State private var attempt = 0
     @State private var action: NodeAction?
+    /* The file on screen, once a loaded listing of its folder showed it: only then can that listing say it's gone. */
+    @State private var seenListed: String?
 
     init(items: [Opened], start: Opened, version: VersionListView? = nil, versionNote: String? = nil, onRestore: (() -> Void)? = nil) {
         self.items = items.isEmpty ? [start] : items
@@ -34,8 +36,48 @@ struct FileViewer: View {
     private var index: Int { items.firstIndex { $0.id == current.id } ?? 0 }
 
     var body: some View {
+        NavigationStack {
+            page
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { toolbar }
+        }
+        // A mark's check started in the viewer is the viewer's to show (the mark leaves once the writer is added).
+        .contactHost(.viewer, store: store)
+    }
+
+    /* The system's bars: Done, the name and where you are, Share and More above; who can open it and Send a copy below. */
+    @ToolbarContentBuilder private var toolbar: some ToolbarContent {
+        ToolbarItem(placement: .cancellationAction) {
+            Button { dismiss() } label: { HeaderWord(text: "Done") }
+        }
+        ToolbarItem(placement: .principal) { title }
+        if version == nil {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                if store.role(of: current) == .owner {
+                    Button { action = .share(current) } label: { HeaderIcon(symbol: "person.badge.plus") }
+                        .accessibilityLabel("Share")
+                }
+                Menu { NodeMenu(item: current, action: $action) } label: { HeaderIcon(symbol: "ellipsis") }
+                    .accessibilityLabel("More")
+            }
+            ToolbarItem(placement: .bottomBar) {
+                HStack(spacing: Alpine.Space.s2) {
+                    access.font(Theme.Text.footnote).lineLimit(1)
+                    Spacer(minLength: 0)
+                    Text([current.size.map { formatBytes(Int64($0)) }, changedLabel(current.modified)].compactMap { $0 }.joined(separator: " · "))
+                        .font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted).lineLimit(1)
+                }
+                .padding(.horizontal, Alpine.Space.s2)
+            }
+            ToolbarItem(placement: .bottomBar) {
+                Button { action = .sendCopy(current) } label: { HeaderIcon(symbol: "square.and.arrow.up") }
+                    .accessibilityLabel("Send a copy")
+            }
+        }
+    }
+
+    private var page: some View {
         VStack(spacing: 0) {
-            header
             ZStack {
                 if let url {
                     QuickLookView(url: url).ignoresSafeArea(edges: .horizontal)
@@ -55,57 +97,85 @@ struct FileViewer: View {
                 if version == nil, items.count > 1 { edges }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            foot
+            if version != nil { versionFoot }
         }
         .background(Alpine.ground)
-        .nodeActionSheets(action: $action, store: store)
+        .nodeActionSheets(action: $action, store: store, beside: false)
         // Somewhere else was asked for (a link, Info's Folder row): get out of its way.
         .onChange(of: store.route) { _, link in if link != nil { dismiss() } }
-        .task(id: "\(current.id)-\(attempt)") {
+        // Keyed on the session's vault too: a new session (the same account signed in again from Files) cancels a copy
+        // under way, and the copy starts again under the new one rather than waiting on a cancelled one.
+        .task(id: "\(current.id)-\(attempt)-\(ObjectIdentifier(store.vault).hashValue)") {
             url = nil
-            // Paged past before it came down: the next page's task is the one that counts.
-            do { url = try await store.fetch(current, version: version) } catch where !ErrorWords.isCancellation(error) { failed = true } catch {}
+            // Paged past before it came down: the next page's task is the one that counts. A newer version the vault learned
+            // comes down instead, and the viewer shows that row.
+            do { url = try await store.fetch(current, version: version, adopted: { current = $0 }) } catch where !ErrorWords.isCancellation(error) { failed = true } catch {}
         }
-        .onChange(of: store.folders[current.node.parentId ?? ""]?.contains { $0.id == current.id }) { _, here in
-            // Moved to the Trash or elsewhere from the menu: the viewer has nothing left to show.
-            if here == false, version == nil { dismiss() }
+        // A family's file that failed while its family wasn't open yet (a new session's vault, before the family is checked
+        // again): asked again once the family has been shown anew. The fetch lists the file's folder itself when the vault
+        // doesn't hold its row (Vault.holdForCopy), so the retry doesn't wait on the screens' listings.
+        .onChange(of: familyShown) { _, _ in
+            if failed { failed = false; attempt += 1 }
+        }
+        .onChange(of: listedHere, initial: true) { _, id in
+            if let id { seenListed = id }
+        }
+        .onChange(of: removed) { _, gone in
+            if gone { dismiss() }
         }
     }
 
-    private var header: some View {
-        HStack(spacing: Alpine.Space.s2) {
-            Button { dismiss() } label: { HeaderWord(text: "Done") }
-                .buttonStyle(.plain).foregroundStyle(Alpine.primary)
-                .glassEffect(.regular.interactive(), in: .capsule).highContrastEdge(Capsule())
-            Spacer(minLength: 0)
-            VStack(spacing: 1) {
-                Text(current.name).font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.ink).lineLimit(1)
-                if let provenance = version.map({ store.provenance(of: $0, in: current) }) ?? store.provenance(of: current) {
-                    // In place of the position or size: who wrote it comes first when it can't be checked, an earlier version too.
-                    UnverifiedMark(provenance: provenance).frame(minHeight: 16)
-                } else if let saved = version.map({ store.savedCopy(of: $0, in: current) }) ?? store.savedCopy(of: current) {
-                    // Saved from a link: where it came from, in the subtitle's place and colour.
-                    Text(saved.line).font(.caption).foregroundStyle(Alpine.inkMuted).multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else {
-                    Text(subtitle).font(.caption).foregroundStyle(Alpine.inkMuted).lineLimit(1)
-                }
-            }
-            Spacer(minLength: 0)
-            if version == nil {
-                HeaderActions {
-                    if store.role(of: current) == .owner {
-                        Button { action = .share(current) } label: { HeaderIcon(symbol: "person.badge.plus") }
-                            .buttonStyle(.plain).accessibilityLabel("Share")
-                    }
-                    Menu { NodeMenu(item: current, action: $action) } label: { HeaderIcon(symbol: "ellipsis") }
-                        .accessibilityLabel("More")
-                }
+    /* How many times the file's family was shown (FamilySync's checks): nil for a file in no family. */
+    private var familyShown: Int? {
+        guard store.isFamily(current), let groupId = store.familyAreaGroups[current.node.workspaceId.lowercased()] else { return nil }
+        return store.familyRefreshed[groupId] ?? 0
+    }
+
+    /* The file on screen's id while its folder's loaded listing shows it. */
+    private var listedHere: String? {
+        guard let listed = store.folders[current.node.parentId ?? ""], listed.contains(where: { $0.id == current.id }) else { return nil }
+        return current.id
+    }
+
+    /*
+     * Whether the file on screen is confirmed gone: its folder's loaded listing showed it and a
+     * loaded listing no longer does (moved to the Trash or elsewhere from the menu), or its family was
+     * removed, forked or refused. A listing that never showed it (a folder not listed, a cached
+     * listing older than the file, paged to) says nothing, nor does a folder whose listing was merely
+     * let go of (a rotation's failure clears them), nor a family whose state isn't known yet.
+     */
+    private var removed: Bool {
+        guard version == nil else { return false }
+        if seenListed == current.id, store.folders[current.node.parentId ?? ""] != nil, listedHere == nil { return true }
+        guard store.isFamily(current), let groupId = store.familyAreaGroups[current.node.workspaceId.lowercased()],
+              let state = store.familyStates[groupId] else { return false }
+        switch state {
+        case .accepted: return false
+        case .failed(let words): return words != FamilyWords.noAnswer
+        default: return true
+        }
+    }
+
+    /* The name, and under it where you are in the folder, its size and date, or who wrote it when that can't be checked. */
+    private var title: some View {
+        VStack(spacing: 1) {
+            Text(current.name).font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.ink).lineLimit(1)
+            if let provenance = version.map({ store.provenance(of: $0, in: current) }) ?? store.provenance(of: current) {
+                // In place of the position or size: who wrote it comes first when it can't be checked, an earlier version too.
+                UnverifiedMark(provenance: provenance).frame(minHeight: 16)
+            } else if let saved = version.map({ store.savedCopy(of: $0, in: current) }) ?? store.savedCopy(of: current) {
+                // Saved from a link: where it came from, in the subtitle's place and colour.
+                Text(saved.line).font(.caption).foregroundStyle(Alpine.inkMuted).multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if version == nil, let seen = store.seenBy(of: current) {
+                // Written by someone first seen and not checked: no mark, said in the subtitle's place (Info has the way to check).
+                // Cut in the middle, so a long address never pushes "Not verified" off the line.
+                Text("Added by \(seen.shown) · Not verified").font(.caption).foregroundStyle(Alpine.inkMuted).lineLimit(1).truncationMode(.middle)
             } else {
-                Color.clear.frame(width: 72, height: Theme.control)
+                Text(subtitle).font(.caption).foregroundStyle(Alpine.inkMuted).lineLimit(1)
             }
         }
-        .padding(.horizontal, Alpine.Space.s4).padding(.vertical, Alpine.Space.s2)
+        .padding(.horizontal, Alpine.Space.s2)
     }
 
     private var subtitle: String {
@@ -136,35 +206,20 @@ struct FileViewer: View {
         current = items[next]
     }
 
-    @ViewBuilder private var foot: some View {
-        if version != nil {
-            HStack(spacing: Alpine.Space.s3) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Earlier version").font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.ink)
-                    if let versionNote { Text(versionNote).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted) }
-                }
-                Spacer(minLength: 0)
-                if let onRestore { Button("Restore", action: onRestore).buttonStyle(PrimaryCapsuleStyle()) }
+    /* An earlier version: which it is, and Restore. */
+    private var versionFoot: some View {
+        HStack(spacing: Alpine.Space.s3) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Earlier version").font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.ink)
+                if let versionNote { Text(versionNote).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted) }
             }
-            .padding(Alpine.Space.s3).padding(.leading, Alpine.Space.s1)
-            .background(Alpine.surface, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-            .alpineRaised(RoundedRectangle(cornerRadius: 26, style: .continuous))
-            .padding(.horizontal, Alpine.Space.s4).padding(.bottom, Alpine.Space.s2)
-        } else {
-            HStack(spacing: Alpine.Space.s2) {
-                access.font(Theme.Text.footnote).lineLimit(1)
-                Spacer(minLength: 0)
-                Text([current.size.map { formatBytes(Int64($0)) }, changedLabel(current.modified)].compactMap { $0 }.joined(separator: " · "))
-                    .font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted).lineLimit(1)
-                Button { action = .sendCopy(current) } label: { HeaderIcon(symbol: "square.and.arrow.up") }
-                    .buttonStyle(.plain).foregroundStyle(Alpine.primary).accessibilityLabel("Send a copy")
-            }
-            .padding(.leading, Alpine.Space.s4).padding(.trailing, Alpine.Space.s1)
-            .frame(height: 62)
-            .glassEffect(.regular, in: .capsule)
-            .highContrastEdge(Capsule())
-            .padding(.horizontal, Alpine.Space.s4).padding(.bottom, Alpine.Space.s2)
+            Spacer(minLength: 0)
+            if let onRestore { Button("Restore", action: onRestore).buttonStyle(PrimaryCapsuleStyle()) }
         }
+        .padding(Alpine.Space.s3).padding(.leading, Alpine.Space.s1)
+        .background(Alpine.surface, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .alpineRaised(RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .padding(.horizontal, Alpine.Space.s4).padding(.bottom, Alpine.Space.s2)
     }
 
     /* Who can open it, on the foot's one line in ink; an open link adds the small link icon, as rows do. */
@@ -227,8 +282,8 @@ enum Opener {
             } catch {
                 if store.offline {
                     store.notify("You’re offline. Files you keep on this phone open without a connection.")
-                } else if case DriveAPIError.notAuthenticated = error {
-                    // The session alert says it.
+                } else if store.endsThisSession(error) {
+                    // The session alert says it. (A late 401 of a session no longer in use says nothing of the one in use.)
                 } else {
                     store.notify("Couldn’t open “\(item.name)”. Check your connection and try again.")
                 }

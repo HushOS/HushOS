@@ -1,7 +1,9 @@
 use super::*;
 use crate::contacts::{identity_fingerprint_of_keys, key_digest};
-use crate::device_record::{ServedAcceptance, ServedChain};
-use crate::group_trust::{accept_rosters, pin_after, roster_check_next, GroupPin, RosterChain, VerifiedPin};
+use crate::device_record::{FamilyGuard, ServedAcceptance, ServedChain};
+use crate::group_trust::{
+    accept_rosters, pin_after, roster_check_next, GroupAnchor, GroupPin, RosterChain, VerifiedPin,
+};
 use crate::groups::tests::{
     accepted_of, area_key_at, group_seed_at, ml_dsa_keys, reader, History, Person, AREA, AREA_KEY, AREA_SEED,
     GROUP,
@@ -10,6 +12,7 @@ use crate::groups::{area_grant_open, area_key_commitment, area_root_commitment, 
 use crate::identity::identity_create;
 use crate::ids::{derive_id, IdKind};
 use crate::join::code_at;
+use crate::rotation_records::RotatingNode;
 
 const CHECKED: &str = "2026-10-18T00:00:00.000Z";
 /* A second family folder on roster 1, deleted (its tombstone) on roster 2: granted to nobody after. */
@@ -145,6 +148,7 @@ impl Family {
             GROUP.into(),
             None,
             self.served(self.h.rosters.clone()),
+            FamilyGuard::Absent,
             CHECKED.into(),
         );
         assert!(matches!(accepted, Ok(ServedAcceptance::Accepted { .. })), "{accepted:?}");
@@ -318,7 +322,7 @@ fn after_body(f: &Family, body: &Value) -> Arc<AcceptedRosters> {
     match accept_rosters(
         GROUP.into(),
         f.h.key(1),
-        true,
+        Some(GroupAnchor::Created),
         vec![],
         rosters,
         successions,
@@ -452,13 +456,16 @@ fn an_admission_grants_exactly_each_live_folder_at_its_key_and_is_a_roster_every
 }
 
 #[test]
-fn an_admission_with_members_carries_the_current_group_key_sealed_to_the_newcomer() {
+fn an_admission_never_carries_a_role_whatever_the_invitation_says() {
     let f = family();
     let ledger = f.ledger(true, true);
-    let body = body_of(&staged(f.admit(&ledger, 5, vec![GroupRole::Members])).unwrap());
-    let after = after_body(&f, &body);
-    assert_eq!(body["keySeal"]["holderUserId"], json!(f.p[4].user_id));
-    assert_eq!(open_seal(&f, &after, &body["keySeal"], 5).unwrap(), group_seed_at(1));
+    // Every role an invitation can carry, over a checked pin: refused before anything is signed.
+    for role in [GroupRole::Members, GroupRole::Billing, GroupRole::Guardian] {
+        assert_eq!(message(f.admit(&ledger, 5, vec![role])), ADMIT_AS_MEMBER);
+    }
+    // As a plain member it goes, with no group key sealed to them.
+    let body = body_of(&staged(f.admit(&ledger, 5, vec![])).unwrap());
+    assert_eq!(body["keySeal"], Value::Null);
 }
 
 #[test]
@@ -477,6 +484,19 @@ fn an_admission_takes_the_pin_only_from_the_settings_and_refuses_a_member_unchec
     let via = VerifiedPin { trusted_via: Some(GROUP.into()), ..pin_of(&f.p[3]) };
     let trusted = f.ledger_of(1, [(f.p[3].user_id.clone(), via)].into(), true, true);
     assert_eq!(message(f.admit(&trusted, 4, vec![])), "These are not the keys whose words were checked.");
+    // A first-seen pin of the newcomer's very keys (no words compared): let in over it as over a
+    // verified one (design 3.2, the worker since #231), as a plain member.
+    let seen = VerifiedPin { fingerprint: String::new(), ..pin_of(&f.p[3]) };
+    let first_seen = f.ledger_of(1, [(f.p[3].user_id.clone(), seen)].into(), true, true);
+    assert!(matches!(f.admit(&first_seen, 4, vec![]).unwrap(), RosterCall::Staged { .. }));
+    // A first-seen pin filed for them over someone else's keys still admits nobody.
+    let other_seen =
+        VerifiedPin { user_id: f.p[3].user_id.clone(), fingerprint: String::new(), ..pin_of(&f.p[4]) };
+    let other_first_seen = f.ledger_of(1, [(f.p[3].user_id.clone(), other_seen)].into(), true, true);
+    assert_eq!(
+        message(f.admit(&other_first_seen, 4, vec![])),
+        "These are not the keys whose words were checked."
+    );
     // A live folder not opened here: answered before anything is signed.
     assert_eq!(f.admit(&f.ledger(true, false), 4, vec![]).unwrap(), RosterCall::OpenFoldersFirst);
     // Settings that file a pin under another person are refused outright.
@@ -604,6 +624,36 @@ fn granting_members_seals_the_current_key_to_them_and_nothing_else_changes() {
 }
 
 #[test]
+fn members_is_given_only_over_this_accounts_own_verified_pin_of_the_keys_their_entry_names() {
+    // The manager rule (docs/optional-verification.md 3.6), the worker's CHECK_MANAGER_FIRST twin.
+    let f = family();
+    let two = f.p[1].user_id.clone();
+    let with = |pin: Option<VerifiedPin>| {
+        let mut contacts = f.contacts();
+        match pin {
+            Some(pin) => contacts.insert(two.clone(), pin),
+            None => contacts.remove(&two),
+        };
+        f.ledger_of(1, contacts, true, true)
+    };
+    // No pin of them, a first-seen one (no words compared), one trusted via the family, and a
+    // verified pin filed for them over someone else's keys: none gives the role.
+    assert_eq!(message(f.roles(&with(None), 2, MembersRole::Grant)), CHECK_MANAGER_FIRST);
+    let seen = VerifiedPin { fingerprint: String::new(), ..pin_of(&f.p[1]) };
+    assert_eq!(message(f.roles(&with(Some(seen.clone())), 2, MembersRole::Grant)), CHECK_MANAGER_FIRST);
+    let via = VerifiedPin { trusted_via: Some(GROUP.into()), ..pin_of(&f.p[1]) };
+    assert_eq!(message(f.roles(&with(Some(via)), 2, MembersRole::Grant)), CHECK_MANAGER_FIRST);
+    let other = VerifiedPin { user_id: two.clone(), ..pin_of(&f.p[3]) };
+    assert_eq!(message(f.roles(&with(Some(other)), 2, MembersRole::Grant)), CHECK_MANAGER_FIRST);
+    // Their own words compared, over the keys their entry names: given.
+    assert!(staged(f.roles(&with(Some(pin_of(&f.p[1]))), 2, MembersRole::Grant)).is_ok());
+    // Taking it away, and billing, ask for no check: a first-seen pin is enough.
+    let first_seen = with(Some(seen));
+    assert!(staged(f.roles(&first_seen, 3, MembersRole::Take)).is_ok());
+    assert!(staged(f.handover(&first_seen, Handover::To { user_id: two })).is_ok());
+}
+
+#[test]
 fn taking_members_away_replaces_the_group_key_and_seals_it_only_to_those_who_keep_it() {
     let f = family();
     let ledger = f.ledger(true, true);
@@ -704,7 +754,10 @@ fn a_staged_chain_is_never_committed_cached_or_a_mark() {
         Some(vec![]),
     );
     let served = f.served(won.rosters.clone());
-    match ledger.accept_served(f.me(), GROUP.into(), None, served, CHECKED.into()).unwrap() {
+    match ledger
+        .accept_served(f.me(), GROUP.into(), None, served, FamilyGuard::Absent, CHECKED.into())
+        .unwrap()
+    {
         ServedAcceptance::Accepted { chain, pin, .. } => {
             assert_eq!(chain.roster.roster_version, 3);
             assert_eq!(pin.roster_digest, chain.roster_digest);
@@ -720,8 +773,14 @@ fn a_staged_chain_is_never_committed_cached_or_a_mark() {
     // The served chain without either is still the family's (no mark of roster 3 to fall short of).
     let fresh = f.ledger(true, true);
     let _ = staged(f.admit(&fresh, 4, vec![])).unwrap();
-    let again =
-        fresh.accept_served(f.me(), GROUP.into(), None, f.served(f.h.rosters.clone()), CHECKED.into());
+    let again = fresh.accept_served(
+        f.me(),
+        GROUP.into(),
+        None,
+        f.served(f.h.rosters.clone()),
+        FamilyGuard::Absent,
+        CHECKED.into(),
+    );
     match again.unwrap() {
         ServedAcceptance::Accepted { chain, .. } => assert_eq!(chain.roster_digest, before.roster_digest),
         other => panic!("{other:?}"),
@@ -737,7 +796,9 @@ fn a_kept_call_whose_roster_the_family_now_holds_reads_as_landed() {
     let mut rosters = f.h.rosters.clone();
     rosters.push(signed_of(&body_of(&call)["roster"]));
     assert!(matches!(
-        ledger.accept_served(f.me(), GROUP.into(), None, f.served(rosters), CHECKED.into()).unwrap(),
+        ledger
+            .accept_served(f.me(), GROUP.into(), None, f.served(rosters), FamilyGuard::Absent, CHECKED.into())
+            .unwrap(),
         ServedAcceptance::Accepted { .. }
     ));
     assert_eq!(
@@ -1142,7 +1203,7 @@ fn only_the_current_group_key_s_seed_is_kept_and_a_later_key_or_a_forget_drops_i
     );
     assert!(at_two.held_seed_versions(GROUP).is_empty());
     let kept = f.ledger(true, false);
-    kept.forget_group(GROUP.into());
+    crate::area_ledger::forget_fully(&kept, GROUP);
     assert!(kept.held_seed_versions(GROUP).is_empty());
     let cleared = f.ledger(true, false);
     cleared.clear();
@@ -1164,8 +1225,14 @@ fn a_member_whose_entry_still_names_their_earlier_keys_folds_them_in_before_any_
         user_id: next.user_id.clone(),
         identities: vec![f.p[0].served_keys(), next.served_keys()],
     };
-    let accepted =
-        ledger.accept_served(me.clone(), GROUP.into(), None, f.served(f.h.rosters.clone()), CHECKED.into());
+    let accepted = ledger.accept_served(
+        me.clone(),
+        GROUP.into(),
+        None,
+        f.served(f.h.rosters.clone()),
+        FamilyGuard::Absent,
+        CHECKED.into(),
+    );
     assert!(matches!(accepted, Ok(ServedAcceptance::Accepted { .. })), "{accepted:?}");
     ledger
         .open_group_key(
@@ -1326,4 +1393,480 @@ fn a_kept_admission_goes_only_to_the_keys_it_was_staged_over_by_their_commitment
     assert_eq!(read(both, &others), Some(send.clone()));
     let broken = json!({ "userId": user, "keys": null, "fingerprint": staged_pin.fingerprint });
     assert_eq!(read(broken, &theirs), Some(held));
+}
+
+/* Core 5b ------------------------------------------------------------------- */
+
+const AREA_ROOT: &str = "0e0e0e0e-0000-4000-8000-0000000000a1";
+const THIRD_ROOT: &str = "0e0e0e0e-0000-4000-8000-0000000000a3";
+const AREA_ROOT_KEY: [u8; 32] = [61; 32];
+const THIRD_ROOT_KEY: [u8; 32] = [64; 32];
+/* Person 1's account key, rotated once: its self-grants name 2 while their identity is still at 1. */
+const ACCOUNT_KEY: u64 = 2;
+const TAGS: &str = r#"{"version":2,"tags":[{"id":"t1","name":"Recipes"}],"items":{}}"#;
+
+/* A folder's root as the rotation work serves it: its key under the area key at `version`, its name under its key. */
+fn root_at(
+    workspace_id: &str,
+    node_id: &str,
+    version: u64,
+    area_key: &[u8],
+    root_key: &[u8],
+) -> RotatingNode {
+    let ctx = crate::drive::NodeKeyContext {
+        workspace_id: workspace_id.into(),
+        node_id: node_id.into(),
+        parent_id: workspace_id.into(),
+        parent_key_epoch: version,
+        key_epoch: version,
+    };
+    let metadata = crate::drive::metadata_seal(
+        crate::drive::MetadataContext {
+            workspace_id: workspace_id.into(),
+            node_id: node_id.into(),
+            metadata_version: 1,
+        },
+        root_key.to_vec(),
+        crate::drive::NodeMetadata {
+            name: "Family".into(),
+            mime: None,
+            size: None,
+            modified: None,
+            attributes: Default::default(),
+        },
+    )
+    .unwrap();
+    RotatingNode {
+        node_id: node_id.into(),
+        parent_id: workspace_id.into(),
+        parent_key_epoch: version + 1,
+        key_epoch: version,
+        wrapped_parent_key_epoch: version,
+        key_envelope: crate::drive::node_wrap(ctx, area_key.to_vec(), root_key.to_vec()).unwrap(),
+        kind: crate::NodeKind::Folder,
+        metadata_version: 1,
+        metadata_envelope: metadata,
+        metadata_signer: None,
+        metadata_signature: None,
+        metadata_rekey: None,
+        versions: vec![],
+        share_ids: vec![],
+        link_ids: vec![],
+    }
+}
+
+fn document(workspace_id: &str, kind: &str, version: u64, key: &[u8], text: &str) -> ServedDocument {
+    let ctx = crate::drive::DocumentContext { workspace_id: workspace_id.into(), kind: kind.into(), version };
+    ServedDocument {
+        kind: kind.into(),
+        version,
+        envelope: crate::drive::document_seal(ctx, key.to_vec(), text.into()).unwrap(),
+    }
+}
+
+/* Every live folder's rotation: AREA (key 1) with its tags, THIRD (key 2) with tags nobody can open. */
+fn rotations() -> Vec<AreaRotation> {
+    vec![
+        AreaRotation {
+            workspace_id: AREA.into(),
+            target_epoch: 9,
+            root: root_at(AREA, AREA_ROOT, 1, &AREA_KEY, &AREA_ROOT_KEY),
+            change_seq: 4,
+            documents: vec![document(AREA, "tags", 3, &AREA_KEY, TAGS)],
+        },
+        AreaRotation {
+            workspace_id: third(),
+            target_epoch: 9,
+            root: root_at(&third(), THIRD_ROOT, 2, &third_key(2), &THIRD_ROOT_KEY),
+            change_seq: 5,
+            documents: vec![ServedDocument { kind: "tags".into(), version: 1, envelope: vec![7; 80] }],
+        },
+    ]
+}
+
+impl Family {
+    fn remove(
+        &self,
+        ledger: &AreaLedger,
+        who: usize,
+        rotations: Vec<AreaRotation>,
+    ) -> CoreResult<RosterCall> {
+        ledger.removal_body(
+            self.me(),
+            self.p[0].envelope.clone(),
+            GROUP.into(),
+            7,
+            self.p[who - 1].user_id.clone(),
+            rotations,
+            vec![],
+            ACCOUNT_KEY,
+            self.kems(),
+        )
+    }
+}
+
+/* What a rotation wire opens to with the folder's new key: (new root key, previous root key, root name, documents). */
+type OpenedRotation = (Vec<u8>, Vec<u8>, String, Vec<(String, u64, String)>);
+
+fn opened_rotation(wire: &Value, area_key: &[u8]) -> OpenedRotation {
+    let workspace_id = wire["workspaceId"].as_str().unwrap();
+    let node_id = wire["root"]["id"].as_str().unwrap();
+    let to_version = wire["toVersion"].as_u64().unwrap();
+    let target = wire["targetEpoch"].as_u64().unwrap();
+    let d = |value: &Value| decode("k", value.as_str().unwrap(), None).unwrap();
+    let ctx = |key_epoch| crate::drive::NodeKeyContext {
+        workspace_id: workspace_id.into(),
+        node_id: node_id.into(),
+        parent_id: workspace_id.into(),
+        parent_key_epoch: to_version,
+        key_epoch,
+    };
+    let root =
+        crate::drive::node_open(ctx(target), area_key.to_vec(), d(&wire["root"]["keyEnvelope"])).unwrap();
+    let previous_epoch = if workspace_id == AREA { 1 } else { 2 };
+    let previous = crate::drive::previous_root_key_open(
+        ctx(previous_epoch),
+        area_key.to_vec(),
+        d(&wire["previousRootKeyEnvelope"]),
+    )
+    .unwrap();
+    let name = crate::drive::metadata_open(
+        crate::drive::MetadataContext {
+            workspace_id: workspace_id.into(),
+            node_id: node_id.into(),
+            metadata_version: 1,
+        },
+        root.clone(),
+        d(&wire["root"]["rotated"]["metadataEnvelope"]),
+    )
+    .unwrap()
+    .name;
+    let documents = wire["documents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|doc| {
+            let version = doc["version"].as_u64().unwrap() + 1;
+            let kind = doc["kind"].as_str().unwrap().to_string();
+            let ctx = crate::drive::DocumentContext {
+                workspace_id: workspace_id.into(),
+                kind: kind.clone(),
+                version,
+            };
+            (kind, version, crate::drive::document_open(ctx, area_key.to_vec(), d(&doc["envelope"])).unwrap())
+        })
+        .collect();
+    (root, previous, name, documents)
+}
+
+#[test]
+fn a_removal_rotates_every_live_folder_and_grants_the_new_keys_only_to_those_who_stay() {
+    let f = family();
+    let ledger = f.ledger(true, true);
+    let call = staged(f.remove(&ledger, 2, rotations())).unwrap();
+    assert_eq!(call.route, ChainRoute::Remove { user_id: f.p[1].user_id.clone(), ends_lapsed: vec![] });
+    // THIRD's tags never opened: carried on empty, and said.
+    assert_eq!(call.replaced, vec![ReplacedDocument { workspace_id: third(), kind: "tags".into() }]);
+    let body = body_of(&call);
+    let after = after_body(&f, &body);
+    assert_eq!(after.roster.entry(&f.p[1].user_id).unwrap().status, MemberStatus::Left);
+    // Person 2 held no `members`: no succession, the family key stays.
+    assert!(body.get("succession").is_none() && body.get("seals").is_none());
+    // Each new key to persons 1 and 3 (everyone active after), never to person 2.
+    let grants = open_grants(&f, &after, &body["grants"]);
+    let mut to: Vec<(String, String, u64)> =
+        grants.iter().map(|(who, at, version, _)| (who.clone(), at.clone(), *version)).collect();
+    to.sort();
+    let mut expected = vec![
+        (f.p[0].user_id.clone(), AREA.to_string(), 2),
+        (f.p[2].user_id.clone(), AREA.to_string(), 2),
+        (f.p[0].user_id.clone(), third(), 3),
+        (f.p[2].user_id.clone(), third(), 3),
+    ];
+    expected.sort();
+    assert_eq!(to, expected);
+    let key_of = |at: &str| grants.iter().find(|(_, ws, _, _)| ws == at).unwrap().3.clone();
+    assert!(grants.iter().all(|(_, ws, _, key)| *key == key_of(ws)));
+    for wire in body["rotations"].as_array().unwrap() {
+        let workspace_id = wire["workspaceId"].as_str().unwrap();
+        let (root, previous, name, documents) = opened_rotation(wire, &key_of(workspace_id));
+        // The root under its new key (the roster's root commitment), the old one wrapped as its previous.
+        assert_eq!(
+            after.area_roots.get(workspace_id).unwrap().last(),
+            Some(&Some(area_root_commitment(&root).unwrap()))
+        );
+        let old = if workspace_id == AREA { AREA_ROOT_KEY.to_vec() } else { THIRD_ROOT_KEY.to_vec() };
+        assert_eq!(previous, old);
+        assert_eq!(name, "Family");
+        if workspace_id == AREA {
+            assert_eq!(documents, vec![("tags".to_string(), 4, TAGS.to_string())]);
+        } else {
+            assert_eq!(
+                documents,
+                vec![("tags".to_string(), 2, r#"{"version":2,"tags":[],"items":{}}"#.to_string())]
+            );
+        }
+        // The self-grant names the account key (2), never the identity's key version (1).
+        assert_eq!(wire["selfGrant"]["keyVersion"], json!(ACCOUNT_KEY));
+        assert!(wire["selfGrant"]["encryptedKey"].is_string());
+    }
+    assert!(body["grants"].as_array().unwrap().iter().all(|grant| grant["granteeKeyVersion"] == json!(1)));
+    // An account key version no self-grant can name is refused before anything is built.
+    for version in [0, 1 << 53] {
+        let refused = ledger.removal_body(
+            f.me(),
+            f.p[0].envelope.clone(),
+            GROUP.into(),
+            7,
+            f.p[1].user_id.clone(),
+            rotations(),
+            vec![],
+            version,
+            f.kems(),
+        );
+        assert_eq!(message(refused), "Invalid account key version.");
+    }
+}
+
+/*
+ * A document the web reads goes on as written, whatever a serde_json::Value would refuse (a tag
+ * named by a lone surrogate, a number past an f64); one JSON.parse refuses (a trailing no-break
+ * space is no JSON whitespace) goes on empty, as the worker carries it.
+ */
+#[test]
+fn a_rotation_carries_every_document_the_web_reads_as_written() {
+    const ODD: &str = r#"{"version":2,"tags":[{"id":"t1","name":"\ud800"}],"items":{},"n":1e400}"#;
+    let f = family();
+    let ledger = f.ledger(true, true);
+    let mut all = rotations();
+    all[0].documents = vec![document(AREA, "tags", 3, &AREA_KEY, ODD)];
+    all[1].documents = vec![document(&third(), "tags", 1, &third_key(2), "{\"version\":2}\u{a0}")];
+    let call = staged(f.remove(&ledger, 2, all)).unwrap();
+    assert_eq!(call.replaced, vec![ReplacedDocument { workspace_id: third(), kind: "tags".into() }]);
+    let body = body_of(&call);
+    let after = after_body(&f, &body);
+    let grants = open_grants(&f, &after, &body["grants"]);
+    let key_of = |at: &str| grants.iter().find(|(_, ws, _, _)| ws == at).unwrap().3.clone();
+    let wire =
+        body["rotations"].as_array().unwrap().iter().find(|w| w["workspaceId"] == json!(AREA)).unwrap();
+    let (_, _, _, documents) = opened_rotation(wire, &key_of(AREA));
+    assert_eq!(documents, vec![("tags".to_string(), 4, ODD.to_string())]);
+}
+
+#[test]
+fn a_removal_that_leaves_a_live_folder_unrotated_is_refused_before_anything_is_signed() {
+    let f = family();
+    let ledger = f.ledger(true, true);
+    let all = rotations();
+    // THIRD left out, AREA twice, and none at all: refused alike.
+    assert_eq!(message(f.remove(&ledger, 2, vec![all[0].clone()])), EVERY_FOLDER);
+    assert_eq!(message(f.remove(&ledger, 2, vec![all[0].clone(), all[0].clone()])), EVERY_FOLDER);
+    assert_eq!(message(f.remove(&ledger, 2, vec![])), EVERY_FOLDER);
+    // The deleted folder named in THIRD's place.
+    let mut deleted = all[1].clone();
+    deleted.workspace_id = SECOND.into();
+    assert_eq!(message(f.remove(&ledger, 2, vec![all[0].clone(), deleted])), EVERY_FOLDER);
+    // Someone not in the family now.
+    assert_eq!(message(f.remove(&ledger, 4, rotations())), NOT_IN);
+    // A folder not open here: asked for first, before anything is signed.
+    assert_eq!(f.remove(&f.ledger(true, false), 2, rotations()).unwrap(), RosterCall::OpenFoldersFirst);
+}
+
+#[test]
+fn removing_a_manager_replaces_the_family_key_and_seals_it_only_to_those_who_keep_it() {
+    let f = family();
+    let ledger = f.ledger(true, true);
+    let body = body_of(&staged(f.remove(&ledger, 3, rotations())).unwrap());
+    let after = after_body(&f, &body);
+    assert_eq!(after.group_key_version, 2);
+    let seals = body["seals"].as_array().unwrap();
+    assert_eq!(seals.len(), 1);
+    assert_eq!(seals[0]["holderUserId"], json!(f.p[0].user_id));
+}
+
+#[test]
+fn a_deletion_carries_exactly_one_tombstone_and_nothing_else() {
+    let f = family();
+    let ledger = f.ledger(true, true);
+    let call = staged(ledger.area_delete_body(
+        f.me(),
+        f.p[0].envelope.clone(),
+        GROUP.into(),
+        7,
+        AREA.into(),
+        f.kems(),
+    ))
+    .unwrap();
+    assert_eq!(call.route, ChainRoute::Delete { workspace_id: AREA.into() });
+    let body = body_of(&call);
+    let mut keys: Vec<&String> = body.as_object().unwrap().keys().collect();
+    keys.sort();
+    assert_eq!(keys, vec!["expectedRevision", "roster"]);
+    let roster = parse_roster(&signed_of(&body["roster"]).statement).unwrap();
+    assert_eq!(roster.areas.len(), 1);
+    assert!(roster.areas[0].retired && roster.areas[0].workspace_id == AREA);
+    assert!(after_body(&f, &body).retired_areas.contains(&AREA.to_string()));
+    // A folder already deleted, or never the family's: refused before signing.
+    let delete = |workspace_id: &str| {
+        message(ledger.area_delete_body(
+            f.me(),
+            f.p[0].envelope.clone(),
+            GROUP.into(),
+            7,
+            workspace_id.into(),
+            f.kems(),
+        ))
+    };
+    assert_eq!(delete(SECOND), NOT_ON_LIST);
+    assert_eq!(delete("f0f0f0f0-0000-4000-8000-00000000000f"), NOT_ON_LIST);
+}
+
+/*
+ * After `document-stale` (or `root-moved`, `epoch-stale`) the folder is gathered again and only its
+ * rotation is made again: the same signed roster, grants and self-grants, the same new keys, its
+ * documents at their new versions; the kept entry becomes the rebuilt call.
+ */
+#[test]
+fn a_rebuild_reseals_what_was_gathered_again_under_the_same_keys_and_roster() {
+    const NEWER: &str = r#"{"version":2,"tags":[{"id":"t2","name":"Trips"}],"items":{}}"#;
+    let f = family();
+    let ledger = f.ledger(true, true);
+    let call = staged(f.remove(&ledger, 2, rotations())).unwrap();
+    let body = body_of(&call);
+    let after = after_body(&f, &body);
+    let grants = open_grants(&f, &after, &body["grants"]);
+    let key_of = |at: &str| grants.iter().find(|(_, ws, _, _)| ws == at).unwrap().3.clone();
+    let rebuild = |outbox_id: &str, entry: &str, rotations: Vec<AreaRotation>| {
+        ledger.outbox_rebuild(
+            f.me(),
+            f.p[0].envelope.clone(),
+            GROUP.into(),
+            outbox_id.into(),
+            entry.into(),
+            rotations,
+        )
+    };
+    // A member wrote AREA's tags after the call was built: gathered again at version 4.
+    let mut again = rotations().remove(0);
+    again.documents = vec![document(AREA, "tags", 4, &AREA_KEY, NEWER)];
+    let rebuilt = rebuild(&call.outbox_id, &call.entry, vec![again.clone()]).unwrap();
+    assert_eq!((&rebuilt.outbox_id, &rebuilt.route), (&call.outbox_id, &call.route));
+    assert!(rebuilt.replaced.is_empty());
+    let next = body_of(&rebuilt);
+    let wire_of = |b: &Value, ws: &str| {
+        b["rotations"].as_array().unwrap().iter().find(|w| w["workspaceId"] == json!(ws)).unwrap().clone()
+    };
+    // Only AREA's rotation is made again: the roster, grants, THIRD and the self-grant byte for byte.
+    assert_eq!((&next["roster"], &next["grants"]), (&body["roster"], &body["grants"]));
+    assert_eq!(wire_of(&next, &third()), wire_of(&body, &third()));
+    assert_eq!(wire_of(&next, AREA)["selfGrant"], wire_of(&body, AREA)["selfGrant"]);
+    // Under the new key the grants hand out: the root key the roster commits to, the tags at 5.
+    let (root, previous, _, documents) = opened_rotation(&wire_of(&next, AREA), &key_of(AREA));
+    assert_eq!(after.area_roots.get(AREA).unwrap().last(), Some(&Some(area_root_commitment(&root).unwrap())));
+    assert_eq!(previous, AREA_ROOT_KEY.to_vec());
+    assert_eq!(documents, vec![("tags".to_string(), 5, NEWER.to_string())]);
+    // The rebuilt entry sends the rebuilt body.
+    match ledger
+        .outbox_open(GROUP.into(), call.outbox_id.clone(), f.p[0].user_id.clone(), rebuilt.entry.clone())
+        .unwrap()
+    {
+        OutboxCall::Send { body, .. } => assert_eq!(body, rebuilt.body),
+        other => panic!("{other:?}"),
+    }
+    // Kept under another id: no entry. A folder the call does not rotate: refused.
+    assert!(matches!(
+        rebuild("f0f0f0f0-0000-4000-8000-000000000001", &call.entry, vec![again.clone()]),
+        Err(CoreError::Sealed(_))
+    ));
+    let one = staged(ledger.area_rotation_body(
+        f.me(),
+        f.p[0].envelope.clone(),
+        GROUP.into(),
+        7,
+        rotations().remove(1),
+        ACCOUNT_KEY,
+        f.kems(),
+    ))
+    .unwrap();
+    assert_eq!(rebuild(&one.outbox_id, &one.entry, vec![again]).unwrap_err().to_string(), NOT_ROTATED_HERE);
+}
+
+#[test]
+fn a_key_replacement_rotates_the_one_folder_it_names() {
+    let f = family();
+    let ledger = f.ledger(true, true);
+    let rotation = rotations().remove(0);
+    let call = staged(ledger.area_rotation_body(
+        f.me(),
+        f.p[0].envelope.clone(),
+        GROUP.into(),
+        7,
+        rotation,
+        ACCOUNT_KEY,
+        f.kems(),
+    ))
+    .unwrap();
+    assert_eq!(call.route, ChainRoute::Rotation { workspace_id: AREA.into() });
+    let body = body_of(&call);
+    assert!(body.get("rotations").is_none() && body["rotation"]["workspaceId"] == json!(AREA));
+    let after = after_body(&f, &body);
+    assert_eq!(after.area_keys.get(AREA).map(Vec::len), Some(2));
+    assert_eq!(after.area_keys.get(&third()).map(Vec::len), Some(2), "THIRD untouched");
+    // Every member active, the remover included, gets the new key.
+    assert_eq!(open_grants(&f, &after, &body["grants"]).len(), 3);
+}
+
+#[test]
+fn a_repair_never_uses_a_served_previous_envelope_s_key() {
+    let f = family();
+    let ledger = f.ledger(true, true);
+    let ctx = crate::drive::NodeKeyContext {
+        workspace_id: AREA.into(),
+        node_id: AREA_ROOT.into(),
+        parent_id: AREA.into(),
+        parent_key_epoch: 1,
+        key_epoch: 4,
+    };
+    let wrapped = |key: &[u8]| {
+        crate::drive::previous_root_key_wrap(ctx.clone(), AREA_KEY.to_vec(), key.to_vec()).unwrap()
+    };
+    let root = |envelope: Option<Vec<u8>>| PreviousRoot {
+        node_id: AREA_ROOT.into(),
+        parent_key_epoch: 1,
+        prev_key_envelope: envelope,
+        prev_key_epoch: Some(4),
+        prev_parent_key_epoch: Some(1),
+    };
+    let check = |envelope| ledger.previous_root_repair(GROUP.into(), AREA.into(), root(envelope)).unwrap();
+    let own = vec![70u8; 32];
+    let other = vec![71u8; 32];
+    // This device never held the old key: an envelope that opens is taken as it is, one that does not can't be fixed.
+    assert_eq!(check(Some(wrapped(&other))), PreviousRootRepair::Opens);
+    assert_eq!(check(Some(vec![1; 72])), PreviousRootRepair::Cannot);
+    // A key a served envelope gave (not this device's own) repairs nothing.
+    ledger.hold_previous_node_key(AREA, AREA_ROOT, other.clone(), 4, false);
+    assert_eq!(check(Some(vec![1; 72])), PreviousRootRepair::Cannot);
+    // Its own key: the envelope that opens to it is fine; one that opens to another key, or not at all, is wrapped
+    // again from its own key, never from the served one.
+    ledger.hold_previous_node_key(AREA, AREA_ROOT, own.clone(), 4, true);
+    assert_eq!(check(Some(wrapped(&own))), PreviousRootRepair::Opens);
+    for served in [Some(wrapped(&other)), Some(vec![1; 72])] {
+        let PreviousRootRepair::Repair { previous_root_key_envelope } = check(served) else {
+            panic!("no repair")
+        };
+        assert_eq!(
+            crate::drive::previous_root_key_open(ctx.clone(), AREA_KEY.to_vec(), previous_root_key_envelope)
+                .unwrap(),
+            own
+        );
+    }
+    // No envelope (an empty one is none, as the worker reads ""), or one not under the current key:
+    // nothing to check.
+    assert_eq!(check(None), PreviousRootRepair::None);
+    assert_eq!(check(Some(vec![])), PreviousRootRepair::None);
+    let stale = PreviousRoot { prev_parent_key_epoch: Some(0), ..root(Some(wrapped(&own))) };
+    assert_eq!(
+        ledger.previous_root_repair(GROUP.into(), AREA.into(), stale).unwrap(),
+        PreviousRootRepair::None
+    );
 }

@@ -468,7 +468,15 @@ async function checkRoster(
         signerMlDsaPublicKey: signerMlDsa.mlDsaPublicKey,
         changes: roster.members
             .filter((entry) => entry.sinceVersion === roster.rosterVersion)
-            .map((entry) => ({ userId: entry.userId, status: entry.status, roles: entry.roles })),
+            .map((entry) => {
+                const before = rosterEntry(previous, entry.userId);
+                return {
+                    userId: entry.userId,
+                    status: entry.status,
+                    roles: entry.roles,
+                    rekeyed: before !== undefined && !sameKeys(before, entry),
+                };
+            }),
         dropsHolder: next.droppedHolder,
         commitments: commitmentsOf(roster),
     } as groupsRepository.ParsedRoster;
@@ -776,6 +784,18 @@ function headView(head: groupsRepository.Head): Head {
     };
 }
 
+/*
+ * The family's payer is leaving or being removed while a change to its plan holds the plan's
+ * claim (a resume, a raise, the dissolve job): billing's own "in progress" sentence.
+ */
+function planBusy() {
+    return new GroupError(
+        'busy',
+        'Another change to this plan is in progress. Try again in a moment.',
+        409,
+    );
+}
+
 /* A chain write's answer: the new head, or the refusal as the route's error. */
 function chainAnswer(result: groupsRepository.ChainResult): Head & { replayed: boolean } {
     switch (result.status) {
@@ -880,6 +900,11 @@ function chainAnswer(result: groupsRepository.ChainResult): Head & { replayed: b
             throw forbidden();
         case 'not-member':
             throw notMember();
+        case 'busy':
+            throw planBusy();
+        // Removing the payer of a plan that renews (asked again under the plan's lock).
+        case 'pays':
+            throw paysForPlan();
         case 'unavailable':
             throw unavailable();
         case 'invalid':
@@ -1913,7 +1938,7 @@ export async function acceptInvitation(userId: string, token: string, address: s
     if (opened && !(await familyHasPlan(opened.group.id)))
         throw new GroupError(
             'no-plan',
-            `${opened.group.name} can’t take anyone new right now. Ask whoever invited you; this invitation works again once the family has a plan.`,
+            `Nobody new can join ${opened.group.name} right now. Ask whoever invited you; this invitation works again once there’s a plan.`,
             402,
             { invitee: true },
         );
@@ -1976,12 +2001,13 @@ function seatRefusal(result: Exclude<SeatResult, { status: 'ok' }>) {
     const messages: Record<Exclude<SeatResult['status'], 'ok' | 'unavailable'>, string> = {
         'no-plan': 'Choose a family plan before letting anyone in.',
         payer: 'The family is full. Ask the person who pays for it to add a place.',
+        full: 'Every place in the family is taken.',
         cap: 'The family has as many members as its plan allows.',
         canceling: 'The family plan is set to end. Resume it before letting anyone in.',
         declined:
             'Your bank declined the charge for another place. Nothing was charged and nobody was let in.',
         confirm:
-            'Your bank wants you to confirm the charge for another place. Confirm it in the billing portal, then let them in again.',
+            'Your bank wants you to confirm the charge for another place. Confirm it in Card and invoices, under Billing, then let them in again.',
         payment: 'The payment for another place did not go through. Nobody was let in.',
         busy: 'Another change to this plan is in progress. Try again in a moment.',
         'upgrade-waiting': 'Confirm the plan change with your bank first, then let them in.',
@@ -1998,15 +2024,29 @@ function seatRefusal(result: Exclude<SeatResult, { status: 'ok' }>) {
 }
 
 /*
+ * Whether an admission from this client may buy a place for the payer: only
+ * the web's, which says what it will cost before Let them in is pressed. The
+ * phone apps keep billing read only (store payment rules), and a client this
+ * server doesn't know sells nothing either. Decided from the request's
+ * `HushOS-Client`, which every send of a kept call carries again.
+ */
+export function mayBuySeatFrom(clientName: string | null | undefined) {
+    return clientName === 'web';
+}
+
+/*
  * Route 17: the admitting roster, the newcomer's grants and, with `members`,
  * their seal. With billing on, the place is paid for after every check and
  * before the write: Polar's 200 or no admission (a 402 there changed nothing).
+ * `mayBuy` false (mayBuySeatFrom) never pays for one: a full plan is 402
+ * `seats` with reason `full`.
  */
 export async function admit(
     userId: string,
     groupId: string,
     targetId: string,
     call: RosterCall & { keySeal?: SealWire },
+    { mayBuy = true }: { mayBuy?: boolean } = {},
 ) {
     /*
      * One family per account, then whether the newcomer's own files fit in the pool's free
@@ -2031,7 +2071,7 @@ export async function admit(
                     throw newcomerInFamily();
                 if (!(await groupsRepository.admissionFitsNow(groupId, targetId))) throw poolFull();
                 if (!billingEnabled()) return;
-                const seat = await ensureGroupSeat(groupId, userId);
+                const seat = await ensureGroupSeat(groupId, userId, { mayBuy });
                 if (seat.status !== 'ok') throw seatRefusal(seat);
             },
         },
@@ -2257,9 +2297,14 @@ async function leaveAnswer(result: groupsRepository.LeaveResult, groupId?: strin
         case 'not-last':
             throw new GroupError(
                 'payer',
-                'The family’s plan was just paid for again, so it runs, on your card. Cancel it in the billing portal at hushos.com first, or contact support.',
+                'The family’s plan was just paid for again, so it runs, on your card. Cancel it under Billing on the family’s page at hushos.com first, or contact support.',
                 409,
             );
+        case 'busy':
+            throw planBusy();
+        // The leaver pays for a plan that renews (the route's precheck, asked again under the lock).
+        case 'pays':
+            throw youPay();
         case 'unavailable':
             throw unavailable();
     }

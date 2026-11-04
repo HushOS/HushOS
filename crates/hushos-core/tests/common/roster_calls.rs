@@ -27,7 +27,7 @@
 #![allow(dead_code)]
 
 use super::device_records::root;
-use super::groups::{e, pattern, person, s, signed_json, signed_of, History, Person, CHECKED};
+use super::groups::{e, pattern, person, s, served_keys, signed_json, signed_of, History, Person, CHECKED};
 use hushos_core::*;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -46,7 +46,7 @@ pub struct Family {
 pub fn area_key(index: usize, version: u64) -> Vec<u8> {
     pattern(32, (120 + index as u64 * 2 + version - 1) as u8)
 }
-fn root_key(index: usize, version: u64) -> Vec<u8> {
+pub fn root_key(index: usize, version: u64) -> Vec<u8> {
     pattern(32, (140 + index as u64 * 2 + version - 1) as u8)
 }
 
@@ -118,7 +118,7 @@ pub fn chain_of(
     match accept_rosters(
         group_id.into(),
         first_keys,
-        true,
+        Some(GroupAnchor::Created),
         vec![],
         rosters,
         successions,
@@ -135,7 +135,7 @@ pub fn chain_of(
 
 pub fn me(n: usize) -> OwnIdentities {
     let p = &family().p[n - 1];
-    OwnIdentities { user_id: p.user_id.clone(), identities: vec![super::groups::served_keys(p)] }
+    OwnIdentities { user_id: p.user_id.clone(), identities: vec![served_keys(p)] }
 }
 
 /* Person `n`'s identity envelope under the shared device root: what their phone opened. */
@@ -207,8 +207,14 @@ pub fn ledger_with(
     ledger
         .use_settings(p.user_id.clone(), Some([(f.group_id.clone(), pin_now)].into()), contacts(n, filed))
         .unwrap();
-    let accepted =
-        ledger.accept_served(me(n), f.group_id.clone(), None, served_of(f.h.key(1), rosters), CHECKED.into());
+    let accepted = ledger.accept_served(
+        me(n),
+        f.group_id.clone(),
+        None,
+        served_of(f.h.key(1), rosters),
+        FamilyGuard::Absent,
+        CHECKED.into(),
+    );
     assert!(matches!(accepted, Ok(ServedAcceptance::Accepted { .. })), "{accepted:?}");
     if seed {
         let p1 = &f.p[0];
@@ -271,9 +277,9 @@ pub fn call_specs() -> Vec<Value> {
         json!({ "name": "admit-member", "op": { "kind": "admit", "who": 4, "roles": [] },
             "expected": { "route": { "kind": "admit", "userId": u(4) }, "rosterVersion": 8, "groupKeyVersion": 1,
                 "changed": [changed(4, &[])], "keySeal": null, "seals": [], "grants": grants(4) } }),
+        // Never with a role: an invitation's roles are the server's word (ADMIT_AS_MEMBER).
         json!({ "name": "admit-manager", "op": { "kind": "admit", "who": 5, "roles": ["members"] },
-            "expected": { "route": { "kind": "admit", "userId": u(5) }, "rosterVersion": 8, "groupKeyVersion": 1,
-                "changed": [changed(5, &["members"])], "keySeal": u(5), "seals": [], "grants": grants(5) } }),
+            "refused": "Let them in first. Roles are given afterwards." }),
         json!({ "name": "grant-members", "op": { "kind": "grant", "who": 2 },
             "expected": { "route": { "kind": "member", "userId": u(2) }, "rosterVersion": 8, "groupKeyVersion": 1,
                 "changed": [changed(2, &["members"])], "keySeal": u(2), "seals": [], "grants": [] } }),
@@ -456,9 +462,16 @@ fn history_of(doc: &Value) -> Vec<SignedGroupStatement> {
     doc["family"]["rosters"].as_array().unwrap().iter().map(signed_of).collect()
 }
 
-/* A grant opened by its grantee to the key of the folder at its version, by `granter`; its verdict entry. */
-fn open_grant(doc: &Value, chain: &Arc<AcceptedRosters>, grant: &Value, granter: &Person) -> Value {
-    let f = family();
+/* The latest key version the family's history lists for A1, A2 and A3: a grant above it is a call's new key. */
+const LISTED: [u64; 3] = [1, 1, 2];
+
+/*
+ * A grant opened by its grantee, by `granter`: the folder's key at its
+ * version. One the family's history lists must be the family's fixed key; a
+ * call's new key (Core 5b) is checked by `area_grant_open` against the
+ * commitment the call's roster names, and the caller compares the grantees' keys.
+ */
+pub fn grant_key(doc: &Value, chain: &Arc<AcceptedRosters>, grant: &Value, granter: &Person) -> Vec<u8> {
     let grantee = person_of(grant["granteeUserId"].as_str().unwrap());
     let workspace_id = s(grant, "workspaceId");
     let version = grant["workspaceKeyVersion"].as_u64().unwrap();
@@ -489,9 +502,24 @@ fn open_grant(doc: &Value, chain: &Arc<AcceptedRosters>, grant: &Value, granter:
         grantee.keys.clone(),
     )
     .expect("the grant opens");
-    assert_eq!(key.to_vec(), area_key(index, version), "the grant is of that folder's key at that version");
-    let _ = f;
-    json!({ "userId": grantee.user_id, "workspaceId": workspace_id, "version": version })
+    if version <= LISTED[index] {
+        assert_eq!(
+            key.to_vec(),
+            area_key(index, version),
+            "the grant is of that folder's key at that version"
+        );
+    }
+    key.to_vec()
+}
+
+/* A grant opened by its grantee to the key of the folder at its version, by `granter`; its verdict entry. */
+fn open_grant(doc: &Value, chain: &Arc<AcceptedRosters>, grant: &Value, granter: &Person) -> Value {
+    grant_key(doc, chain, grant, granter);
+    json!({
+        "userId": s(grant, "granteeUserId"),
+        "workspaceId": s(grant, "workspaceId"),
+        "version": grant["workspaceKeyVersion"].as_u64().unwrap(),
+    })
 }
 
 /*
@@ -592,7 +620,12 @@ pub fn route_json(route: &ChainRoute) -> Value {
     match route {
         ChainRoute::Admit { user_id } => json!({ "kind": "admit", "userId": user_id }),
         ChainRoute::Member { user_id } => json!({ "kind": "member", "userId": user_id }),
-        ChainRoute::Remove { user_id } => json!({ "kind": "remove", "userId": user_id }),
+        ChainRoute::Remove { user_id, ends_lapsed } if ends_lapsed.is_empty() => {
+            json!({ "kind": "remove", "userId": user_id })
+        }
+        ChainRoute::Remove { user_id, ends_lapsed } => {
+            json!({ "kind": "remove", "userId": user_id, "endsLapsed": ends_lapsed })
+        }
         ChainRoute::Create => json!({ "kind": "create" }),
         ChainRoute::Rosters => json!({ "kind": "rosters" }),
         ChainRoute::Areas => json!({ "kind": "areas" }),
@@ -735,8 +768,16 @@ pub fn committed_ledger(
             contacts(1, Some(filed)),
         )
         .unwrap();
-    let accepted =
-        ledger.accept_served(me(1), group_id, None, served_of(first_keys, history), CHECKED.into()).unwrap();
+    let accepted = ledger
+        .accept_served(
+            me(1),
+            group_id,
+            None,
+            served_of(first_keys, history),
+            FamilyGuard::Absent,
+            CHECKED.into(),
+        )
+        .unwrap();
     assert!(matches!(accepted, ServedAcceptance::Accepted { .. }));
     ledger
 }
@@ -994,6 +1035,14 @@ pub fn fixture() -> Value {
         joins.push(spec);
     }
     doc["joinCodes"] = Value::Array(joins);
+    let mut pairs = vec![];
+    for mut spec in pair_specs(&doc) {
+        let outcome = pair_run_over(&doc, &spec);
+        assert_eq!(outcome, spec["expected"], "pair {}-{}", spec["me"], spec["other"]);
+        spec["outcome"] = outcome;
+        pairs.push(spec);
+    }
+    doc["pairCodes"] = Value::Array(pairs);
     let mut sealed = vec![];
     for mut spec in entry_specs(&doc) {
         let entry = &entries[spec["call"].as_str().unwrap()];
@@ -1052,9 +1101,92 @@ pub fn check(doc: &Value) {
         let outcome = join_run_over(doc, spec);
         assert_eq!(outcome, spec["outcome"], "{}", spec["name"]);
     }
+    // Every pair code the other twin worked out over its own chain, worked out here alike, and as
+    // this core's own specs declare it over those bytes.
+    let here = pair_specs(doc);
+    let theirs = doc["pairCodes"].as_array().unwrap();
+    assert_eq!(
+        theirs.iter().map(|at| (at["me"].clone(), at["other"].clone())).collect::<Vec<_>>(),
+        here.iter().map(|at| (at["me"].clone(), at["other"].clone())).collect::<Vec<_>>(),
+        "the same pairs in the same order"
+    );
+    for (theirs, spec) in theirs.iter().zip(&here) {
+        let outcome = pair_run_over(doc, theirs);
+        assert_eq!(outcome, theirs["outcome"], "pair {}-{}: their words", theirs["me"], theirs["other"]);
+        assert_eq!(outcome, spec["expected"], "pair {}-{}: as declared here", theirs["me"], theirs["other"]);
+    }
     for spec in doc["outboxEntries"].as_array().unwrap() {
         let read = entry_read(doc, spec, spec["id"].as_str().unwrap(), spec["envelope"].as_str().unwrap());
         assert!(entry_says(doc, &read, &spec["expected"]), "{}: {read}", spec["name"]);
+    }
+}
+
+/*
+ * The pair codes of every two people of the family, each worked out by `me` over the doc's own
+ * chain as `me` accepts it (docs/optional-verification.md 3.4): at the later admission of the
+ * two (1 and 2 at roster 2; 1 and 3, 2 and 3 at roster 3), the same words from either side, over
+ * that roster's digest, group key 1 and the two ids; someone not let in has none. The twin of
+ * the web's pairSpecs.
+ */
+pub fn pair_specs(doc: &Value) -> Vec<Value> {
+    let f = family();
+    let rosters = history_of(doc);
+    let words = |version: usize, a: usize, b: usize| {
+        pair_code_of(
+            &roster_digest(rosters[version - 1].statement.clone()),
+            &first_keys_of(doc),
+            1,
+            &f.p[a - 1].user_id,
+            &f.p[b - 1].user_id,
+        )
+        .unwrap()
+    };
+    let mut specs = vec![];
+    for (a, b, version) in [(1, 2, 2), (1, 3, 3), (2, 3, 3)] {
+        let code = words(version, a, b);
+        let expected = json!({ "status": "code", "rosterVersion": version, "code": code });
+        specs.push(json!({ "me": a, "other": b, "expected": expected }));
+        specs.push(json!({ "me": b, "other": a, "expected": expected }));
+    }
+    specs.push(json!({ "me": 1, "other": 4, "expected": { "status": "not-admitted" } }));
+    specs
+}
+
+/*
+ * A pair code as `spec.me` works it out over the doc's chain, accepted as their own (the web's
+ * pairRunOver): holding the keys of person `spec.as` (their own when absent; the fuzz kind
+ * pair_code holds another's). `not-accepted` when the chain is not, `refused` when either call
+ * refuses.
+ */
+pub fn pair_run_over(doc: &Value, spec: &Value) -> Value {
+    let f = family();
+    let person = |key: &str| &f.p[spec[key].as_u64().unwrap() as usize - 1];
+    let holding = if spec["as"].is_u64() { person("as") } else { person("me") };
+    let me = OwnIdentities { user_id: person("me").user_id.clone(), identities: vec![served_keys(holding)] };
+    let chain = match accept_rosters(
+        s(&doc["family"], "groupId"),
+        first_keys_of(doc),
+        Some(GroupAnchor::Created),
+        vec![],
+        history_of(doc),
+        vec![],
+        ml_dsa_keys(),
+        me.clone(),
+        None,
+    ) {
+        Ok(RosterChain::Accepted { chain }) => chain,
+        Ok(_) => return json!({ "status": "not-accepted" }),
+        Err(_) => return json!({ "status": "refused" }),
+    };
+    match pair_code(chain, me, person("other").user_id.clone(), history_of(doc)) {
+        Ok(PairCode::Code { roster_version, code }) => {
+            json!({ "status": "code", "rosterVersion": roster_version, "code": code })
+        }
+        Ok(PairCode::OwnEntryWrong { roster_version }) => {
+            json!({ "status": "own-entry-wrong", "rosterVersion": roster_version })
+        }
+        Ok(PairCode::NotAdmitted) => json!({ "status": "not-admitted" }),
+        Err(_) => json!({ "status": "refused" }),
     }
 }
 
@@ -1161,7 +1293,14 @@ pub fn session_run(steps: &[Value]) -> Vec<Value> {
                     successions: server.successions.clone(),
                     signer_keys: ml_dsa_keys(),
                 };
-                match ledger.accept_served(me(1), f.group_id.clone(), None, served, CHECKED.into()) {
+                match ledger.accept_served(
+                    me(1),
+                    f.group_id.clone(),
+                    None,
+                    served,
+                    FamilyGuard::Absent,
+                    CHECKED.into(),
+                ) {
                     Ok(ServedAcceptance::Accepted { chain, .. }) => {
                         json!(format!("accepted:{}", chain.roster().roster_version))
                     }

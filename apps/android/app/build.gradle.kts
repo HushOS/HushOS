@@ -59,6 +59,9 @@ val buildNumber: Int = (project.findProperty("buildNumber") as String?)?.toInt()
 android {
     namespace = "com.hushos.app"
     compileSdk = 37
+    // The NDK the Rust core is built with (scripts/build-core.sh takes the newest installed): AGP strips the packaged native
+    // libraries and extracts their symbols with it. Without one it packages them unstripped and extracts nothing.
+    ndkVersion = "27.1.12297006"
 
     defaultConfig {
         applicationId = "com.hushos.app"
@@ -66,7 +69,7 @@ android {
         targetSdk = 36
         versionCode = buildNumber
         // The product version (the root package.json): the release pull request sets it.
-        versionName = "0.10.0" // x-release-please-version
+        versionName = "0.14.0" // x-release-please-version
     }
 
     signingConfigs {
@@ -86,6 +89,9 @@ android {
         debug { serves(this, "http://localhost:5173") }
         release {
             serves(this, "https://hushos.com")
+            // The Rust core's symbol table goes into the bundle's BUNDLE-METADATA, for Play to symbolicate native crashes;
+            // the libraries the app ships are stripped of it (they don't grow). FULL would need DWARF the core isn't built with.
+            ndk { debugSymbolLevel = "SYMBOL_TABLE" }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
@@ -127,6 +133,14 @@ dependencies {
     implementation(libs.androidx.compose.foundation)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.material.icons)
+    // Foldables and large screens: the bar, rail or wide rail by window size, Info beside the list, and the fold's posture.
+    implementation(libs.androidx.compose.material3.navigation.suite)
+    implementation(libs.androidx.compose.material3.adaptive)
+    implementation(libs.androidx.compose.material3.adaptive.layout)
+    implementation(libs.androidx.compose.material3.adaptive.navigation)
+    implementation(libs.androidx.window)
+    // Dialog and sheet state kept in memory across a fold or a resize, never written to the saved-state bundle.
+    implementation(libs.androidx.compose.runtime.retain)
     implementation(libs.androidx.security.crypto)
     implementation(libs.androidx.documentfile)
     implementation(libs.kotlinx.coroutines.android)
@@ -145,6 +159,10 @@ dependencies {
     testImplementation(libs.jna)
     // android.jar's org.json is stubs that throw on the JVM; settings tests edit real JSON.
     testImplementation(libs.org.json)
+    // Vault against a fake server on loopback (VaultAttributesTest): a real Context for its files, SQLite mirror and preferences.
+    testImplementation(libs.robolectric)
+    // The transfer workers run whole in JVM tests (UploadWorkerTest): WorkManager's test executor and drivers.
+    testImplementation(libs.androidx.work.testing)
 }
 
 /*
@@ -159,4 +177,7 @@ val hostCore = tasks.register<Exec>("hostCore") {
 tasks.withType<Test>().configureEach {
     dependsOn(hostCore)
     systemProperty("jna.library.path", File(repoRoot, "target/release").path)
+    // The JVM's HttpURLConnection has no PATCH (Android's has): FamilyFixture.allowPatch adds it to the test JVM only,
+    // so route 18's role changes run in unit tests as on a phone.
+    jvmArgs("--add-opens=java.base/java.net=ALL-UNNAMED")
 }

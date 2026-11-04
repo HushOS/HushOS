@@ -23,6 +23,16 @@ export type { Integrity, SignatureForm };
 export type RecordIntegrity = GroupIntegrity;
 
 /*
+ * A verdict on the person a share would be sealed to (their account changed, they're not in Contacts, they can't be
+ * sealed to yet, a succession nobody followed): the one refusal that may leave them out of a rotation, which makes the
+ * server revoke their share. Anything else a check throws (a guard that can't be read or written, settings refused, no
+ * network) says nothing about them and stops the rotation before it sends anything.
+ */
+export class GranteeRefusedError extends Error {
+    override name = 'GranteeRefusedError';
+}
+
+/*
  * The statement a record written again is signed with, from what the original
  * checked as (docs/integrity-design.md, "Saved copies, by where they came
  * from"). A copy saved from a link is `saved`, whatever the original was: a

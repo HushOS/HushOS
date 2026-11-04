@@ -31,7 +31,7 @@ class OwnIdentityTest {
     private val accountKey = base64urlDecode(upgrade.getString("accountKey"))
     private val legacy = WebFixture.identity(upgrade.getJSONObject("legacy"))
     private val webUpgrade = WebFixture.identity(upgrade.getJSONObject("upgraded"))
-    private val marks = SettingsMark(Files.createTempDirectory("marks").resolve("seen.json").toFile())
+    private val marks = SettingsMark(Files.createTempDirectory("marks").resolve("marks").toFile(), SettingsMarkTest.keys(7))
 
     private class Server(var current: IdentityEnvelope, val conflict: IdentityEnvelope? = null) {
         val stored = ArrayList<IdentityEnvelope>()

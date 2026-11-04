@@ -34,7 +34,19 @@ public struct TagRegistry: Sendable, Equatable {
     private var known: Set<String> = []
 
     public static let empty = TagRegistry(version: 2, tags: [], items: [:])
+    /* The Ledger colours tags were first given, still read wherever a tag has one. */
     public static let presets = ["blue", "ink", "yellow", "teal", "coral"]
+    /*
+     * The swatches offered for a tag and the colours new tags cycle through: the ones folders offer, as their hex, in
+     * the web's order and with its names (packages/drive/src/colour.ts FOLDER_COLOURS, COLOUR_NAMES).
+     */
+    public static let offered = ["#70adfb", "#53c48e", "#f28881", "#aa9cf7", "#00c3cb", "#e488be", "#8fbb5f", "#e99355"]
+    private static let names = Dictionary(uniqueKeysWithValues: zip(offered, ["Blue", "Mint", "Coral", "Violet", "Teal", "Pink", "Lime", "Orange"]))
+    /* A tag colour's name: an offered swatch's, an older tag's preset, or "Custom". */
+    public static func colourName(_ colour: String) -> String {
+        if let name = names[colour] { return name }
+        return presets.contains(colour) ? colour.prefix(1).uppercased() + colour.dropFirst() : "Custom"
+    }
     public static let maxTags = 200
     public static let maxPerNode = 16
 
@@ -91,7 +103,7 @@ public struct TagRegistry: Sendable, Equatable {
         let clean = try TagRegistry.checkName(name)
         if let existing = tags.first(where: { $0.name.caseInsensitiveCompare(clean) == .orderedSame }) { return existing }
         guard tags.count < TagRegistry.maxTags else { throw AuthError.message("A workspace can have at most 200 tags.") }
-        let tag = Tag(id: UUID().uuidString.lowercased(), name: clean, colour: TagRegistry.presets[tags.count % TagRegistry.presets.count])
+        let tag = Tag(id: UUID().uuidString.lowercased(), name: clean, colour: TagRegistry.offered[tags.count % TagRegistry.offered.count])
         tags.append(tag)
         known.insert(tag.id)
         return tag

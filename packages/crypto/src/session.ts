@@ -1,3 +1,4 @@
+import { guardRowId, openGuardRow, sealGuardRow, type GuardRowKind } from './contact-guard';
 import { CryptoError, RefusedError } from './errors';
 import { checkPassword, normalizePassword } from './password';
 import {
@@ -121,6 +122,13 @@ import {
 import { client, ready } from '@serenity-kit/opaque';
 import { encryptKey, decryptKey } from './aead';
 import { deriveStashKey, openStash, sealStash } from './stash';
+import {
+    openRollbackMarks,
+    RollbackMarksError,
+    sealRollbackMarks,
+    updateRollbackMarks,
+    type RollbackMarks,
+} from './rollback-marks';
 import { encode, decode, wrappingKey, checkProfile } from './keys';
 import {
     accountKeyContext,
@@ -235,6 +243,31 @@ type BaseRequests = {
     /* `envelope` null: the account has no settings stored yet (a new account), read as none. */
     settingsOpen: { userId: string; envelope: SettingsEnvelope | null };
     settingsSeal: { userId: string; settingsVersion: number; settings: Settings };
+    /*
+     * This device's rollback marks for the account (rollback-marks.ts), sealed
+     * and opened here under a key derived from the settings key, which must be
+     * open for `userId`, so a locked browser keeps only ciphertext. Open
+     * answers null for a record that does not open, which the page refuses,
+     * never reads as no marks.
+     */
+    rollbackMarksSeal: { userId: string; marks: RollbackMarks };
+    rollbackMarksOpen: { userId: string; envelope: string };
+    /*
+     * Opens the record `envelope` holds (none for a first one), raises it to at least `marks`
+     * and seals it again, in one step under the one settings key open now: a record that does
+     * not open under it is refused, never sealed over under another.
+     */
+    rollbackMarksUpdate: {
+        userId: string;
+        envelope: string | null;
+        marks: Partial<RollbackMarks>;
+    };
+    /*
+     * Opens the settings key from the envelope kept beside the marks, for when the server did
+     * not answer or served none: false, the session untouched, when it does not open under
+     * this root (it was re-wrapped by a rotation since, or it is not this account's).
+     */
+    rollbackMarksKey: { userId: string; settingsKey: SettingsKeyEnvelope };
     /*
      * Shares. Seal wraps an open node key to a contact's identity keys in share
      * suite 4 (a fresh X25519 key and ML-KEM), with the granter's hybrid signature;
@@ -616,6 +649,23 @@ type BaseRequests = {
      */
     driveStashSeal: { userId: string; name: string; bytes: Uint8Array };
     driveStashOpen: { userId: string; name: string; stored: Blob };
+    /*
+     * The contact guard (contact-guard.ts), sealed and opened here under a key
+     * derived from the settings key, so a locked browser holds only
+     * ciphertext. Each needs the settings key open for `userId`. Ids find a
+     * row without saying whom it is about; open answers null for a row that
+     * does not open, which the page treats as unreadable, never as none.
+     */
+    contactGuardIds: { userId: string; contactIds: string[] };
+    contactGuardSeal: {
+        userId: string;
+        rows: { contactId: string; kind: GuardRowKind; value: unknown }[];
+    };
+    contactGuardOpen: {
+        userId: string;
+        kind: GuardRowKind;
+        rows: { id: string; envelope: string }[];
+    };
 };
 export type CryptoRequests = BaseRequests & GroupRequests;
 /* What an upload reads its plaintext from: a file the person chose, or bytes attached to the worker. */
@@ -774,6 +824,12 @@ type BaseResults = {
     /* Null for a version 1 document, which no longer opens: treat it as no settings. */
     settingsOpen: { settings: Settings | null };
     settingsSeal: { envelope: SettingsEnvelope };
+    rollbackMarksSeal: { slot: string; envelope: string };
+    rollbackMarksOpen: { marks: RollbackMarks | null };
+    rollbackMarksUpdate:
+        | { refused: true }
+        | { refused: false; marks: RollbackMarks; envelope: string; changed: boolean };
+    rollbackMarksKey: { opened: boolean };
     driveSealShare: { shareEnvelope: string };
     driveOpenShare: { opened: true };
     driveSealLink: {
@@ -845,6 +901,9 @@ type BaseResults = {
     };
     driveStashSeal: { parts: Uint8Array<ArrayBuffer>[] };
     driveStashOpen: { parts: Uint8Array<ArrayBuffer>[] };
+    contactGuardIds: { ids: string[] };
+    contactGuardSeal: { rows: { id: string; envelope: string }[] };
+    contactGuardOpen: { rows: ({ contactId: string; value: unknown } | null)[] };
 };
 export type CryptoResults = BaseResults & GroupResults;
 export type DownloadChunkResult =
@@ -1875,6 +1934,56 @@ export function createCryptoSession() {
                 // Not taken as this worker's settings marks: the server has not accepted it yet.
                 // Group pins come only from settingsOpen of what the server serves.
                 return { envelope };
+            }
+            case 'rollbackMarksKey': {
+                const { userId } = message.input;
+                if (!accountKey || unlockedUserId !== userId)
+                    throw new CryptoError('Unlock your account first.');
+                if (settingsKey?.userId === userId) return { opened: true };
+                const root = accountKey.slice();
+                try {
+                    const key = await openSettingsKey(root, userId, message.input.settingsKey);
+                    forgetSettingsKey();
+                    settingsKey = { userId, key };
+                    return { opened: true };
+                } catch {
+                    return { opened: false };
+                } finally {
+                    root.fill(0);
+                }
+            }
+            case 'rollbackMarksUpdate': {
+                const { userId, envelope, marks } = message.input;
+                if (!accountKey || unlockedUserId !== userId)
+                    throw new CryptoError('Unlock your account first.');
+                if (!settingsKey || settingsKey.userId !== userId)
+                    throw new CryptoError('Open your settings key first.');
+                try {
+                    return {
+                        refused: false as const,
+                        ...(await updateRollbackMarks(settingsKey.key, userId, envelope, marks)),
+                    };
+                } catch (error) {
+                    if (error instanceof RollbackMarksError) return { refused: true as const };
+                    throw error;
+                }
+            }
+            case 'rollbackMarksSeal':
+            case 'rollbackMarksOpen': {
+                const { userId } = message.input;
+                if (!accountKey || unlockedUserId !== userId)
+                    throw new CryptoError('Unlock your account first.');
+                if (!settingsKey || settingsKey.userId !== userId)
+                    throw new CryptoError('Open your settings key first.');
+                const key = settingsKey.key;
+                if (message.operation === 'rollbackMarksSeal')
+                    return await sealRollbackMarks(key, userId, message.input.marks);
+                try {
+                    return { marks: await openRollbackMarks(key, userId, message.input.envelope) };
+                } catch (error) {
+                    if (error instanceof RollbackMarksError) return { marks: null };
+                    throw error;
+                }
             }
             case 'driveSealShare': {
                 const { workspaceId, nodeId, keyEpoch, granterUserId, granteeUserId } =
@@ -3144,6 +3253,45 @@ export function createCryptoSession() {
             case 'driveStashOpen': {
                 const { userId, name, stored } = message.input;
                 return { parts: await openStash(await ownStashKey(userId), name, stored) };
+            }
+            case 'contactGuardIds':
+            case 'contactGuardSeal':
+            case 'contactGuardOpen': {
+                const { userId } = message.input;
+                if (!accountKey || unlockedUserId !== userId)
+                    throw new CryptoError('Unlock your account first.');
+                if (!settingsKey || settingsKey.userId !== userId)
+                    throw new CryptoError('Open your settings key first.');
+                const key = settingsKey.key;
+                if (message.operation === 'contactGuardIds')
+                    return {
+                        ids: await Promise.all(
+                            message.input.contactIds.map((contactId) =>
+                                guardRowId(key, userId, contactId),
+                            ),
+                        ),
+                    };
+                if (message.operation === 'contactGuardSeal')
+                    return {
+                        rows: await Promise.all(
+                            message.input.rows.map((row) =>
+                                sealGuardRow(key, userId, row.contactId, row.kind, row.value),
+                            ),
+                        ),
+                    };
+                const { kind, rows } = message.input;
+                return {
+                    rows: await Promise.all(
+                        rows.map((row) =>
+                            openGuardRow(key, userId, kind, row.id, row.envelope).catch(
+                                (error: unknown) => {
+                                    if (error instanceof CryptoError) return null;
+                                    throw error;
+                                },
+                            ),
+                        ),
+                    ),
+                };
             }
             case 'unlock': {
                 if (phase !== 'unlock')

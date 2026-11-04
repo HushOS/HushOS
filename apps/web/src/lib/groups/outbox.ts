@@ -43,9 +43,9 @@ import {
  * and the change is rebuilt on top of the new one or not at all. `not-member`
  * is the only answer that wipes the family from this device.
  *
- * An admission is signed and sent when the admin presses "Let them in"
- * (letIn), after checking the newcomer's twelve words; the join code is
- * compared once it has landed, over the stored roster. An entry `awaiting-check`
+ * An admission is signed and sent when a manager presses "Let them in"
+ * (letIn), over this account's contact pin of the newcomer, first-seen or
+ * verified (docs/optional-verification.md 3.2). An entry `awaiting-check`
  * is an earlier version's admission held back until its join code was typed:
  * nothing sends one, ever; the family page drops it (nothing of it reached the
  * server) and says so, and the admin lets the person in again. One tab at a time writes a
@@ -849,7 +849,7 @@ async function stageLocked(
 }
 
 /*
- * "Let them in", once the admin checked the newcomer's twelve words: an
+ * "Let them in", over the manager's contact pin of the newcomer: an
  * admission this device already keeps for them (sent before, with no answer
  * yet) goes again as it was signed, as every kept call does; otherwise one is
  * staged on the committed chain and sent, unless it was sealed to other keys

@@ -107,7 +107,7 @@ export function StorageCard({ userId }: { userId: string }) {
         setRemoving(true);
         try {
             const purged = await removeEarlierVersions(queryClient, userId);
-            cue('droplet');
+            cue('close');
             toast.add({
                 type: 'success',
                 title: purged === 1 ? 'Earlier version removed' : 'Earlier versions removed',
@@ -144,7 +144,7 @@ export function StorageCard({ userId }: { userId: string }) {
                     )}
                     data-pool-line
                 >
-                    {pool.name}’s storage, for everyone’s own files and the family folders. Your
+                    The family’s storage, for everyone’s own files and the family folders. Your
                     files take {formatSpace(own)}.{' '}
                     {full
                         ? 'The family’s storage is full.'

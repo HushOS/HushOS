@@ -1,11 +1,10 @@
-import { CryptoError } from './errors';
 import {
     verifyIdentityKeys,
     verifySuccessionChain,
     type ServedKeys,
     type SuccessionLink,
 } from './identity';
-import { keyCommitment, pinKeysOfServed, pinTrust, type PinKeys } from './pins';
+import { keyCommitment, pinKeysOfServed, pinTrust, type GuardEntry, type PinKeys } from './pins';
 
 /*
  * First-seen pins (docs/optional-verification.md 2): the rules that let a
@@ -15,6 +14,9 @@ import { keyCommitment, pinKeysOfServed, pinTrust, type PinKeys } from './pins';
  * store on each phone); these say what its entries mean. The Rust core's
  * `first_seen.rs` is the twin.
  */
+
+/* Pure, so the web's main thread takes them without libsodium; re-exported here as before. */
+export { nextGuardEntry, type GuardEntry } from './pins';
 
 /*
  * A pin from before post-quantum identities, or a malformed one (pinTrust
@@ -52,24 +54,6 @@ export async function firstSeenOfLegacy<T extends PinKeys>(
         return null;
     }
 }
-
-/*
- * What one device keeps per contact, apart from the settings (2.8): the keys
- * it last acted on for them (the inputs of their key commitment, and the key
- * version), the signing keys it saw them replace, whether it saw these keys
- * verified, and a revision that only rises. Never written to the settings,
- * never cleared by anything the server answers.
- */
-export type GuardEntry = {
-    revision: number;
-    keyVersion: number | null;
-    encryptionPublicKey: string;
-    signingPublicKey: string;
-    mlDsaPublicKeyHash: string;
-    kemPublicKeyHash: string;
-    previousSigningKeys: string[];
-    verified: boolean;
-};
 
 /*
  * Whether a device may act on a person through the settings pin it holds now
@@ -122,40 +106,4 @@ export async function guardAgrees(
         succession.links,
     );
     return valid ? 'follows' : 'changed';
-}
-
-/*
- * The guard entry after this device acted on `pin` (adding, sharing,
- * opening, Continue, a check, a followed succession): the pin's keys at the
- * next revision. A signing key the guard held before and the pin does not is
- * kept as replaced; `verified` says whether this device saw these very keys
- * verified, through this pin or before. Refused for a pin that is neither
- * verified nor first-seen, so a guard never holds keys that match nothing.
- */
-export async function nextGuardEntry(
-    previous: GuardEntry | null,
-    pin: PinKeys,
-): Promise<GuardEntry> {
-    const trust = await pinTrust(pin);
-    if (trust !== 'verified' && trust !== 'seen')
-        throw new CryptoError('Only a verified or first-seen pin is remembered.');
-    const keys = (await keyCommitment(pin))!;
-    const same = previous !== null && (await keyCommitment(previous)) === keys;
-    const replaced = [...(previous?.previousSigningKeys ?? [])];
-    if (
-        previous &&
-        previous.signingPublicKey !== pin.signingPublicKey &&
-        !replaced.includes(previous.signingPublicKey)
-    )
-        replaced.push(previous.signingPublicKey);
-    return {
-        revision: (previous?.revision ?? 0) + 1,
-        keyVersion: pin.keyVersion ?? null,
-        encryptionPublicKey: pin.encryptionPublicKey,
-        signingPublicKey: pin.signingPublicKey,
-        mlDsaPublicKeyHash: pin.mlDsaPublicKeyHash!,
-        kemPublicKeyHash: pin.kemPublicKeyHash!,
-        previousSigningKeys: replaced.filter((key) => key !== pin.signingPublicKey),
-        verified: trust === 'verified' || (same && previous?.verified === true),
-    };
 }

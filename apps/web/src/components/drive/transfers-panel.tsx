@@ -467,20 +467,7 @@ export function TransfersPanel() {
     return (
         <section
             aria-label="Transfers"
-            // Its height, for toasts to sit above it. It sits above the selection bar itself.
-            ref={(element) => {
-                if (!element) return;
-                const root = document.documentElement;
-                const lift = () =>
-                    root.style.setProperty('--transfers-lift', `${element.offsetHeight + 8}px`);
-                lift();
-                const observer = new ResizeObserver(lift);
-                observer.observe(element);
-                return () => {
-                    observer.disconnect();
-                    root.style.removeProperty('--transfers-lift');
-                };
-            }}
+            // It sits above the selection bar; toasts sit in front of it.
             className="fixed right-4 bottom-[calc(1rem+var(--selection-lift,0px))] z-40 flex w-[calc(100%-2rem)] max-w-[420px] flex-col overflow-hidden rounded-xl border border-edge bg-card text-card-foreground shadow-xl transition-[bottom] duration-200 sm:right-6 sm:bottom-[calc(1.5rem+var(--selection-lift,0px))]"
         >
             <header className="flex items-center gap-3 py-3 pr-2 pl-4">

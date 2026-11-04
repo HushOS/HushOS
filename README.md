@@ -33,7 +33,7 @@ The detail behind every line above is in the security page, `docs/drive-design.m
 
 ## Stack
 
-- Bun workspaces and Turborepo; **Bun 1.4.2**, TypeScript 7.0.2.
+- Bun workspaces and Turborepo; **Bun 1.4.4**, TypeScript 7.0.2.
 - TanStack Start + React Query on **Vite 8**, with Nitro v3 targeting Bun in production.
 - Tailwind v4, shadcn/ui **Base UI**, and locally bundled Fontsource Variable **Geist Sans** for text and **Geist Mono** for codes. The look is specified in [`DESIGN.md`](DESIGN.md), served at `/design.md`.
 - Elysia **2.0.0-beta.12** mounted at `/api` inside TanStack Start, with typed Eden Treaty and Eden Fetch clients.
@@ -47,7 +47,7 @@ apps/
         src/lib/                    API clients, React Query options, utilities
         src/components/ui/          shadcn Base UI components
         src/lib/api.server.ts       Elysia handlers mounted by src/routes/api/$.ts
-        server/plugins/             Request IDs and database shutdown
+        server/plugins/             Startup env check, request IDs, headers, database shutdown
         nitro.config.ts             Nitro server and logging configuration
 packages/
     auth/                           Registration, sessions, browser auth client
@@ -74,7 +74,7 @@ That runs the whole stack on [http://localhost:5173](http://localhost:5173): the
 
 ## Start locally
 
-Install Bun 1.4.2 and Docker with Compose 2.24.4+ (or newer). Start Docker, then:
+Install Bun 1.4.4 and Docker with Compose 2.24.4+ (or newer). Start Docker, then:
 
 ```sh
 bun install --frozen-lockfile

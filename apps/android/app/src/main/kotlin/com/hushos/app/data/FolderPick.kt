@@ -22,7 +22,7 @@ object FolderPick {
     fun read(resolver: ContentResolver, tree: Uri): Picked? {
         val rootId = DocumentsContract.getTreeDocumentId(tree)
         val top = resolver.query(DocumentsContract.buildDocumentUriUsingTree(tree, rootId), arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)
-            ?.use { if (it.moveToFirst()) it.getString(0) else null } ?: return null
+            ?.use { if (it.moveToFirst()) it.getString(0) else null }?.let(::wellFormed) ?: return null
         if (hidden(top)) return Picked(top, emptyList(), emptyList())
         val files = ArrayList<File>()
         val folders = arrayListOf(listOf(top))
@@ -30,7 +30,8 @@ object FolderPick {
         fun walk(id: String, path: List<String>) {
             val children = ArrayList<Triple<String, String, String?>>()
             resolver.query(DocumentsContract.buildChildDocumentsUriUsingTree(tree, id), columns, null, null, null)?.use { cursor ->
-                while (cursor.moveToNext()) children.add(Triple(cursor.getString(0), cursor.getString(1) ?: continue, cursor.getString(2)))
+                // Names as the provider gives them may hold a lone surrogate: made well formed before they become folders and files.
+                while (cursor.moveToNext()) children.add(Triple(cursor.getString(0), wellFormed(cursor.getString(1) ?: continue), cursor.getString(2)))
             }
             for ((child, name, mime) in children) {
                 if (hidden(name)) continue

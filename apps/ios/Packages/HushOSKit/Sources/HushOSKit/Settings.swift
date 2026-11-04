@@ -130,15 +130,91 @@ struct Settings {
         if pin.resealShares == true { raw["resealShares"] = true }
         // Known here: a words check (no origin) clears a group's; a followed pin carries it on.
         if let via = pin.trustedVia { raw["trustedVia"] = via } else { raw.removeValue(forKey: "trustedVia") }
+        if let firstSeen = pin.firstSeen { raw["firstSeen"] = firstSeen }
         contacts[pin.userId] = raw
         document["contacts"] = contacts
     }
 
-    mutating func removePin(_ userId: String) {
-        var contacts = rawContacts
-        contacts[userId] = nil
-        document["contacts"] = contacts
+    /* The pin of `userId`, under its id in any letters (the web's pinOf). */
+    func pin(of userId: String) -> ContactPin? {
+        let id = userId.lowercased()
+        let all = contacts
+        return all[userId] ?? all.first(where: { $0.key.lowercased() == id })?.value
     }
+
+    /*
+     * `pin` written for its person, under the served id (a pin stored under the id in other letters
+     * goes), their removal forgotten (they are a contact again), and removals forgotten oldest first
+     * for room; refused with `contactsFull` when the document would not seal even without any.
+     */
+    mutating func setPinOnce(_ pin: ContactPin) throws {
+        var next = self
+        var contacts = next.rawContacts
+        // A pin another client stored under the id in other letters moves to the served id first, whole: the
+        // fields this version doesn't know (another client's, a later version's) go with it, and only then are
+        // the known ones written over.
+        let others = contacts.keys.filter { $0 != pin.userId && $0.lowercased() == pin.userId.lowercased() }.sorted()
+        if contacts[pin.userId] == nil, let other = others.first { contacts[pin.userId] = contacts[other] }
+        for key in others { contacts[key] = nil }
+        next.document["contacts"] = contacts
+        next.setPin(pin)
+        next.forgetRemoval(pin.userId)
+        next.fit()
+        guard try next.bytes() <= Self.maxBytes else { throw ContactError.message(Self.contactsFull) }
+        self = next
+    }
+
+    /* The pin removed and the removal recorded (docs/optional-verification.md 2.8): nothing adds them back on its own. */
+    mutating func removeContact(_ userId: String, at: String) {
+        let id = userId.lowercased()
+        var contacts = rawContacts
+        for key in contacts.keys where key.lowercased() == id { contacts[key] = nil }
+        document["contacts"] = contacts
+        var removed = removals.filter { $0.id != id }
+        removed.append((id, at))
+        document["removedContacts"] = Dictionary(removed.map { ($0.id, $0.at) }, uniquingKeysWith: { a, _ in a })
+        fit()
+    }
+
+    /* What a sealed document may hold (the core refuses more), and what adding someone says past it (2.7). */
+    static let maxBytes = 64 * 1024
+    public static let contactsFull = "Your contacts are full. Remove someone you no longer share with."
+
+    /*
+     * The removals the document records (`removedContacts`), oldest first; anything malformed is
+     * left out, so an odd value from another client never stops a save.
+     */
+    var removals: [(id: String, at: String)] {
+        guard let removed = document["removedContacts"] as? [String: Any] else { return [] }
+        return removed.compactMap { key, value in (value as? String).map { (key.lowercased(), $0) } }
+            .sorted { $0.at < $1.at || ($0.at == $1.at && $0.id < $1.id) }
+    }
+
+    /* Whether this account removed `userId` and has not added them back. */
+    func removed(_ userId: String) -> Bool { removals.contains { $0.id == userId.lowercased() } }
+
+    mutating func forgetRemoval(_ userId: String) {
+        guard document["removedContacts"] != nil else { return }
+        let kept = removals.filter { $0.id != userId.lowercased() }
+        if kept.isEmpty { document["removedContacts"] = nil } else {
+            document["removedContacts"] = Dictionary(kept.map { ($0.id, $0.at) }, uniquingKeysWith: { a, _ in a })
+        }
+    }
+
+    /*
+     * Removals count against the room a document has (2.7): the oldest are forgotten first, one at
+     * a time, until it seals. A document too large without any is left for the caller to refuse.
+     */
+    mutating func fit() {
+        var removed = removals
+        while !removed.isEmpty, ((try? bytes()) ?? 0) > Self.maxBytes {
+            removed.removeFirst()
+            document["removedContacts"] = removed.isEmpty ? nil : Dictionary(removed.map { ($0.id, $0.at) }, uniquingKeysWith: { a, _ in a })
+        }
+    }
+
+    /* The sealed document's size, as the core measures it. */
+    func bytes() throws -> Int { try json().utf8.count }
 
     var ledger: SharingLedger {
         get {
@@ -212,6 +288,83 @@ struct Settings {
         document["groups"] = groups
     }
 
+    // MARK: Family checks (docs/optional-verification.md 3.4, 7.2; the web's lib/groups/family-checks.ts)
+
+    /*
+     * Which families this person vouched for: `familyChecks`, one record per family (a family
+     * check `{rosterVersion, with, code, checkedAt}`, or `{rosterVersion, how, checkedAt}` with
+     * `how` one of `before`, `created`, `join`), and `familyChecksSince`, when this account's first
+     * client able to take a family on first use began writing them. Every family accepted before
+     * first use existed was anchored by creation or a compared join code, so a group pin with no
+     * record reads as checked until the marker is set, and as first use after it. Both are kept as
+     * another client wrote them: only a record this account has none of is ever added.
+     */
+
+    /* JavaScript's truthiness, as the web reads these fields: absent, null, false, 0 and "" are not set. */
+    private static func truthy(_ value: Any?) -> Bool {
+        guard let value, !(value is NSNull) else { return false }
+        if let number = value as? NSNumber {
+            if CFGetTypeID(number) == CFBooleanGetTypeID() { return number.boolValue }
+            return number.doubleValue != 0 && !number.doubleValue.isNaN
+        }
+        if let text = value as? String { return !text.isEmpty }
+        return true
+    }
+
+    /* A roster version as the web's Number.isSafeInteger reads it: never a boolean. */
+    private static func safeInteger(_ value: Any?) -> NSNumber? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        let double = number.doubleValue
+        guard double.rounded() == double, abs(double) <= 9_007_199_254_740_991 else { return nil }
+        return number
+    }
+
+    /* Whether this person vouched for `groupId`: a check record, or a pin from before the marker (the web's familyChecked). */
+    func familyChecked(_ groupId: String) -> Bool {
+        if Self.truthy((document["familyChecks"] as? [String: Any])?[groupId]) { return true }
+        guard Self.truthy((document["groups"] as? [String: Any])?[groupId]) else { return false }
+        return !Self.truthy(document["familyChecksSince"])
+    }
+
+    /*
+     * The document a family pin is saved into (the web's withFamilyChecks): the marker, if it is
+     * missing, with a `before` record at each pin's own roster for every family pin already here;
+     * then a record of what vouched for this acceptance (`checked`: created, or a join code
+     * compared). A first-use acceptance (`checked` nil) adds no record. **The invariant (7.2):** no
+     * group pin is ever saved into settings that lack the marker without it, so a pin labelled
+     * `before` was never a first-use one. Derived again on every attempt of the compare-and-set.
+     */
+    mutating func markFamilyChecks(now: String, acceptance: (groupId: String, checked: FamilyChecked?)? = nil) {
+        var checks = document["familyChecks"] as? [String: Any] ?? [:]
+        var since = document["familyChecksSince"]
+        if !Self.truthy(since) {
+            for (groupId, pin) in document["groups"] as? [String: Any] ?? [:] {
+                guard !Self.truthy(checks[groupId]), let pin = pin as? [String: Any], let version = Self.safeInteger(pin["rosterVersion"]) else { continue }
+                checks[groupId] = ["rosterVersion": version, "how": "before", "checkedAt": now]
+            }
+            since = now
+        }
+        if let acceptance, let checked = acceptance.checked, checked.how != .compared, !Self.truthy(checks[acceptance.groupId]) {
+            checks[acceptance.groupId] = ["rosterVersion": NSNumber(value: checked.rosterVersion), "how": checked.how == .created ? "created" : "join",
+                                          "checkedAt": now]
+        }
+        document["familyChecks"] = checks
+        document["familyChecksSince"] = since
+    }
+
+    /* A family check this person made (3.4), with the marker first if it is missing: what They match saves. */
+    mutating func setFamilyCheck(_ groupId: String, _ check: FamilyCheck) {
+        markFamilyChecks(now: check.checkedAt)
+        var checks = document["familyChecks"] as? [String: Any] ?? [:]
+        checks[groupId] = ["rosterVersion": NSNumber(value: check.rosterVersion), "with": check.with, "code": check.code, "checkedAt": check.checkedAt]
+        document["familyChecks"] = checks
+    }
+
+    /* The other member of this person's family check of `groupId`, if the record is one. */
+    func familyCheckWith(_ groupId: String) -> String? {
+        ((document["familyChecks"] as? [String: Any])?[groupId] as? [String: Any])?["with"] as? String
+    }
+
     /* The document as sealed: compact, keys sorted, version 2 (read as 1 or 2; the only one that may hold version 3 pins). */
     func json() throws -> String {
         var out = document
@@ -236,20 +389,28 @@ extension ContactPin {
 
     var displayName: String { name.isEmpty ? email : name }
 
-    /*
-     * The keys a share to this person is sealed to, given what the server serves for them: the
-     * pinned X25519 key and the served ML-KEM key, only when the comparison is `same` (so the
-     * ML-KEM and ML-DSA keys are the ones the version 3 pin's digests name). Never X25519 alone.
-     */
-    func sealKeys(_ served: ServedContactKeys) throws -> (publicKey: Data, kem: Data) {
-        guard verified else { throw ContactError.recheck(displayName) }
-        switch compare(served) {
-        case .same: break
-        case .recheck: throw ContactError.recheck(displayName)
-        case .succession, .changed: throw ContactError.changed
-        }
-        guard let kemPublicKey = served.kemPublicKey, let kem = try? base64urlDecode(value: kemPublicKey) else { throw ContactError.changed }
-        return (try base64urlDecode(value: encryptionPublicKey), kem)
+    /* The first word of the name, as every sentence about them says it ("Maya’s account changed"). */
+    public var firstName: String { displayName.split(separator: " ").first.map(String.init) ?? displayName }
+
+    /* The key fields every pin rule reads (the core's `PinKeys`). */
+    var keys: PinKeys {
+        PinKeys(keyVersion: keyVersion, encryptionPublicKey: encryptionPublicKey, signingPublicKey: signingPublicKey,
+                mlDsaPublicKeyHash: mlDsaPublicKeyHash, kemPublicKeyHash: kemPublicKeyHash, fingerprint: fingerprint)
+    }
+
+    /* Verified (a words check), seen (first-seen: the keys first met, nobody checked), legacy or invalid: the core's one rule. */
+    public var trust: PinTrust { pinTrust(pin: keys) }
+
+    /* The key commitment over its four keys (never `fingerprint`, which every first-seen pin holds as ""); nil when malformed. */
+    var commitment: String? { keyCommitment(pin: keys) }
+
+    /* Whether two pins hold the same keys: by key commitment, or for pins without one, by every key field. */
+    static func sameKeys(_ a: ContactPin?, _ b: ContactPin?) -> Bool {
+        guard let a, let b else { return a == nil && b == nil }
+        let (left, right) = (a.commitment, b.commitment)
+        if left != nil || right != nil { return left == right }
+        return a.encryptionPublicKey == b.encryptionPublicKey && a.signingPublicKey == b.signingPublicKey
+            && a.mlDsaPublicKeyHash == b.mlDsaPublicKeyHash && a.kemPublicKeyHash == b.kemPublicKeyHash
     }
 }
 
@@ -259,7 +420,33 @@ extension Vault {
         if let settingsKey { return settingsKey }
         let key = try settingsKeyOpen(userId: session.userId, accountKey: try unlockAccount(), envelope: envelope)
         settingsKey = key
+        settingsKeyEnvelope = envelope
         return key
+    }
+
+    /*
+     * The settings key the rollback marks are sealed under (RollbackMarks): the envelope kept
+     * beside them when it opens under the account key (it does until a master-key rotation), else
+     * the one this process opened, else the server's (`served` when the caller has just read it).
+     * With `create`, an account with none gets one; without, nil.
+     */
+    func marksKey(kept: SettingsKeyEnvelope?, create: Bool, served: SettingsKeyEnvelope? = nil) async throws -> MarksKey? {
+        if let kept, let key = try? settingsKeyOpen(userId: session.userId, accountKey: try unlockAccount(), envelope: kept) {
+            return MarksKey(key: key, envelope: kept)
+        }
+        if let settingsKey, let settingsKeyEnvelope { return MarksKey(key: settingsKey, envelope: settingsKeyEnvelope) }
+        var stored = served
+        if stored == nil { stored = try await Auth.settings(as: session).key }
+        if let stored { return MarksKey(key: try openSettingsKey(stored), envelope: settingsKeyEnvelope ?? stored) }
+        guard create else { return nil }
+        let key = try await ensureSettingsKey(nil)
+        guard let settingsKeyEnvelope else { return nil }
+        return MarksKey(key: key, envelope: settingsKeyEnvelope)
+    }
+
+    /* The marks' key, asked of this vault (`served`: the settings key envelope just read, if any). */
+    func marksKeys(served: SettingsKeyEnvelope? = nil) -> MarksKeys {
+        { kept, create in try await self.marksKey(kept: kept, create: create, served: served) }
     }
 
     /*
@@ -270,11 +457,13 @@ extension Vault {
         if let stored { return try openSettingsKey(stored) }
         let made = try settingsKeyCreate(userId: session.userId, accountKey: try unlockAccount())
         do {
-            try await Auth.putSettingsKey(made.envelope)
+            // Under this vault's own session: a key is stored once and for good, so never into another account.
+            try await Auth.putSettingsKey(made.envelope, as: session)
             settingsKey = made.key
+            settingsKeyEnvelope = made.envelope
             return made.key
         } catch AuthError.conflict {
-            guard let raced = try await Auth.settings().key else { throw AuthError.message("Your settings key couldn’t be read. Try again.") }
+            guard let raced = try await Auth.settings(as: session).key else { throw AuthError.message("Your settings key couldn’t be read. Try again.") }
             return try openSettingsKey(raced)
         }
     }
@@ -286,10 +475,12 @@ extension Vault {
      * reproduces): it reads as empty settings, and the next save starts afresh at version 2.
      */
     func loadSettings() async throws -> Settings {
-        let marks = SettingsMarks.shared
-        let reply = try await Auth.settings()
-        // The stored sequence decides, document or not: below the mark is a rollback, a version 1 row included.
-        try marks.check(userId: session.userId, served: reply.version)
+        let marks = RollbackMarkStore.shared(session: session.token)
+        let reply = try await Auth.settings(as: session)
+        let document = reply.envelope?.version == 2
+        // The stored sequence decides, document or not: below the mark is a rollback, a version 1 row included;
+        // and once a version 2 document was seen here, anything else is.
+        try SettingsMarks.check(try await marks.read(userId: session.userId, keys: marksKeys(served: reply.key)), served: reply.version, document: document)
         var settings: Settings
         if let envelope = reply.envelope {
             guard envelope.settingsVersion == reply.version else { throw ContactError.message("Your settings didn’t add up. Try again later.") }
@@ -306,7 +497,10 @@ extension Vault {
         }
         settings.keyEnvelope = reply.key
         settings.served = reply.envelope
-        marks.record(userId: session.userId, version: reply.version)
+        // Taken only with its mark kept: a later visit could not tell an older copy from it otherwise. Checked
+        // again against what the write found, for a newer sequence another read recorded meanwhile.
+        let kept = try await marks.raise(userId: session.userId, to: RollbackMarks(settings: reply.version, settingsDocument: document, identity: 0, identityVersion: 0), keys: marksKeys(served: reply.key))
+        try SettingsMarks.check(kept, served: reply.version, document: document)
         lastPins = settings.contacts
         // The area ledger takes the families' marks from every settings read, as the web's worker does.
         try? useForFamilies(settings)
@@ -319,18 +513,22 @@ extension Vault {
      * meanwhile makes the server refuse the stale base: read again and apply the change again.
      */
     @discardableResult
-    func updateSettings(_ change: (inout Settings) throws -> Void) async throws -> Settings {
+    func updateSettings(_ change: (inout Settings) throws -> Void, beforeSend: ((_ base: UInt64) throws -> Void)? = nil) async throws -> Settings {
         var attempt = 0
         while true {
             var settings = try await loadSettings()
             try change(&settings)
+            // Removals count against the room the document has: the oldest go first (docs/optional-verification.md 2.7).
+            settings.fit()
             let settingsKey = try await ensureSettingsKey(settings.keyEnvelope)
+            // Each attempt names the sequence it lands over (a contact act's pending record), before it is sent.
+            try beforeSend?(settings.version)
             // Named by the stored sequence (a version 1 row's too) and sealed one above it, where the server stores it.
             let sealed = try settingsSeal(userId: session.userId, settingsKey: settingsKey, settingsVersion: settings.version + 1, json: try settings.json())
             do {
-                let stored = try await Auth.putSettings(expectedVersion: settings.version, envelope: sealed)
+                let stored = try await Auth.putSettings(expectedVersion: settings.version, envelope: sealed, as: session)
                 guard stored == sealed.settingsVersion else { throw ContactError.message("Your settings couldn’t be saved. Try again later.") }
-                SettingsMarks.shared.record(userId: session.userId, version: stored)
+                try await RollbackMarkStore.shared(session: session.token).raise(userId: session.userId, to: RollbackMarks(settings: stored, settingsDocument: true, identity: 0, identityVersion: 0), keys: marksKeys())
                 settings.version = stored
                 settings.envelopeVersion = sealed.version
                 settings.served = sealed

@@ -1,0 +1,241 @@
+package com.hushos.app.data
+
+import android.content.Context
+import android.net.Uri
+import android.provider.DocumentsContract
+import com.hushos.core.deviceRemember
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
+import org.robolectric.annotation.Config
+import java.io.File
+import java.util.UUID
+
+/*
+ * The system Files app keeps a folder's listing until that folder's children URI is notified. Every write the phone
+ * makes (from the app, a transfer job, or Files itself through the provider) and every sync that changes a folder must
+ * notify it, by the document id Files holds ("root" for the top folder). And the provider's Vault must see changes
+ * another Vault in the same process (the app's) already pulled into the shared mirror, or Files is told and still
+ * shows the old listing. The real Vault and DriveApi against FakeDrive on loopback; notifications as Robolectric's
+ * ContentResolver records them.
+ */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
+class FilesChangesTest {
+    private val server = FakeDrive()
+    private lateinit var context: Context
+
+    // Drive { A { f.txt }, B { g.txt } }
+    private val a = server.folder(server.root, "A")
+    private val f = server.file(a, "f.txt", ByteArray(64) { it.toByte() })
+    private val b = server.folder(server.root, "B")
+    private val g = server.file(b, "g.txt", ByteArray(32) { it.toByte() })
+
+    @Before
+    fun signIn() {
+        context = RuntimeEnvironment.getApplication()
+        Shared::class.java.getDeclaredField("opened").apply { isAccessible = true }
+            .set(null, context.getSharedPreferences("files-changes-test", Context.MODE_PRIVATE))
+        Shared.writeSession(context, Shared.Session(server.origin, server.token, server.userId, "me@example.org"))
+        Shared.writeDevice(context, deviceRemember(server.userId, server.accountKey, 1uL, 1uL, UUID.randomUUID().toString()))
+        freshMirror()
+    }
+
+    @After
+    fun close() {
+        freshMirror()
+        server.close()
+        assertEquals("routes the fake does not serve", emptyList<String>(), server.unknown)
+    }
+
+    /* The mirror is one per process, and Robolectric keeps statics between tests: each test starts from an empty one. */
+    private fun freshMirror() {
+        Mirror::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(null, null)
+        context.deleteDatabase("mirror.db")
+    }
+
+    private fun vault() = Vault(context, DriveApi(Shared.session(context)!!))
+
+    private fun children(documentId: String): Uri = DocumentsContract.buildChildDocumentsUri(FilesRoots.authority(context), documentId)
+
+    /* What `block` notified, in order. */
+    private fun notified(block: () -> Unit): List<Uri> {
+        val shadow = shadowOf(context.contentResolver)
+        val before = shadow.notifiedUris.size
+        block()
+        return shadow.notifiedUris.drop(before).map { it.uri }
+    }
+
+    private fun file(name: String) = File(File(context.cacheDir, "files-changes-" + UUID.randomUUID()).also { it.mkdirs() }, name)
+        .also { it.writeBytes(ByteArray(100) { i -> (i * 7).toByte() }) }
+
+    @Test
+    fun everyWriteTellsTheFoldersWhoseChildrenItChanged() {
+        val vault = vault()
+        vault.buildCatalogue()
+        val root = server.root
+
+        // An upload landing (the app's, a transfer job's): its folder, and the top folder by both names Files may hold.
+        assertTrue(children(a) in notified { vault.upload(file("new.txt"), "new.txt", "text/plain", a, null) })
+        val atTop = notified { vault.upload(file("top.txt"), "top.txt", "text/plain", root, null) }
+        assertTrue("the top folder as Files names it", children(FilesRoots.ROOT_DOCUMENT) in atTop)
+        assertTrue("the top folder by its node id", children(root) in atTop)
+
+        assertTrue(children(a) in notified { vault.createFolder(a, "Inside") })
+        assertTrue(children(b) in notified { vault.rename(g, "g renamed.txt") })
+
+        // A move changes two listings: the folder it left and the one it entered.
+        val moved = notified { vault.move(f, b) }
+        assertTrue("the folder it left", children(a) in moved)
+        assertTrue("the folder it entered", children(b) in moved)
+
+        assertTrue(children(b) in notified { vault.trash(g) })
+    }
+
+    @Test
+    fun theProviderSeesWhatTheAppAlreadyPulledAndFilesIsToldOfIt() {
+        // The app's Vault and the provider's, one process, one mirror.
+        val app = vault()
+        val provider = vault()
+        app.buildCatalogue()
+        provider.buildCatalogue()
+
+        // Added elsewhere (the web): the app's live sync pulls it first and moves the mirror's cursor past it.
+        val added = server.file(a, "from the web.txt", ByteArray(10))
+        assertTrue(added in app.sync()!!)
+
+        val told = notified { assertTrue("the provider's sync still brings it", added in provider.sync()!!) }
+        assertTrue("its folder is told", children(a) in told)
+        assertTrue("the provider's listing has it", provider.listChildren(a).any { it.id == added })
+    }
+
+    /*
+     * The provider fell behind and the server has dropped tombstones since: its pull starts over, clearing the shared
+     * mirror, and the connection drops after the first page. The app was current; its next sync must not move the
+     * mirror's cursor past rows the refill never restored, or every later cold build leaves those files out for good.
+     */
+    @Test
+    fun aRefillThatFailsPartwayIsFinishedBeforeAnyoneMovesTheMirrorPastIt() {
+        val app = vault()
+        val provider = vault()
+        app.buildCatalogue()
+        provider.buildCatalogue()
+        val later = (1..4).map { server.file(b, "later-$it.txt", ByteArray(8)) }
+        app.sync()
+        server.tombstonesDroppedThrough = app.catalogueCursor
+        server.changesPage = 2
+        server.changePagesLeft = 1
+        assertTrue("the provider's refill fails partway", runCatching { provider.sync() }.isFailure)
+        server.changePagesLeft = null
+
+        app.sync()
+
+        // The next process: a vault built cold from what the mirror holds.
+        val cold = vault()
+        cold.buildCatalogue()
+        val listed = cold.catalogueAll().map { it.id }.toSet()
+        for (id in listOf(a, f, b, g) + later) assertTrue("$id is in the cold catalogue", id in listed)
+        assertEquals(setOf(g) + later, cold.catalogueChildren(b)!!.map { it.id }.toSet())
+    }
+
+    /*
+     * The app reset the mirror (its cursor predated dropped tombstones), so the provider's next poll rebuilds its
+     * catalogue, and that rebuild fails (the server answers 500). The poll after it succeeds: the folder that changed
+     * while the provider was behind must still be told, or Files keeps the old listing for good (the provider's cursor
+     * is current by then, and no later poll brings that change again).
+     */
+    @Test
+    fun aRebuildThatFailsStillTellsTheFoldersOnceALaterPollSucceeds() {
+        val app = vault()
+        val provider = vault()
+        app.buildCatalogue()
+        provider.buildCatalogue()
+        val added = server.file(b, "while behind.txt", ByteArray(8))
+        server.tombstonesDroppedThrough = app.catalogueCursor + 1
+        app.sync()
+
+        server.changePagesLeft = 0
+        assertTrue("the provider's rebuild fails", runCatching { provider.sync() }.isFailure)
+        server.changePagesLeft = null
+
+        val told = notified { provider.sync() }
+        assertTrue("the folder that changed is told", children(b) in told)
+        assertTrue("and lists the file", provider.listChildren(b).any { it.id == added })
+    }
+
+    /*
+     * Deleted for good on the server while the provider was behind (f from A; g, already in the Trash, from B), and the
+     * tombstones dropped since: the provider's pull starts over and the refill simply omits them. The rebuilt catalogue
+     * must let go of them as a tombstone would (gone from resolve, from everything live, from the Trash), and tell
+     * their folders, rather than keep serving the rows it had cached.
+     */
+    @Test
+    fun aRefillThatOmitsPurgedNodesEvictsThemAsTombstonesWould() {
+        val provider = vault()
+        provider.buildCatalogue()
+        server.trash(g)
+        provider.sync()
+        assertTrue("in the Trash before", provider.catalogueTrash()!!.any { it.item.id == g })
+        assertTrue("live before", provider.catalogueAll().any { it.id == f })
+
+        server.drop(f)
+        server.drop(g)
+        server.tombstonesDroppedThrough = provider.catalogueCursor + 1
+        val told = notified { provider.sync() }
+
+        for (id in listOf(f, g)) {
+            assertTrue("$id no longer resolves", runCatching { provider.resolve(id) }.isFailure)
+            assertTrue("$id is marked gone", provider.removed(server.workspace, id))
+        }
+        assertFalse("f left everything live", provider.catalogueAll().any { it.id == f })
+        assertFalse("g left the Trash", provider.catalogueTrash()!!.any { it.item.id == g })
+        assertTrue("A is told", children(a) in told)
+        assertTrue("B is told", children(b) in told)
+    }
+
+    /*
+     * A sync finds a file under a folder this device never saw (the feed page with the folder was missed): it files
+     * what it can and leaves the catalogue to be built again. The build that follows, once the folder arrives, must tell
+     * the top folder it appeared in, as a sync would have; a plain build tells nobody.
+     */
+    @Test
+    fun theBuildAfterRowsUnderAnUnseenFolderTellsWhereTheFolderAppeared() {
+        val provider = vault()
+        provider.buildCatalogue()
+        val unseen = server.folder(server.root, "Unseen")
+        server.missedByFeed.add(unseen)
+        server.file(unseen, "inside.txt", ByteArray(8))
+        provider.sync()
+
+        server.missedByFeed.clear()
+        server.touch(unseen)
+        val told = notified { provider.sync() }
+        assertTrue("the top folder is told", children(FilesRoots.ROOT_DOCUMENT) in told)
+        assertTrue("and lists the folder", provider.listChildren(server.root).any { it.id == unseen })
+    }
+
+    @Test
+    fun aSyncTellsTheFolderAMoveLeftAsWellAsTheOneItEntered() {
+        val app = vault()
+        val provider = vault()
+        app.buildCatalogue()
+        provider.buildCatalogue()
+        assertTrue(provider.listChildren(a).any { it.id == f })
+
+        app.move(f, b)
+        lateinit var touched: Set<String>
+        val told = notified { touched = provider.sync()!! }
+        assertTrue("the folder it left is among what the sync touched", a in touched)
+        assertTrue("the folder it left is told", children(a) in told)
+        assertTrue("the folder it entered is told", children(b) in told)
+        assertFalse("gone from the folder it left", provider.listChildren(a).any { it.id == f })
+        assertTrue("in the folder it entered", provider.listChildren(b).any { it.id == f })
+    }
+}

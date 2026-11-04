@@ -1,5 +1,16 @@
 package com.hushos.app.ui
 
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.foundation.selection.selectable
+import com.hushos.core.folderSwatches
+import com.hushos.core.folderColour
+import com.hushos.core.swatchArgb
+import com.hushos.core.toColour
+import androidx.compose.runtime.retain.retain
 import android.content.Context
 import android.content.Intent
 import android.graphics.BitmapFactory
@@ -8,6 +19,16 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -92,6 +113,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.hushos.app.data.Offline
 import com.hushos.app.data.Opened
 import com.hushos.app.data.savedLineOf
@@ -104,7 +126,7 @@ import java.time.Instant
 import java.time.temporal.ChronoUnit
 
 /* Which part of the item sheet opens first: the menu, or one action straight from the selection bar or Info. */
-enum class ItemSheet { MENU, RENAME, MOVE, VERSIONS, TAGS, INFO, SHARE, SEND, REPORT }
+enum class ItemSheet { MENU, RENAME, MOVE, COLOUR, VERSIONS, TAGS, INFO, SHARE, SEND, REPORT }
 
 /* Whose folder an item sits in: this account's, or someone else's that it can edit or only view. */
 enum class Owner { ME, EDIT, VIEW }
@@ -116,12 +138,15 @@ fun receivedVia(model: DriveViewModel, state: DriveState, item: Opened): Vault.S
     var steps = 0
     while (cursor != null && steps++ < 256) {
         mounts.firstOrNull { it.root?.id == cursor?.id }?.let { return it }
-        cursor = cursor.node.parentId?.let { model.item(it) }
+        // A parent is in its child's workspace: looked up there, never by id alone.
+        cursor = cursor.node.parentId?.let { model.itemIn(cursor!!.node.workspaceId, it) }
     }
     return null
 }
 
 fun ownerOf(model: DriveViewModel, state: DriveState, item: Opened): Owner {
+    // A family folder's item is never this account's own: changed as the family's while its folder may be written here.
+    if (model.families.isFamilyItem(item)) return if (model.families.writable(item)) Owner.EDIT else Owner.VIEW
     val own = state.rootId?.let { model.item(it) }?.node?.workspaceId
     if (own == null || item.node.workspaceId == own) return Owner.ME
     return if (receivedVia(model, state, item)?.share?.role == "editor") Owner.EDIT else Owner.VIEW
@@ -145,8 +170,8 @@ fun sheetLine(model: DriveViewModel, state: DriveState, item: Opened): String {
 @Composable
 fun ItemHeader(model: DriveViewModel, state: DriveState, item: Opened, subtitle: String? = null, open: Boolean = false) {
     val alpine = Alpine.colors
-    LaunchedEffect(item.id) { model.thumbnail(item) }
-    val thumbnail = state.thumbnails[item.id]
+    LaunchedEffect(thumbnailKey(item)) { model.thumbnail(item) }
+    val thumbnail = state.thumbnails[thumbnailKey(item)]
     val bitmap = remember(thumbnail) { thumbnail?.let { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() } }
     val line = subtitle ?: sheetLine(model, state, item)
     Row(Modifier.fillMaxWidth().padding(start = AlpineSpace.S6, end = AlpineSpace.S6, bottom = AlpineSpace.S3), verticalAlignment = Alignment.CenterVertically) {
@@ -157,7 +182,7 @@ fun ItemHeader(model: DriveViewModel, state: DriveState, item: Opened, subtitle:
             Text(item.name, style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Normal), maxLines = 2, overflow = TextOverflow.Ellipsis)
             // A sheet's header is a detail, not a list row: plain words, no link icon.
             if (line.isNotEmpty()) Text(line, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            if (model.unverified(item, state) != null) Box(Modifier.padding(top = AlpineSpace.S1)) { UnverifiedMark(model, state, item) }
+            if (model.marked(item, state)) Box(Modifier.padding(top = AlpineSpace.S1)) { UnverifiedMark(model, state, item) }
         }
     }
 }
@@ -187,13 +212,37 @@ private fun SheetDivider() = HorizontalDivider(Modifier.padding(horizontal = Alp
  */
 @Composable
 fun ItemActions(model: DriveViewModel, state: DriveState, item: Opened, open: ItemSheet = ItemSheet.MENU, onSelect: (() -> Unit)? = null, dismiss: () -> Unit) {
-    var sheet by remember { mutableStateOf(open) }
+    // Saved, so a fold, an unfold or a rotation keeps the sheet that was open (Rename, Share, Move), not the menu.
+    var sheet by rememberSaveable { mutableStateOf(open) }
     val context = LocalContext.current
     val owner = ownerOf(model, state, item)
     val mine = owner == Owner.ME
     val canEdit = owner != Owner.VIEW
+    // iOS 2's menu: send a copy of a file, rename, move within the family's folder, Info and Move to Trash while it may be
+    // written here; no share, keep, copy, tags, versions or report.
+    val family = model.families.isFamilyItem(item)
     when (sheet) {
-        ItemSheet.MENU -> Sheet(onDismissRequest = dismiss) { Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = AlpineSpace.S4)) {
+        ItemSheet.MENU -> if (family) Sheet(onDismissRequest = dismiss) { Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = AlpineSpace.S4)) {
+            ItemHeader(model, state, item)
+            SheetDivider()
+            if (canEdit) onSelect?.let { select ->
+                SheetRow("Select", Icons.Outlined.CheckCircleOutline) { select(); dismiss() }
+                SheetDivider()
+            }
+            if (!item.isFolder) SheetRow("Send a copy", Icons.AutoMirrored.Outlined.Send) { sheet = ItemSheet.SEND }
+            if (canEdit) {
+                SheetDivider()
+                SheetRow("Rename", Icons.Outlined.Edit) { sheet = ItemSheet.RENAME }
+                SheetRow("Move", Icons.AutoMirrored.Outlined.DriveFileMove) { sheet = ItemSheet.MOVE }
+                if (item.isFolder) SheetRow("Colour", Icons.Outlined.Palette) { sheet = ItemSheet.COLOUR }
+            }
+            SheetDivider()
+            SheetRow("Info", Icons.Outlined.Info) { sheet = ItemSheet.INFO }
+            if (canEdit) {
+                SheetDivider()
+                SheetRow("Move to Trash", Icons.Outlined.Delete, danger = true) { model.trash(item); dismiss() }
+            }
+        } } else Sheet(onDismissRequest = dismiss) { Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = AlpineSpace.S4)) {
             ItemHeader(model, state, item)
             SheetDivider()
             onSelect?.let { select ->
@@ -245,6 +294,7 @@ fun ItemActions(model: DriveViewModel, state: DriveState, item: Opened, open: It
             if (canEdit) SheetRow("Move", Icons.AutoMirrored.Outlined.DriveFileMove) { sheet = ItemSheet.MOVE }
             SheetRow("Copy", Icons.Outlined.ContentCopy) { model.copy(listOf(item)); dismiss() }
             if (mine) SheetRow("Tags", Icons.AutoMirrored.Outlined.Label) { sheet = ItemSheet.TAGS }
+            if (canEdit && item.isFolder) SheetRow("Colour", Icons.Outlined.Palette) { sheet = ItemSheet.COLOUR }
             SheetDivider()
             if (!item.isFolder && canEdit) SheetRow("Versions", Icons.Outlined.History) { sheet = ItemSheet.VERSIONS }
             SheetRow("Info", Icons.Outlined.Info) { sheet = ItemSheet.INFO }
@@ -259,13 +309,74 @@ fun ItemActions(model: DriveViewModel, state: DriveState, item: Opened, open: It
         } }
         ItemSheet.RENAME -> RenameDialog(model, state, item, dismiss)
         ItemSheet.MOVE -> MovePicker(model, state, listOf(item), dismiss)
+        ItemSheet.COLOUR -> FolderColourDialog(listOf(item), onPick = { model.recolour(listOf(item), it); dismiss() }, onDismiss = dismiss)
         ItemSheet.VERSIONS -> VersionsSheet(model, state, item, dismiss)
         ItemSheet.TAGS -> ItemTagsSheet(model, state, listOf(item), dismiss)
         ItemSheet.SHARE -> ShareSheet(model, state, item, dismiss)
         ItemSheet.SEND -> SendCopy(model, state, listOf(item), dismiss)
-        ItemSheet.INFO -> InfoSheet(model, state, item, onShare = { sheet = ItemSheet.SHARE }, onTags = { sheet = ItemSheet.TAGS }, dismiss = dismiss)
+        // Main shows Info: beside the list when the window has room, otherwise as this same sheet.
+        ItemSheet.INFO -> LocalInfo.current?.let { host -> LaunchedEffect(item.id) { host.open(item); dismiss() } }
+            ?: InfoSheet(model, state, item, onShare = { sheet = ItemSheet.SHARE }, onTags = { sheet = ItemSheet.TAGS }, dismiss = dismiss)
         ItemSheet.REPORT -> ReportSheet(item, model.reportsGoTo(state), dismiss) { category, reason, email -> model.report(item, category, reason, email) }
     }
+}
+
+/*
+ * A folder's colour, as the web's dialog offers it: the plain folder colour every folder starts with, the eight
+ * swatches, or a colour of its own typed as a hex. Choosing only marks the choice; Save writes one signed record
+ * per folder (null for the plain colour).
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun FolderColourDialog(folders: List<Opened>, onPick: (String?) -> Unit, onDismiss: () -> Unit) {
+    val alpine = Alpine.colors
+    val swatches = remember { folderSwatches() }
+    val first = folders.firstOrNull()?.let { folderColour(it.metadata.attributes) }
+    // "" is the plain folder colour: a saveable stand-in for null.
+    var choice by rememberSaveable { mutableStateOf(first.orEmpty()) }
+    var hex by rememberSaveable { mutableStateOf(if (first != null && swatches.none { it.colour == first }) first else "") }
+    val what = folders.singleOrNull()?.let { "“${it.name}”" } ?: "${folders.size} folders"
+    val typedWrong = hex.isNotEmpty() && toColour(hex) == null
+    @Composable
+    fun Swatch(value: String, name: String, fill: Color, check: Color) {
+        val on = value == choice
+        Box(
+            Modifier.size(44.dp)
+                .then(if (on) Modifier.border(2.dp, alpine.ink, CircleShape) else Modifier)
+                .padding(5.dp).background(fill, CircleShape).clip(CircleShape)
+                .selectable(selected = on, role = androidx.compose.ui.semantics.Role.RadioButton) { choice = value; hex = "" }
+                .semantics { contentDescription = name },
+            contentAlignment = Alignment.Center,
+        ) { if (on) Icon(Icons.Outlined.Check, null, tint = check, modifier = Modifier.size(18.dp)) }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Colour for $what") },
+        text = {
+            Column {
+                Text(
+                    if (folders.size == 1) "People who can open this folder see the colour too." else "People who can open these folders see the colour too.",
+                    modifier = Modifier.padding(bottom = 16.dp),
+                )
+                FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(2.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Swatch("", "Default", alpine.folderFront, alpine.folderBack)
+                    for (swatch in swatches) Swatch(swatch.colour, swatch.name, Color(swatchArgb(swatch.colour).toInt()), Color.White)
+                }
+                OutlinedTextField(
+                    value = hex, onValueChange = { typed -> hex = typed.trim(); toColour(hex)?.let { choice = it } },
+                    singleLine = true, label = { Text("Custom colour") }, placeholder = { Text("#7c5cbf") },
+                    isError = typedWrong, supportingText = if (typedWrong) ({ Text("Enter a colour like #7c5cbf.") }) else null,
+                    leadingIcon = if (choice.startsWith("#") && swatches.none { it.colour == choice }) {
+                        { Box(Modifier.size(18.dp).background(Color(swatchArgb(choice).toInt()), CircleShape)) }
+                    } else null,
+                    modifier = Modifier.padding(top = 16.dp).fillMaxWidth(),
+                )
+            }
+        },
+        // A custom colour half typed is not saved as the last one that was whole.
+        confirmButton = { TextButton(enabled = !typedWrong, onClick = { onPick(choice.ifEmpty { null }) }) { Text("Save") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 /* Rename: one field, the same clash message as iOS and the web. */
@@ -310,13 +421,17 @@ fun MovePicker(model: DriveViewModel, state: DriveState, items: List<Opened>, di
     val alpine = Alpine.colors
     val first = items.first()
     val excluded = items.map { it.id }.toSet()
+    // A family folder's items move within that family's folder only: its top folder is where the picker starts and ends.
+    val familyTop = first.takeIf { model.families.isFamilyItem(it) }?.let { model.families.topFolder(it.node.workspaceId) }
     // null: the top, where Files and the shared folders sit side by side.
-    var trail by remember { mutableStateOf(listOf(Place(state.rootId, "Files", state.rootId?.let { model.item(it) }?.node?.workspaceId))) }
+    var trail by retain {
+        mutableStateOf(listOf(familyTop?.let { Place(it.id, it.name, it.node.workspaceId) } ?: Place(state.rootId, "Files", state.rootId?.let { model.item(it) }?.node?.workspaceId)))
+    }
     val here = trail.lastOrNull()
     val folderId = here?.id
     LaunchedEffect(Unit) { if (state.shares == null) model.refreshShares() }
     LaunchedEffect(folderId) { folderId?.let { if (!state.folders.containsKey(it)) model.refresh(it) } }
-    val editable = state.shares.orEmpty().filter { it.share.role == "editor" && it.root?.isFolder == true }
+    val editable = if (familyTop != null) emptyList() else state.shares.orEmpty().filter { it.share.role == "editor" && it.root?.isFolder == true }
     val folders = if (here == null) emptyList() else (folderId?.let { state.folders[it] }?.filter { it.isFolder && it.id !in excluded } ?: emptyList())
     val already = folderId != null && items.all { it.node.parentId == folderId }
     // Who will be able to open it there: this account's people on a shared folder of its own, or the one who shared it.
@@ -426,13 +541,15 @@ fun SendCopy(model: DriveViewModel, state: DriveState, items: List<Opened>, dism
         done = 0
         job = scope.launch {
             val uris = ArrayList<Uri>()
+            // The rows the copies were made from: a file replaced meanwhile is sent as the type and name it is now.
+            val sent = ArrayList<Opened>()
             for (item in items) {
-                val uri = model.download(item, quiet = true)
-                if (uri == null) { failed = item; return@launch }
+                val (uri, opened) = model.downloadOpened(item, quiet = true) ?: run { failed = item; return@launch }
                 uris.add(uri)
+                sent.add(opened)
                 done++
             }
-            send(context, items, uris)
+            send(context, sent, uris)
             dismiss()
         }
     }
@@ -481,12 +598,12 @@ fun VersionsSheet(model: DriveViewModel, state: DriveState, item: Opened, dismis
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var sizes by remember { mutableStateOf<Map<String, Long>>(emptyMap()) }
-    var menu by remember { mutableStateOf<VersionListView?>(null) }
-    var deleting by remember { mutableStateOf<VersionListView?>(null) }
+    var menu by retain { mutableStateOf<VersionListView?>(null) }
+    var deleting by retain { mutableStateOf<VersionListView?>(null) }
     var restoring by remember { mutableStateOf<String?>(null) }
-    var sending by remember { mutableStateOf<VersionListView?>(null) }
+    var sending by retain { mutableStateOf<VersionListView?>(null) }
     var reload by remember { mutableStateOf(0) }
-    val current = model.item(item.id) ?: item
+    val current = model.itemIn(item.node.workspaceId, item.id) ?: item
     LaunchedEffect(item.id, reload) {
         versions = model.versions(current)
         // Sizes are sealed in each version's envelope, so they are opened here rather than read off the list.
@@ -583,14 +700,47 @@ private fun VersionRow(item: Opened, title: String, detail: String?, faded: Bool
 /* Info: what it is, and who can open it and its tags as ways in, not dead text. */
 @Composable
 fun InfoSheet(model: DriveViewModel, state: DriveState, item: Opened, onShare: () -> Unit, onTags: () -> Unit, dismiss: () -> Unit) {
+    Sheet(onDismissRequest = dismiss, full = true) { InfoBody(model, state, item, onShare, onTags) }
+}
+
+/*
+ * Info beside the list, on a window with room for two panes (DESIGN.md's details panel): the
+ * sheet's contents under a title and Close, on a surface card that keeps clear of the status bar.
+ */
+@Composable
+fun InfoPane(model: DriveViewModel, state: DriveState, item: Opened, onShare: () -> Unit, onTags: () -> Unit, onClose: () -> Unit) {
     val alpine = Alpine.colors
-    LaunchedEffect(item.id) { model.thumbnail(item) }
-    val thumbnail = state.thumbnails[item.id]
+    val shape = RoundedCornerShape(com.hushos.tokens.AlpineRadius.Card)
+    Column(
+        Modifier.fillMaxSize()
+            .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout).only(WindowInsetsSides.Top + WindowInsetsSides.End))
+            .padding(top = AlpineSpace.S2, end = AlpineSpace.S3, bottom = AlpineSpace.S3)
+            .then(if (alpine.high) Modifier.border(1.dp, alpine.divider, shape) else Modifier.raised(shape))
+            .background(alpine.surface, shape).clip(shape),
+    ) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = AlpineSpace.S4, end = AlpineSpace.S1), verticalAlignment = Alignment.CenterVertically) {
+            Text("Info", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f).semantics { heading() })
+            IconButton(onClick = onClose) { Icon(Icons.Outlined.Close, "Close Info") }
+        }
+        // Rows paint themselves in Material's surface: the card's own colour here, as inside a sheet.
+        MaterialTheme(colorScheme = MaterialTheme.colorScheme.copy(surface = alpine.surface)) { InfoBody(model, state, item, onShare, onTags) }
+    }
+}
+
+/* What Info says, in the sheet and in the pane alike. */
+@Composable
+private fun InfoBody(model: DriveViewModel, state: DriveState, item: Opened, onShare: () -> Unit, onTags: () -> Unit) {
+    val alpine = Alpine.colors
+    LaunchedEffect(thumbnailKey(item)) { model.thumbnail(item) }
+    val thumbnail = state.thumbnails[thumbnailKey(item)]
     val bitmap = remember(thumbnail) { thumbnail?.let { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() } }
     val mine = ownerOf(model, state, item) == Owner.ME
+    val familyName = model.families.familyOf(item)?.let { model.families.name(it) }
+    LaunchedEffect(item.node) { if (familyName != null) model.families.judge(listOf(item)) }
+    val familyVerdict = model.families.verdict(item)
     val created = item.node.createdAt?.let { runCatching { whenText(Instant.parse(it).toEpochMilli()) }.getOrNull() }
-    val folder = item.node.parentId?.let { parent -> if (parent == state.rootId) "Files" else model.item(parent)?.name }
-    Sheet(onDismissRequest = dismiss, full = true) {
+    val folder = item.node.parentId?.let { parent -> if (parent == state.rootId) "Files" else model.itemIn(item.node.workspaceId, parent)?.name }
+    run {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = AlpineSpace.S6)) {
             Column(Modifier.fillMaxWidth().padding(bottom = AlpineSpace.S4), horizontalAlignment = Alignment.CenterHorizontally) {
                 Mark(item, bitmap, box = if (bitmap != null) 120.dp else 88.dp)
@@ -599,22 +749,68 @@ fun InfoSheet(model: DriveViewModel, state: DriveState, item: Opened, onShare: (
                 // A copy saved from a link: no mark, only who saved it and what that can't say, in plain muted words.
                 val saved = remember(item.node, state.trust) { savedLineOf(item.node, state.trust) }
                 saved?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = AlpineSpace.S6)) }
+                // A family folder's item as its family's member list reads it (the web's Info): "Verified by Lindqvist family" when every record verified on its word.
+                familyVerdict?.verifiedBy?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = AlpineSpace.S6)) }
+                familyVerdict?.replacedBy?.forEach { Text(it, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = AlpineSpace.S6)) }
             }
             Fact("Kind", kindOf(item))
             item.size?.let { Fact("Size", formatBytes(it)) }
             whenText(item.modifiedMillis)?.let { Fact("Changed", it) }
             created?.let { Fact("Added", it) }
             folder?.let { Fact("Folder", it, primary = true) }
+            familyVerdict?.changedBy?.let { (label, words) -> Fact(label, words) }
+            familyVerdict?.writtenBy?.let { Fact("Written by", it) }
+            // Written by someone this person's devices first saw and nobody checked (6.4): no mark, and the way to check. In a
+            // family taken on first use, the family's verdict names them: a member's check is the family's, anyone else's their own.
+            val familySeen = familyVerdict?.seen
+            if (familySeen != null) {
+                val groupId = model.families.familyOf(item)
+                val me = model.currentVault?.api?.session?.userId.orEmpty()
+                // Named with the address the family serves (D10), so two members named alike are told apart.
+                val named = familySeen.email?.let { "${familySeen.name} ($it)" } ?: familySeen.name
+                AddedBy(model, com.hushos.app.data.SeenBy(familySeen.name, familySeen.userId, familySeen.email), label = named) {
+                    groupId?.let { model.families.memberCheck(it, familySeen.userId, me) }?.let { model.families.checking = it }
+                        ?: familySeen.email?.let { model.contactStep = ContactStep.Check(it, familySeen.name) }
+                }
+            } else if (familyName == null) remember(item.node, state.trust) { model.seenBy(item, state) }?.let { seen -> AddedBy(model, seen) }
             SheetDivider()
             // Who can open it, in words (never "Same as folder"), once it is known; it opens the share sheet.
             // Who can open it, as a whole sentence with you first; it opens the share sheet.
-            whoCanOpenSentence(model, state, item)?.let { who -> Fact("Who can open", who, onClick = if (mine) onShare else null) }
+            if (familyName != null) Fact("Who can open", "Everyone in $familyName can open it.")
+            else whoCanOpenSentence(model, state, item)?.let { who -> Fact("Who can open", who, onClick = if (mine) onShare else null) }
             if (mine) {
                 val tags = state.tags.tagsOf(item.id)
                 Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(onClick = onTags).padding(horizontal = AlpineSpace.S4), verticalAlignment = Alignment.CenterVertically) {
                     Text("Tags", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
                     if (tags.isEmpty()) Text("None", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
                     else Row(horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S1)) { for (tag in tags.take(3)) TagPill(tag) }
+                }
+            }
+        }
+    }
+}
+
+/*
+ * Info's "Added by" for a writer first seen and not checked (docs/optional-verification.md 6.4): their name, then "Not
+ * verified" in muted text with Check it's Maya, which the app shows (Main) so it outlives Info's own state.
+ */
+@Composable
+private fun AddedBy(model: DriveViewModel, seen: com.hushos.app.data.SeenBy, label: String = seen.name, check: (() -> Unit)? = null) {
+    val alpine = Alpine.colors
+    val first = com.hushos.app.data.firstNameOf(seen.name)
+    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2), verticalAlignment = Alignment.CenterVertically) {
+        // The label keeps its width; a long name with its address wraps in the value's column, never the label.
+        Text("Added by", style = MaterialTheme.typography.bodyLarge)
+        Column(horizontalAlignment = Alignment.End, modifier = Modifier.weight(1f).padding(start = AlpineSpace.S4)) {
+            Text(label, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, textAlign = TextAlign.End)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Not verified", fontSize = 13.sp, color = alpine.inkMuted)
+                // The dot goes with the way to check, so a narrow column never strands it.
+                val open = check ?: seen.email?.let { email -> { model.contactStep = ContactStep.Check(email, seen.name) } }
+                open?.let { onCheck ->
+                    Text(" · Check it’s $first", fontSize = 13.sp, color = alpine.primary, fontWeight = FontWeight.SemiBold, maxLines = 1,
+                        modifier = Modifier.clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onCheck)
+                            .heightIn(min = 32.dp).padding(vertical = 6.dp))
                 }
             }
         }
@@ -648,14 +844,15 @@ private fun Fact(label: String, value: String, primary: Boolean = false, onClick
  * Tags for one item or several: a find-or-add field, each tag with a box (mixed
  * when only some of the items carry it), and Manage tags for the whole list.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ItemTagsSheet(model: DriveViewModel, state: DriveState, items: List<Opened>, dismiss: () -> Unit) {
     val alpine = Alpine.colors
     // Tag id to on (true), off (false), or left as each item has it (null).
-    var choice by remember { mutableStateOf<Map<String, Boolean?>>(emptyMap()) }
+    var choice by retain { mutableStateOf<Map<String, Boolean?>>(emptyMap()) }
     var query by rememberSaveable { mutableStateOf("") }
     var colour by rememberSaveable { mutableStateOf(OFFERED_TAG_COLOURS.first()) }
-    var managing by remember { mutableStateOf(false) }
+    var managing by retain { mutableStateOf(false) }
     LaunchedEffect(Unit) { model.refreshTags() }
     val carried = { tagId: String -> items.count { tagId in state.tags.tagsOf(it.id).map { t -> t.id } } }
     val stateOf = { tagId: String ->
@@ -688,7 +885,7 @@ fun ItemTagsSheet(model: DriveViewModel, state: DriveState, items: List<Opened>,
                 FilledTonalButton(enabled = typed.isNotEmpty(), onClick = add, modifier = Modifier.padding(start = AlpineSpace.S2).height(FieldHeight)) { Text("Add") }
             }
             // The colour a new tag gets.
-            Row(Modifier.padding(horizontal = AlpineSpace.S6, vertical = AlpineSpace.S2), horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
+            FlowRow(Modifier.padding(horizontal = AlpineSpace.S6, vertical = AlpineSpace.S2), horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S1)) {
                 for (c in OFFERED_TAG_COLOURS) Swatch(c, selected = colour == c) { colour = c }
             }
             if (shown.none { it.name.equals(typed, ignoreCase = true) } && typed.isNotEmpty()) SheetRow("Add “$typed”", Icons.Outlined.Add) { add() }
@@ -735,7 +932,8 @@ fun Swatch(colour: String, selected: Boolean, size: androidx.compose.ui.unit.Dp 
     val alpine = Alpine.colors
     Box(
         Modifier.size(size).then(if (selected) Modifier.border(2.dp, alpine.ink, CircleShape) else Modifier).padding(4.dp)
-            .clip(CircleShape).background(tagColour(colour)).clickable(role = Role.RadioButton, onClickLabel = colour, onClick = onClick),
+            .clip(CircleShape).background(tagColour(colour)).clickable(role = Role.RadioButton, onClick = onClick)
+            .semantics { contentDescription = com.hushos.app.data.TagRegistry.colourName(colour); this.selected = selected },
         contentAlignment = Alignment.Center,
     ) { if (selected) Icon(Icons.Outlined.Check, null, tint = onTagColour(colour), modifier = Modifier.size(size * 0.45f)) }
 }
@@ -784,7 +982,7 @@ fun tagColour(value: String): Color {
     }
 }
 
-/* The colours a tag can be given here, as the web offers them; anything else is a custom colour. */
+/* The colours a tag can be given here, the folder swatches as the web offers them; anything else is a custom colour. */
 val OFFERED_TAG_COLOURS = com.hushos.app.data.TagRegistry.OFFERED
 
 /* What a file is, the way people say it: "PNG image", "PDF document", not a MIME type. */

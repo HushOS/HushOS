@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { CryptoRequests, CryptoResults, UploadPartResult } from '@hushos/crypto';
 import { KEY_CHANGE_PENDING } from '@hushos/crypto/protocol';
+import { generateKey, openMetadata, sealMetadata } from '@hushos/crypto/drive';
 import { DriveApiError, type DriveApi, type NodeView } from './api';
 import type { DriveNode, Rpc } from './client';
 import { scopedId } from '../../db/src/ids';
@@ -26,6 +27,9 @@ import {
  */
 
 const CHUNK = 8 * 1024 * 1024;
+/* Ids in the form the envelope contexts take, for the one test that seals a record for real. */
+const WS_ID = '11111111-1111-4111-8111-111111111111';
+const NODE_ID = '22222222-2222-4222-8222-222222222222';
 
 function node(id: string, parentId: string | null = 'root'): DriveNode {
     return {
@@ -132,6 +136,8 @@ function harness(
         /* Held until it resolves: the attach, and the encrypt of a chunk index, still on their way. */
         attachHold?: () => Promise<void>;
         encryptHold?: (index: number) => Promise<void> | undefined;
+        /* The worker's cancel of an upload, held until it resolves (a worker that hangs). */
+        cancelHold?: () => Promise<void>;
     } = {},
 ) {
     const journal = options.journal ?? createMemoryJournal();
@@ -141,6 +147,8 @@ function harness(
     /* The key epoch every created node was given, and the parent epoch its key was wrapped under. */
     const givenEpochs: number[] = [];
     const wrappedUnder: number[] = [];
+    /* The metadata every created node was sealed with, in order. */
+    const createdMetadata: CryptoRequests['driveCreateNodes']['nodes'][number]['metadata'][] = [];
     let inFlight = 0;
     let peakInFlight = 0;
     const flying = new Map<string, Set<(result: UploadPartResult) => void>>();
@@ -200,6 +208,7 @@ function harness(
                 for (const n of (input as CryptoRequests['driveCreateNodes']).nodes) {
                     givenEpochs.push(n.keyEpoch);
                     wrappedUnder.push(n.parentKeyEpoch);
+                    createdMetadata.push(n.metadata);
                     signed.push({ operation, signAs: n.signAs });
                 }
                 return {
@@ -269,6 +278,7 @@ function harness(
                 }
             }
             case 'driveUploadCancel': {
+                await options.cancelHold?.();
                 const set = flying.get((input as CryptoRequests['driveUploadCancel']).objectId);
                 const count = set?.size ?? 0;
                 for (const finish of Array.from(set ?? []))
@@ -444,6 +454,7 @@ function harness(
         signed,
         givenEpochs,
         wrappedUnder,
+        createdMetadata,
         server,
         journal,
         published,
@@ -1750,6 +1761,112 @@ describe('queued rows and stashed copies', () => {
         expect(restored.signed.map((call) => call.signAs)).toEqual(['resealed', 'resealed']);
     });
 
+    test('a copy’s node carries its source’s attributes, through a conflict copy and a reload at either stage', async () => {
+        const attributes = { colour: 'blue', 'zz-unknown': 'from a newer client' };
+        const attributesOf = (h: ReturnType<typeof harness>) =>
+            h.createdMetadata.map((metadata) => metadata.attributes);
+        // Straight through, and the "keep both" copy a conflict makes: both carry them.
+        const h = harness({ conflict: true });
+        h.manager.enqueue([
+            {
+                file: fakeFile(CHUNK, 'saved.bin'),
+                parent: node('root', null),
+                origin: 'copy',
+                attributes,
+            },
+        ]);
+        await settle(2_000);
+        expect(attributesOf(h)).toEqual([attributes, attributes]);
+        expect(h.createdMetadata[1]!.name).toBe('saved (conflict copy).bin');
+
+        // Queued when the page went away: the queued row keeps them.
+        const stash = fakeStash();
+        stash.files.set('waiting', fakeFile(CHUNK, 'waiting.bin'));
+        const queued = harness({ stash });
+        queued.manager.enqueue([
+            {
+                file: fakeFile(CHUNK, 'waiting.bin'),
+                parent: node('root', null),
+                origin: 'copy',
+                stash: 'waiting',
+                attributes,
+            },
+        ]);
+        const row = [...queued.journal.queued.values()][0]!;
+        expect(row.attributes).toEqual(attributes);
+        const fresh = createMemoryJournal();
+        await fresh.putQueued(row);
+        const restored = harness({ journal: fresh, stash });
+        await restored.manager.restore('ws');
+        await settle(2_000);
+        expect(attributesOf(restored)).toEqual([attributes]);
+
+        // Begun, then the page went away, then a conflict: the journaled row keeps them for the copy.
+        const begunStash = fakeStash();
+        begunStash.files.set('begun', fakeFile(6 * CHUNK, 'movie.mp4'));
+        const first = harness({ stash: begunStash });
+        const [id] = first.manager.enqueue([
+            {
+                file: fakeFile(6 * CHUNK, 'movie.mp4'),
+                parent: node('root', null),
+                origin: 'copy',
+                stash: 'begun',
+                attributes,
+            },
+        ]);
+        await settle(150);
+        await first.manager.pause(id!);
+        await settle(100);
+        expect(first.journal.entries.get(id!)!.attributes).toEqual(attributes);
+        const second = harness({ journal: first.journal, stash: begunStash, conflict: true });
+        second.server.uploads = first.server.uploads;
+        await second.manager.restore('ws');
+        await settle(2_000);
+        expect(second.server.attached).toHaveLength(1);
+        expect(attributesOf(second)).toEqual([attributes]);
+    });
+
+    test('a file whose name holds a lone surrogate lands with U+FFFD in its place, and its record opens', async () => {
+        const h = harness();
+        const [id] = h.manager.enqueue([
+            { file: fakeFile(CHUNK, 'a\ud800b'), parent: node('root', null) },
+        ]);
+        await settle(2_000);
+        expect(h.item(id!).status).toBe('done');
+        expect(h.item(id!).name).toBe('a�b');
+        const sealed = h.createdMetadata[0]!;
+        expect(sealed.name).toBe('a�b');
+        // Sealed and opened as the worker does: a name that seals is one that opens.
+        const key = generateKey();
+        const ctx = { workspaceId: WS_ID, nodeId: NODE_ID, metadataVersion: 1 };
+        expect(await openMetadata(await sealMetadata(sealed, key, ctx), key, ctx)).toMatchObject({
+            name: 'a�b',
+        });
+    });
+
+    test('a replacement’s "keep both" copy takes the replaced file’s attributes; a new file has none', async () => {
+        const attributes = { colour: 'red' };
+        const replaced = {
+            ...node('doc'),
+            kind: 'file' as const,
+            metadata: { name: 'doc', mime: null, size: 1, modified: null, attributes },
+        };
+        const h = harness({ conflict: true });
+        h.manager.enqueue([
+            { file: fakeFile(CHUNK, 'doc'), parent: node('root', null), replaces: replaced },
+        ]);
+        await settle(2_000);
+        expect(h.server.attached).toHaveLength(1);
+        expect(h.createdMetadata).toHaveLength(1);
+        expect(h.createdMetadata[0]!.attributes).toEqual(attributes);
+
+        const own = harness();
+        own.manager.enqueue([{ file: fakeFile(CHUNK, 'own.bin'), parent: node('root', null) }]);
+        await settle(2_000);
+        expect(own.createdMetadata).toHaveLength(1);
+        expect(own.createdMetadata[0]).not.toHaveProperty('attributes');
+    });
+
     test('a copy comes back from its stash and finishes without being asked', async () => {
         const stash = fakeStash();
         stash.files.set('copy-1', fakeFile(6 * CHUNK, 'movie.mp4'));
@@ -1867,6 +1984,134 @@ describe('queued rows and stashed copies', () => {
         // The server is told, so the reservations do not linger until they expire.
         expect(h.server.aborted.length).toBeGreaterThan(0);
         expect(h.server.completed).toHaveLength(0);
+    });
+
+    /* Records every journal write from now on. */
+    function journalWrites(journal: Journal) {
+        const writes: string[] = [];
+        for (const method of ['put', 'update', 'remove', 'putQueued', 'removeQueued'] as const) {
+            const original = journal[method].bind(journal) as (...args: never[]) => Promise<void>;
+            (journal[method] as unknown) = async (...args: never[]) => {
+                writes.push(method);
+                return original(...args);
+            };
+        }
+        return writes;
+    }
+
+    test('after another tab signed out, a part that lands later writes nothing to the journal', async () => {
+        let land!: () => void;
+        const landing = new Promise<void>((resolve) => {
+            land = resolve;
+        });
+        const h = harness({
+            send: async (_objectId, index) => {
+                await landing;
+                return { ok: true, etag: `etag-${index}`, bytes: CHUNK + 16 };
+            },
+        });
+        h.manager.enqueue([
+            { file: fakeFile(2 * CHUNK, 'payroll.xlsx'), parent: node('root', null) },
+        ]);
+        await settle(200);
+        expect(h.journal.entries.size).toBe(1);
+        // That tab deletes the journal; this one hears of it and must not write it back.
+        const writes = journalWrites(h.journal);
+        h.manager.invalidate();
+        land();
+        await settle(1_000);
+        expect(writes).toEqual([]);
+        expect(h.manager.getState().uploads).toHaveLength(0);
+        // Signed in again, the journal is used as before.
+        h.manager.enqueue([{ file: fakeFile(CHUNK, 'later.txt'), parent: node('root', null) }]);
+        await settle(1_000);
+        expect(writes).toContain('put');
+    });
+
+    test('after another tab signed out, an upload whose begin answers later sends nothing and is released', async () => {
+        const h = harness();
+        const begin = h.api.beginUpload;
+        let release!: () => void;
+        const held = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        h.api.beginUpload = async (ws, input) => {
+            await held;
+            return begin(ws, input);
+        };
+        h.manager.enqueue([
+            { file: fakeFile(2 * CHUNK, 'contract.pdf'), parent: node('root', null) },
+        ]);
+        await settle(100);
+        const sendsBefore = h.calls.filter((c) => c === 'driveUploadSend').length;
+        h.manager.invalidate();
+        release();
+        await settle(1_000);
+        expect(h.calls.filter((c) => c === 'driveUploadSend').length).toBe(sendsBefore);
+        expect(h.server.aborted).toEqual(['up-1']);
+        expect(h.journal.entries.size).toBe(0);
+    });
+
+    test('when another tab signs out, uploads here release their reservations and write nothing', async () => {
+        const h = harness({
+            // Parts never land: the uploads are begun and stay so.
+            send: () => new Promise(() => {}),
+        });
+        const [sending, paused] = h.manager.enqueue([
+            { file: fakeFile(2 * CHUNK, 'payroll.xlsx'), parent: node('root', null) },
+            { file: fakeFile(2 * CHUNK, 'contract.pdf'), parent: node('root', null) },
+        ]);
+        await settle(200);
+        await h.manager.pause(paused!);
+        expect(h.item(sending!).status).toBe('uploading');
+        expect(h.item(paused!).status).toBe('paused');
+        const writes = journalWrites(h.journal);
+        await h.manager.releaseAll();
+        // Both reservations go back to the server now, not when they expire a day later.
+        expect([...h.server.aborted].sort()).toEqual(['up-1', 'up-2']);
+        expect(writes).toEqual([]);
+        expect(h.manager.getState().uploads).toHaveLength(0);
+    });
+
+    test('a release waits for a begin still on its way, and aborts what it reserved before it says released', async () => {
+        const h = harness();
+        const begin = h.api.beginUpload;
+        let answer!: () => void;
+        const held = new Promise<void>((resolve) => {
+            answer = resolve;
+        });
+        h.api.beginUpload = async (ws, input) => {
+            await held;
+            return begin(ws, input);
+        };
+        h.manager.enqueue([
+            { file: fakeFile(2 * CHUNK, 'contract.pdf'), parent: node('root', null) },
+        ]);
+        await settle(100);
+        let released = false;
+        const releasing = h.manager.releaseAll().then(() => (released = true));
+        await settle(50);
+        expect(released).toBe(false);
+        // The server answers the begin while the other tab still waits on this one.
+        answer();
+        await releasing;
+        // Aborted before the release was reported, so before that tab ends the session (the
+        // upload's own late begin aborts it once more, harmlessly).
+        expect(h.server.aborted).toContain('up-1');
+    });
+
+    test('a worker that hangs does not hold up releasing the server’s reservations', async () => {
+        const h = harness({
+            send: () => new Promise(() => {}),
+            cancelHold: () => new Promise(() => {}),
+        });
+        h.manager.enqueue([
+            { file: fakeFile(2 * CHUNK, 'payroll.xlsx'), parent: node('root', null) },
+        ]);
+        await settle(200);
+        void h.manager.releaseAll();
+        await settle(50);
+        expect(h.server.aborted).toEqual(['up-1']);
     });
 
     test('a copy without bytes on this device is reported lost, its reservation released, no file picker offered', async () => {

@@ -1,5 +1,6 @@
 package com.hushos.app.ui
 
+import androidx.compose.runtime.retain.retain
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -71,27 +72,20 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.hushos.app.data.ItemKind
 import com.hushos.app.data.Offline
 import com.hushos.app.data.Opened
 import com.hushos.tokens.AlpineSpace
 import kotlinx.coroutines.launch
 
-enum class TypeFilter(val label: String, val plural: String) {
-    ALL("All", "files"), FOLDERS("Folders", "folders"), IMAGES("Images", "images"), VIDEOS("Videos", "videos"), DOCUMENTS("Documents", "documents");
+/* What search's type chips narrow it to: everything, or one kind (`ItemKind`, the web's split). */
+enum class TypeFilter(val label: String, val kind: ItemKind?) {
+    ALL("All", null), FOLDERS("Folders", ItemKind.FOLDER), IMAGES("Images", ItemKind.IMAGE), VIDEOS("Videos", ItemKind.VIDEO), DOCUMENTS("Documents", ItemKind.DOCUMENT);
 
-    fun matches(item: Opened): Boolean {
-        val mime = mimeOf(item) ?: ""
-        return when (this) {
-            ALL -> true
-            FOLDERS -> item.isFolder
-            IMAGES -> mime.startsWith("image/")
-            VIDEOS -> mime.startsWith("video/")
-            DOCUMENTS -> !item.isFolder && (mime == "application/pdf" || mime.startsWith("text/") || mime.contains("document") || mime.contains("presentation") || mime.contains("sheet"))
-        }
-    }
+    fun matches(item: Opened): Boolean = kind == null || ItemKind.of(item) == kind
 }
 
-/* The type chips, Home's and search's: All, Folders, Images, Videos, Documents. */
+/* Search's type chips: All, Folders, Images, Videos, Documents. */
 @Composable
 private fun TypeChips(value: TypeFilter, onChange: (TypeFilter) -> Unit) {
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2), horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
@@ -101,8 +95,8 @@ private fun TypeChips(value: TypeFilter, onChange: (TypeFilter) -> Unit) {
 
 /*
  * Home: the header, the search bar under it; then what is on this phone, and
- * Recent with its own filters under its title: the type chips, then the tags
- * (once there is one). The + adds into Files, as Files' own does.
+ * Recent with the tags under its title (once there is one). Search finds things
+ * by kind ("photos"). The + adds into Files, as Files' own does.
  * `screen` is which page of Home is showing: "home", "search", "phone", or
  * "folder:<id>" for a folder opened from Recent.
  */
@@ -118,7 +112,6 @@ fun HomeScreen(model: DriveViewModel, state: DriveState, screen: String, go: (St
         }
     }
     val alpine = Alpine.colors
-    var filter by rememberSaveable { mutableStateOf(TypeFilter.ALL) }
     var tagFilter by rememberSaveable { mutableStateOf<String?>(null) }
     var tagged by remember { mutableStateOf<List<Opened>>(emptyList()) }
     var managingTags by rememberSaveable { mutableStateOf(false) }
@@ -145,13 +138,12 @@ fun HomeScreen(model: DriveViewModel, state: DriveState, screen: String, go: (St
     LaunchedEffect(state.unreachable) { if (!state.unreachable) model.refreshAccess() }
     // A tag that went away (deleted here or elsewhere) stops filtering.
     LaunchedEffect(state.tags) { if (tagFilter != null && state.tags.tags.none { it.id == tagFilter }) tagFilter = null }
-    val base = if (tagFilter != null) tagged else state.recents
-    val rows = base.filter { filter.matches(it) }
+    val rows = if (tagFilter != null) tagged else state.recents
     val kept = state.offline.map { it.id }.toSet()
     val loading = "recents" in state.loading
     // A brand-new account: nothing anywhere yet, so Home offers the two ways to start instead of an empty Recent.
     val firstRun = !loading && state.recents.isEmpty() && model.searchesEverything() && model.searchable().isEmpty()
-    val heading = state.tags.tags.firstOrNull { it.id == tagFilter }?.name ?: if (filter == TypeFilter.ALL) "Recent" else "Recent ${filter.plural}"
+    val heading = state.tags.tags.firstOrNull { it.id == tagFilter }?.name ?: "Recent"
     Scaffold(
         contentWindowInsets = WindowInsets(0),
         containerColor = alpine.ground,
@@ -180,12 +172,11 @@ fun HomeScreen(model: DriveViewModel, state: DriveState, screen: String, go: (St
                         return@LazyColumn
                     }
                     item(key = "phone") { OnThisPhoneRow(state) { go("phone") } }
-                    // Recent is the page's section, at the Title size; its filters (types, then tags) sit under it.
+                    // Recent is the page's section, at the Title size; its tags sit under it.
                     item(key = "heading") {
                         Text(heading, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = alpine.ink, maxLines = 1, overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.fillMaxWidth().semantics { heading() }.padding(start = AlpineSpace.S4, end = AlpineSpace.S4, top = AlpineSpace.S3))
                     }
-                    item(key = "types") { TypeChips(filter) { filter = it } }
                     // The tags row stays away until there is a tag to show.
                     if (state.tags.tags.isNotEmpty()) item(key = "tags") {
                         // One row that scrolls to the screen's edges, label and Manage included, as the board draws it.
@@ -205,15 +196,14 @@ fun HomeScreen(model: DriveViewModel, state: DriveState, screen: String, go: (St
                     // The empty word sits in the list under its heading, never over the rows above it.
                     if (rows.isEmpty() && !loading) item(key = "empty") {
                         val name = state.tags.tags.firstOrNull { it.id == tagFilter }?.name
-                        if (name != null) EmptyState(if (filter == TypeFilter.ALL) "Nothing tagged $name" else "No ${filter.plural} tagged $name", modifier = Modifier.padding(top = AlpineSpace.S6))
-                        else EmptyState(if (filter == TypeFilter.ALL) "No recent files yet" else "No ${filter.plural} yet",
-                            "${if (filter == TypeFilter.ALL) "Files" else filter.label} you add or change show up here.", modifier = Modifier.padding(top = AlpineSpace.S6))
+                        if (name != null) EmptyState("Nothing tagged $name", modifier = Modifier.padding(top = AlpineSpace.S6))
+                        else EmptyState("No recent files yet", "Files you add or change show up here.", modifier = Modifier.padding(top = AlpineSpace.S6))
                     }
                     items(rows, key = { it.id }) { item ->
                         // Offline, a file that isn't on this phone can't open: it dims and says so.
                         val away = state.unreachable && !item.isFolder && item.id !in kept
                         NodeRow(model, state, item, away = away, recent = true,
-                            onClick = { if (item.isFolder) go("folder:${item.id}") else scope.launch { model.download(item)?.let { openWith(context, it, mimeOf(item), model, item.name) } } },
+                            onClick = { if (item.isFolder) go("folder:${item.id}") else scope.launch { model.downloadOpened(item)?.let { (uri, opened) -> openWith(context, uri, mimeOf(opened), model, opened.name) } } },
                             onLongClick = { selected = item }, onMore = { selected = item })
                     }
                 }
@@ -249,7 +239,9 @@ private fun OnThisPhoneRow(state: DriveState, onClick: () -> Unit) {
 /*
  * Search, opened from the bar: back, the field, the type chips, then recent
  * searches until you type. Results say where each thing is. It looks through
- * the whole drive once the catalogue is built, and says less when it is not.
+ * the whole drive once the catalogue is built, and says less when it is not. A
+ * word that names a kind ("photos", "videos", "documents", "folders") finds
+ * everything of that kind, as the web's search does (`ItemKind`).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -258,7 +250,7 @@ fun SearchScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) {
     var query by rememberSaveable { mutableStateOf("") }
     var filter by rememberSaveable { mutableStateOf(TypeFilter.ALL) }
     var selected by rememberSavedItem(model)
-    var folder by remember { mutableStateOf<Opened?>(null) }
+    var folder by retain { mutableStateOf<Opened?>(null) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val focus = remember { FocusRequester() }
@@ -269,11 +261,13 @@ fun SearchScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) {
     }
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
     val words = query.trim().lowercase().split(Regex("\\s+")).filter { it.isNotEmpty() }
+    val kinds = words.map(ItemKind::named)
     val hits = if (words.isEmpty()) emptyList() else model.searchable().filter { item ->
         if (!filter.matches(item)) return@filter false
         // Names, tags and the kind of file ("PDF document", "PNG image") are what search looks at.
         val text = (listOf(item.name, kindOf(item)) + state.tags.tagsOf(item.id).map { it.name }).joinToString(" ").lowercase()
-        words.all { text.contains(it) }
+        val kind = if (kinds.any { it != null }) ItemKind.of(item) else null
+        words.indices.all { text.contains(words[it]) || (kinds[it] != null && kinds[it] == kind) }
     }.sortedWith(compareBy<Opened> { !it.isFolder }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }).take(200)
     Column(Modifier.fillMaxSize().background(alpine.surface).statusBarsPadding()) {
         Row(Modifier.fillMaxWidth().height(72.dp).padding(horizontal = AlpineSpace.S1), verticalAlignment = Alignment.CenterVertically) {
@@ -314,7 +308,7 @@ fun SearchScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) {
                 NodeRow(model, state, item, note = "In $where",
                     onClick = {
                         model.rememberSearch(query)
-                        if (item.isFolder) folder = item else scope.launch { model.download(item)?.let { openWith(context, it, mimeOf(item), model, item.name) } }
+                        if (item.isFolder) folder = item else scope.launch { model.downloadOpened(item)?.let { (uri, opened) -> openWith(context, uri, mimeOf(opened), model, opened.name) } }
                     },
                     onLongClick = { selected = item }, onMore = { selected = item })
             }
@@ -329,9 +323,9 @@ fun SearchScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) {
 fun OnThisPhoneScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) {
     val alpine = Alpine.colors
     var selected by rememberSavedItem(model)
-    var removing by remember { mutableStateOf<Offline.Entry?>(null) }
-    var removingFolder by remember { mutableStateOf<Offline.Folder?>(null) }
-    var browsing by remember { mutableStateOf<Opened?>(null) }
+    var removing by retain { mutableStateOf<Offline.Entry?>(null) }
+    var removingFolder by retain { mutableStateOf<Offline.Folder?>(null) }
+    var browsing by retain { mutableStateOf<Opened?>(null) }
     val context = LocalContext.current
     BackHandler(onBack = onBack)
     LaunchedEffect(Unit) { model.refreshOffline() }

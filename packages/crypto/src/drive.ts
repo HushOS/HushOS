@@ -78,11 +78,32 @@ export const DOCUMENT_ENVELOPE_MAX_BYTES =
     ENVELOPE_NONCE_BYTES + DOCUMENT_MAX_BYTES + CHUNK_TAG_BYTES;
 const DOCUMENT_KIND = /^[a-z][a-z0-9-]{0,31}$/;
 
+/*
+ * Attributes: plain data a feature keeps on a node (a folder's colour), as
+ * short lowercase keys to strings, sealed beside the name. A client carries
+ * every key through unchanged whenever it seals the record again, the ones it
+ * does not know included, so a feature can add one without the others losing
+ * it. New plain data goes here: top-level fields nobody knows are dropped.
+ * Limits: keys match ATTRIBUTE_KEY, at most ATTRIBUTES_MAX_KEYS of them, every
+ * value a string, and the whole plaintext within METADATA_MAX_BYTES. A record
+ * that breaks one is refused, sealing and opening, never trimmed. None is
+ * written as no `attributes` field at all, so a record without any seals to
+ * exactly what it did before attributes; keys are written in sorted order.
+ */
+export const ATTRIBUTE_KEY = /^[a-z][a-z0-9_-]{0,31}$/;
+export const ATTRIBUTES_MAX_KEYS = 32;
+export type NodeAttributes = Record<string, string>;
+
 export type NodeMetadata = {
     name: string;
     mime: string | null;
     size: number | null;
     modified: string | null;
+    /*
+     * Absent for none, as on the wire: openMetadata leaves it out of a record
+     * that has none, and sealMetadata writes none for `{}`.
+     */
+    attributes?: NodeAttributes;
 };
 
 export type NodeKeyContext = {
@@ -151,6 +172,19 @@ function context(parts: unknown[]) {
 }
 
 /* Names are enforced by the client because the server cannot read them. */
+/* A lone surrogate: JSON.parse makes one from "\ud800", TextEncoder would not keep it, Rust refuses it. */
+const LONE_SURROGATE = /[\uD800-\uDFFF]/u;
+
+/*
+ * `text` with each lone surrogate replaced by U+FFFD, as
+ * String.prototype.toWellFormed does (newer than the browsers the web app
+ * builds for). For names the platform hands over, a File's or a dropped
+ * folder's: a Windows file name may hold one, and checkName refuses it.
+ */
+export function wellFormed(text: string) {
+    return text.replace(/[\uD800-\uDFFF]/gu, '\uFFFD');
+}
+
 export function checkName(name: string) {
     if (typeof name !== 'string') throw new CryptoError('Enter a name.');
     const points = Array.from(name).length;
@@ -159,6 +193,11 @@ export function checkName(name: string) {
         throw new CryptoError(`Use a name of at most ${NAME_MAX_CODE_POINTS} characters.`);
     if (name === '.' || name === '..' || name.includes('/'))
         throw new CryptoError('Names cannot contain "/" or be "." or "..".');
+    // Sealed, it would be written as an escape no reader opens (ambiguousJson): refused here instead.
+    if (LONE_SURROGATE.test(name))
+        throw new CryptoError(
+            'This name has a character that can’t be saved. Type the name again.',
+        );
     for (const character of name) {
         const point = character.codePointAt(0) ?? 0;
         if (point < 0x20 || point === 0x7f)
@@ -296,11 +335,96 @@ export async function openPreviousRootKey(
     return key;
 }
 
+/*
+ * UTF-8 as Rust's String::from_utf8 reads it: invalid bytes throw rather than
+ * become U+FFFD, and a leading byte order mark is kept (so JSON.parse refuses
+ * it, as serde does) rather than dropped.
+ */
+function strictText(bytes: Uint8Array) {
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+}
+
+/*
+ * Whether JSON text JSON.parse already accepted reads differently in the core:
+ * an object names one key twice, escapes decoded ("colour" and "\u0063olour"
+ * are the same key), where JSON.parse keeps the last and serde refuses; or a
+ * string anywhere, key or value, unknown fields included, holds a lone
+ * surrogate ("\ud800"), which JSON.parse keeps and Rust cannot hold. A pair
+ * written as escapes is one character and reads alike in both.
+ */
+export function ambiguousJson(text: string) {
+    // One entry per open object (its keys so far) or array (null).
+    const open: (Set<string> | null)[] = [];
+    let keyNext = false;
+    for (let i = 0; i < text.length; i++) {
+        const c = text[i];
+        if (c === '"') {
+            let end = i + 1;
+            while (text[end] !== '"') end += text[end] === '\\' ? 2 : 1;
+            // Every string, keys and values alike: the text has no raw lone surrogates
+            // (strictText refused them), so only an escape can make one.
+            const decoded = JSON.parse(text.slice(i, end + 1)) as string;
+            if (LONE_SURROGATE.test(decoded)) return true;
+            const keys = open.at(-1);
+            if (keys && keyNext) {
+                const key = decoded;
+                if (keys.has(key)) return true;
+                keys.add(key);
+                keyNext = false;
+            }
+            i = end;
+        } else if (c === '{') {
+            open.push(new Set());
+            keyNext = true;
+        } else if (c === '[') {
+            open.push(null);
+            keyNext = false;
+        } else if (c === '}' || c === ']') {
+            open.pop();
+            keyNext = false;
+        } else if (c === ',') keyNext = open.at(-1) instanceof Set;
+    }
+    return false;
+}
+
+/*
+ * A node's attributes as sealed: `undefined` is none, anything else must be a
+ * plain object within the limits. Returns a fresh object with its keys sorted.
+ */
+export function checkAttributes(attributes: unknown): NodeAttributes {
+    if (attributes === undefined) return {};
+    if (
+        typeof attributes !== 'object' ||
+        attributes === null ||
+        Array.isArray(attributes) ||
+        (Object.getPrototypeOf(attributes) !== Object.prototype &&
+            Object.getPrototypeOf(attributes) !== null)
+    )
+        throw new CryptoError('Invalid attributes.');
+    const keys = Object.keys(attributes);
+    if (keys.length > ATTRIBUTES_MAX_KEYS)
+        throw new CryptoError(`An item can have at most ${ATTRIBUTES_MAX_KEYS} attributes.`);
+    const out: NodeAttributes = {};
+    for (const key of keys.sort()) {
+        if (!ATTRIBUTE_KEY.test(key)) throw new CryptoError('Invalid attribute name.');
+        const value = (attributes as Record<string, unknown>)[key];
+        if (typeof value !== 'string' || LONE_SURROGATE.test(value))
+            throw new CryptoError('An attribute must be text.');
+        out[key] = value;
+    }
+    return out;
+}
+
 export async function sealMetadata(
     metadata: NodeMetadata,
     nodeKey: Uint8Array,
     ctx: MetadataContext,
 ) {
+    const attributes = checkAttributes(metadata.attributes);
+    // Every string sealed must open again: a lone surrogate would be written as an escape both readers refuse.
+    for (const text of [metadata.mime, metadata.modified])
+        if (typeof text === 'string' && LONE_SURROGATE.test(text))
+            throw new CryptoError('This item has details that can’t be saved.');
     const clean: NodeMetadata = {
         name: checkName(metadata.name),
         mime:
@@ -316,8 +440,15 @@ export async function sealMetadata(
                 ? metadata.modified
                 : null,
     };
+    // None is no field at all: such a record seals exactly as one from before attributes.
+    if (Object.keys(attributes).length) clean.attributes = attributes;
     const plaintext = new TextEncoder().encode(JSON.stringify(clean));
-    if (plaintext.length > METADATA_MAX_BYTES) throw new CryptoError('This name is too long.');
+    if (plaintext.length > METADATA_MAX_BYTES)
+        throw new CryptoError(
+            clean.attributes
+                ? 'This name and its attributes are too long to save.'
+                : 'This name is too long.',
+        );
     return seal(
         padded(plaintext, METADATA_PAD_STEP, METADATA_MAX_BYTES),
         nodeKey,
@@ -351,13 +482,23 @@ export async function openMetadata(
     }
     let parsed: unknown;
     try {
-        parsed = JSON.parse(new TextDecoder().decode(plaintext));
+        const text = strictText(plaintext);
+        parsed = JSON.parse(text);
+        // What the core would read differently (a key named twice, a lone surrogate): refused alike.
+        if (ambiguousJson(text)) throw new CryptoError('Ambiguous JSON.');
     } catch {
         throw new CryptoError('This item could not be opened. It may be damaged.');
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
         throw new CryptoError('This item could not be opened. It may be damaged.');
     const value = parsed as Record<string, unknown>;
+    let attributes: NodeAttributes;
+    try {
+        attributes = checkAttributes(value.attributes);
+    } catch {
+        // Refused whole, never trimmed: a re-save would otherwise drop what it could not read.
+        throw new CryptoError('This item could not be opened. It may be damaged.');
+    }
     return {
         name: checkName(value.name as string),
         mime: typeof value.mime === 'string' ? value.mime : null,
@@ -366,6 +507,7 @@ export async function openMetadata(
                 ? value.size
                 : null,
         modified: typeof value.modified === 'string' ? value.modified : null,
+        ...(Object.keys(attributes).length ? { attributes } : {}),
     };
 }
 
@@ -410,7 +552,7 @@ export async function openDocument(
         throw new CryptoError('This document could not be opened. It may be damaged.');
     }
     try {
-        return JSON.parse(new TextDecoder().decode(plaintext));
+        return JSON.parse(strictText(plaintext));
     } catch {
         throw new CryptoError('This document could not be opened. It may be damaged.');
     }

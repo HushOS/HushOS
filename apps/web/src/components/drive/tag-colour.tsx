@@ -1,9 +1,9 @@
-import { TAG_PRESETS, type TagColour, type TagPreset } from '@hushos/drive/client';
+import type { TagColour } from '@hushos/drive/client';
 import { CheckIcon, ChevronDownIcon } from 'lucide-react';
 import { cn } from 'cn';
 import { useId, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { OFFERED_COLOURS, swatchProps, TAG_COLOUR_LABEL } from '@/lib/tags';
+import { OFFERED_COLOURS, swatchProps, tagColourLabel } from '@/lib/tags';
 
 /* A tag's colour as a square, whichever way it was chosen. */
 export function Swatch({ colour, className }: { colour: TagColour | null; className?: string }) {
@@ -33,16 +33,18 @@ export function TagColourPicker({
     className,
 }: {
     value: TagColour;
-    onChange: (colour: TagColour) => void;
+    /* `swatch`: chosen by a swatch, not by the custom editor (whose hex may match one). */
+    onChange: (colour: TagColour, swatch: boolean) => void;
     disabled?: boolean;
     className?: string;
 }) {
     const id = useId();
-    const custom = !(TAG_PRESETS as readonly string[]).includes(value);
+    // An older tag's Ledger preset is neither a swatch on offer nor one of its own: nothing is ticked.
+    const custom = value.startsWith('#') && !OFFERED_COLOURS.includes(value);
     const [open, setOpen] = useState(custom);
     const ring = (on: boolean) =>
         cn(
-            'relative flex size-9 cursor-pointer items-center justify-center rounded-full border-2 outline-none has-focus-visible:outline-2 has-focus-visible:outline-offset-1 has-focus-visible:outline-ring has-disabled:cursor-not-allowed has-disabled:opacity-50',
+            'relative flex size-9 cursor-pointer items-center justify-center rounded-full border-2 outline-none has-focus-visible:outline-2 has-focus-visible:outline-solid has-focus-visible:outline-offset-1 has-focus-visible:outline-ring has-disabled:cursor-not-allowed has-disabled:opacity-50',
             on ? 'border-foreground' : 'border-transparent hover:border-rule',
         );
     return (
@@ -51,22 +53,22 @@ export function TagColourPicker({
             disabled={disabled}
             className={cn('m-0 flex min-w-0 flex-col gap-2 border-0 p-0', className)}
         >
-            <div className="flex items-center gap-1">
+            <div className="flex flex-wrap items-center gap-1">
                 {OFFERED_COLOURS.map((preset) => (
                     <label
                         key={preset}
-                        title={TAG_COLOUR_LABEL[preset]}
+                        title={tagColourLabel(preset) ?? undefined}
                         className={ring(value === preset)}
                     >
                         <input
                             type="radio"
                             name={id}
                             value={preset}
-                            aria-label={TAG_COLOUR_LABEL[preset]}
+                            aria-label={tagColourLabel(preset) ?? undefined}
                             checked={value === preset}
                             onChange={() => {
                                 setOpen(false);
-                                onChange(preset);
+                                onChange(preset, true);
                             }}
                             className="absolute inset-0 size-full cursor-pointer appearance-none rounded-full"
                         />
@@ -91,8 +93,9 @@ export function TagColourPicker({
                         checked={custom}
                         onChange={() => {
                             // Choosing Custom chooses a colour at once; the square then refines it.
+                            // With the editor already open its colour stands; it reads a value only as it opens.
+                            if (!custom && !open) onChange(FIRST_CUSTOM, false);
                             setOpen(true);
-                            if (!custom) onChange(FIRST_CUSTOM);
                         }}
                         onClick={() => setOpen(true)}
                         className="absolute inset-0 size-full cursor-pointer appearance-none rounded-full"
@@ -103,23 +106,22 @@ export function TagColourPicker({
                         style={{
                             background: custom
                                 ? value
-                                : 'conic-gradient(#b4503b, #c9962b, #23766d, #4a64c8, #7c5cbf, #b4503b)',
+                                : `conic-gradient(${OFFERED_COLOURS.join(', ')}, ${OFFERED_COLOURS[0]})`,
                         }}
                     />
                 </label>
             </div>
             <span className="text-[13px] text-muted-foreground">
-                {custom
-                    ? `Custom colour · ${value.toUpperCase()}`
-                    : (TAG_COLOUR_LABEL[value as TagPreset] ?? '')}
+                {custom ? `Custom colour · ${value.toUpperCase()}` : (tagColourLabel(value) ?? '')}
             </span>
             {open && (
                 <div className="border-t border-rule pt-3">
+                    {/* The editor holds the hex chosen, a swatch's included, so typing one keeps it in place. */}
                     <CustomColour
-                        key={custom ? 'custom' : 'preset'}
-                        value={custom ? value : FIRST_CUSTOM}
+                        key={value.startsWith('#') ? 'hex' : 'preset'}
+                        value={value.startsWith('#') ? value : FIRST_CUSTOM}
                         disabled={disabled}
-                        onChoose={(hex) => onChange(hex)}
+                        onChoose={(hex) => onChange(hex, false)}
                     />
                 </div>
             )}
@@ -170,7 +172,7 @@ function hsvToHex({ h, s, v }: Hsv) {
 }
 const clamp = (value: number) => Math.min(1, Math.max(0, value));
 
-function CustomColour({
+export function CustomColour({
     value,
     disabled,
     onChoose,
@@ -182,9 +184,25 @@ function CustomColour({
     const [hsv, setHsv] = useState<Hsv>(() => hexToHsv(value));
     const [typed, setTyped] = useState(value);
     const hex = hsvToHex(hsv);
+    /*
+     * The colour as the caller last gave it, and the last one chosen here. A value arriving
+     * from outside (a save coming back, Custom resetting it) moves the square, hue and field
+     * to it; one this editor chose, or the one it shows, leaves them where they are.
+     */
+    const [given, setGiven] = useState(value);
+    const [sent, setSent] = useState<string | null>(null);
+    if (value !== given) {
+        setGiven(value);
+        const lower = value.toLowerCase();
+        if (lower !== sent && lower !== hex.toLowerCase()) {
+            setHsv(hexToHsv(value));
+            setTyped(value);
+        }
+    }
     const commit = (next: Hsv) => {
         setHsv(next);
         setTyped(hsvToHex(next));
+        setSent(hsvToHex(next).toLowerCase());
         onChoose(hsvToHex(next) as TagColour);
     };
     /* A press anywhere on a surface sets it; a drag keeps setting; the release chooses. */
@@ -253,7 +271,7 @@ function CustomColour({
                 aria-valuetext={`${Math.round(hsv.s * 100)}% saturation, ${Math.round(hsv.v * 100)}% brightness`}
                 onKeyDown={(event) => keys(event, 'area')}
                 {...surface((x, y) => ({ ...hsv, s: x, v: 1 - y }))}
-                className="relative h-32 w-full cursor-crosshair touch-none rounded-md outline-none select-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                className="relative h-32 w-full cursor-crosshair touch-none rounded-md outline-none select-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring"
                 style={{
                     backgroundImage: `linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, ${pure})`,
                 }}
@@ -277,7 +295,7 @@ function CustomColour({
                 aria-valuenow={Math.round(hsv.h)}
                 onKeyDown={(event) => keys(event, 'hue')}
                 {...surface((x) => ({ ...hsv, h: x * 359.999 }))}
-                className="relative h-3 w-full cursor-pointer touch-none rounded-full outline-none select-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                className="relative h-3 w-full cursor-pointer touch-none rounded-full outline-none select-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring"
                 style={{
                     backgroundImage:
                         'linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)',
@@ -319,7 +337,7 @@ function CustomColour({
                                 commit(hexToHsv(typed.toLowerCase()));
                         }
                     }}
-                    className="h-9 w-28 min-w-0 rounded-md border border-input bg-card px-2.5 font-mono text-base outline-none sm:text-sm focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring"
+                    className="h-9 w-28 min-w-0 rounded-md border border-input bg-card px-2.5 font-mono text-base outline-none sm:text-sm focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-1 focus-visible:outline-ring"
                 />
             </label>
         </div>
@@ -346,18 +364,21 @@ export function TagColourButton({
                 aria-label="Colour for the new tag"
                 title="Colour"
                 disabled={disabled}
-                className="flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-input bg-card px-2.5 outline-none hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-default disabled:opacity-60 pointer-coarse:h-11"
+                className="flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-input bg-card px-2.5 outline-none hover:bg-muted focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring disabled:cursor-default disabled:opacity-60 pointer-coarse:h-11"
             >
                 <Swatch colour={value} className="size-[18px] rounded-full" />
                 <ChevronDownIcon className="size-4 text-muted-foreground" aria-hidden="true" />
             </PopoverTrigger>
-            <PopoverContent align="start" className="flex w-[292px] flex-col gap-3 p-4">
+            <PopoverContent
+                align="start"
+                className="flex w-[min(392px,calc(100vw_-_32px))] max-w-none flex-col gap-3 p-4"
+            >
                 <span className="text-sm font-bold">Colour</span>
                 <TagColourPicker
                     value={value}
-                    onChange={(colour) => {
+                    onChange={(colour, swatch) => {
                         onChange(colour);
-                        if ((TAG_PRESETS as readonly string[]).includes(colour)) setOpen(false);
+                        if (swatch) setOpen(false);
                     }}
                 />
             </PopoverContent>

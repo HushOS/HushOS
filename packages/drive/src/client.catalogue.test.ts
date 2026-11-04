@@ -525,14 +525,23 @@ describe('a folder made, filled and renamed while a tab was hidden', () => {
         await visible.catchUp();
         await hidden.catchUp();
 
+        // Recent shows the folder for what it holds; its listing names each file.
         const expected = [
-            ['hotel.pdf', 'hotel.pdf'],
             ['notes.md', 'notes.md'],
-            ['ticket.pdf', 'ticket.pdf'],
             ['trip', 'Trip 2026'],
         ];
-        expect(named(visible)).toEqual(expected);
-        expect(named(hidden)).toEqual(expected);
+        const inside = (client: ReturnType<typeof tab>) =>
+            client
+                .localListing('trip')
+                ?.children.map((node) => [node.id, node.name])
+                .sort(([a], [b]) => (a! < b! ? -1 : 1));
+        for (const client of [visible, hidden]) {
+            expect(named(client)).toEqual(expected);
+            expect(inside(client)).toEqual([
+                ['hotel.pdf', 'hotel.pdf'],
+                ['ticket.pdf', 'ticket.pdf'],
+            ]);
+        }
     });
 
     test('an item that would not open is opened again when the tab refiles', async () => {

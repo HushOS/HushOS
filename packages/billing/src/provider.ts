@@ -67,7 +67,7 @@ export function polar() {
 export function unavailable(error: unknown) {
     if (error instanceof PolarClientError && error.statusCode === 403)
         return new BillingError(
-            'Polar does not allow that change on this subscription right now. Manage it in the billing portal, or contact support.',
+            'Polar does not allow that change on this subscription right now. Manage it in Card and invoices, or contact support.',
             409,
             { cause: error },
         );

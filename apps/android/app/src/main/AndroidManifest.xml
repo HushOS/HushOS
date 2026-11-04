@@ -60,7 +60,7 @@
             </intent-filter>
             <!--
                 The server's own links, verified against its /.well-known/assetlinks.json: share
-                links and the app's pages. /app/billing and /app/admin are left out on purpose,
+                links, the emailed family invitation, and the app's pages. /app/billing and /app/admin are left out on purpose,
                 so they stay in the browser. Scheme and host come from the build type's default
                 origin (build.gradle.kts), so they always match the server the app signs in to;
                 debug builds answer the dev server over http and skip verification.
@@ -79,6 +79,8 @@
                 <data android:pathPrefix="/app/trash" />
                 <!-- The emailed recovery link: recovery carries on in the app. -->
                 <data android:path="/recover/complete" />
+                <!-- The emailed family invitation, /join#invite=<token>: the invitation sheet. -->
+                <data android:path="/join" />
             </intent-filter>
         </activity>
 
@@ -138,6 +140,12 @@
         <receiver
             android:name="com.hushos.app.data.RetryReceiver"
             android:exported="false" />
+
+        <!-- Polls the change feed while Files or a picker is likely open (files/FilesPoll.kt). -->
+        <service
+            android:name="com.hushos.app.files.FilesPollService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
 
         <!-- WorkManager's foreground service, declared as data sync for the queued transfers. -->
         <service

@@ -11,8 +11,39 @@ import type { TagRegistry } from './tags';
  * next unlock rebuilds it from the mirror on disk.
  */
 
-export type CatalogueQuery = { query: string; limit?: number };
+/*
+ * What a node is, as search's kind words name it. The app decides it (`kindOf`): the split is
+ * what its viewer can show a file as, which this package doesn't know.
+ */
+export type NodeKind = 'folder' | 'image' | 'video' | 'document';
+export type CatalogueQuery = {
+    query: string;
+    limit?: number;
+    kindOf?: (node: DriveNode) => NodeKind | null;
+};
 export type CatalogueHit = { node: DriveNode; score: number; path: string[] };
+
+/*
+ * Query words that name a kind: "photos" finds every image, "folders" every folder. One is
+ * worth an exact extension, so "photos" puts images ahead of what only has it in its path.
+ */
+export const KIND_WORDS: Readonly<Record<string, NodeKind>> = {
+    image: 'image',
+    images: 'image',
+    photo: 'image',
+    photos: 'image',
+    picture: 'image',
+    pictures: 'image',
+    video: 'video',
+    videos: 'video',
+    document: 'document',
+    documents: 'document',
+    doc: 'document',
+    docs: 'document',
+    folder: 'folder',
+    folders: 'folder',
+};
+const folderOnly = (node: DriveNode): NodeKind | null => (node.kind === 'folder' ? 'folder' : null);
 
 /*
  * Search is over words, not strings: a name, a tag, a folder on the path and a
@@ -56,6 +87,66 @@ function scoreWord(word: string, tokens: string[], weight: number) {
     }
     return best;
 }
+
+/*
+ * Recent shows a folder once, not again for what it holds, as a window over what changed lately:
+ * nodes are taken newest first by their own time, and one with a kept folder above it (at any
+ * depth) is folded into that folder instead of kept. A folder kept later takes in what was kept
+ * below it, so the topmost recent folder stands in for everything under it. The walk stops once
+ * `limit` rows are kept, so a folder older than that window hides nothing: a file changed today
+ * inside it shows on its own. `parentOf` walks up through folders not among `nodes`; one it
+ * doesn't know ends the walk. Each row carries the newest change it stands for as `recentAt`,
+ * which Recent sorts by and shows.
+ */
+export function collapseRecent(
+    nodes: Iterable<DriveNode>,
+    limit: number,
+    parentOf: (id: string) => string | null | undefined = () => null,
+): RecentNode[] {
+    const held = new Map<string, DriveNode>();
+    for (const node of nodes) held.set(node.id, node);
+    const parent = (id: string) => held.get(id)?.parentId ?? parentOf(id);
+    // Newest first; things changed in the same moment by name, then id, so the order never shuffles.
+    const newer = (a: { node: DriveNode; at: number }, b: { node: DriveNode; at: number }) =>
+        b.at - a.at ||
+        a.node.name.localeCompare(b.node.name) ||
+        (a.node.id < b.node.id ? -1 : a.node.id > b.node.id ? 1 : 0);
+    // Kept rows by id, with the newest change each stands for, as it was written.
+    const kept = new Map<string, { node: DriveNode; at: number; iso: string }>();
+    // The kept folder above an id, if any: on any line of folders at most one is kept.
+    const keptAbove = (id: string) => {
+        const walked = new Set<string>();
+        for (let current = parent(id); current && !walked.has(current); current = parent(current)) {
+            walked.add(current);
+            const row = kept.get(current);
+            if (row) return row;
+        }
+        return undefined;
+    };
+    const order = [...held.values()]
+        .map((node) => ({ node, at: Date.parse(node.updatedAt) || 0 }))
+        .sort(newer);
+    for (const { node, at } of order) {
+        if (kept.size >= limit) break;
+        const above = keptAbove(node.id);
+        if (above) {
+            if (at > above.at) Object.assign(above, { at, iso: node.updatedAt });
+            continue;
+        }
+        const row = { node, at, iso: node.updatedAt };
+        kept.set(node.id, row);
+        if (node.kind === 'folder')
+            for (const [id, below] of kept)
+                if (id !== node.id && keptAbove(id) === row) {
+                    kept.delete(id);
+                    if (below.at > row.at) Object.assign(row, { at: below.at, iso: below.iso });
+                }
+    }
+    return [...kept.values()].sort(newer).map((row) => ({ ...row.node, recentAt: row.iso }));
+}
+
+/* A row of Recent: the node, and when Recent says it changed (`collapseRecent`). */
+export type RecentNode = DriveNode & { recentAt: string };
 
 export class Catalogue {
     private readonly nodes = new Map<string, DriveNode>();
@@ -221,21 +312,23 @@ export class Catalogue {
         return isLive;
     }
 
-    /* What changed lately, newest first: live nodes below the top folder that `keep` lets through. */
-    recent(limit: number, keep: (node: DriveNode) => boolean = () => true) {
+    /*
+     * What changed lately, newest first: live nodes below the top folder that `keep` lets
+     * through, a folder standing in for what it holds (`collapseRecent`). `fresher` rows (a
+     * listing or a restore the catalogue has yet to file) take the place of its own.
+     */
+    recent(
+        limit: number,
+        keep: (node: DriveNode) => boolean = () => true,
+        fresher: Iterable<DriveNode> = [],
+    ) {
         const isLive = this.liveCheck();
-        const found: { node: DriveNode; at: number }[] = [];
+        const found = new Map<string, DriveNode>();
         for (const node of this.nodes.values())
-            if (node.parentId && isLive(node) && keep(node))
-                found.push({ node, at: Date.parse(node.updatedAt) || 0 });
-        // Newest first; things changed in the same moment by name, then id, so the order never shuffles.
-        found.sort(
-            (a, b) =>
-                b.at - a.at ||
-                a.node.name.localeCompare(b.node.name) ||
-                (a.node.id < b.node.id ? -1 : a.node.id > b.node.id ? 1 : 0),
-        );
-        return found.slice(0, limit).map((entry) => entry.node);
+            if (node.parentId && isLive(node) && keep(node)) found.set(node.id, node);
+        for (const node of fresher)
+            if (node.parentId && !node.trashedAt && keep(node)) found.set(node.id, node);
+        return collapseRecent(found.values(), limit, (id) => this.nodes.get(id)?.parentId);
     }
 
     /* How many live nodes carry each tag, for the sidebar. */
@@ -253,16 +346,22 @@ export class Catalogue {
         return counts;
     }
 
-    /* Every live node every query word lands on (none inside a trashed folder), best first; folders above files at a tie, then by name. */
-    search({ query, limit = 50 }: CatalogueQuery): CatalogueHit[] {
+    /*
+     * Every live node every query word lands on (none inside a trashed folder), best first; folders
+     * above files at a tie, then by name. A word in `KIND_WORDS` also lands on every node of its kind.
+     */
+    search({ query, limit = 50, kindOf = folderOnly }: CatalogueQuery): CatalogueHit[] {
         const words = tokenize(query);
         if (!words.length) return [];
         const hits: CatalogueHit[] = [];
         const isLive = this.liveCheck();
+        const kinds = words.map((word) => KIND_WORDS[word] ?? null);
+        const anyKind = kinds.some((kind) => kind !== null);
         for (const node of this.nodes.values()) {
             if (!node.parentId || !isLive(node)) continue;
             const name = tokenize(node.name);
             const extension = extensionOf(node.name);
+            const kind = anyKind ? kindOf(node) : null;
             const tags = this.tagsOf(node.id).flatMap((id) =>
                 tokenize(this.tagNames.get(id) ?? ''),
             );
@@ -271,10 +370,10 @@ export class Catalogue {
                 ancestor.parentId ? tokenize(ancestor.name) : [],
             );
             let score = 0;
-            for (const word of words) {
+            for (const [index, word] of words.entries()) {
                 const found = Math.max(
                     scoreWord(word, name, 4),
-                    extension === word ? 8 : 0,
+                    extension === word || (kind !== null && kinds[index] === kind) ? 8 : 0,
                     scoreWord(word, tags, 2),
                     scoreWord(word, path, 1),
                 );

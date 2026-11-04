@@ -455,7 +455,7 @@ function CheckWords({
                                         }))
                                     }
                                     className={cn(
-                                        'h-9 min-w-0 flex-1 cursor-pointer rounded-sm font-mono text-sm outline-none focus-visible:outline-2 focus-visible:outline-ring',
+                                        'h-9 min-w-0 flex-1 cursor-pointer rounded-sm font-mono text-sm outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring',
                                         pick === word &&
                                             !wrong &&
                                             'bg-card font-semibold text-primary shadow-sm ring-1 ring-primary',
