@@ -1,6 +1,7 @@
 import type { ComponentType } from 'react';
 
 import {
+    FamilyBillingDemo,
     FamilyGlanceDemo,
     FileRowsDemo,
     PageHeaderDemo,
@@ -67,6 +68,7 @@ const DEMOS: { id: string; title: string; Demo: ComponentType }[] = [
     { id: 'people', title: 'Avatars and who can open', Demo: PeopleDemo },
     { id: 'settings', title: 'Settings rows and storage', Demo: SettingsDemo },
     { id: 'family-glance', title: 'Family plan glance', Demo: FamilyGlanceDemo },
+    { id: 'family-billing', title: 'Family plan billing', Demo: FamilyBillingDemo },
 ];
 
 export function ComponentsPage() {

@@ -164,6 +164,35 @@ async function orderState(subscriptionId: string) {
 }
 
 /*
+ * The waits between reads while a charge Polar has just taken settles. Polar answers a raise or
+ * an upgrade before it charges the order the change makes; the order is paid a second or two
+ * later (sandbox, 2026-11-04), so read at once every such charge looks like one the bank holds.
+ * Six seconds in all, well inside Polar's 15 s timeout on the request that waits; a charge still
+ * unpaid after them is one the bank holds.
+ */
+const SETTLE_DELAYS_MS: readonly number[] = [250, 500, 750, 1000, 1500, 2000];
+let settleDelays = SETTLE_DELAYS_MS;
+
+/* Tests: shorter waits; undefined puts the real ones back. */
+export function setSettleDelays(delays: readonly number[] | undefined) {
+    settleDelays = delays ?? SETTLE_DELAYS_MS;
+}
+
+/*
+ * Reads `paid` until it says true, the waits run out (false), or it says null (unreadable:
+ * reading again would say no more, so it is answered as unpaid at once).
+ */
+async function settled(paid: () => Promise<boolean | null>) {
+    let state = await paid();
+    for (const delay of settleDelays) {
+        if (state !== false) break;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        state = await paid();
+    }
+    return state === true;
+}
+
+/*
  * An order refunded whole: Polar marks it `refunded`, or its refunds reach what it
  * charged. A partial refund (a goodwill credit) leaves it paying for its tier; an
  * order that charged nothing (a 100%-off checkout) is never "refunded" by being free.
@@ -2763,8 +2792,13 @@ async function raisePlaces(
     // now, so the cut is not put back, or they would pay for places they could not fill.
     // A scheduled tier move survives it (T1); restorePending below only checks.
     if (cut !== null) await billingRepository.setIntendedUnits(live.id, null);
-    // Paid only when Polar shows no order waiting; one that cannot be read is not paid yet.
-    const paid = (await orderState(subscription.id)).unpaid === false;
+    // Paid only when Polar shows no order waiting; one that cannot be read is not paid yet. Polar
+    // charges the raise's order just after answering, so it is given a few seconds to settle
+    // before the payer is sent to their bank.
+    const paid = await settled(async () => {
+        const { unpaid } = await orderState(subscription.id);
+        return unpaid === null ? null : !unpaid;
+    });
     await applyChanged(groupId, raised, paid, answeredAt);
     // Polar keeps a scheduled move through a raise; were it lost, it is asked for again.
     await restorePending(groupId);
@@ -3080,21 +3114,35 @@ export async function changeGroupPlan(
                 await billingRepository.setIntendedProduct(live.id, null);
                 // The places are unchanged (their paid count stays); the tier from Polar's orders. Polar has
                 // changed the product: a write that fails here is put right from Polar at once.
-                let applied: boolean;
-                try {
-                    applied = await applyChanged(groupId, changed, false, changedAt);
-                } catch (error) {
-                    log.warn({
-                        message: 'Upgrade not written after Polar took it; reconciling',
-                        billing: { group: groupId, failure: String((error as Error)?.name) },
-                    });
-                    await reconcileGroup(groupId);
-                    applied = (await billingRepository.getLiveGroupSubscription(groupId)) !== null;
-                }
-                if (!applied) throw unresolvedPlan();
-                const paid =
+                const write = async () => {
+                    try {
+                        return await applyChanged(groupId, changed, false, changedAt);
+                    } catch (error) {
+                        log.warn({
+                            message: 'Upgrade not written after Polar took it; reconciling',
+                            billing: { group: groupId, failure: String((error as Error)?.name) },
+                        });
+                        await reconcileGroup(groupId);
+                        return (await billingRepository.getLiveGroupSubscription(groupId)) !== null;
+                    }
+                };
+                if (!(await write())) throw unresolvedPlan();
+                const paidNow = async () =>
                     (await billingRepository.getLiveGroupSubscription(groupId))?.paidProductId ===
                     target.id;
+                let paid = await paidNow();
+                // Polar charges the change's order just after answering: it is given a few seconds
+                // to settle before the payer is sent to their bank, and the tier written once paid.
+                if (
+                    !paid &&
+                    (await settled(async () => {
+                        const tier = await tierStateOf(changed, target);
+                        return tier.known ? tier.paidTier?.productId === target.id : null;
+                    }))
+                ) {
+                    await write();
+                    paid = await paidNow();
+                }
                 log.info({
                     message: 'Family plan upgraded',
                     billing: { group: groupId, from: current.id, to: target.id, paid },
@@ -3178,6 +3226,7 @@ function planChangeError(result: SeatResult) {
             return new BillingError(
                 'Your bank declined this charge. Nothing was charged and the plan didn’t change. Try another card in Card and invoices, or ask your bank.',
                 402,
+                { code: 'declined' },
             );
         case 'payment':
             return new BillingError(
@@ -3201,6 +3250,7 @@ export function seatError(result: Exclude<SeatResult, { status: 'ok' | 'confirm'
             return new BillingError(
                 'Your bank declined this charge. Nothing was charged and no places were added. Try another card in Card and invoices, or ask your bank.',
                 402,
+                { code: 'declined' },
             );
         case 'payment':
             return new BillingError(

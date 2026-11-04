@@ -1362,7 +1362,7 @@ function Stepper({
                         if (Number.isFinite(next) && event.target.value !== '')
                             onChange(clamp(next));
                     }}
-                    className="h-9 w-20 text-center tabular-nums pointer-coarse:h-11"
+                    className="h-9 w-20 [appearance:textfield] text-center tabular-nums pointer-coarse:h-11 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                 />
                 <Button
                     variant="outline"
@@ -1377,6 +1377,54 @@ function Stepper({
         </div>
     );
 }
+
+/*
+ * Card and invoices after a declined charge: the payer's portal, where another card goes in
+ * before they try again. Outline beside the retry, the one blue button.
+ */
+function DeclinedPortal({
+    groupId,
+    disabled,
+    onOpening,
+    onError,
+}: {
+    groupId: string;
+    disabled: boolean;
+    onOpening: (opening: boolean) => void;
+    onError: (message: string) => void;
+}) {
+    const [opening, setOpening] = useState(false);
+    usePageRestored(() => {
+        setOpening(false);
+        onOpening(false);
+    });
+    async function open() {
+        setOpening(true);
+        onOpening(true);
+        try {
+            window.location.assign((await groupBillingApi.portal(groupId)).url);
+        } catch (cause) {
+            cue('error');
+            onError(authError(cause));
+            setOpening(false);
+            onOpening(false);
+        }
+    }
+    return (
+        <Button
+            variant="outline"
+            disabled={disabled || opening}
+            onClick={() => void open()}
+            data-declined-portal
+        >
+            {opening ? 'Opening' : 'Card and invoices'}
+            <ArrowUpRightIcon />
+        </Button>
+    );
+}
+
+/* A refusal the bank gave: another card may pay it, so the portal is offered beside a retry. */
+const wasDeclined = (cause: unknown) => (cause as { code?: string }).code === 'declined';
 
 /* The moment a change is pressed: read in its handler, never during render. */
 const pressedAt = () => new Date();
@@ -1475,6 +1523,8 @@ function AddPlacesDialog({
     const [count, setCount] = useState(1);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
+    const [declined, setDeclined] = useState(false);
+    const [opening, setOpening] = useState(false);
     const [sent, setSent] = useState<Sent<number> | null>(null);
     const confirmUrl = sent?.url ?? null;
     const standing = sent?.url ? raiseStanding(props.summary, sent) : null;
@@ -1489,6 +1539,7 @@ function AddPlacesDialog({
     function close() {
         onOpenChange(false);
         setError('');
+        setDeclined(false);
         setSent(null);
         setCount(1);
     }
@@ -1509,6 +1560,7 @@ function AddPlacesDialog({
         const done = `Added ${places(value)} to ${family}`;
         setBusy(true);
         setError('');
+        setDeclined(false);
         const quoted = summary;
         setSent({
             quoted,
@@ -1539,6 +1591,7 @@ function AddPlacesDialog({
             setSent(null);
             cue('error');
             setError(authError(cause));
+            setDeclined(wasDeclined(cause));
             reread();
         } finally {
             setBusy(false);
@@ -1615,9 +1668,19 @@ function AddPlacesDialog({
                             <ArrowUpRightIcon />
                         </Button>
                     ) : (
-                        <Button disabled={busy || !range} onClick={() => void add()}>
-                            {busy ? 'Adding…' : range ? `Add ${places(value)}` : 'Add places'}
-                        </Button>
+                        <>
+                            {declined && (
+                                <DeclinedPortal
+                                    groupId={groupId}
+                                    disabled={busy}
+                                    onOpening={setOpening}
+                                    onError={setError}
+                                />
+                            )}
+                            <Button disabled={busy || opening || !range} onClick={() => void add()}>
+                                {busy ? 'Adding…' : range ? `Add ${places(value)}` : 'Add places'}
+                            </Button>
+                        </>
                     )}
                 </DialogFooter>
             </DialogContent>
@@ -1645,6 +1708,8 @@ function ChangePlanDialog({
     const [choice, setChoice] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
+    const [declined, setDeclined] = useState(false);
+    const [opening, setOpening] = useState(false);
     const [sent, setSent] = useState<Sent<string> | null>(null);
     const confirmUrl = sent?.url ?? null;
     const standing = sent?.url ? upgradeStanding(props.summary, sent) : null;
@@ -1659,6 +1724,7 @@ function ChangePlanDialog({
     function close() {
         onOpenChange(false);
         setError('');
+        setDeclined(false);
         setSent(null);
         setChoice(null);
     }
@@ -1683,6 +1749,7 @@ function ChangePlanDialog({
         const done = `The family’s plan is ${tierName(chosen.plan)} now`;
         setBusy(true);
         setError('');
+        setDeclined(false);
         const quoted = summary;
         setSent({
             quoted,
@@ -1714,6 +1781,7 @@ function ChangePlanDialog({
             setSent(null);
             cue('error');
             setError(authError(cause));
+            setDeclined(wasDeclined(cause));
             reread();
         } finally {
             setBusy(false);
@@ -1844,13 +1912,26 @@ function ChangePlanDialog({
                             <ArrowUpRightIcon />
                         </Button>
                     ) : (
-                        <Button disabled={busy || chosen.over > 0n} onClick={() => void change()}>
-                            {busy
-                                ? 'Changing…'
-                                : chosen.direction === 'up'
-                                  ? `Change to ${tierName(chosen.plan)}`
-                                  : `Change on ${ends}`}
-                        </Button>
+                        <>
+                            {declined && (
+                                <DeclinedPortal
+                                    groupId={groupId}
+                                    disabled={busy}
+                                    onOpening={setOpening}
+                                    onError={setError}
+                                />
+                            )}
+                            <Button
+                                disabled={busy || opening || chosen.over > 0n}
+                                onClick={() => void change()}
+                            >
+                                {busy
+                                    ? 'Changing…'
+                                    : chosen.direction === 'up'
+                                      ? `Change to ${tierName(chosen.plan)}`
+                                      : `Change on ${ends}`}
+                            </Button>
+                        </>
                     )}
                 </DialogFooter>
             </DialogContent>

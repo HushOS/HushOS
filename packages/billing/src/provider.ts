@@ -31,9 +31,10 @@ const CATALOGUE_TTL_MS = 60_000;
  * A refusal the pages tell apart without matching on its words: `in-family`, a
  * personal plan asked for while the person's storage comes from a family's
  * (docs/families-shared-pool.md 3.3); `ends-lapsed`, a family checkout that would end
- * the family's lapsed plan, asked again once the person has confirmed it.
+ * the family's lapsed plan, asked again once the person has confirmed it; `declined`, a
+ * charge for places or a bigger family plan the bank refused, which another card may pay.
  */
-export type BillingErrorCode = 'in-family' | 'ends-lapsed';
+export type BillingErrorCode = 'in-family' | 'ends-lapsed' | 'declined';
 
 export class BillingError extends Error {
     readonly code: BillingErrorCode | undefined;
