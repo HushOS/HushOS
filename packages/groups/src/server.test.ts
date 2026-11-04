@@ -1092,6 +1092,39 @@ describe('one family per account (families-shared-pool 3.2)', () => {
     });
 });
 
+describe('declining an invitation', () => {
+    test('a decline that comes after they were let in leaves nothing: they stay a member, with their access', async () => {
+        const ortega = await family();
+        const sam = await member();
+        // Accepted and then let in, between Sam's page loading (waiting) and Sam confirming the decline.
+        await admitted(ortega, sam);
+        expect(
+            await refusal(groups.leave(sam.userId, ortega.groupId, { expect: 'accepted' })),
+        ).toEqual({
+            code: 'stale',
+            status: 409,
+            data: { reason: 'admitted' },
+        });
+        expect((await groupsRepository.familyOf(sam.userId))?.groupId).toBe(ortega.groupId);
+        expect((await groups.getGroup(sam.userId, ortega.groupId)).group.id).toBe(ortega.groupId);
+    });
+
+    test('a decline while still waiting withdraws it, and a leave without one still leaves a member', async () => {
+        const ortega = await family();
+        const sam = await member();
+        await accepted(ortega, sam);
+        await expect(
+            groups.leave(sam.userId, ortega.groupId, { expect: 'accepted' }),
+        ).resolves.toEqual({
+            state: 'left',
+        });
+        expect((await groupsRepository.listGroupsFor(sam.userId)).map((g) => g.id)).toEqual([]);
+        const ines = await member();
+        await admitted(ortega, ines);
+        await expect(groups.leave(ines.userId, ortega.groupId)).resolves.toEqual({ state: 'left' });
+    });
+});
+
 describe('waiting to join, under races', () => {
     test('a family made as its creator accepts an invitation: exactly one goes through, and the other is refused', async () => {
         const ortega = await family();

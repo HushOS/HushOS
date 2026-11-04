@@ -2150,6 +2150,58 @@ test.describe.serial('declining a pending join', () => {
         expect(listed.groups.filter((group) => group.state === 'accepted')).toEqual([]);
         for (const who of [maya, sam]) await who.page.context().close();
     });
+    test('a decline that comes after they were let in leaves nothing, and the page then shows them as a member', async ({
+        browser,
+        request,
+    }) => {
+        test.skip(
+            await sellsPlans(request),
+            'Where plans are sold, inviting needs a family with a plan, which can’t be paid for here.',
+        );
+        test.setTimeout(300_000);
+        const maya = await person(browser, 'Maya Berg');
+        const sam = await person(browser, 'Sam Okafor');
+        await createFamily(maya, 'Berg family');
+        await invite(maya, sam.email);
+        await accept(sam, 'Berg family');
+        await sam.page.goto('/app/family');
+        const page = sam.page.locator('[data-no-family]');
+        await expect(page.getByRole('link', { name: 'Continue joining Berg family' })).toBeVisible({
+            timeout: 60_000,
+        });
+        // Sam's page stays as it loaded (waiting) while Maya lets Sam in.
+        let loaded: unknown = null;
+        const groupsList = (url: URL) => url.pathname === '/api/groups';
+        await sam.page.route(groupsList, async (route: Route) => {
+            if (route.request().method() !== 'GET') return route.continue();
+            loaded ??= await (await route.fetch()).json();
+            return route.fulfill({ json: loaded });
+        });
+        // Maya lets Sam in from the family's page (Sam's own page isn't watched: it stays as it loaded).
+        const pending = maya.page.locator(`[data-pending="${sam.email}"]`);
+        await expect(pending).toBeVisible({ timeout: 60_000 });
+        await pending.getByRole('button', { name: 'Let them in' }).click();
+        await expect(maya.page.getByText('Sam is in Berg family')).toBeVisible({ timeout: 90_000 });
+        await page.getByRole('button', { name: 'Decline invitation to Berg family' }).click();
+        const ask = sam.page.getByRole('alertdialog');
+        await expect(ask).toContainText('Decline the invitation to Berg family?');
+        await sam.page.unroute(groupsList);
+        await ask.getByRole('button', { name: 'Decline invitation' }).click();
+        await expect(
+            sam.page.getByText('Berg family changed while you were working on it. Try again.'),
+        ).toBeVisible({ timeout: 60_000 });
+        await expect(ask).toHaveCount(0);
+        // The family page, read again: Sam is a member, and nothing left.
+        await expect(sam.page.locator('[data-no-family]')).toHaveCount(0, { timeout: 60_000 });
+        await expect(sam.page.locator(`[data-member="${maya.email}"]`)).toBeVisible({
+            timeout: 60_000,
+        });
+        const listed = (await (
+            await sam.page.request.get('/api/groups', { headers: { 'HushOS-Client': 'web/1' } })
+        ).json()) as { groups: { name: string; state: string }[] };
+        expect(listed.groups.map((group) => group.state)).toEqual(['active']);
+        for (const who of [maya, sam]) await who.page.context().close();
+    });
 });
 
 test.describe.serial('Family for someone waiting to join one', () => {

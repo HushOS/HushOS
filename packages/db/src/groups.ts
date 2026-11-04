@@ -1977,7 +1977,22 @@ export type LeaveResult =
      */
     | { status: 'busy' | 'pays' }
     /* `mustDissolve`, and the leave would not dissolve the family: nothing was written. */
-    | { status: 'not-last' };
+    | { status: 'not-last' }
+    /* `onlyAccepted` (declining an invitation), and they were let in meanwhile: nothing was written. */
+    | { status: 'admitted' };
+
+/*
+ * A decline (`onlyAccepted`) withdraws only a membership still waiting to be let in, read under
+ * the group's lock: one let in meanwhile is a member now, whose leaving revokes their access and
+ * takes their files out of the pool, which only the leave dialog says.
+ */
+async function stillWaiting(tx: Tx, groupId: string, userId: string) {
+    const [row] = await tx
+        .select({ state: groupMemberships.state })
+        .from(groupMemberships)
+        .where(and(eq(groupMemberships.groupId, groupId), eq(groupMemberships.userId, userId)));
+    return row?.state !== 'active';
+}
 
 /*
  * Whether the family has a plan someone is still paying for: live, and not set
@@ -2174,13 +2189,15 @@ export async function leaveGroup(
      * Only a leave that dissolves the family (its last member's): the caller let a plan run on
      * that condition (the dissolved family's job ends it). Any other is rolled back, `not-last`.
      */
-    options: { mustDissolve?: boolean } = {},
+    options: { mustDissolve?: boolean; onlyAccepted?: boolean } = {},
 ): Promise<LeaveResult> {
     return answering<LeaveResult>(
         () =>
             db.transaction(async (tx): Promise<LeaveResult> => {
                 const group = await lockGroup(tx, groupId);
                 if (!group) return { status: 'not-member' };
+                if (options.onlyAccepted && !(await stillWaiting(tx, groupId, userId)))
+                    return { status: 'admitted' };
                 await lockAreas(tx, groupId);
                 // Leaving takes the member's own files out of the family's pool (3.6).
                 if (group.kind === 'family') await lockPool(tx, groupId);
@@ -2200,7 +2217,11 @@ export async function leaveGroup(
  * leave the rule refuses ends nothing. Another change between this and the leave can still
  * refuse it.
  */
-export async function previewLeave(groupId: string, userId: string): Promise<LeaveResult> {
+export async function previewLeave(
+    groupId: string,
+    userId: string,
+    options: { onlyAccepted?: boolean } = {},
+): Promise<LeaveResult> {
     const preview = Symbol('preview');
     let answer: LeaveResult = { status: 'unavailable' };
     // As leaveGroup answers: a deadlock or a lost connection is `unavailable`, not an error.
@@ -2210,6 +2231,8 @@ export async function previewLeave(groupId: string, userId: string): Promise<Lea
                 await db.transaction(async (tx) => {
                     const group = await lockGroup(tx, groupId);
                     if (!group) answer = { status: 'not-member' };
+                    else if (options.onlyAccepted && !(await stillWaiting(tx, groupId, userId)))
+                        answer = { status: 'admitted' };
                     else {
                         await lockAreas(tx, groupId);
                         if (group.kind === 'family') await lockPool(tx, groupId);

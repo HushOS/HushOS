@@ -166,7 +166,7 @@ export function createGroupsApi(client = () => apiClient()) {
                 plans: LapsedPlanNamed[];
             }>,
         /* 20 */
-        leave: (groupId: string, confirm: { endsLapsed?: string[] } = {}) =>
+        leave: (groupId: string, confirm: { endsLapsed?: string[]; expect?: 'accepted' } = {}) =>
             answer(groups(groupId).leave.post(confirm)),
         /* 21 */
         createArea: (groupId: string, call: RosterCallBody) =>

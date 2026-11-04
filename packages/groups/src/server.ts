@@ -2274,13 +2274,18 @@ const youPay = () =>
 export async function leave(
     userId: string,
     groupId: string,
-    /* The lapsed plans they pay for that they confirmed end (ids, as `ends-lapsed` names them). */
-    body: { endsLapsed?: string[] } = {},
+    /*
+     * The lapsed plans they pay for that they confirmed end (ids, as `ends-lapsed` names them);
+     * `expect: 'accepted'` for declining an invitation, which withdraws only a membership still
+     * waiting: one let in meanwhile is refused (`stale`, reason `admitted`) and nothing leaves.
+     */
+    body: { endsLapsed?: string[]; expect?: 'accepted' } = {},
 ) {
-    if (await paysForGroup(groupId, userId)) throw youPay();
+    const onlyAccepted = body.expect === 'accepted';
+    if (!onlyAccepted && (await paysForGroup(groupId, userId))) throw youPay();
     // The leave's own rule first (its refusals end nothing), then the payer's lapsed plan, once
     // confirmed, then the leave.
-    const preview = await groupsRepository.previewLeave(groupId, userId);
+    const preview = await groupsRepository.previewLeave(groupId, userId, { onlyAccepted });
     if (preview.status !== 'left' && preview.status !== 'dissolved') return leaveAnswer(preview);
     const ended = await endPayersLapsedPlan(groupId, userId, 'You', body.endsLapsed, {
         dissolving: preview.status === 'dissolved',
@@ -2288,7 +2293,10 @@ export async function leave(
     // A plan let run only because this leave dissolves the family: the write must dissolve it
     // (someone admitted meanwhile makes it an ordinary leave), or nothing is left.
     return leaveAnswer(
-        await groupsRepository.leaveGroup(groupId, userId, { mustDissolve: ended?.live === true }),
+        await groupsRepository.leaveGroup(groupId, userId, {
+            mustDissolve: ended?.live === true,
+            onlyAccepted,
+        }),
         groupId,
     );
 }
@@ -2303,6 +2311,16 @@ async function leaveAnswer(result: groupsRepository.LeaveResult, groupId?: strin
             return { state: 'left' as const, dissolved: true };
         case 'not-member':
             throw notMember();
+        // A decline of someone let in meanwhile: they're a member now, and nothing left.
+        case 'admitted':
+            throw new GroupError(
+                'stale',
+                'Someone else changed the group first. Reload and try again.',
+                409,
+                {
+                    reason: 'admitted',
+                },
+            );
         case 'organizer':
             throw new GroupError(
                 'organizer',

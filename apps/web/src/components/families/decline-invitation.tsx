@@ -14,7 +14,7 @@ import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
 import { afterFamilyChange, familyContext } from '@/lib/families';
 import { familySynced } from '@/lib/families-keys';
-import { groupsApi } from '@/lib/groups/api';
+import { GroupApiError, groupsApi } from '@/lib/groups/api';
 import { errorCopy } from '@/lib/groups/copy';
 import { wipeGroup } from '@/lib/groups/sync';
 import { cue } from '@/lib/sounds';
@@ -47,7 +47,8 @@ export function DeclineInvitation({
         setBusy(true);
         setError('');
         try {
-            await groupsApi.leave(groupId);
+            // Only while they're still waiting: let in meanwhile, nothing leaves (the leave dialog says what leaving does).
+            await groupsApi.leave(groupId, { expect: 'accepted' });
             // Whatever the join kept on this device goes; a wipe that fails changes nothing the
             // person can act on, since they hold no family keys yet.
             const ctx = familyContext(userId);
@@ -60,6 +61,17 @@ export function DeclineInvitation({
             await onDeclined?.();
         } catch (cause) {
             cue('error');
+            if (
+                cause instanceof GroupApiError &&
+                cause.code === 'stale' &&
+                (cause.data as { reason?: unknown } | undefined)?.reason === 'admitted'
+            ) {
+                // Let in since the page loaded: the family page shows them as a member now.
+                setOpen(false);
+                toast.add({ type: 'error', title: errorCopy(cause, { family }) });
+                await afterFamilyChange(queryClient, userId);
+                return;
+            }
             setError(errorCopy(cause, { family }));
         } finally {
             setBusy(false);

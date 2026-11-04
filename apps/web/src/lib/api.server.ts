@@ -2718,7 +2718,13 @@ export const apiApp = new Elysia({ prefix: '/api' })
             )
             .post(
                 '/groups/:id/leave',
-                { params: groupParams, body: t.Object({ endsLapsed: endsLapsedSchema }) },
+                {
+                    params: groupParams,
+                    body: t.Object({
+                        endsLapsed: endsLapsedSchema,
+                        expect: t.Optional(t.Literal('accepted')),
+                    }),
+                },
                 async ({ request, sessionToken, params, body }) =>
                     groups.leave((await groupUser(request, sessionToken)).id, params.id, body),
             )
