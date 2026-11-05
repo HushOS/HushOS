@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0](https://github.com/HushOS/HushOS/compare/v0.15.0...v1.0.0) (2026-11-05)
+
+
+### Chores
+
+* release 1.0.0 ([#304](https://github.com/HushOS/HushOS/issues/304)) ([14b75fd](https://github.com/HushOS/HushOS/commit/14b75fd8b5a2c05dd356fb719be5dc91671f47ea))
+
 ## [0.15.0](https://github.com/HushOS/HushOS/compare/v0.14.0...v0.15.0) (2026-11-05)
 
 
