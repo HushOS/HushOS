@@ -62,7 +62,7 @@ Deep links have only been tried on the simulator and emulator, with `hushos://` 
 
 ## Store pages
 
-- [ ] **Screenshots:** iOS 6.9-inch 1320×2868 (iPhone only, so no iPad set); Android 1080×1920. Six each, light mode, clean status bar, the demo account only. The Account shot was taken after the plan buttons were removed.
+- [ ] **Screenshots:** iOS 6.9-inch 1320×2868 (iPhone only, so no iPad set); Android 1080×1920. Eight each, captioned, in the same order (store-listing.md), light mode, clean status bar, the demo account only. Neither set has an Account shot, since it shows the plan and storage.
 - [ ] **Google graphics:** icon 512×512, feature graphic 1024×500 (`docs/release/assets/`).
 - [ ] **Copy pasted from store-listing.md;** no price, plan or "upgrade" wording anywhere.
 - [ ] **Apple:** App Privacy published; age rating answered; content rights answered; Pricing free; availability (France per the export decision); "available on Mac" unticked; review notes and both demo accounts filled in; manual release.

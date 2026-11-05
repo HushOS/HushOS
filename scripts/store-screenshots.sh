@@ -7,7 +7,7 @@
 #   bun dev                                   # the web dev server on :5173, with the demo account
 #   scripts/store-screenshots.sh ios          # or: android, or both (the default)
 #
-# It uses its own simulator ("HushOS Store 6.9") and its own emulator ("HushOS_Store",
+# It uses its own simulator ("HushOS AppStore 6.9") and its own emulator ("HushOS_Store",
 # 1080x1920), never the ones you develop on. AVD names another emulator instead (say the site's
 # HushOS_Site): its screen is set to 1080x1920 at Pixel 2 density for the shots and put back
 # after. The emulator refuses to start while another one is running, because a second device
@@ -24,7 +24,8 @@
 #   PORT           the web server the apps talk to (default 5173). Another port (an isolated
 #                  instance, say) rebuilds the Android debug app to talk to it.
 #   DB             its database (default hushos), in the hushos-db-1 container.
-#   SIGNED_IN      set when the Android app is already signed in as the demo account.
+#   SIGNED_IN      set when the app (both platforms) is already signed in as the demo account.
+#   SIM            another 6.9-inch iPhone simulator's name, if "HushOS AppStore 6.9" can't be used.
 # Times on screen are in a timezone where it is mid-morning now (e2e/morning-zone.ts), as on the web.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -79,46 +80,79 @@ check_size() { # file width height
 }
 
 ios() {
-    local name="HushOS Store 6.9" udid app runtime
+    local name="${SIM:-HushOS AppStore 6.9}" udid app runtime
     udid=$(xcrun simctl list devices available | grep "$name (" | grep -oE '[0-9A-F-]{36}' | head -1 || true)
     if [[ -z "$udid" ]]; then
-        runtime=$(xcrun simctl list runtimes available | grep -oE 'com\.apple\.CoreSimulator\.SimRuntime\.iOS-[0-9-]+' | tail -1)
-        for type in iPhone-18-Pro-Max iPhone-17-Pro-Max; do
-            udid=$(xcrun simctl create "$name" "com.apple.CoreSimulator.SimDeviceType.$type" "$runtime" 2>/dev/null) && break
-        done
+        # The newest runtime that has a 6.9-inch iPhone (a newer runtime may not have the model).
+        for runtime in $(xcrun simctl list runtimes available | grep -oE 'com\.apple\.CoreSimulator\.SimRuntime\.iOS-[0-9-]+' | sort -rV); do
+            for type in iPhone-18-Pro-Max iPhone-17-Pro-Max; do
+                udid=$(xcrun simctl create "$name" "com.apple.CoreSimulator.SimDeviceType.$type" "$runtime" 2>/dev/null) && break 2
+            done
+        done || true
     fi
     [[ -n "$udid" ]] || fail "Couldn't create a 6.9-inch iPhone simulator."
     app="apps/ios/DerivedData/Build/Products/Debug-iphonesimulator/HushOS.app"
     [[ -d "$app" ]] || bun run ios:build
     xcrun simctl boot "$udid" 2>/dev/null || true
     xcrun simctl bootstatus "$udid" -b >/dev/null
-    open -a Simulator --args -CurrentDeviceUDID "$udid"
+    # Simulator.app, if this Xcode has one; the shots don't need its window.
+    open -a Simulator --args -CurrentDeviceUDID "$udid" 2>/dev/null || true
     xcrun simctl ui "$udid" appearance light
-    xcrun simctl status_bar "$udid" override --time "9:41" --dataNetwork wifi --wifiMode active --wifiBars 3 \
-        --cellularMode active --cellularBars 4 --operatorName "" --batteryState charged --batteryLevel 100
+    # The time on the device (in the morning zone), set again before every capture, so the clock
+    # is never earlier than the newest row on screen.
+    clock() {
+        xcrun simctl status_bar "$udid" override --time "$(TZ=$ZONE date '+%-I:%M')" --dataNetwork wifi \
+            --wifiMode active --wifiBars 3 --cellularMode active --cellularBars 4 --operatorName "" \
+            --batteryState charged --batteryLevel 100
+    }
+    clock
     xcrun simctl install "$udid" "$app"
     # The app's clock in the morning zone, with any 24-hour override off, so rows read
-    # "Today, 10:24 AM" beside the 9:41 status bar, as on Android.
-    xcrun simctl terminate "$udid" com.hushos.app 2>/dev/null || true
-    SIMCTL_CHILD_TZ="$ZONE" xcrun simctl launch "$udid" com.hushos.app -AppleICUForce24HourTime NO >/dev/null
+    # "Today, 10:24 AM", as on Android. A link opens through a debug-only launch argument,
+    # since `simctl openurl` makes iOS ask "Open in HushOS?" first.
+    launch() { # [link] [extra arguments]
+        xcrun simctl terminate "$udid" com.hushos.app 2>/dev/null || true
+        if [[ -n "${1:-}" ]]; then
+            SIMCTL_CHILD_TZ="$ZONE" xcrun simctl launch "$udid" com.hushos.app -AppleICUForce24HourTime NO -HushOSOpenLink "$1" "${@:2}" >/dev/null
+        else
+            SIMCTL_CHILD_TZ="$ZONE" xcrun simctl launch "$udid" com.hushos.app -AppleICUForce24HourTime NO >/dev/null
+        fi
+    }
+    launch
     mkdir -p "$OUT/ios"
-    local link="xcrun simctl openurl $udid"
-    shot() { # number name instruction [deep link]
-        [[ -n "${4:-}" ]] && $link "$4"
+    shot() { # number name instruction [link] [extra launch arguments]
+        [[ -n "${4:-}" ]] && launch "$4" "${@:5}"
         wait_enter "$3"
+        clock
+        sleep 1
         xcrun simctl io "$udid" screenshot --type=png "$OUT/ios/$1-$2.png" >/dev/null 2>&1
         check_size "$OUT/ios/$1-$2.png" 1320 2868
     }
-    say "iOS, on \"$name\". Sign in first."
-    password_to_clipboard
-    wait_enter "Sign in as $DEMO_EMAIL; the password is on the clipboard (paste it). Allow or dismiss any prompt, then come back here."
+    say "iOS, on \"$name\"."
+    # SIGNED_IN=1 when the simulator's app is already signed in as the demo account.
+    if [[ -z "${SIGNED_IN:-}" ]]; then
+        password_to_clipboard
+        xcrun simctl pbcopy "$udid" < <(sed -n "s/^export const PASSWORD = '\(.*\)';$/\1/p" e2e/helpers.ts | tr -d '\n')
+        local server=""
+        [[ "$PORT" != 5173 ]] && server=" First set the server: the gear > Self-hosting > Server address http://localhost:$PORT > Save."
+        wait_enter "Sign in as $DEMO_EMAIL; the password is on the simulator's clipboard (paste it).$server Allow or dismiss any prompt, then come back here."
+        printf '' | xcrun simctl pbcopy "$udid"
+    fi
     say "First keep Lisbon 2026, Finances and Q3 report.md on this phone (each one's menu > Keep on this phone), so Home and shot 5 have something to show."
+    # In the App Store's order (store-listing.md); the names match Android's captures.
     shot 01 home "Home, scrolled to the top, no prompt or notice on screen." "hushos://app"
-    shot 02 folder "Lisbon 2026 as a grid: More (or the sort button on Android) > View > Grid." "hushos://app/drive?folder=$LISBON_FOLDER"
-    shot 03 share "In Lisbon 2026, tap Manage on the banner, so the sheet shows Maya, Jonas and one link." ""
-    shot 04 preview "A photo open in the viewer." "hushos://app/drive?folder=$LISBON_FOLDER&preview=$PHOTO"
+    shot 02 folder "Lisbon 2026 as a grid of photos." "hushos://app/drive?folder=$LISBON_FOLDER" -files.view grid
+    shot 09 colours "Files, at the top, as a list: Holidays, Finances and Recipes in their colours." "hushos://app/drive" -files.view list
+    # The family's folders and members, nothing about the plan above them (store-listing.md).
+    shot 10 family "Account > Lindqvist family: its folders (Family, Household) and members, scrolled to the top." ""
+    shot 03 share "Files > Holidays, tap Manage on the banner, so the sheet is titled Holidays and shows Maya, Jonas and one link." ""
+    shot 07 words "Shared > Contacts > Your twelve words, so no plan shows behind the sheet." ""
     shot 05 phone "Home > On this phone." "hushos://app"
-    shot 06 account "The Account tab, scrolled to the top." ""
+    # The Files app on its own, so the status bar has no "Back to HushOS" link, on the same clock.
+    xcrun simctl terminate "$udid" com.hushos.app 2>/dev/null || true
+    xcrun simctl terminate "$udid" com.apple.DocumentsApp 2>/dev/null || true
+    SIMCTL_CHILD_TZ="$ZONE" xcrun simctl launch "$udid" com.apple.DocumentsApp -AppleICUForce24HourTime NO >/dev/null
+    shot 08 files "In Files: Browse > HushOS > Holidays > Lisbon 2026, as icons (if HushOS isn't listed, the ... menu > Edit turns it on)." ""
     xcrun simctl status_bar "$udid" clear
     say "iOS done: $OUT/ios"
 }

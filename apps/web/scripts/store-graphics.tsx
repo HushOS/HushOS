@@ -9,20 +9,18 @@ import { Logo } from '../src/components/logo';
 import { LOGO_BLACK, LOGO_WHITE, logoSvg } from '../src/lib/brand';
 
 /*
- * The Play Store's graphics, drawn like the social cards (src/lib/og.server.tsx): the
- * 1024x500 feature graphic (the home card's words beside its dithered panel), the 512x512
- * icon, and the captioned phone screenshots. Play wants the graphic and the screenshots
- * without alpha (24-bit PNG) and the icon as a 32-bit PNG, so those are flattened and the
- * icon keeps an opaque alpha channel.
- * Run: bun run store:graphics. Output: docs/release/assets/ and
- * docs/release/screenshots/android/play/ (from the raw captures beside it, made by
- * scripts/store-screenshots.sh; the captions are in docs/release/store-listing.md).
+ * The stores' graphics, drawn like the social cards (src/lib/og.server.tsx): Play's 1024x500
+ * feature graphic (the home card's words beside its dithered panel) and 512x512 icon, and the
+ * captioned phone screenshots for both stores. Play wants the graphic and the screenshots
+ * without alpha (24-bit PNG) and the icon as a 32-bit PNG, and Apple refuses transparency, so
+ * those are flattened and the icon keeps an opaque alpha channel.
+ * Run: bun run store:graphics. Output: docs/release/assets/,
+ * docs/release/screenshots/android/play/ and docs/release/screenshots/ios/app-store/ (from the
+ * raw captures beside each, made by scripts/store-screenshots.sh; the captions are in
+ * docs/release/store-listing.md).
  */
 const assets = new URL('../../../docs/release/assets/', import.meta.url);
-const screens = new URL('../../../docs/release/screenshots/android/', import.meta.url);
-const captioned = new URL('play/', screens);
 await mkdir(assets, { recursive: true });
-await mkdir(captioned, { recursive: true });
 
 const font = await readFile(
     fileURLToPath(
@@ -125,8 +123,10 @@ const feature = await render(
 );
 
 /*
- * The phone screenshots in Play's order, each under one short line. The first two carry
- * the message; every caption is something the Android app does today.
+ * The phone screenshots in the stores' order, each under one short line. The first two carry
+ * the message; every caption is something both apps do today. The same captures and lines
+ * make Play's set (1080x1920) and the App Store's 6.9-inch iPhone set (1320x2868); each
+ * platform's raw captures sit beside its captioned folder under the same names.
  */
 const shots: [file: string, caption: string][] = [
     ['01-home', 'End-to-end encrypted\ncloud storage'],
@@ -138,67 +138,83 @@ const shots: [file: string, caption: string][] = [
     ['05-phone', 'Keep folders on your\nphone for offline'],
     ['08-files', 'Open and save\nfrom any app'],
 ];
-// The capture sits below the line at this width, rounded and ruled, cut off at the foot.
-const SHOT_WIDTH = 880;
-const SHOT_HEIGHT = Math.round((SHOT_WIDTH * 1920) / 1080);
+/*
+ * Play's layout, scaled to each canvas: the line in a band above, the capture below it at
+ * the band's width, rounded and ruled, cut off at the foot. The iPhone's capture is taller
+ * than Play's 9:16, so its band is a little deeper to keep the foot cut off.
+ */
+const sets = [
+    { platform: 'android', out: 'play', width: 1080, height: 1920, band: 400 },
+    { platform: 'ios', out: 'app-store', width: 1320, height: 2868, band: 560 },
+] as const;
 const written: string[] = [];
-for (const [index, [file, caption]] of shots.entries()) {
-    const source = fileURLToPath(new URL(`${file}.png`, screens));
-    if (!existsSync(source)) {
-        console.warn(`No ${file}.png in docs/release/screenshots/android; skipped.`);
-        continue;
-    }
-    const capture = `data:image/png;base64,${(await readFile(source)).toString('base64')}`;
-    const image = await render(
-        <div
-            style={{
-                width: 1080,
-                height: 1920,
-                backgroundColor: '#ffffff',
-                color: INK,
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                fontFamily: 'Geist',
-            }}
-        >
+for (const set of sets) {
+    const screens = new URL(`../../../docs/release/screenshots/${set.platform}/`, import.meta.url);
+    const captioned = new URL(`${set.out}/`, screens);
+    await mkdir(captioned, { recursive: true });
+    const scale = set.width / 1080;
+    const shotWidth = Math.round(880 * scale);
+    const shotHeight = Math.round((shotWidth * set.height) / set.width);
+    let count = 0;
+    for (const [index, [file, caption]] of shots.entries()) {
+        const source = fileURLToPath(new URL(`${file}.png`, screens));
+        if (!existsSync(source)) {
+            console.warn(`No ${file}.png in docs/release/screenshots/${set.platform}; skipped.`);
+            continue;
+        }
+        const capture = `data:image/png;base64,${(await readFile(source)).toString('base64')}`;
+        const image = await render(
             <div
                 style={{
-                    width: SHOT_WIDTH,
-                    height: 400,
+                    width: set.width,
+                    height: set.height,
+                    backgroundColor: '#ffffff',
+                    color: INK,
                     display: 'flex',
+                    flexDirection: 'column',
                     alignItems: 'center',
-                    fontSize: 76,
-                    lineHeight: 1.06,
-                    letterSpacing: -2.4,
-                    fontWeight: 800,
-                    whiteSpace: 'pre-line',
+                    fontFamily: 'Geist',
                 }}
             >
-                {caption}
-            </div>
-            <div
-                style={{
-                    width: SHOT_WIDTH + 4,
-                    height: SHOT_HEIGHT + 4,
-                    border: `2px solid ${RULE}`,
-                    borderRadius: 44,
-                    overflow: 'hidden',
-                    display: 'flex',
-                }}
-            >
-                <img src={capture} alt="" width={SHOT_WIDTH} height={SHOT_HEIGHT} />
-            </div>
-        </div>,
-        1080,
-        1920,
-    );
-    const name = `${String(index + 1).padStart(2, '0')}-${file.slice(3)}.png`;
-    await sharp(image)
-        .flatten({ background: '#ffffff' })
-        .png()
-        .toFile(fileURLToPath(new URL(name, captioned)));
-    written.push(name);
+                <div
+                    style={{
+                        width: shotWidth,
+                        height: set.band,
+                        display: 'flex',
+                        alignItems: 'center',
+                        fontSize: Math.round(76 * scale),
+                        lineHeight: 1.06,
+                        letterSpacing: -2.4 * scale,
+                        fontWeight: 800,
+                        whiteSpace: 'pre-line',
+                    }}
+                >
+                    {caption}
+                </div>
+                <div
+                    style={{
+                        width: shotWidth + 4,
+                        height: shotHeight + 4,
+                        border: `2px solid ${RULE}`,
+                        borderRadius: Math.round(44 * scale),
+                        overflow: 'hidden',
+                        display: 'flex',
+                    }}
+                >
+                    <img src={capture} alt="" width={shotWidth} height={shotHeight} />
+                </div>
+            </div>,
+            set.width,
+            set.height,
+        );
+        const name = `${String(index + 1).padStart(2, '0')}-${file.slice(3)}.png`;
+        await sharp(image)
+            .flatten({ background: '#ffffff' })
+            .png()
+            .toFile(fileURLToPath(new URL(name, captioned)));
+        count += 1;
+    }
+    written.push(`${count} in ${fileURLToPath(captioned)}`);
 }
 
 await Promise.all([
@@ -215,5 +231,5 @@ await Promise.all([
         .toFile(fileURLToPath(new URL('google-play-icon.png', assets))),
 ]);
 console.log(
-    `Wrote ${fileURLToPath(assets)}google-feature-graphic.png, google-play-icon.png and ${written.length} screenshots in ${fileURLToPath(captioned)}`,
+    `Wrote ${fileURLToPath(assets)}google-feature-graphic.png, google-play-icon.png, and screenshots: ${written.join('; ')}`,
 );
