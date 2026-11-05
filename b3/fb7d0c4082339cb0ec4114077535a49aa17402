@@ -1,0 +1,21 @@
+apps/ios/Files/Info.plist
+  s_566b8e0c4467a4::t_e19d0aaf7b2f68 27-28
+apps/ios/project.yml
+  s_566b8e0c4467a4::t_d4a993066be520 113-114,147-148,152-153,188-189,219-220,271-272
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b3fb7d0c4082339cb0ec4114077535a49aa17402",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
