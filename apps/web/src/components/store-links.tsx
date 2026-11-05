@@ -145,7 +145,7 @@ export function StoreLinks({ className }: { className?: string }) {
                 <Frame art="appStore" alt="Download on the App Store, coming soon" />
                 <span
                     aria-hidden="true"
-                    className="absolute -top-[5px] left-[126px] inline-flex h-5 origin-center -translate-x-1/2 -translate-y-1/2 rotate-8 items-center rounded-full bg-tint px-1.5 text-[11px] leading-none font-semibold whitespace-nowrap text-on-tint hc:border hc:border-edge"
+                    className="absolute -top-[2px] left-[126px] inline-flex h-5 origin-center -translate-x-1/2 -translate-y-1/2 rotate-8 items-center rounded-full bg-tint px-1.5 text-[11px] leading-none font-semibold whitespace-nowrap text-on-tint hc:border hc:border-edge"
                 >
                     Coming soon
                 </span>
