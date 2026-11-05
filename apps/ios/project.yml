@@ -110,6 +110,8 @@ targets:
         settings:
             base:
                 PRODUCT_BUNDLE_IDENTIFIER: com.hushos.app
+                # The iOS presets set the device family per target, overriding the project's: iPhone only.
+                TARGETED_DEVICE_FAMILY: '1'
                 ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
                 # Hush blue for system controls (alerts, menus, pickers) as well as the views that set it.
                 ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
@@ -142,9 +144,13 @@ targets:
                     NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).FileProviderExtension
                     NSExtensionFileProviderSupportsEnumeration: true
                     NSExtensionFileProviderSupportsPinning: true
+                    # Required by App Store validation: the container the provider shares with the app.
+                    NSExtensionFileProviderDocumentGroup: '$(APP_GROUP_ID)'
         settings:
             base:
                 PRODUCT_BUNDLE_IDENTIFIER: com.hushos.app.files
+                # The iOS presets set the device family per target, overriding the project's: iPhone only.
+                TARGETED_DEVICE_FAMILY: '1'
                 # Callback-based Objective-C API: Swift 5 mode keeps the sending-closure checks as warnings.
                 SWIFT_VERSION: '5'
                 SWIFT_STRICT_CONCURRENCY: minimal
@@ -179,6 +185,8 @@ targets:
         settings:
             base:
                 PRODUCT_BUNDLE_IDENTIFIER: com.hushos.app.filesui
+                # The iOS presets set the device family per target, overriding the project's: iPhone only.
+                TARGETED_DEVICE_FAMILY: '1'
                 SWIFT_VERSION: '5'
                 SWIFT_STRICT_CONCURRENCY: minimal
     HushOSWidgets:
@@ -208,6 +216,8 @@ targets:
         settings:
             base:
                 PRODUCT_BUNDLE_IDENTIFIER: com.hushos.app.widgets
+                # The iOS presets set the device family per target, overriding the project's: iPhone only.
+                TARGETED_DEVICE_FAMILY: '1'
     # Save to HushOS: the share sheet's extension. Seals what is shared into the app group's queue and
     # hands it to a background session; the app adopts what is still on its way (ShareHandoff).
     HushOSShare:
@@ -258,6 +268,8 @@ targets:
         settings:
             base:
                 PRODUCT_BUNDLE_IDENTIFIER: com.hushos.app.share
+                # The iOS presets set the device family per target, overriding the project's: iPhone only.
+                TARGETED_DEVICE_FAMILY: '1'
                 # NSItemProvider's callbacks: Swift 5 mode keeps the sending-closure checks as warnings, as the Files extensions do.
                 SWIFT_VERSION: '5'
                 SWIFT_STRICT_CONCURRENCY: minimal

@@ -24,6 +24,8 @@
 	<string>$(APP_GROUP_ID)</string>
 	<key>NSExtension</key>
 	<dict>
+		<key>NSExtensionFileProviderDocumentGroup</key>
+		<string>$(APP_GROUP_ID)</string>
 		<key>NSExtensionFileProviderSupportsEnumeration</key>
 		<true/>
 		<key>NSExtensionFileProviderSupportsPinning</key>
