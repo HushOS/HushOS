@@ -1,0 +1,23 @@
+apps/ios/project.yml
+  s_566b8e0c4467a4::t_5ec24cdc43611b 16
+docs/release/checklist.md
+  s_566b8e0c4467a4::t_a0d2a9dc9b3208 8-10,65
+docs/release/signing.md
+  s_566b8e0c4467a4::t_cdac81180cc43d 24
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c4170889e69b97955984cc87cae45c6a1fb629fe",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
