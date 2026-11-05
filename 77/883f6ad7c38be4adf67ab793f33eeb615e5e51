@@ -1,0 +1,64 @@
+apps/web/src/components/store-links.tsx
+  s_566b8e0c4467a4::t_0a9dc9c51b5707 3,7-10,12-14,16-19,21-41,46-60,62
+apps/web/src/components/family-scenes/folders-demo-state.test.ts
+  s_566b8e0c4467a4::t_3455812b503097 1-64
+  s_566b8e0c4467a4::t_d88fc8fe0f97e3 65-74
+apps/web/src/components/family-scenes/folders-demo-state.ts
+  s_566b8e0c4467a4::t_4cd31a958c7b3d 1-80
+  s_566b8e0c4467a4::t_03950930b30ddc 81-85
+apps/web/src/components/family-scenes/folders-demo.tsx
+  s_566b8e0c4467a4::t_6e10339189fa9c 1-308
+  s_566b8e0c4467a4::t_404b104986904b 309-341
+DESIGN.md
+  s_566b8e0c4467a4::t_77bd914af69e9c 538-539
+apps/web/src/badges/download-on-the-app-store-black-en-us.svg
+  s_566b8e0c4467a4::t_8c651f02df2fd2 1-46
+apps/web/src/components/drive/file-mark.tsx
+  s_566b8e0c4467a4::t_97161ba7055b1c 4
+apps/web/src/components/family-scenes/check-scene.tsx
+  s_566b8e0c4467a4::t_95e788ea964d67 14-15,136-151,154-158,170,181,207,218,221-223,255
+apps/web/src/components/family-scenes/create-scene.tsx
+  s_566b8e0c4467a4::t_71f91cbb68b525 14-15,149,287,290-295
+apps/web/src/components/family-scenes/faux.tsx
+  s_566b8e0c4467a4::t_b97688ffa7602b 4,31-38,59,122,127-128,141-146,156-167,485-486,488-518
+apps/web/src/components/family-scenes/index.ts
+  s_566b8e0c4467a4::t_d621db17143523 4
+apps/web/src/components/family-scenes/invite-scene.tsx
+  s_566b8e0c4467a4::t_c5a1866a2b8cb0 16-17,72-73,84,140,157-159,182
+apps/web/src/components/family-scenes/scene.tsx
+  s_566b8e0c4467a4::t_003f5763aaa087 9-10,72
+apps/web/src/components/family-scenes/storage-view.tsx
+  s_566b8e0c4467a4::t_02739a834edceb 32-34
+apps/web/src/components/screenshot.tsx
+  s_566b8e0c4467a4::t_8de7a1c20054fb 98-100,103-145,170,172-173,175,177
+apps/web/src/components/sheet-mark.tsx
+  s_566b8e0c4467a4::t_fdcffe7066c586 1-82
+apps/web/src/components/stageshow/stage.test.ts
+  s_566b8e0c4467a4::t_90a05108b6d569 1-29
+apps/web/src/components/stageshow/stage.tsx
+  s_566b8e0c4467a4::t_4a91e3c8508d98 1,39-52,611,622-623,630-638
+apps/web/src/content/blog/family-plans.mdx
+  s_566b8e0c4467a4::t_0a3de85763df90 16,32
+apps/web/src/routes/index.tsx
+  s_566b8e0c4467a4::t_e4112864facff8 10,330-333,335-336
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_9e015c201cda89 305
+packages/env/src/app.ts
+  s_566b8e0c4467a4::t_3d54121f58bb34 87
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "77883f6ad7c38be4adf67ab793f33eeb615e5e51",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
