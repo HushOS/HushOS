@@ -22,6 +22,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { adminRepository, authRepository, billingRepository, groupsRepository } from '@hushos/db';
 import type { SignupIntent } from '@hushos/db/schema';
 import {
+    sendAccountNotice,
     sendSecurityNotice,
     sendShareEmail,
     sendVerificationEmail,
@@ -244,6 +245,29 @@ export async function requestRegistrationEmail(
     const normalizedEmail = normalizeEmail(email);
     await limitEmailSend(address);
     await limitEmail(purpose === 'recover' ? 'recover-email' : 'register', normalizedEmail);
+    const sent = { message: 'Check your inbox for a verification link.' };
+    const failed = (error: unknown) =>
+        new AuthError('Could not send the verification email. Please try again shortly.', 503, {
+            cause: error,
+        });
+    /*
+     * Sign-up for an address that has an account, or recovery for one that has none, could
+     * only fail at the end, after a password was chosen. The address hears where to go
+     * instead, with no link to verify, and nothing is stored. The answer, the limits above and
+     * the one email are the same either way, so the form can't be asked who has an account.
+     */
+    const exists = await authRepository.accountExists(normalizedEmail);
+    if (exists !== (purpose === 'recover')) {
+        try {
+            await sendAccountNotice(normalizedEmail, {
+                kind: exists ? 'exists' : 'none',
+                appUrl: config().origin,
+            });
+        } catch (error) {
+            throw failed(error);
+        }
+        return sent;
+    }
     const token = randomToken();
     await authRepository.createEnrollment({
         purpose,
@@ -262,13 +286,9 @@ export async function requestRegistrationEmail(
         );
     } catch (error) {
         await authRepository.removeEnrollment(hash(token));
-        throw new AuthError(
-            'Could not send the verification email. Please try again shortly.',
-            503,
-            { cause: error },
-        );
+        throw failed(error);
     }
-    return { message: 'Check your inbox for a verification link.' };
+    return sent;
 }
 
 export async function verifyEmail(token: string) {

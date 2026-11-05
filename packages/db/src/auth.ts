@@ -230,6 +230,19 @@ export async function hasCredentialsOutside(profileVersion: number, serverSetupI
     return row !== undefined;
 }
 
+/*
+ * Whether an account uses the address. Sign-up and recovery ask before minting a link, so
+ * neither sends one that could only fail at the end; a suspended account still counts.
+ */
+export async function accountExists(normalizedEmail: string) {
+    const [row] = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.normalizedEmail, normalizedEmail))
+        .limit(1);
+    return row !== undefined;
+}
+
 export async function findCredential(normalizedEmail: string) {
     const [credential] = await db
         .select({

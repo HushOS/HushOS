@@ -3,6 +3,7 @@ import { emailEnv, validateEmailAdapter } from '@hushos/env/email';
 import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 import nodemailer from 'nodemailer';
 import { Resend } from 'resend';
+import { accountNotice } from './rendered/account-notice';
 import { familyDissolved } from './rendered/family-dissolved';
 import { familyPlanEnding } from './rendered/family-plan-ending';
 import { groupInvitation } from './rendered/group-invitation';
@@ -171,6 +172,38 @@ export async function sendVerificationEmail(
     purpose: 'register' | 'recover' = 'register',
 ) {
     await deliver(composeVerificationEmail(to, verificationUrl, purpose));
+}
+
+export type AccountNoticeKind = keyof typeof accountNotice;
+
+const accountNoticeSubjects: Record<AccountNoticeKind, string> = {
+    exists: 'You already have an account · HushOS',
+    none: 'No account uses this email · HushOS',
+};
+
+/*
+ * Sign-up asked for an address that has an account (`exists`: sign in, or recover), or
+ * recovery for one that has none (`none`: create one). Sent in place of a verification
+ * link, which could only fail later; the page answered the same either way.
+ */
+export function composeAccountNotice(
+    to: string,
+    input: { kind: AccountNoticeKind; appUrl: string },
+) {
+    const link = (path: string) => new URL(path, input.appUrl).href;
+    return compose(to, accountNoticeSubjects[input.kind], accountNotice[input.kind], {
+        ...(input.kind === 'exists'
+            ? { signInUrl: link('/login'), recoverUrl: link('/recover') }
+            : { registerUrl: link('/register') }),
+        logoUrl: logoUrl(input.appUrl),
+    });
+}
+
+export async function sendAccountNotice(
+    to: string,
+    input: { kind: AccountNoticeKind; appUrl: string },
+) {
+    await deliver(composeAccountNotice(to, input));
 }
 
 type ShareInput = {

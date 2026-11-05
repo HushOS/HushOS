@@ -6,6 +6,10 @@ export default defineConfig({
         // test that takes 1 s locally has hit 5.3 s there. Locally the default still flags slow tests.
         testTimeout: process.env.CI ? 30_000 : 5_000,
         include: ['src/**/*.test.ts'],
+        // Most suites here replace the repositories; those that don't share one test database.
+        globalSetup: ['./test/global-setup.ts'],
+        setupFiles: ['../db/test/setup.ts'],
+        fileParallelism: false,
         passWithNoTests: true,
     },
 });
