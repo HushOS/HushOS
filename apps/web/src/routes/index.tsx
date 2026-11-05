@@ -7,7 +7,7 @@ import { DitherGradient } from '@/components/dither-kit/gradient';
 import { Cover } from '@/components/cover';
 import { LockStory } from '@/components/lock-story';
 import { Scramble } from '@/components/scramble';
-import { Phones, Shot } from '@/components/screenshot';
+import { PhoneShot, Phones, Shot } from '@/components/screenshot';
 import { container, Faq, H1, H2, Lede, SitePage, StartFree, TextLink } from '@/components/site';
 import { SiteFooter, SiteHeader } from '@/components/site-header';
 import { StoreLinks } from '@/components/store-links';
@@ -327,14 +327,13 @@ function LandingPage() {
                             <StoreLinks className="pt-2" />
                         </div>
                         <div className="flex h-72 justify-center overflow-hidden px-6 pt-2 sm:h-80 lg:h-[23rem]">
-                            <Shot
-                                name="android-home"
-                                width={896}
-                                height={1995}
+                            <PhoneShot
+                                platform="android"
+                                screen="home"
+                                crop
                                 sizes="(min-width: 64rem) 17rem, 15rem"
-                                alt="The Android app’s Home: search, the files kept on this phone, and recent folders and files with their tags."
-                                className="block w-60 shrink-0 self-start overflow-hidden rounded-t-[28px] border border-b-0 border-rule shadow-lg lg:w-68"
-                                imageClassName="block h-auto w-full"
+                                alt="Home: search, the files kept on this phone, and recent folders and files with their tags"
+                                className="w-60 self-start lg:w-68"
                             />
                         </div>
                     </section>

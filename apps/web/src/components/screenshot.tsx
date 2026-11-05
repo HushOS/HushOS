@@ -95,9 +95,53 @@ export function Shot({
 
 /* The phone captures (from the apps themselves, by scripts/site-phone-shots.sh) and their 2x sizes. */
 const phones = {
-    ios: { width: 804, height: 1748, label: 'iPhone' },
-    android: { width: 896, height: 1995, label: 'Android' },
+    // `corners`: 8% of the width, across and (as a share of the height) down.
+    ios: { width: 804, height: 1748, label: 'iPhone', corners: 'rounded-[8%/3.7%]' },
+    android: { width: 896, height: 1995, label: 'Android', corners: 'rounded-[8%/3.6%]' },
 } as const;
+
+/*
+ * One phone capture in its frame. The frame's corners are a share of its own width (8%, about a
+ * real phone's), not a fixed 24px: a fixed radius on a phone drawn small swallowed the status
+ * bar's clock and battery, which sit close to the corners in the captures. At 8% they clear the
+ * curve at every size. A whole phone says it as percentages (8% of the width across, the same
+ * length as a share of its height down); `crop` cuts the phone off at the bottom, the frame open
+ * there, so its height is no longer the phone's and its corners are 8% of the width as cqw, which
+ * needs a definite width in `className`. `className` sizes the phone (its width).
+ */
+export function PhoneShot({
+    platform,
+    screen,
+    alt,
+    sizes = '12rem',
+    className = 'w-40 sm:w-48',
+    priority = false,
+    crop = false,
+}: {
+    platform: keyof typeof phones;
+    screen: 'home' | 'folder';
+    /* What the capture shows; the alt adds which phone it is. */
+    alt: string;
+    sizes?: string;
+    className?: string;
+    priority?: boolean;
+    crop?: boolean;
+}) {
+    return (
+        // Cropped, the frame's container, so its corners can be a share of its width (cqw).
+        <span className={`block shrink-0 ${crop ? '@container' : ''} ${className}`}>
+            <Shot
+                name={`${platform}-${screen}`}
+                width={phones[platform].width}
+                height={phones[platform].height}
+                sizes={sizes}
+                alt={`${alt}, in the ${phones[platform].label} app.`}
+                priority={priority}
+                className={`block overflow-hidden border border-rule shadow-lg ${crop ? 'rounded-t-[8cqw] border-b-0' : phones[platform].corners}`}
+            />
+        </span>
+    );
+}
 
 /*
  * The iPhone and Android apps side by side, each a real capture of the same
@@ -123,15 +167,14 @@ export function Phones({
     return (
         <span className={className}>
             {(['ios', 'android'] as const).map((platform) => (
-                <Shot
+                <PhoneShot
                     key={platform}
-                    name={`${platform}-${screen}`}
-                    width={phones[platform].width}
-                    height={phones[platform].height}
+                    platform={platform}
+                    screen={screen}
                     sizes={sizes}
-                    alt={`${alt}, in the ${phones[platform].label} app.`}
+                    alt={alt}
                     priority={priority}
-                    className={`block overflow-hidden rounded-[24px] border border-rule shadow-lg ${phoneClassName}`}
+                    className={phoneClassName}
                 />
             ))}
         </span>

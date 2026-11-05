@@ -6,8 +6,8 @@ import { useReducedMotion } from '@/components/stageshow/reduced-motion';
 
 /*
  * One scene of the family plans post: a Stageshow stage of the app's own furniture, played once
- * when it scrolls into view and then holding its last frame, never looping in the reader's eye
- * line. It is one image to assistive technology, its story said in `label`. Under reduced motion
+ * each time it scrolls into view and then holding its last frame, never looping in the reader's
+ * eye line; scrolled away (under a quarter showing), it plays from the start when it comes back. It is one image to assistive technology, its story said in `label`. Under reduced motion
  * it is its poster, the frame that tells the story alone, and nothing moves. Otherwise a quiet
  * button under it stops it at that poster, or plays it again (WCAG 2.2.2: anything that moves
  * for more than five seconds can be stopped).
@@ -69,7 +69,7 @@ export function Scene<S extends object>({
                     poster={poster}
                     script={phase === 'stopped' ? undefined : played}
                     cursor={cursor}
-                    play="once"
+                    play="replay"
                 >
                     {children}
                 </Stage>

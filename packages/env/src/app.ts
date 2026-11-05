@@ -84,7 +84,7 @@ export const appEnv = createEnv({
             )
             .optional(),
         // The Android app's listing on Google Play, for the website's and the family page's
-        // store links (a Google Play badge, and a note that the iPhone app is coming soon).
+        // store links (the Google Play badge, and the App Store badge marked Coming soon).
         // hushos.com sets it to its own listing; unset, no store links are shown, as on most
         // self-hosted servers.
         PLAY_STORE_URL: z

@@ -13,7 +13,8 @@ import {
     SAM,
     Section,
     Sidebar,
-    QuietSection,
+    JONAS,
+    TechnicalSection,
     Title,
     Toast,
 } from './faux';
@@ -68,8 +69,8 @@ async function script(a: Act<S>) {
 export function InviteScene() {
     return (
         <Scene<S>
-            label={`The page of ${FAMILY}, where Maya manages it. Invite someone opens a dialog; ${SAM.email} is typed and the invitation sent, and it waits under Invitations. Once Sam accepts from the email, Sam waits to join, with Let them in beside the name. One click, and Sam Ortega is under Members: “Sam is in ${FAMILY}”.`}
-            height={430}
+            label={`The page of ${FAMILY}, with Maya and Jonas in it. Invite someone opens a dialog; ${SAM.email} is typed and the invitation sent, and it waits under Invitations. Once Sam accepts from the email, Sam waits to join, with Let them in beside the name. One click, and Sam Ortega is under Members: “Sam is in ${FAMILY}”.`}
+            height={400}
             compact={{ height: 470 }}
             initial={initial}
             poster={poster}
@@ -80,7 +81,7 @@ export function InviteScene() {
                 const compact = layout === 'compact';
                 return (
                     <AppWindow
-                        className="inset-0"
+                        className="absolute inset-0"
                         sidebar={compact ? undefined : <Sidebar active="family" />}
                         overlay={
                             <>
@@ -136,7 +137,7 @@ export function InviteScene() {
                                     Invite someone
                                 </FauxButton>
                             }
-                            description={`${s.joined ? 2 : 1} of 4 places taken.`}
+                            description={`${s.joined ? 3 : 2} of 4 places taken.`}
                         >
                             {FAMILY}
                         </Title>
@@ -153,6 +154,9 @@ export function InviteScene() {
                             </Reveal>
                             <Section title="Members">
                                 <PersonRow person={MAYA} you badge="Organizer" />
+                                <PersonRow person={JONAS}>
+                                    <Checked verified />
+                                </PersonRow>
                                 <Reveal open={s.joined}>
                                     <PersonRow person={SAM}>
                                         <Checked verified={false} />
@@ -175,7 +179,7 @@ export function InviteScene() {
                                     </PersonRow>
                                 </Section>
                             </Reveal>
-                            <QuietSection title="Billing" />
+                            <TechnicalSection />
                         </span>
                     </AppWindow>
                 );

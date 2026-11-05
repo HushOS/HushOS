@@ -29,8 +29,9 @@ function Swatch({ look }: { look: string }) {
 
 export function FamilyStorageView() {
     const { freeQuotaBytes } = useRouteContext({ from: '__root__' });
-    const [people, setPeople] = useState(4);
-    const [ownGb, setOwnGb] = useState(100);
+    // It opens on the post's family, Maya, Jonas and Sam: the folders demo's meter, 1.17 TB of 2 TB.
+    const [people, setPeople] = useState(3);
+    const [ownGb, setOwnGb] = useState(300);
     const [foldersGb, setFoldersGb] = useState(300);
     const [leaving, setLeaving] = useState(false);
     const leaveId = useId();

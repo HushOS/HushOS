@@ -1,6 +1,7 @@
 import { cn } from 'cn';
 import {
     CheckIcon,
+    ChevronDownIcon,
     ContactIcon,
     FolderIcon,
     FoldersIcon,
@@ -27,8 +28,14 @@ import { buttonVariants } from '@/components/ui/button';
  */
 
 /* The people in every scene: one family, as DESIGN.md names it. */
-export const MAYA = { name: 'Maya Lindqvist', email: 'maya@example.com', seed: 'maya' };
-export const SAM = { name: 'Sam Ortega', email: 'sam@example.com', seed: 'sam-ortega' };
+/*
+ * The people in every scene, as the site's demo account has them (e2e/screenshots.spec.ts): Maya,
+ * who made the family, and Jonas, already in it; Sam is who the scenes invite. Seeds pick the same
+ * avatar tones the demo's pictures show.
+ */
+export const MAYA = { name: 'Maya Lindqvist', email: 'maya.lindqvist@example.org', seed: 'maya-3' };
+export const JONAS = { name: 'Jonas Berg', email: 'jonas.berg@example.org', seed: 'jonas-1' };
+export const SAM = { name: 'Sam Ortega', email: 'sam.ortega@example.org', seed: 'sam-ortega' };
 export const FAMILY = 'Lindqvist family';
 
 /* The app's window: the ground, the sidebar on it, and the page panel inset beside it. */
@@ -49,7 +56,7 @@ export function AppWindow({
     return (
         <div
             className={cn(
-                'absolute flex overflow-hidden rounded-[10px] bg-background ring-1 ring-rule ring-inset',
+                'flex overflow-hidden rounded-[10px] bg-background ring-1 ring-rule ring-inset',
                 className,
             )}
             style={style}
@@ -112,10 +119,13 @@ export function Sidebar({
     active,
     family = FAMILY,
     meter,
+    extras = true,
 }: {
     active: Place;
     family?: string | null;
     meter?: ReactNode;
+    /* Tags and Contacts; left out where the window is only as tall as its page. */
+    extras?: boolean;
 }) {
     return (
         <div className="flex w-[184px] shrink-0 flex-col gap-4 px-2 py-4">
@@ -128,7 +138,12 @@ export function Sidebar({
                             active === 'family' && 'bg-tint text-on-tint',
                         )}
                     >
-                        <PersonAvatar name={family} seed="lindqvist" size={20} className="-mx-px" />
+                        <PersonAvatar
+                            name={family}
+                            seed="lindqvist-3"
+                            size={20}
+                            className="-mx-px"
+                        />
                         <span className="truncate">{family}</span>
                     </span>
                 )}
@@ -138,16 +153,18 @@ export function Sidebar({
                     </SidebarItem>
                 ))}
             </div>
-            <div className="flex flex-col gap-0.5">
-                <SidebarItem icon={TagIcon}>Tags</SidebarItem>
-                <SidebarItem icon={ContactIcon}>Contacts</SidebarItem>
-                {/* Someone in no family finds Family here, after Contacts. */}
-                {!family && (
-                    <SidebarItem icon={UsersIcon} active={active === 'family'}>
-                        Family
-                    </SidebarItem>
-                )}
-            </div>
+            {extras && (
+                <div className="flex flex-col gap-0.5">
+                    <SidebarItem icon={TagIcon}>Tags</SidebarItem>
+                    <SidebarItem icon={ContactIcon}>Contacts</SidebarItem>
+                    {/* Someone in no family finds Family here, after Contacts. */}
+                    {!family && (
+                        <SidebarItem icon={UsersIcon} active={active === 'family'}>
+                            Family
+                        </SidebarItem>
+                    )}
+                </div>
+            )}
             {meter && <div className="mt-auto px-3">{meter}</div>}
         </div>
     );
@@ -465,16 +482,39 @@ export function InviteMark() {
     );
 }
 
-/* A section further down the page, as filler: its real heading, its rows as quiet lines. */
-export function QuietSection({ title, rows = [140, 96] }: { title: string; rows?: number[] }) {
+/* The family page's last section, folded as the app folds it: its heading, its rule and Show. */
+export function TechnicalSection({ className }: { className?: string }) {
     return (
-        <Section title={title} className="pt-6">
-            {rows.map((width, index) => (
-                <span key={index} className="flex min-h-11 items-center gap-6 py-2">
-                    <Bar width={64} className="bg-foreground/12" />
-                    <Bar width={width} />
-                </span>
-            ))}
-        </Section>
+        <span
+            className={cn(
+                'mx-6 flex items-end justify-between gap-4 border-b border-rule pt-6 pb-2',
+                className,
+            )}
+        >
+            <span className="text-base font-bold tracking-[-0.01em]">
+                Technical details and leaving
+            </span>
+            <span className="flex items-center gap-1 text-sm font-semibold text-primary">
+                Show
+                <ChevronDownIcon className="size-4" aria-hidden="true" />
+            </span>
+        </span>
+    );
+}
+
+/* What the server learns from a family, at the foot of the families pages, in the app's words. */
+export const SERVER_KNOWS =
+    'HushOS’s server knows the family’s name, who is in it and what each person can do, who invited and let in whom, and how many family folders there are and roughly how big. It can’t open family folders.';
+
+export function ServerKnows({ className }: { className?: string }) {
+    return (
+        <span
+            className={cn(
+                'mt-auto block px-6 pt-5 pb-5 text-[13px] leading-snug text-muted-foreground',
+                className,
+            )}
+        >
+            {SERVER_KNOWS}
+        </span>
     );
 }

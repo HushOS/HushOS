@@ -1,4 +1,4 @@
-/* oxlint-disable react/refs, react/set-state-in-effect, react-hooks/exhaustive-deps, no-unused-expressions, typescript/no-floating-promises -- vendored from Stageshow (MIT, LICENSE) as upstream wrote it; re-copied, not edited */
+/* oxlint-disable react/refs, react/set-state-in-effect, react-hooks/exhaustive-deps, no-unused-expressions, typescript/no-floating-promises -- vendored from Stageshow (MIT, LICENSE) as upstream wrote it, but for HushOS's `replay` playback (marked below) */
 import {
     useCallback,
     useEffect,
@@ -36,7 +36,20 @@ import { clamp, easeInOutCubic, isDev, warn } from './util';
 // the look context looks.ts.
 
 /** loop: repeats while on screen. once: plays when first seen, then holds the end. hover: plays while the pointer is over it, settles back when it leaves; on a screen with no hover (a phone) it plays once. */
-export type Play = 'loop' | 'once' | 'hover';
+export type Play = 'loop' | 'once' | 'hover' | 'replay';
+
+/*
+ * HushOS: `replay` plays once each time the stage comes into view and holds its end while it stays
+ * there; once less than REPLAY_SHOWN of it shows, it goes back to its start, unseen, and plays again
+ * the next time it comes in. It starts only when that much of it shows, too.
+ */
+export const REPLAY_SHOWN = 0.25;
+
+/* Whether a stage counts as on screen for its playback, from its IntersectionObserver entry. */
+export function onStage(play: Play, entry: { isIntersecting: boolean; intersectionRatio: number }) {
+    if (!entry.isIntersecting) return false;
+    return play === 'replay' ? entry.intersectionRatio >= REPLAY_SHOWN : true;
+}
 
 /** Design tokens for a look: `--ss-accent`, `--ss-radius-md`, `--ss-font` and the rest. */
 export type LookTokens = { [token: `--ss-${string}`]: string };
@@ -595,7 +608,7 @@ export function Stage<S extends object>({
                         );
                 } while (play === 'loop' && !signal.aborted);
                 // Once holds its end state for good; hover holds it until the pointer leaves.
-                if (play === 'once' && !signal.aborted) {
+                if ((play === 'once' || play === 'replay') && !signal.aborted) {
                     done = true;
                     finishIdle();
                 }
@@ -606,18 +619,23 @@ export function Stage<S extends object>({
             if (!ctrl) return;
             ctrl.abort();
             ctrl = null;
+            // A replay that ended goes back to its start out of view, to play again on the way in.
+            if (done && play === 'replay') done = false;
             if (!done) reset(glide);
         };
 
         const markOffscreen = () =>
             stage.toggleAttribute('data-offscreen', !onScreen || document.hidden);
         markOffscreen();
-        const io = new IntersectionObserver(([entry]) => {
-            onScreen = entry?.isIntersecting ?? false;
-            // Off screen its CSS animations pause too, so nothing runs out of view
-            markOffscreen();
-            onScreen ? start() : stop();
-        });
+        const io = new IntersectionObserver(
+            ([entry]) => {
+                onScreen = entry ? onStage(play, entry) : false;
+                // Off screen its CSS animations pause too, so nothing runs out of view
+                markOffscreen();
+                onScreen ? start() : stop();
+            },
+            { threshold: play === 'replay' ? [0, REPLAY_SHOWN] : 0 },
+        );
         io.observe(root);
         const onVisibility = () => {
             markOffscreen();
