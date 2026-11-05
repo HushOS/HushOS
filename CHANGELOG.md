@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.15.0](https://github.com/HushOS/HushOS/compare/v0.14.0...v0.15.0) (2026-11-05)
+
+
+### Features
+
+* **groups:** email the last member and pending invitees when a family dissolves ([#198](https://github.com/HushOS/HushOS/issues/198)) ([2e03785](https://github.com/HushOS/HushOS/commit/2e037857e29e2e2b52967b3858abeb2a626c098b))
+* **ios:** let managers change roles and hand the organizer role over ([#285](https://github.com/HushOS/HushOS/issues/285)) ([9571862](https://github.com/HushOS/HushOS/commit/9571862edbb0a159ccaa6da079a8109580267563))
+* **ios:** show family folders in the Files app ([#282](https://github.com/HushOS/HushOS/issues/282)) ([971467d](https://github.com/HushOS/HushOS/commit/971467d95f467312e47a3c0da0c2dda9b162045f))
+* **web:** bring the family plans post to life and link the Android app ([#297](https://github.com/HushOS/HushOS/issues/297)) ([9c407fb](https://github.com/HushOS/HushOS/commit/9c407fb27564b2bdbe26446ca0f201bb8ec82d3d))
+* **web:** de-box pricing and size the planner for families ([#292](https://github.com/HushOS/HushOS/issues/292)) ([66f0a7c](https://github.com/HushOS/HushOS/commit/66f0a7c86608106355e8e4b0854bbe104e8eb58f))
+* **web:** sign up for a family plan from pricing and find Family in the sidebar ([#211](https://github.com/HushOS/HushOS/issues/211)) ([428001f](https://github.com/HushOS/HushOS/commit/428001ffdd766f8dbc23077b752c477fbe233dbf))
+
+
+### Bug fixes
+
+* **auth:** mail the right next step when sign-up or recovery can't finish ([#302](https://github.com/HushOS/HushOS/issues/302)) ([0a33a28](https://github.com/HushOS/HushOS/commit/0a33a288c35a5fbdd1d21dc984ead0d1e70273a9))
+* **billing:** keep a family to one plan: one open checkout, and a second plan refunded ([#190](https://github.com/HushOS/HushOS/issues/190)) ([ed967f0](https://github.com/HushOS/HushOS/commit/ed967f082c54d2516014f2bbc86e4a46e0dfdfb2))
+* **billing:** let a family's charge settle before sending the payer to their bank ([#291](https://github.com/HushOS/HushOS/issues/291)) ([3a06225](https://github.com/HushOS/HushOS/commit/3a0622582c46836586f1d824006f0e3909cb3978))
+* **billing:** let one raise fill a family to its limit ([#212](https://github.com/HushOS/HushOS/issues/212)) ([290fbfb](https://github.com/HushOS/HushOS/commit/290fbfbb94de897521ac6783dae2b9921c8f5369))
+* **groups:** tell someone holding another person's invitation nothing about the family ([#199](https://github.com/HushOS/HushOS/issues/199)) ([d9c0c38](https://github.com/HushOS/HushOS/commit/d9c0c380dc5f823304a18baa034a1f05216d0c48))
+* **web:** balance the two store badges inside their frames ([#300](https://github.com/HushOS/HushOS/issues/300)) ([20b21e0](https://github.com/HushOS/HushOS/commit/20b21e023f4dac4064935d8eb10fe5ba5ee9ff4a))
+* **web:** keep the bank confirmation open after a raise that fills the family ([#214](https://github.com/HushOS/HushOS/issues/214)) ([b45a523](https://github.com/HushOS/HushOS/commit/b45a523e612c77a174d6973b9556aa1bbc253c3b))
+* **web:** polish the store links and the family post's pictures ([#299](https://github.com/HushOS/HushOS/issues/299)) ([0d0597d](https://github.com/HushOS/HushOS/commit/0d0597ddbccda02032ff244ecea638b7adca6f1c))
+
 ## [0.14.0](https://github.com/HushOS/HushOS/compare/v0.13.0...v0.14.0) (2026-11-04)
 
 
