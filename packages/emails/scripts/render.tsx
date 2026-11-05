@@ -262,12 +262,14 @@ console.info(`Rendered ${dissolvedKinds.length} dissolved family notices.`);
 
 /*
  * Sign-up for an address that has an account, or recovery for one that has none: where to go
- * instead. Fixed words and the app's own links; no token, and nothing anyone typed.
+ * instead, and when it was asked (written by the server, in UTC). Fixed words and the app's
+ * own links; no token, and nothing anyone typed.
  */
 export const ACCOUNT_NOTICE_PLACEHOLDERS = {
     signInUrl: '{{signInUrl}}',
     recoverUrl: '{{recoverUrl}}',
     registerUrl: '{{registerUrl}}',
+    when: '{{when}}',
     logoUrl: '{{logoUrl}}',
     marker: '{{marker}}',
 } as const;
@@ -278,8 +280,8 @@ for (const kind of accountNoticeKinds) {
     const P = ACCOUNT_NOTICE_PLACEHOLDERS;
     const needed =
         kind === 'exists'
-            ? [P.signInUrl, P.recoverUrl, P.logoUrl, P.marker]
-            : [P.registerUrl, P.logoUrl, P.marker];
+            ? [P.signInUrl, P.recoverUrl, P.when, P.logoUrl, P.marker]
+            : [P.registerUrl, P.when, P.logoUrl, P.marker];
     for (const token of needed)
         if (!html.includes(token))
             throw new Error(`Rendered ${kind} account notice lacks ${token}.`);

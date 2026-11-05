@@ -184,25 +184,23 @@ const accountNoticeSubjects: Record<AccountNoticeKind, string> = {
 /*
  * Sign-up asked for an address that has an account (`exists`: sign in, or recover), or
  * recovery for one that has none (`none`: create one). Sent in place of a verification
- * link, which could only fail later; the page answered the same either way.
+ * link, which could only fail later; the page answered the same either way. `when` is
+ * written by the caller, in UTC, as for a security notice.
  */
-export function composeAccountNotice(
-    to: string,
-    input: { kind: AccountNoticeKind; appUrl: string },
-) {
+type AccountNoticeInput = { kind: AccountNoticeKind; when: string; appUrl: string };
+
+export function composeAccountNotice(to: string, input: AccountNoticeInput) {
     const link = (path: string) => new URL(path, input.appUrl).href;
     return compose(to, accountNoticeSubjects[input.kind], accountNotice[input.kind], {
         ...(input.kind === 'exists'
             ? { signInUrl: link('/login'), recoverUrl: link('/recover') }
             : { registerUrl: link('/register') }),
+        when: input.when,
         logoUrl: logoUrl(input.appUrl),
     });
 }
 
-export async function sendAccountNotice(
-    to: string,
-    input: { kind: AccountNoticeKind; appUrl: string },
-) {
+export async function sendAccountNotice(to: string, input: AccountNoticeInput) {
     await deliver(composeAccountNotice(to, input));
 }
 

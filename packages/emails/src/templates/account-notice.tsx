@@ -20,6 +20,9 @@ import {
  * has none (`none`). The page answers the same either way, so the form can't be
  * asked who has an account; the mail goes only to the address itself, and says
  * what to do instead. Neither carries a token: there is nothing to verify.
+ * Facts as the security notice has them: when (written by the server, in UTC)
+ * and what was asked. Never the requester's address, browser or device, which
+ * the requester controls, so a stranger could write them into our mail.
  * Same sheet as the verification email.
  */
 /* Hidden everywhere, Outlook included; a variable, since React's types lack mso-hide. */
@@ -40,6 +43,7 @@ export default function AccountNotice({
     signInUrl = 'http://localhost:5173/login',
     recoverUrl = 'http://localhost:5173/recover',
     registerUrl = 'http://localhost:5173/register',
+    when = '5 Nov 2026, 14:02 UTC',
     logoUrl = '/static/hushos-logo-square.png',
     marker = 'preview',
 }: {
@@ -50,6 +54,8 @@ export default function AccountNotice({
     recoverUrl?: string;
     /** `none` only. */
     registerUrl?: string;
+    /** When the request came in, written by the server in UTC. */
+    when?: string;
     /** The logo: the brand square as one image, the same in both colour schemes. */
     logoUrl?: string;
     /** Different in every message; see the end of the body. */
@@ -58,10 +64,11 @@ export default function AccountNotice({
     const copy = {
         exists: {
             preview:
-                'Someone asked to create a HushOS account with this email. You already have one.',
+                'We received a request to create a HushOS account with this email. You already have one.',
             label: 'Registration',
             heading: 'You already have a HushOS account.',
-            body: 'Someone, probably you, asked to create an account with this email. There already is one, so nothing new was created. Sign in with your password.',
+            body: 'We received a request to create a HushOS account with this email. There’s already one, so nothing new was created. Sign in with your password.',
+            what: 'Create an account',
             button: { text: 'Sign in', href: signInUrl },
             aside: {
                 text: 'Forgot your password? You can choose a new one with your recovery phrase.',
@@ -72,15 +79,20 @@ export default function AccountNotice({
         },
         none: {
             preview:
-                'Someone asked to recover a HushOS account with this email, but there isn’t one.',
+                'We received a request to recover a HushOS account with this email, but there isn’t one.',
             label: 'Recovery',
             heading: 'There’s no HushOS account for this email.',
-            body: 'Someone, probably you, asked to recover an account with this email, but no account uses it. If you signed up with a different email, recover with that one instead, or create an account with this one.',
+            body: 'We received a request to recover a HushOS account with this email, but no account uses it. If you signed up with a different email, recover with that one instead, or create an account with this one.',
+            what: 'Recover an account',
             button: { text: 'Create an account', href: registerUrl },
             aside: null,
             footer: 'If you didn’t ask for this, you can ignore this email. Nothing was created.',
         },
     }[kind];
+    const facts: [string, string][] = [
+        ['When', when],
+        ['What', copy.what],
+    ];
     return (
         <Html lang="en">
             <Head>
@@ -202,7 +214,7 @@ export default function AccountNotice({
                             {copy.body}
                         </Text>
                     </Section>
-                    <Section className="email-pad" style={{ padding: '0 28px 28px' }}>
+                    <Section className="email-pad" style={{ padding: '0 28px 24px' }}>
                         <Button
                             className="email-button"
                             href={copy.button.href}
@@ -244,6 +256,55 @@ export default function AccountNotice({
                                 </Link>
                             </Text>
                         )}
+                    </Section>
+                    <Section className="email-pad" style={{ padding: '0 28px 28px' }}>
+                        <table
+                            role="presentation"
+                            cellPadding={0}
+                            cellSpacing={0}
+                            width="100%"
+                            style={{ borderCollapse: 'collapse' }}
+                        >
+                            <tbody>
+                                {facts.map(([key, value]) => (
+                                    <tr key={key}>
+                                        <td
+                                            className="email-cell"
+                                            style={{
+                                                width: '44%',
+                                                padding: '9px 0',
+                                                borderTop: '1px solid #e2e5ee',
+                                            }}
+                                        >
+                                            <Text className="email-muted" style={label}>
+                                                {key}
+                                            </Text>
+                                        </td>
+                                        <td
+                                            className="email-cell"
+                                            style={{
+                                                padding: '9px 0',
+                                                borderTop: '1px solid #e2e5ee',
+                                                textAlign: 'right',
+                                            }}
+                                        >
+                                            <Text
+                                                className="email-value"
+                                                style={{
+                                                    margin: 0,
+                                                    fontSize: '14px',
+                                                    lineHeight: '20px',
+                                                    fontWeight: 400,
+                                                    color: '#17203a',
+                                                }}
+                                            >
+                                                {value}
+                                            </Text>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
                     </Section>
                     <Section
                         className="email-pad email-cell"

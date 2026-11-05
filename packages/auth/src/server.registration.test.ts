@@ -47,6 +47,7 @@ const MAYA = 'maya@hush.example';
 const NEW = 'new@hush.example';
 
 beforeEach(async () => {
+    vi.useRealTimers();
     await resetDatabase();
     outbox.length = 0;
     mailer.down = false;
@@ -81,12 +82,26 @@ function tokenIn(message: Sent, purpose: 'register' | 'recover') {
     return match![1]!;
 }
 
-function expectNoToken(message: Sent) {
+/*
+ * A notice carries no token, and nothing the requester controls: their address (the client
+ * address `ask` sends) is never written into mail that reaches someone else's inbox.
+ */
+function expectNoTokenOrRequester(message: Sent) {
     for (const body of [message.html, message.text]) {
         expect(body).not.toContain('verify=');
         expect(body).not.toContain('/complete');
+        expect(body).not.toContain('203.0.113.7');
     }
 }
+
+/*
+ * The facts as the plain text lays them out: when, in the security notice's words (its
+ * en-GB formatter reads "5 Nov 2026, 14:02" under Node and "5 Nov 2026 at 14:02" under Bun),
+ * then what was asked.
+ */
+const NOW = new Date('2026-11-05T14:02:59Z');
+const facts = (what: string) =>
+    new RegExp(`When\\n\\n5 Nov 2026(,| at) 14:02 UTC\\n\\nWhat\\n\\n${what}\\n`);
 
 describe('sign-up', () => {
     test('a new address gets a link that verifies', async () => {
@@ -100,18 +115,21 @@ describe('sign-up', () => {
     test('an address with an account stores nothing and is told to sign in, with the same answer', async () => {
         await createTestAccount({ email: MAYA });
         const fresh = await ask(NEW, 'register');
+        vi.useFakeTimers({ now: NOW, toFake: ['Date'] });
         const taken = await ask(MAYA, 'register');
+        vi.useRealTimers();
         expect(taken).toEqual(fresh);
         expect(await enrollments(MAYA)).toEqual([]);
         expect(await enrollments(NEW)).toHaveLength(1);
 
         const mail = mailTo(MAYA);
         expect(mail.subject).toBe('You already have an account · HushOS');
-        expectNoToken(mail);
+        expectNoTokenOrRequester(mail);
         expect(mail.text).toContain('You already have a HushOS account.');
         expect(mail.text).toContain('https://hush.example/login');
         expect(mail.text).toContain('https://hush.example/recover');
         expect(mail.text).not.toContain('https://hush.example/register');
+        expect(mail.text).toMatch(facts('Create an account'));
     });
 
     test('a suspended account still counts as one', async () => {
@@ -136,17 +154,20 @@ describe('recovery', () => {
     test('an address with no account stores nothing and is offered sign-up, with the same answer', async () => {
         await createTestAccount({ email: MAYA });
         const known = await ask(MAYA, 'recover');
+        vi.useFakeTimers({ now: NOW, toFake: ['Date'] });
         const unknown = await ask(NEW, 'recover');
+        vi.useRealTimers();
         expect(unknown).toEqual(known);
         expect(await enrollments(NEW)).toEqual([]);
         expect(await enrollments(MAYA)).toHaveLength(1);
 
         const mail = mailTo(NEW);
         expect(mail.subject).toBe('No account uses this email · HushOS');
-        expectNoToken(mail);
+        expectNoTokenOrRequester(mail);
         expect(mail.text).toContain('There’s no HushOS account for this email.');
         expect(mail.text).toContain('https://hush.example/register');
         expect(mail.text).not.toContain('https://hush.example/login');
+        expect(mail.text).toMatch(facts('Recover an account'));
     });
 });
 

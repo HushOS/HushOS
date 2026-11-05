@@ -106,6 +106,18 @@ export function normalizeEmail(email: string) {
     return normalized;
 }
 
+const noticeTime = new Intl.DateTimeFormat('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+    timeZone: 'UTC',
+});
+/* When something happened, as every notice to an account's email says it. */
+const noticeWhen = (at: Date = new Date()) => `${noticeTime.format(at)} UTC`;
+
 function normalizeName(value: string) {
     const name = value.trim().normalize('NFC');
     if (Array.from(name).length < 1 || Array.from(name).length > 100)
@@ -261,6 +273,7 @@ export async function requestRegistrationEmail(
         try {
             await sendAccountNotice(normalizedEmail, {
                 kind: exists ? 'exists' : 'none',
+                when: noticeWhen(),
                 appUrl: config().origin,
             });
         } catch (error) {
@@ -1548,16 +1561,6 @@ export async function removeOtherDevices(sessionToken: string | null, proof: Dev
     return { userId: user.id, removed: result.removed };
 }
 
-const noticeTime = new Intl.DateTimeFormat('en-GB', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-    timeZone: 'UTC',
-});
-
 /*
  * A security notice about the account's devices, by email. It cannot be turned
  * off, but it is bounded: past ten an hour for one account, notices are dropped
@@ -1577,7 +1580,7 @@ export async function notifyDevices(
     if (!user) return;
     await sendSecurityNotice(user.email, {
         kind,
-        when: `${noticeTime.format(at)} UTC`,
+        when: noticeWhen(at),
         count,
         accountUrl: new URL('/app/account#devices', authEnv.APP_ORIGIN).href,
     });
