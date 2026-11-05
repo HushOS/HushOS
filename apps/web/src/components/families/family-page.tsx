@@ -690,7 +690,7 @@ function FamilyApps() {
     const { playStoreUrl } = useRouteContext({ from: '__root__' });
     if (!playStoreUrl) return null;
     return (
-        <div className="-mt-5 flex flex-col gap-3">
+        <div className="-mt-5 flex flex-col gap-7">
             <p className="text-sm text-muted-foreground">Your family can use HushOS on Android.</p>
             <StoreLinks />
         </div>
