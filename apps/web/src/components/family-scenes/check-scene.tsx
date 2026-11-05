@@ -11,7 +11,8 @@ import {
     SAM,
     Section,
     Sidebar,
-    QuietSection,
+    JONAS,
+    TechnicalSection,
     Title,
     Toast,
 } from './faux';
@@ -132,11 +133,29 @@ function CheckCard({
                 )}
             </span>
             <Words reading={reading} small={small} />
-            <span className="flex items-center justify-end gap-2">
-                <FauxButton variant="outline" size={small ? 'sm' : 'default'}>
+            {/*
+             * The small card is the other person's screen, narrow as a phone's sheet: its two
+             * answers stack full width, the blue one on top, as the app's dialogs do on a phone,
+             * so neither ever reaches past the card's edge.
+             */}
+            <span
+                className={cn(
+                    'flex gap-2',
+                    small ? 'flex-col-reverse' : 'items-center justify-end',
+                )}
+            >
+                <FauxButton
+                    variant="outline"
+                    size={small ? 'sm' : 'default'}
+                    className={small ? 'w-full' : undefined}
+                >
                     They don’t match
                 </FauxButton>
-                <FauxButton size={small ? 'sm' : 'default'} target={target}>
+                <FauxButton
+                    size={small ? 'sm' : 'default'}
+                    target={target}
+                    className={small ? 'w-full' : undefined}
+                >
                     They match
                 </FauxButton>
             </span>
@@ -148,7 +167,7 @@ export function CheckScene() {
     return (
         <Scene<S>
             label={`Maya and Sam check each other. On Maya's screen, Check it's Sam shows twelve words, numbered; on Sam's, Check it's Maya shows the same twelve: orchard, velvet, timber, glance, harbor, pencil, autumn, rescue, lunar, cabin, shallow, cotton. They read them to each other, and Maya chooses They match. Sam's row under Members then reads Verified: “You and Sam checked each other”.`}
-            height={430}
+            height={390}
             compact={{ height: 470 }}
             initial={initial}
             poster={poster}
@@ -159,7 +178,7 @@ export function CheckScene() {
                 const compact = layout === 'compact';
                 return (
                     <AppWindow
-                        className="inset-0"
+                        className="absolute inset-0"
                         sidebar={compact ? undefined : <Sidebar active="family" />}
                         overlay={
                             <>
@@ -185,7 +204,7 @@ export function CheckScene() {
                                         reading={s.reading}
                                         small
                                         open={s.open}
-                                        className="top-[92px] right-5 w-[236px]"
+                                        className="top-10 right-6 w-[240px]"
                                     />
                                 )}
                                 <Toast
@@ -196,9 +215,12 @@ export function CheckScene() {
                             </>
                         }
                     >
-                        <Title description="2 of 4 places taken.">{FAMILY}</Title>
+                        <Title description="3 of 4 places taken.">{FAMILY}</Title>
                         <Section title="Members">
                             <PersonRow person={MAYA} you badge="Organizer" />
+                            <PersonRow person={JONAS}>
+                                <Checked verified />
+                            </PersonRow>
                             <PersonRow person={SAM}>
                                 <Checked verified={s.matched} />
                                 <span
@@ -230,7 +252,7 @@ export function CheckScene() {
                                 </span>
                             </PersonRow>
                         </Section>
-                        <QuietSection title="Billing" />
+                        <TechnicalSection />
                     </AppWindow>
                 );
             }}

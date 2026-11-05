@@ -11,7 +11,8 @@ import {
     MAYA,
     PersonRow,
     Section,
-    QuietSection,
+    ServerKnows,
+    TechnicalSection,
     Title,
     Toast,
 } from './faux';
@@ -130,17 +131,6 @@ function ChoosePlan({ compact }: { compact: boolean }) {
     );
 }
 
-/* What the server learns from a family, at the foot of the families pages, as the app says it. */
-function ServerKnows() {
-    return (
-        <span className="mt-auto px-6 pb-5 text-[13px] leading-snug text-muted-foreground">
-            HushOS’s server knows the family’s name, who is in it and what each person can do, who
-            invited and let in whom, and how many family folders there are and roughly how big. It
-            can’t open family folders.
-        </span>
-    );
-}
-
 export function CreateFamilyScene() {
     return (
         <Scene<S>
@@ -156,7 +146,7 @@ export function CreateFamilyScene() {
                 const compact = layout === 'compact';
                 return (
                     <AppWindow
-                        className="inset-0"
+                        className="absolute inset-0"
                         overlay={
                             <>
                                 <Dialog
@@ -294,9 +284,15 @@ export function CreateFamilyScene() {
                                             </span>
                                         </span>
                                     </Section>
-                                    <QuietSection title="Storage" />
+                                    <TechnicalSection className="-mt-5" />
                                 </span>
                             </span>
+                            <ServerKnows
+                                className={cn(
+                                    'transition-opacity duration-300',
+                                    !s.paid && 'opacity-0',
+                                )}
+                            />
                         </span>
                     </AppWindow>
                 );
