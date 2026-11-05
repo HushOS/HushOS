@@ -5,9 +5,9 @@ One list for both stores. Tick everything before pressing Submit (Apple) or Send
 ## Owner decisions (nobody else can make these)
 
 - [ ] **Public business address and phone.** Apple's Support URL must show "legal address, email address, telephone number"; Apple's EU trader status and Google's organization profile publish an address and phone too. The support page reads them from `OPERATOR_ADDRESS` and `OPERATOR_PHONE` on the production server. Is it a real office, a virtual office, or the registered agent (Corporation Service Company, Wilmington)? A registered agent's address is usually not acceptable as a business address. Ask counsel.
-- [ ] **iPhone only, or iPhone and iPad.** The project is universal (`TARGETED_DEVICE_FAMILY: '1,2'`). Universal means 13-inch iPad screenshots are mandatory and iPad can never be dropped after release. Nothing is designed for iPad. Recommended: `'1'` in `apps/ios/project.yml` before the first App Store release.
-- [ ] **Export compliance.** Keep `ITSAppUsesNonExemptEncryption = false`, or answer App Store Connect's questionnaire; and whether to sell in France now (needs a French encryption declaration) or later. apple.md, section 8. **Confirm with counsel.**
-- [ ] **Privacy answers.** Whether encrypted photos count as "collected" for Apple (privacy-answers.md). **Confirm with counsel.**
+- [x] **iPhone only.** Decided 2026-11-05: `TARGETED_DEVICE_FAMILY: '1'` in `apps/ios/project.yml`, so no iPad screenshots. iPad can be added in a later release; it's dropping it after a universal release that Apple refuses.
+- [ ] **Export compliance.** Keep `ITSAppUsesNonExemptEncryption = false`, or answer App Store Connect's questionnaire. apple.md, section 8. **Confirm with counsel.** France is decided (2026-11-05): left out of the first release, so no French encryption declaration is needed yet.
+- [x] **Privacy answers.** Decided 2026-11-05: encrypted photos and files are not collected, as Proton Drive's label also treats them; account data the server can read is declared as collected and linked (privacy-answers.md).
 - [ ] **Version.** `1.0.0`, decided: the first release pull request proposes it (CONTRIBUTING.md, Releasing). Build numbers are the commit count on main.
 - [ ] **App Store name.** `HushOS: Encrypted Drive`, or `HushOS Drive`, if available.
 
@@ -62,7 +62,7 @@ Deep links have only been tried on the simulator and emulator, with `hushos://` 
 
 ## Store pages
 
-- [ ] **Screenshots:** iOS 6.9-inch 1320×2868 (and 13-inch iPad if universal); Android 1080×1920. Six each, light mode, clean status bar, the demo account only. The Account shot was taken after the plan buttons were removed.
+- [ ] **Screenshots:** iOS 6.9-inch 1320×2868 (iPhone only, so no iPad set); Android 1080×1920. Six each, light mode, clean status bar, the demo account only. The Account shot was taken after the plan buttons were removed.
 - [ ] **Google graphics:** icon 512×512, feature graphic 1024×500 (`docs/release/assets/`).
 - [ ] **Copy pasted from store-listing.md;** no price, plan or "upgrade" wording anywhere.
 - [ ] **Apple:** App Privacy published; age rating answered; content rights answered; Pricing free; availability (France per the export decision); "available on Mac" unticked; review notes and both demo accounts filled in; manual release.
