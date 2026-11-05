@@ -211,7 +211,7 @@ Apple requires an internal group before an external one, and reviews the first b
 
 App Store Connect > HushOS > **iOS App 1.0.0** (left column, under "iOS App"):
 
-1. **Previews and Screenshots:** the iPhone 6.9" Display tab. Drag in `docs/release/screenshots/ios/01-home.png` … `06-account.png` in order (1 to 10 allowed, no transparency; https://developer.apple.com/help/app-store-connect/reference/app-information/screenshot-specifications). If iPad is still supported, the 13" iPad tab is required too.
+1. **Previews and Screenshots:** the iPhone 6.9" Display tab. Drag in the captioned set, `docs/release/screenshots/ios/app-store/01-home.png` … `08-files.png`, in order (1 to 10 allowed, no transparency; https://developer.apple.com/help/app-store-connect/reference/app-information/screenshot-specifications). The app is iPhone only (signing.md), so there is no iPad tab to fill.
 2. **Promotional Text, Description, Keywords:** from store-listing.md.
 3. **Support URL:** `https://hushos.com/support`. It must show the legal address, email and phone: set `OPERATOR_ADDRESS` and `OPERATOR_PHONE` on production first (checklist.md).
 4. **Marketing URL:** `https://hushos.com`.
