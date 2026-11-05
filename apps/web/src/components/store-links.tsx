@@ -135,16 +135,17 @@ export function StoreLinks({ className }: { className?: string }) {
             </a>
             {/*
              * Not a link yet, so not focusable: the badge, read with its sticker as one name. The
-             * sticker is the small badge style, tilted clockwise (falling to the right), pinned to the
-             * frame's top right corner over the frame's own black and border only (Apple's artwork
-             * ends about 14px in from that edge),
-             * and adds no height to the row; the right margin keeps room for it.
+             * sticker is the small badge style, tilted clockwise (falling to the right), stuck on the
+             * frame's top right corner: its centre a little inside the corner and above the frame's
+             * top, so most of it lies over the frame's border and the spare black at the right,
+             * clear of Apple's words and logo ("Download on the" ends about 106px in, below 7px
+             * down). It adds no height to the row; the right margin keeps room for what overhangs.
              */}
-            <span className="relative mr-16 shrink-0">
+            <span className="relative mr-8 shrink-0">
                 <Frame art="appStore" alt="Download on the App Store, coming soon" />
                 <span
                     aria-hidden="true"
-                    className="absolute -top-2.5 left-32 inline-flex h-5 origin-bottom-left rotate-8 items-center rounded-full bg-tint px-1.5 text-[11px] leading-none font-semibold whitespace-nowrap text-on-tint hc:border hc:border-edge"
+                    className="absolute -top-[5px] left-[126px] inline-flex h-5 origin-center -translate-x-1/2 -translate-y-1/2 rotate-8 items-center rounded-full bg-tint px-1.5 text-[11px] leading-none font-semibold whitespace-nowrap text-on-tint hc:border hc:border-edge"
                 >
                     Coming soon
                 </span>
