@@ -59,7 +59,7 @@ Apple's CDN fetches the association file within 24 hours of the app's first inst
 
 ### Export compliance key
 
-`App/Info.plist` sets `ITSAppUsesNonExemptEncryption: false`, which tells App Store Connect, upload after upload, that the app needs no export documentation. Read the encryption section of apple.md before the first upload: Apple's own table puts HushOS's case (standard algorithms implemented in the app, not the operating system's) in the "French declaration if sold in France" row, and counsel should confirm the `false`.
+The app sets no `ITSAppUsesNonExemptEncryption` key (since 1.0.2), so App Store Connect asks the encryption questions for each build; the answers are in apple.md, section 8. HushOS's case (standard algorithms implemented in the app, not the operating system's) needs a French declaration only if sold in France, which the first release excludes.
 
 ## Android
 
