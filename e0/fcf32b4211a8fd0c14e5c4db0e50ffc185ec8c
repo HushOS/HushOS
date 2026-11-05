@@ -1,0 +1,27 @@
+apps/web/scripts/store-graphics.tsx
+  s_566b8e0c4467a4::t_bb4d222d16c0eb 12-20,126-129,141-149,151-166,169-172,174,176,179-217,234
+docs/release/apple.md
+  s_566b8e0c4467a4::t_97e302e18dd7a0 214
+docs/release/checklist.md
+  s_566b8e0c4467a4::t_ce132015417c6c 65
+docs/release/store-listing.md
+  s_566b8e0c4467a4::t_822740d1ea756a 223-253
+scripts/store-screenshots.sh
+  s_566b8e0c4467a4::t_529a01392db8d9 10,27-28,83,86-91,98-99,101-108,111-121,123-124,126-127,131-140,142,144-149,151-155
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e0fcf32b4211a8fd0c14e5c4db0e50ffc185ec8c",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
