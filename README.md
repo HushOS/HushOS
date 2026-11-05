@@ -16,15 +16,24 @@
     <a href="LICENSE">AGPL-3.0</a>
 </p>
 
+<p align="center">
+    <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="apps/web/src/screenshots/drive-wide-dark.png">
+        <img src="apps/web/src/screenshots/drive-wide.png" alt="HushOS Drive in a browser: My files with coloured folders, tags and who can open each item." width="100%">
+    </picture>
+</p>
+
 ---
 
-Private storage for your files, personal or work, that is simple to use. HushOS is an open-source, self-hostable, end-to-end encrypted productivity suite; version 1 is Drive. Files are encrypted on the person's device, the service holds only ciphertext and the shape of the tree, and the whole thing runs at [hushos.com](https://hushos.com) or on a server you control.
+Private storage for your files, personal or work, that is simple to use. HushOS is an open-source, self-hostable, end-to-end encrypted productivity suite; version 1 is Drive, with family plans. Files are encrypted on the person's device, the service holds only ciphertext and the shape of the tree, and the whole thing runs at [hushos.com](https://hushos.com) or on a server you control, in the browser, [on Android](https://play.google.com/store/apps/details?id=com.hushos.app) and, soon, on the iPhone.
 
 ## What it does
 
 - **Accounts.** Email verification, OPAQUE sign-in (the password never leaves the device), remembered device unlock, a 24-word recovery phrase, password changes, master and recovery-key rotation, permanent deletion.
-- **Drive.** An encrypted folder tree, resumable uploads straight to an S3-compatible store, streaming downloads and zips decrypted on the device, previews of images, PDF, video, audio, Markdown, code, Word, spreadsheets and CSV, encrypted thumbnails with a grid view, drag and drop, copies, versions, trash, an Info panel that shows an item's ids, sizes and, on request, its keys (downloadable as a key file for decrypting the stored bytes without HushOS), and an installable web app.
+- **Drive.** An encrypted folder tree, resumable uploads straight to an S3-compatible store, streaming downloads and zips decrypted on the device, previews of images, PDF, video, audio, Markdown, code, Word, spreadsheets and CSV, encrypted thumbnails with a grid view, drag and drop, copies, versions, trash, folder colours and tags (sealed, so the server never sees them), search by name and kind that runs on the device, an Info panel that shows an item's ids, sizes and, on request, its keys (downloadable as a key file for decrypting the stored bytes without HushOS), and an installable web app.
 - **Sharing.** Contacts pinned by identity key, shares to accounts as viewer or editor, links for anyone with an optional password and expiry, save a copy, a Shared page, key rotation when a share or link is stopped (new keys for the folder tree; existing file contents keep theirs), and change feeds that keep open folders current.
+- **Families.** Up to 20 people share one plan's storage, for their own files and the family's folders, which everyone in the family can open. A manager invites people and lets each one in; anyone can check another member with the same twelve words, whenever they like. The family's member lists are signed, and removing someone gives the family folders new keys. Each person's own files stay private to them; the people who manage the family see only how much space they take.
+- **Phone apps.** Android (Kotlin, Jetpack Compose) on Google Play, and iPhone (SwiftUI), built on one Rust core that does all the cryptography for both. Files can be kept on the phone to open offline, appear in the system's Files app and file pickers (family folders too), and can be saved to from the share menu.
 - **Referrals and affiliates.** Every account has an invite link that earns both sides storage, up to a cap; operators enrol creators with a coupon code, a landing page showing the plans with their discount, a Polar discount applied at checkout, and a commission per paid order tracked until it is marked paid.
 - **Reports.** Anyone with access can report content; the key is escrowed to the operators' identity keys (which the server provides, so whoever runs it can open what is reported), the report snapshots the subtree and holds its bytes, an optional evidence bucket keeps a copy, and operators triage, remove, suspend, or file with an authority.
 - **Operations.** A pg-boss worker sweeps expired uploads, deletions, replication, purge, usage and object audits, orphans and tiering; Polar bills paid plans on the hosted service and is off by default when self-hosting; every page ships a Content Security Policy.
@@ -42,6 +51,8 @@ The detail behind every line above is in the security page, `docs/drive-design.m
 
 ```text
 apps/
+    android/                        Android app (Kotlin, Jetpack Compose)
+    ios/                            iPhone app (SwiftUI), with its Files, share and widget extensions
     web/
         src/routes/                 Pages, layouts, and TanStack route definitions
         src/lib/                    API clients, React Query options, utilities
@@ -49,9 +60,17 @@ apps/
         src/lib/api.server.ts       Elysia handlers mounted by src/routes/api/$.ts
         server/plugins/             Startup env check, request IDs, headers, database shutdown
         nitro.config.ts             Nitro server and logging configuration
+crates/
+    hushos-core/                    The client side of the protocol in Rust, shared by both phone apps
+    hushos-bindgen/                 The pinned uniffi-bindgen that makes the Swift and Kotlin bindings
 packages/
     auth/                           Registration, sessions, browser auth client
+    billing/                        Polar plans, checkout and webhooks, personal and family
     crypto/                         Versioned OPAQUE and account-key cryptography
+    drive/                          Drive's client and server: the tree, uploads, sharing, links, catalogue
+    groups/                         Families: the protocol, membership, signed member lists, key changes
+    jobs/                           The pg-boss worker and its jobs
+    tokens/                         Alpine design tokens, written out for web, iOS and Android
     emails/                         React Email templates and SMTP/Resend/SES delivery
     env/                            T3 Env and Zod server configuration
     config/                         Shared Oxlint / Oxfmt configuration
