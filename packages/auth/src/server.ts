@@ -22,6 +22,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { adminRepository, authRepository, billingRepository, groupsRepository } from '@hushos/db';
 import type { SignupIntent } from '@hushos/db/schema';
 import {
+    sendAccountNotice,
     sendSecurityNotice,
     sendShareEmail,
     sendVerificationEmail,
@@ -104,6 +105,18 @@ export function normalizeEmail(email: string) {
         throw new AuthError('Enter a valid email address.');
     return normalized;
 }
+
+const noticeTime = new Intl.DateTimeFormat('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+    timeZone: 'UTC',
+});
+/* When something happened, as every notice to an account's email says it. */
+const noticeWhen = (at: Date = new Date()) => `${noticeTime.format(at)} UTC`;
 
 function normalizeName(value: string) {
     const name = value.trim().normalize('NFC');
@@ -244,6 +257,30 @@ export async function requestRegistrationEmail(
     const normalizedEmail = normalizeEmail(email);
     await limitEmailSend(address);
     await limitEmail(purpose === 'recover' ? 'recover-email' : 'register', normalizedEmail);
+    const sent = { message: 'Check your inbox for a verification link.' };
+    const failed = (error: unknown) =>
+        new AuthError('Could not send the verification email. Please try again shortly.', 503, {
+            cause: error,
+        });
+    /*
+     * Sign-up for an address that has an account, or recovery for one that has none, could
+     * only fail at the end, after a password was chosen. The address hears where to go
+     * instead, with no link to verify, and nothing is stored. The answer, the limits above and
+     * the one email are the same either way, so the form can't be asked who has an account.
+     */
+    const exists = await authRepository.accountExists(normalizedEmail);
+    if (exists !== (purpose === 'recover')) {
+        try {
+            await sendAccountNotice(normalizedEmail, {
+                kind: exists ? 'exists' : 'none',
+                when: noticeWhen(),
+                appUrl: config().origin,
+            });
+        } catch (error) {
+            throw failed(error);
+        }
+        return sent;
+    }
     const token = randomToken();
     await authRepository.createEnrollment({
         purpose,
@@ -262,13 +299,9 @@ export async function requestRegistrationEmail(
         );
     } catch (error) {
         await authRepository.removeEnrollment(hash(token));
-        throw new AuthError(
-            'Could not send the verification email. Please try again shortly.',
-            503,
-            { cause: error },
-        );
+        throw failed(error);
     }
-    return { message: 'Check your inbox for a verification link.' };
+    return sent;
 }
 
 export async function verifyEmail(token: string) {
@@ -1528,16 +1561,6 @@ export async function removeOtherDevices(sessionToken: string | null, proof: Dev
     return { userId: user.id, removed: result.removed };
 }
 
-const noticeTime = new Intl.DateTimeFormat('en-GB', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-    timeZone: 'UTC',
-});
-
 /*
  * A security notice about the account's devices, by email. It cannot be turned
  * off, but it is bounded: past ten an hour for one account, notices are dropped
@@ -1557,7 +1580,7 @@ export async function notifyDevices(
     if (!user) return;
     await sendSecurityNotice(user.email, {
         kind,
-        when: `${noticeTime.format(at)} UTC`,
+        when: noticeWhen(at),
         count,
         accountUrl: new URL('/app/account#devices', authEnv.APP_ORIGIN).href,
     });
