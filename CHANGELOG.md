@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/HushOS/HushOS/compare/v1.0.0...v1.0.1) (2026-11-05)
+
+
+### Bug fixes
+
+* **ios:** pass App Store validation on the first upload ([#306](https://github.com/HushOS/HushOS/issues/306)) ([3059b64](https://github.com/HushOS/HushOS/commit/3059b644ee99a7c3c19c152702721719af6793ae))
+
 ## [1.0.0](https://github.com/HushOS/HushOS/compare/v0.15.0...v1.0.0) (2026-11-05)
 
 
