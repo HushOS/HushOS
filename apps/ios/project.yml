@@ -84,7 +84,7 @@ targets:
                 LSSupportsOpeningDocumentsInPlace: false
                 UIFileSharingEnabled: false
                 NSFileProviderDomainUsageDescription: HushOS keeps your encrypted files available in the Files app.
-                NSCameraUsageDescription: HushOS uses the camera when you choose Take photo, and to scan your recovery kit.
+                NSCameraUsageDescription: HushOS uses the camera when you choose Take photo or Scan document, and to scan your recovery kit.
                 # Save Image in the share sheet of Send a copy; iOS ends the app if this is missing.
                 NSPhotoLibraryAddUsageDescription: HushOS saves the photo you chose to your library.
                 NSSupportsLiveActivities: true

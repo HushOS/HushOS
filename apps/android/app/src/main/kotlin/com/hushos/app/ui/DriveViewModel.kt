@@ -2067,6 +2067,27 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         file.delete()
     }
 
+    /*
+     * A finished scan: Google's scanner leaves its PDF in this app's cache, which goes up as
+     * "Scan <date> <time>.pdf", as on iOS. The scanner's own copy is removed either way.
+     */
+    fun uploadScan(pdf: Uri, folder: String) = viewModelScope.launch {
+        val stamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH.mm.ss"))
+        val file = File(context.cacheDir, "camera/Scan $stamp.pdf")
+        val copied = withContext(Dispatchers.IO) {
+            val read = runCatching {
+                file.parentFile?.mkdirs()
+                context.contentResolver.openInputStream(pdf)!!.use { input -> file.outputStream().use { input.copyTo(it) } }
+            }.isSuccess
+            pdf.path?.let { File(it) }?.takeIf { pdf.scheme == "file" && it.canonicalPath.startsWith(context.cacheDir.canonicalPath + File.separator) }?.delete()
+            read && file.length() > 0
+        }
+        if (copied) uploadTaken(file, folder) else {
+            file.delete()
+            notify("Couldn’t read the scan. Try scanning again.")
+        }
+    }
+
     /* Uploads a staged file here and now; a failure keeps the file, so its row can send it again. */
     private suspend fun uploadNow(file: File, name: String, mime: String?, folder: String, replacing: Opened?): Boolean {
         val ticket = begin("upload", name)
