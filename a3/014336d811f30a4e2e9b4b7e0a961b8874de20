@@ -1,0 +1,45 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_ff73aa5384df6d 25
+apps/android/app/build.gradle.kts
+  s_566b8e0c4467a4::t_3b80121b481251 157-158
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AddMenu.kt
+  s_566b8e0c4467a4::t_d9d3d284991a9d 5,7,30,63-67,70-71,137-160,226,233,260
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_d9cc79766e80ef 2070-2090
+apps/android/gradle/libs.versions.toml
+  s_566b8e0c4467a4::t_07765f850e2bf4 24,65
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_03c1dc5c6cb16b 30
+apps/ios/App/BrowseView.swift
+  s_566b8e0c4467a4::t_c3fba56101ee47 94,238,471,554,560,569
+apps/ios/App/Info.plist
+  s_566b8e0c4467a4::t_3a55d7b1941af5 49
+apps/ios/App/RecentsView.swift
+  s_566b8e0c4467a4::t_41983eb325b2e7 23,103,127
+apps/ios/App/Uploads.swift
+  s_566b8e0c4467a4::t_1f7e51967ee70f 2,7,10,21-22,34,36-37,68-74,80-83,85-86,131-146,598-661
+apps/ios/project.yml
+  s_566b8e0c4467a4::t_9ab939ff8ed18f 87
+apps/web/src/content/legal/privacy.mdx
+  s_566b8e0c4467a4::t_d867a1b0f1d693 3,80
+docs/release/apple.md
+  s_566b8e0c4467a4::t_dc15867605db6a 233
+docs/release/privacy-answers.md
+  s_566b8e0c4467a4::t_f9f8a975d2072c 25,29,142
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a3014336d811f30a4e2e9b4b7e0a961b8874de20",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
