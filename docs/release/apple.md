@@ -230,7 +230,7 @@ App Store Connect > HushOS > **iOS App 1.0.0** (left column, under "iOS App"):
 
         HushOS in the Files app: open Files > Browse > the ... menu (top right) > Edit, and turn on HushOS. "Save to HushOS" appears in the share sheet of other apps.
 
-        Camera: used only for "Take photo" in the + menu, and to scan a recovery kit's code during password recovery.
+        Camera: used only for "Take photo" and "Scan document" in the + menu, and to scan a recovery kit's code during password recovery.
 
         Encryption: files and their names are encrypted on the device with standard published algorithms (XChaCha20-Poly1305, X25519, ML-KEM-768, Argon2id; OPAQUE for sign-in). The source is public: https://github.com/HushOS/HushOS
         ```

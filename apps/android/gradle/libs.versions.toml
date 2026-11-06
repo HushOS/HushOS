@@ -21,6 +21,7 @@ kotlinxCoroutines = "1.11.0"
 documentfile = "1.1.0"
 zxing = "3.5.4"
 camerax = "1.6.2"
+mlkitDocumentScanner = "16.0.0"
 browser = "1.10.0"
 orgJson = "20260814"
 robolectric = "4.17"
@@ -61,6 +62,7 @@ androidx-browser = { group = "androidx.browser", name = "browser", version.ref =
 androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "camerax" }
 androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camerax" }
 androidx-camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "camerax" }
+mlkit-document-scanner = { group = "com.google.android.gms", name = "play-services-mlkit-document-scanner", version.ref = "mlkitDocumentScanner" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

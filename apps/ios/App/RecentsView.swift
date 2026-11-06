@@ -20,6 +20,7 @@ struct HomeView: View {
     @State private var showingPhone = false
     @State private var showingPhotos = false
     @State private var showingCamera = false
+    @State private var showingScanner = false
 
     private var rows: [Opened] {
         tagFilter != nil ? tagged : store.recents
@@ -99,7 +100,7 @@ struct HomeView: View {
             }
             .nodeActionSheets(action: $action, store: store)
             .fileViewer($viewing, among: rows, store: store)
-            .uploadFlow(into: store.rootId, importer: $showingImporter, folder: $showingFolder, photos: $showingPhotos, camera: $showingCamera)
+            .uploadFlow(into: store.rootId, importer: $showingImporter, folder: $showingFolder, photos: $showingPhotos, camera: $showingCamera, scan: $showingScanner)
             .sheet(isPresented: $managingTags) { TagManagerSheet().environment(store) }
             .task(id: store.sessionKey) {
                 if let root = await store.loadRoot(), store.folders[root] == nil { await store.refresh(folder: root) }
@@ -123,7 +124,7 @@ struct HomeView: View {
     @ViewBuilder private var addMenu: some View {
         if let root = store.rootId {
             Menu {
-                AddItems(importer: $showingImporter, folder: $showingFolder, photos: $showingPhotos, camera: $showingCamera) {
+                AddItems(importer: $showingImporter, folder: $showingFolder, photos: $showingPhotos, camera: $showingCamera, scan: $showingScanner) {
                     Rename.newFolder(in: root, named: "Files", store: store)
                 }
             } label: { HeaderIcon(symbol: "plus") }

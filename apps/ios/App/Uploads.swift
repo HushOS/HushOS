@@ -1,11 +1,13 @@
 import HushOSKit
+import PDFKit
 import PhotosUI
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
+import VisionKit
 
 /*
- * Adding files to a folder: the document picker, the photo library, the camera, and
+ * Adding files to a folder: the document picker, the photo library, the camera, the document scanner, and
  * the name-clash question (DESIGN.md): asked per file, Replace, Keep
  * both or Skip, each saying what it does, with "Do the same for N others". Keep both
  * names the new copies in a sheet. Home's first-run buttons and every folder share it.
@@ -16,8 +18,8 @@ import UniformTypeIdentifiers
 typealias StagedFile = (url: URL, name: String, type: UTType?)
 
 extension View {
-    func uploadFlow(into folderId: String?, named folderName: String = "Files", importer: Binding<Bool>, folder: Binding<Bool> = .constant(false), photos: Binding<Bool>, camera: Binding<Bool> = .constant(false)) -> some View {
-        modifier(UploadFlow(folderId: folderId, folderName: folderName, showingImporter: importer, showingFolder: folder, showingPhotos: photos, showingCamera: camera))
+    func uploadFlow(into folderId: String?, named folderName: String = "Files", importer: Binding<Bool>, folder: Binding<Bool> = .constant(false), photos: Binding<Bool>, camera: Binding<Bool> = .constant(false), scan: Binding<Bool> = .constant(false)) -> some View {
+        modifier(UploadFlow(folderId: folderId, folderName: folderName, showingImporter: importer, showingFolder: folder, showingPhotos: photos, showingCamera: camera, showingScanner: scan))
     }
 }
 
@@ -29,8 +31,10 @@ private struct UploadFlow: ViewModifier {
     @Binding var showingFolder: Bool
     @Binding var showingPhotos: Bool
     @Binding var showingCamera: Bool
+    @Binding var showingScanner: Bool
     @State private var photoItems: [PhotosPickerItem] = []
-    @State private var noCamera = false
+    /* Take photo or Scan document asked for a camera this device doesn't have: which one, for the alert's words. */
+    @State private var noCamera: NoCamera?
     /* Whether the open document picker is choosing a folder (its answer comes after the flags are reset). */
     @State private var importingFolder = false
     /*
@@ -61,16 +65,25 @@ private struct UploadFlow: ViewModifier {
                 // The simulator and some iPads have no camera: say so rather than open nothing.
                 if on, !UIImagePickerController.isSourceTypeAvailable(.camera) {
                     showingCamera = false
-                    noCamera = true
+                    noCamera = .photo
+                }
+            }
+            .onChange(of: showingScanner) { _, on in
+                if on, !VNDocumentCameraViewController.isSupported {
+                    showingScanner = false
+                    noCamera = .scan
                 }
             }
             .fullScreenCover(isPresented: $showingCamera) {
                 CameraPicker { file in queue([file]) }.ignoresSafeArea()
             }
-            .alert("There’s no camera on this device", isPresented: $noCamera) {
+            .fullScreenCover(isPresented: $showingScanner) {
+                DocumentScanner { scan in queueScan(scan) }.ignoresSafeArea()
+            }
+            .alert("There’s no camera on this device", isPresented: Binding(get: { noCamera != nil }, set: { if !$0 { noCamera = nil } }), presenting: noCamera) { _ in
                 Button("OK", role: .cancel) {}
-            } message: {
-                Text("Choose Upload photos to add pictures you already have.")
+            } message: { asked in
+                Text(asked == .scan ? "Choose Upload files to add a PDF you already have." : "Choose Upload photos to add pictures you already have.")
             }
             .sheet(item: Binding(get: { questions.asking }, set: { questions.asking = $0 })) { asked in
                 ClashSheet(
@@ -113,6 +126,22 @@ private struct UploadFlow: ViewModifier {
                     queue(staged)
                 }
             }
+    }
+
+    /*
+     * A finished scan: its pages made into one PDF off the main thread (a row says so meanwhile,
+     * as for Photos), then sent like a picked file.
+     */
+    private func queueScan(_ scan: VNDocumentCameraScan) {
+        let pages = (0..<scan.pageCount).map { scan.imageOfPage(at: $0) }
+        guard !pages.isEmpty else { return }
+        let ticket = store.begin(.upload, pages.count == 1 ? "Scan, 1 page" : "Scan, \(pages.count) pages")
+        store.markWaiting(ticket)
+        Task {
+            let file = await Task.detached(priority: .userInitiated) { ScannedPDF.write(pages) }.value
+            store.dismiss(ticket)
+            if let file { queue([file]) } else { store.notify("Couldn’t make a PDF of the scan. Try scanning again.") }
+        }
     }
 
     /* Picked files for this folder: the free names go at once, each taken one is asked about. */
@@ -563,6 +592,70 @@ private struct CameraPicker: UIViewControllerRepresentable {
         }
 
         func imagePickerControllerDidCancel(_ picker: UIImagePickerController) { parent.dismiss() }
+    }
+}
+
+private enum NoCamera { case photo, scan }
+
+/* Scan document: the system's document camera (edges found, pages straightened), every page of one scan kept. */
+private struct DocumentScanner: UIViewControllerRepresentable {
+    let scanned: (VNDocumentCameraScan) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIViewController(context: Context) -> VNDocumentCameraViewController {
+        let camera = VNDocumentCameraViewController()
+        camera.delegate = context.coordinator
+        return camera
+    }
+
+    func updateUIViewController(_ uiViewController: VNDocumentCameraViewController, context: Context) {}
+
+    /* VisionKit's delegate isn't marked for the main actor, but it calls on the main thread (checked at run time). */
+    @MainActor final class Coordinator: NSObject, @preconcurrency VNDocumentCameraViewControllerDelegate {
+        let parent: DocumentScanner
+        init(_ parent: DocumentScanner) { self.parent = parent }
+
+        func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFinishWith scan: VNDocumentCameraScan) {
+            parent.scanned(scan)
+            parent.dismiss()
+        }
+
+        func documentCameraViewControllerDidCancel(_ controller: VNDocumentCameraViewController) { parent.dismiss() }
+
+        func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFailWithError error: Error) { parent.dismiss() }
+    }
+}
+
+/* A scan's pages as one PDF in the temporary folder, named "Scan <date> <time>.pdf" as on Android. */
+enum ScannedPDF {
+    /* Every page is as wide as A4 and as tall as its picture is in proportion; the pictures go in as JPEG. */
+    static let pageWidth: CGFloat = 595
+
+    static func write(_ pages: [UIImage]) -> StagedFile? {
+        let document = PDFDocument()
+        for image in pages {
+            guard image.size.width > 0 else { continue }
+            let box = CGRect(x: 0, y: 0, width: pageWidth, height: (pageWidth * image.size.height / image.size.width).rounded())
+            guard let page = PDFPage(image: image, options: [.mediaBox: NSValue(cgRect: box), .compressionQuality: 0.8, .upscaleIfSmaller: true]) else { return nil }
+            document.insert(page, at: document.pageCount)
+        }
+        guard document.pageCount == pages.count, let data = document.dataRepresentation() else { return nil }
+        let name = "Scan \(stamp.string(from: Date())).pdf"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent(name)
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: url)
+        } catch { return nil }
+        return (url, name, .pdf)
+    }
+
+    private static var stamp: DateFormatter {
+        let format = DateFormatter()
+        format.locale = Locale(identifier: "en_US_POSIX")
+        format.dateFormat = "yyyy-MM-dd HH.mm.ss"
+        return format
     }
 }
 

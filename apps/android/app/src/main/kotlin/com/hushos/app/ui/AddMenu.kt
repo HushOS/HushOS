@@ -2,7 +2,9 @@ package com.hushos.app.ui
 
 import androidx.compose.runtime.retain.retain
 import android.net.Uri
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -25,6 +27,7 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.material.icons.outlined.CreateNewFolder
+import androidx.compose.material.icons.outlined.DocumentScanner
 import androidx.compose.material.icons.outlined.DriveFolderUpload
 import androidx.compose.material.icons.outlined.PhotoCamera
 import androidx.compose.material.icons.outlined.PhotoLibrary
@@ -57,10 +60,15 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.google.android.gms.common.ConnectionResult
+import com.google.android.gms.common.GoogleApiAvailability
+import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions
+import com.google.mlkit.vision.documentscanner.GmsDocumentScanning
+import com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult
 import java.io.File
 
-/* What the + menu does in a folder: each starts its picker, the camera or the New folder dialog. */
-class Adder(val pickFiles: () -> Unit, val pickFolder: () -> Unit, val pickPhotos: () -> Unit, val takePhoto: () -> Unit, val newFolder: () -> Unit)
+/* What the + menu does in a folder: each starts its picker, the camera, the scanner or the New folder dialog. */
+class Adder(val pickFiles: () -> Unit, val pickFolder: () -> Unit, val pickPhotos: () -> Unit, val takePhoto: () -> Unit, val scan: () -> Unit, val newFolder: () -> Unit)
 
 /*
  * Adding into a folder, for Files and Home alike: the pickers, the camera, the same-name
@@ -126,6 +134,30 @@ fun addInto(model: DriveViewModel, state: DriveState, folderId: String?, folderN
             .onFailure { photoFile = null; file.delete(); model.notify("No camera app is available on this phone.") }
     }
     takePhotoAfterAsking = ::takePhoto
+    // Scan document: Google's scanner (Play services draws it and needs no camera permission of
+    // ours) finds the page edges, straightens and cleans each page and hands back one PDF.
+    val activity = LocalActivity.current
+    val scanner = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
+        val pdf = GmsDocumentScanningResult.fromActivityResultIntent(result.data)?.pdf
+        if (result.resultCode == android.app.Activity.RESULT_OK && pdf != null && folderId != null) model.uploadScan(pdf.uri, folderId)
+    }
+    fun scan() {
+        if (activity == null) return
+        // Phones without Google's services (some de-Googled ones) have no scanner to open.
+        if (GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(context) != ConnectionResult.SUCCESS) {
+            model.notify("Scanning needs Google Play services, which this phone doesn’t have. Choose Take photo instead.")
+            return
+        }
+        val options = GmsDocumentScannerOptions.Builder()
+            .setScannerMode(GmsDocumentScannerOptions.SCANNER_MODE_FULL)
+            .setGalleryImportAllowed(false)
+            .setResultFormats(GmsDocumentScannerOptions.RESULT_FORMAT_PDF)
+            .build()
+        // The first scan may wait for Play services to fetch the scanner; a failure there says so.
+        GmsDocumentScanning.getClient(options).getStartScanIntent(activity)
+            .addOnSuccessListener { scanner.launch(IntentSenderRequest.Builder(it).build()) }
+            .addOnFailureListener { model.notify("Couldn’t open the scanner. Try again in a moment.") }
+    }
 
     clashes.firstOrNull { it.uri !in answers }?.let { asked ->
         val left = clashes.filter { it.uri !in answers && it != asked }
@@ -191,13 +223,14 @@ fun addInto(model: DriveViewModel, state: DriveState, folderId: String?, folderN
         pickFolder = { folderPicker.launch(null) },
         pickPhotos = { photos.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) },
         takePhoto = ::takePhoto,
+        scan = ::scan,
         newFolder = { newFolder = "" },
     )
 }
 
 /*
  * The + button and its menu, Files' and Home's: Paste (when the clipboard can go here), New
- * folder, Take photo, Upload photos, Upload folder, and Upload files nearest the button. `lift` raises it over
+ * folder, Scan document, Take photo, Upload photos, Upload folder, and Upload files nearest the button. `lift` raises it over
  * a paste bar; it also rises over the notice and transfer bars at the foot.
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
@@ -224,6 +257,7 @@ fun AddButton(open: Boolean, onOpen: (Boolean) -> Unit, add: Adder, paste: Pair<
             FloatingActionButtonMenuItem(containerColor = alpine.primary, contentColor = alpine.onPrimary, onClick = { onOpen(false); onPaste() }, icon = { Icon(Icons.Outlined.ContentPaste, null) }, text = { Text(text) })
         }
         FloatingActionButtonMenuItem(containerColor = alpine.primary, contentColor = alpine.onPrimary, onClick = { onOpen(false); add.newFolder() }, icon = { Icon(Icons.Outlined.CreateNewFolder, null) }, text = { Text("New folder") })
+        FloatingActionButtonMenuItem(containerColor = alpine.primary, contentColor = alpine.onPrimary, onClick = { onOpen(false); add.scan() }, icon = { Icon(Icons.Outlined.DocumentScanner, null) }, text = { Text("Scan document") })
         FloatingActionButtonMenuItem(containerColor = alpine.primary, contentColor = alpine.onPrimary, onClick = { onOpen(false); add.takePhoto() }, icon = { Icon(Icons.Outlined.PhotoCamera, null) }, text = { Text("Take photo") })
         FloatingActionButtonMenuItem(containerColor = alpine.primary, contentColor = alpine.onPrimary, onClick = { onOpen(false); add.pickPhotos() }, icon = { Icon(Icons.Outlined.PhotoLibrary, null) }, text = { Text("Upload photos") })
         FloatingActionButtonMenuItem(containerColor = alpine.primary, contentColor = alpine.onPrimary, onClick = { onOpen(false); add.pickFolder() }, icon = { Icon(Icons.Outlined.DriveFolderUpload, null) }, text = { Text("Upload folder") })

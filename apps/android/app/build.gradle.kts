@@ -154,6 +154,8 @@ dependencies {
     implementation(libs.androidx.camera.camera2)
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
+    // Scan document: Google's scanner, run by Play services on the phone (edges, cleanup, pages), handing back a PDF.
+    implementation(libs.mlkit.document.scanner)
     testImplementation(libs.junit)
     // JVM tests open real envelopes: JNA's desktop jar loads the core built for this machine.
     testImplementation(libs.jna)
