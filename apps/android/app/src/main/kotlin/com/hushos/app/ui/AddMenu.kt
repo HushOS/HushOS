@@ -137,15 +137,19 @@ fun addInto(model: DriveViewModel, state: DriveState, folderId: String?, folderN
     // Scan document: Google's scanner (Play services draws it and needs no camera permission of
     // ours) finds the page edges, straightens and cleans each page and hands back one PDF.
     val activity = LocalActivity.current
+    // The folder the scan was asked for, kept until it comes back: Files may have moved to another folder meanwhile.
+    var scanInto by rememberSaveable { mutableStateOf<String?>(null) }
     val scanner = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
         val pdf = GmsDocumentScanningResult.fromActivityResultIntent(result.data)?.pdf
-        if (result.resultCode == android.app.Activity.RESULT_OK && pdf != null && folderId != null) model.uploadScan(pdf.uri, folderId)
+        val into = scanInto
+        scanInto = null
+        if (result.resultCode == android.app.Activity.RESULT_OK && pdf != null && into != null) model.uploadScan(pdf.uri, into)
     }
     // Play services may take a while to ready the scanner; by then this screen (and its launcher) may be gone.
     val shown = remember { java.util.concurrent.atomic.AtomicBoolean(true) }
     androidx.compose.runtime.DisposableEffect(Unit) { shown.set(true); onDispose { shown.set(false) } }
     fun scan() {
-        if (activity == null) return
+        if (activity == null || folderId == null) return
         // Phones without Google's services (some de-Googled ones) have no scanner to open.
         if (GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(context) != ConnectionResult.SUCCESS) {
             model.notify("Scanning needs Google Play services, which this phone doesn’t have. Choose Take photo instead.")
@@ -160,6 +164,7 @@ fun addInto(model: DriveViewModel, state: DriveState, folderId: String?, folderN
         GmsDocumentScanning.getClient(options).getStartScanIntent(activity)
             .addOnSuccessListener { sender ->
                 if (!shown.get()) return@addOnSuccessListener
+                scanInto = folderId
                 runCatching { scanner.launch(IntentSenderRequest.Builder(sender).build()) }
                     .onFailure { model.notify("Couldn’t open the scanner. Try again in a moment.") }
             }

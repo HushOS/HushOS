@@ -153,6 +153,19 @@
             android:foregroundServiceType="dataSync"
             tools:node="merge" />
 
+        <!--
+            Google's document scanner library (Scan document) logs usage events to Google through
+            Datatransport's "cct" backend. With that backend unregistered nothing is sent: the
+            runtime finds no backend for the events and deletes them on the phone.
+        -->
+        <service
+            android:name="com.google.android.datatransport.runtime.backends.TransportBackendDiscovery"
+            tools:node="merge">
+            <meta-data
+                android:name="backend:com.google.android.datatransport.cct.CctBackendFactory"
+                tools:node="remove" />
+        </service>
+
         <!-- Decrypted files handed to other apps (share, open with). -->
         <provider
             android:name="androidx.core.content.FileProvider"
