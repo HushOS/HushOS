@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/HushOS/HushOS/compare/v1.1.0...v1.1.1) (2026-11-06)
+
+
+### Bug fixes
+
+* **android:** keep phones without a portrait screen when scanning arrived ([#314](https://github.com/HushOS/HushOS/issues/314)) ([804eb75](https://github.com/HushOS/HushOS/commit/804eb7572582604537fd9ee7f4360f03fda1e91c))
+
 ## [1.1.0](https://github.com/HushOS/HushOS/compare/v1.0.2...v1.1.0) (2026-11-06)
 
 
