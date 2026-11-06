@@ -20,6 +20,8 @@ struct SignInView: View {
     @State private var fieldError: Field?
     @State private var showingServer = false
     @FocusState private var focus: Field?
+    /* The password is a UIKit field, which SwiftUI's focus can't reach: its focus is kept here. */
+    @State private var passwordFocused = false
 
     private enum Field { case email, password }
 
@@ -93,19 +95,15 @@ struct SignInView: View {
                                     .keyboardType(.emailAddress).textContentType(.username)
                                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                                     .submitLabel(.next).focused($focus, equals: .email)
-                                    .onSubmit { focus = .password }
+                                    .onSubmit { passwordFocused = true }
                             }
                             Theme.divider.frame(height: 1).padding(.leading, Alpine.Space.s4)
                             fieldRow("Password", error: fieldError == .password) {
                                 HStack {
-                                    // Typing always goes into the secure field; the eye only draws the characters over it
-                                    // (see RevealingSecureField), so the password is never in a plain field.
-                                    SecureField("Required", text: $password)
-                                        .focused($focus, equals: .password)
-                                        .textContentType(.password).textInputAutocapitalization(.never).autocorrectionDisabled()
-                                        .submitLabel(.go)
-                                        .onSubmit { submit() }
-                                        .revealed(showPassword ? password : nil, placeholder: "Required", focused: focus == .password)
+                                    ShowablePasswordField(
+                                        placeholder: "Required", text: $password, shown: showPassword, returnKey: .go,
+                                        focused: $passwordFocused
+                                    ) { submit() }
                                     Button {
                                         showPassword.toggle()
                                     } label: {
@@ -171,7 +169,7 @@ struct SignInView: View {
         guard !pending else { return }
         let address = email.trimmingCharacters(in: .whitespaces)
         guard !address.isEmpty else { fieldError = .email; focus = .email; return }
-        guard !password.isEmpty else { fieldError = .password; focus = .password; return }
+        guard !password.isEmpty else { fieldError = .password; passwordFocused = true; return }
         clearErrors()
         pending = true
         Task {
