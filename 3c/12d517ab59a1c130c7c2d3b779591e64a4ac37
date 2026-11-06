@@ -1,0 +1,19 @@
+apps/ios/App/ShowablePasswordField.swift
+  s_566b8e0c4467a4::t_28fc8665524d14 29,44-45,125-142
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3c12d517ab59a1c130c7c2d3b779591e64a4ac37",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
