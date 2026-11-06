@@ -9,7 +9,8 @@ import UIKit
  * Shown, it is a plain field, which is safe only because the app refuses third-party keyboards
  * (HushOSApp's shouldAllowExtensionPointIdentifier): the Files sign-in sheet, an extension that
  * can't, keeps its secure field and draws the characters over it instead (RevealedPassword.swift).
- * Nothing is learned either way: no autocorrection, spell checking, smart punctuation or capitals.
+ * Nothing is learned or offered either way: no autocorrection, spell checking, predictions,
+ * Writing Tools, smart punctuation or capitals.
  */
 struct ShowablePasswordField: UIViewRepresentable {
     let placeholder: String
@@ -36,6 +37,10 @@ struct ShowablePasswordField: UIViewRepresentable {
         field.smartQuotesType = .no
         field.smartDashesType = .no
         field.smartInsertDeleteType = .no
+        // Shown, it is an ordinary field: no inline predictions and no Writing Tools, as PhraseEntry.
+        field.inlinePredictionType = .no
+        field.writingToolsBehavior = .none
+        field.allowedWritingToolsResultOptions = []
         field.isSecureTextEntry = !shown
         field.setContentHuggingPriority(.defaultLow, for: .horizontal)
         field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
