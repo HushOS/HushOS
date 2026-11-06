@@ -1,0 +1,25 @@
+apps/ios/App/AccountView.swift
+  s_566b8e0c4467a4::t_420490db140cb8 733,743
+apps/ios/App/RevealedPassword.swift
+  s_566b8e0c4467a4::t_6d871e834f912f 11-13
+apps/ios/App/ShowablePasswordField.swift
+  s_566b8e0c4467a4::t_30ef111ebc216e 1-117
+apps/ios/App/SignInView.swift
+  s_566b8e0c4467a4::t_5a202dad0912e2 23-24,98,103-106,172
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c99d627d70090c92b4f526b3c3b9857d565c2433",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
