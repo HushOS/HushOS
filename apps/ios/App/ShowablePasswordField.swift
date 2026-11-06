@@ -26,7 +26,7 @@ struct ShowablePasswordField: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeUIView(context: Context) -> UITextField {
-        let field = UITextField()
+        let field = PasswordTextField()
         field.delegate = context.coordinator
         field.font = .preferredFont(forTextStyle: .body)
         field.adjustsFontForContentSizeCategory = true
@@ -41,6 +41,8 @@ struct ShowablePasswordField: UIViewRepresentable {
         field.inlinePredictionType = .no
         field.writingToolsBehavior = .none
         field.allowedWritingToolsResultOptions = []
+        // Nor can it be dragged out, as a secure field can't.
+        field.textDragInteraction?.isEnabled = false
         field.isSecureTextEntry = !shown
         field.setContentHuggingPriority(.defaultLow, for: .horizontal)
         field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -118,5 +120,23 @@ struct ShowablePasswordField: UIViewRepresentable {
             if let submit = parent.submit { submit() } else { field.resignFirstResponder() }
             return true
         }
+    }
+}
+
+/*
+ * Shown, a password still offers only what a secure field does: paste, select and delete. No
+ * copy, cut, share, look up or translate, which would put it on the shared, syncing pasteboard
+ * or hand it to another app.
+ */
+private final class PasswordTextField: UITextField {
+    private static let allowed: Set<Selector> = [
+        #selector(UIResponderStandardEditActions.paste(_:)),
+        #selector(UIResponderStandardEditActions.select(_:)),
+        #selector(UIResponderStandardEditActions.selectAll(_:)),
+        #selector(UIResponderStandardEditActions.delete(_:)),
+    ]
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        Self.allowed.contains(action) && super.canPerformAction(action, withSender: sender)
     }
 }
