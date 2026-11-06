@@ -137,9 +137,15 @@ test('real audio plays, as a blob and past 16 MB through the worker', async () =
     expect(response?.headers()['content-type']).toBe('audio/wav');
     // And it plays there: the browser's player page may load it under the worker's policy.
     await expect
-        .poll(() => tab.evaluate(() => document.querySelector('video, audio')?.readyState ?? 0), {
-            timeout: 30_000,
-        })
+        .poll(
+            () =>
+                tab.evaluate(
+                    () => document.querySelector<HTMLMediaElement>('video, audio')?.readyState ?? 0,
+                ),
+            {
+                timeout: 30_000,
+            },
+        )
         .toBeGreaterThanOrEqual(1);
     await tab.close();
     await close();
