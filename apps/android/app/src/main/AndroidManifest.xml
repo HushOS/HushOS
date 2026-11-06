@@ -10,6 +10,12 @@
     <!-- Scanning a recovery kit's code, asked for only when Scan your kit is chosen. -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+    <!--
+        Google's document scanner (Scan document) declares its screen portrait only, which would
+        make Play require a portrait screen and drop the phones and tablets that lack one. They
+        keep HushOS; the scanner turns the picture itself where it can.
+    -->
+    <uses-feature android:name="android.hardware.screen.portrait" android:required="false" />
 
     <application
         android:name=".HushOSApplication"
