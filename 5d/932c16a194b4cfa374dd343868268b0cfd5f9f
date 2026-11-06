@@ -1,0 +1,31 @@
+e2e/media-preview.spec.ts
+  s_566b8e0c4467a4::t_bc5fc1bb7be92f 1-49,51-70,73-106,108-125,127-130,132-134,139-147,149-160,168-175,178,184,186,190-193
+  s_566b8e0c4467a4::t_b4b85b04eb8d51 161-167,183
+  s_566b8e0c4467a4::t_50320f312063ad 50,71-72,107,126,131,135-138,148,176-177,179-182,185,187-189
+apps/web/public/download-sw.js
+  s_566b8e0c4467a4::t_8da4248881ce03 188-191,193,197
+apps/web/src/components/drive/preview.tsx
+  s_566b8e0c4467a4::t_2cd3fc639fe3c3 51,650,885
+apps/web/src/lib/previews.ts
+  s_566b8e0c4467a4::t_98d6569c840cab 199-210
+apps/web/src/lib/sharp-image.ts
+  s_566b8e0c4467a4::t_b99f01dd355b48 6,63
+e2e/fixtures/media/README.md
+  s_566b8e0c4467a4::t_e2bc6a115b7ab2 1-9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5d932c16a194b4cfa374dd343868268b0cfd5f9f",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
