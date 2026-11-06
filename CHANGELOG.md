@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.2](https://github.com/HushOS/HushOS/compare/v1.1.1...v1.1.2) (2026-11-06)
+
+
+### Bug fixes
+
+* **ios:** show a password in place, as Settings and the password managers do ([#319](https://github.com/HushOS/HushOS/issues/319)) ([ba38f9a](https://github.com/HushOS/HushOS/commit/ba38f9a7fd8715d86c2fa7ced413a1f34ce15516))
+* **ios:** show the cursor while a password is revealed ([#317](https://github.com/HushOS/HushOS/issues/317)) ([22d3eaf](https://github.com/HushOS/HushOS/commit/22d3eaf2db431cb441b13f2ea325f6f1b689dc7e))
+
 ## [1.1.1](https://github.com/HushOS/HushOS/compare/v1.1.0...v1.1.1) (2026-11-06)
 
 
