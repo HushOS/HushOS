@@ -141,6 +141,9 @@ fun addInto(model: DriveViewModel, state: DriveState, folderId: String?, folderN
         val pdf = GmsDocumentScanningResult.fromActivityResultIntent(result.data)?.pdf
         if (result.resultCode == android.app.Activity.RESULT_OK && pdf != null && folderId != null) model.uploadScan(pdf.uri, folderId)
     }
+    // Play services may take a while to ready the scanner; by then this screen (and its launcher) may be gone.
+    val shown = remember { java.util.concurrent.atomic.AtomicBoolean(true) }
+    androidx.compose.runtime.DisposableEffect(Unit) { shown.set(true); onDispose { shown.set(false) } }
     fun scan() {
         if (activity == null) return
         // Phones without Google's services (some de-Googled ones) have no scanner to open.
@@ -155,8 +158,12 @@ fun addInto(model: DriveViewModel, state: DriveState, folderId: String?, folderN
             .build()
         // The first scan may wait for Play services to fetch the scanner; a failure there says so.
         GmsDocumentScanning.getClient(options).getStartScanIntent(activity)
-            .addOnSuccessListener { scanner.launch(IntentSenderRequest.Builder(it).build()) }
-            .addOnFailureListener { model.notify("Couldn’t open the scanner. Try again in a moment.") }
+            .addOnSuccessListener { sender ->
+                if (!shown.get()) return@addOnSuccessListener
+                runCatching { scanner.launch(IntentSenderRequest.Builder(sender).build()) }
+                    .onFailure { model.notify("Couldn’t open the scanner. Try again in a moment.") }
+            }
+            .addOnFailureListener { if (shown.get()) model.notify("Couldn’t open the scanner. Try again in a moment.") }
     }
 
     clashes.firstOrNull { it.uri !in answers }?.let { asked ->

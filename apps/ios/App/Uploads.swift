@@ -78,7 +78,10 @@ private struct UploadFlow: ViewModifier {
                 CameraPicker { file in queue([file]) }.ignoresSafeArea()
             }
             .fullScreenCover(isPresented: $showingScanner) {
-                DocumentScanner { scan in queueScan(scan) }.ignoresSafeArea()
+                DocumentScanner { scan in queueScan(scan) } failed: { error in
+                    if let words = ErrorWords.say(error, otherwise: "Couldn’t finish the scan. Try scanning again.") { store.notify(words) }
+                }
+                .ignoresSafeArea()
             }
             .alert("There’s no camera on this device", isPresented: Binding(get: { noCamera != nil }, set: { if !$0 { noCamera = nil } }), presenting: noCamera) { _ in
                 Button("OK", role: .cancel) {}
@@ -597,9 +600,10 @@ private struct CameraPicker: UIViewControllerRepresentable {
 
 private enum NoCamera { case photo, scan }
 
-/* Scan document: the system's document camera (edges found, pages straightened), every page of one scan kept. */
+/* Scan document: the system's document camera (edges found, pages straightened), every page of one scan kept. A failure is said; Cancel says nothing. */
 private struct DocumentScanner: UIViewControllerRepresentable {
     let scanned: (VNDocumentCameraScan) -> Void
+    let failed: (Error) -> Void
     @Environment(\.dismiss) private var dismiss
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -624,7 +628,10 @@ private struct DocumentScanner: UIViewControllerRepresentable {
 
         func documentCameraViewControllerDidCancel(_ controller: VNDocumentCameraViewController) { parent.dismiss() }
 
-        func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFailWithError error: Error) { parent.dismiss() }
+        func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFailWithError error: Error) {
+            parent.failed(error)
+            parent.dismiss()
+        }
     }
 }
 
