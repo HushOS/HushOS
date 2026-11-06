@@ -187,14 +187,18 @@ function mediaResponse(source, request) {
     });
     // The page sends only an audio or video type, and this checks it again: the type is the
     // uploader's word, and this URL, opened in a tab of its own, must never be a page or a
-    // script on this origin. The sandbox stops anything that would run if it were.
+    // script on this origin. The policy stops anything that would run if it were. A real file
+    // opened in a tab gets the browser's own player, which loads it under this policy: so
+    // media-src 'self', and a sandbox that keeps the origin (a bare one makes it opaque, and
+    // 'self' then matches nothing). Without allow-scripts, scripts stay off either way.
     const mime = (source.mime || '').toLowerCase();
     const headers = new Headers({
         'Content-Type': mime.startsWith(`${source.kind}/`) ? mime : 'application/octet-stream',
         'Content-Length': String(end - start + 1),
         'Accept-Ranges': 'bytes',
         'Cache-Control': 'no-store',
-        'Content-Security-Policy': "default-src 'none'; sandbox",
+        'Content-Security-Policy':
+            "default-src 'none'; media-src 'self'; sandbox allow-same-origin",
         'X-Content-Type-Options': 'nosniff',
     });
     if (partial) headers.set('Content-Range', `bytes ${start}-${end}/${size}`);
