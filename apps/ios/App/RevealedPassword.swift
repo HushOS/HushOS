@@ -18,12 +18,12 @@ extension View {
                     HStack(spacing: 1) {
                         // Before the placeholder when empty, after the last character otherwise: typing only
                         // adds at the end, unless the caret is moved with the space bar, which this can't follow.
-                        if focused, value.isEmpty { RevealCaret(restart: value) }
+                        if focused, value.isEmpty { RevealCaret().id(value) }
                         Text(value.isEmpty ? placeholder : value)
                             .foregroundStyle(value.isEmpty ? Alpine.inkMuted : Alpine.ink)
                             .lineLimit(1).truncationMode(.head)
                             .privacySensitive()
-                        if focused, !value.isEmpty { RevealCaret(restart: value) }
+                        if focused, !value.isEmpty { RevealCaret().id(value) }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
                     .background(Alpine.surface)
@@ -33,16 +33,18 @@ extension View {
     }
 }
 
-/* The caret the faded field can't show: the tint colour, blinking as UIKit's does, solid again after each keystroke. */
+/*
+ * The caret the faded field can't show: the tint colour, blinking as UIKit's does. Each keystroke
+ * makes a new one (`.id` of the text), whose blink starts from its own moment, shown first.
+ */
 private struct RevealCaret: View {
-    let restart: String
+    @State private var start = Date.now
     @ScaledMetric(relativeTo: .body) private var height: CGFloat = 22
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 0.5)) { context in
+        TimelineView(.periodic(from: start, by: 0.5)) { context in
             Capsule().fill(.tint).frame(width: 2, height: height)
-                .opacity(Int(context.date.timeIntervalSinceReferenceDate * 2).isMultiple(of: 2) ? 1 : 0)
+                .opacity(Int(max(0, context.date.timeIntervalSince(start)) * 2).isMultiple(of: 2) ? 1 : 0)
         }
-        .id(restart)
     }
 }
