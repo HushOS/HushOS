@@ -48,7 +48,7 @@ import {
     openReader,
     PREVIEW_LIMITS,
     previewKind,
-    previewMime,
+    servedMime,
     readAll,
     type ReadProgress,
     recallPreview,
@@ -647,7 +647,7 @@ function ImagePreview({
     limit: number;
     onDownload: () => void;
 }) {
-    const mime = previewMime(node);
+    const mime = servedMime(node, 'image');
     const versionId = node.currentVersion?.id ?? null;
     const [progress, setProgress] = useState<ReadProgress | null>(null);
     const [state, setState] = useState<{ url: string | null; error: string | null }>({
@@ -882,7 +882,7 @@ function MediaPreview({
     kind: 'video' | 'audio';
     onDownload: () => void;
 }) {
-    const mime = previewMime(node);
+    const mime = servedMime(node, kind);
     const versionId = node.currentVersion?.id ?? null;
     const [progress, setProgress] = useState<ReadProgress | null>(null);
     const [source, setSource] = useState<

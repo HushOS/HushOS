@@ -185,11 +185,16 @@ function mediaResponse(source, request) {
             }
         },
     });
+    // The page sends only an audio or video type, and this checks it again: the type is the
+    // uploader's word, and this URL, opened in a tab of its own, must never be a page or a
+    // script on this origin. The sandbox stops anything that would run if it were.
+    const mime = (source.mime || '').toLowerCase();
     const headers = new Headers({
-        'Content-Type': source.mime || 'application/octet-stream',
+        'Content-Type': mime.startsWith(`${source.kind}/`) ? mime : 'application/octet-stream',
         'Content-Length': String(end - start + 1),
         'Accept-Ranges': 'bytes',
         'Cache-Control': 'no-store',
+        'Content-Security-Policy': "default-src 'none'; sandbox",
         'X-Content-Type-Options': 'nosniff',
     });
     if (partial) headers.set('Content-Range', `bytes ${start}-${end}/${size}`);
