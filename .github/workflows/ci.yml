@@ -73,6 +73,9 @@ jobs:
                           # app, so check and build still compile it; no browser suite reads
                           # its words, and it changes no header or script.
                           apps/web/src/content/*.mdx) ;;
+                          # The phone apps: native code the web build never reads. Their own
+                          # workflows build and ship them.
+                          apps/ios/* | apps/android/*) ;;
                           *) browser=true ;;
                       esac
                       # The core, its bindings, and the TypeScript twin its fixtures are checked against.
@@ -240,9 +243,22 @@ jobs:
               with:
                   path: ~/.cache/ms-playwright
                   key: playwright-${{ runner.os }}-chromium-${{ steps.playwright.outputs.version }}
-            # The system libraries every time; the browser download only on a cache miss.
+            # The system packages (fonts, mostly) come from Ubuntu's mirror, which has taken eight
+            # minutes on a slow day: apt keeps what it downloads in a cached folder and reuses it.
+            - name: Cache Playwright's system packages
+              uses: actions/cache@v6
+              with:
+                  path: ~/.cache/playwright-apt
+                  key: playwright-apt-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+            # The system libraries every time (from the cache above when it hits); the browser download only on a cache miss.
             - name: Install Chromium for Playwright
-              run: bunx playwright install --with-deps chromium
+              run: |
+                  mkdir -p ~/.cache/playwright-apt/partial
+                  printf 'Dir::Cache::Archives "%s/.cache/playwright-apt/";\nAPT::Keep-Downloaded-Packages "true";\nBinary::apt::APT::Keep-Downloaded-Packages "true";\n' "$HOME" \
+                      | sudo tee /etc/apt/apt.conf.d/90playwright-cache > /dev/null
+                  bunx playwright install --with-deps chromium
+                  # apt leaves root's files there (its lock is unreadable to others); the cache saves as the runner.
+                  sudo chown -R "$(id -u):$(id -g)" ~/.cache/playwright-apt
             # Streamed, not grouped: Turborepo holds a task's output until it ends, and a
             # server never ends. Playwright reuses whatever answers on 5173.
             - name: Start the production server and the jobs worker
@@ -317,8 +333,19 @@ jobs:
               with:
                   path: ~/.cache/ms-playwright
                   key: playwright-${{ runner.os }}-chromium-${{ steps.playwright.outputs.version }}
+            # As in the browser tests above: apt reuses the cached system packages.
+            - name: Cache Playwright's system packages
+              uses: actions/cache@v6
+              with:
+                  path: ~/.cache/playwright-apt
+                  key: playwright-apt-${{ runner.os }}-${{ steps.playwright.outputs.version }}
             - name: Install Chromium for Playwright
-              run: bunx playwright install --with-deps chromium
+              run: |
+                  mkdir -p ~/.cache/playwright-apt/partial
+                  printf 'Dir::Cache::Archives "%s/.cache/playwright-apt/";\nAPT::Keep-Downloaded-Packages "true";\nBinary::apt::APT::Keep-Downloaded-Packages "true";\n' "$HOME" \
+                      | sudo tee /etc/apt/apt.conf.d/90playwright-cache > /dev/null
+                  bunx playwright install --with-deps chromium
+                  sudo chown -R "$(id -u):$(id -g)" ~/.cache/playwright-apt
             - name: Start the production server and the jobs worker
               run: |
                   mkdir -p scratchpad
