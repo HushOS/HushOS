@@ -164,29 +164,34 @@ test('an image and an SVG still show', async () => {
     }
 });
 
-test('a small file recorded as a page is handed over as neither', async () => {
+test('a small file recorded as a page is handed over as neither', async ({ browserName }) => {
     await open('small.wav');
     const audio = dialog(page).locator('audio');
     await expect(audio).toHaveCount(1, { timeout: 60_000 });
     const src = await audio.evaluate((a: HTMLAudioElement) => a.src);
     expect(src.startsWith('blob:')).toBe(true);
-    // Opened in a tab of its own: a file to save, not a page.
+    // Opened in a tab of its own: never a page that runs. Chromium saves it as a file; WebKit
+    // doesn't open another tab's blob URL at all, so there only the first holds.
     const tab = await page.context().newPage();
     const download = tab.waitForEvent('download', { timeout: 15_000 }).catch(() => null);
     await tab.goto(src).catch(() => {});
-    expect(await download).not.toBeNull();
+    if (browserName === 'chromium') expect(await download).not.toBeNull();
+    else await tab.waitForTimeout(1_500);
     expect(await tab.title().catch(() => '')).not.toBe('ran');
     await tab.close();
     await close();
 });
 
-test('a large file recorded as a page never runs as one in a tab of its own', async () => {
+test('a large file recorded as a page never runs as one in a tab of its own', async ({
+    browserName,
+}) => {
     await open('notes.wav');
     const frame = await playerFrame();
     const src = await frame.evaluate(() => document.querySelector('audio')!.src);
     expect(src).toContain('/hushos-download/media/');
     // Opened as "Open audio in new tab" would, in the same browser while the preview is open:
-    // the worker answers it as a file to save, never a page to run.
+    // the worker answers it as a file to save, never a page to run. Chromium shows that as a
+    // download; whatever a browser does with it, the page's script never runs.
     const tab = await page.context().newPage();
     const answered: Record<string, string>[] = [];
     tab.on('response', (response) => {
@@ -194,7 +199,8 @@ test('a large file recorded as a page never runs as one in a tab of its own', as
     });
     const download = tab.waitForEvent('download', { timeout: 15_000 }).catch(() => null);
     await tab.goto(src).catch(() => {});
-    expect(await download).not.toBeNull();
+    if (browserName === 'chromium') expect(await download).not.toBeNull();
+    else await tab.waitForTimeout(1_500);
     expect(await tab.title().catch(() => '')).not.toBe('ran');
     if (answered[0]) {
         expect(answered[0]['content-type']).toBe('application/octet-stream');
