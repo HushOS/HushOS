@@ -69,7 +69,7 @@ android {
         targetSdk = 36
         versionCode = buildNumber
         // The product version (the root package.json): the release pull request sets it.
-        versionName = "1.0.2" // x-release-please-version
+        versionName = "1.1.0" // x-release-please-version
     }
 
     signingConfigs {

@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/HushOS/HushOS/compare/v1.0.2...v1.1.0) (2026-11-06)
+
+
+### Features
+
+* **apps:** scan documents to a PDF from the + menu ([#311](https://github.com/HushOS/HushOS/issues/311)) ([e42a0ee](https://github.com/HushOS/HushOS/commit/e42a0ee89ddd98256b041020c9b9b38dc86270bd))
+
 ## [1.0.2](https://github.com/HushOS/HushOS/compare/v1.0.1...v1.0.2) (2026-11-05)
 
 
