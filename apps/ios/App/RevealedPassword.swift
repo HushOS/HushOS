@@ -8,8 +8,9 @@ extension View {
      * view below 1% alpha. Faded, its caret is gone too, so a drawn one stands in while it has
      * focus. The overlay is the row's colour across the whole field: at 1% the field's dots,
      * wider than the letters, still showed past the end of the text. Every revealed field sits
-     * on an Alpine.surface row. Used by the app and by the Files sign-in sheet (FilesUI compiles
-     * this file).
+     * on an Alpine.surface row. Only the Files sign-in sheet uses it: an extension can't refuse
+     * third-party keyboards, so its password never goes into a plain field. The app, which
+     * refuses them, shows the characters in place (ShowablePasswordField.swift).
      */
     func revealed(_ value: String?, placeholder: String, focused: Bool) -> some View {
         opacity(value == nil ? 1 : 0.011)

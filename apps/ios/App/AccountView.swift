@@ -730,27 +730,17 @@ struct PasswordField: View {
     }
 }
 
-/*
- * A secure field with the eye at its end, as on sign-in. Typing always goes into the secure
- * field (the system keyboard, no autocorrection, nothing learned); the eye only lays the
- * characters over it as text, so a revealed password is never in a plain, editable field a
- * keyboard could read or learn from. Swapping the fields out made iOS offer to save a password.
- */
+/* A password field with the eye at its end, as on sign-in: ShowablePasswordField shows the characters in place. */
 struct RevealingSecureField: View {
     let placeholder: String
     @Binding var text: String
     var content: UITextContentType? = .password
     var submit: (() -> Void)? = nil
     @State private var shown = false
-    @FocusState private var focused: Bool
 
     var body: some View {
         HStack {
-            SecureField(placeholder, text: $text)
-                .textContentType(content).textInputAutocapitalization(.never).autocorrectionDisabled()
-                .focused($focused)
-                .onSubmit { submit?() }
-                .revealed(shown ? text : nil, placeholder: placeholder, focused: focused)
+            ShowablePasswordField(placeholder: placeholder, text: $text, shown: shown, content: content, submit: submit)
             Button { shown.toggle() } label: {
                 Image(systemName: shown ? "eye.slash" : "eye").foregroundStyle(Alpine.inkMuted)
             }
