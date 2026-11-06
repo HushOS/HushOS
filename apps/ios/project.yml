@@ -158,6 +158,9 @@ targets:
         platform: iOS
         sources:
             - path: FilesUI
+            # The revealed password's overlay and caret, the same as the app's.
+            - path: App/RevealedPassword.swift
+              group: App
             # Apple's required-reason declarations (docs/release/privacy-answers.md): one manifest for every bundle.
             - path: Privacy/PrivacyInfo.xcprivacy
               buildPhase: resources

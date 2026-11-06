@@ -105,7 +105,7 @@ struct SignInView: View {
                                         .textContentType(.password).textInputAutocapitalization(.never).autocorrectionDisabled()
                                         .submitLabel(.go)
                                         .onSubmit { submit() }
-                                        .revealed(showPassword ? password : nil, placeholder: "Required")
+                                        .revealed(showPassword ? password : nil, placeholder: "Required", focused: focus == .password)
                                     Button {
                                         showPassword.toggle()
                                     } label: {
