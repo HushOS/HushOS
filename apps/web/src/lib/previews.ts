@@ -197,6 +197,18 @@ export function previewMime(node: DriveNode) {
 }
 
 /*
+ * The type a preview's bytes are handed to the browser as: the recorded one only when it is
+ * the kind being shown (image/* for an image, video/* or audio/* for media). The recorded type
+ * is whatever the uploader's client wrote, and a URL made from it can be opened in a tab of its
+ * own: "clip.mp4" recorded as text/html would be a page on this origin, with this person's
+ * keys. Anything else is a neutral type, which a media element still plays and a tab won't run.
+ */
+export function servedMime(node: DriveNode, kind: 'image' | 'video' | 'audio') {
+    const mime = previewMime(node).toLowerCase();
+    return mime.startsWith(`${kind}/`) ? mime : 'application/octet-stream';
+}
+
+/*
  * A reader over the node's decrypted chunks. One that reads the whole file
  * (text, an image, an Office file) keeps one chunk, not four: those chunks
  * would only sit in memory beside the copy the viewer is making.

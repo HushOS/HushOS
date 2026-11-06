@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import {
     openReader,
     previewKind,
-    previewMime,
+    servedMime,
     readAll,
     recallPreview,
     rememberPreview,
@@ -60,7 +60,7 @@ export function useSharpImage(node: DriveNode, limit: number, enabled = true) {
             try {
                 const { bytes } = await readAll(reader, limit);
                 const url = URL.createObjectURL(
-                    new Blob([bytes as BlobPart], { type: previewMime(node) }),
+                    new Blob([bytes as BlobPart], { type: servedMime(node, 'image') }),
                 );
                 // Only what the cache keeps is shown: the cache revokes it, here nothing would.
                 if (!rememberPreview(versionId, { kind: 'image', url, bytes: bytes.byteLength })) {
