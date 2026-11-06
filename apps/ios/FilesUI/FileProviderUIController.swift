@@ -70,6 +70,7 @@ struct SignInView: View {
     @State private var email = ""
     @State private var password = ""
     @State private var showPassword = false
+    @FocusState private var passwordFocused: Bool
     @State private var pending = false
     @State private var error = ""
 
@@ -101,14 +102,8 @@ struct SignInView: View {
                                     SecureField("Required", text: $password)
                                         .textContentType(.password).textInputAutocapitalization(.never).autocorrectionDisabled()
                                         .onSubmit { submit() }
-                                        .opacity(showPassword ? 0.011 : 1)
-                                        .overlay(alignment: .leading) {
-                                            if showPassword {
-                                                Text(password.isEmpty ? "Required" : password)
-                                                    .foregroundStyle(password.isEmpty ? Alpine.inkMuted : Alpine.ink)
-                                                    .lineLimit(1).truncationMode(.head).allowsHitTesting(false).accessibilityHidden(true)
-                                            }
-                                        }
+                                        .focused($passwordFocused)
+                                        .revealed(showPassword ? password : nil, placeholder: "Required", focused: passwordFocused)
                                     Button { showPassword.toggle() } label: {
                                         Image(systemName: showPassword ? "eye.slash" : "eye").foregroundStyle(Alpine.inkMuted).frame(width: 36, height: 36)
                                     }

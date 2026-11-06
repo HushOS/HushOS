@@ -742,38 +742,20 @@ struct RevealingSecureField: View {
     var content: UITextContentType? = .password
     var submit: (() -> Void)? = nil
     @State private var shown = false
+    @FocusState private var focused: Bool
 
     var body: some View {
         HStack {
             SecureField(placeholder, text: $text)
                 .textContentType(content).textInputAutocapitalization(.never).autocorrectionDisabled()
+                .focused($focused)
                 .onSubmit { submit?() }
-                .revealed(shown ? text : nil, placeholder: placeholder)
+                .revealed(shown ? text : nil, placeholder: placeholder, focused: focused)
             Button { shown.toggle() } label: {
                 Image(systemName: shown ? "eye.slash" : "eye").foregroundStyle(Alpine.inkMuted)
             }
             .buttonStyle(.plain).accessibilityLabel(shown ? "Hide password" : "Show password")
         }
-    }
-}
-
-extension View {
-    /*
-     * A secure field's characters drawn over it while revealed: the field stays underneath (and
-     * stays the one typed into), only its dots are hidden. Not hit-testable, so a tap still lands
-     * on the field. The field is faded rather than hidden: UIKit stops delivering touches to a
-     * view below 1% alpha.
-     */
-    func revealed(_ value: String?, placeholder: String) -> some View {
-        opacity(value == nil ? 1 : 0.011)
-            .overlay(alignment: .leading) {
-                if let value {
-                    Text(value.isEmpty ? placeholder : value)
-                        .foregroundStyle(value.isEmpty ? Alpine.inkMuted : Alpine.ink)
-                        .lineLimit(1).truncationMode(.head)
-                        .privacySensitive().allowsHitTesting(false).accessibilityHidden(true)
-                }
-            }
     }
 }
 
