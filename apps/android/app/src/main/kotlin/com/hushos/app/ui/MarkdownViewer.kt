@@ -43,6 +43,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
@@ -108,8 +110,9 @@ fun MarkdownViewer(reading: Reading, close: () -> Unit, openElsewhere: () -> Uni
                     CircularProgressIndicator(color = alpine.primary, modifier = Modifier.padding(top = 48.dp))
                 }
             } else {
+                // Filling the readable width, not shrinking to its widest block: a file of short lines stays at the left.
                 LazyColumn(
-                    modifier = Modifier.fillMaxSize().padding(padding).readableWidth(720.dp),
+                    modifier = Modifier.fillMaxSize().padding(padding).readableWidth(720.dp).fillMaxWidth(),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 24.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
@@ -142,7 +145,8 @@ private fun MarkdownBlockView(block: MdBlock, muted: Boolean = false) {
         is MdBlock.ListBlock -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             block.items.forEachIndexed { index, item ->
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    when {
+                    // A continued item (the rest of the one before, cut off with its list) keeps the indent, unmarked.
+                    Box(if (item.continued) Modifier.alpha(0f).clearAndSetSemantics {} else Modifier) { when {
                         item.check != null -> Icon(
                             if (item.check) Icons.Outlined.CheckBox else Icons.Outlined.CheckBoxOutlineBlank,
                             if (item.check) "Done" else "Not done",
@@ -151,7 +155,7 @@ private fun MarkdownBlockView(block: MdBlock, muted: Boolean = false) {
                         )
                         block.ordered -> Text("${block.start + index}.", style = type.bodyLarge.copy(fontFeatureSettings = "tnum"), color = alpine.inkMuted)
                         else -> Text("•", style = type.bodyLarge, color = alpine.inkMuted)
-                    }
+                    } }
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { item.blocks.forEach { MarkdownBlockView(it, muted) } }
                 }
             }

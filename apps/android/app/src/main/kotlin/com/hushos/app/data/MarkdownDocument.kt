@@ -70,8 +70,15 @@ object MarkdownDocument {
     const val PARAGRAPH_CHARS = 4000
     const val CODE_LINES = 200
     const val TABLE_ROWS = 200
-    /* A table cell past this is shortened with "…": one cell can't be cut into pieces, and Open with shows it whole. */
+    /* A table cell or an image's alt text past this is shortened with "…": neither can be cut into pieces, and Open with shows it whole. */
     const val CELL_CHARS = 2000
+    /*
+     * The most a list or quote holds before it is cut into consecutive ones, in weight (one per block, one per table row,
+     * one per CHARS_PER_WEIGHT characters): its children are laid out together, so 100,000 `- item` lines as one list
+     * froze the viewer as one paragraph had. An item too heavy for one piece goes on in the next without its marker.
+     */
+    const val BLOCK_WEIGHT = 200
+    private const val CHARS_PER_WEIGHT = 200
 
     fun parse(text: String): List<MdBlock> = try {
         blocks(parser.parse(text), 0)
@@ -87,12 +94,70 @@ object MarkdownDocument {
     /* A block too big to lay out at once, as consecutive blocks of the same kind. */
     internal fun cut(block: MdBlock): List<MdBlock> = when (block) {
         is MdBlock.Paragraph -> cutInline(block.inline).map { MdBlock.Paragraph(it) }
+        is MdBlock.Heading -> cutInline(block.inline).map { MdBlock.Heading(block.level, it) }
+        is MdBlock.Quote -> if (weight(block) <= BLOCK_WEIGHT) listOf(block) else pack(block.blocks, BLOCK_WEIGHT - 1).map { MdBlock.Quote(it) }
+        is MdBlock.ListBlock -> if (weight(block) <= BLOCK_WEIGHT) listOf(block) else cutList(block)
         is MdBlock.Code -> cutCode(block.text).map { MdBlock.Code(block.language, it) }
         is MdBlock.Table -> {
             val short = block.copy(head = block.head.map(::shortCell), rows = block.rows.map { row -> row.map(::shortCell) })
             if (short.rows.size <= TABLE_ROWS) listOf(short) else short.rows.chunked(TABLE_ROWS).map { short.copy(rows = it) }
         }
         else -> listOf(block)
+    }
+
+    /* How much laying a block out costs, roughly: see BLOCK_WEIGHT. Its children were cut first, so each is bounded. */
+    internal fun weight(block: MdBlock): Int = when (block) {
+        is MdBlock.Paragraph -> 1 + block.inline.length / CHARS_PER_WEIGHT
+        is MdBlock.Heading -> 1 + block.inline.length / CHARS_PER_WEIGHT
+        is MdBlock.Code -> 1 + block.text.length / CHARS_PER_WEIGHT
+        is MdBlock.Table -> 1 + block.rows.size
+        is MdBlock.Quote -> 1 + block.blocks.sumOf(::weight)
+        is MdBlock.ListBlock -> 1 + block.items.sumOf(::weight)
+        MdBlock.Rule -> 1
+    }
+
+    private fun weight(item: MdItem): Int = 1 + item.blocks.sumOf(::weight)
+
+    /* Consecutive blocks in groups of at most `room` (a heavier block alone): the room a container leaves past its own 1. */
+    private fun pack(blocks: List<MdBlock>, room: Int): List<List<MdBlock>> {
+        val groups = mutableListOf<List<MdBlock>>()
+        var current = mutableListOf<MdBlock>()
+        var total = 0
+        for (block in blocks) {
+            val each = weight(block)
+            if (current.isNotEmpty() && total + each > room) { groups += current; current = mutableListOf(); total = 0 }
+            current += block
+            total += each
+        }
+        if (current.isNotEmpty()) groups += current
+        return groups
+    }
+
+    /*
+     * A list in pieces of at most BLOCK_WEIGHT, numbered on. A heavy item's blocks go into several items, the later ones
+     * `continued` (no marker); greedy packing never lets two parts of one item share a piece, so a continued item only
+     * ever comes first, and each piece's items number from its start.
+     */
+    private fun cutList(list: MdBlock.ListBlock): List<MdBlock> {
+        val parts = list.items.flatMap { item ->
+            if (weight(item) <= BLOCK_WEIGHT - 1) listOf(item)
+            else pack(item.blocks, BLOCK_WEIGHT - 2).mapIndexed { index, blocks -> if (index == 0) item.copy(blocks = blocks) else MdItem(null, blocks, continued = true) }
+        }
+        val pieces = mutableListOf<MdBlock>()
+        var current = mutableListOf<MdItem>()
+        var total = 0
+        var number = list.start
+        var start = number
+        for (part in parts) {
+            val each = weight(part)
+            if (current.isNotEmpty() && total + each > BLOCK_WEIGHT - 1) { pieces += list.copy(start = start, items = current); current = mutableListOf(); total = 0 }
+            if (current.isEmpty()) start = if (part.continued) number - 1 else number
+            current += part
+            total += each
+            if (!part.continued) number++
+        }
+        if (current.isNotEmpty()) pieces += list.copy(start = start, items = current)
+        return pieces
     }
 
     /* Code in pieces of at most CODE_LINES lines and PARAGRAPH_CHARS characters; a longer line is cut where it must be. */
@@ -130,7 +195,7 @@ object MarkdownDocument {
 
     /* A paragraph's runs in pieces of at most PARAGRAPH_CHARS, cut at a space where there is one. */
     private fun cutInline(inline: MdInline): List<MdInline> {
-        if (inline.runs.sumOf { (it as? MdRun.Text)?.text?.length ?: (it as MdRun.Image).alt.length } <= PARAGRAPH_CHARS) return listOf(inline)
+        if (inline.length <= PARAGRAPH_CHARS) return listOf(inline)
         val pieces = mutableListOf<MdInline>()
         var current = mutableListOf<MdRun>()
         var length = 0
@@ -243,7 +308,8 @@ object MarkdownDocument {
                 is HardLineBreak -> add("\n")
                 // Dropped, as on the web.
                 is HtmlInline, is TaskListItemMarker -> Unit
-                is Image -> { flush(); runs += MdRun.Image(alt = plain(node), source = node.destination) }
+                // Its alt text bounded, so a paragraph's pieces stay bounded too (cutInline never cuts inside an image).
+                is Image -> { flush(); runs += MdRun.Image(alt = shortAlt(flatText(node)), source = node.destination) }
                 is Link -> children(node).forEach { walk(it, style.copy(link = safeLink(node.destination) ?: style.link), depth + 1) }
                 is Emphasis -> children(node).forEach { walk(it, style.copy(italic = true), depth + 1) }
                 is StrongEmphasis -> children(node).forEach { walk(it, style.copy(bold = true), depth + 1) }
@@ -256,13 +322,7 @@ object MarkdownDocument {
         return MdInline(runs)
     }
 
-    private fun plain(node: Node): String = children(node).joinToString("") { child ->
-        when (child) {
-            is Text -> child.literal
-            is Code -> child.literal
-            else -> plain(child)
-        }
-    }
+    private fun shortAlt(alt: String): String = if (alt.length <= CELL_CHARS) alt else alt.take(CELL_CHARS) + " …"
 
     /* A link the viewer may open on a tap: http, https or mailto only, as the web's sanitiser allows. */
     fun safeLink(destination: String?): String? {
@@ -282,13 +342,17 @@ sealed interface MdBlock {
     data class Table(val alignments: List<MdAlign>, val head: List<MdInline>, val rows: List<List<MdInline>>) : MdBlock
 }
 
-/* `check` is null for a plain item, true or false for a task list's box. */
-data class MdItem(val check: Boolean?, val blocks: List<MdBlock>)
+/*
+ * `check` is null for a plain item, true or false for a task list's box. `continued`: the rest of the item before it,
+ * cut off with its list (MarkdownDocument.cutList); drawn without a marker, and not numbered.
+ */
+data class MdItem(val check: Boolean?, val blocks: List<MdBlock>, val continued: Boolean = false)
 
 enum class MdAlign { START, CENTER, END }
 
 data class MdInline(val runs: List<MdRun>) {
     val plainText: String get() = runs.joinToString("") { if (it is MdRun.Text) it.text else (it as MdRun.Image).alt }
+    val length: Int get() = runs.sumOf { if (it is MdRun.Text) it.text.length else (it as MdRun.Image).alt.length }
 }
 
 sealed interface MdRun {

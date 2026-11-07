@@ -91,10 +91,20 @@ public enum MarkdownDocument {
     static let codeLines = 200
     static let tableRows = 200
     static let cellChars = 2000
+    /*
+     * The most a list or quote holds before it is cut into consecutive ones, in weight (one per block, one per table row,
+     * one per charsPerWeight characters): its children are laid out together, so 100,000 `- item` lines as one list
+     * would freeze the viewer as one paragraph had. An item too heavy for one piece goes on in the next without its marker.
+     */
+    static let blockWeight = 200
+    static let charsPerWeight = 200
 
     static func cut(_ block: MarkdownBlock) -> [MarkdownBlock] {
         switch block {
         case .paragraph(let inline): return cutInline(inline).map { .paragraph($0) }
+        case let .heading(level, inline): return cutInline(inline).map { .heading(level: level, $0) }
+        case .quote(let blocks): return weight(block) <= blockWeight ? [block] : pack(blocks, room: blockWeight - 1).map { .quote($0) }
+        case .list(let list): return weight(block) <= blockWeight ? [block] : cutList(list)
         case let .code(language, text): return cutCode(text).map { .code(language: language, text: $0) }
         case .table(let table):
             let short = MarkdownTable(alignments: table.alignments, head: table.head.map(shortCell), rows: table.rows.map { $0.map(shortCell) })
@@ -106,9 +116,69 @@ public enum MarkdownDocument {
         }
     }
 
+    /* How much laying a block out costs, roughly: see blockWeight. Its children were cut first, so each is bounded. */
+    static func weight(_ block: MarkdownBlock) -> Int {
+        switch block {
+        case .heading(_, let inline), .paragraph(let inline): return 1 + inline.length / charsPerWeight
+        case .code(_, let text): return 1 + text.count / charsPerWeight
+        case .table(let table): return 1 + table.rows.count
+        case .quote(let blocks): return 1 + blocks.reduce(0) { $0 + weight($1) }
+        case .list(let list): return 1 + list.items.reduce(0) { $0 + weight($1) }
+        case .rule: return 1
+        }
+    }
+
+    private static func weight(_ item: MarkdownListItem) -> Int { 1 + item.blocks.reduce(0) { $0 + weight($1) } }
+
+    /* Consecutive blocks in groups of at most `room` (a heavier block alone): the room a container leaves past its own 1. */
+    private static func pack(_ blocks: [MarkdownBlock], room: Int) -> [[MarkdownBlock]] {
+        var groups: [[MarkdownBlock]] = []
+        var current: [MarkdownBlock] = []
+        var total = 0
+        for block in blocks {
+            let each = weight(block)
+            if !current.isEmpty, total + each > room { groups.append(current); current = []; total = 0 }
+            current.append(block)
+            total += each
+        }
+        if !current.isEmpty { groups.append(current) }
+        return groups
+    }
+
+    /*
+     * A list in pieces of at most blockWeight, numbered on. A heavy item's blocks go into several items, the later ones
+     * `continued` (no marker); greedy packing never lets two parts of one item share a piece, so a continued item only
+     * ever comes first, and each piece's items number from its start.
+     */
+    private static func cutList(_ list: MarkdownList) -> [MarkdownBlock] {
+        let parts = list.items.flatMap { item -> [MarkdownListItem] in
+            if weight(item) <= blockWeight - 1 { return [item] }
+            return pack(item.blocks, room: blockWeight - 2).enumerated().map { index, blocks in
+                MarkdownListItem(check: index == 0 ? item.check : nil, blocks: blocks, continued: index > 0)
+            }
+        }
+        var pieces: [MarkdownBlock] = []
+        var current: [MarkdownListItem] = []
+        var total = 0
+        var number = list.start
+        var start = number
+        for part in parts {
+            let each = weight(part)
+            if !current.isEmpty, total + each > blockWeight - 1 {
+                pieces.append(.list(MarkdownList(ordered: list.ordered, start: start, items: current))); current = []; total = 0
+            }
+            if current.isEmpty { start = part.continued ? number - 1 : number }
+            current.append(part)
+            total += each
+            if !part.continued { number += 1 }
+        }
+        if !current.isEmpty { pieces.append(.list(MarkdownList(ordered: list.ordered, start: start, items: current))) }
+        return pieces
+    }
+
     /* A paragraph's runs in pieces of at most paragraphChars, cut at a space where there is one; linear in its length. */
     private static func cutInline(_ inline: MarkdownInline) -> [MarkdownInline] {
-        guard inline.plainText.count > paragraphChars else { return [inline] }
+        guard inline.length > paragraphChars else { return [inline] }
         var pieces: [MarkdownInline] = []
         var current: [MarkdownInline.Run] = []
         var length = 0
@@ -287,7 +357,9 @@ public enum MarkdownDocument {
             case is InlineHTML: break
             case let image as Markdown.Image:
                 flush()
-                runs.append(.image(alt: image.plainText, source: image.source))
+                // Its alt text bounded, so a paragraph's pieces stay bounded too (cutInline never cuts inside an image).
+                let alt = image.plainText
+                runs.append(.image(alt: alt.count > cellChars ? String(alt.prefix(cellChars)) + " …" : alt, source: image.source))
             case let anchor as Markdown.Link:
                 let target = anchor.destination.flatMap(safeLink)
                 for child in anchor.children { walk(child, intent, target ?? link, depth + 1) }
@@ -329,6 +401,16 @@ public struct MarkdownInline: Sendable, Equatable {
 
     public let runs: [Run]
 
+    /* Its length in characters, as cutting counts it. */
+    public var length: Int {
+        runs.reduce(0) { total, run in
+            switch run {
+            case .text(let text): total + text.characters.count
+            case .image(let alt, _): total + alt.count
+            }
+        }
+    }
+
     /* The words alone, for accessibility and tests. */
     public var plainText: String {
         runs.map { run in
@@ -350,6 +432,8 @@ public struct MarkdownListItem: Sendable, Equatable {
     /* nil for a plain item; true or false for a task list's checkbox. */
     public let check: Bool?
     public let blocks: [MarkdownBlock]
+    /* The rest of the item before it, cut off with its list (MarkdownDocument.cutList): drawn without a marker, not numbered. */
+    public var continued = false
 }
 
 public struct MarkdownTable: Sendable, Equatable {

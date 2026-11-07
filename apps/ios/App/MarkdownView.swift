@@ -66,7 +66,9 @@ private struct MarkdownBlockView: View {
             VStack(alignment: .leading, spacing: Alpine.Space.s2) {
                 ForEach(Array(list.items.enumerated()), id: \.offset) { index, item in
                     HStack(alignment: .firstTextBaseline, spacing: Alpine.Space.s2) {
+                        // A continued item (the rest of the one before, cut off with its list) keeps the indent, unmarked.
                         marker(list, index: index, check: item.check)
+                            .opacity(item.continued ? 0 : 1).accessibilityHidden(item.continued)
                         VStack(alignment: .leading, spacing: Alpine.Space.s2) {
                             ForEach(Array(item.blocks.enumerated()), id: \.offset) { _, inner in MarkdownBlockView(block: inner, muted: muted) }
                         }

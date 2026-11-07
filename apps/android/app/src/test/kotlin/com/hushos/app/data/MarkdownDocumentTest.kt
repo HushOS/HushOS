@@ -94,6 +94,38 @@ class MarkdownDocumentTest {
 
         // Each piece keeps the head, so a column is never left unnamed.
         assertTrue(tables.all { t -> t.head.map { it.plainText } == listOf("A", "B") })
+
+        // A heading is cut as a paragraph is, every piece at its level.
+        val heading = MarkdownDocument.parse("## " + words.take(20_000).joinToString(" ")).map { it as MdBlock.Heading }
+        assertTrue(heading.size > 1 && heading.all { it.level == 2 && it.inline.length <= MarkdownDocument.PARAGRAPH_CHARS })
+        assertEquals(words.take(20_000), heading.flatMap { it.inline.plainText.split(' ') })
+
+        // A long image description can't push a piece past the limit: the text after it is still cut where it must be.
+        val pictured = MarkdownDocument.parse("![" + "a".repeat(5000) + "](x.png) " + words.take(2000).joinToString(" ")).map { it as MdBlock.Paragraph }
+        assertTrue(pictured.all { it.inline.length <= MarkdownDocument.PARAGRAPH_CHARS })
+        assertTrue((pictured.first().inline.runs.first() as MdRun.Image).alt.endsWith("…"))
+    }
+
+    @Test fun bigListsAndQuotesComeInPiecesNumberedOn() {
+        // 100,000 items as one list laid out every row at once; in pieces, each no heavier than the limit, numbered on.
+        val lists = MarkdownDocument.parse((1..100_000).joinToString("\n") { "$it. item $it" }).map { it as MdBlock.ListBlock }
+        assertTrue(lists.size > 1 && lists.all { MarkdownDocument.weight(it) <= MarkdownDocument.BLOCK_WEIGHT })
+        val numbered = lists.flatMap { list -> list.items.mapIndexed { index, item -> "${list.start + index}:${(item.blocks.single() as MdBlock.Paragraph).inline.plainText}" } }
+        assertEquals((1..100_000).map { "$it:item $it" }, numbered)
+
+        // One item holding a huge list: its rest goes on in later pieces, unmarked, and the next item keeps its number.
+        val nested = MarkdownDocument.parse("1. outer\n" + (1..5000).joinToString("\n") { "   - inner $it" } + "\n2. after").map { it as MdBlock.ListBlock }
+        assertTrue(nested.size > 1 && nested.all { MarkdownDocument.weight(it) <= MarkdownDocument.BLOCK_WEIGHT + 2 * MarkdownDocument.BLOCK_DEPTH })
+        assertTrue(nested.drop(1).all { it.items.first().continued } && nested.all { list -> list.items.drop(1).none { it.continued } })
+        val last = nested.last()
+        assertEquals(2, last.start + last.items.indexOfFirst { !it.continued })
+        fun inner(blocks: List<MdBlock>): List<String> = blocks.flatMap { b -> (b as? MdBlock.ListBlock)?.items?.flatMap { i -> i.blocks.mapNotNull { (it as? MdBlock.Paragraph)?.inline?.plainText } }.orEmpty() }
+        assertEquals((1..5000).map { "inner $it" }, nested.flatMap { list -> list.items.flatMap { inner(it.blocks) } })
+
+        // A quote of many paragraphs, likewise.
+        val quotes = MarkdownDocument.parse((1..5000).joinToString("\n>\n") { "> line $it" }).map { it as MdBlock.Quote }
+        assertTrue(quotes.size > 1 && quotes.all { MarkdownDocument.weight(it) <= MarkdownDocument.BLOCK_WEIGHT })
+        assertEquals((1..5000).map { "line $it" }, quotes.flatMap { q -> q.blocks.map { (it as MdBlock.Paragraph).inline.plainText } })
     }
 
     @Test fun markdownFilesByNameOrType() {

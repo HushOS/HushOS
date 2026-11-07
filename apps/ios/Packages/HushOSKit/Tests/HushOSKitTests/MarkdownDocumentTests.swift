@@ -121,6 +121,54 @@ struct MarkdownDocumentTests {
         guard case .table(let wide) = MarkdownDocument.parse("| A |\n| - |\n| " + String(repeating: "x", count: 300_000) + " |").first,
               let cell = wide.rows.first?.first else { Issue.record("expected a table"); return }
         #expect(cell.plainText.count <= MarkdownDocument.cellChars + 2 && cell.plainText.hasSuffix("…"))
+
+        // A heading is cut as a paragraph is, every piece at its level.
+        let heading = MarkdownDocument.parse("## " + words.prefix(20_000).joined(separator: " "))
+        #expect(heading.count > 1)
+        #expect(heading.allSatisfy { if case let .heading(2, inline) = $0 { inline.length <= MarkdownDocument.paragraphChars } else { false } })
+
+        // A long image description followed by text crashed the cutting (an index before the run's start); now the
+        // description is shortened and every piece stays within the limit.
+        let pictured = MarkdownDocument.parse("![" + String(repeating: "a", count: 5000) + "](x.png) " + words.prefix(2000).joined(separator: " "))
+        #expect(pictured.allSatisfy { if case .paragraph(let inline) = $0 { inline.length <= MarkdownDocument.paragraphChars } else { false } })
+        guard case .paragraph(let first) = pictured.first, case .image(let alt, _) = first.runs.first else { Issue.record("expected an image"); return }
+        #expect(alt.hasSuffix("…"))
+    }
+
+    @Test func bigListsAndQuotesComeInPiecesNumberedOn() {
+        // 100,000 items as one list would lay out every row at once; in pieces, each no heavier than the limit, numbered on.
+        let lists = MarkdownDocument.parse((1...100_000).map { "\($0). item \($0)" }.joined(separator: "\n")).compactMap { block -> MarkdownList? in
+            if case .list(let list) = block { list } else { nil }
+        }
+        #expect(lists.count > 1)
+        #expect(lists.allSatisfy { MarkdownDocument.weight(.list($0)) <= MarkdownDocument.blockWeight })
+        let numbered = lists.flatMap { list in
+            list.items.enumerated().map { index, item -> String in
+                guard case .paragraph(let inline) = item.blocks.first else { return "?" }
+                return "\(list.start + index):\(inline.plainText)"
+            }
+        }
+        #expect(numbered == (1...100_000).map { "\($0):item \($0)" })
+
+        // One item holding a huge list: its rest goes on in later pieces, unmarked, and the next item keeps its number.
+        let nested = MarkdownDocument.parse("1. outer\n" + (1...5000).map { "   - inner \($0)" }.joined(separator: "\n") + "\n2. after")
+            .compactMap { block -> MarkdownList? in if case .list(let list) = block { list } else { nil } }
+        #expect(nested.count > 1)
+        #expect(nested.allSatisfy { MarkdownDocument.weight(.list($0)) <= MarkdownDocument.blockWeight + 2 * MarkdownDocument.blockDepth })
+        #expect(nested.dropFirst().allSatisfy { $0.items.first?.continued == true })
+        #expect(nested.allSatisfy { !$0.items.dropFirst().contains(where: \.continued) })
+        if let last = nested.last, let after = last.items.firstIndex(where: { !$0.continued }) { #expect(last.start + after == 2) }
+        else { Issue.record("expected the second item") }
+
+        // A quote of many paragraphs, likewise.
+        let quotes = MarkdownDocument.parse((1...5000).map { "> line \($0)" }.joined(separator: "\n>\n"))
+        #expect(quotes.count > 1)
+        #expect(quotes.allSatisfy { if case .quote = $0 { MarkdownDocument.weight($0) <= MarkdownDocument.blockWeight } else { false } })
+        let lines = quotes.flatMap { block -> [String] in
+            guard case .quote(let inner) = block else { return [] }
+            return inner.compactMap { if case .paragraph(let inline) = $0 { inline.plainText } else { nil } }
+        }
+        #expect(lines == (1...5000).map { "line \($0)" })
     }
 
     @Test func markdownFilesByNameOrType() {
