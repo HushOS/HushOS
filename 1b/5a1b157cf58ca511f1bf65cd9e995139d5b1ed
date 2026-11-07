@@ -1,0 +1,100 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/SignupRules.kt
+  s_566b8e0c4467a4::t_b447f77ac6948a 1-39
+apps/android/app/src/test/kotlin/com/hushos/app/data/SignupRulesTest.kt
+  s_566b8e0c4467a4::t_b16024d2821e00 1-55
+apps/android/app/src/main/kotlin/com/hushos/app/data/Auth.kt
+  s_566b8e0c4467a4::t_bb99c714aa7ae6 375-411
+apps/ios/App/SignupView.swift
+  s_566b8e0c4467a4::t_a519dc5147fa80 1-338,340-341
+  s_566b8e0c4467a4::t_2436651f210e55 339
+packages/crypto/src/core-fixtures.test.ts
+  s_566b8e0c4467a4::t_9b7f1d54681f21 106-138
+  s_566b8e0c4467a4::t_ebc85df3b71feb 139-140
+apps/android/app/src/main/kotlin/com/hushos/app/ui/SignupScreen.kt
+  s_566b8e0c4467a4::t_7e8a496d637612 1-184
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Signup.swift
+  s_566b8e0c4467a4::t_585c3e87f5775c 1-120
+crates/hushos-core/src/signup.rs
+  s_566b8e0c4467a4::t_f28f6ac00a3d94 1-153
+  s_566b8e0c4467a4::t_01139f6e1d380c 154-167
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_aad18dd3fce1b8 65,101,102-104
+apps/android/app/src/main/AndroidManifest.xml
+  s_566b8e0c4467a4::t_2f53f536f1f3e4 86,91
+apps/android/app/src/main/kotlin/com/hushos/app/MainActivity.kt
+  s_566b8e0c4467a4::t_1011ec4ea83ebb 21-22,73-74
+apps/android/app/src/main/kotlin/com/hushos/app/PickerSignInActivity.kt
+  s_566b8e0c4467a4::t_3cae15bc90578b 20,38-40
+apps/android/app/src/main/kotlin/com/hushos/app/data/AppLinks.kt
+  s_566b8e0c4467a4::t_04ad573534191b 30-31,99,103-107
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AccountScreen.kt
+  s_566b8e0c4467a4::t_52f911835de322 498,501,516,525,528-529,541-542,544-545,551-552,554,559-561
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_77fa80c16a65f4 508,538,972-973,996,1084,1134-1243
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HushOSApp.kt
+  s_566b8e0c4467a4::t_4646acd8d62d99 29,123-135,182-200
+apps/android/app/src/main/kotlin/com/hushos/app/ui/PickerSignIn.kt
+  s_566b8e0c4467a4::t_ed759fe2328313 28-30,34,70,99
+apps/android/app/src/main/kotlin/com/hushos/app/ui/RecoverScreen.kt
+  s_566b8e0c4467a4::t_6b8950c82b464c 97,112,120,131-132,144-146,160,215,220,228
+apps/android/app/src/main/kotlin/com/hushos/app/ui/SignInScreen.kt
+  s_566b8e0c4467a4::t_3bb6ff6f765479 138-143
+apps/android/app/src/test/kotlin/com/hushos/app/data/AppLinksTest.kt
+  s_566b8e0c4467a4::t_37005f558db2a8 133-151
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_0e8f653937650d 144,145-147
+apps/ios/App/AccountView.swift
+  s_566b8e0c4467a4::t_e2721bd0069f0a 1094-1095,1103,1106,1172,1175
+apps/ios/App/AppModel.swift
+  s_566b8e0c4467a4::t_1c49df92b1b7c4 165-166,357,359-361,364-377,402-444,451-452
+apps/ios/App/HushOSApp.swift
+  s_566b8e0c4467a4::t_38f4eec02ca43f 57-58,72
+apps/ios/App/MainView.swift
+  s_566b8e0c4467a4::t_0765f0c49d9699 130-131
+apps/ios/App/RecoveryView.swift
+  s_566b8e0c4467a4::t_72bb1e56ec6c4d 45
+apps/ios/App/SignInView.swift
+  s_566b8e0c4467a4::t_2b438a5dd72339 127-134
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/AppLinks.swift
+  s_566b8e0c4467a4::t_e390105281545b 27-28,70-73,76
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Recovery.swift
+  s_566b8e0c4467a4::t_3151054640937a 199
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/AppLinksTests.swift
+  s_566b8e0c4467a4::t_2bd30ee64b0830 94-110
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SignupRulesTests.swift
+  s_566b8e0c4467a4::t_786b0fdde70001 1-40
+apps/web/src/content/roadmap.ts
+  s_566b8e0c4467a4::t_153b03161829bb 189-195
+apps/web/src/lib/app-links.server.ts
+  s_566b8e0c4467a4::t_5bd4edfb115a20 27
+crates/hushos-core/examples/fixtures.rs
+  s_566b8e0c4467a4::t_a0dfae5c27deaa 225-256,748
+crates/hushos-core/src/drive.rs
+  s_566b8e0c4467a4::t_a7881d57082daa 123-185,189,196,198,202,204,207
+crates/hushos-core/src/lib.rs
+  s_566b8e0c4467a4::t_6a756449e6105b 46,78
+docs/release/apple.md
+  s_566b8e0c4467a4::t_8c5d626e43ca25 205,229
+docs/release/checklist.md
+  s_566b8e0c4467a4::t_aa938b9de7c994 23
+docs/release/privacy-answers.md
+  s_566b8e0c4467a4::t_41bdb577067bf4 3,114-121,143
+docs/release/store-listing.md
+  s_566b8e0c4467a4::t_5eb24b95428724 77,144,147,271
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1b5a1b157cf58ca511f1bf65cd9e995139d5b1ed",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
