@@ -82,7 +82,9 @@ struct FileViewer: View {
             ZStack {
                 if let url {
                     // Markdown as a document (MarkdownView); QuickLook shows it as raw text. Past the limit, QuickLook.
-                    if MarkdownDocument.handles(name: current.name, mime: current.metadata.mime), (current.size ?? 0) <= UInt64(MarkdownDocument.limit) {
+                    // The limit is the opened file's own size: an earlier version's isn't the current one's.
+                    if MarkdownDocument.handles(name: current.name, mime: current.metadata.mime),
+                       let bytes = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, bytes <= MarkdownDocument.limit {
                         MarkdownView(url: url)
                     } else {
                         QuickLookView(url: url).ignoresSafeArea(edges: .horizontal)

@@ -146,7 +146,7 @@ fun SharedScreen(model: DriveViewModel, state: DriveState) {
     // The top folder reads as Files, as everywhere else in the app.
     fun nameOf(item: Opened?) = when { item == null -> "Item outside this workspace"; item.id == state.rootId -> "Files"; else -> item.name }
     fun open(item: Opened) {
-        if (item.isFolder) openedId = item.id else scope.launch { model.downloadOpened(item)?.let { (uri, opened) -> openWith(context, uri, mimeOf(opened), model, opened.name) } }
+        if (item.isFolder) openedId = item.id else scope.launch { model.downloadOpened(item)?.let { (uri, opened) -> openWith(context, uri, mimeOf(opened), model, opened.name, opened.id, opened.node.workspaceId) } }
     }
     Scaffold(contentWindowInsets = WindowInsets(0), containerColor = alpine.ground, topBar = {
         DestinationBar("Shared") {

@@ -106,12 +106,20 @@ object MarkdownDocument {
     /* A paragraph's runs: styled text, with images named in their own runs. */
     private fun inline(parent: Node): MdInline {
         val runs = mutableListOf<MdRun>()
+        // The run being written: neighbours in the same style join, so a sentence stays one run. A builder, not a
+        // string copied whole for each piece: a long paragraph of short lines would be quadratic.
+        var current: MdRun.Text? = null
+        val text = StringBuilder()
+        fun flush() {
+            current?.let { if (text.isNotEmpty()) runs += it.copy(text = text.toString()) }
+            current = null
+            text.setLength(0)
+        }
         fun walk(node: Node, style: MdRun.Text) {
-            fun add(text: String, extra: MdRun.Text = style) {
-                val last = runs.lastOrNull()
-                // Neighbours in the same style join, so a sentence stays one run.
-                if (last is MdRun.Text && last.copy(text = "") == extra.copy(text = "")) runs[runs.lastIndex] = last.copy(text = last.text + text)
-                else runs += extra.copy(text = text)
+            fun add(piece: String, extra: MdRun.Text = style) {
+                if (current != extra) flush()
+                current = extra
+                text.append(piece)
             }
             when (node) {
                 is Text -> add(node.literal)
@@ -120,7 +128,7 @@ object MarkdownDocument {
                 is HardLineBreak -> add("\n")
                 // Dropped, as on the web.
                 is HtmlInline, is TaskListItemMarker -> Unit
-                is Image -> runs += MdRun.Image(alt = plain(node), source = node.destination)
+                is Image -> { flush(); runs += MdRun.Image(alt = plain(node), source = node.destination) }
                 is Link -> children(node).forEach { walk(it, style.copy(link = safeLink(node.destination) ?: style.link)) }
                 is Emphasis -> children(node).forEach { walk(it, style.copy(italic = true)) }
                 is StrongEmphasis -> children(node).forEach { walk(it, style.copy(bold = true)) }
@@ -129,6 +137,7 @@ object MarkdownDocument {
             }
         }
         children(parent).forEach { walk(it, MdRun.Text("")) }
+        flush()
         return MdInline(runs)
     }
 

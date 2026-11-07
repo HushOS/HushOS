@@ -69,8 +69,11 @@ import com.hushos.app.data.MdRun
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-/* A Markdown file opened in the app: its name, the decrypted copy, and its type for Open with. */
-data class Reading(val name: String, val uri: Uri, val mime: String?)
+/*
+ * A Markdown file opened in the app: its name, the decrypted copy, its type for Open with, and the item and workspace
+ * it came from, so a family's clear-out (FamiliesModel.clear) closes it with the rest of what the family showed.
+ */
+data class Reading(val name: String, val uri: Uri, val mime: String?, val node: String? = null, val workspace: String? = null)
 
 /*
  * A Markdown file, drawn as a document rather than handed to whichever app claims text: the

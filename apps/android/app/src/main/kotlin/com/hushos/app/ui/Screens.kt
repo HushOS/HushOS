@@ -118,12 +118,12 @@ import com.hushos.app.data.SharedByMe
 import kotlinx.coroutines.launch
 
 /* Opens a decrypted file with whatever app handles its type. */
-fun openWith(context: android.content.Context, uri: android.net.Uri, mime: String?, model: DriveViewModel? = null, name: String? = null) {
+fun openWith(context: android.content.Context, uri: android.net.Uri, mime: String?, model: DriveViewModel? = null, name: String? = null, node: String? = null, workspace: String? = null) {
     val type = name?.let { mimeFor(it, mime) } ?: mime
     // Markdown opens in HushOS's own viewer, as on the web and iPhone: Android has no viewer of its own, and a
     // text editor shows the raw marks. Past the web's limit it goes to another app as before.
     if (model != null && name != null && com.hushos.app.data.MarkdownDocument.handles(name, type) && sizeOf(context, uri)?.let { it <= com.hushos.app.data.MarkdownDocument.LIMIT } == true) {
-        model.read(name, uri, type)
+        model.read(name, uri, type, node, workspace)
         return
     }
     openElsewhere(context, uri, type, model, name)

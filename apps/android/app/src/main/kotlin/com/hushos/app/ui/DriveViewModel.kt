@@ -1671,7 +1671,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     }
 
     /* A Markdown file, opened in HushOS's own viewer instead of whichever app claims text (openWith). */
-    fun read(name: String, uri: Uri, mime: String?) = _state.update { it.copy(reading = Reading(name, uri, mime)) }
+    fun read(name: String, uri: Uri, mime: String?, node: String?, workspace: String?) = _state.update { it.copy(reading = Reading(name, uri, mime, node, workspace)) }
     fun closeReading() = _state.update { it.copy(reading = null) }
 
     /* One notice on screen at a time, until-read ones never lost to the next (NoticeQueue). */

@@ -183,7 +183,7 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
         if (preview.isNotEmpty()) {
             val file = model.find(preview)
             if (file == null || file.isFolder) model.notify("This isn’t available any more.")
-            else model.downloadOpened(file)?.let { (uri, opened) -> openWith(context, uri, mimeOf(opened), model, opened.name) }
+            else model.downloadOpened(file)?.let { (uri, opened) -> openWith(context, uri, mimeOf(opened), model, opened.name, opened.id, opened.node.workspaceId) }
         }
     }
 
@@ -450,7 +450,7 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
                         }
                         fun open(item: Opened) {
                             if (item.isFolder) { query = ""; stack.add(item) }
-                            else scope.launch { model.downloadOpened(item)?.let { (uri, opened) -> openWith(context, uri, mimeOf(opened), model, opened.name) } }
+                            else scope.launch { model.downloadOpened(item)?.let { (uri, opened) -> openWith(context, uri, mimeOf(opened), model, opened.name, opened.id, opened.node.workspaceId) } }
                         }
                         // While this selection's batch runs, taps that would change it are ignored.
                         fun toggle(item: Opened) { if (!trashing) picked = if (item.id in picked) picked - item.id else picked + item.id }

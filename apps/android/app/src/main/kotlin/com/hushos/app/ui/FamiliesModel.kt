@@ -1178,12 +1178,17 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
     private fun clear(groupId: String, roots: List<String>, s: FamilySession, details: Boolean, problem: FamilyProblem) {
         val ids = folders.cleared(groupId, model.state.value.folders, roots)
         val items = folders.wipeIds(groupId, model.state.value.folders, s.owner.familyNodes)
+        val workspaces = folders.workspacesOf(groupId)
         model.updateState { st ->
-            st.copy(folders = st.folders.filterKeys { it.lowercase() !in ids }, thumbnails = st.thumbnails.filterKeys { thumbnailItem(it) !in items && thumbnailItem(it) !in ids }, failedFolders = st.failedFolders - ids)
+            st.copy(
+                folders = st.folders.filterKeys { it.lowercase() !in ids }, thumbnails = st.thumbnails.filterKeys { thumbnailItem(it) !in items && thumbnailItem(it) !in ids }, failedFolders = st.failedFolders - ids,
+                // A Markdown file of the family's open in the viewer closes with the rest; its copy is deleted below.
+                reading = st.reading?.takeUnless { r -> r.workspace in workspaces || r.node?.lowercase()?.let { it in items || it in ids } == true },
+            )
         }
         for (id in ids) problems[id] = problem
         // The sync's forget deleted the copies of the folders its records know; these are the ones this session saw.
-        s.owner.forgetFamilyCopies(folders.workspacesOf(groupId))
+        s.owner.forgetFamilyCopies(workspaces)
         verdicts.moved(groupId)
         shown.remove(groupId)
         if (details) this.details.remove(groupId)
