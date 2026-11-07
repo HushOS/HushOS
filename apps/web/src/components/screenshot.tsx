@@ -95,11 +95,11 @@ export function Shot({
 
 /* The phone captures (from the apps themselves, by scripts/site-phone-shots.sh) and their 2x sizes. */
 const phones = {
-    // `corners`: 8% of the width, across and (as a share of the height) down. `scale`: drawn at
-    // the same width, the iPhone's UI came out about 8% larger than Android's (402 points across
-    // to the Pixel's 412, and iOS's 17 pt rows to Android's 16 sp), so it is drawn that much
-    // smaller to match: (402 / 412) × (16 / 17).
-    ios: { width: 804, height: 1748, label: 'iPhone', corners: 'rounded-[8%/3.7%]', scale: 0.92 },
+    // `corners`: 8% of the width, across and (as a share of the height) down. `scale`: the iPhone is
+    // an 18 Pro Max (440 x 956 points), the size of the Pixel beside it (448 x 997 dp), so the two
+    // read alike; its screen is a shade squatter, so it is drawn 2.5% larger to stand as tall:
+    // (997 / 448) / (956 / 440). Its text comes out within a few percent of Android's.
+    ios: { width: 880, height: 1912, label: 'iPhone', corners: 'rounded-[8%/3.7%]', scale: 1.025 },
     android: { width: 896, height: 1995, label: 'Android', corners: 'rounded-[8%/3.6%]', scale: 1 },
 } as const;
 
