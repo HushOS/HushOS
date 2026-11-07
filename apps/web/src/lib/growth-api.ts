@@ -11,4 +11,11 @@ export const growthApi: GrowthApi = {
     updateAffiliate: (id, patch) => unwrap(api().affiliates({ id }).patch(patch)),
     deleteAffiliate: (id) => unwrap(api().affiliates({ id }).delete({})),
     markAffiliatePaid: (id) => unwrap(api().affiliates({ id }).paid.post({})),
+    affiliateHandle: (value, except, signal) =>
+        unwrap(
+            api().affiliates.handle.get({
+                query: { value, ...(except ? { except } : {}) },
+                fetch: { signal },
+            }),
+        ),
 };
