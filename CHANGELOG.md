@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.2.0](https://github.com/HushOS/HushOS/compare/v1.1.2...v1.2.0) (2026-11-07)
+
+
+### Features
+
+* **apps:** create an account in the phone apps ([#201](https://github.com/HushOS/HushOS/issues/201)) ([de47572](https://github.com/HushOS/HushOS/commit/de4757205093ae8fb402d85cc36f33fb22e10815))
+* **apps:** preview Markdown files in the phone apps ([#327](https://github.com/HushOS/HushOS/issues/327)) ([b3dfed5](https://github.com/HushOS/HushOS/commit/b3dfed51327a75aeda1405e273915648f233781e))
+* **web:** link HushOS on X from the footer ([#328](https://github.com/HushOS/HushOS/issues/328)) ([240e4f9](https://github.com/HushOS/HushOS/commit/240e4f90b389690b1ef3fe5d9880f2c0ca492187))
+* **web:** link the App Store and announce the phone apps ([#322](https://github.com/HushOS/HushOS/issues/322)) ([f14d743](https://github.com/HushOS/HushOS/commit/f14d7430b8d3d0e3d58671f1fc21fbbb6f61a27d))
+* **web:** share links for the phone apps with our own card ([#323](https://github.com/HushOS/HushOS/issues/323)) ([de67e0c](https://github.com/HushOS/HushOS/commit/de67e0c7e884c857fd88f0debba5d648898b981f))
+
+
+### Bug fixes
+
+* **android:** keep ML Kit's component constructors so Scan document opens ([#329](https://github.com/HushOS/HushOS/issues/329)) ([56b4335](https://github.com/HushOS/HushOS/commit/56b4335c2340b687dde1e6e1616a39ade804cc67))
+* **apps:** keep the Advanced row to one line ([#325](https://github.com/HushOS/HushOS/issues/325)) ([e310a09](https://github.com/HushOS/HushOS/commit/e310a094cb5f7fd0e1a7710a3913ba5939136629))
+* **ios:** put Trash's Delete All where Files and Photos put it ([#324](https://github.com/HushOS/HushOS/issues/324)) ([03e8b49](https://github.com/HushOS/HushOS/commit/03e8b498a4b93ca148ebd3a79f61992910ca4923))
+* **web:** never hand a preview to the browser as a page ([#320](https://github.com/HushOS/HushOS/issues/320)) ([6235aaf](https://github.com/HushOS/HushOS/commit/6235aaf8ca6adabccc69a0e2f2e411ec55cc71eb))
+* **web:** redirect /ios and /android from the server, and size the phones alike ([#326](https://github.com/HushOS/HushOS/issues/326)) ([2568166](https://github.com/HushOS/HushOS/commit/25681669560d8fb72a304b88c6e7e1ccf7dd746a))
+* **web:** show the iPhone as a Pro Max so it stands as tall as the Android phone ([#330](https://github.com/HushOS/HushOS/issues/330)) ([2975d1a](https://github.com/HushOS/HushOS/commit/2975d1a07d3810181296a23b0dd8e767a3ed4891))
+
 ## [1.1.2](https://github.com/HushOS/HushOS/compare/v1.1.1...v1.1.2) (2026-11-06)
 
 
