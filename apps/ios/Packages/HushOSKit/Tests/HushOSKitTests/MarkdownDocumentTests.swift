@@ -65,6 +65,9 @@ struct MarkdownDocumentTests {
         #expect(MarkdownDocument.parse(source) == [.code(language: nil, text: source)])
         let emphasis = String(repeating: "*a ", count: 20_000) + "deep" + String(repeating: " a*", count: 20_000)
         #expect(MarkdownDocument.parse(emphasis) == [.code(language: nil, text: emphasis)])
+        // The check parses as swift-markdown does: an autolink (which it doesn't make) mustn't hide the emphasis inside.
+        let linked = "https://example.com/" + String(repeating: "*a/", count: 5000) + "deep" + String(repeating: "/a*", count: 5000)
+        #expect(MarkdownDocument.parse(linked) == [.code(language: nil, text: linked)])
 
         // Within the limit it is drawn, and past the drawing budget the words come as plain text.
         var level = MarkdownDocument.parse(String(repeating: "> ", count: 40) + "hello")

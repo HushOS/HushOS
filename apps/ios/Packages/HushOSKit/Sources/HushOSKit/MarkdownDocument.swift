@@ -40,12 +40,17 @@ public enum MarkdownDocument {
         return blocks(of: Document(parsing: text).children, depth: 0)
     }
 
-    /* The deepest a node sits in the file's tree, as cmark-gfm parses it with the extensions swift-markdown uses. */
+    /*
+     * The deepest a node sits in the file's tree, parsed exactly as swift-markdown 0.9.0's `Document(parsing:)` parses it
+     * (CommonMarkConverter.parseString: these options, these three extensions and no others). Any difference lets the
+     * two trees differ: with autolink here, a link that swallows `*` measured 3 deep while swift-markdown built 5,002.
+     * Check this again whenever swift-markdown moves (Package.swift pins it exactly).
+     */
     static func depth(of text: String) -> Int {
         cmark_gfm_core_extensions_ensure_registered()
-        guard let parser = cmark_parser_new(CMARK_OPT_DEFAULT) else { return .max }
+        guard let parser = cmark_parser_new(CMARK_OPT_TABLE_SPANS | CMARK_OPT_SMART | CMARK_OPT_SOURCEPOS) else { return .max }
         defer { cmark_parser_free(parser) }
-        for name in ["table", "strikethrough", "tasklist", "autolink"] {
+        for name in ["table", "strikethrough", "tasklist"] {
             if let extensionPointer = cmark_find_syntax_extension(name) { cmark_parser_attach_syntax_extension(parser, extensionPointer) }
         }
         var utf8 = Array(text.utf8)
