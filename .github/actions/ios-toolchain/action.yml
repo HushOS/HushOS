@@ -1,0 +1,30 @@
+name: iOS release toolchain
+description: >-
+    What apps/ios/scripts/release-ipa.sh and archive.sh need on a macOS runner: Bun, the Xcode
+    project.yml names (options.xcodeVersion, by its major version), Rust's iOS targets for the core
+    (apps/ios/scripts/build-core.sh) and XcodeGen. The runner's stable Rust is used as it comes.
+    Run after actions/checkout.
+
+runs:
+    using: composite
+    steps:
+        - uses: oven-sh/setup-bun@v2
+          with:
+              bun-version: 1.4.4
+        # The newest installed Xcode of the major version the project is made for: the SDK it
+        # builds against and the toolchain App Store Connect checks uploads against.
+        - name: Xcode
+          shell: bash
+          run: |
+              major=$(sed -n "s/^[[:space:]]*xcodeVersion: '\{0,1\}\([0-9]*\).*/\1/p" apps/ios/project.yml)
+              [[ -n "$major" ]] || { echo "::error::No xcodeVersion in apps/ios/project.yml"; exit 1; }
+              xcode=$(ls -d /Applications/Xcode_"$major"*.app 2> /dev/null | sort -V | tail -1)
+              [[ -n "$xcode" ]] || { echo "::error::This runner has no Xcode $major: $(ls -d /Applications/Xcode_*.app | xargs -n1 basename | tr '\n' ' ')"; exit 1; }
+              sudo xcode-select -s "$xcode/Contents/Developer"
+              xcodebuild -version
+        - name: Rust iOS targets and XcodeGen
+          shell: bash
+          run: |
+              rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+              command -v xcodegen > /dev/null || brew install --quiet xcodegen
+              xcodegen --version

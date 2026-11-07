@@ -1,0 +1,21 @@
+# Temporary: proves the macOS runner builds the IPA (UPLOAD=0). Removed before merge.
+name: iOS release test
+on:
+    push:
+        branches: [ci/ios-release]
+permissions:
+    contents: read
+jobs:
+    ipa:
+        runs-on: macos-26
+        timeout-minutes: 90
+        steps:
+            - uses: actions/checkout@v7
+              with:
+                  fetch-depth: 0
+                  persist-credentials: false
+            - uses: ./.github/actions/ios-toolchain
+            - name: Build and check the v1.2.0 IPA, uploading nothing
+              env:
+                  UPLOAD: '0'
+              run: apps/ios/scripts/release-ipa.sh v1.2.0
