@@ -135,14 +135,15 @@ export function StoreLinks({
     if (!playStoreUrl && !appStoreUrl) return null;
     return (
         <div className={cn('flex flex-wrap items-start gap-2', className)}>
-            {playStoreUrl && (
-                <a href={playStoreUrl} target="_blank" rel="noreferrer" className={LINK}>
-                    <Frame art="play" alt="Get it on Google Play" />
-                </a>
-            )}
+            {/* The App Store first, as the iPhone comes first everywhere on the site. */}
             {appStoreUrl && (
                 <a href={appStoreUrl} target="_blank" rel="noreferrer" className={LINK}>
                     <Frame art="appStore" alt="Download on the App Store" />
+                </a>
+            )}
+            {playStoreUrl && (
+                <a href={playStoreUrl} target="_blank" rel="noreferrer" className={LINK}>
+                    <Frame art="play" alt="Get it on Google Play" />
                 </a>
             )}
         </div>

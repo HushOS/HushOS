@@ -22,9 +22,9 @@ const commands = [
     'docker compose up -d --build',
 ];
 
-/* Which apps the listings name, in the badges' order: "The Android and iPhone apps are on Google Play and the App Store". */
+/* Which apps the listings name, in the badges' order: "The iPhone and Android apps are on the App Store and Google Play". */
 function appsWhere(play: string | null, apple: string | null) {
-    if (play && apple) return 'The Android and iPhone apps are on Google Play and the App Store';
+    if (play && apple) return 'The iPhone and Android apps are on the App Store and Google Play';
     return apple ? 'The iPhone app is on the App Store' : 'The Android app is on Google Play';
 }
 
