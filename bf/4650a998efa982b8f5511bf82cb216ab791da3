@@ -1,0 +1,29 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_e71072dcadefb5 25
+apps/android/app/src/main/kotlin/com/hushos/app/data/MarkdownDocument.kt
+  s_566b8e0c4467a4::t_ffe53b23392584 90-100,107,110,127,132-147,158-161,167-170,298-299,331,376-377
+apps/android/app/src/test/kotlin/com/hushos/app/data/MarkdownDocumentTest.kt
+  s_566b8e0c4467a4::t_21de419fa2ac73 123-127
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_137026f3296197 30
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/MarkdownDocument.swift
+  s_566b8e0c4467a4::t_e5fb9e5dbf6d01 39,110-127,139,144-159,171-178,342,386,407-408
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/MarkdownDocumentTests.swift
+  s_566b8e0c4467a4::t_80dce12e63c3c1 153-162
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bf4650a998efa982b8f5511bf82cb216ab791da3",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
