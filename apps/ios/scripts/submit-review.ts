@@ -156,6 +156,8 @@ if (others.length)
     throw new Error(
         `The draft review submission holds ${others.length} other item(s); remove them in App Store Connect or submit it there.`,
     );
+// A new version has no What's New to keep, so it must be given one: refused here, before any change.
+if (!target && !whatsNew) throw new Error(`Version ${version} is new: set WHATS_NEW.`);
 target ??= await write(`make version ${version}`, 'POST', '/v1/appStoreVersions', {
     data: {
         type: 'appStoreVersions',
@@ -218,12 +220,27 @@ if (submission && target) {
                 },
             },
         });
-    await write(
-        `submit ${version} (${build}) for App Review`,
-        'PATCH',
-        `/v1/reviewSubmissions/${submission.id}`,
-        {
-            data: { type: 'reviewSubmissions', id: submission.id, attributes: { submitted: true } },
-        },
-    );
+    // A version just added becomes ready for review a moment later, and until then the submit is
+    // refused with 409: asked again, for up to two minutes.
+    for (let attempt = 1; ; attempt++) {
+        try {
+            await write(
+                `submit ${version} (${build}) for App Review`,
+                'PATCH',
+                `/v1/reviewSubmissions/${submission.id}`,
+                {
+                    data: {
+                        type: 'reviewSubmissions',
+                        id: submission.id,
+                        attributes: { submitted: true },
+                    },
+                },
+            );
+            break;
+        } catch (error) {
+            if (attempt >= 12 || !String(error).includes(': 409 ')) throw error;
+            console.log("The submission isn't ready yet; asking again in 10 seconds.");
+            await Bun.sleep(10_000);
+        }
+    }
 } else console.log(`would submit ${version} (${build}) for App Review`);
