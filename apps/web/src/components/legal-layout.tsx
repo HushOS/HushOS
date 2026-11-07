@@ -15,7 +15,7 @@ import { formatDate } from '@/lib/content';
 export type Heading = { id: string; title: string };
 
 export function ReadingPage({
-    eyebrow,
+    meta,
     title,
     summary,
     headings = [],
@@ -23,7 +23,8 @@ export function ReadingPage({
     banner,
     children,
 }: {
-    eyebrow: ReactNode;
+    /* A date line above the title (updated, or a post's date and author); never a kicker that repeats it. */
+    meta?: ReactNode;
     title: string;
     summary?: string;
     /* The document's sections; two or more get a contents list, as on the security page. */
@@ -42,7 +43,7 @@ export function ReadingPage({
             <main className="flex-1">
                 <div className={cn(container, 'pt-12 pb-10 sm:pt-16 lg:pt-20 lg:pb-14')}>
                     <div className="flex max-w-[780px] flex-col gap-5">
-                        <p className="text-[15px] text-muted-foreground">{eyebrow}</p>
+                        {meta && <p className="text-[15px] text-muted-foreground">{meta}</p>}
                         <H1>{title}</H1>
                         {summary && <Lede>{summary}</Lede>}
                     </div>
@@ -115,7 +116,7 @@ export function LegalLayout({
     return (
         <OperatorContext.Provider value={operator}>
             <ReadingPage
-                eyebrow={`Last updated ${formatDate(updated)}`}
+                meta={`Last updated ${formatDate(updated)}`}
                 title={String(frontmatter.title)}
                 summary={String(frontmatter.summary)}
                 headings={headings}

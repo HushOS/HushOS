@@ -59,7 +59,7 @@ export const mdxComponents: MDXComponents = {
     ),
     th: (props) => (
         <th
-            className="eyebrow border-b border-rule py-2 pr-4 text-left text-muted-foreground"
+            className="label border-b border-rule py-2 pr-4 text-left text-muted-foreground"
             {...props}
         />
     ),
@@ -122,7 +122,7 @@ export function Ledger({ rows }: { rows: [string, string][] }) {
 export function Note({ title, children }: { title?: string; children: ReactNode }) {
     return (
         <aside className="mt-4 rounded-md border border-rule bg-muted px-4 py-3">
-            {title && <p className="eyebrow pt-1 text-foreground">{title}</p>}
+            {title && <p className="text-[15px] font-semibold">{title}</p>}
             <div className="mt-2 text-sm leading-relaxed text-muted-foreground [&>p]:mt-0">
                 {children}
             </div>

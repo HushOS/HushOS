@@ -92,7 +92,6 @@ function SupportPage() {
     const email = support?.email ?? null;
     return (
         <ReadingPage
-            eyebrow="Support"
             title="Get help with HushOS"
             summary="Write to us, get back into your account, or find out who runs this service."
             headings={headings}

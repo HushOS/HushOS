@@ -397,7 +397,7 @@ export function RenameTagDialog({
                         </DialogDescription>
                     </DialogHeader>
                     <div className="flex flex-col gap-2">
-                        <label htmlFor={id} className="eyebrow text-muted-foreground">
+                        <label htmlFor={id} className="text-[13px] font-semibold">
                             Name
                         </label>
                         <div className="flex items-center gap-3">

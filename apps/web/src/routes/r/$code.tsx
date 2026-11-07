@@ -60,7 +60,6 @@ function InvitePage() {
                     <div className="flex flex-col gap-6">
                         {landing ? (
                             <>
-                                <p className="eyebrow text-muted-foreground">An invitation</p>
                                 <h1 className="max-w-3xl text-5xl font-bold tracking-tight text-balance sm:text-6xl">
                                     {landing.inviter} invited you to HushOS.
                                 </h1>
@@ -109,7 +108,6 @@ function InvitePage() {
                             </>
                         ) : (
                             <>
-                                <p className="eyebrow text-muted-foreground">An invitation</p>
                                 <h1 className="max-w-3xl text-4xl font-bold tracking-tight text-balance sm:text-5xl">
                                     This invite link is not valid any more.
                                 </h1>
@@ -151,8 +149,7 @@ function InvitePage() {
                             </div>
                         )}
                         <div className="px-6 py-6">
-                            <p className="eyebrow text-muted-foreground">What you get</p>
-                            <dl className="mt-2 text-sm">
+                            <dl className="text-sm">
                                 {[
                                     ['Your files', 'Locked on your device'],
                                     ['Your password', 'Never sent to us'],
