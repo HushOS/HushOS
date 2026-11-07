@@ -1,0 +1,75 @@
+DESIGN.md
+  s_566b8e0c4467a4::t_20b3a1d85b808b 318-319
+apps/web/src/components/app-sidebar.tsx
+  s_566b8e0c4467a4::t_dfdf728ac4a4ff 14,182,251,504,506
+apps/web/src/components/brand.tsx
+  s_566b8e0c4467a4::t_3c4f733525d26e 103
+apps/web/src/components/drive/details-panel.tsx
+  s_566b8e0c4467a4::t_f8429b43146925 163,392,655-656
+apps/web/src/components/drive/tag-stamp.tsx
+  s_566b8e0c4467a4::t_7da98c442bce95 105
+apps/web/src/components/drive/tag-view.tsx
+  s_566b8e0c4467a4::t_e5454ab6755552 400
+apps/web/src/components/drive/unverified-mark.tsx
+  s_566b8e0c4467a4::t_93cb61040bdfda 269
+apps/web/src/components/form-rows.tsx
+  s_566b8e0c4467a4::t_62e1f3645b24d7 46
+apps/web/src/components/legal-layout.tsx
+  s_566b8e0c4467a4::t_5008017a4e0417 18,26-27,46,119
+apps/web/src/components/mdx.tsx
+  s_566b8e0c4467a4::t_d5ef031f1e3c29 62,125
+apps/web/src/components/operator.tsx
+  s_566b8e0c4467a4::t_94278ef3927f26 45
+apps/web/src/components/recovery-phrase.tsx
+  s_566b8e0c4467a4::t_2fc237ded49c6f 366
+apps/web/src/components/ui/badge.tsx
+  s_566b8e0c4467a4::t_511b8d16211f5e 6
+apps/web/src/components/ui/command.tsx
+  s_566b8e0c4467a4::t_f8100194b55cc3 129
+apps/web/src/components/ui/context-menu.tsx
+  s_566b8e0c4467a4::t_ece801ac7c91c2 76
+apps/web/src/components/ui/dropdown-menu.tsx
+  s_566b8e0c4467a4::t_9b11216a5f9a16 70
+apps/web/src/components/ui/label.tsx
+  s_566b8e0c4467a4::t_9fbea9ff756b18 11
+apps/web/src/components/ui/progress.tsx
+  s_566b8e0c4467a4::t_d565f3815a889e 49
+apps/web/src/components/ui/select.tsx
+  s_566b8e0c4467a4::t_63235a687bcd38 95
+apps/web/src/components/ui/sidebar.tsx
+  s_566b8e0c4467a4::t_9c03266d5f8bb8 394
+apps/web/src/routes/__root.tsx
+  s_566b8e0c4467a4::t_1756f553721a22 174
+apps/web/src/routes/_authenticated/app/_drive/admin.reports.$reportId.tsx
+  s_566b8e0c4467a4::t_8483b99872915f 789,802
+apps/web/src/routes/_authenticated/app/admin/reports/index.tsx
+  s_566b8e0c4467a4::t_ea4a929e49cb5c 47
+apps/web/src/routes/blog/$slug.tsx
+  s_566b8e0c4467a4::t_2eef7ef5382da6 92
+apps/web/src/routes/go/$slug.tsx
+  s_566b8e0c4467a4::t_d81c02df55edef 161,219,258,290
+apps/web/src/routes/r/$code.tsx
+  s_566b8e0c4467a4::t_3c74f1862642b0 152
+apps/web/src/routes/roadmap/route.tsx
+  s_566b8e0c4467a4::t_275e9b7e85c43f 235
+apps/web/src/styles.css
+  s_566b8e0c4467a4::t_45f28ce95f7493 470-475
+packages/tokens/src/index.ts
+  s_566b8e0c4467a4::t_007253a17dab76 292-293
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c39c6bfa8c2381b19dd89033e0f68f99d93529fb",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
