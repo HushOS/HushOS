@@ -93,6 +93,7 @@ final class AppModel {
     }
 
     func start() async {
+        defer { if let url = deferredSignup { deferredSignup = nil; open(url) } }
         do {
             let check = try await Auth.checkSession()
             if case let .signedIn(user, device) = check, let session = SharedKeychain.session {
@@ -114,6 +115,8 @@ final class AppModel {
                 user = SessionUser(id: session.userId, name: "", email: "", credentialVersion: 0, role: "member")
                 vault = Vault.fromKeychain()
                 owner = AccountOwner(session)
+                // Offline too, words this phone made and nobody checked come before the drive.
+                wordsWaiting = WordsWaiting.isWaiting(for: session.userId)
                 state = .signedIn
                 return
             }
@@ -123,6 +126,9 @@ final class AppModel {
         if let ended = SharedKeychain.session { lastOwner = AccountOwner(ended) }
         state = .signedOut
     }
+
+    /* A sign-up link that arrived while `start` was still checking the stored session. */
+    private var deferredSignup: URL?
 
     /* The stored session `start` last found ended, so `checkAccount` only follows a new one. */
     private var declinedToken: String?
@@ -364,6 +370,9 @@ final class AppModel {
         // The emailed sign-up link carries sign-up on here, wherever it began. Signed in, it isn't used (the web asks to
         // sign out first), so the link stays good for later.
         case let .success(.register(token)):
+            // A link that started the app comes before start() has restored any session: decided once it has, so a
+            // signed-in phone never spends the one-use link.
+            if state == .checking { deferredSignup = url; return }
             if state == .signedIn {
                 let who = user.map { $0.email.isEmpty ? "" : " as \($0.email)" } ?? ""
                 NoticeCenter.shared.show("You’re signed in\(who). To create another account, sign out, then open the link again.")

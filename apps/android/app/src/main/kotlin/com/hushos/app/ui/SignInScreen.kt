@@ -138,9 +138,12 @@ fun SignInScreen(model: DriveViewModel, state: DriveState) {
         // Sign-up runs here in the app, against the server above (SignupScreen); nothing on the way names plans or prices.
         // From a file picker it runs in the app's own screen, where its emailed link opens.
         val signUpInApp = LocalSignUpInApp.current
-        Text("New to HushOS?", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, modifier = Modifier.padding(top = AlpineSpace.S4))
-        if (signUpInApp == null) TextButton(onClick = model::startSignup) { Text("Create an account") }
-        else TextButton(onClick = signUpInApp) { Text("Create an account in the HushOS app") }
+        // One line, the question and its answer, as iOS has it; not the question left on a line of its own.
+        Row(Modifier.padding(top = AlpineSpace.S2), verticalAlignment = Alignment.CenterVertically) {
+            Text("New to HushOS?", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
+            if (signUpInApp == null) TextButton(onClick = model::startSignup) { Text("Create an account") }
+            else TextButton(onClick = signUpInApp) { Text("Create an account in the HushOS app") }
+        }
         // The server's privacy policy and terms, before anyone signs in.
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = { openWebPage(context, privacyUrl(state.origin)) }) { Text("Privacy policy") }

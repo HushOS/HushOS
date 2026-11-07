@@ -17,6 +17,8 @@ struct SignupView: View {
     @State private var pending = false
     @State private var error = ""
     @State private var resent = false
+    /* Account creation under way: Cancel can't leave it running underneath (it would sign in after the screen is gone). */
+    @State private var creating = false
 
     enum Step: Equatable { case email, inbox(String), checking, linkFailed(String), details(SignupEnrollment), created }
 
@@ -28,13 +30,13 @@ struct SignupView: View {
                 case let .inbox(address): inbox(address)
                 case .checking: checking
                 case let .linkFailed(why): linkFailed(why)
-                case let .details(enrollment): SignupDetails(enrollment: enrollment) { step = .created }
+                case let .details(enrollment): SignupDetails(enrollment: enrollment, pending: $creating) { step = .created }
                 case .created: created
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                if step != .checking {
+                if step != .checking && !creating {
                     ToolbarItem(placement: .cancellationAction) { Button("Cancel") { model.signupDone() } }
                 }
             }
@@ -58,6 +60,20 @@ struct SignupView: View {
     }
 
     private var emailProblem: String? { SignupRules.email(email) }
+
+    /* "I agree to the Terms of Service and Privacy Policy", the two names links, as the web's consent field has it. */
+    private var agreement: AttributedString {
+        func link(_ words: String, _ url: URL?) -> AttributedString {
+            var piece = AttributedString(words)
+            piece.link = url
+            piece.inlinePresentationIntent = .stronglyEmphasized
+            piece.underlineStyle = .single
+            piece.foregroundColor = Alpine.primary
+            return piece
+        }
+        return AttributedString("I agree to the ") + link("Terms of Service", Auth.termsURL(origin: model.origin))
+            + AttributedString(" and ") + link("Privacy Policy", Auth.privacyURL(origin: model.origin))
+    }
     private var agreeProblem: String? { SignupRules.agreed(agreed) }
 
     private var emailStep: some View {
@@ -79,26 +95,24 @@ struct SignupView: View {
                 if tried, let emailProblem { Text(emailProblem).foregroundStyle(Alpine.danger) }
             }
             Section {
-                Button { agreed.toggle() } label: {
-                    HStack(alignment: .top, spacing: Alpine.Space.s3) {
-                        // Round, as iOS's own agree rows are (Reminders, Apple's terms).
-                        Image(systemName: agreed ? "checkmark.circle.fill" : "circle").font(.title3).foregroundStyle(agreed ? Alpine.primary : Alpine.field)
-                        Text("I agree to the Terms of Service and Privacy Policy").foregroundStyle(Alpine.ink).frame(maxWidth: .infinity, alignment: .leading)
+                // The web's consent row: the mark agrees, the two names open the server's own pages (?app=1, which link to
+                // nothing that sells). One row, not the sentence and then the same two names again.
+                HStack(alignment: .top, spacing: Alpine.Space.s3) {
+                    Button { agreed.toggle() } label: {
+                        // Round, as iOS's own agree rows are (Reminders, Apple's terms); 44pt to tap, laid out at its own size.
+                        Image(systemName: agreed ? "checkmark.circle.fill" : "circle").font(.title3)
+                            .foregroundStyle(agreed ? Alpine.primary : Alpine.field)
+                            .padding(10).contentShape(Rectangle()).padding(-10)
                     }
-                    .frame(minHeight: Theme.control).contentShape(Rectangle())
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("I agree to the Terms of Service and Privacy Policy")
+                    .accessibilityAddTraits(agreed ? .isSelected : [])
+                    Text(agreement).foregroundStyle(Alpine.ink).frame(maxWidth: .infinity, alignment: .leading)
+                        .environment(\.openURL, OpenURLAction { url in PolicyLinks.present(url); return .handled })
                 }
-                .buttonStyle(.plain)
-                .accessibilityAddTraits(agreed ? .isSelected : [])
+                .padding(.vertical, Alpine.Space.s1)
+                .frame(minHeight: Theme.control)
                 .alpineRow()
-                .listRowSeparator(.hidden)
-                // The server's own terms and policy, the app=1 pages that link to nothing that sells.
-                HStack(spacing: Alpine.Space.s4) {
-                    Button("Terms of Service") { if let url = Auth.termsURL(origin: model.origin) { PolicyLinks.present(url) } }
-                    Button("Privacy Policy") { if let url = Auth.privacyURL(origin: model.origin) { PolicyLinks.present(url) } }
-                }
-                .font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.primary).buttonStyle(.plain)
-                .frame(minHeight: Theme.control).alpineRow()
-                .listRowSeparator(.hidden)
             } footer: {
                 if tried, let agreeProblem { Text(agreeProblem).foregroundStyle(Alpine.danger) }
             }
@@ -207,12 +221,12 @@ struct SignupView: View {
 private struct SignupDetails: View {
     @Environment(AppModel.self) private var model
     let enrollment: SignupEnrollment
+    @Binding var pending: Bool
     let createdWithoutSignIn: () -> Void
     @State private var name = ""
     @State private var password = ""
     @State private var confirm = ""
     @State private var tried = false
-    @State private var pending = false
     @State private var error = ""
 
     private var nameProblem: String? { SignupRules.name(name) }
@@ -227,13 +241,19 @@ private struct SignupDetails: View {
             }
             if !error.isEmpty { Section { Text(error).foregroundStyle(Alpine.danger).alpineRow() } }
             Section {
-                TextField("Name", text: $name).textContentType(.name).textInputAutocapitalization(.words).disabled(pending).alpineRow()
+                // Labelled like the password rows below it (PasswordField's 90pt label), not a bare placeholder.
+                HStack {
+                    Text("Name").foregroundStyle(Alpine.ink).frame(width: 90, alignment: .leading)
+                    TextField("Name", text: $name, prompt: Text("Required")).textContentType(.name).textInputAutocapitalization(.words)
+                }
+                .disabled(pending).alpineRow()
             } footer: {
                 if tried, let nameProblem { Text(nameProblem).foregroundStyle(Alpine.danger) } else { Text("Shown to people you share with.") }
             }
             Section {
                 PasswordField(label: "Password", text: $password, content: .newPassword).disabled(pending).alpineRow()
-                PasswordField(label: "Confirm password", text: $confirm, content: .newPassword).disabled(pending).alpineRow()
+                // "Repeat", as Change password says it: "Confirm password" wraps in the label's column.
+                PasswordField(label: "Repeat", text: $confirm, content: .newPassword).disabled(pending).alpineRow()
             } footer: {
                 if tried, let passwordProblem { Text(passwordProblem).foregroundStyle(Alpine.danger) }
                 else if tried || (!confirm.isEmpty && confirm.utf16.count >= password.utf16.count), let confirmProblem { Text(confirmProblem).foregroundStyle(Alpine.danger) }

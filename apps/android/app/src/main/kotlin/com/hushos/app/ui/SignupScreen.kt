@@ -17,7 +17,6 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Mail
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
@@ -39,6 +38,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.dp
 import com.hushos.app.data.SignupRules
 import com.hushos.tokens.AlpineSpace
@@ -102,20 +102,24 @@ private fun SignupEmail(model: DriveViewModel, state: DriveState, flow: DriveVie
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Done, autoCorrectEnabled = false),
         modifier = Modifier.fillMaxWidth(),
     )
-    // The web's consent, with the server's own terms and privacy policy (the app=1 pages, which link to nothing that sells).
+    // The web's consent row: the row agrees, the two names open the server's own pages (the app=1 pages, which link to
+    // nothing that sells). One row, not the sentence and then the same two names again.
+    val linkStyle = androidx.compose.ui.text.TextLinkStyles(androidx.compose.ui.text.SpanStyle(color = alpine.primary, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline))
+    val agreement = androidx.compose.ui.text.buildAnnotatedString {
+        append("I agree to the ")
+        withLink(androidx.compose.ui.text.LinkAnnotation.Url(termsUrl(state.origin), linkStyle) { openWebPage(context, termsUrl(state.origin)) }) { append("Terms of Service") }
+        append(" and ")
+        withLink(androidx.compose.ui.text.LinkAnnotation.Url(privacyUrl(state.origin), linkStyle) { openWebPage(context, privacyUrl(state.origin)) }) { append("Privacy Policy") }
+    }
     Column {
         Row(
             Modifier.fillMaxWidth().heightIn(min = 48.dp).toggleable(value = agreed, enabled = !flow.pending, role = Role.Checkbox) { agreed = it },
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Checkbox(checked = agreed, onCheckedChange = null, enabled = !flow.pending)
-            Text("I agree to the Terms of Service and Privacy Policy", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = AlpineSpace.S3))
+            Text(agreement, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = AlpineSpace.S3))
         }
         if (tried && agreeError != null) Text(agreeError, style = MaterialTheme.typography.bodySmall, color = alpine.danger, modifier = Modifier.padding(start = 48.dp))
-        Row {
-            TextButton(onClick = { openWebPage(context, termsUrl(state.origin)) }) { Text("Terms of Service") }
-            TextButton(onClick = { openWebPage(context, privacyUrl(state.origin)) }) { Text("Privacy Policy") }
-        }
     }
     Button(
         onClick = { tried = true; if (emailError == null && agreeError == null) model.sendSignupEmail(email) },
@@ -126,7 +130,6 @@ private fun SignupEmail(model: DriveViewModel, state: DriveState, flow: DriveVie
 
 @Composable
 private fun SignupSent(model: DriveViewModel, flow: DriveViewModel.SignupFlow) {
-    Icon(Icons.Outlined.Mail, null, tint = Alpine.colors.primary, modifier = Modifier.padding(top = AlpineSpace.S4).size(32.dp))
     FlowHeading("Check your inbox", "We sent a link to ${flow.email}. Open it to carry on. It works once, for 30 minutes.")
     if (flow.resent) FlowNote("New link sent to ${flow.email}.", danger = false)
     flow.error?.let { FlowNote(it) }

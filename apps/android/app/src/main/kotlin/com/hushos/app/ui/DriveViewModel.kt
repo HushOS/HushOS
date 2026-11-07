@@ -1189,15 +1189,17 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
      * The emailed link. Signed in, it isn't used (the web asks to sign out first): the link stays good for after.
      * Otherwise the address is confirmed and the name and password come next, or the link says why it can't be used.
      */
-    fun openSignupLink(verify: String) {
-        if (state.value.gate == Gate.SIGNED_IN) {
+    fun openSignupLink(verify: String) = viewModelScope.launch {
+        // A link that started the app comes before the stored session is restored: decided once it has been, so a
+        // signed-in phone never spends the one-use link.
+        if (state.first { it.gate != Gate.CHECKING }.gate == Gate.SIGNED_IN) {
             val who = state.value.user?.email?.ifEmpty { null }
             notifyUntilRead("You’re signed in${who?.let { " as $it" }.orEmpty()}. To create another account, sign out, then open the link again.")
-            return
+            return@launch
         }
         recovery = null
         signup = SignupFlow(SignupStep.CHECKING, email = signup?.email.orEmpty())
-        viewModelScope.launch {
+        run {
             val result = withContext(Dispatchers.IO) { runCatching { Auth.verifySignupLink(state.value.origin, verify) } }
             signup = result.fold(
                 { SignupFlow(SignupStep.DETAILS, email = it.email, enrollment = it) },

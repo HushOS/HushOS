@@ -1087,7 +1087,7 @@ struct SavedCheck: View {
     let title: String
     let next: () -> Void
 
-    var body: some View {
+    @ViewBuilder var body: some View {
         Section {
             Button { saved.toggle() } label: {
                 HStack(alignment: .top, spacing: Alpine.Space.s3) {
@@ -1101,6 +1101,9 @@ struct SavedCheck: View {
             .accessibilityAddTraits(saved ? .isSelected : [])
             .alpineRow()
             .listRowSeparator(.hidden)
+        }
+        // Its own section: in the tick's, the clear button row took the card's rounded foot and left the tick's cut off.
+        Section {
             Button(action: next) { Text(title).frame(maxWidth: .infinity) }
                 .buttonStyle(PrimaryCapsuleStyle()).disabled(!saved)
                 .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
