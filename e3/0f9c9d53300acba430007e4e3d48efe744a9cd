@@ -1,0 +1,31 @@
+apps/web/src/components/app-links-page.tsx
+  s_566b8e0c4467a4::t_af593f66292143 1-79
+apps/web/src/components/store-links.tsx
+  s_566b8e0c4467a4::t_749764bc801050 124-134
+apps/web/src/lib/og.server.tsx
+  s_566b8e0c4467a4::t_2429c8421d4814 120-144
+apps/web/src/routeTree.gen.ts
+  s_566b8e0c4467a4::t_8588ded468cca3 16-17,19,105-114,120-124,486-488,559-561,627-629,704-706,777-779,844-846,920-922,983-996,1004-1010,1655-1657
+apps/web/src/routes/android/route.tsx
+  s_566b8e0c4467a4::t_6ed13b392dce35 1-34
+apps/web/src/routes/apps/route.tsx
+  s_566b8e0c4467a4::t_84a476733ea54d 1-34
+apps/web/src/routes/ios/route.tsx
+  s_566b8e0c4467a4::t_f25373613f5cbf 1-34
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e30f9c9d53300acba430007e4e3d48efe744a9cd",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
