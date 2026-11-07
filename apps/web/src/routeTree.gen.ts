@@ -13,7 +13,10 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as AboutRouteRouteImport } from './routes/about/route'
 import { Route as AccountDeletedRouteRouteImport } from './routes/account-deleted/route'
+import { Route as AndroidRouteRouteImport } from './routes/android/route'
+import { Route as AppsRouteRouteImport } from './routes/apps/route'
 import { Route as DesignDotmdRouteImport } from './routes/design[.]md'
+import { Route as IosRouteRouteImport } from './routes/ios/route'
 import { Route as JoinRouteRouteImport } from './routes/join/route'
 import { Route as LlmsDottxtRouteImport } from './routes/llms[.]txt'
 import { Route as LoginRouteRouteImport } from './routes/login/route'
@@ -99,9 +102,24 @@ const AccountDeletedRouteRoute = AccountDeletedRouteRouteImport.update({
   path: '/account-deleted',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AndroidRouteRoute = AndroidRouteRouteImport.update({
+  id: '/android',
+  path: '/android',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AppsRouteRoute = AppsRouteRouteImport.update({
+  id: '/apps',
+  path: '/apps',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const DesignDotmdRoute = DesignDotmdRouteImport.update({
   id: '/design.md',
   path: '/design.md',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const IosRouteRoute = IosRouteRouteImport.update({
+  id: '/ios',
+  path: '/ios',
   getParentRoute: () => rootRouteImport,
 } as any)
 const JoinRouteRoute = JoinRouteRouteImport.update({
@@ -465,6 +483,9 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/about': typeof AboutRouteRoute
   '/account-deleted': typeof AccountDeletedRouteRoute
+  '/android': typeof AndroidRouteRoute
+  '/apps': typeof AppsRouteRoute
+  '/ios': typeof IosRouteRoute
   '/join': typeof JoinRouteRoute
   '/login': typeof LoginRouteRoute
   '/pricing': typeof PricingRouteRoute
@@ -535,6 +556,9 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/about': typeof AboutRouteRoute
   '/account-deleted': typeof AccountDeletedRouteRoute
+  '/android': typeof AndroidRouteRoute
+  '/apps': typeof AppsRouteRoute
+  '/ios': typeof IosRouteRoute
   '/join': typeof JoinRouteRoute
   '/login': typeof LoginRouteRoute
   '/pricing': typeof PricingRouteRoute
@@ -600,6 +624,9 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/about': typeof AboutRouteRoute
   '/account-deleted': typeof AccountDeletedRouteRoute
+  '/android': typeof AndroidRouteRoute
+  '/apps': typeof AppsRouteRoute
+  '/ios': typeof IosRouteRoute
   '/join': typeof JoinRouteRoute
   '/login': typeof LoginRouteRoute
   '/pricing': typeof PricingRouteRoute
@@ -674,6 +701,9 @@ export interface FileRouteTypes {
     | '/'
     | '/about'
     | '/account-deleted'
+    | '/android'
+    | '/apps'
+    | '/ios'
     | '/join'
     | '/login'
     | '/pricing'
@@ -744,6 +774,9 @@ export interface FileRouteTypes {
     | '/'
     | '/about'
     | '/account-deleted'
+    | '/android'
+    | '/apps'
+    | '/ios'
     | '/join'
     | '/login'
     | '/pricing'
@@ -808,6 +841,9 @@ export interface FileRouteTypes {
     | '/'
     | '/about'
     | '/account-deleted'
+    | '/android'
+    | '/apps'
+    | '/ios'
     | '/join'
     | '/login'
     | '/pricing'
@@ -881,6 +917,9 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AboutRouteRoute: typeof AboutRouteRoute
   AccountDeletedRouteRoute: typeof AccountDeletedRouteRoute
+  AndroidRouteRoute: typeof AndroidRouteRoute
+  AppsRouteRoute: typeof AppsRouteRoute
+  IosRouteRoute: typeof IosRouteRoute
   JoinRouteRoute: typeof JoinRouteRoute
   LoginRouteRoute: typeof LoginRouteRoute
   PricingRouteRoute: typeof PricingRouteRoute
@@ -941,11 +980,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AccountDeletedRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/android': {
+      id: '/android'
+      path: '/android'
+      fullPath: '/android'
+      preLoaderRoute: typeof AndroidRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/apps': {
+      id: '/apps'
+      path: '/apps'
+      fullPath: '/apps'
+      preLoaderRoute: typeof AppsRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/design.md': {
       id: '/design.md'
       path: '/design.md'
       fullPath: '/design.md'
       preLoaderRoute: typeof DesignDotmdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/ios': {
+      id: '/ios'
+      path: '/ios'
+      fullPath: '/ios'
+      preLoaderRoute: typeof IosRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/join': {
@@ -1592,6 +1652,9 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AboutRouteRoute: AboutRouteRoute,
   AccountDeletedRouteRoute: AccountDeletedRouteRoute,
+  AndroidRouteRoute: AndroidRouteRoute,
+  AppsRouteRoute: AppsRouteRoute,
+  IosRouteRoute: IosRouteRoute,
   JoinRouteRoute: JoinRouteRoute,
   LoginRouteRoute: LoginRouteRoute,
   PricingRouteRoute: PricingRouteRoute,
