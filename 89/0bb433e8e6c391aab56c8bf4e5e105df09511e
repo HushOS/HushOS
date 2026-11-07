@@ -1,0 +1,23 @@
+.github/actions/ios-toolchain/action.yml
+  s_566b8e0c4467a4::t_32059a4bfbc9fd 6-13,24,34-38,40,43,45
+.github/workflows/ios-release.yml
+  s_566b8e0c4467a4::t_f1fb76403dd18d 110,112,159,162
+docs/release/apple.md
+  s_566b8e0c4467a4::t_fb075941c9e795 141-145,147-149
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "890bb433e8e6c391aab56c8bf4e5e105df09511e",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
