@@ -61,17 +61,19 @@ public enum MarkdownDocument {
         defer { cmark_node_free(root) }
         guard let iterator = cmark_iter_new(root) else { return .max }
         defer { cmark_iter_free(iterator) }
-        var depth = 0, deepest = 0
+        // Depth by ancestry, not by counting enters and exits: cmark exits empty containers (a bare `#`) it never
+        // reported as having children, so a counter drifts. Entered nodes still open form a stack; each new node pops
+        // back to its own parent first.
+        var open: [UnsafeMutablePointer<cmark_node>] = []
+        var deepest = 0
         while true {
             let event = cmark_iter_next(iterator)
             if event == CMARK_EVENT_DONE { break }
-            // A node with children is entered and exited; a leaf is only entered.
-            if event == CMARK_EVENT_ENTER, cmark_node_first_child(cmark_iter_get_node(iterator)) != nil {
-                depth += 1
-                deepest = max(deepest, depth)
-            } else if event == CMARK_EVENT_EXIT {
-                depth -= 1
-            }
+            guard event == CMARK_EVENT_ENTER, let node = cmark_iter_get_node(iterator) else { continue }
+            let parent = cmark_node_parent(node)
+            while let top = open.last, top != parent { open.removeLast() }
+            open.append(node)
+            deepest = max(deepest, open.count)
         }
         return deepest
     }

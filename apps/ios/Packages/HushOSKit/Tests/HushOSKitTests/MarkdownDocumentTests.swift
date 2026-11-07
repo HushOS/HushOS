@@ -68,6 +68,9 @@ struct MarkdownDocumentTests {
         // The check parses as swift-markdown does: an autolink (which it doesn't make) mustn't hide the emphasis inside.
         let linked = "https://example.com/" + String(repeating: "*a/", count: 5000) + "deep" + String(repeating: "/a*", count: 5000)
         #expect(MarkdownDocument.parse(linked) == [.code(language: nil, text: linked)])
+        // Empty headings before the nesting mustn't throw the measure off.
+        let headed = String(repeating: "#\n\n", count: 5000) + String(repeating: "> ", count: 5000) + "x"
+        #expect(MarkdownDocument.parse(headed) == [.code(language: nil, text: headed)])
 
         // Within the limit it is drawn, and past the drawing budget the words come as plain text.
         var level = MarkdownDocument.parse(String(repeating: "> ", count: 40) + "hello")

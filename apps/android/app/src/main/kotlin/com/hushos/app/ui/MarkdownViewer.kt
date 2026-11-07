@@ -170,29 +170,60 @@ private fun MarkdownBlockView(block: MdBlock, muted: Boolean = false) {
     }
 }
 
-/* Columns as wide as their widest cell, a rule under the head: a table's own grid, not a list of rows. */
+/*
+ * A table's own grid: each column as wide as its widest cell, each row as tall as its tallest, a rule under the head.
+ * Measured as one grid (not column by column), so a cell that wraps keeps its row level with the cells beside it.
+ */
 @Composable
 private fun MarkdownTable(table: MdBlock.Table, ink: androidx.compose.ui.graphics.Color) {
     val alpine = Alpine.colors
     val type = MaterialTheme.typography
     val columns = maxOf(table.head.size, table.rows.maxOfOrNull { it.size } ?: 0)
+    if (columns == 0) return
     fun align(column: Int) = when (table.alignments.getOrNull(column)) {
         MdAlign.CENTER -> TextAlign.Center
         MdAlign.END -> TextAlign.End
         else -> TextAlign.Start
     }
-    // No gap between columns: each cell pads itself, so the rule under the head runs on unbroken.
-    Row(Modifier.padding(horizontal = 4.dp, vertical = 12.dp).width(IntrinsicSize.Max)) {
-        for (column in 0 until columns) {
-            val cell = Modifier.fillMaxWidth().padding(horizontal = 8.dp)
-            Column(Modifier.width(IntrinsicSize.Max), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                val head = table.head.getOrNull(column)
-                MarkdownText(head ?: MdInline(emptyList()), type.bodyMedium.copy(fontWeight = FontWeight.SemiBold, textAlign = align(column)), ink, cell)
-                Spacer(Modifier.fillMaxWidth().height(1.dp).background(alpine.rule))
-                table.rows.forEach { row ->
-                    MarkdownText(row.getOrNull(column) ?: MdInline(emptyList()), type.bodyMedium.copy(textAlign = align(column)), ink, cell)
+    val rows = listOf(table.head) + table.rows
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val gap = with(density) { 8.dp.roundToPx() }
+    val rule = with(density) { 1.dp.roundToPx() }
+    androidx.compose.ui.layout.Layout(
+        content = {
+            rows.forEachIndexed { r, row ->
+                for (column in 0 until columns) {
+                    val style = if (r == 0) type.bodyMedium.copy(fontWeight = FontWeight.SemiBold) else type.bodyMedium
+                    MarkdownText(row.getOrNull(column) ?: MdInline(emptyList()), style.copy(textAlign = align(column)), ink, Modifier.padding(horizontal = 8.dp))
                 }
             }
+            // The rule under the head, as wide as the grid.
+            Box(Modifier.background(alpine.rule))
+        },
+        modifier = Modifier.padding(horizontal = 4.dp, vertical = 12.dp),
+    ) { measurables, _ ->
+        val cells = measurables.dropLast(1)
+        val widths = IntArray(columns) { c -> rows.indices.maxOf { r -> cells[r * columns + c].maxIntrinsicWidth(androidx.compose.ui.unit.Constraints.Infinity) } }
+        val placed = cells.mapIndexed { i, cell -> cell.measure(androidx.compose.ui.unit.Constraints.fixedWidth(widths[i % columns])) }
+        val heights = IntArray(rows.size) { r -> (0 until columns).maxOf { c -> placed[r * columns + c].height } }
+        val width = widths.sum()
+        val divider = measurables.last().measure(androidx.compose.ui.unit.Constraints.fixed(width, rule))
+        // The head, the rule half a gap below it, then the rows a gap apart; one pass decides where, both to size and to place.
+        fun rowTops(): IntArray {
+            var y = 0
+            return IntArray(rows.size) { r ->
+                if (r == 1) y += gap + rule else if (r > 1) y += gap
+                y.also { y += heights[r] }
+            }
+        }
+        val tops = rowTops()
+        val height = tops.last() + heights.last()
+        layout(width, height) {
+            rows.indices.forEach { r ->
+                var x = 0
+                for (c in 0 until columns) { placed[r * columns + c].placeRelative(x, tops[r]); x += widths[c] }
+            }
+            if (rows.size > 1) divider.placeRelative(0, heights[0] + gap / 2)
         }
     }
 }
