@@ -139,6 +139,23 @@ if (busy)
 let target = versions.find((v) => text(v, 'versionString') === version);
 if (target && ['READY_FOR_SALE', 'READY_FOR_DISTRIBUTION'].includes(text(target, 'appStoreState')))
     throw new Error(`Version ${version} is already released.`);
+
+// A draft submission of this app's (one left from App Store Connect, say) is reused. It may already
+// hold other things (a product page, an event, another version), and submitting it would send those
+// too, so it may hold this version and nothing else. Checked before anything is changed.
+const [draft] = await list(
+    `/v1/reviewSubmissions?filter[app]=${app.id}&filter[platform]=IOS&filter[state]=READY_FOR_REVIEW&limit=1`,
+);
+const draftItems = draft
+    ? await list(`/v1/reviewSubmissions/${draft.id}/items?include=appStoreVersion`)
+    : [];
+const others = draftItems.filter(
+    (item) => !target || item.relationships?.appStoreVersion?.data?.id !== target.id,
+);
+if (others.length)
+    throw new Error(
+        `The draft review submission holds ${others.length} other item(s); remove them in App Store Connect or submit it there.`,
+    );
 target ??= await write(`make version ${version}`, 'POST', '/v1/appStoreVersions', {
     data: {
         type: 'appStoreVersions',
@@ -180,10 +197,7 @@ if (target)
     );
 else console.log(`would attach build ${build}`);
 
-// A draft submission of this app's (one left from App Store Connect, say), or a new one; the version in it; then sent.
-const [draft] = await list(
-    `/v1/reviewSubmissions?filter[app]=${app.id}&filter[platform]=IOS&filter[state]=READY_FOR_REVIEW&limit=1`,
-);
+// The draft, or a new submission; the version in it; then sent.
 const submission =
     draft ??
     (await write('open a review submission', 'POST', '/v1/reviewSubmissions', {
@@ -194,20 +208,7 @@ const submission =
         },
     }));
 if (submission && target) {
-    // A draft may already hold other things (a product page, an event, another version): submitting
-    // it would send those too, so it has to hold this version and nothing else.
-    const items = await list(
-        `/v1/reviewSubmissions/${submission.id}/items?include=appStoreVersion`,
-    );
-    const versionId = target.id;
-    const others = items.filter(
-        (item) => item.relationships?.appStoreVersion?.data?.id !== versionId,
-    );
-    if (others.length)
-        throw new Error(
-            `The draft review submission ${submission.id} holds ${others.length} other item(s); remove them in App Store Connect or submit it there.`,
-        );
-    if (!items.length)
+    if (!draftItems.length)
         await write(`add version ${version} to it`, 'POST', '/v1/reviewSubmissionItems', {
             data: {
                 type: 'reviewSubmissionItems',
