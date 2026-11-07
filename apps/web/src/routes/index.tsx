@@ -22,6 +22,12 @@ const commands = [
     'docker compose up -d --build',
 ];
 
+/* Which apps the listings name, in the badges' order: "The Android and iPhone apps are on Google Play and the App Store". */
+function appsWhere(play: string | null, apple: string | null) {
+    if (play && apple) return 'The Android and iPhone apps are on Google Play and the App Store';
+    return apple ? 'The iPhone app is on the App Store' : 'The Android app is on Google Play';
+}
+
 /* Copies the commands as one block; the icon answers for a moment. */
 function CopyCommands() {
     const [copied, setCopied] = useState(false);
@@ -184,7 +190,7 @@ export const Route = createFileRoute('/')({
 });
 
 function LandingPage() {
-    const { billingEnabled, playStoreUrl } = Route.useRouteContext();
+    const { billingEnabled, playStoreUrl, appStoreUrl } = Route.useRouteContext();
     const latest = posts[0];
     return (
         <SitePage identity="home">
@@ -309,7 +315,7 @@ function LandingPage() {
                  * words and the links in one column, and the Android app's own Home beside them, cut
                  * off where the band below begins, so the phone stands on it.
                  */}
-                {playStoreUrl && (
+                {(playStoreUrl || appStoreUrl) && (
                     <section
                         aria-labelledby="apps-title"
                         className={cn(
@@ -320,9 +326,9 @@ function LandingPage() {
                         <div className="flex flex-col gap-4 lg:self-center lg:pb-16">
                             <H2 id="apps-title">On your phone, too.</H2>
                             <p className="max-w-[29.2em] text-[17px] leading-[1.6] text-muted-foreground">
-                                The Android app is on Google Play, with the same folders, sharing
-                                and links, and files kept on the phone to open without a connection.
-                                The iPhone app is coming to the App Store.
+                                {appsWhere(playStoreUrl, appStoreUrl)}, with the same folders,
+                                sharing and links, and files kept on the phone to open without a
+                                connection.
                             </p>
                             <StoreLinks className="pt-2" />
                         </div>

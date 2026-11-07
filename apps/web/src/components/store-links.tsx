@@ -6,9 +6,9 @@ import playBadge from '@/badges/GetItOnGooglePlay_Badge_Web_color_English.svg?ur
 
 /*
  * Where to get the phone apps: the stores' own badges, each the official file byte for byte and
- * served from here for the CSP. Shown only where the server names the Android app's listing
- * (PLAY_STORE_URL, set on hushos.com), since the listings are HushOS's own; elsewhere it draws
- * nothing.
+ * served from here for the CSP. Each is shown only where the server names that app's listing
+ * (PLAY_STORE_URL, APP_STORE_URL, both set on hushos.com), since the listings are HushOS's own;
+ * with neither, it draws nothing.
  *
  * Both sit in one frame, FRAME: the same width, height and corners, black like the badges, with a
  * 1px border drawn once in CSS, on whole pixels, so it stays crisp at any density. Each artwork's
@@ -22,10 +22,8 @@ import playBadge from '@/badges/GetItOnGooglePlay_Badge_Web_color_English.svg?ur
  * or rescaled inside; at least 28px tall; clear space round it; no smaller than another store's
  * badge beside it; linking to the listing.
  *
- * App Store (Apple's black "Download on the App Store", en-US): at least 40px tall. The iPhone app
- * isn't on the App Store yet, so it links nowhere and wears a Coming soon sticker at the frame's
- * corner, as the owner chose, knowing Apple's guidelines keep the badge for apps that are
- * available or open for pre-order. When the app is listed it becomes a link like Google's.
+ * App Store (Apple's black "Download on the App Store", en-US): at least 40px tall, linking to
+ * the listing.
  */
 
 /* The frame both badges share: Google's badge at 40px tall is 135px wide, the wider of the two. */
@@ -120,36 +118,24 @@ function Frame({
     );
 }
 
+const LINK =
+    'block shrink-0 rounded-[8px] outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-solid focus-visible:outline-ring';
+
 export function StoreLinks({ className }: { className?: string }) {
-    const { playStoreUrl } = useRouteContext({ from: '__root__' });
-    if (!playStoreUrl) return null;
+    const { playStoreUrl, appStoreUrl } = useRouteContext({ from: '__root__' });
+    if (!playStoreUrl && !appStoreUrl) return null;
     return (
         <div className={cn('flex flex-wrap items-start gap-2', className)}>
-            <a
-                href={playStoreUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="block shrink-0 rounded-[8px] outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-solid focus-visible:outline-ring"
-            >
-                <Frame art="play" alt="Get it on Google Play" />
-            </a>
-            {/*
-             * Not a link yet, so not focusable: the badge, read with its sticker as one name. The
-             * sticker is the small badge style, tilted clockwise (falling to the right), stuck on the
-             * frame's top right corner: its centre a little inside the corner and above the frame's
-             * top, so most of it lies over the frame's border and the spare black at the right,
-             * clear of Apple's words and logo ("Download on the" ends about 106px in, below 7px
-             * down). It adds no height to the row; the right margin keeps room for what overhangs.
-             */}
-            <span className="relative mr-8 shrink-0">
-                <Frame art="appStore" alt="Download on the App Store, coming soon" />
-                <span
-                    aria-hidden="true"
-                    className="absolute -top-[2px] left-[126px] inline-flex h-5 origin-center -translate-x-1/2 -translate-y-1/2 rotate-8 items-center rounded-full bg-tint px-1.5 text-[11px] leading-none font-semibold whitespace-nowrap text-on-tint hc:border hc:border-edge"
-                >
-                    Coming soon
-                </span>
-            </span>
+            {playStoreUrl && (
+                <a href={playStoreUrl} target="_blank" rel="noreferrer" className={LINK}>
+                    <Frame art="play" alt="Get it on Google Play" />
+                </a>
+            )}
+            {appStoreUrl && (
+                <a href={appStoreUrl} target="_blank" rel="noreferrer" className={LINK}>
+                    <Frame art="appStore" alt="Download on the App Store" />
+                </a>
+            )}
         </div>
     );
 }

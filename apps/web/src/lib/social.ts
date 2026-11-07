@@ -58,6 +58,16 @@ export const playStoreQueryOptions = queryOptions({
 export function playStoreHint(queryClient: QueryClient) {
     return queryClient.ensureQueryData(playStoreQueryOptions);
 }
+/* The iPhone app's App Store listing (APP_STORE_URL), the same way. */
+const getAppStoreServerFn = createServerFn().handler(() => appEnv.APP_STORE_URL ?? null);
+export const appStoreQueryOptions = queryOptions({
+    queryKey: ['stores', 'apple'],
+    queryFn: () => getAppStoreServerFn(),
+    staleTime: Number.POSITIVE_INFINITY,
+});
+export function appStoreHint(queryClient: QueryClient) {
+    return queryClient.ensureQueryData(appStoreQueryOptions);
+}
 export function operatorHint(queryClient: QueryClient) {
     return queryClient.ensureQueryData(operatorNameQueryOptions);
 }

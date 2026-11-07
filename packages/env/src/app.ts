@@ -83,10 +83,9 @@ export const appEnv = createEnv({
                 'Use colon-separated SHA-256 fingerprints, comma separated.',
             )
             .optional(),
-        // The Android app's listing on Google Play, for the website's and the family page's
-        // store links (the Google Play badge, and the App Store badge marked Coming soon).
-        // hushos.com sets it to its own listing; unset, no store links are shown, as on most
-        // self-hosted servers.
+        // The phone apps' store listings, for the website's and the family page's store links:
+        // each set listing gets its store's badge. hushos.com sets them to its own listings;
+        // unset, no store links are shown, as on most self-hosted servers.
         PLAY_STORE_URL: z
             .string()
             .trim()
@@ -94,6 +93,15 @@ export const appEnv = createEnv({
             .refine(
                 (value) => value.startsWith('https://play.google.com/store/apps/details?id='),
                 'Use the listing’s address, https://play.google.com/store/apps/details?id=….',
+            )
+            .optional(),
+        APP_STORE_URL: z
+            .string()
+            .trim()
+            .url()
+            .refine(
+                (value) => value.startsWith('https://apps.apple.com/'),
+                'Use the listing’s address, https://apps.apple.com/app/…/id….',
             )
             .optional(),
         // Referrals, paid in storage and never money: what each side of an invite earns
