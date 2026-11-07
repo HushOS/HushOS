@@ -1,6 +1,6 @@
 # HushOS
 
-HushOS is a planned encrypted productivity suite organized around user accounts and workspaces. The current scaffold does not yet implement encryption or key management.
+HushOS is an end-to-end encrypted productivity suite organized around user accounts and workspaces. Drive, with families, is built: files are encrypted on the device, and the server holds ciphertext.
 
 ## Language
 

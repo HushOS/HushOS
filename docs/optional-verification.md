@@ -1,6 +1,8 @@
 # Optional verification: contacts and families
 
-Design only. Nothing here is built. It changes `docs/identity-pq-design.md` 2 (contacts compare words before anything is trusted) and `docs/groups-design.md` 2.4, 2.7, 2.8, 3.2 and 3.6 (the join flow and the version 1 anchor), and the claims built on them. Where this document and those disagree, this one is the plan and they are updated in the PRs of section 8.
+**Status:** PR 1 (first-seen pins) and PR 2 (first use and the family check) are built; the rest of section 8 is not. Where code and this plan disagree, read `crates/hushos-core/AGENTS.md` for what shipped.
+
+It changes `docs/identity-pq-design.md` 2 (contacts compare words before anything is trusted) and `docs/groups-design.md` 2.4, 2.7, 2.8, 3.2 and 3.6 (the join flow and the version 1 anchor), and the claims built on them. Where this document and those disagree, this one is the plan and they are updated in the PRs of section 8.
 
 ## Why
 

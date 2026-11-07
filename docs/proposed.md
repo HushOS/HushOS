@@ -1,10 +1,12 @@
 # Proposed features
 
-What the Alpine design board (`apps/design`, removed after the redesign; it is in git history up to the commit that removed it) drew as proposed but nobody has built. Each entry says what it is, what the board decided about its shape and words, and what is open. None of it may be claimed anywhere in the product until it ships.
+What the Alpine design board (`apps/design`, removed after the redesign; it is in git history up to the commit that removed it) drew as proposed. Some has shipped since; the status below says which. Each entry says what it is, what the board decided about its shape and words, and what is open. None of it may be claimed anywhere in the product until it ships.
 
-## Being built on the redesign branch
+## Status (November 2026)
 
-- Account recovery in the phone apps (9), transfer notifications (3) and Save to HushOS from other apps (4).
+- **Shipped:** create an account in the phone apps (1), transfer notifications on Android (3), save to HushOS from other apps (4), family plans (6), and account recovery in the phone apps (9). Their entries below are kept for the record.
+- **Open:** invite by email (2), team plan (7), desktop apps (8).
+- **Not planned:** home screen widgets (5), a Photos tab.
 
 ## Waiting for a decision
 
@@ -56,16 +58,8 @@ Listed under "Coming soon" on the For teams page. There is no plan behind it yet
 
 After the same email step: Scan your kit (the printed QR code), Choose the kit file, or Type the 24 words, in that order. Today the apps hand off to the web.
 
-## Later, not on this branch
-
-- **Create an account in the phone apps (1)** and **invite by email (2).** Later.
-- **Team plan (7).** Comes later on its own branch. Until then the Business tab and the For teams page keep "coming soon" and Talk to us.
-- **Desktop apps (8).** Later.
-
 ## Decided: not planned
 
 - **Home screen widgets (5).** Dropped.
-- **Family plan (6).** Dropped; the "coming soon" line is gone from pricing.
-
 - **Photos tab and photo backup.** Upload photos and Take photo stay on both phones.
 - **Android in-app viewer.** Files open in the default app.
