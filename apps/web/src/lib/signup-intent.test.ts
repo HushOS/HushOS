@@ -54,7 +54,7 @@ describe('the sign-up intent at the HTTP boundary', () => {
     test('is the schema the server’s register route takes', () => {
         expect(source).toMatch(/import \{ intentSchema \} from '@\/lib\/signup-intent';/);
         expect(source).toMatch(
-            /'\/auth\/register\/email',\s*\{ body: t\.Object\(\{ email: emailSchema, intent: t\.Optional\(intentSchema\) \}\) \}/,
+            /'\/auth\/register\/email',\s*\{\s*body: t\.Object\(\{\s*email: emailSchema,\s*intent: t\.Optional\(intentSchema\),/,
         );
         expect(source).not.toMatch(/const intentSchema =/);
     });
