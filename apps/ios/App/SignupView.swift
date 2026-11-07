@@ -19,6 +19,8 @@ struct SignupView: View {
     @State private var resent = false
     /* Account creation under way: Cancel can't leave it running underneath (it would sign in after the screen is gone). */
     @State private var creating = false
+    /* The sign-up link last opened here: the same one again leaves the flow it started alone (openLink). */
+    @State private var handledToken: String?
 
     enum Step: Equatable { case email, inbox(String), checking, linkFailed(String), details(SignupEnrollment), created }
 
@@ -48,6 +50,11 @@ struct SignupView: View {
     /* The emailed link arrived (or opened the app): trade its token for the enrollment. */
     private func openLink() async {
         guard let token = model.signupLink else { return }
+        // The same link again (opened twice, or after it worked): its token is spent, so the flow it started stands.
+        var failed = false
+        if case .linkFailed = step { failed = true }
+        if token == handledToken, !failed { model.signupLink = nil; return }
+        handledToken = token
         step = .checking
         // Cleared only once the check is done: clearing it first changes the task's id and cancels this request.
         defer { if model.signupLink == token { model.signupLink = nil } }
@@ -91,6 +98,8 @@ struct SignupView: View {
                     .keyboardType(.emailAddress).textContentType(.username)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                     .onSubmit(send).alpineRow()
+                    // Fixed while its link is on the way: the inbox, and its Send a new link, name the address sent to.
+                    .disabled(pending)
             } footer: {
                 if tried, let emailProblem { Text(emailProblem).foregroundStyle(Alpine.danger) }
             }
