@@ -22,7 +22,7 @@ Before editing files for a substantial task:
 - Be direct and critical. Name a weakness first and specifically (what, where, what it costs), then the fix. Do not soften assessments, lead with praise, or let impatience or a half-finished feature pass without saying so.
 - Use four spaces for indentation. Oxfmt owns formatting; Oxlint owns linting.
 - Keep the structure simple: web pages and layouts use TanStack directory routes (`app/route.tsx`, `app/index.tsx`), reusable UI in `components/`, and shared helpers in `lib/`. Extract modules when reuse or complexity warrants it.
-- Keep Elysia API handlers together in `apps/web/src/lib/api.server.ts`; `apps/web/src/routes/api/$.ts` mounts them at `/api`. Nitro owns the HTTP server and request logging.
+- Elysia API handlers live in one Elysia instance per feature in `apps/web/src/lib/api/` (`auth`, `billing`, `drive`, `admin`, `groups`, `system`), with shared context, schemas and helpers in `api/shared.server.ts`. `apps/web/src/lib/api.server.ts` composes them into one app, and `apps/web/src/routes/api/$.ts` mounts it at `/api`. Nitro owns the HTTP server and request logging.
 - Use `@/*` within the web app and `@hushos/*` package exports between workspaces.
 - Use shadcn's Base UI components and Fontsource Variable Geist Sans (text) and Geist Mono (codes). Keep Tailwind configuration in the web app.
 - HushOS is an open-source, self-hostable E2EE productivity suite, beginning with Drive. Encryption and key management live in `packages/crypto`, `packages/drive`, `packages/groups` and `crates/hushos-core`; product claims must match what that code does, and hushos.com/security is where they are stated.

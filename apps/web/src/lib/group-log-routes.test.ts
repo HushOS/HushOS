@@ -1,7 +1,14 @@
 import { groupLogAction } from '@hushos/logging';
 import { expect, test } from 'vitest';
+// The API's source: the app in api.server.ts and its feature instances in api/.
+const source = Object.values(
+    import.meta.glob<string>(['./api.server.ts', './api/*.server.ts'], {
+        query: '?raw',
+        import: 'default',
+        eager: true,
+    }),
+).join('\n');
 // The source, not the module: importing the handlers needs a whole server environment.
-import source from './api.server.ts?raw';
 
 /*
  * Group routes carry group, account, area and invitation ids in their paths:

@@ -1,8 +1,15 @@
 import { Elysia, t } from 'elysia';
 import { describe, expect, test } from 'vitest';
 // The source, not the module: importing the handlers needs a whole server environment.
-import source from './api.server.ts?raw';
 import { intentSchema } from './signup-intent';
+// The API's source: the app in api.server.ts and its feature instances in api/.
+const source = Object.values(
+    import.meta.glob<string>(['./api.server.ts', './api/*.server.ts'], {
+        query: '?raw',
+        import: 'default',
+        eager: true,
+    }),
+).join('\n');
 
 /*
  * The intent sign-up sends with its email (`/auth/register/email`), through Elysia as the server
