@@ -520,6 +520,13 @@ public actor Vault {
     }
 
     /* The 24 words again, for someone who holds the account key and wants to check their copy. */
+    /* The phrase with its recovery version, so a check confirms the words it showed, not a kit made since elsewhere. */
+    public func recoveryPhraseAndVersion() async throws -> (phrase: String, version: UInt64) {
+        let (envelope, _) = try await Auth.recoveryKey(as: session)
+        let phrase = try HushOSCore.recoveryPhrase(userId: session.userId, accountKey: try unlockAccount(), envelope: envelope)
+        return (phrase, envelope.recoveryVersion)
+    }
+
     public func recoveryPhrase() async throws -> String {
         let (envelope, _) = try await Auth.recoveryKey(as: session)
         return try HushOSCore.recoveryPhrase(userId: session.userId, accountKey: try unlockAccount(), envelope: envelope)

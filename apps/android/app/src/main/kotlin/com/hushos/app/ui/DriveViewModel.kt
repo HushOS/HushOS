@@ -1222,7 +1222,13 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         val address = email.trim()
         signup = (signup ?: SignupFlow(SignupStep.EMAIL)).copy(pending = true, error = null, email = address)
         viewModelScope.launch {
-            val result = withContext(Dispatchers.IO) { runCatching { Auth.requestSignupEmail(state.value.origin, address) } }
+            val origin = state.value.origin
+            val result = withContext(Dispatchers.IO) {
+                runCatching { Auth.requestSignupEmail(origin, address) }
+                    // Kept as this phone's server once its link is on the way: if the app is stopped while the person
+                    // reads their mail, the link still opens sign-up here, not as another server's. A link never sets it.
+                    .onSuccess { Shared.writeOrigin(context, origin) }
+            }
             // Only the steps that sent it take the answer: a link opened meanwhile has moved on, and mustn't be sent back.
             signup = signup?.let { flow ->
                 if (flow.step != SignupStep.EMAIL && flow.step != SignupStep.SENT) return@let flow

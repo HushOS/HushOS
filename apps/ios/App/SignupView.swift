@@ -146,7 +146,11 @@ struct SignupView: View {
         error = ""
         Task {
             do {
-                try await Auth.requestSignupEmail(origin: model.origin, email: address)
+                let origin = model.origin
+                try await Auth.requestSignupEmail(origin: origin, email: address)
+                // Kept as this phone's server once its link is on the way: if the app is stopped while the person reads
+                // their mail, the link still opens sign-up here, not as another server's. A link never sets it.
+                try? SharedKeychain.write(SharedKeychain.configAccount, SharedKeychain.Config(origin: origin))
                 // Only the steps that sent it take the answer: a link opened meanwhile has moved on, and mustn't be sent back.
                 switch step {
                 case .email: step = .inbox(address)
@@ -314,6 +318,8 @@ private struct SignupDetails: View {
 struct FirstKitView: View {
     @Environment(AppModel.self) private var model
     @State private var phrase: String?
+    /* The recovery version of the words shown: the check confirms these, never a kit replaced since. */
+    @State private var version: UInt64?
     @State private var error = ""
     @State private var saved = false
     @State private var checking = false
@@ -355,13 +361,14 @@ struct FirstKitView: View {
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(isPresented: $checking) {
                 if let phrase {
-                    CheckWordsView(phrase: phrase, recoveryVersion: nil, done: {
+                    CheckWordsView(phrase: phrase, recoveryVersion: version, done: {
                         NoticeCenter.shared.show("Recovery phrase saved")
                         model.wordsChecked()
                     }, sessionEnded: { model.sessionLost() })
                 }
             }
-            .task(id: attempt) { await load() }
+            // Loaded again when the session is replaced (a sign-in from the Files app): the words are that session's.
+            .task(id: "\(attempt) \(model.vault.map { ObjectIdentifier($0).hashValue } ?? 0)") { await load() }
         }
     }
 
@@ -370,7 +377,9 @@ struct FirstKitView: View {
         // Checked already (on the web, or before this phone was stopped): nothing waits.
         if let key = try? await Auth.recoveryKey(), key.confirmed { model.wordsChecked(); return }
         guard let vault = model.vault else { error = "Your recovery phrase didn’t open. Try again."; return }
-        do { phrase = try await vault.recoveryPhrase() } catch {
+        phrase = nil
+        version = nil
+        do { (phrase, version) = try await vault.recoveryPhraseAndVersion() } catch {
             // The session ended under this screen (it stands in for the drive, so the drive's own signed-out alert
             // isn't here): back to sign-in, the words still marked as waiting, so they come first after it. Unless a
             // sign-in has replaced that session since: then Try again uses the new one.
