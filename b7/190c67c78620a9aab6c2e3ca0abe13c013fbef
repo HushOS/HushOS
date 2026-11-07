@@ -1,0 +1,97 @@
+.github/actions/ios-toolchain/action.yml
+  s_566b8e0c4467a4::t_c0358e06c9bfe8 1-51
+.github/workflows/ios-release.yml
+  s_566b8e0c4467a4::t_605e03a9942770 1-232
+AGENTS.md
+  s_566b8e0c4467a4::t_acf875fa169d3c 28
+CONTEXT.md
+  s_566b8e0c4467a4::t_99d4d11ee47cda 3
+CONTRIBUTING.md
+  s_566b8e0c4467a4::t_92bb8ebe38630b 148
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_a40c93ca5db789 21
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_4199358b28d150 26,72
+apps/ios/scripts/archive.sh
+  s_566b8e0c4467a4::t_049abe13d22ee5 14-18,24-28,45,71
+apps/ios/scripts/submit-review.ts
+  s_566b8e0c4467a4::t_13696c36968188 1-252
+apps/web/src/components/ui/autocomplete.tsx
+  s_566b8e0c4467a4::t_0199686f1b95fd 1-99
+apps/web/src/lib/affiliate-form.test.ts
+  s_566b8e0c4467a4::t_8b9d869e5c7ee9 1-113
+apps/web/src/lib/affiliate-form.ts
+  s_566b8e0c4467a4::t_774d4ea31776de 1-131
+apps/web/src/lib/affiliate-routes.test.ts
+  s_566b8e0c4467a4::t_a451da36385c31 1-33
+apps/web/src/lib/api.server.ts
+  s_566b8e0c4467a4::t_9df6d517fa76b2 251-255,1174-1189,1212,1237-1242
+apps/web/src/lib/growth-api.ts
+  s_566b8e0c4467a4::t_d6536355989e04 14-20
+apps/web/src/lib/use-debounced-value.ts
+  s_566b8e0c4467a4::t_2ce4f7445ce871 1-11
+apps/web/src/routes/_authenticated/app/_drive/admin.affiliates.tsx
+  s_566b8e0c4467a4::t_c12abfcb7c6695 20-26,44,46-54,58,366-370,372-373,375-390,393-395,397,401,417,424,450-455,472,487,492-494,500-503,508-513,515-523,528-718,725-730,733-740,742,744-748,762,771-772,774,777,787-788,790,793,797-798,800-801,803,806,810-814,816,819,846-851,856-879,881,883-885
+apps/web/src/routes/_authenticated/app/_drive/referrals.tsx
+  s_566b8e0c4467a4::t_405c1dd1de425a 1,3,211,213,217,219-244,250-291
+docs/families-shared-pool.md
+  s_566b8e0c4467a4::t_4a41d09f1066f7 5,297
+docs/groups-mobile-plan.md
+  s_566b8e0c4467a4::t_e8afe23b4a3c49 3-5
+docs/groups-server.md
+  s_566b8e0c4467a4::t_7736a24210a208 5
+docs/optional-verification.md
+  s_566b8e0c4467a4::t_f5ebdb56cfc7ef 3-5
+docs/proposed.md
+  s_566b8e0c4467a4::t_bb0583c65dc4fe 3,5,7-9,35,37,39,41-63
+docs/release/README.md
+  s_566b8e0c4467a4::t_d41955f56a62ed 3-27,31
+docs/release/apple.md
+  s_566b8e0c4467a4::t_e46ffbd69b86fe 9-11,120-145
+docs/release/checklist.md
+  s_566b8e0c4467a4::t_8df8b4885ab0af 3-4,13-14,25,36-37
+docs/release/google.md
+  s_566b8e0c4467a4::t_6f7c68baacca19 9-11
+docs/release/store-listing.md
+  s_566b8e0c4467a4::t_8cfe1f972e9577 7-16
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_ae723a04dcea02 781-791
+packages/billing/src/api.ts
+  s_566b8e0c4467a4::t_8208369bd0d0bc 231-232,249-250,322-327
+packages/billing/src/growth.ts
+  s_566b8e0c4467a4::t_9453022c137d68 87,98-100,117,219-220,234,242-254,292-295,311,318-343,347-357,367-453,455-456,458,467-483
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_453ec3e3e219fb 196-199,767-769,787-789,1156,1252-1253,2617-3114
+packages/billing/src/server.ts
+  s_566b8e0c4467a4::t_d0c48ac51dfcbf 631-657
+packages/db/drizzle/20261107215320_affiliate_pending_email/migration.sql
+  s_566b8e0c4467a4::t_affa1511d064be 1
+packages/db/drizzle/20261107215320_affiliate_pending_email/snapshot.json
+  s_566b8e0c4467a4::t_6c30f39a2238b9 1-37
+packages/db/src/growth.ts
+  s_566b8e0c4467a4::t_e29455f4b94819 1,296,300-338,359,361,379-380,390-401,418-419,421-426,430-435,437-438,442-483,506-507,524-525,529,536,545-571,585-588,597,599,625-630,687-688
+packages/db/src/readiness.ts
+  s_566b8e0c4467a4::t_9b5615ae1f1db4 14
+packages/db/src/schema/growth.ts
+  s_566b8e0c4467a4::t_a9f30e62c85d0c 45-47
+packages/db/test/helpers.ts
+  s_566b8e0c4467a4::t_71705ea73032c4 11,71-105
+scripts/release-wizard.sh
+  s_566b8e0c4467a4::t_1dba0333e37898 188
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b7190c67c78620a9aab6c2e3ca0abe13c013fbef",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
