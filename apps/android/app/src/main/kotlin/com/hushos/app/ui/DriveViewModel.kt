@@ -966,6 +966,12 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
      * the screens act on: a tab, a folder, a file, or the link browser.
      */
     fun openLink(link: String) {
+        // A link that started the app arrives before the saved server and session are restored: read once they are,
+        // against the server this phone uses, not the default.
+        if (state.value.gate == Gate.CHECKING) {
+            viewModelScope.launch { state.first { it.gate != Gate.CHECKING }; openLink(link) }
+            return
+        }
         // The emailed recovery link picks up recovery, signed in or not; it never waits for a sign-in.
         (com.hushos.app.data.AppLinks.parse(link, state.value.origin) as? com.hushos.app.data.AppLinkResult.Open)?.link?.let { target ->
             if (target is com.hushos.app.data.AppLink.Recover) { openRecoveryLink(target.verify); return }
@@ -1149,6 +1155,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
 
     fun startSignup() { signup = SignupFlow(SignupStep.EMAIL) }
 
+    /* The token of the sign-up link last opened: the same link opened again doesn't spend it twice (openSignupLink). */
+    private var signupVerify: String? = null
+
     /* Sent from a file picker's sign-in screen: sign-up starts once the gate says signed out (not over one under way). */
     fun signUpWhenSignedOut() = viewModelScope.launch {
         val gate = state.first { it.gate != Gate.CHECKING }.gate
@@ -1209,10 +1218,16 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
                 return@launch
             }
         } ?: return@launch
+        // The same link again (opened twice, or after it worked): its token is spent, so the flow it started stands.
+        if (verify == signupVerify && signup != null && signup?.step != SignupStep.LINK_FAILED) return@launch
+        signupVerify = verify
         recovery = null
-        signup = SignupFlow(SignupStep.CHECKING, email = signup?.email.orEmpty())
+        val checking = SignupFlow(SignupStep.CHECKING, email = signup?.email.orEmpty())
+        signup = checking
         run {
             val result = withContext(Dispatchers.IO) { runCatching { Auth.verifySignupLink(origin, verify) } }
+            // Only into the flow that asked: one left, or replaced by a newer link, keeps what it has.
+            if (signup !== checking) return@launch
             signup = result.fold(
                 { SignupFlow(SignupStep.DETAILS, email = it.email, enrollment = it) },
                 { SignupFlow(SignupStep.LINK_FAILED, error = com.hushos.app.data.Problems.say(it, "This link didn’t work.")) },
