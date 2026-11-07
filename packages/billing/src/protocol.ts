@@ -74,7 +74,7 @@ export function lapsedPlan<T extends { status: string; endedAt: string | Date | 
 export const GROUP_CUSTOMER_PREFIX = 'group:';
 
 /*
- * Polar enforces no unit cap (docs/polar-group-billing-spike.md, E7), so
+ * Polar enforces no unit cap (docs/archive/polar-group-billing-spike.md, E7), so
  * HushOS bounds a family at this many members, at checkout and on every
  * raise; a deliberate larger family goes through support. That bound is the
  * only one: one raise may fill a family to it, and is charged at once, but

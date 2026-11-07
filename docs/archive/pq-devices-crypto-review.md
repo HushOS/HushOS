@@ -2,7 +2,7 @@
 
 **Status (15 October):** applied on 2026-10-15 in the revised `docs/identity-pq-design.md`, `docs/devices-design.md`, `docs/envelope-migrations.md`, `docs/groups-design.md` and `docs/groups-threat-model.md`, except for the guardian findings, which the owner scoped out and which are recorded as residuals in envelope-migrations 7 and the threat model's 3.7. Every child conversion now waits 7 days, with no instant path. Not applied: C2's fixes 1 and 2, H5's link revocation, H6's fixes, H7's cancelling rule, sign-up link and mandatory child approval, M9's write frontier, and the young adult's escape-path prompt. H1 takes the first option. M2's "Start over with new keys" and L4's recovery are still to confirm.
 
-Independent review of `docs/identity-pq-design.md`, `docs/devices-design.md` and `docs/envelope-migrations.md`, read against `docs/groups-design.md`, `docs/groups-threat-model.md`, `docs/groups-crypto-review.md`, `docs/integrity-design.md`, `docs/opaque-auth-design.md` and the code at `13b315a`. 15 October 2026.
+Independent review of `docs/identity-pq-design.md`, `docs/devices-design.md` and `docs/envelope-migrations.md`, read against `docs/groups-design.md`, `docs/groups-threat-model.md`, `docs/archive/groups-crypto-review.md`, `docs/integrity-design.md`, `docs/opaque-auth-design.md` and the code at `13b315a`. 15 October 2026.
 
 ## Verdict
 

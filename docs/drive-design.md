@@ -1,34 +1,134 @@
 # Drive: tree, content encryption, and transfers
 
-This document fixed the shape of HushOS Drive before code was written, the way `opaque-auth-design.md` fixed authentication, and stays the reference for what remains. It builds on what exists: independent workspace keys with per-member grants, `workspace_storage` with `used_bytes` and `reserved_bytes`, storage entitlements written by billing, and a pg-boss worker. Everything below the workspace key is new.
+This document fixed the shape of HushOS Drive before code was written, the way `opaque-auth-design.md` fixed authentication. It stays the reference for what remains.
+
+It builds on what exists:
+
+- independent workspace keys with per-member grants;
+- `workspace_storage` with `used_bytes` and `reserved_bytes`;
+- storage entitlements written by billing;
+- a pg-boss worker.
+
+Everything below the workspace key is new.
 
 ## Status
 
-Content suite 3 is current: suite 2's layout (the thumbnail sealed into the object, the plaintext size in the version envelope) padded to a Padmé bucket. Suites 2 and 1 are read but never written. Writer signatures, share suite 3, identity succession and the settings key are specified in [integrity-design.md](integrity-design.md), whose API contract the server implements; where this document and that one differ, that one is current. The code lives in `packages/drive`, `packages/db/src/drive.ts` and `packages/crypto/src/drive.ts`.
+Content suite 3 is current: suite 2's layout (the thumbnail sealed into the object, the plaintext size in the version envelope) padded to a Padmé bucket. Suites 2 and 1 are read but never written.
+
+Writer signatures, share suite 3, identity succession and the settings key are specified in [integrity-design.md](integrity-design.md), whose API contract the server implements. Where this document and that one differ, that one is current.
+
+The code lives in `packages/drive`, `packages/db/src/drive.ts` and `packages/crypto/src/drive.ts`.
 
 ### Implemented as designed
 
-- **Tree, upload protocol and journal, download path.** Downloads stream through the app's own service worker at `/hushos-download/`, fall back to the File System Access API and then to a blob, and bundle folders and selections as store-only zips with `client-zip`.
-- **Previews** for images, PDF (pdf.js over a range transport), text and media. Media plays through the same service worker, which serves a player page and answers the element's Range requests from chunks the page decrypts, rather than through Media Source Extensions, so every container the browser can play works and no codec parsing is needed.
-- **Markdown and code.** Markdown renders through the data-only CommonMark path below (remark to a sanitised hast tree to React elements, raw HTML dropped, links opened only on click, images named and never fetched). Code highlights through Shiki, loaded on first use with per-grammar chunks and the JavaScript regex engine.
-- **Office documents** preview on the device: Word through mammoth to HTML that is parsed to a tree and sanitised like Markdown output; spreadsheets (and CSV or TSV, decoded as UTF-8) through SheetJS to a clipped table with sheet tabs; presentations as a text outline in slide order, since nothing lays a slide out faithfully in a browser. Each renderer loads on first use, up to 32 MiB.
-- **Thumbnails.** The uploader renders a 256-pixel WebP under 64 KiB for images, a PDF's first page and a video frame, encrypted under the derived thumbnail key as a one-chunk object with its own nonce, uploaded through begin, parts and complete with `purpose: thumbnail` after the content publishes. `GET /api/drive/thumbnails?versions=` hands back presigned URLs for up to 100 versions, decrypted in the worker and kept only in memory.
+- **Tree, upload protocol and journal, download path.**
+    - Downloads stream through the app's own service worker at `/hushos-download/`.
+    - They fall back to the File System Access API and then to a blob.
+    - They bundle folders and selections as store-only zips with `client-zip`.
+- **Previews** for images, PDF (pdf.js over a range transport), text and media.
+    - Media plays through the same service worker, rather than through Media Source Extensions.
+    - The service worker serves a player page and answers the element's Range requests from chunks the page decrypts.
+    - So every container the browser can play works, and no codec parsing is needed.
+- **Markdown and code.**
+    - Markdown renders through the data-only CommonMark path below: remark to a sanitised hast tree to React elements, raw HTML dropped, links opened only on click, images named and never fetched.
+    - Code highlights through Shiki, loaded on first use with per-grammar chunks and the JavaScript regex engine.
+- **Office documents** preview on the device. Each renderer loads on first use, up to 32 MiB.
+    - Word: through mammoth to HTML that is parsed to a tree and sanitised like Markdown output.
+    - Spreadsheets (and CSV or TSV, decoded as UTF-8): through SheetJS to a clipped table with sheet tabs.
+    - Presentations: as a text outline in slide order, since nothing lays a slide out faithfully in a browser.
+- **Thumbnails.**
+    - The uploader renders a 256-pixel WebP under 64 KiB for images, a PDF's first page and a video frame.
+    - It is encrypted under the derived thumbnail key as a one-chunk object with its own nonce.
+    - It is uploaded through begin, parts and complete with `purpose: thumbnail` after the content publishes.
+    - `GET /api/drive/thumbnails?versions=` hands back presigned URLs for up to 100 versions.
+    - Thumbnails are decrypted in the worker and kept only in memory.
 - **Conflicted uploads** attach as described: the same node for an epoch race, a sibling conflict copy for a version race.
-- **Copy** within a workspace: for files by the server, for folders by the client walking the tree. A file's earlier version can be listed, downloaded, restored and discarded early. Each live version pays for the thumbnail it references as well as its object, so a copy that shares both is charged for both and refunded for both.
-- **The client header.** Every Drive request carries `HushOS-Client: name/version`; `DRIVE_CLIENT_MINIMUMS` sets the floor per client name, refused with 426.
-- **Contact pins**, ahead of sharing. A person looks another up by email, sees the fingerprint of the identity encryption and signing keys the server served, and pins it into a settings document, sealed since integrity-design.md under a random settings key wrapped under the account root (it was a key derived from the identity private key, which a succession would strand). A later lookup that returns a different key is shown as a warning to accept, never applied.
+- **Copy** within a workspace: for files by the server, for folders by the client walking the tree.
+    - A file's earlier version can be listed, downloaded, restored and discarded early.
+    - Each live version pays for the thumbnail it references as well as its object.
+    - So a copy that shares both is charged for both and refunded for both.
+- **The client header.**
+    - Every Drive request carries `HushOS-Client: name/version`.
+    - `DRIVE_CLIENT_MINIMUMS` sets the floor per client name, refused with 426.
+- **Contact pins**, ahead of sharing.
+    - A person looks another up by email, and sees the fingerprint of the identity encryption and signing keys the server served.
+    - They pin it into a settings document.
+    - Since integrity-design.md, that document is sealed under a random settings key wrapped under the account root. (It was a key derived from the identity private key, which a succession would strand.)
+    - A later lookup that returns a different key is shown as a warning to accept, never applied.
 - **Operators**: a `role` on the account, granted from the command line only, with a management overview that lists the audit's missing objects.
-- **Shares to accounts**: `drive_shares` rows with the node key sealed between identity keys; authorization moved into the walk on every node-addressed route (member, else the nearest live share's role, else 404; too low a role is 403); a grantee's listing cut at the share root; editors' uploads and epochs drawn in the owner's workspace; a move refused unless both ends lie in the same share; revocation live; and the recipient opening the envelope only with a pinned granter key (a share from someone not yet pinned stays shut until the recipient adds them and compares words; a served key that differs from the pin is refused).
-- **Links**: `drive_links` rows keyed by the hash of a path token the client mints and shows once; the node key sealed under BLAKE2b("hushos/drive/link/key/v2" || secret || argon2id(password, salt)) with the link's context, the derivation's version kept on the link so a later one can sit beside it, and a password of at least 8 characters, since whoever holds the URL can try passwords offline; viewer-only; expiry capped at a year; revocation; a use count; visitor routes under `/api/drive/links/:token/*` that require no session, are bounded per address and per token, and authorize exactly the subtree beneath the linked node. The page at `/s/<token>#<secret>` opens the key in the worker under no account. A signed-in visitor or a share's grantee can save a copy into their own Drive, which re-encrypts each file under their own keys rather than carrying the sharer's.
-- **Link ids and tokens are client-generated**, because the id is sealed into the envelope's context and the secret and token are also sealed under the node key (`secret_envelope`, opaque to the server) for the owner. That is what lets a link be shown again, re-sealed with a different password, or given a new expiry without changing the URL.
-- **Rotation on revoke**, with `drive_rotations`, the parent-first work query, `prev_key_envelope` (with a `prev_key_epoch` beside it, since the previous envelope's context binds the previous epoch), re-sealed shares carrying `prev_share_envelope` until the finish, links re-sealed from the password key the owner's sealed copy now keeps (a password link from before that cannot be re-sealed and is stopped), and moves out of the subtree refused while it runs. The client drives it from the owner's device after every revocation and resumes an unfinished one on the next open.
-- **Change feeds**: `GET /api/drive/workspaces/:id/changes` as a range over `change_seq` with tombstones; `GET /api/drive/shares/:id/changes` filtered by the walk and merged with `drive_share_events` written by moves across a share boundary, 410 on revocation. The web app polls both while visible and refetches only the folders a change touched, in place of a sync engine's cursor.
-- **The queued-upload journal.** The upload journal keeps a row per queued file from the moment it is queued, so a reload forgets nothing that was waiting. Its rows are not sealed: until an upload finishes, its file name, parent folder name, size and chunk digests sit in IndexedDB in the clear, through a lock too; signing out deletes the database. A copy of something shared (which has no file on disk) stashes its bytes in the origin private file system under a name the journal records, sealed with AES-256-GCM by the crypto worker under a key derived from the account key (`hushos/stash/v1`, with the user id; `@hushos/crypto/stash`). The key never leaves the worker and is never stored, so the stash is ciphertext a locked browser can't open. An explicit lock (Lock on this browser, signing out, a password change, in any tab) deletes the stash; a tab closing or reloading keeps it, since resuming is what it is for. A restored copy continues on its own once unlocked, and one whose stash is gone is reported lost with the reservation released, never offered a file picker. While a copy uploads, its bytes are never a Blob (which a browser short of memory may page to its own temporary storage): the engine takes an in-memory byte source beside `File` (`MemoryFile` in `@hushos/drive/transfers`), whose buffers move to the crypto worker the first time the upload reads them, transferred rather than copied, and are zeroed there when the upload settles; a lock ends the worker and them with it. A copy carries its source's own thumbnail, so nothing renders one from its plaintext. A file the person chooses is still read through its `File`, which the browser already has on disk. Where the browser has no usable private file system (Safari's private windows, for one), a copy has no stash: once its bytes have moved to the worker, a lock or a reload loses it, and it is reported lost ("Save it again"). Keeping a copy of the bytes in the page for that case would bring back the Blob this avoids.
+- **Shares to accounts**:
+    - `drive_shares` rows, with the node key sealed between identity keys.
+    - Authorization moved into the walk on every node-addressed route: member, else the nearest live share's role, else 404. Too low a role is 403.
+    - A grantee's listing is cut at the share root.
+    - Editors' uploads and epochs are drawn in the owner's workspace.
+    - A move is refused unless both ends lie in the same share.
+    - Revocation is live.
+    - The recipient opens the envelope only with a pinned granter key:
+        - a share from someone not yet pinned stays shut until the recipient adds them and compares words;
+        - a served key that differs from the pin is refused.
+- **Links**:
+    - `drive_links` rows, keyed by the hash of a path token the client mints and shows once.
+    - The node key is sealed under BLAKE2b("hushos/drive/link/key/v2" || secret || argon2id(password, salt)) with the link's context.
+    - The derivation's version is kept on the link, so a later one can sit beside it.
+    - A password is at least 8 characters, since whoever holds the URL can try passwords offline.
+    - Viewer-only; expiry capped at a year; revocation; a use count.
+    - Visitor routes under `/api/drive/links/:token/*` require no session, are bounded per address and per token, and authorize exactly the subtree beneath the linked node.
+    - The page at `/s/<token>#<secret>` opens the key in the worker under no account.
+    - A signed-in visitor or a share's grantee can save a copy into their own Drive. That re-encrypts each file under their own keys rather than carrying the sharer's.
+- **Link ids and tokens are client-generated**, because:
+    - the id is sealed into the envelope's context;
+    - the secret and token are also sealed under the node key (`secret_envelope`, opaque to the server) for the owner.
+    - That is what lets a link be shown again, re-sealed with a different password, or given a new expiry without changing the URL.
+- **Rotation on revoke**:
+    - `drive_rotations` and the parent-first work query.
+    - `prev_key_envelope`, with a `prev_key_epoch` beside it, since the previous envelope's context binds the previous epoch.
+    - Re-sealed shares carry `prev_share_envelope` until the finish.
+    - Links are re-sealed from the password key the owner's sealed copy now keeps. A password link from before that cannot be re-sealed and is stopped.
+    - Moves out of the subtree are refused while it runs.
+    - The client drives it from the owner's device after every revocation, and resumes an unfinished one on the next open.
+- **Change feeds**:
+    - `GET /api/drive/workspaces/:id/changes` is a range over `change_seq` with tombstones.
+    - `GET /api/drive/shares/:id/changes` is filtered by the walk and merged with `drive_share_events` written by moves across a share boundary; 410 on revocation.
+    - The web app polls both while visible and refetches only the folders a change touched, in place of a sync engine's cursor.
+- **The queued-upload journal.** The upload journal keeps a row per queued file from the moment it is queued, so a reload forgets nothing that was waiting.
+    - Its rows are not sealed. Until an upload finishes, its file name, parent folder name, size and chunk digests sit in IndexedDB in the clear, through a lock too.
+    - Signing out deletes the database.
+    - A copy of something shared (which has no file on disk) stashes its bytes in the origin private file system, under a name the journal records:
+        - the stash is sealed with AES-256-GCM by the crypto worker under a key derived from the account key (`hushos/stash/v1`, with the user id; `@hushos/crypto/stash`);
+        - the key never leaves the worker and is never stored, so the stash is ciphertext a locked browser can't open;
+        - an explicit lock (Lock on this browser, signing out, a password change, in any tab) deletes the stash;
+        - a tab closing or reloading keeps it, since resuming is what it is for;
+        - a restored copy continues on its own once unlocked;
+        - one whose stash is gone is reported lost with the reservation released, never offered a file picker.
+    - While a copy uploads, its bytes are never a Blob (which a browser short of memory may page to its own temporary storage):
+        - the engine takes an in-memory byte source beside `File` (`MemoryFile` in `@hushos/drive/transfers`);
+        - its buffers move to the crypto worker the first time the upload reads them, transferred rather than copied;
+        - they are zeroed there when the upload settles; a lock ends the worker and them with it.
+    - A copy carries its source's own thumbnail, so nothing renders one from its plaintext.
+    - A file the person chooses is still read through its `File`, which the browser already has on disk.
+    - Where the browser has no usable private file system (Safari's private windows, for one), a copy has no stash:
+        - once its bytes have moved to the worker, a lock or a reload loses it, and it is reported lost ("Save it again");
+        - keeping a copy of the bytes in the page for that case would bring back the Blob this avoids.
 
 ### Where the implementation differs from the design below
 
-- **Purge fan-out.** A person's request purges the one node and the worker's `drive.purge` sweep fans out to descendants one level per pass, rather than a per-request `drive.purge-subtree` job, so the web app sends no jobs. Empty trash purges roots in batches of 100 per request, with the client calling until none remain.
-- **Report key escrow** goes to the operators' own identity keys (one envelope per current operator: 1224 bytes, a hybrid seal with an ML-KEM-768 ciphertext beside the X25519 box, used whenever the operator's KEM key is known; otherwise a 112-byte box to the X25519 key alone) rather than to a separate moderation key, so there is no key to generate or keep offline and an operator opens a report under the identity they already hold. The report snapshots the reported subtree (up to 2,000 live nodes) so it outlives the owner's deletions; the deletion outbox skips objects an open or held report names; an operator's removal trashes the node beyond the owner's restore and revokes its shares and links; suspension ends the uploader's sessions; and the worker copies reported objects to an optional evidence bucket and deletes those copies after a dismissal without a hold. The copy is verified: the worker reads the object in 64 MiB parts, sends each with its SHA-256 (a single put below that size, a multipart upload above it), and the store checks the digest, which a bucket under Object Lock also insists on; a report whose copy failed is tried again on the next run, with the reason in the worker's log.
+- **Purge fan-out.**
+    - A person's request purges the one node.
+    - The worker's `drive.purge` sweep fans out to descendants one level per pass, rather than a per-request `drive.purge-subtree` job, so the web app sends no jobs.
+    - Empty trash purges roots in batches of 100 per request, with the client calling until none remain.
+- **Report key escrow** goes to the operators' own identity keys rather than to a separate moderation key. So there is no key to generate or keep offline, and an operator opens a report under the identity they already hold.
+    - There is one envelope per current operator:
+        - 1224 bytes, a hybrid seal with an ML-KEM-768 ciphertext beside the X25519 box, used whenever the operator's KEM key is known;
+        - otherwise a 112-byte box to the X25519 key alone.
+    - The report snapshots the reported subtree (up to 2,000 live nodes), so it outlives the owner's deletions.
+    - The deletion outbox skips objects an open or held report names.
+    - An operator's removal trashes the node beyond the owner's restore, and revokes its shares and links.
+    - Suspension ends the uploader's sessions.
+    - The worker copies reported objects to an optional evidence bucket, and deletes those copies after a dismissal without a hold.
+    - The copy is verified:
+        - the worker reads the object in 64 MiB parts and sends each with its SHA-256 (a single put below that size, a multipart upload above it);
+        - the store checks the digest, which a bucket under Object Lock also insists on;
+        - a report whose copy failed is tried again on the next run, with the reason in the worker's log.
 
 ### Worker jobs as they run
 
@@ -50,7 +150,9 @@ Content suite 3 is current: suite 2's layout (the thumbnail sealed into the obje
 - Transfers that survive a closed tab.
 - Previews of images, PDFs, text and media, because they are client work on top of ranged reads.
 
-Sharing is designed here and built second. Version history, search, and desktop, mobile, file-system and command-line clients come after; the design leaves room for each and says where.
+Sharing is designed here and built second.
+
+Version history, search, and desktop, mobile, file-system and command-line clients come after. The design leaves room for each and says where.
 
 ## Key hierarchy
 
@@ -67,9 +169,11 @@ flowchart TD
     N2 --> C2[Content key, one per object]
 ```
 
-Every node in the tree, folder or file, has its own random 32-byte **node key**, wrapped under its parent's node key. The root folder's key is wrapped under the workspace key.
-
-A file's node key encrypts its metadata and wraps the **content key** of each of its versions. The content key encrypts the bytes of one stored **object**, and several versions may point at one object when a file is copied.
+- Every node in the tree, folder or file, has its own random 32-byte **node key**, wrapped under its parent's node key.
+- The root folder's key is wrapped under the workspace key.
+- A file's node key encrypts its metadata and wraps the **content key** of each of its versions.
+- The content key encrypts the bytes of one stored **object**.
+- Several versions may point at one object when a file is copied.
 
 Nothing below the workspace key is derived from anything else, so:
 
@@ -81,7 +185,9 @@ The client generates every node id, version id, object id and key. The server ne
 
 ## Envelopes and contexts
 
-All envelopes use envelope suite 1 from the authentication design: XChaCha20-Poly1305-IETF from libsodium with a random 24-byte nonce and JSON associated data. UUIDs are lowercase. `epoch` and `version` are positive integers.
+- All envelopes use envelope suite 1 from the authentication design: XChaCha20-Poly1305-IETF from libsodium with a random 24-byte nonce and JSON associated data.
+- UUIDs are lowercase.
+- `epoch` and `version` are positive integers.
 
 ```text
 nodeKeyEnvelope
@@ -112,35 +218,102 @@ thumbnailKey = crypto_kdf_derive_from_key(32, 1, "hushthmb", contentKey)   // li
 
 ### What the version envelope carries
 
-The version envelope is the one sealed record a version has. It carries everything a reader needs that the server must not hold: the content key, the plaintext size, and the length of the thumbnail that sits at the end of the object, zero when there is none. It names the object it is for, so the server cannot point a version at any other object encrypted under the same key.
+The version envelope is the one sealed record a version has. It carries everything a reader needs that the server must not hold:
 
-The plaintext size and the thumbnail length live here rather than on the object row because the server could derive from them what it must not learn. With the plaintext size in the clear, the difference between it and the stored size says whether a thumbnail is present, and a thumbnail is only made for an image, a PDF or a video, so its presence is the file's kind.
+- the content key;
+- the plaintext size;
+- the length of the thumbnail that sits at the end of the object, zero when there is none.
 
-The thumbnail is encrypted under a key derived from the content key for that one role. A server that reframes the object cannot hand a reader the thumbnail as the file or the file as the thumbnail: the file's key does not open it. Nothing about the thumbnail is a server-side pointer; it is bytes of the object, described only inside the envelope.
+It names the object it is for, so the server cannot point a version at any other object encrypted under the same key.
+
+The plaintext size and the thumbnail length live here rather than on the object row, because the server could derive from them what it must not learn:
+
+- With the plaintext size in the clear, the difference between it and the stored size says whether a thumbnail is present.
+- A thumbnail is only made for an image, a PDF or a video, so its presence is the file's kind.
+
+The thumbnail is encrypted under a key derived from the content key for that one role.
+
+- A server that reframes the object cannot hand a reader the thumbnail as the file or the file as the thumbnail: the file's key does not open it.
+- Nothing about the thumbnail is a server-side pointer. It is bytes of the object, described only inside the envelope.
 
 ### Epochs and what the associated data binds
 
-- The root folder's node-key envelope uses the workspace id as `parentId` and the workspace key as the wrapping key. Its own `keyEpoch` comes from the workspace's node-key counter like every node's; its `parentKeyEpoch` is the workspace key's epoch, which the account layer owns and rotates on its own schedule.
-- The two counters never mix: one numbers node keys, the other the workspace key, and every row carries both numbers with those meanings.
+- The root folder's node-key envelope uses the workspace id as `parentId` and the workspace key as the wrapping key.
+    - Its own `keyEpoch` comes from the workspace's node-key counter like every node's.
+    - Its `parentKeyEpoch` is the workspace key's epoch, which the account layer owns and rotates on its own schedule.
+- The two counters never mix: one numbers node keys, the other the workspace key. Every row carries both numbers with those meanings.
 - `parentKeyEpoch` is in the associated data because a reader chooses between a parent's current and previous key by that number, and the choice must be authenticated with the rest.
-- `parentId` is bound into the key envelope because a move rewraps anyway. It is left out of the metadata envelope so that a move never re-encrypts metadata and a rename never rewraps a key.
+- `parentId` is bound into the key envelope because a move rewraps anyway.
+    - It is left out of the metadata envelope so that a move never re-encrypts metadata and a rename never rewraps a key.
 - The server owns `created_at` and `updated_at`; the client does not put timestamps into metadata to bump them.
 
 ### Metadata
 
-Metadata is a JSON object: `{ "name": string, "mime": string | null, "size": number | null, "modified": string | null, "attributes"?: { [key: string]: string } }`.
+Metadata is a JSON object:
 
-- `size` is the plaintext size and `modified` the source file's mtime, both informational. The version envelope is what a reader trusts for the size of the bytes it decrypts.
-- Names are limited to 255 UTF-8 code points and may not contain `/` or be `.` or `..`. The client enforces this because the server cannot see them. Nothing is sealed that would not open again: a lone surrogate in the name, `mime`, `modified` or an attribute is refused at seal (a name typed with one is refused with a message), and a name the platform hands over (a `File`'s, a dropped folder's, which on Windows may hold one) is made well formed first, each lone surrogate becoming U+FFFD.
-- `attributes` holds plain data a feature keeps on a node, such as a folder's colour, as string keys to string values. Keys match `^[a-z][a-z0-9_-]{0,31}$`, there are at most 32 of them, every value is a string (well-formed Unicode), and the whole plaintext stays within 4096 bytes before padding. A record that breaks any of these is refused, when sealing and when opening, and never trimmed. So is plaintext that is not UTF-8 (or starts with a byte order mark) any object in it that names a key twice, escapes decoded, and any string in it, key or value, unknown fields included, that holds a lone surrogate (`"\ud800"`): JSON parsers disagree on which of two equal keys wins, and Rust cannot hold a lone surrogate, so neither twin reads one. A pair written as escapes is one character and opens. No attributes is written as no field at all, so such a record seals exactly as it did before attributes existed, and one that has none opens with none; keys are written in sorted order, so the web and the core write the same bytes for the same record.
-- Every client carries every attribute through unchanged whenever it seals a record again, the keys it does not know included: a rename, a copy (a file, or a folder and everything in it), a save of a copy, a move between spaces, a rotation, a new version's re-signed record and its "keep both" copy. New plain data goes into `attributes`; a top-level field no client knows is still dropped on the next save. An attribute named like a field (`name`, `size`) is only an attribute: the record's own fields and their rules are the top-level ones.
-- A record's signature is over the SHA-256 of the whole envelope, so attributes are signed with the rest and need no statement of their own.
-- The JSON is padded with trailing whitespace to a multiple of 256 bytes before it is sealed, so the envelope's length does not follow a name's length or change with a rename that keeps a name within the same step. Envelopes sealed before padding open unchanged.
+`{ "name": string, "mime": string | null, "size": number | null, "modified": string | null, "attributes"?: { [key: string]: string } }`
+
+#### Size and modified time
+
+- `size` is the plaintext size and `modified` the source file's mtime, both informational.
+- The version envelope is what a reader trusts for the size of the bytes it decrypts.
+
+#### Names
+
+- Names are limited to 255 UTF-8 code points and may not contain `/` or be `.` or `..`.
+- The client enforces this because the server cannot see them.
+- Nothing is sealed that would not open again:
+    - a lone surrogate in the name, `mime`, `modified` or an attribute is refused at seal (a name typed with one is refused with a message);
+    - a name the platform hands over (a `File`'s, a dropped folder's, which on Windows may hold one) is made well formed first, each lone surrogate becoming U+FFFD.
 - Two siblings may have the same name. The server has no way to prevent it, and the client shows both.
+
+#### Attributes
+
+`attributes` holds plain data a feature keeps on a node, such as a folder's colour, as string keys to string values.
+
+- Keys match `^[a-z][a-z0-9_-]{0,31}$`.
+- There are at most 32 of them.
+- Every value is a string (well-formed Unicode).
+
+#### Record limits
+
+These hold for every metadata record, with attributes or without.
+
+- The whole plaintext stays within 4096 bytes before padding.
+- A record that breaks any of these, or the attribute rules above, is refused, when sealing and when opening, and never trimmed. So is:
+    - plaintext that is not UTF-8 (or starts with a byte order mark);
+    - any object in it that names a key twice, escapes decoded;
+    - any string in it, key or value, unknown fields included, that holds a lone surrogate (`"\ud800"`).
+- JSON parsers disagree on which of two equal keys wins, and Rust cannot hold a lone surrogate, so neither twin reads one.
+- A pair written as escapes is one character and opens.
+- No attributes is written as no field at all. So such a record seals exactly as it did before attributes existed, and one that has none opens with none.
+- Keys are written in sorted order, so the web and the core write the same bytes for the same record.
+
+Every client carries every attribute through unchanged whenever it seals a record again, the keys it does not know included:
+
+- a rename;
+- a copy (a file, or a folder and everything in it);
+- a save of a copy;
+- a move between spaces;
+- a rotation;
+- a new version's re-signed record and its "keep both" copy.
+
+New plain data goes into `attributes`; a top-level field no client knows is still dropped on the next save.
+
+An attribute named like a field (`name`, `size`) is only an attribute: the record's own fields and their rules are the top-level ones.
+
+#### Signature and padding
+
+- A record's signature is over the SHA-256 of the whole envelope, so attributes are signed with the rest and need no statement of their own.
+- The JSON is padded with trailing whitespace to a multiple of 256 bytes before it is sealed. So the envelope's length does not follow a name's length or change with a rename that keeps a name within the same step.
+- Envelopes sealed before padding open unchanged.
 
 ### Sealed workspace documents
 
-A workspace keeps a few small records beside its tree that belong to the workspace rather than to any node: the tag registry is the first. Each is one JSON value sealed under the workspace key, so every member opens it and no grantee can, and the server holds a kind, a version and bytes.
+A workspace keeps a few small records beside its tree that belong to the workspace rather than to any node. The tag registry is the first.
+
+- Each is one JSON value sealed under the workspace key, so every member opens it and no grantee can.
+- The server holds a kind, a version and bytes.
 
 ```text
 documentEnvelope
@@ -150,27 +323,87 @@ documentEnvelope
   body  = XChaCha20-Poly1305(UTF8(JSON document), workspaceKey, nonce, aad)   // at most 64 KiB of plaintext
 ```
 
-- `kind` is `[a-z][a-z0-9-]{0,31}`; `version` is the version the envelope becomes, so a stored envelope can only be read back as the version the row says it is. Plaintext is padded in steps before sealing (1 KiB up to 64 KiB, then 4 KiB, then 16 KiB, at most 1 MiB), so the size says which bucket, not what is in it.
-- A write names the version the client saw (0 when it saw none) and the row moves to the next; a stale write is refused with 409 and the current row, like every other Drive write, and the client merges and retries. Documents are not part of the change feed: a client reads the one it needs when it opens Drive and after a refused write.
-- **Kinds.** The server keeps only the kinds shipped clients write: `DOCUMENT_KINDS` in `@hushos/drive/protocol`, `tags` today. A write of any other kind is 400 `invalid`. Widen the list when a client ships a new kind, before that client is released; never narrow it while a workspace holds the kind.
-- **Limits.** A workspace, personal or group area, holds at most 8 kinds and 2 MiB and 80 bytes of stored envelopes between them (two documents at the largest size; `WORKSPACE_DOCUMENT_KINDS` and `WORKSPACE_DOCUMENT_BYTES` in `@hushos/drive/protocol`). A write that would add a ninth kind, or take the total past the limit counting the rewritten document's new size in place of its old one, is refused 409 `document-limit` with `data: { limit: 'kinds' | 'bytes', kinds, bytes }`, and nothing is stored; a stale write is answered `stale` first. The write takes the workspace's row before its documents, so concurrent writes cannot pass the limits together. Every client writes only the tags registry today, well within them. They exist for group areas: every rotation of an area carries all its documents again in the roster call (docs/groups-server.md 8), so what an area may hold bounds what a roster body must take.
-- Routes: `GET` and `PUT /api/drive/workspaces/:id/documents/:kind`, members only.
+- `kind` is `[a-z][a-z0-9-]{0,31}`.
+- `version` is the version the envelope becomes, so a stored envelope can only be read back as the version the row says it is.
+- Plaintext is padded in steps before sealing (1 KiB up to 64 KiB, then 4 KiB, then 16 KiB, at most 1 MiB), so the size says which bucket, not what is in it.
+- **Writes.**
+    - A write names the version the client saw (0 when it saw none), and the row moves to the next.
+    - A stale write is refused with 409 and the current row, like every other Drive write. The client merges and retries.
+    - Documents are not part of the change feed. A client reads the one it needs when it opens Drive and after a refused write.
+- **Kinds.**
+    - The server keeps only the kinds shipped clients write: `DOCUMENT_KINDS` in `@hushos/drive/protocol`, `tags` today.
+    - A write of any other kind is 400 `invalid`.
+    - Widen the list when a client ships a new kind, before that client is released.
+    - Never narrow it while a workspace holds the kind.
+- **Limits.**
+    - A workspace, personal or group area, holds at most 8 kinds and 2 MiB and 80 bytes of stored envelopes between them (two documents at the largest size; `WORKSPACE_DOCUMENT_KINDS` and `WORKSPACE_DOCUMENT_BYTES` in `@hushos/drive/protocol`).
+    - A write is refused 409 `document-limit` with `data: { limit: 'kinds' | 'bytes', kinds, bytes }`, and nothing is stored, when it would:
+        - add a ninth kind, or
+        - take the total past the limit, counting the rewritten document's new size in place of its old one.
+    - A stale write is answered `stale` first.
+    - The write takes the workspace's row before its documents, so concurrent writes cannot pass the limits together.
+    - Every client writes only the tags registry today, well within them.
+    - They exist for group areas: every rotation of an area carries all its documents again in the roster call (docs/groups-server.md 8). So what an area may hold bounds what a roster body must take.
+- **Routes.** `GET` and `PUT /api/drive/workspaces/:id/documents/:kind`, members only.
 
 ### The catalogue and tags
 
-The server can list one folder; it cannot answer "everything tagged Home" or "files named lease" without reading names it must not hold. So each device answers those itself, from a copy of the tree it keeps:
+The server can list one folder. It cannot answer "everything tagged Home" or "files named lease" without reading names it must not hold. So each device answers those itself, from a copy of the tree it keeps.
 
-- **The mirror** is every node of the workspace as the server serves it, in IndexedDB on the device: ids, epochs and envelopes, the same bytes any member receives, and no name or key. It is filled from the change feed starting at 0, which visits every live node and tombstone in change order; each page is written with the cursor it advances to in one transaction, so an interrupted pull resumes at the last page kept and never claims one it lost. Tombstones are kept 90 days; the workspace records the change sequence of the newest tombstone the purge job dropped, and a feed asked from a cursor below it answers `resync`, on which the device throws the mirror away and starts from 0 rather than keep a deletion it never heard of. It is dropped when another workspace opens on the device, and deleted at sign-out with everything else the browser keeps for the account (`apps/web/src/lib/device-data.ts`). While the browser is only locked it stays, unsealed beyond the server's own envelopes: its ids, sizes, times and writers' ids read as they do to the server. A row whose parent is missing is a page the device missed, and the build starts over once.
-- **The catalogue** is the mirror opened: the worker unwraps every node parents-first from the local rows, and the names, tags and structure sit in memory for the session. A lock empties it with the keys; the next unlock rebuilds it from the mirror without the network. Once ready, it answers folder listings before the server is asked (the server's answer replaces it), tag filters, and name search. After the app polls a page of changes, the client pulls the feed from the mirror's cursor to the head and files what arrived.
-- **Tags** are flat sets across folders, never nested, and they live in the registry alone: the sealed document of kind `tags` holds the tags (id, name, one of five colours) and, per tag, the ids of the nodes carrying it. Node metadata never mentions tags, so tagging touches no node envelope and no metadata version, a share's recipient learns nothing of the owner's tags, and a rename is one write that shows everywhere at once. The registry is replaced whole under its version; a refused write is merged three ways (what this device last saw, what it wants, what the server now holds: tags by id, memberships as sets) and retried. Filtering is an intersection over the catalogue's index, built from the registry, so it costs nothing on the server and shows the server nothing.
+**The mirror** is every node of the workspace as the server serves it, in IndexedDB on the device: ids, epochs and envelopes, the same bytes any member receives, and no name or key.
 
-What the server learns from tags: that a document of kind `tags` exists, its size in coarse steps, and when it is saved. Not a name, not a count per item. Viewing a tag does fetch its items' thumbnails in one batch, and the timing of that batch can hint which items go together; the tag's id never leaves in a `Referer`, since every page sends only its origin.
+- It is filled from the change feed starting at 0, which visits every live node and tombstone in change order.
+- Each page is written with the cursor it advances to in one transaction. So an interrupted pull resumes at the last page kept and never claims one it lost.
+- Tombstones are kept 90 days. The workspace records the change sequence of the newest tombstone the purge job dropped.
+- A feed asked from a cursor below it answers `resync`. On that, the device throws the mirror away and starts from 0 rather than keep a deletion it never heard of.
+- It is dropped when another workspace opens on the device.
+- It is deleted at sign-out with everything else the browser keeps for the account (`apps/web/src/lib/device-data.ts`).
+- While the browser is only locked it stays, unsealed beyond the server's own envelopes: its ids, sizes, times and writers' ids read as they do to the server.
+- A row whose parent is missing is a page the device missed, and the build starts over once.
 
-Search runs on the device too, and its query stays there: the search page keeps it in the URL's fragment (`/app/search#q=…`), which no request carries, and the app's `Referrer-Policy` is `strict-origin`, so no path or query of a page reaches the server or a proxy through the calls the page makes.
+**The catalogue** is the mirror opened: the worker unwraps every node parents-first from the local rows, and the names, tags and structure sit in memory for the session.
+
+- A lock empties it with the keys. The next unlock rebuilds it from the mirror without the network.
+- Once ready, it answers folder listings before the server is asked (the server's answer replaces it), tag filters, and name search.
+- After the app polls a page of changes, the client pulls the feed from the mirror's cursor to the head and files what arrived.
+
+**Tags** are flat sets across folders, never nested, and they live in the registry alone.
+
+- The sealed document of kind `tags` holds the tags (id, name, one of five colours) and, per tag, the ids of the nodes carrying it.
+- Node metadata never mentions tags. So:
+    - tagging touches no node envelope and no metadata version;
+    - a share's recipient learns nothing of the owner's tags;
+    - a rename is one write that shows everywhere at once.
+- The registry is replaced whole under its version.
+- A refused write is merged three ways and retried: what this device last saw, what it wants, what the server now holds (tags by id, memberships as sets).
+- Filtering is an intersection over the catalogue's index, built from the registry, so it costs nothing on the server and shows the server nothing.
+
+What the server learns from tags:
+
+- that a document of kind `tags` exists;
+- its size in coarse steps;
+- when it is saved.
+
+Not a name, not a count per item.
+
+Viewing a tag does fetch its items' thumbnails in one batch, and the timing of that batch can hint which items go together. The tag's id never leaves in a `Referer`, since every page sends only its origin.
+
+Search runs on the device too, and its query stays there:
+
+- the search page keeps it in the URL's fragment (`/app/search#q=…`), which no request carries;
+- the app's `Referrer-Policy` is `strict-origin`, so no path or query of a page reaches the server or a proxy through the calls the page makes.
 
 ## Content encryption
 
-Content suite 2, described here, encrypts a version as independent chunks rather than a libsodium secretstream; suite 3, the one written today, is the same layout padded to a Padmé bucket (see integrity-design.md, section 1), and a reader fetches every chunk of it, padding included, for a whole download or preview. An interrupted upload resumes by re-encrypting only the missing chunks, a download can start at any chunk, and the version's thumbnail, when it has one, rides as a sealed trailer of the same object.
+Content suite 2, described here, encrypts a version as independent chunks rather than a libsodium secretstream.
+
+Suite 3, the one written today, is the same layout padded to a Padmé bucket (see integrity-design.md, section 1). A reader fetches every chunk of it, padding included, for a whole download or preview.
+
+In this layout:
+
+- an interrupted upload resumes by re-encrypting only the missing chunks;
+- a download can start at any chunk;
+- the version's thumbnail, when it has one, rides as a sealed trailer of the same object.
 
 ```text
 contentKey   = random(32)
@@ -197,31 +430,60 @@ object = chunk_0 || ... || chunk_(chunkCount-1) || thumbnail?
 - Every ciphertext chunk is exactly `chunkSize + 16` bytes except the last.
 - The object is the concatenation of chunks in order, followed by the thumbnail's `thumbnailBytes + 16` bytes when the envelope says there is one.
 - The trailer starts at `plaintextSize + 16 * chunkCount`, a number only a holder of the version envelope can compute. The server sees one object of one size.
-- Content suite 1, the first release's, is the same chunk framing with `1` in the associated data, no trailer, the plaintext size on the object row and the 72-byte envelope. Objects written under it are read forever and never written again, and a copy of one keeps its suite.
+- Content suite 1, the first release's, is the same chunk framing with `1` in the associated data, no trailer, the plaintext size on the object row and the 72-byte envelope.
+    - Objects written under it are read forever and never written again.
+    - A copy of one keeps its suite.
 
 ### What this answers
 
 Each defect the 2026 audit found in the old design:
 
 - The suite and chunk size are recorded on the object row, so a reader never guesses the framing.
-- The associated data names the object, not the version, so a copy can share the object. The content-key envelope still binds the key to one node and version, so a version cannot be pointed at ciphertext encrypted under a different key without failing to open.
-- `chunkCount` and `plaintextSize` are in every chunk's associated data, so a truncated or padded object fails authentication rather than decrypting to a shorter file, and the last chunk is identified by index rather than by a trailing marker the transport could drop.
+- The associated data names the object, not the version, so a copy can share the object.
+    - The content-key envelope still binds the key to one node and version.
+    - So a version cannot be pointed at ciphertext encrypted under a different key without failing to open.
+- `chunkCount` and `plaintextSize` are in every chunk's associated data.
+    - So a truncated or padded object fails authentication rather than decrypting to a shorter file.
+    - The last chunk is identified by index rather than by a trailing marker the transport could drop.
 - Chunk boundaries are fixed by arithmetic, so the reader slices the byte stream itself and does not care how the network framed it.
-- Part boundaries for multipart upload are the same arithmetic: one part per chunk. 8 MiB clears S3's 5 MiB minimum part size, and its 10,000-part ceiling allows objects just under 80 GiB, above the release limit below.
+- Part boundaries for multipart upload are the same arithmetic: one part per chunk.
+    - 8 MiB clears S3's 5 MiB minimum part size.
+    - Its 10,000-part ceiling allows objects just under 80 GiB, above the release limit below.
 
 ### Where it runs and what the server learns
 
-Encryption and decryption run in the existing crypto worker, which already holds libsodium and the unlocked keys. The main thread streams bytes to it and sees no key in ordinary use; the two exceptions are on the person's own request, showing a link's address again (its secret) and the key file of Info, both of which put a key on their screen by design.
+Encryption and decryption run in the existing crypto worker, which already holds libsodium and the unlocked keys. The main thread streams bytes to it and sees no key in ordinary use.
 
-The worker keeps node keys in two pools, keyed by workspace and node: the person's own workspaces, and everything reached through a share, a link or a report. A key from a share, link or report comes under a workspace and node the server named, so it can never stand in for a key of the person's own tree, where it would wrap every new child under a key the server chose; a share, link or report naming one of their own workspaces is refused outright.
+The two exceptions are on the person's own request, and both put a key on their screen by design:
+
+- showing a link's address again (its secret);
+- the key file of Info.
+
+The worker keeps node keys in two pools, keyed by workspace and node:
+
+- the person's own workspaces;
+- everything reached through a share, a link or a report.
+
+A key from a share, link or report comes under a workspace and node the server named. So it can never stand in for a key of the person's own tree, where it would wrap every new child under a key the server chose. A share, link or report naming one of their own workspaces is refused outright.
 
 An object's ciphertext size is `plaintextSize + 16 * chunkCount`, plus `thumbnailBytes + 16` when there is a thumbnail. The client declares this number, the store confirms it, and it is what quota counts.
 
-It is also what the server learns about the size of a file, and it learns nearly all of it: for a file without a thumbnail the plaintext size is exactly `ciphertextSize - 16 * chunkCount`, and for one with a thumbnail it is that less the trailer, under 64 KiB. Which files have a thumbnail the server can tell from which ones are asked for one (see Thumbnails). Reads never sharpen this further: the last chunk is always fetched through to the object's end, trailer and all, so no range stops where the trailer begins. Padding objects to hide sizes is a later content suite; until then, sizes are metadata the server holds.
+It is also what the server learns about the size of a file, and it learns nearly all of it:
+
+- For a file without a thumbnail, the plaintext size is exactly `ciphertextSize - 16 * chunkCount`.
+- For one with a thumbnail, it is that less the trailer, under 64 KiB.
+- Which files have a thumbnail the server can tell from which ones are asked for one (see Thumbnails).
+- Reads never sharpen this further: the last chunk is always fetched through to the object's end, trailer and all, so no range stops where the trailer begins.
+
+Padding objects to hide sizes is a later content suite; until then, sizes are metadata the server holds.
 
 ## Data model
 
-Six new tables. Byte counts are `bigint`; binary is `bytea` with length checks like the auth tables. The tree is an adjacency list: `parent_id` is the only structural fact, and there is no materialized path, because a path makes every move cost the size of the subtree while the reads that matter, one folder at a time, never need it.
+Six new tables.
+
+- Byte counts are `bigint`; binary is `bytea` with length checks like the auth tables.
+- The tree is an adjacency list: `parent_id` is the only structural fact, and there is no materialized path.
+- There is no materialized path because a path makes every move cost the size of the subtree while the reads that matter, one folder at a time, never need it.
 
 ```text
 drive_nodes
@@ -339,47 +601,93 @@ drive_rotations                   a subtree key rotation in progress; at most on
 
 ### How the rows relate
 
-- The tree lives only in Postgres; object keys are flat. Files and folders share `drive_nodes`.
-- A version is a node's pointer to an object plus the wrap of that object's content key under the node's key. An object is the stored ciphertext and its framing, and lives until no version points at it.
-- A workspace gets its root row when Drive is first opened, created in the same request that stores the root key envelope. Existing accounts get it lazily, new accounts at registration once the client generates it.
+- The tree lives only in Postgres; object keys are flat.
+- Files and folders share `drive_nodes`.
+- A version is a node's pointer to an object, plus the wrap of that object's content key under the node's key.
+- An object is the stored ciphertext and its framing, and lives until no version points at it.
+- A workspace gets its root row when Drive is first opened, created in the same request that stores the root key envelope.
+    - Existing accounts get it lazily.
+    - New accounts get it at registration, once the client generates it.
 - A purged node keeps its row as a tombstone, envelopes cleared, for 90 days so that a client that was offline learns of the deletion.
 
 ### Two counters on the workspace
 
-`workspaces` gains `change_seq bigint`, incremented by every change to any node in it; the changed node takes the new value. No two nodes of a workspace share one (the index above is unique): a write that changes several nodes takes a number for each, as a batch of folders, a trash batch or a purge batch does, because a feed page may end after any row and the next page asks for what follows it. It also gains `key_epoch_seq`, the counter every node key epoch in the workspace is drawn from, so that a rotation's target epoch is greater than every epoch any node in the workspace has ever had, whatever earlier rotations did to some subfolder.
+`workspaces` gains two counters.
 
-Every write to the tree begins by locking the workspace row to take the next value, which serialises writes within a workspace. That is deliberate: it is what makes the cycle check below sound, and each write touches a handful of rows, so the lock is held for milliseconds. A listing can be cached against it, and the change feed below is a range query on it.
+- `change_seq bigint`, incremented by every change to any node in it; the changed node takes the new value.
+    - No two nodes of a workspace share one (the index above is unique).
+    - A write that changes several nodes takes a number for each, as a batch of folders, a trash batch or a purge batch does.
+    - That is because a feed page may end after any row, and the next page asks for what follows it.
+- `key_epoch_seq`, the counter every node key epoch in the workspace is drawn from.
+    - So a rotation's target epoch is greater than every epoch any node in the workspace has ever had, whatever earlier rotations did to some subfolder.
+
+Every write to the tree begins by locking the workspace row to take the next value, which serialises writes within a workspace. That is deliberate:
+
+- it is what makes the cycle check below sound;
+- each write touches a handful of rows, so the lock is held for milliseconds.
+
+A listing can be cached against it, and the change feed below is a range query on it.
 
 ## Tree operations
 
-Every operation costs a fixed number of rows, whatever the size of the tree. Anything that is naturally the size of a subtree is recorded on one row synchronously and fanned out in batches: purge and empty-trash by the worker, key rotation by the owner's client. This is the rule the API is built around: a request whose cost depends on how much data a person has is the request that takes the service down at the worst moment, and the client cannot see that cost coming.
+Every operation costs a fixed number of rows, whatever the size of the tree.
+
+Anything that is naturally the size of a subtree is recorded on one row synchronously and fanned out in batches:
+
+- purge and empty-trash by the worker;
+- key rotation by the owner's client.
+
+This is the rule the API is built around. A request whose cost depends on how much data a person has is the request that takes the service down at the worst moment, and the client cannot see that cost coming.
 
 ### Effective state and the ancestor walk
 
-A node's **effective state** comes from its ancestors. The **ancestor walk** is one recursive query from a node up to the root, capped at 128 rows, that returns the chain for breadcrumbs, the depth, and whether any ancestor is trashed or purged. Every node-addressed request runs it once.
+A node's **effective state** comes from its ancestors.
 
-Depth is capped at 64 for creates and for moves alike, using the height bound below, so no node ever sits deeper than 64. The walk's own cap of 128 is a defence against corruption rather than a limit anyone can reach; no filesystem a client mounts allows paths anywhere near that deep.
+The **ancestor walk** is one recursive query from a node up to the root, capped at 128 rows.
+
+- It returns the chain for breadcrumbs, the depth, and whether any ancestor is trashed or purged.
+- Every node-addressed request runs it once.
+
+Depth is capped at 64 for creates and for moves alike, using the height bound below, so no node ever sits deeper than 64.
+
+The walk's own cap of 128 is a defence against corruption rather than a limit anyone can reach; no filesystem a client mounts allows paths anywhere near that deep.
 
 ### The height bound
 
 Each node carries `height_bound`, an upper bound on the number of levels beneath it.
 
-- A create raises the bound on each ancestor in the walk that is lower than its distance to the new node, which is at most 64 rows and usually one. A move does the same along the destination's chain.
-- Nothing lowers a bound synchronously, so after a move-out or a purge it can overstate, which can only refuse a move that would have been legal.
-- A refused move recomputes the moved subtree's exact height once, outside the lock, and notes the workspace's `change_seq` at the time of the scan. The retry takes the lock and uses the exact height only if `change_seq` has not moved since, because a grandchild created in between would make the scan a lie; otherwise it refuses again and the client starts over.
+- A create raises the bound on each ancestor in the walk that is lower than its distance to the new node, which is at most 64 rows and usually one.
+- A move does the same along the destination's chain.
+- Nothing lowers a bound synchronously. So after a move-out or a purge it can overstate, which can only refuse a move that would have been legal.
+- A refused move recomputes the moved subtree's exact height once, outside the lock, and notes the workspace's `change_seq` at the time of the scan.
+- The retry takes the lock and uses the exact height only if `change_seq` has not moved since, because a grandchild created in between would make the scan a lie.
+    - Otherwise it refuses again and the client starts over.
 - That scan is the one read whose cost is the size of a subtree, taken only on that path.
 
 ### Listing
 
-Listing returns a folder's live children with their envelopes, plus the chain of ancestors from the walk. A file whose first upload has not completed has no `change_seq` and is not a child yet: it appears in nobody's listing and in no change feed until its version is ready, which is what lets an abort delete it without a trace. The client unwraps root to current folder, then children in parallel, and caches unwrapped node keys per session in the worker.
+Listing returns a folder's live children with their envelopes, plus the chain of ancestors from the walk.
+
+A file whose first upload has not completed has no `change_seq` and is not a child yet:
+
+- it appears in nobody's listing and in no change feed until its version is ready;
+- that is what lets an abort delete it without a trace.
+
+The client unwraps root to current folder, then children in parallel, and caches unwrapped node keys per session in the worker.
 
 ### Create
 
-Create folder or file inserts the node with its key and metadata envelopes. A file is created with its first version in `pending` state as part of the upload flow below.
+Create folder or file inserts the node with its key and metadata envelopes.
+
+A file is created with its first version in `pending` state as part of the upload flow below.
 
 ### Rename
 
-Rename replaces the metadata envelope with `metadata_version + 1` and states the `key_epoch` the new envelope was encrypted under; the server refuses a stale version or a stale epoch with 409. The epoch matters because a rotation re-encrypts metadata without renaming, so a rename prepared under the old key and sent after would otherwise commit an envelope nobody can open. Nothing else changes.
+Rename replaces the metadata envelope with `metadata_version + 1`, and states the `key_epoch` the new envelope was encrypted under.
+
+- The server refuses a stale version or a stale epoch with 409.
+- The epoch matters because a rotation re-encrypts metadata without renaming. A rename prepared under the old key and sent after would otherwise commit an envelope nobody can open.
+- Nothing else changes.
 
 ### Preconditions on every write
 
@@ -391,73 +699,192 @@ Every write carries the state the client last saw:
 | Move   | the destination and the destination's `key_epoch` |
 | Upload | `current_version_id` and `key_epoch`              |
 
-Every envelope a client sends names the epoch of the key it used, and the server refuses it if that key has been rotated away; that one rule is what keeps every stored envelope openable. A mismatch is a 409 with the current row, never a silent overwrite. A sync client that loses this race creates a conflict copy, a sibling named by the client, rather than retrying on top of someone else's change.
+- Every envelope a client sends names the epoch of the key it used, and the server refuses it if that key has been rotated away.
+- That one rule is what keeps every stored envelope openable.
+- A mismatch is a 409 with the current row, never a silent overwrite.
+- A sync client that loses this race creates a conflict copy, a sibling named by the client, rather than retrying on top of someone else's change.
 
 ### Move
 
-Move takes `{ nodeId, parentId, parentKeyEpoch, keyEnvelope }`, where the envelope is the same node key rewrapped under the destination's key at that epoch, with the new `parentId` and `parentKeyEpoch` in its context. In one transaction, under the workspace lock, the server:
+Move takes `{ nodeId, parentId, parentKeyEpoch, keyEnvelope }`. The envelope is the same node key rewrapped under the destination's key at that epoch, with the new `parentId` and `parentKeyEpoch` in its context.
+
+In one transaction, under the workspace lock, the server:
 
 1. walks the node's ancestors and refuses if the node is the root or effectively trashed;
-2. walks the destination's ancestors and refuses if the destination is in another workspace, effectively trashed, or if the moved node appears in the chain, which is the cycle check; refuses if the destination's depth plus one plus the node's `height_bound` exceeds 64; refuses, too, if the node's chain contains the root of a running rotation and the destination's does not, or if the node itself still carries a previous envelope from that rotation, as the sharing section explains;
+2. walks the destination's ancestors and refuses:
+    - if the destination is in another workspace, effectively trashed, or if the moved node appears in the chain, which is the cycle check;
+    - if the destination's depth plus one plus the node's `height_bound` exceeds 64;
+    - if the node's chain contains the root of a running rotation and the destination's does not;
+    - if the node itself still carries a previous envelope from a running rotation.
+
+    Both rotation conditions are explained in the sharing section.
+
 3. refuses if `parentKeyEpoch` is not the destination's current `key_epoch`, then updates `parent_id`, `parent_key_epoch` and the envelope on the node and assigns it the workspace's next `change_seq`.
 
-Cost is one small AEAD on the client and, on the server, two bounded walks and one row update, whatever the size of the subtree. Descendants are untouched: their parent ids and envelopes are still correct, and a sync client learns of the move from the one changed row.
+Cost is one small AEAD on the client and, on the server, two bounded walks and one row update, whatever the size of the subtree.
+
+Descendants are untouched: their parent ids and envelopes are still correct. A sync client learns of the move from the one changed row.
 
 The height check is what keeps depth a hard ceiling. Without it, three 63-deep chains and two moves would put leaves at 189, past anything the walk reads, and those nodes could not even be moved back out.
 
 ### Copy within a workspace
 
-Copy moves no bytes. The client creates a new node with a fresh node key and reseals the _same_ version record (key, size, thumbnail length) under it, in the source object's suite. The server, in one transaction:
+Copy moves no bytes. The client creates a new node with a fresh node key, and reseals the _same_ version record (key, size, thumbnail length) under it, in the source object's suite.
+
+The server, in one transaction:
 
 - checks the allowance exactly as upload begin does and refuses with 402;
 - inserts a version row pointing at the _same_ object;
 - adds the object's size to `used_bytes`;
 - assigns `change_seq`.
 
-No reservation is needed because nothing happens between the check and the write. The store is never touched: the ciphertext is opaque, the associated data names the object and not the version, and the content-key envelope is what ties the key to its new node.
+No reservation is needed because nothing happens between the check and the write.
 
-A copy costs quota like any other file even though the bytes are stored once, so purging either copy gives the bytes back predictably and nobody has to explain reference counting on a billing page. Copying a folder is the client copying node by node with progress, since each node needs a rewrap the server cannot do; the cost is visible and the client's. A copy into a share, later, must re-encrypt into a new object, because sharing is the operation that widens who can read the key, and copy must not do that silently.
+The store is never touched:
+
+- the ciphertext is opaque;
+- the associated data names the object and not the version;
+- the content-key envelope is what ties the key to its new node.
+
+A copy costs quota like any other file even though the bytes are stored once. So purging either copy gives the bytes back predictably, and nobody has to explain reference counting on a billing page.
+
+- Copying a folder is the client copying node by node with progress, since each node needs a rewrap the server cannot do. The cost is visible and the client's.
+- A copy into a share, later, must re-encrypt into a new object, because sharing is the operation that widens who can read the key, and copy must not do that silently.
 
 ### Moves across workspaces
 
-A move between two workspaces (a person's own files and their family's folders) cannot be a tree move: each workspace has its own keys. The device reads the file, encrypts it again under the destination's keys, and uploads it with `moveOf` naming the source and the version it read. Its completion deletes the source in the same transaction, or fails `move-stale` and releases the copy if the source changed (a new version uploading on it included). Where both draw from one storage pool the upload reserves only what the copy adds beyond what the source's versions free; across two it reserves the whole copy, as any upload does. docs/families-shared-pool.md 3.8 and 13 have the rules and what was built.
+A move between two workspaces (a person's own files and their family's folders) cannot be a tree move: each workspace has its own keys.
+
+- The device reads the file, encrypts it again under the destination's keys, and uploads it with `moveOf` naming the source and the version it read.
+- Its completion deletes the source in the same transaction, unless the source changed (a new version uploading on it included): then it fails `move-stale` and releases the copy.
+- Where both draw from one storage pool, the upload reserves only what the copy adds beyond what the source's versions free.
+- Across two pools it reserves the whole copy, as any upload does.
+
+docs/families-shared-pool.md 3.8 and 13 have the rules and what was built.
 
 ### Trash and restore
 
-**Trash** sets `trashed_at = now()` on the one node and assigns `change_seq`. Descendants are untouched and are effectively trashed because the walk finds a trashed ancestor. Listings exclude children with their own `trashed_at`, and a listing of a folder inside a trashed subtree is refused, so nothing under a trashed folder is reachable.
+**Trash** sets `trashed_at = now()` on the one node and assigns `change_seq`.
+
+- Descendants are untouched. They are effectively trashed because the walk finds a trashed ancestor.
+- Listings exclude children with their own `trashed_at`.
+- A listing of a folder inside a trashed subtree is refused, so nothing under a trashed folder is reachable.
 
 The trash view lists every node with `trashed_at` set, from the partial index. A folder trashed on its own before its parent was trashed shows as its own entry, which is what happened.
 
-**Restore** clears `trashed_at` on the node. If the walk finds the parent effectively trashed, the server refuses with 409 `parent-trashed`, and the client offers to restore to the root, which is a move with a rewrapped key envelope and a restore in one request. The server cannot reparent on its own because a new parent means a new envelope only the client can make.
+**Restore** clears `trashed_at` on the node.
 
-**A selection** goes to the trash in one request, `workspaces/:id/trash-batch` with up to 200 node ids, in one transaction under the same workspace lock and in the same order as a single trash: access first, without the lock (someone who may trash none of the ids never takes it), then the lock, then each node's walk and access again, then the writes. A batch waits at most 2 s for any lock or statement, and holds the workspace's lock at most 2 s, or rolls back and is answered 409 `conflict` to try again: every other write in the workspace waits on that lock holding a pooled connection. Each node moves exactly as a single trash would move it or is refused on its own (`not-found`, `forbidden`, `root`, `trashed`); one refusal keeps none of the rest back, since nothing about trashing one node depends on another. A writer whose access to a family folder ended or is held moves nothing, as for one. A node inside a folder of the same request that goes is answered `covered` by that folder and keeps no `trashed_at` of its own, so Undo of the folder brings it back; a node inside a refused one is judged on its own. Each node that moves takes its own `change_seq`, consecutive in the order sent, so a feed read a page at a time never splits a batch on a shared number. The answer lists every id in the order sent, so it says exactly what moved. `workspaces/:id/restore-batch` is Undo for it: in place only, refusing `not-found`, `not-trashed`, `removed` and `parent-trashed` one by one, with a node whose folder comes back in the same request waiting for it; each node is walked once, and the order they come back in is worked out from those walks. Restoring to the root stays a single request, since it re-wraps each key. Both routes cap the body at 12 KiB and allow 60 requests a minute per account; the web sends a larger selection in several requests of 200, puts folders back before what is in them on Undo, and tries a `parent-trashed` item again once the other requests have landed.
+- If the walk finds the parent effectively trashed, the server refuses with 409 `parent-trashed`.
+- The client then offers to restore to the root, which is a move with a rewrapped key envelope and a restore in one request.
+- The server cannot reparent on its own, because a new parent means a new envelope only the client can make.
+
+#### Trash and restore a selection
+
+**A selection** goes to the trash in one request: `workspaces/:id/trash-batch` with up to 200 node ids.
+
+It runs in one transaction under the same workspace lock, and in the same order as a single trash:
+
+1. access first, without the lock (someone who may trash none of the ids never takes it);
+2. then the lock;
+3. then each node's walk and access again;
+4. then the writes.
+
+A batch waits at most 2 s for any lock or statement, and holds the workspace's lock at most 2 s, or rolls back and is answered 409 `conflict` to try again. The bound exists because every other write in the workspace waits on that lock holding a pooled connection.
+
+A writer whose access to a family folder ended or is held moves nothing, as for one.
+
+Each node in the batch:
+
+- moves exactly as a single trash would move it, or is refused on its own (`not-found`, `forbidden`, `root`, `trashed`);
+- one refusal keeps none of the rest back, since nothing about trashing one node depends on another;
+- a node inside a folder of the same request that goes is answered `covered` by that folder and keeps no `trashed_at` of its own, so Undo of the folder brings it back;
+- a node inside a refused one is judged on its own;
+- each node that moves takes its own `change_seq`, consecutive in the order sent, so a feed read a page at a time never splits a batch on a shared number.
+
+The answer lists every id in the order sent, so it says exactly what moved.
+
+`workspaces/:id/restore-batch` is Undo for it:
+
+- in place only;
+- refusing `not-found`, `not-trashed`, `removed` and `parent-trashed` one by one;
+- a node whose folder comes back in the same request waits for it;
+- each node is walked once, and the order they come back in is worked out from those walks.
+
+Restoring to the root stays a single request, since it re-wraps each key.
+
+Limits and the web client:
+
+- Both routes cap the body at 12 KiB and allow 60 requests a minute per account.
+- The web sends a larger selection in several requests of 200.
+- On Undo it puts folders back before what is in them.
+- It tries a `parent-trashed` item again once the other requests have landed.
 
 ### Purge
 
-**Purge** marks the one node `purged_at`, clears its envelopes, marks its versions purged and releases each one's bytes from the counter that holds them:
+**Purge** marks the one node `purged_at`, clears its envelopes, marks its versions purged, and releases each one's bytes from the counter that holds them:
 
 - a `ready` version's from `used_bytes`;
 - a `pending` version's from `reserved_bytes`, by aborting its upload the way abort does;
 - a `completing` version's not at all, because its completion takes the same workspace lock, will find the node purged at its final step, and aborts itself.
 
-Then it assigns `change_seq` and enqueues `drive.purge-subtree`, which walks the descendants in batches of 1,000 doing the same to each. Between the request and the end of the fan-out the descendants are unreachable through the purged ancestor, so the tree is consistent throughout. The worker also purges anything trashed for more than 30 days.
+Then it assigns `change_seq` and enqueues `drive.purge-subtree`, which walks the descendants in batches of 1,000 doing the same to each.
 
-A person does not have to wait. **Delete forever** on a trashed item is this same request, and **Empty trash** enqueues `drive.empty-trash`, which purges the workspace's trash roots in batches of 100, because a trash can hold a hundred thousand roots and one request must not. Trashed bytes count against quota until purged, and the UI says so and shows the trash draining; this keeps accounting honest and gives people the same control an operating system does.
+- Between the request and the end of the fan-out the descendants are unreachable through the purged ancestor, so the tree is consistent throughout.
+- The worker also purges anything trashed for more than 30 days.
 
-**Delete forever for a selection** is `workspaces/:id/purge-batch`, with the same limits and the same lock rules as `trash-batch` (up to 200 ids, a 12 KiB body, 60 batch requests a minute, 2 s lock and statement timeouts), for members only: anyone else is answered without the lock being taken. Each node goes through the same purge as one (versions, storage, the outbox, shares and links, the tombstone and its own `change_seq`) or is refused on its own (`not-found`, `root`, `not-trashed`); a node inside a folder of the same request that is purged is `covered` and goes with it by the fan-out. A purge costs a dozen statements a node, so a request stops purging once it has held the lock for 1 s, keeps what it purged and answers the rest `busy`; the web sends those again while that gets further. The web counts a row answered `not-found` as gone (deleted from another tab, or by a request whose answer was lost), and sends a request turned away whole with 409 (the lock held elsewhere) once more after 1 s; a 429 is not retried, since its window runs a minute. Empty trash keeps its own loop, one root per transaction in one request: batching it would only hold the lock longer, since it has no round trips to save.
+A person does not have to wait.
+
+- **Delete forever** on a trashed item is this same request.
+- **Empty trash** enqueues `drive.empty-trash`, which purges the workspace's trash roots in batches of 100, because a trash can hold a hundred thousand roots and one request must not.
+- Trashed bytes count against quota until purged, and the UI says so and shows the trash draining.
+- This keeps accounting honest and gives people the same control an operating system does.
+
+#### Delete forever for a selection
+
+**Delete forever for a selection** is `workspaces/:id/purge-batch`, for members only: anyone else is answered without the lock being taken.
+
+It has the same limits and the same lock rules as `trash-batch`:
+
+- up to 200 ids;
+- a 12 KiB body;
+- 60 batch requests a minute;
+- 2 s lock and statement timeouts.
+
+Each node in the batch:
+
+- goes through the same purge as one (versions, storage, the outbox, shares and links, the tombstone and its own `change_seq`), or is refused on its own (`not-found`, `root`, `not-trashed`);
+- a node inside a folder of the same request that is purged is `covered` and goes with it by the fan-out.
+
+A purge costs a dozen statements a node.
+
+- So a request stops purging once it has held the lock for 1 s, keeps what it purged and answers the rest `busy`.
+- The web sends those again while that gets further.
+
+How the web handles the answers:
+
+- It counts a row answered `not-found` as gone (deleted from another tab, or by a request whose answer was lost).
+- It sends a request turned away whole with 409 (the lock held elsewhere) once more after 1 s.
+- A 429 is not retried, since its window runs a minute.
+
+Empty trash keeps its own loop, one root per transaction in one request. Batching it would only hold the lock longer, since it has no round trips to save.
 
 ### Releasing objects and tombstones
 
 - A version's bytes are released when it is purged.
-- An object's row is replaced by a `drive_object_deletions` row when its last version is purged, in the same transaction, and the worker takes it from there. A published object's primary copy waits for the replica, as the backups section says, and the row records whether the object was ever published so that one that never was does not wait for a copy nobody scheduled.
-- Tombstones, purged nodes with their envelopes cleared, stay 90 days for the change feed and are then deleted leaves first in batches, which the non-cascading parent FK enforces: a mistake fails loudly rather than deleting live rows.
+- An object's row is replaced by a `drive_object_deletions` row when its last version is purged, in the same transaction, and the worker takes it from there.
+    - A published object's primary copy waits for the replica, as the backups section says.
+    - The row records whether the object was ever published, so that one that never was does not wait for a copy nobody scheduled.
+- Tombstones, purged nodes with their envelopes cleared, stay 90 days for the change feed.
+    - They are then deleted leaves first in batches, which the non-cascading parent FK enforces.
+    - A mistake fails loudly rather than deleting live rows.
 
 ### Versions
 
-Versions are created by every upload to an existing file, each with its own object, and a file keeps at most one besides the current: the one it displaced.
+Versions are created by every upload to an existing file, each with its own object. A file keeps at most one besides the current: the one it displaced.
 
-- When a new version completes, the current version becomes superseded and the version that was superseded before it is purged in the same transaction, bytes released.
-- The superseded version is kept 30 days and counts against quota. `DELETE /api/drive/versions/:id` discards it early, which is what freeing space means for versions.
+- When a new version completes, the current version becomes superseded. The version that was superseded before it is purged in the same transaction, bytes released.
+- The superseded version is kept 30 days and counts against quota.
+- `DELETE /api/drive/versions/:id` discards it early, which is what freeing space means for versions.
 - Restoring it is one statement: current and superseded swap, `superseded_at` cleared on the restored one and set on the displaced one.
 - The purge job never touches a current version, whatever its timestamps say.
 - A full history, and encrypted patches so that a small edit to a large file does not re-upload it, are later content suites and do not change this table.
@@ -468,28 +895,49 @@ Quota is reserved before any byte is accepted, confirmed against the real object
 
 ### 1. Begin
 
-`POST /api/drive/uploads` with the node (new or existing), its envelopes and, for a new node, the `metadataSignature`, the object's `contentSuite` (3; anything else is 409, "Update HushOS to upload"), `chunkCount`, `ciphertextSize`, `contentNonce`, the version envelope and its `versionSignature` (see integrity-design.md). The client knows the ciphertext size exactly before it begins, because the thumbnail is rendered first and sealed into the envelope with the size; nothing about the object changes after begin.
+`POST /api/drive/uploads` with:
+
+- the node (new or existing) and its envelopes;
+- for a new node, the `metadataSignature`;
+- the object's `contentSuite` (3; anything else is 409, "Update HushOS to upload");
+- `chunkCount`, `ciphertextSize` and `contentNonce`;
+- the version envelope and its `versionSignature` (see integrity-design.md).
+
+The client knows the ciphertext size exactly before it begins, because the thumbnail is rendered first and sealed into the envelope with the size. Nothing about the object changes after begin.
 
 What the server refuses:
 
 - a suite it does not accept, with 400;
-- a `ciphertextSize` that no object of `chunkCount` chunks can have: every part but the last is `chunkSize + 16`, and the last must be between 16 bytes (an empty file) and a full chunk plus a full trailer, `chunkSize + 16 + 65536 + 16`;
+- a `ciphertextSize` that no object of `chunkCount` chunks can have:
+    - every part but the last is `chunkSize + 16`;
+    - the last must be between 16 bytes (an empty file) and a full chunk plus a full trailer, `chunkSize + 16 + 65536 + 16`;
 - a file over the per-file limit, enforced on what the server can see, `ciphertextSize - 16 * chunkCount`, allowing for a trailer.
 
 In one transaction it:
 
 1. checks `base + live entitlements - used - reserved >= ciphertextSize`, and refuses with 402 if not;
 2. adds `ciphertextSize` to `reserved_bytes`;
-3. inserts the node if new with no `change_seq`, the object and the version as `pending`, and the upload row naming the object and the node's current `key_epoch`, with a 24-hour expiry.
+3. inserts:
+    - the node if new, with no `change_seq`;
+    - the object and the version as `pending`;
+    - the upload row naming the object and the node's current `key_epoch`, with a 24-hour expiry.
 
-It then starts a multipart upload at the store and returns the upload id and presigned PUT URLs for the first batch of parts. Each URL is signed for one part number in `1..chunkCount` with `Content-Length` as a signed header, set to the exact length of that part, which the server derives from `ciphertextSize` and `chunkCount`. A PUT with any other length fails the signature at the store, so the reservation bounds what the store accepts and not only what the database admits. A store that ignores signed headers is caught at complete by the size check, with the 3-day lifecycle rule bounding what abandoned parts can cost.
+It then starts a multipart upload at the store, and returns the upload id and presigned PUT URLs for the first batch of parts.
+
+- Each URL is signed for one part number in `1..chunkCount`, with `Content-Length` as a signed header.
+- That header is set to the exact length of that part, which the server derives from `ciphertextSize` and `chunkCount`.
+- A PUT with any other length fails the signature at the store. So the reservation bounds what the store accepts and not only what the database admits.
+- A store that ignores signed headers is caught at complete by the size check, with the 3-day lifecycle rule bounding what abandoned parts can cost.
 
 ### 2. Parts
 
 - The client encrypts chunk `i` in the worker and PUTs it to part `i + 1`, up to four in flight.
-- A failed part is retried with exponential backoff and full jitter, starting at one second and capped at a minute, and a `Retry-After` header from the store or the API is honoured. Without the jitter, every client that lost the same store for a moment retries in the same instant and loses it again.
+- A failed part is retried with exponential backoff and full jitter, starting at one second and capped at a minute.
+- A `Retry-After` header from the store or the API is honoured.
+- Without the jitter, every client that lost the same store for a moment retries in the same instant and loses it again.
 - The store returns an ETag per part; the client records it.
-- `GET /api/drive/uploads/:id/parts?from=` returns more presigned URLs. URLs expire after an hour and can always be reissued.
+- `GET /api/drive/uploads/:id/parts?from=` returns more presigned URLs.
+- URLs expire after an hour and can always be reissued.
 
 ### 3. Resume
 
@@ -502,28 +950,51 @@ The client keeps an upload journal in IndexedDB:
 - the sealed thumbnail trailer as the worker produced it at begin;
 - a BLAKE2b hash of every plaintext chunk it has encrypted.
 
-The trailer is journaled as ciphertext, never as the image: a resumed last part appends the same bytes, so a thumbnail is encrypted once under its nonce however many times the part is sent, and a journal without the trailer the envelope promises is uncertain like any other.
+The trailer is journaled as ciphertext, never as the image.
 
-The hash is written in a journal transaction with `durability: 'strict'` and awaited before that chunk's PUT starts, and hash and ciphertext come from the same buffer, so the journal never lacks a record for a chunk that may have left the machine. A journal that is missing, unreadable, or written by a browser that does not honour the durability hint is uncertain, and an uncertain journal never resumes: the upload starts over with fresh material. Resuming is an optimisation; the nonce rule is not.
+- A resumed last part appends the same bytes, so a thumbnail is encrypted once under its nonce however many times the part is sent.
+- A journal without the trailer the envelope promises is uncertain like any other.
+
+The hash is written in a journal transaction with `durability: 'strict'`, and awaited before that chunk's PUT starts.
+
+- Hash and ciphertext come from the same buffer.
+- So the journal never lacks a record for a chunk that may have left the machine.
+
+A journal that is missing, unreadable, or written by a browser that does not honour the durability hint is uncertain. An uncertain journal never resumes: the upload starts over with fresh material. Resuming is an optimisation; the nonce rule is not.
 
 After a reload the client re-reads the source and checks it against the journal: size and modification time first, then the hash of every chunk already encrypted.
 
-- If all match, it asks the server which parts the store has, re-encrypts only the missing chunks, and continues. Encryption is deterministic given the key and nonce, so re-encrypted parts are byte-identical.
+- If all match, it asks the server which parts the store has, re-encrypts only the missing chunks, and continues.
+    - Encryption is deterministic given the key and nonce, so re-encrypted parts are byte-identical.
 - If anything differs, or the source cannot be re-read, the client aborts the upload and starts a new one with a fresh object, key and nonce.
 
-This rule is not about correctness of the file, though a mix of old and new chunks would authenticate chunk by chunk and assemble into a file nobody wrote. It is that encrypting different bytes under a key and nonce that already produced a ciphertext, which left the machine as an uploaded part, is the one thing XChaCha20-Poly1305 forbids.
+This rule is not about correctness of the file, though a mix of old and new chunks would authenticate chunk by chunk and assemble into a file nobody wrote.
+
+It is that encrypting different bytes under a key and nonce that already produced a ciphertext, which left the machine as an uploaded part, is the one thing XChaCha20-Poly1305 forbids.
 
 ### 4. Complete
 
 `POST /api/drive/uploads/:id/complete` with the part list, in three steps that arbitrate against abort, expiry, purge and each other:
 
-1. In a short transaction, the upload moves from `open` to `completing` and records the time. An upload in any other state is refused, and the version precondition is checked here to fail early.
-2. The server completes the multipart upload at the store and reads the object's size. If it differs from `ciphertextSize` the object is deleted and the upload aborted as below.
-3. Under the workspace lock, the server rechecks everything the upload assumed: the node and its ancestors are not purged, the node's `key_epoch` is the one the upload recorded, for a new file the node's `parent_key_epoch` is the parent's current epoch, and the file's `current_version_id` is still the one the upload named.
+1. In a short transaction, the upload moves from `open` to `completing` and records the time.
+    - An upload in any other state is refused.
+    - The version precondition is checked here to fail early.
+2. The server completes the multipart upload at the store and reads the object's size.
+    - If it differs from `ciphertextSize`, the object is deleted and the upload aborted as below.
+3. Under the workspace lock, the server rechecks everything the upload assumed:
+    - the node and its ancestors are not purged;
+    - the node's `key_epoch` is the one the upload recorded;
+    - for a new file, the node's `parent_key_epoch` is the parent's current epoch;
+    - the file's `current_version_id` is still the one the upload named.
 
-Trash is deliberately not in that list. A file trashed while its upload was in flight completes into the trash, with the new version current, because trash is reversible and the person's bytes are not; begin refuses uploads into trashed places, and that is where the trash check lives.
+Trash is deliberately not in that list.
 
-Step three is the check that counts: two uploads that both started from the same version can both pass the first step and both finish at the store, but only one passes here. If it passes, in that transaction:
+- A file trashed while its upload was in flight completes into the trash, with the new version current, because trash is reversible and the person's bytes are not.
+- Begin refuses uploads into trashed places, and that is where the trash check lives.
+
+Step three is the check that counts. Two uploads that both started from the same version can both pass the first step and both finish at the store, but only one passes here.
+
+If it passes, in that transaction:
 
 - `used_bytes += size`, `reserved_bytes -= size`;
 - the object and the version become `ready`, and the version becomes current;
@@ -532,43 +1003,76 @@ Step three is the check that counts: two uploads that both started from the same
 
 #### Conflicts and attach
 
-If the version or epoch precondition fails, the upload becomes `conflicted`, its bytes still reserved and its object still in the store, and the client gets 409 with the winner. The client resolves that before the upload expires, either by aborting or by attaching the finished object: `POST /api/drive/uploads/:id/attach` with a destination, a fresh content-key envelope and, for a new node, a fresh node-key envelope, each with the epoch it wrapped under. Attach moves the bytes from reserved to used with no second upload, because the associated data names the object and not the node.
+If the version or epoch precondition fails:
+
+- the upload becomes `conflicted`, its bytes still reserved and its object still in the store;
+- the client gets 409 with the winner.
+
+The client resolves that before the upload expires, either:
+
+- by aborting; or
+- by attaching the finished object: `POST /api/drive/uploads/:id/attach` with a destination, a fresh content-key envelope and, for a new node, a fresh node-key envelope, each with the epoch it wrapped under.
+
+Attach moves the bytes from reserved to used with no second upload, because the associated data names the object and not the node.
 
 Attach validates what it is given against the tree as it is now, under the workspace lock:
 
 - The destination is a new sibling node for a version race, or the same node for an epoch race.
 - In both cases the envelope's epoch must equal the destination node's current `key_epoch`, and the destination's ancestors must not be purged.
-- A same-node attach additionally requires the node's `current_version_id` to be the one begin recorded, because another upload may have published while this one was being rewrapped. An attach that ignored that would be the silent overwrite the whole three-step dance exists to prevent. If it has moved, attach fails into `conflicted` again and the client attaches as a sibling instead.
+- A same-node attach additionally requires the node's `current_version_id` to be the one begin recorded, because another upload may have published while this one was being rewrapped.
+    - An attach that ignored that would be the silent overwrite the whole three-step dance exists to prevent.
+    - If it has moved, attach fails into `conflicted` again and the client attaches as a sibling instead.
 
-An attach that passes does what step three does: for a sibling, the new node is created and its first version published; for the same node, the version becomes current, the displaced one superseded, the older one purged. Bytes move from reserved to used, the node takes the next `change_seq`, and replication is queued. Either failure leaves the upload `conflicted` and the client tries again with fresher keys; expiry aborts a `conflicted` upload like any other.
+An attach that passes does what step three does:
+
+- for a sibling, the new node is created and its first version published;
+- for the same node, the version becomes current, the displaced one superseded, the older one purged;
+- bytes move from reserved to used, the node takes the next `change_seq`, and replication is queued.
+
+Either failure leaves the upload `conflicted`, and the client tries again with fresher keys. Expiry aborts a `conflicted` upload like any other.
 
 #### Retries and purge
 
 - If the node was purged meanwhile, the upload is aborted and the object deleted.
-- A retry after a failure in the middle finds the store already done: `NoSuchUpload` with an object present at the right size is treated as step two having succeeded, and step three runs with the same rules.
+- A retry after a failure in the middle finds the store already done.
+    - `NoSuchUpload` with an object present at the right size is treated as step two having succeeded.
+    - Step three runs with the same rules.
 - A repeated call for a completed upload returns the same result.
 
 ### 5. Abort
 
-`DELETE /api/drive/uploads/:id`, or the worker's hourly `drive.expire-uploads` job for anything past `expires_at`:
+`DELETE /api/drive/uploads/:id`, or the worker's hourly `drive.expire-uploads` job for anything past `expires_at`. Both first refuse an upload that is `completing`; otherwise they:
 
 - abort the multipart upload at the store;
 - release `reserved_bytes`;
 - delete the pending version and object and, for a new file, its node, which nobody has seen.
 
-Both refuse an upload that is `completing`. An aborted `conflicted` upload's object goes into the deletion outbox as never published, so it is deleted at once and waits for no replica. The expiry job resolves a `completing` upload older than an hour by asking the store: an object present at the recorded size is finalised as step three above, anything else is aborted.
+Then:
+
+- An aborted `conflicted` upload's object goes into the deletion outbox as never published, so it is deleted at once and waits for no replica.
+- The expiry job resolves a `completing` upload older than an hour by asking the store:
+    - an object present at the recorded size is finalised as step three above;
+    - anything else is aborted.
 
 ### Sizes and limits
 
 - Sizes are trusted only from the store, never from the client.
 - The reservation is what makes concurrent uploads honest: two uploads that would each fit alone but not together see the other's reservation.
-- The per-file limit is `DRIVE_MAX_FILE_BYTES`, 32 GiB by default, reported by `capabilities` and enforced at upload begin on the declared ciphertext size less its tags, with a trailer's allowance. Raising it is an environment change, not a release.
+- The per-file limit is `DRIVE_MAX_FILE_BYTES`, 32 GiB by default, reported by `capabilities`.
+    - It is enforced at upload begin on the declared ciphertext size less its tags, with a trailer's allowance.
+    - Raising it is an environment change, not a release.
 - The server refuses a value above what 10,000 parts of 8 MiB can hold, just under 80 GiB.
 - Empty files are allowed and have one 16-byte chunk.
 
 ## Download
 
-`GET /api/drive/versions/:id/url` returns a presigned GET URL valid for an hour, or 15 minutes for a node reached through a share, reissued on demand. Before issuing it the server checks the session, that the version and its object are `ready`, and that the walk grants the caller at least viewer access to the node.
+`GET /api/drive/versions/:id/url` returns a presigned GET URL valid for an hour, or 15 minutes for a node reached through a share, reissued on demand.
+
+Before issuing it the server checks:
+
+- the session;
+- that the version and its object are `ready`;
+- that the walk grants the caller at least viewer access to the node.
 
 The client fetches with `Range` headers in chunk-aligned windows, decrypts each chunk in the worker as it arrives, and streams to disk without holding the file in memory:
 
@@ -576,17 +1080,28 @@ The client fetches with `Range` headers in chunk-aligned windows, decrypts each 
 2. otherwise through a service worker that turns the decrypting stream into a download response, the technique StreamSaver made common;
 3. a blob as the last resort, for files under 256 MiB in a browser with neither.
 
-Range and streaming are one mechanism: any chunk can be fetched and decrypted on its own, and previews, seeking in media and file-system hydration all use it. Downloads are never blocked by quota: being over the allowance stops uploads and nothing else, which is what the pricing page and the terms promise.
+Range and streaming are one mechanism: any chunk can be fetched and decrypted on its own. Previews, seeking in media and file-system hydration all use it.
 
-Presigned URLs mean the person's browser talks to the object store directly, so the store sees their IP address and the bucket hostname appears in their network log. That is the normal trade for not proxying terabytes through the app server. Proxying stays possible later behind the same API without changing the client protocol.
+Downloads are never blocked by quota. Being over the allowance stops uploads and nothing else, which is what the pricing page and the terms promise.
+
+Presigned URLs mean the person's browser talks to the object store directly. So the store sees their IP address, and the bucket hostname appears in their network log.
+
+That is the normal trade for not proxying terabytes through the app server. Proxying stays possible later behind the same API without changing the client protocol.
 
 ## Previews and thumbnails
 
-The server cannot render anything. It holds ciphertext and does not know a PDF from a photograph, because the type is inside the metadata envelope. Every preview is the client decrypting bytes it fetched by range and rendering them itself, which is also what keeps a preview from becoming a second copy of the plaintext somewhere.
+The server cannot render anything. It holds ciphertext and does not know a PDF from a photograph, because the type is inside the metadata envelope.
+
+Every preview is the client decrypting bytes it fetched by range and rendering them itself. That is also what keeps a preview from becoming a second copy of the plaintext somewhere.
 
 ### Thumbnails
 
-Thumbnails are made by the uploader. For an image, a PDF's first page, or a frame of a video, the client renders a 256-pixel WebP of at most 64 KiB before the upload begins, and the worker seals it as the trailer of the object, encrypted under `thumbnailKey`, which the envelopes section derives from the version's content key for this role alone, with the trailer's length in the associated data and in the version envelope.
+Thumbnails are made by the uploader.
+
+- For an image, a PDF's first page, or a frame of a video, the client renders a 256-pixel WebP of at most 64 KiB before the upload begins.
+- The worker seals it as the trailer of the object, encrypted under `thumbnailKey`.
+- The envelopes section derives `thumbnailKey` from the version's content key for this role alone.
+- The trailer's length is in the associated data and in the version envelope.
 
 The thumbnail is then bytes of the object like any other:
 
@@ -596,9 +1111,26 @@ The thumbnail is then bytes of the object like any other:
 - a file whose render fails or whose type has none simply has a trailer length of zero in its envelope;
 - a copy shares the object and therefore the thumbnail.
 
-What keeps the trailer apart from the content is the key: the file's key does not open it, and the trailer's associated data is its own, so a server that reframes the object produces something the client refuses to open rather than a thumbnail decrypting as the file.
+What keeps the trailer apart from the content is the key:
 
-`GET /api/drive/thumbnails?versions=` returns presigned URLs for the objects of up to 100 ready versions at once, and the client asks only for versions whose envelope, opened when the folder was listed, says there is a trailer. That much the server does learn: which versions are asked for, and so which files have a thumbnail, that is, which are images, PDFs or videos. What it does not learn is the trailer's length, and with it the file's exact size: the worker fetches the same window for every thumbnail, the object's last 64 KiB and a tag (or all of it, when smaller), from the same URL a download would use, cuts the trailer from its end, decrypts it, and the page keeps decoded thumbnails in memory for the session, never on disk. A thumbnail fetch does not bump `last_read_at`; opening the file does.
+- the file's key does not open it;
+- the trailer's associated data is its own.
+
+So a server that reframes the object produces something the client refuses to open, rather than a thumbnail decrypting as the file.
+
+#### Fetching thumbnails
+
+`GET /api/drive/thumbnails?versions=` returns presigned URLs for the objects of up to 100 ready versions at once. The client asks only for versions whose envelope, opened when the folder was listed, says there is a trailer.
+
+That much the server does learn: which versions are asked for, and so which files have a thumbnail, that is, which are images, PDFs or videos.
+
+What it does not learn is the trailer's length, and with it the file's exact size:
+
+- the worker fetches the same window for every thumbnail: the object's last 64 KiB and a tag (or all of it, when smaller), from the same URL a download would use;
+- it cuts the trailer from its end and decrypts it;
+- the page keeps decoded thumbnails in memory for the session, never on disk.
+
+A thumbnail fetch does not bump `last_read_at`; opening the file does.
 
 Files uploaded under suite 1 had their thumbnails in separate objects. Those objects were retired with the move to suite 2, and such a file shows its type's icon until it is uploaded again.
 
@@ -606,13 +1138,41 @@ Files uploaded under suite 1 had their thumbnails in separate objects. Those obj
 
 Viewers in the first release, each a client renderer fed by ranged, decrypted reads:
 
-- **Images** decrypt to a blob URL that is revoked when the viewer closes. SVG is shown through an `img` element and never inlined, because SVG carries script.
-- **PDF** uses pdf.js in its own worker with a range transport: pdf.js asks for byte ranges, the client fetches and decrypts the chunks that cover them, and the first page shows before the file has finished downloading. Text selection and find work; saving annotations does not.
-- **Text, Markdown and code** up to 8 MiB decrypt into the page; past that the first 8 MiB shows, with Load the whole file up to 32 MiB (the large-file card). Markdown is rendered as data, never as code: a CommonMark parser produces a syntax tree with raw HTML disabled, the tree is rendered through an allowlist of elements and attributes, links carry `rel="noopener noreferrer"` and open only after a click on the actual link, and image references are not fetched, since the page's policy blocks remote loads anyway. The legal pages are not a model here: they compile trusted MDX into React at build time, which is exactly what must never happen to an uploaded file inside an unlocked session. Code is highlighted client-side from the same data-only path.
-- **Audio and video** seek through range. Fragmented MP4 and WebM play through Media Source Extensions, decrypted chunk by chunk as the player asks; other containers play from a blob under 256 MiB and offer download above it. There is no transcoding, because that needs plaintext on a server.
-- **Office documents** preview on the device: Word as a sanitised document, spreadsheets and CSV as a clipped table, presentations as a text outline (see the top of this document). Up to 32 MiB they open at once; past that the large-file card offers Open anyway up to 64 MiB. A server-side converter never will.
+- **Images** decrypt to a blob URL that is revoked when the viewer closes.
+    - SVG is shown through an `img` element and never inlined, because SVG carries script.
+- **PDF** uses pdf.js in its own worker with a range transport.
+    - pdf.js asks for byte ranges; the client fetches and decrypts the chunks that cover them.
+    - The first page shows before the file has finished downloading.
+    - Text selection and find work; saving annotations does not.
+- **Text, Markdown and code** up to 8 MiB decrypt into the page.
+    - Past that the first 8 MiB shows, with Load the whole file up to 32 MiB (the large-file card).
+    - Markdown is rendered as data, never as code:
+        - a CommonMark parser produces a syntax tree with raw HTML disabled;
+        - the tree is rendered through an allowlist of elements and attributes;
+        - links carry `rel="noopener noreferrer"` and open only after a click on the actual link;
+        - image references are not fetched, since the page's policy blocks remote loads anyway.
+    - The legal pages are not a model here. They compile trusted MDX into React at build time, which is exactly what must never happen to an uploaded file inside an unlocked session.
+    - Code is highlighted client-side from the same data-only path.
+- **Audio and video** seek through range.
+    - Fragmented MP4 and WebM play through Media Source Extensions, decrypted chunk by chunk as the player asks.
+    - Other containers play from a blob under 256 MiB and offer download above it.
+    - There is no transcoding, because that needs plaintext on a server.
+- **Office documents** preview on the device: Word as a sanitised document, spreadsheets and CSV as a clipped table, presentations as a text outline (see the top of this document).
+    - Up to 32 MiB they open at once; past that the large-file card offers Open anyway up to 64 MiB.
+    - A server-side converter never will.
 
-Anything else shows its card, size and type, and a download button. A file past its kind's comfortable size (code to colour past 512 KiB, text past 8 MiB, images past 100 MiB, Office past 32 MiB) shows the large-file card: what continuing costs, an opt-in for that viewing, and past a ceiling (4 MiB, 32 MiB, 300 MiB or less on a device that reports little memory, 64 MiB) only Download. PDF and media stream, so they have none.
+Anything else shows its card, size and type, and a download button.
+
+A file past its kind's comfortable size shows the large-file card: what continuing costs, an opt-in for that viewing, and past a ceiling only Download.
+
+| Kind           | Large-file card past | Only Download past                                     |
+| -------------- | -------------------- | ------------------------------------------------------ |
+| Code to colour | 512 KiB              | 4 MiB                                                  |
+| Text           | 8 MiB                | 32 MiB                                                 |
+| Images         | 100 MiB              | 300 MiB or less on a device that reports little memory |
+| Office         | 32 MiB               | 64 MiB                                                 |
+
+PDF and media stream, so they have none.
 
 What every preview holds to:
 
@@ -630,18 +1190,43 @@ free      = allowance - used - reserved_bytes
 ```
 
 - An upload begins only if `free >= ciphertextSize`.
-- After a plan ends, `allowance` drops and `free` goes negative; uploads refuse, reads work, trash and purge work and reduce `used`.
-- The worker's daily reconcile already keeps entitlements right. A second job, `drive.audit-usage`, recomputes `used_bytes` as the sum, over ready versions (a pending one's bytes are its upload's reservation), of each version's object size, for a sample of workspaces each night and logs any drift, so an accounting bug is noticed rather than trusted.
+- After a plan ends, `allowance` drops and `free` goes negative:
+    - uploads refuse;
+    - reads work;
+    - trash and purge work and reduce `used`.
+- The worker's daily reconcile already keeps entitlements right.
+- A second job, `drive.audit-usage`, recomputes `used_bytes` for a sample of workspaces each night and logs any drift, so an accounting bug is noticed rather than trusted.
+    - It sums, over ready versions, each version's object size (a pending one's bytes are its upload's reservation).
 
 ## Sharing
 
-Sharing is built after the first release, but the tree, the keys and the walk are shaped for it now so that nothing is rebuilt. There are two kinds: a share to another HushOS account, and a link for anyone.
+Sharing is built after the first release, but the tree, the keys and the walk are shaped for it now so that nothing is rebuilt.
+
+There are two kinds: a share to another HushOS account, and a link for anyone.
 
 ### A share is one node's key
 
-A share is one node's key, sealed to one grantee, with a role. The grantee unwraps the node key and descends the subtree exactly as the owner does, because every descendant's key is wrapped under its parent's. A share is one row and one envelope whatever the size of the subtree, and the workspace key is never involved.
+A share is one node's key, sealed to one grantee, with a role.
 
-Share envelopes come in three suites, told apart by length. Suite 3 (1256 bytes: an ephemeral X25519 key, ML-KEM-768 and the granter's signature, see integrity-design.md) is the only one written: a new share, a re-seal or a rotation in any other suite is refused with 409. What follows describes suites 1 and 2, which are served as stored. Suite 2 is hybrid: the X25519 agreement of suite 1 and an ML-KEM-768 (FIPS 203) encapsulation to the grantee's post-quantum identity key, combined so the envelope opens only for someone holding both private halves and stays shut unless both problems fall. Suite 1 is still read, for shares made before the grantee had a KEM key, and still written for a grantee who has none yet; it is never chosen when the grantee's KEM key is known, and a suite 1 share is re-sealed as suite 2 by the owner's device once the grantee's key appears (see re-sealing below).
+- The grantee unwraps the node key and descends the subtree exactly as the owner does, because every descendant's key is wrapped under its parent's.
+- A share is one row and one envelope whatever the size of the subtree.
+- The workspace key is never involved.
+
+Share envelopes come in three suites, told apart by length:
+
+| Suite | Length     | Construction                                                                              |
+| ----- | ---------- | ----------------------------------------------------------------------------------------- |
+| 3     | 1256 bytes | An ephemeral X25519 key, ML-KEM-768 and the granter's signature (see integrity-design.md) |
+| 2     | 1160 bytes | Hybrid X25519 + ML-KEM-768                                                                |
+| 1     | 72 bytes   | X25519 alone                                                                              |
+
+- Suite 3 is the only one written: a new share, a re-seal or a rotation in any other suite is refused with 409.
+- What follows describes suites 1 and 2, which are served as stored.
+- Suite 2 is hybrid: the X25519 agreement of suite 1 and an ML-KEM-768 (FIPS 203) encapsulation to the grantee's post-quantum identity key.
+    - They are combined so the envelope opens only for someone holding both private halves and stays shut unless both problems fall.
+- Suite 1 is still read, for shares made before the grantee had a KEM key, and still written for a grantee who has none yet.
+    - It is never chosen when the grantee's KEM key is known.
+    - A suite 1 share is re-sealed as suite 2 by the owner's device once the grantee's key appears (see re-sealing below).
 
 ```text
 shareEnvelope, suite 1 (72 bytes; X25519 alone)
@@ -673,23 +1258,69 @@ linkEnvelope (to anyone with the link)
 
 The granter seals to the grantee's identity keys, which the server serves, and the grantee derives the same key from the granter's public key. Because the server serves those keys, a dishonest server could substitute its own and read the share.
 
-- The client pins a contact's keys when the person adds them, after both compare a fingerprint. A changed key is a warning that must be accepted, never a silent update.
-- Nothing pins without that step. A share from someone not pinned stays shut, shown as waiting for a words check, until the recipient adds the granter in Contacts; taking the served key on first use would let a server fake a share "from" anyone and plant its own key as theirs.
-- Pins live in the person's encrypted settings on the server, sealed under a key derived from the identity encryption private key, which survives password changes, root rotation and recovery unchanged, so the settings never need rewrapping. Every device they unlock sees the same pins.
+#### Pinning
+
+- The client pins a contact's keys when the person adds them, after both compare a fingerprint.
+- A changed key is a warning that must be accepted, never a silent update.
+- Nothing pins without that step.
+    - A share from someone not pinned stays shut, shown as waiting for a words check, until the recipient adds the granter in Contacts.
+    - Taking the served key on first use would let a server fake a share "from" anyone and plant its own key as theirs.
+- Pins live in the person's encrypted settings on the server, sealed under a key derived from the identity encryption private key.
+    - That key survives password changes, root rotation and recovery unchanged, so the settings never need rewrapping.
+    - Every device they unlock sees the same pins.
 - A pin kept in one browser would make each new device trust-on-first-use again, which is the attack the pin exists to catch.
-- The fingerprint (v2) covers the X25519 key and the Ed25519 signing key: SHA-256 over `hushos/identity/fingerprint/v2`, the X25519 key and the signing key. The ML-KEM key is vouched for by that signing key, so covering it is what authenticates the post-quantum half; a fingerprint over X25519 alone would let a server serve its own signing and KEM keys beside the real X25519 key. The vouching: the identity signs `["hushos/identity/kem", 1, userId, x25519PublicKey, kemPublicKey]`, the server refuses to store a KEM key without a valid signature, and a client verifies it against the pinned signing key, never the served one, before using the key. A pin records the KEM key's SHA-256 the first time it is seen valid; a different KEM key served later is refused like a changed X25519 key, and a KEM key that goes missing is refused as a downgrade, so a server cannot quietly turn hybrid shares back into X25519 ones.
-- Every place the server, not the person, names the grantee goes through the pin: the share dialog looks the pinned contact up and seals to the served keys only when they match the pin; a rotation re-seals each remaining share to the pinned keys and leaves a share whose served keys the pin refuses with its old envelope, which the rotation makes unopenable, rather than sealing to a key nobody vouched for; and the background pass that re-seals older shares does the same.
-- Key transparency is a later layer on top of the same pin.
+
+#### The fingerprint and the KEM key
+
+- The fingerprint (v2) covers the X25519 key and the Ed25519 signing key: SHA-256 over `hushos/identity/fingerprint/v2`, the X25519 key and the signing key.
+- The ML-KEM key is vouched for by that signing key, so covering it is what authenticates the post-quantum half.
+- A fingerprint over X25519 alone would let a server serve its own signing and KEM keys beside the real X25519 key.
+- The vouching:
+    - the identity signs `["hushos/identity/kem", 1, userId, x25519PublicKey, kemPublicKey]`;
+    - the server refuses to store a KEM key without a valid signature;
+    - a client verifies it against the pinned signing key, never the served one, before using the key.
+- A pin records the KEM key's SHA-256 the first time it is seen valid.
+    - A different KEM key served later is refused like a changed X25519 key.
+    - A KEM key that goes missing is refused as a downgrade, so a server cannot quietly turn hybrid shares back into X25519 ones.
+
+#### Where the pin applies
+
+Every place the server, not the person, names the grantee goes through the pin:
+
+- the share dialog looks the pinned contact up and seals to the served keys only when they match the pin;
+- a rotation re-seals each remaining share to the pinned keys, and leaves a share whose served keys the pin refuses with its old envelope, which the rotation makes unopenable, rather than sealing to a key nobody vouched for;
+- the background pass that re-seals older shares does the same.
+
+Key transparency is a later layer on top of the same pin.
 
 ### Re-sealing older shares
 
-Today every re-seal is to suite 3 (integrity-design.md): the owner's device seals again any share still in suite 1 or 2, any share to a grantee whose pin followed a succession, and, after the owner replaced their own keys, every share in the ledger, finishing on a later open what an interrupted pass left. What follows is how suite 1 shares became suite 2 before that.
+Today every re-seal is to suite 3 (integrity-design.md). The owner's device seals again:
 
-An identity made before hybrid sharing has no KEM key. On its next unlock the device mints one (seed wrapped under the root beside the X25519 key, binding signed), stores it once through `POST /api/auth/identity/kem`, and from then on every share sealed to that person is suite 2. Shares sealed to them earlier stay suite 1 until the owner's device next opens Drive: it lists what it shares out, and for each suite 1 share whose grantee now serves a KEM key the pin accepts, re-seals the node key hybrid at the current epoch through `PUT /api/drive/shares/:id/envelope`. The repository accepts that only from the granter, only for a live share, and only at the node's current key epoch, so a rotation in flight is never raced.
+- any share still in suite 1 or 2;
+- any share to a grantee whose pin followed a succession;
+- after the owner replaced their own keys, every share in the ledger.
+
+It finishes on a later open what an interrupted pass left.
+
+What follows is how suite 1 shares became suite 2 before that.
+
+An identity made before hybrid sharing has no KEM key.
+
+- On its next unlock the device mints one (seed wrapped under the root beside the X25519 key, binding signed), and stores it once through `POST /api/auth/identity/kem`.
+- From then on every share sealed to that person is suite 2.
+- Shares sealed to them earlier stay suite 1 until the owner's device next opens Drive.
+    - It lists what it shares out.
+    - For each suite 1 share whose grantee now serves a KEM key the pin accepts, it re-seals the node key hybrid at the current epoch through `PUT /api/drive/shares/:id/envelope`.
+- The repository accepts that only from the granter, only for a live share, and only at the node's current key epoch, so a rotation in flight is never raced.
 
 ### Authorization is the walk
 
-Every node-addressed request already walks the ancestors. For a caller who is not a member of the workspace, the walk also looks for an unrevoked, unexpired share of any node in the chain granted to the caller, or matching the link token, and the nearest one sets the role. A caller with neither gets 404, the same answer as for a node that does not exist.
+Every node-addressed request already walks the ancestors.
+
+- For a caller who is not a member of the workspace, the walk also looks for an unrevoked, unexpired share of any node in the chain granted to the caller, or matching the link token.
+- The nearest one sets the role.
+- A caller with neither gets 404, the same answer as for a node that does not exist.
 
 | Role   | May                                                                                                                                                                       |
 | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -699,66 +1330,154 @@ Every node-addressed request already walks the ancestors. For a caller who is no
 
 ### Bytes belong to the owner
 
-Everything an editor uploads lands in the owner's workspace and counts against the owner's quota. Begin checks the owner's allowance and refuses with 402 whoever is uploading, and the editor sees the owner's free space. Node rows record `created_by`, so the owner can see who added what. A copy into a share re-encrypts into a new object under a fresh content key, as the copy rule says.
+- Everything an editor uploads lands in the owner's workspace and counts against the owner's quota.
+- Begin checks the owner's allowance and refuses with 402 whoever is uploading, and the editor sees the owner's free space.
+- Node rows record `created_by`, so the owner can see who added what.
+- A copy into a share re-encrypts into a new object under a fresh content key, as the copy rule says.
 
 ### Each share has its own feed
 
-`GET /api/drive/shares/:id/changes?since=` is the owner's workspace feed filtered to rows whose ancestor chain contains the shared node, one walk per row over a page of at most 200, merged with the share's own membership events.
+`GET /api/drive/shares/:id/changes?since=` is the owner's workspace feed filtered to rows whose ancestor chain contains the shared node.
 
-The filter alone would lie at the boundary: a node moved out of the share no longer has the shared node in its chain and would vanish without a word, and a folder moved in announces only its root while its descendants keep sequence numbers below the cursor. So a move whose source and destination chains cover different shares writes a `drive_share_events` row for each affected share, `left` or `entered` with the node id, at the workspace's next `change_seq`. A client drops the subtree on `left` and lists it on `entered`, the same way it lists the shared node itself on first sync.
+- It is one walk per row over a page of at most 200.
+- It is merged with the share's own membership events.
+
+The filter alone would lie at the boundary:
+
+- a node moved out of the share no longer has the shared node in its chain and would vanish without a word;
+- a folder moved in announces only its root while its descendants keep sequence numbers below the cursor.
+
+So a move whose source and destination chains cover different shares writes a `drive_share_events` row for each affected share: `left` or `entered` with the node id, at the workspace's next `change_seq`.
+
+A client drops the subtree on `left` and lists it on `entered`, the same way it lists the shared node itself on first sync.
 
 Revocation ends the feed with 410. A sync client mounts each share as a root of its own, and "Shared with me" is the list of the caller's live shares.
 
 ### A link is a share without a grantee
 
-`/s/{token}#{secret}`. The path token, hashed, finds the share; the fragment never leaves the browser. `GET /api/drive/links/:token` returns the shared node with its envelopes and, for a file, a presigned URL, with no session; the browser derives the key and decrypts in the crypto worker under an ephemeral session. Links are viewer-only in the sharing release, with an optional password and expiry, and are rate-limited per token and per address, because the token is the only secret the server ever sees.
+`/s/{token}#{secret}`
+
+- The path token, hashed, finds the share; the fragment never leaves the browser.
+- `GET /api/drive/links/:token` returns the shared node with its envelopes and, for a file, a presigned URL, with no session.
+- The browser derives the key and decrypts in the crypto worker under an ephemeral session.
+- Links are viewer-only in the sharing release, with an optional password and expiry.
+- They are rate-limited per token and per address, because the token is the only secret the server ever sees.
 
 ### Revocation stops the server; rotation shuts the door
 
-Revoking a share sets `revoked_at`, and the server refuses that grantee on the next request, on every route, because the walk consults shares live. Two things revocation does not reach, and the document says so rather than implying otherwise:
+Revoking a share sets `revoked_at`. The server refuses that grantee on the next request, on every route, because the walk consults shares live.
 
-- Presigned download URLs already issued stay valid until they expire. So URLs for shared content are issued for 15 minutes and reissued on demand, which a revoked grantee cannot do; a member who kept a content key and an unexpired URL can still fetch and read that one object inside that window.
+Two things revocation does not reach, and the document says so rather than implying otherwise:
+
+- Presigned download URLs already issued stay valid until they expire.
+    - So URLs for shared content are issued for 15 minutes and reissued on demand, which a revoked grantee cannot do.
+    - A member who kept a content key and an unexpired URL can still fetch and read that one object inside that window.
 - Keys a former member cached are theirs.
 
-So the owner's client then rotates: a new node key for the shared node and every descendant, `key_epoch` bumped, each child's key envelope rewrapped, each metadata envelope and content-key envelope re-encrypted, and the share envelopes of the members who remain re-sealed under the new key. Content keys and objects are not touched: re-encrypting terabytes to shut out one person is not something a client does. The guarantee is about authorization: a revoked member gets nothing further from the API, and nothing further from the store once the last URL they held has expired. It assumes an honest server: one that colludes with the revoked member can serve them the old envelopes and objects, and the content keys in those still open existing versions.
+So the owner's client then rotates:
 
-Which shares and links a rotation seals again is not the server's to say. The owner keeps a sealed ledger in their settings, the people each node was shared with and the links they made, written when they share or make a link and cleared before a stop reaches the server; a rotation, and the pass that upgrades older shares to the hybrid suite, seal only what the ledger holds. A share or link the server lists that the ledger does not is left with its old envelope, which the rotation makes unopenable.
+- a new node key for the shared node and every descendant, `key_epoch` bumped;
+- each child's key envelope rewrapped;
+- each metadata envelope and content-key envelope re-encrypted;
+- the share envelopes of the members who remain re-sealed under the new key.
+
+Content keys and objects are not touched: re-encrypting terabytes to shut out one person is not something a client does.
+
+The guarantee is about authorization: a revoked member gets nothing further from the API, and nothing further from the store once the last URL they held has expired.
+
+It assumes an honest server. One that colludes with the revoked member can serve them the old envelopes and objects, and the content keys in those still open existing versions.
+
+#### The sharing ledger
+
+Which shares and links a rotation seals again is not the server's to say.
+
+- The owner keeps a sealed ledger in their settings: the people each node was shared with and the links they made.
+- It is written when they share or make a link, and cleared before a stop reaches the server.
+- A rotation, and the pass that upgrades older shares to the hybrid suite, seal only what the ledger holds.
+- A share or link the server lists that the ledger does not is left with its old envelope, which the rotation makes unopenable.
 
 ### What a rotation must visit
 
-Rotation is the one client-side job in Drive whose size is a subtree, and it has to survive being interrupted and being raced. A `drive_rotations` row names the root and the target epoch, which the server takes from the workspace's `key_epoch_seq`; every epoch a node has ever carried came from that same counter, so the target is above all of them.
+Rotation is the one client-side job in Drive whose size is a subtree. It has to survive being interrupted and being raced.
 
-What the rotation has to visit is not "nodes below the target" but nodes that are either below it or wrapped under a parent key that is. A node carries its own key's epoch and, separately, the epoch of the parent key its envelope is wrapped under. The rotation is finished only when every node in the subtree has both at or above the target, except the root, whose parent lies outside the rotation and never reaches the target: the root is done when its own epoch is at the target and its envelope is wrapped under its outside parent's current key, which the ordinary move precondition already states.
+A `drive_rotations` row names the root and the target epoch, which the server takes from the workspace's `key_epoch_seq`. Every epoch a node has ever carried came from that same counter, so the target is above all of them.
 
-The distinction matters because the tree moves while a rotation runs. A node already at the target moved beneath an unrotated folder is wrapped under that folder's old key; a node created beneath an unrotated folder draws a fresh epoch above the target but is likewise wrapped under the old parent key. Judged by their own epoch both would be skipped, and clearing the parent's old key would strand them; judged by the parent-key epoch both are visited and rewrapped, keys unchanged.
+What the rotation has to visit is not "nodes below the target" but nodes that are either below it or wrapped under a parent key that is.
+
+- A node carries its own key's epoch and, separately, the epoch of the parent key its envelope is wrapped under.
+- The rotation is finished only when every node in the subtree has both at or above the target, except the root.
+- The root's parent lies outside the rotation and never reaches the target.
+- The root is done when its own epoch is at the target and its envelope is wrapped under its outside parent's current key, which the ordinary move precondition already states.
+
+The distinction matters because the tree moves while a rotation runs:
+
+- A node already at the target moved beneath an unrotated folder is wrapped under that folder's old key.
+- A node created beneath an unrotated folder draws a fresh epoch above the target but is likewise wrapped under the old parent key.
+- Judged by their own epoch both would be skipped, and clearing the parent's old key would strand them.
+- Judged by the parent-key epoch both are visited and rewrapped, keys unchanged.
 
 ### Moves while a rotation runs
 
-- A node cannot leave the subtree while the rotation runs: a move whose source chain contains the rotation root and whose destination chain does not is refused with 409 until the rotation finishes, which the two walks a move already does decide with no extra cost. Letting a half-rotated folder leave would strand its children: the folder's new key is rewrapped under the destination, its children still hang off its old key, and the previous envelope that reached that old key is cleared when the rotation ends.
+- A node cannot leave the subtree while the rotation runs.
+    - A move whose source chain contains the rotation root and whose destination chain does not is refused with 409 until the rotation finishes.
+    - The two walks a move already does decide that with no extra cost.
+    - Letting a half-rotated folder leave would strand its children: the folder's new key is rewrapped under the destination, its children still hang off its old key, and the previous envelope that reached that old key is cleared when the rotation ends.
 - Moves into and within the subtree stay allowed for nodes the rotation has not reached yet, since the parent-key epoch is what the rotation looks at.
-- A node the rotation has already reached, one that still carries a previous envelope, cannot move at all until the rotation finishes, and its own row decides that in constant time. A move rewraps only the current key; the previous envelope would stay wrapped under the old parent's old key and bound to the old parent id, so a client that unlocked fresh and walked down through the new parent could reach the node's new key but never its old one, and the unrotated children beneath it, which still hang off that old key, would be unreadable and unfinishable. Rewrapping both keys instead would need the previous envelope wrapped under whichever of the destination's keys a reader on the old path holds, which is not a single answer, so the rule is refusal.
+- A node the rotation has already reached, one that still carries a previous envelope, cannot move at all until the rotation finishes. Its own row decides that in constant time.
+    - A move rewraps only the current key.
+    - The previous envelope would stay wrapped under the old parent's old key and bound to the old parent id.
+    - So a client that unlocked fresh and walked down through the new parent could reach the node's new key but never its old one.
+    - The unrotated children beneath it, which still hang off that old key, would be unreadable and unfinishable.
+    - Rewrapping both keys instead would need the previous envelope wrapped under whichever of the destination's keys a reader on the old path holds. That is not a single answer, so the rule is refusal.
 
 ### One rotation at a time, in batches
 
-One rotation runs per workspace at a time; starting a second is refused until the first finishes, which keeps the frontier a single line. The client works top-down in batches of 200 through `POST /api/drive/nodes/rotate`, each batch a set of nodes whose parents have already reached the target epoch, with the node's `change_seq` as the client read it as the precondition on every row.
+- One rotation runs per workspace at a time.
+- Starting a second is refused until the first finishes, which keeps the frontier a single line.
+- The client works top-down in batches of 200 through `POST /api/drive/nodes/rotate`.
+- Each batch is a set of nodes whose parents have already reached the target epoch.
+- The node's `change_seq` as the client read it is the precondition on every row.
 
-Epochs alone are not enough for that check: a whole rotated subtree shares one epoch, so a node moved between two of its folders, or renamed, changes neither epoch and would have the client install an envelope bound to the old parent or the old metadata version. Every write to a node advances its `change_seq`, so a stale row is refused and the client re-reads it on the next pass.
+Epochs alone are not enough for that check.
+
+- A whole rotated subtree shares one epoch.
+- So a node moved between two of its folders, or renamed, changes neither epoch and would have the client install an envelope bound to the old parent or the old metadata version.
+- Every write to a node advances its `change_seq`, so a stale row is refused and the client re-reads it on the next pass.
 
 ### Previous envelopes and grants
 
-The server keeps each rotated node's previous envelope beside the new one, in `prev_key_envelope` with `prev_parent_key_epoch`, until the rotation finishes, so a reader who holds the old parent key can descend through rotated nodes to the ones still below the frontier.
+The server keeps each rotated node's previous envelope beside the new one, in `prev_key_envelope` with `prev_parent_key_epoch`, until the rotation finishes. So a reader who holds the old parent key can descend through rotated nodes to the ones still below the frontier.
 
-That reader must hold both keys of the root, which is the part a previous envelope alone does not give a grantee: the shared root's old envelope is wrapped under a parent outside the share, a key the grantee never had. So when a rotation starts, the owner re-seals every remaining share with both the new root key and the old one, in `key_envelope` and `prev_key_envelope`. A grantee who unlocks mid-rotation opens the previous envelope to reach unrotated children and the new one for rotated ones, and the previous grant is cleared with the previous envelopes when the rotation finishes.
+That reader must hold both keys of the root, which is the part a previous envelope alone does not give a grantee. The shared root's old envelope is wrapped under a parent outside the share, a key the grantee never had.
 
-The work set is a paginated server query, `GET /api/drive/nodes/rotate?root=&cursor=`, over every node in the subtree whose own or parent-key epoch is below the target, visible or not. Not the feed: a file whose first upload is still in flight has no `change_seq` and is in no feed, and a rotation that walked the feed would skip it, clear the previous envelopes, and leave the finished upload unreadable. A crashed client resumes from the same query. When it returns nothing, the rotation row is finished and the previous envelopes and grants are cleared.
+- So when a rotation starts, the owner re-seals every remaining share with both the new root key and the old one, in `key_envelope` and `prev_key_envelope`.
+- A grantee who unlocks mid-rotation opens the previous envelope to reach unrotated children and the new one for rotated ones.
+- The previous grant is cleared with the previous envelopes when the rotation finishes.
+
+The work set is a paginated server query, `GET /api/drive/nodes/rotate?root=&cursor=`, over every node in the subtree whose own or parent-key epoch is below the target, visible or not.
+
+- Not the feed: a file whose first upload is still in flight has no `change_seq` and is in no feed.
+- A rotation that walked the feed would skip it, clear the previous envelopes, and leave the finished upload unreadable.
+- A crashed client resumes from the same query.
+- When it returns nothing, the rotation row is finished and the previous envelopes and grants are cleared.
 
 ### Writes that race a rotation
 
-Writes race it in one way that matters: an upload begun under the old node key would publish a content-key envelope nobody can open. So every upload records the node's `key_epoch` at begin, complete requires it unchanged under the workspace lock, and a mismatch is the `conflicted` state above. The client fetches the new node key from the feed, rewraps the content key, and attaches; attach checks the epoch of the envelope it is handed against the node as it is now, never the epoch begin recorded. Renames, creates and moves already carry the epoch of the key they wrapped under, so an editor writing with a stale key is refused rather than accepted unreadable.
+Writes race it in one way that matters: an upload begun under the old node key would publish a content-key envelope nobody can open. So:
+
+- every upload records the node's `key_epoch` at begin;
+- complete requires it unchanged under the workspace lock;
+- a mismatch is the `conflicted` state above.
+
+The client fetches the new node key from the feed, rewraps the content key, and attaches. Attach checks the epoch of the envelope it is handed against the node as it is now, never the epoch begin recorded.
+
+Renames, creates and moves already carry the epoch of the key they wrapped under, so an editor writing with a stale key is refused rather than accepted unreadable.
 
 ## Object storage
 
-Any S3-compatible store works: the server uses the AWS SDK's S3 client and presigner, which already sit beside the SES client in the dependency tree. Settings:
+Any S3-compatible store works. The server uses the AWS SDK's S3 client and presigner, which already sit beside the SES client in the dependency tree.
+
+Settings:
 
 | Variable                                                                                                                                             | Purpose                                                                                                                       |
 | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
@@ -772,11 +1491,16 @@ Any S3-compatible store works: the server uses the AWS SDK's S3 client and presi
 
 - The bucket needs a CORS rule allowing `PUT` and `GET` with `Range` from `APP_ORIGIN` and exposing `ETag`.
 - The Compose stack gains a Garage service with a bootstrap step that creates the bucket and the CORS rule, so `bun run selfhost:up` works unchanged.
-- For the hosted service, the primary is Cloudflare R2 with the EU jurisdiction restriction, so content stays in the EU, and R2 charges nothing for egress, which is what every presigned download and every replication read is.
-- The replica is Backblaze B2 in its EU region through its S3 endpoint: ingress is free and storage is the cheapest of the credible options, which is the right shape for a copy that is written once and read in an emergency.
+- For the hosted service, the primary is Cloudflare R2 with the EU jurisdiction restriction, so content stays in the EU.
+    - R2 charges nothing for egress, which is what every presigned download and every replication read is.
+- The replica is Backblaze B2 in its EU region through its S3 endpoint.
+    - Ingress is free and storage is the cheapest of the credible options.
+    - That is the right shape for a copy that is written once and read in an emergency.
 - Both are S3-compatible, so the choice is configuration, and the replica credentials live only on the worker.
 
-Object keys carry no information: `ws/{workspaceId}/{objectId}`. The store holds ciphertext only, and a listing of the bucket reveals workspace ids, object ids, sizes and timestamps, nothing else.
+Object keys carry no information: `ws/{workspaceId}/{objectId}`.
+
+The store holds ciphertext only. A listing of the bucket reveals workspace ids, object ids, sizes and timestamps, nothing else.
 
 ## API and packages
 
@@ -789,30 +1513,49 @@ A new `@hushos/drive` package with the same split as auth and billing:
 | `./api`      | The contract implemented over the shared Treaty client              |
 | `./protocol` | The constants                                                       |
 
-Content and envelope primitives go into `@hushos/crypto` under a new `drive.ts`, and the crypto session gains requests for node keys, metadata, and chunk encryption so that keys stay in the worker.
+Content and envelope primitives go into `@hushos/crypto` under a new `drive.ts`.
+
+The crypto session gains requests for node keys, metadata, and chunk encryption, so that keys stay in the worker.
 
 ### Routes
 
 Under `/api/drive/`:
 
 - `capabilities`
-- `workspaces/:id/root`, `workspaces/:id/changes`, `workspaces/:id/trash` (empty), `workspaces/:id/trash-batch`, `workspaces/:id/restore-batch`, `workspaces/:id/purge-batch`, `workspaces/:id/documents/:kind`
-- `nodes/:id/children` (cursor-paginated), `nodes` (create), `nodes/:id/metadata`, `nodes/:id/parent`, `nodes/:id/copy`, `nodes/:id/trash`, `nodes/:id/restore`, `nodes/:id` (purge), `nodes/rotate`
+- Workspaces:
+    - `workspaces/:id/root`, `workspaces/:id/changes`, `workspaces/:id/trash` (empty);
+    - `workspaces/:id/trash-batch`, `workspaces/:id/restore-batch`, `workspaces/:id/purge-batch`;
+    - `workspaces/:id/documents/:kind`.
+- Nodes:
+    - `nodes/:id/children` (cursor-paginated), `nodes` (create);
+    - `nodes/:id/metadata`, `nodes/:id/parent`, `nodes/:id/copy`;
+    - `nodes/:id/trash`, `nodes/:id/restore`, `nodes/:id` (purge);
+    - `nodes/rotate`.
 - `uploads`, `uploads/:id/parts`, `uploads/:id/complete`, `uploads/:id/attach`, `uploads/:id` (abort)
 - `versions/:id/url`, `versions/:id` (discard a superseded version)
 - `thumbnails`
 - `shares`, `shares/:id`, `shares/:id/changes`
 - `links/:token`, without a session
 
-All are session-bound and Origin-checked like billing; bodies carry envelopes as Base64url with tight length limits.
+All are session-bound and Origin-checked like billing. Bodies carry envelopes as Base64url with tight length limits.
 
 ### The protocol is versioned from the first release
 
-A native client cannot be redeployed: a File Provider extension or a CLI that someone installed keeps running for months after the server moved on.
+A native client cannot be redeployed. A File Provider extension or a CLI that someone installed keeps running for months after the server moved on.
 
-- `GET /api/drive/capabilities` returns the protocol version, the content and envelope suites the server accepts, the chunk size, the per-file and depth limits, the name length, and the tombstone window, so no client hardcodes a number it will later be wrong about.
-- Every client sends `HushOS-Client: <name>/<version>`. The server refuses versions below a configured minimum with 426 and a message that names the fix, and refuses unknown suites on upload begin.
-- Policy, meaning quota, limits, validation of preconditions, and what a state transition allows, lives on the server only. A client carries cryptography and presentation, never a rule the server would have to trust it to apply.
+- `GET /api/drive/capabilities` returns:
+    - the protocol version;
+    - the content and envelope suites the server accepts;
+    - the chunk size;
+    - the per-file and depth limits;
+    - the name length;
+    - the tombstone window.
+- So no client hardcodes a number it will later be wrong about.
+- Every client sends `HushOS-Client: <name>/<version>`.
+    - The server refuses versions below a configured minimum with 426 and a message that names the fix.
+    - It refuses unknown suites on upload begin.
+- Policy, meaning quota, limits, validation of preconditions, and what a state transition allows, lives on the server only.
+- A client carries cryptography and presentation, never a rule the server would have to trust it to apply.
 
 ### Worker jobs
 
@@ -829,25 +1572,58 @@ A native client cannot be redeployed: a File Provider extension or a CLI that so
 | `drive.tier`           | Nightly                                                                                                                                                                                           |
 | `drive.orphan-sweep`   | Weekly                                                                                                                                                                                            |
 
-Account deletion writes every object of the workspace to `drive_object_deletions` inside the transaction that removes the rows. The outbox is a table, not a queue message, so it needs nothing from the job library's transaction support, and each row carries the key, the replica state and the dates, so the sequence finishes after every other record of the object is gone. A failed transaction destroys nothing; a committed one cannot be forgotten.
+Account deletion writes every object of the workspace to `drive_object_deletions` inside the transaction that removes the rows.
+
+- The outbox is a table, not a queue message, so it needs nothing from the job library's transaction support.
+- Each row carries the key, the replica state and the dates, so the sequence finishes after every other record of the object is gone.
+- A failed transaction destroys nothing; a committed one cannot be forgotten.
 
 ## Native clients, sync, and file-system providers
 
-Desktop apps on the operating systems' cloud-file frameworks (File Provider on macOS and iOS, Cloud Files on Windows), a FUSE mount on Linux, mobile apps and a CLI are all planned on top of the same store and API. Nothing in them needs a different storage backend: the store holds opaque ciphertext that any client fetches by presigned URL, and every byte of protocol lives in the API and the crypto suite. What they need from this design, and what it provides:
+Desktop apps on the operating systems' cloud-file frameworks (File Provider on macOS and iOS, Cloud Files on Windows), a FUSE mount on Linux, mobile apps and a CLI are all planned on top of the same store and API.
 
-- **A change feed, not re-listing.** `GET /api/drive/workspaces/:id/changes?since=<seq>&limit=` returns nodes with `change_seq` greater than the cursor in order, envelopes included, tombstones included, and the new cursor. A node without a `change_seq`, a file whose first upload has not completed, is not in the feed and cannot leave a ghost when its upload is aborted. A sync engine keeps one cursor per workspace and never walks the tree after the first sync. A cursor older than the tombstone window forces a full listing. Trash and move are one row in the feed: the client applies them to its local copy of the subtree the way the server derives effective state from ancestors, and only purge fans out into one tombstone per descendant.
-- **Placeholders and on-demand hydration.** File-system providers show files before their bytes are local and fetch content when opened. Chunk-aligned `Range` reads on the presigned URL, with the chunk index authenticated, mean a client can hydrate any 8 MiB of a file independently and cache chunks by `(versionId, index)`.
-- **Whole-version writes.** A save from a desktop app is an upload of a new version, with `current_version_id` as the precondition; the framework's own conflict path handles a 409. Small edits to large files re-upload the file in the first release; content-defined chunking and per-chunk deduplication can be added as a later content suite without changing the tree.
+Nothing in them needs a different storage backend. The store holds opaque ciphertext that any client fetches by presigned URL, and every byte of protocol lives in the API and the crypto suite.
+
+What they need from this design, and what it provides:
+
+- **A change feed, not re-listing.**
+    - `GET /api/drive/workspaces/:id/changes?since=<seq>&limit=` returns nodes with `change_seq` greater than the cursor in order, envelopes included, tombstones included, and the new cursor.
+    - A node without a `change_seq`, a file whose first upload has not completed, is not in the feed and cannot leave a ghost when its upload is aborted.
+    - A sync engine keeps one cursor per workspace and never walks the tree after the first sync.
+    - A cursor older than the tombstone window forces a full listing.
+    - Trash and move are one row in the feed. The client applies them to its local copy of the subtree the way the server derives effective state from ancestors.
+    - Only purge fans out into one tombstone per descendant.
+- **Placeholders and on-demand hydration.**
+    - File-system providers show files before their bytes are local and fetch content when opened.
+    - Chunk-aligned `Range` reads on the presigned URL, with the chunk index authenticated, mean a client can hydrate any 8 MiB of a file independently and cache chunks by `(versionId, index)`.
+- **Whole-version writes.**
+    - A save from a desktop app is an upload of a new version, with `current_version_id` as the precondition; the framework's own conflict path handles a 409.
+    - Small edits to large files re-upload the file in the first release.
+    - Content-defined chunking and per-chunk deduplication can be added as a later content suite without changing the tree.
 - **Offline creation.** Node and version ids are client-generated, so a client can create folders and stage uploads offline and reconcile when back, with 409s resolved as conflict copies.
 - **Stable identifiers.** Renames and moves never change a node id or a version's object key, which is what keeps a provider's local database consistent through them.
-- **Portable cryptography.** Every Drive primitive is libsodium: XChaCha20-Poly1305 with JSON associated data, random keys and nonces. There is no Web Crypto in the Drive suite, so a Rust or Swift implementation is a direct transcription with test vectors from the web client. The account-layer HKDF stays where it is; a native client reaches the workspace key through the same grant.
-- **Sessions for native clients.** The API today is bound to an `HttpOnly` cookie. Native clients need the same session presented as a bearer token; that is an auth-package change (a session issued to a device, sent in a header, revocable from Account settings) and a prerequisite for the first native client, not a Drive change.
-- **Pagination.** Children listings and the change feed are cursor-paginated so a folder with a hundred thousand entries is usable from a mount.
-- **Backoff everywhere.** Every retry, of a part, an API call, or a change-feed poll, uses exponential backoff with full jitter and honours `Retry-After`; an idle sync client polls the feed no more than every 30 seconds, jittered. A thousand mounts that all retry in lockstep after a blip are the outage that follows the blip.
+- **Portable cryptography.**
+    - Every Drive primitive is libsodium: XChaCha20-Poly1305 with JSON associated data, random keys and nonces.
+    - There is no Web Crypto in the Drive suite, so a Rust or Swift implementation is a direct transcription with test vectors from the web client.
+    - The account-layer HKDF stays where it is; a native client reaches the workspace key through the same grant.
+- **Sessions for native clients.**
+    - The API today is bound to an `HttpOnly` cookie.
+    - Native clients need the same session presented as a bearer token.
+    - That is an auth-package change (a session issued to a device, sent in a header, revocable from Account settings) and a prerequisite for the first native client, not a Drive change.
+- **Pagination.** Children listings and the change feed are cursor-paginated, so a folder with a hundred thousand entries is usable from a mount.
+- **Backoff everywhere.**
+    - Every retry, of a part, an API call, or a change-feed poll, uses exponential backoff with full jitter and honours `Retry-After`.
+    - An idle sync client polls the feed no more than every 30 seconds, jittered.
+    - A thousand mounts that all retry in lockstep after a blip are the outage that follows the blip.
 - **Capabilities, not constants.** A native client reads limits and suites from `capabilities` at startup and sends its version on every request, as above.
 - **Shares are extra roots.** Each live share is mounted as its own root with its own feed and cursor, and a revoked share unmounts on the 410.
 
-FUSE and File Provider both want fast metadata and lazy content; the tree in Postgres with one round trip per folder and the change feed give the first, ranged chunk reads give the second. A CLI is the same client library without a window.
+FUSE and File Provider both want fast metadata and lazy content.
+
+- The tree in Postgres with one round trip per folder and the change feed give the first.
+- Ranged chunk reads give the second.
+
+A CLI is the same client library without a window.
 
 ## Operations: lifecycle, tiering, and backups
 
@@ -861,39 +1637,65 @@ The worker is the first:
 - `drive.purge` removes trash and superseded versions past 30 days;
 - `drive.delete-objects` drains the deletion queue with retries.
 
-The bucket's own lifecycle configuration is the second, for the cases where the worker is down or the database and the store disagree: abort incomplete multipart uploads after 3 days, and nothing else. No expiration rule ever deletes a completed object; only the application does, through the queue, because the store cannot know what a row still references.
+The bucket's own lifecycle configuration is the second, for the cases where the worker is down or the database and the store disagree: abort incomplete multipart uploads after 3 days, and nothing else.
+
+No expiration rule ever deletes a completed object. Only the application does, through the queue, because the store cannot know what a row still references.
 
 ### Orphans are swept, slowly
 
-`drive.orphan-sweep` runs nightly over a bounded number of pages of the bucket listing, continuing from a cursor it keeps in `drive_sweeps` and starting over once the listing is exhausted, and deletes objects that neither `drive_objects` nor `drive_object_deletions` names and that are older than 7 days.
+`drive.orphan-sweep` runs nightly over a bounded number of pages of the bucket listing.
 
-- Both tables, because account deletion removes the object rows on purpose while the outbox may still be waiting for a replica that is down; a sweep that checked only the first would delete the only copy after a week.
-- The age bound protects an upload whose completion is in flight, and protects a database restored from a backup: after a restore, the sweep is paused for the length of the backup window so that objects the restored database no longer knows about are not destroyed before someone decides whether they matter.
+- It continues from a cursor it keeps in `drive_sweeps`, starting over once the listing is exhausted.
+- It deletes objects that neither `drive_objects` nor `drive_object_deletions` names and that are older than 7 days.
 
-The inverse check runs too. `drive.audit-objects` takes the `ready` and `missing` objects least recently confirmed (`audited_at`) nightly, confirms each exists with the recorded size, marks any miss `missing` so the UI can say the file is unavailable rather than failing to decrypt, and puts an object back to `ready` when a later pass finds it again.
+Why both tables and the age bound:
+
+- Both tables, because account deletion removes the object rows on purpose while the outbox may still be waiting for a replica that is down. A sweep that checked only the first would delete the only copy after a week.
+- The age bound protects an upload whose completion is in flight.
+- It also protects a database restored from a backup: after a restore, the sweep is paused for the length of the backup window. So objects the restored database no longer knows about are not destroyed before someone decides whether they matter.
+
+The inverse check runs too. `drive.audit-objects` takes the `ready` and `missing` objects least recently confirmed (`audited_at`) nightly, and:
+
+- confirms each exists with the recorded size;
+- marks any miss `missing`, so the UI can say the file is unavailable rather than failing to decrypt;
+- puts an object back to `ready` when a later pass finds it again.
 
 ### Storage tiers are a cost lever, not a product feature
 
 Because content is opaque, moving an object between classes changes nothing for the client.
 
-- `drive.tier` runs nightly and moves objects not read in 90 days to the provider's infrequent-access class where one exists, recording `storage_class`; a read moves it back on the next access.
+- `drive.tier` runs nightly and moves objects not read in 90 days to the provider's infrequent-access class where one exists, recording `storage_class`.
+- A read moves it back on the next access.
 - Only classes with immediate retrieval qualify. Archive tiers that need a restore request are excluded, since the download path assumes a presigned GET works now.
 - Hetzner has one class today, so this job is a no-op there; on R2 it maps to Infrequent Access and on AWS to Standard-IA.
 - Objects referenced only by superseded or trashed versions are the first candidates, since they are rarely read and already scheduled for purge.
 
 ### Backups
 
-Database backups are already an operator duty; Drive adds the bucket. Replication is the application's, driven by the database, and bucket versioning at the store stays off everywhere. The two are different things: file versions are rows in `file_versions`, and the store's versioning would only make deletes undoable, which the replica does instead.
+Database backups are already an operator duty; Drive adds the bucket.
 
-- When an upload completes, `drive.replicate` copies the new object to the replica and sets `replicated_at`. Objects are immutable, so a copy is never stale and a retry is harmless.
-- Deletion goes through `drive_object_deletions`: the primary copy is deleted only once the row says the object is on the replica, so an upload that is purged before replication caught up keeps its only copy until the replica has it, and the promised recovery copy always exists.
-- The replica copy is deleted 30 days after the primary, which is the window for undoing a bad purge or a compromised token, kept as a row rather than a lifecycle rule someone has to have configured.
+- Replication is the application's, driven by the database.
+- Bucket versioning at the store stays off everywhere.
+
+The two are different things: file versions are rows in `file_versions`, and the store's versioning would only make deletes undoable, which the replica does instead.
+
+- When an upload completes, `drive.replicate` copies the new object to the replica and sets `replicated_at`.
+    - Objects are immutable, so a copy is never stale and a retry is harmless.
+- Deletion goes through `drive_object_deletions`: the primary copy is deleted only once the row says the object is on the replica.
+    - So an upload that is purged before replication caught up keeps its only copy until the replica has it.
+    - The promised recovery copy always exists.
+- The replica copy is deleted 30 days after the primary.
+    - That is the window for undoing a bad purge or a compromised token.
+    - It is kept as a row rather than a lifecycle rule someone has to have configured.
 - Without a configured replica the primary is deleted at once, and the worker has said so at start.
 - `drive.audit-objects` samples the primary nightly and the replica weekly, and re-enqueues the copy for any miss on the replica.
 
-This works the same on R2, B2, AWS and Garage and never lists a bucket. Provider-native replication exists only on AWS, where it requires versioning on both buckets, and on neither R2 nor B2 in the form we would need, so it is not a second code path. Replication lag is queue lag, and R2 charges nothing for the read.
+This works the same on R2, B2, AWS and Garage and never lists a bucket.
 
-The replica's credentials live only on the worker and are used by nothing but the copy and the delayed delete, so a token that can delete from the primary cannot reach the replica.
+- Provider-native replication exists only on AWS, where it requires versioning on both buckets, and on neither R2 nor B2 in the form we would need. So it is not a second code path.
+- Replication lag is queue lag, and R2 charges nothing for the read.
+
+The replica's credentials live only on the worker and are used by nothing but the copy and the delayed delete. So a token that can delete from the primary cannot reach the replica.
 
 The database backup and the bucket replica are independent; consistency between them is the orphan and audit jobs' job, in that order:
 
@@ -904,13 +1706,20 @@ The database backup and the bucket replica are independent; consistency between 
 
 ### Encryption at the store
 
-The store sees ciphertext only, but server-side encryption is still turned on at the bucket where offered, so a disk or snapshot leak at the provider is protected by a second key held by the provider. The replica is encrypted the same way.
+The store sees ciphertext only. Server-side encryption is still turned on at the bucket where offered, so a disk or snapshot leak at the provider is protected by a second key held by the provider.
+
+The replica is encrypted the same way.
 
 ### What the operator can see
 
-- A bucket listing shows workspace ids, object ids, sizes and timestamps. Access logs at the store show which client addresses fetched which object ids. Neither reveals names or content.
-- The database does reveal the shape of the tree: parent ids, kinds, sizes, counts and timestamps, and which nodes changed together. The share rows show who shares with whom, which links exist and when they were used.
-- Hiding structure would mean the client storing the tree as one encrypted document, which is a different design. This one hides what things are called and what they contain, not how many there are or how they nest, and the self-hosting guide will say so alongside the retention of those logs.
+- A bucket listing shows workspace ids, object ids, sizes and timestamps.
+- Access logs at the store show which client addresses fetched which object ids.
+- Neither reveals names or content.
+- The database does reveal the shape of the tree: parent ids, kinds, sizes, counts and timestamps, and which nodes changed together.
+- The share rows show who shares with whom, which links exist and when they were used.
+- Hiding structure would mean the client storing the tree as one encrypted document, which is a different design.
+    - This one hides what things are called and what they contain, not how many there are or how they nest.
+    - The self-hosting guide will say so alongside the retention of those logs.
 
 ## Client
 
@@ -919,11 +1728,18 @@ The Drive page is a folder view with breadcrumbs, an upload button and drop targ
 - Uploads run in the crypto worker from a `File` handle streamed in 8 MiB reads; the main thread only forwards progress.
 - A closed tab leaves the journal behind, and the next visit offers to resume or discard.
 - All names, sizes and dates render from decrypted metadata; the server's timestamps fill in where metadata has none.
-- Known issue, Safari: a drop made right after a cancelled drag can land on nothing. WebKit never sends the cancelled drag's last `dragleave`, then hands it to the next drag, and pragmatic-drag-and-drop's Safari enter/leave counter takes it for the pointer leaving the window and forgets the target. The next `dragover` finds the target again, and a held pointer fires one every few hundred milliseconds, so only a drop made within moments of arriving misses. That reproduces under automation (`e2e/helpers.ts` `dragOnto` waits for the drag card instead); it has not been seen by hand. The count lives inside the library, so the app cannot clear it on `dragend`. The fix belongs upstream.
+- Known issue, Safari: a drop made right after a cancelled drag can land on nothing.
+    - WebKit never sends the cancelled drag's last `dragleave`, then hands it to the next drag.
+    - pragmatic-drag-and-drop's Safari enter/leave counter takes it for the pointer leaving the window and forgets the target.
+    - The next `dragover` finds the target again, and a held pointer fires one every few hundred milliseconds. So only a drop made within moments of arriving misses.
+    - That reproduces under automation (`e2e/helpers.ts` `dragOnto` waits for the drag card instead); it has not been seen by hand.
+    - The count lives inside the library, so the app cannot clear it on `dragend`. The fix belongs upstream.
 
 ## What the prototype taught
 
-The earlier prototype worked, and its tree idea, per-node keys wrapped by the parent, is kept. Its defects are each answered above, and they are the tests to write first:
+The earlier prototype worked, and its tree idea, per-node keys wrapped by the parent, is kept.
+
+Its defects are each answered above, and they are the tests to write first:
 
 | The prototype                                                                           | Here                                                                                                                      |
 | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
@@ -941,29 +1757,59 @@ The earlier prototype worked, and its tree idea, per-node keys wrapped by the pa
 
 ## Limits and invariants
 
-- A node's key envelope is bound to its parent, so an envelope from another position cannot be substituted; a metadata envelope is bound to its node and version, so an old name cannot be presented under a new version number. The server can still roll a node back wholesale, old envelope and old version together: a client that remembers the last version it saw notices the number going backwards, a fresh client cannot. Freshness beyond that needs something signed and is not claimed here.
+- A node's key envelope is bound to its parent, so an envelope from another position cannot be substituted.
+- A metadata envelope is bound to its node and version, so an old name cannot be presented under a new version number.
+- The server can still roll a node back wholesale, old envelope and old version together.
+    - A client that remembers the last version it saw notices the number going backwards; a fresh client cannot.
+    - Freshness beyond that needs something signed and is not claimed here.
 - The root cannot be moved, renamed away, trashed or purged; a workspace has exactly one.
 - No node can be moved into its own subtree, into a trashed folder, or into another workspace, and the check runs under the workspace lock that every tree write takes.
-- No request costs more than a fixed number of rows: depth is at most 64 by the height check on creates and moves, the ancestor walk stops at 128, a batch trash or restore names at most 200 nodes, listings and the change feed are paginated, and purge and empty-trash are the only server-side subtree operations, fanned out by the worker.
+- No request costs more than a fixed number of rows:
+    - depth is at most 64 by the height check on creates and moves;
+    - the ancestor walk stops at 128;
+    - a batch trash or restore names at most 200 nodes;
+    - listings and the change feed are paginated;
+    - purge and empty-trash are the only server-side subtree operations, fanned out by the worker.
 - The server accepts only the suites and protocol versions it advertises in `capabilities`, and refuses clients below the configured minimum version.
-- `used_bytes` changes only in the complete, attach, copy, purge and version-discard transactions, and every one that adds to it checked the allowance first, at begin or in the same transaction; `reserved_bytes` only in begin, complete, attach, abort and expiry. Neither is ever set from a client-supplied number.
-- A version is `ready` only after the store confirmed its size. An upload is completed or aborted, never both: `completing` is a persisted state that abort and expiry refuse to touch.
-- A current version is never purged, whatever its `superseded_at` says. A file has at most two versions, current and the one it displaced.
+- `used_bytes` changes only in the complete, attach, copy, purge and version-discard transactions.
+    - Every one that adds to it checked the allowance first, at begin or in the same transaction.
+- `reserved_bytes` changes only in begin, complete, attach, abort and expiry.
+- Neither is ever set from a client-supplied number.
+- A version is `ready` only after the store confirmed its size.
+- An upload is completed or aborted, never both: `completing` is a persisted state that abort and expiry refuse to touch.
+- A current version is never purged, whatever its `superseded_at` says.
+- A file has at most two versions, current and the one it displaced.
 - A node without a `change_seq` is invisible: not listed, not in the feed, deletable without a tombstone.
 - No plaintext is ever encrypted under a key and nonce that already produced a ciphertext for different bytes; a resumed upload proves the source unchanged or starts over.
 - Over-quota blocks upload begin and copy, and nothing else; a move within one pool that adds no bytes is not blocked.
-- Every object key in the store corresponds to a `drive_objects` row, or to a `drive_object_deletions` row, and nothing deletes a key that either table names. That is the whole rule for who may delete what: a published object's primary copy goes only after the replica holds it, or at once when no replica is configured, and its replica copy 30 days after that; an object that was never published has no replica and is deleted at once; the sweep deletes only keys that neither table names and that are older than 7 days.
+- Every object key in the store corresponds to a `drive_objects` row, or to a `drive_object_deletions` row, and nothing deletes a key that either table names.
+- That is the whole rule for who may delete what:
+    - a published object's primary copy goes only after the replica holds it, or at once when no replica is configured;
+    - its replica copy goes 30 days after that;
+    - an object that was never published has no replica and is deleted at once;
+    - the sweep deletes only keys that neither table names and that are older than 7 days.
 - The store accepts a part only at the length the server signed for it.
-- Authorization for every request is the walk: membership of the workspace, else the nearest live share in the ancestor chain, else 404. A revoked share is refused on the next request; URLs it already obtained expire within 15 minutes.
-- Every write that wraps a key states the epoch it wrapped under and is refused if that epoch has moved; an envelope the server stores is always one a current key can open, or sits beside one that can while a rotation finishes. Epochs come from one counter per workspace, so a rotation's target exceeds every epoch in it.
-- A version's envelope names its object and carries the plaintext size and the thumbnail length; the server stores neither, and infers a file's kind from nothing. No object can be served in another object's place, and the thumbnail opens only under a key derived for that role.
-- The server accepts uploads in content suite 3 only and reads suites 1 and 2 forever; the envelope's length follows the object's suite, and a copy keeps the source's suite.
-- Every write that sets a metadata or content-key envelope carries the writer's signature, verified against the writer's current signing key inside the writing transaction; one that does not verify is refused with 400 and changes nothing.
-- A rotation is finished only when every node in its subtree has its own epoch and its parent-key epoch at or above the target, the root judged by its own epoch and its outside parent's current key; creates and moves within or into the subtree are allowed and are visited, not skipped; nothing leaves the subtree until the rotation finishes, and a node still carrying a previous envelope does not move at all; every rotation row carries the node's `change_seq` as its precondition.
+- Authorization for every request is the walk: membership of the workspace, else the nearest live share in the ancestor chain, else 404.
+- A revoked share is refused on the next request; URLs it already obtained expire within 15 minutes.
+- Every write that wraps a key states the epoch it wrapped under and is refused if that epoch has moved.
+- An envelope the server stores is always one a current key can open, or sits beside one that can while a rotation finishes.
+- Epochs come from one counter per workspace, so a rotation's target exceeds every epoch in it.
+- A version's envelope names its object and carries the plaintext size and the thumbnail length; the server stores neither, and infers a file's kind from nothing.
+- No object can be served in another object's place, and the thumbnail opens only under a key derived for that role.
+- The server accepts uploads in content suite 3 only and reads suites 1 and 2 forever.
+- The envelope's length follows the object's suite, and a copy keeps the source's suite.
+- Every write that sets a metadata or content-key envelope carries the writer's signature.
+    - It is verified against the writer's current signing key inside the writing transaction.
+    - One that does not verify is refused with 400 and changes nothing.
+- A rotation is finished only when every node in its subtree has its own epoch and its parent-key epoch at or above the target, the root judged by its own epoch and its outside parent's current key.
+    - Creates and moves within or into the subtree are allowed and are visited, not skipped.
+    - Nothing leaves the subtree until the rotation finishes, and a node still carrying a previous envelope does not move at all.
+    - Every rotation row carries the node's `change_seq` as its precondition.
 - A same-node attach requires the version precondition begin recorded; a sibling attach never overwrites anything.
 - Trash never blocks a completion; purge aborts it.
 - Decrypted bytes for a preview live in memory and blob URLs only.
-- Every write states the version it saw and is refused with 409 if that is stale; `change_seq` is strictly increasing per workspace, and a tombstone outlives its node by 90 days.
+- Every write states the version it saw and is refused with 409 if that is stale.
+- `change_seq` is strictly increasing per workspace, and a tombstone outlives its node by 90 days.
 
 ## Decisions
 
@@ -977,4 +1823,12 @@ The earlier prototype worked, and its tree idea, per-node keys wrapped by the pa
 
 ### Sealed copies
 
-Info offers a sealed copy of any item: a zip holding `manifest.json`, every record under the item as the server stores it (ids, epochs, key and metadata envelopes, the current version's content key envelope, suite, chunking, nonce and sizes), and `objects/<objectId>`, the ciphertext of every ready file, fetched through the same short-lived URLs a download uses. Nothing in it is decrypted and no key is included, so it is as opaque as the store itself; paired with the key file from the same dialog it can be read without HushOS. Records are listed parents first, so a reader can open each key envelope under its parent's key of the named epoch, the top one under the workspace key.
+Info offers a sealed copy of any item. It is a zip holding:
+
+- `manifest.json`;
+- every record under the item as the server stores it: ids, epochs, key and metadata envelopes, the current version's content key envelope, suite, chunking, nonce and sizes;
+- `objects/<objectId>`, the ciphertext of every ready file, fetched through the same short-lived URLs a download uses.
+
+Nothing in it is decrypted and no key is included, so it is as opaque as the store itself. Paired with the key file from the same dialog, it can be read without HushOS.
+
+Records are listed parents first. So a reader can open each key envelope under its parent's key of the named epoch, the top one under the workspace key.

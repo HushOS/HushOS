@@ -1,206 +1,1397 @@
 # hushos-core
 
-The client side of the HushOS protocol in Rust, shared by every app that is not the web: OPAQUE, the account key and its device memory, workspace grants, Drive node, metadata and version envelopes, content chunks and thumbnails. `packages/crypto` is the TypeScript twin the web runs; the two must seal and open each other's records byte for byte. The repository's root `AGENTS.md` applies here too.
+The client side of the HushOS protocol in Rust. Every app that is not the web uses it.
+
+- It covers OPAQUE, the account key and its device memory, workspace grants, Drive node, metadata and version envelopes, content chunks and thumbnails, identities, shares, links, reports and families.
+- `packages/crypto` is the TypeScript twin the web runs. The two must seal and open each other's records byte for byte.
+- The repository's root `AGENTS.md` applies here too.
 
 ## Rules
 
-- `#![forbid(unsafe_code)]`. The C ABI that once lived here is gone; Swift and Kotlin come from UniFFI (`#[uniffi::export]`, `derive(uniffi::Record)`) behind the `uniffi` feature, which is on by default and off for a WebAssembly build.
-- No I/O. The crate seals and opens; the apps fetch and store. Keep it that way so the same crate serves the iOS app, the File Provider extension, the Android app and the DocumentsProvider without a runtime.
+- `#![forbid(unsafe_code)]`.
+- Swift and Kotlin come from UniFFI (`#[uniffi::export]`, `derive(uniffi::Record)`) behind the `uniffi` feature.
+    - The feature is on by default and off for a WebAssembly build.
+    - The C ABI that once lived here is gone.
+- No I/O. The crate seals and opens; the apps fetch and store.
+    - Keep it that way, so the same crate serves the iOS app, the File Provider extension, the Android app and the DocumentsProvider without a runtime.
 - The HushOS OPAQUE profile (server identifier, argon2id parameters) is built in. Do not add parameters for another profile.
-- Every context string is the compact JSON array the web builds with `JSON.stringify`. When the web changes a context, this crate changes with it, and the fixtures below catch the drift.
-- Doc comments carry a runnable example for anything an app calls; unit tests sit in the same file. A test must fail on a real defect (a flipped byte, a wrong context, a wrong length), never assert what the code trivially does.
+- Every context string is the compact JSON array the web builds with `JSON.stringify`.
+    - When the web changes a context, this crate changes with it.
+    - The fixtures catch the drift.
+- Doc comments carry a runnable example for anything an app calls.
+- Unit tests sit in the same file.
+- A test must fail on a real defect (a flipped byte, a wrong context, a wrong length). Never assert what the code trivially does.
+- No exported parameter may be named after a C keyword (`signed`, `char`, `default`…).
+    - The Swift bindings go through a C header, and `ios:build` fails on it.
+- Do not move the ML-DSA library (`ml-dsa`) or its TypeScript twin without the ACVP vectors (see [Identity](#identity-identityrs-pqrs)).
 
-## Fixtures, both directions
+## Commands
 
-`bun run fixtures` at the root regenerates both files:
+Run these from the repository root.
 
-- `fixtures/web.json`, sealed by `packages/crypto/scripts/core-fixtures.ts`, opened by `tests/web_fixtures.rs`.
-- `packages/crypto/src/__fixtures__/core.json`, sealed by `examples/fixtures.rs`, opened by `packages/crypto/src/core-fixtures.test.ts`.
+| Command                                                                        | What it does                                                                                                                                 |
+| ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bun run core:check`                                                           | fmt, clippy with warnings denied, tests. Also lints the `fuzzing` feature and formats and lints `fuzz/`. Run before declaring a change done. |
+| `bun run fixtures`                                                             | Regenerates `fixtures/web.json` and `packages/crypto/src/__fixtures__/core.json`.                                                            |
+| `bun run fixtures:groups`                                                      | Rebuilds the group fixtures and the area-ledger fixtures.                                                                                    |
+| `cargo test -p hushos-core`                                                    | The crate's tests, fixtures from the web included.                                                                                           |
+| `bun run --cwd packages/crypto test src/core-fixtures.test.ts`                 | The web opening what the core sealed.                                                                                                        |
+| `bun run core:apple`                                                           | Builds device and simulator slices, generates Swift, and assembles `apps/ios/Packages/HushOSCore`.                                           |
+| `bun run core:android`                                                         | Builds arm64-v8a and x86_64 with cargo-ndk and generates Kotlin into `apps/android/core`.                                                    |
+| `bun run fuzz:diff`                                                            | Holds the Rust and TypeScript fuzz verdicts to each other through `fuzz/examples/verdicts.rs`.                                               |
+| `cargo test --manifest-path crates/hushos-core/fuzz/Cargo.toml --lib --locked` | The fuzz crate's lib tests. CI's Rust core job runs this on stable, from the root.                                                           |
 
-Run `bun run core:check` (fmt, clippy with warnings denied, tests) before declaring a change done.
+- The xcframework and the generated Swift source are not committed.
+- On this Mac, cargo's index fetch stalls unless `CARGO_HTTP_MULTIPLEXING=false CARGO_HTTP_SSL_VERSION=tlsv1.2` are set. The scripts set them.
+- Fuzzing is run and triaged as CONTRIBUTING.md (Fuzzing) says.
 
-## Bindings
+## Fixtures
 
-- Apple: `bun run core:apple` builds device and simulator slices, generates Swift, and assembles `apps/ios/Packages/HushOSCore` (xcframework and generated source are not committed).
-- Android: `bun run core:android` builds arm64-v8a and x86_64 with cargo-ndk and generates Kotlin into `apps/android/core`.
-- On this Mac cargo's index fetch stalls unless `CARGO_HTTP_MULTIPLEXING=false CARGO_HTTP_SSL_VERSION=tlsv1.2` are set; the scripts set them.
+Every module with a TypeScript twin is held to it by fixtures in both directions.
 
-## Added on 2026-09-22 (evening)
+- The web seals a `fixtures/web*.json`, and a Rust test opens it.
+- An `examples/*.rs` seals a `packages/crypto/src/__fixtures__/core*.json`, and a TypeScript test opens it.
+- Hand-written scenario files in `fixtures/` carry stated outcomes. Both twins run them through a shared testkit.
+- Each twin must reproduce the other's full verdict, not only pass or fail.
 
-- `identity.rs` also rewraps the identity for a master-key rotation; `shares.rs` seals as well as opens (suite 2 when the grantee's ML-KEM key is given); `links.rs` (argon2id + BLAKE2b link keys, the owner's sealed copy, `link_url`/`link_parse`); `reports.rs` (libsodium sealed box by hand over XSalsa20-Poly1305 for suite 1, hybrid suite 2, `kem_binding_verify`); `recovery.rs` (BIP-39 English list embedded from `bip39-english.txt`, `recovery_create/open/phrase`); `contacts.rs` (fingerprint, key digest, the settings document under HKDF of the identity's X25519 private key). `drive.rs` gained `workspace_grant_rewrap`.
-- Every one of these has a fixture in both directions; `bun run fixtures` then `cargo test -p hushos-core` and `bun run --cwd packages/crypto test src/core-fixtures.test.ts` prove the web opens what the core sealed and vice versa (sealed box, argon2id, BIP-39, settings, shares, rewraps).
-- `crypto_secretbox` is used only through `encrypt_in_place_detached`, so the tag is placed first by hand as libsodium does; do not switch to `encrypt`, whose tag position is the crate's choice.
+| Area         | Web to core                                                                                                                                          | Core to web                                                                                                                                                                         | Shared                                                                                                                                                                                                                                                                                                             |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Base         | `fixtures/web.json`, sealed by `packages/crypto/scripts/core-fixtures.ts`, opened by `tests/web_fixtures.rs`                                         | `packages/crypto/src/__fixtures__/core.json`, sealed by `examples/fixtures.rs`, opened by `packages/crypto/src/core-fixtures.test.ts`                                               | `tests/common/rekeyed.rs`, `packages/crypto/src/rekeyed-testkit.ts`                                                                                                                                                                                                                                                |
+| Groups       | `fixtures/web-groups.json`, from `packages/crypto/scripts/group-fixtures.ts`, read by `tests/web_group_fixtures.rs`                                  | `packages/crypto/src/__fixtures__/core-groups.json`, from `examples/group_fixtures.rs`, read by `packages/crypto/src/group-fixtures.test.ts`                                        | `tests/common/groups.rs`, `group-testkit.ts`                                                                                                                                                                                                                                                                       |
+| Area ledger  | `fixtures/web-area-ledger.json`, from `packages/crypto/scripts/area-ledger-fixtures.ts`, read by `tests/area_ledger_fixtures.rs`                     | `packages/crypto/src/__fixtures__/core-area-ledger.json`, from `examples/area_ledger_fixtures.rs`, read by `packages/crypto/src/area-ledger-fixtures.test.ts`                       | `fixtures/area-ledger-scenarios.json`, `fixtures/merge-pin-cases.json`, `tests/common/area_ledger.rs`, `packages/crypto/src/area-ledger-testkit.ts`, `tests/common/rotations.rs`, `packages/crypto/src/rotation-testkit.ts`, `tests/common/device_records.rs`, `packages/crypto/src/device-record-testkit.ts`      |
+| Joining      | `fixtures/web-join.json`, from `packages/crypto/scripts/join-fixtures.ts`, read by `tests/join_fixtures.rs`                                          | `packages/crypto/src/__fixtures__/core-join.json`, from `examples/join_fixtures.rs`, read by `join-fixtures.test.ts` and (for consent) `packages/db/src/auth.consent.test.ts`       | `fixtures/join-check-cases.json`, `fixtures/join-session-scenarios.json`, `tests/common/join.rs`, `join-testkit.ts`                                                                                                                                                                                                |
+| Roster calls | `fixtures/web-roster-calls.json`, from `packages/crypto/scripts/roster-call-fixtures.ts`, read by `tests/roster_call_fixtures.rs`                    | `packages/crypto/src/__fixtures__/core-roster-calls.json`, from `examples/roster_call_fixtures.rs`, read by `roster-call-fixtures.test.ts` and `packages/groups/src/server.test.ts` | `fixtures/outbox-steps.json`, `fixtures/roster-call-sessions.json`, `fixtures/settings-area-cases.json`, `tests/common/roster_calls.rs`, `roster-calls-testkit.ts`, `tests/common/removal_calls.rs`, `removal-calls-testkit.ts`, `tests/common/settings_areas.rs`, `packages/crypto/src/settings-areas-testkit.ts` |
+| Pins         | `fixtures/pin-cases.json` (hand-stated outcomes, written by `packages/crypto/scripts/pin-cases.ts`)                                                  | Read by `tests/pin_cases.rs` and `packages/drive/src/pin-cases.test.ts`                                                                                                             | Chain cases are unit tests in each twin: `first_seen/tests.rs`, `packages/crypto/src/first-seen.test.ts`                                                                                                                                                                                                           |
+| ML-DSA       | `fixtures/ml-dsa-65-acvp.json`, a subset of NIST's ACVP-Server vectors (commit and file hashes inside)                                               | Passed by `pq.rs`'s tests and `packages/crypto/src/ml-dsa-acvp.test.ts`                                                                                                             |                                                                                                                                                                                                                                                                                                                    |
+| Old apps     | `fixtures/v0.10.0/planted-join.json`, made by the core at the tag `v0.10.0` with `fixtures/v0.10.0/planted_join.rs` (how to run it is in its header) | Read by `tests/planted_join.rs` and `packages/crypto/src/planted-join.test.ts`                                                                                                      |                                                                                                                                                                                                                                                                                                                    |
 
-## Added on 2026-10-12 (integrity)
+- The base files cover the sealed box, argon2id, BIP-39, settings, shares, rewraps, `ids`, `rekeyed`, `node.attributed` and the area self-grant.
+- `bun run fixtures:groups` rebuilds the group and area-ledger files.
+- The case lists for each area are under that area below.
 
-- Content suite 3 (`drive.rs`): `content_layout`, `chunk_range` and `thumbnail_range` take the suite; `chunk_encrypt` takes the file's bytes for the index and pads, `chunk_decrypt` returns the file's bytes only; `padded_length` is Padmé; `version_seal` writes suite 3 (`content_suite()`).
-- `signatures.rs`: metadata and version statements, sign with `IdentityKeys::signing_seed`, `*_verify` and `*_integrity` (`Integrity`). The statement bytes are pinned against the server's builder in `packages/db/src/signatures.ts`.
-- `shares.rs` seals suite 3 only (`share_seal` takes the granter's `IdentityKeys`); `share_open` takes a `ShareGranter` (signing key for suite 3, X25519 for 1 and 2).
-- `identity.rs`: `identity_create`, `identity_succeed`, `succession_verify`, `succession_chain_verify` (continuity by keys, not version numbers); `identity_rewrap` keeps the identity's key version.
-- `contacts.rs`: settings key (`settings_key_create/open/rewrap`), settings envelope version 2 (`settings_seal(user_id, settings_key, …)`); `settings_open` reads 1 and 2.
+## Module map
 
-## Added on 2026-10-13 (round 3)
+| Module                    | Twin in TypeScript                                                                                                  | Holds                                                                        |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `bytes.rs`                |                                                                                                                     | `SecretBytes`, encoding helpers                                              |
+| `envelope.rs`             |                                                                                                                     | Contexts, seals, the re-keying primitives                                    |
+| `ids.rs`                  |                                                                                                                     | Scoped ids                                                                   |
+| `drive.rs`                | `packages/crypto/src/drive.ts`                                                                                      | Node, metadata and version envelopes, content suites, node keys, origin keys |
+| `identity.rs`             |                                                                                                                     | Identity envelopes, upgrades, successions                                    |
+| `pq.rs`                   |                                                                                                                     | ML-DSA-65                                                                    |
+| `signatures.rs`           | `packages/db/src/signatures.ts` (statement bytes)                                                                   | Hybrid signatures, record statements and integrity verdicts                  |
+| `shares.rs`               |                                                                                                                     | Share suite 4, `seal_hybrid`/`open_hybrid`                                   |
+| `links.rs`                |                                                                                                                     | Link keys                                                                    |
+| `reports.rs`              | `packages/crypto/src/reports.ts`                                                                                    | Report seals, `pair_key`                                                     |
+| `recovery.rs`             |                                                                                                                     | Recovery phrases                                                             |
+| `contacts.rs`             | `packages/crypto/src/contacts.ts`                                                                                   | Fingerprints, key digests, pins, the settings document                       |
+| `first_seen.rs`           | `packages/drive` (`comparePin`), `packages/crypto/src/first-seen.test.ts`                                           | First-seen pins and the guard's rule                                         |
+| `canonical.rs`            |                                                                                                                     | The group statement grammar                                                  |
+| `groups.rs`               |                                                                                                                     | Group keys, rosters, area rows, group seals                                  |
+| `group_trust.rs`          |                                                                                                                     | Accepting a roster chain, writer trust, group verdicts                       |
+| `succession_path.rs`      | `packages/crypto/src/succession-path.ts`                                                                            | The group core's walk along a member's links (crate-private)                 |
+| `area_ledger.rs`          | `packages/crypto/src/area-ledger.ts` (the worker's Drive key store and family write rules)                          | `AreaLedger`, one per unlocked session                                       |
+| `rotation_records.rs`     | `rekeyRecord`/`rekeyNode` in `packages/crypto/src/rotation-records.ts`                                              | Re-keyed walks                                                               |
+| `group_verdicts.rs`       | `recordVerdicts`/`judgeWith` in `packages/crypto/src/group-verdicts.ts`                                             | Record verdicts in family folders                                            |
+| `device_record.rs`        | The worker's device store and `accept` (`session-groups.ts`), `record-acceptance.ts`, `packages/crypto/src/pins.ts` | The chain record, the floor, the guard                                       |
+| `join.rs`                 | The worker's join (`session-groups.ts`), `packages/crypto/src/join-session.ts`                                      | Joining a family, pair codes, first use                                      |
+| `consent.rs`              | `consent-due.ts`, the worker's `identityConsent`                                                                    | Successor consent                                                            |
+| `roster_calls.rs`         | The worker's `groupStage`, `groupOpenSeal`, `groupGrants`, `groupJoinCode`; `packages/crypto/src/outbox.ts`         | Staged roster calls and the outbox                                           |
+| `roster_calls/removal.rs` | `groupStage` kinds `remove`, `markLeft`, `rotate`, `retire`; `groupRestage`; `groupPreviousRoot`                    | Calls that rotate folders                                                    |
+| `ledger_settings.rs`      | `settingsOpenFor` in `packages/crypto/src/settings-marks.ts`                                                        | Settings and family checks in the ledger                                     |
+| `area_open.rs`            | The worker's `groupOpenArea`, `grantAreaKey`/`openAreaSelfGrant`, `rewrapAreaSelfGrant`                             | Opening a family folder, self-grants                                         |
 
-- `signatures.rs`: re-sealed statements (`metadata_resealed_sign/verify`, `version_resealed_sign/verify`, domains `hushos/drive/sig/{metadata,version}-resealed`); `Integrity` gains `Resealed`, `RetiredKey` and `Unchecked` (never returned by the core; apps use it when a check cannot run); `*_integrity` take `Option<TrustedKeys>` (`current` verifies, `retired` only ever gives `RetiredKey`); `metadata_reseal_sign`/`version_reseal_sign` sign a rotated or copied record ordinary only when its prior verdict is `Verified`, and refuse `Unchecked`.
-- `shares.rs` opens suite 3 only, against the granter's current signing key (`share_open(envelope, granter_signing_public_key, grantee, ctx)`); `ShareGranter` and suites 1/2 are gone. `pair_key` lives in `reports.rs`, the only user left.
-- `contacts.rs`: `settings_open(user_id, settings_key, envelope) -> Option<String>`, `None` for a version 1 envelope.
-- `SecretBytes` (`bytes.rs`) wipes itself on drop and crosses UniFFI as bytes; `IdentityKeys`, `ContentKey`, `Content`, `CreatedSettingsKey`, `LinkSecret`, `DeviceMemory`, `LoginStart`/`LoginFinish`/`RegistrationStart`/`RegistrationFinish` hold their secrets in it. Records cannot implement `Drop` (UniFFI moves fields out), so the field type does the wiping.
+## Primitives
 
-## Added on 2026-10-13 (scoped ids, saved copies)
+### Secrets in memory
 
-- `ids.rs`: `derive_id(kind: IdKind, scope_id, seed) -> String` and `new_id(kind, scope_id) -> NewId { id, seed }`. The seed is base64url (16 bytes) both ways, as the API carries it (`idSeed`, `versionIdSeed`, `objectIdSeed`, `linkIdSeed`, `reportIdSeed`); the scope is the workspace the item is created in (for a report, the reported item's). Known answers in the unit tests come from a third implementation; `ids` in both fixture files pins the twins to each other.
-- `signatures.rs`: saved statements (`metadata_saved_sign/verify`, `version_saved_sign/verify`, domains `hushos/drive/sig/{metadata,version}-saved`, ending in `"link"`); `Integrity::SavedFromLink`, checked after ordinary and before re-sealed. `metadata_copy_sign`/`version_copy_sign(seed, prior, from_link, …)` sign a copy by its source: `from_link` saved whatever `prior`, else as a reseal. `metadata_reseal_sign`/`version_reseal_sign` (rotation, rename) keep `SavedFromLink` as saved and re-seal anything else that did not verify.
+- `SecretBytes` (`bytes.rs`) wipes itself on drop and crosses UniFFI as bytes.
+- These hold their secrets in it: `IdentityKeys`, `ContentKey`, `Content`, `CreatedSettingsKey`, `LinkSecret`, `DeviceMemory`, `LoginStart`/`LoginFinish`/`RegistrationStart`/`RegistrationFinish`.
+- Records cannot implement `Drop`, because UniFFI moves fields out. So the field type does the wiping.
 
-## Added on 2026-10-15 (post-quantum identities, docs/identity-pq-design.md)
+### Secretbox
 
-- `pq.rs`: ML-DSA-65 from `ml-dsa = "=0.1.1"` (pure FIPS 204, keys from the 32-byte ξ, hedged signing through `sign_internal` over `0 || len(ctx) || ctx || M`). `fixtures/ml-dsa-65-acvp.json` is a subset of NIST's ACVP-Server vectors (commit and file hashes inside); `pq.rs`'s tests and `packages/crypto/src/ml-dsa-acvp.test.ts` both pass it. Do not move either library without them.
-- `signatures.rs`: `hybrid_sign`/`hybrid_verify` (Ed25519 64 || ML-DSA-65 3309, context `hushos/identity/v1`, both halves required, never chosen by length), `keys_statement`, `succession_statement` (version 2).
-- `identity.rs`: envelopes version 2 (`ml_dsa`, `keys_signature`; `IdentityKem.signature` is version 1 only). `identity_create` writes 2; `identity_upgrade` keeps a version 1 identity's keys and key version and adds ML-DSA (and ML-KEM if missing); `identity_open` refuses a version 2 identity whose keys statement does not hold; `identity_succeed` needs version 2 and signs hybrid; `succession_verify(user, link, signer)` verifies under the keys the reader trusts, never the link's; `PinnedKeys` carries `ml_dsa_public_key_hash`. The KEM binding (`kem_binding_verify`, `OperatorKem`) is gone; `OperatorKeys` carries `ml_dsa_public_key`, `kem_public_key`, `keys_signature`: `report_seal_key` checks a version 2 operator's keys statement, seals a version 1 operator to the served KEM key unchecked (nobody pins operator keys), and refuses only an operator with no KEM key.
-- `shares.rs`: suite 4 only (4565 bytes), `share_open(envelope, HybridPublicKey, grantee, ctx)`; suite 3 is refused.
-- `contacts.rs`: fingerprint version 3 over X25519, Ed25519 and the SHA-256 of the ML-DSA and ML-KEM keys (`identity_fingerprint` takes the digests, `identity_fingerprint_of_keys` the keys), `pin_verified`; settings documents read as 1 or 2 and always sealed as 2.
+- `crypto_secretbox` is used only through `encrypt_in_place_detached`.
+- The tag is placed first by hand, as libsodium does.
+- Do not switch to `encrypt`: its tag position is the crate's choice.
 
-## Added on 2026-10-15 (groups, milestone 1a: docs/groups-design.md 2; after four reviews)
+### Re-keying primitives (`envelope.rs`)
 
-- `canonical.rs`: the group statements' encoding (lowercase UUIDs only, base64url digests, integers 1..=2^53-1, strictly ascending lists) and the re-encode check every parser ends with.
-- `groups.rs`: the group key (64-byte seed: Ed25519 then ML-DSA-65 ξ; `group_public_key`, `group_sign`, `group_verify`, context `hushos/group/v1`), `group_fingerprint`, roster and succession statements (`roster_statement`/`roster_parse`/`roster_sign`, `group_succession_*`), members' signatures through a roster (`roster_member_signer` uses the served ML-DSA key only when its digest is the entry's), and the two seals of milestone 1 (`group_key_seal`/`_open`, `area_grant_seal`/`_open`), all taking `Arc<AcceptedRosters>`. Area grants take the area's id seed and refuse a workspace not derived under the group. Guardian seals (docs/groups-design.md 2.9) were removed for milestone 1 (2026-10-16): child accounts are a later milestone; do not reintroduce them without the design's review.
-- `shares.rs`: `seal_hybrid`/`open_hybrid` are the suite 4 construction with the payload, `info`, associated data and statement as parameters; shares and the group seals all go through them. Do not fork it.
-- `group_trust.rs`, the model: every device verifies the roster chain from version 1, or continues from its own cache. `accept_rosters(group_id, first_keys, first_keys_checked, pins, rosters, successions, ml_dsa_keys, me, cache)`:
-    - Verify first, decide second. The chain is the one ending at the latest roster served, linked by `previous_roster_digest` to version 1 (or the cache's last roster). Two rosters at the latest version, or a link that does not reach, are refused; rosters after the cache that do not continue it are refused ("fetch it again from version 1"). Any other served roster is a dead branch: ignored, listed in `dead_branches()` (version, claimed signer), never a warning. The chain is verified in full before any mark is compared, so a server alone gets refusals, never the warning.
-    - The person's marks are `pins` (every pin they hold: settings and device) and `cache` (`AcceptedRosters::cache`, the device's own record: roster digests, last statement, group keys, successions with tie, digest and signer, creator, `key_history`, wrong own entries). Marks that disagree with each other or with the verified chain are `RosterChain::Fork { of: Roster | GroupKey, version, sides }`, each `MarkSide` a digest, where it came from (`Pin`, `Cache`, `Served`) and the signer only for a verified statement; no side is ever the culprit. Version 1 keys other than a pin's or the cache's, with a chain verified under them, are `GroupKey` at version 1, sides by SHA-256 of the Ed25519 key and the ML-DSA digest. A group key mark no valid succession meets waits (rivals kept in `waiting` with their keys) and is the warning only if a roster needing the next key holds under a rival key, signed by a `Members` holder; a roster under the real (withheld) key with only rivals served is refused (`NO_SUCCESSION`), and a mark still unmet at the end is a rollback, refused. A succession whose new key is the old one or any earlier group key is refused. A chain short of a mark is refused (rollback). With no pin and no cache, `first_keys_checked` must be true (the join flow's words check) or nothing is accepted.
-    - Then one pass along the chain: each roster under the key current at its version, signed by a `Members` holder of the roster before it, one copy carrying both signatures (other copies of the same statement may fail), the entry rules, and the succession a dropped holder made due. Each succession is taken as soon as the roster it is tied to is held; one that does not hold is ignored; two that hold are refused unless a group key mark chooses.
-    - The entry rules are only: entries never disappear, and `since_version` is the version an entry last changed at. Key versions are a holder's claim: chains are followed from an entry's keys with no key-version floor (`pinned_of` has `key_version: None`).
-    - `roster_check_next(chain, roster, ml_dsa_keys, identities)` and `group_succession_check_next(chain, succession, ml_dsa_keys)` are acceptance itself, extending the chain's cache by one statement. With `identities`, a new or changed entry must be one of its member's identities with its keys statement holding. The server must run both before storing; clients run the succession one before signing. `roster_next` applies the same rules (signatures aside) before a holder signs.
-    - `succession_path.rs` (`succession_path`, crate-private, twin of `packages/crypto/src/succession-path.ts`) is the group core's own walk along a member's links: each link verified once (memoized per call site) by its successor consent (`succession_consent_verify`), the verified links a graph, followed from a start key set; two verified links leaving one key set to different keys are an identity fork (`SuccessionPath::Fork`), whatever the served order. The shipped strict verifier `identity::succession_chain_verify` is untouched (personal pins, drive, iOS and Android rely on its contiguous-in-served-order chain); never route group logic through it or change it for groups.
-    - `group_writer_trust` retires keys only along the links `succession_path` verified (never a link served beside them): unpinned, from the entry's keys and the member's first `key_history` set (the words-checked one), never a later set; pinned, from the pin, plus the keys before the pin on the path from the entry's or first keys when the pin is at a later identity (`retired_before`). An identity fork anywhere on those walks is `Unchecked`. Own entries naming a replaced identity of the reader are in `own_entry_wrong_at` too.
-    - The seal openers take an optional `SignerHistory { served, links }` for the sealer or granter, and then also accept the keys on their verified path from their first `key_history` set up to and including their entry's keys, never past them (`groups::signers_through`): a seal from before a fold-in, or under the entry's keys after the member moved on, opens; one under keys no roster has folded in does not; a forked identity lends nothing beyond the entry's own keys. The seal functions take no history: the sealer's Ed25519 and ML-DSA keys (derived from the seeds) must be their entry's (`sealer_holds`), so a member seals only after their identity is folded in; `group_key_seal` refuses a sealer who is not an active `Members` holder (the creator for key 1 only while active), `area_grant_seal` a granter who is not active; `group_key_open` checks the reader is the holder and takes the creator's key 1 seal only while the creator is active; `open_hybrid` takes a slice of signers. Acceptance runs in four steps: marks vs marks and the served version 1 keys vs the marks (before anything served), link, verify, marks vs chain. Candidate successions' signatures are checked once per statement (`State::signatures`). `links_loaded` false (served identity or links not loaded) turns `BadSignature` into `Unchecked`.
-    - `AcceptedRosters` is a `uniffi::Object` with getters and no constructor: Swift and Kotlin can read one but not write one out (the web freezes it and keeps a registry of accepted chains, and every seal function checks it).
-- Round 8 (2026-10-17): `GroupKeySealContext` and `AreaGrantContext` carry `roster_version` and `roster_digest` (the sealer's latest accepted roster; the sealer must name it, an opener must have it on its chain). `accept_rosters_joining` takes a `JoinMark` (a digest prefix of 16 to 64 lowercase hex characters, the roster version and the admitting admin), a side `MarkSource::Join`; `accept_rosters` is it with none. `AcceptedRosters::own_entry_behind_at` is a soft note, not cached. The group walk returns `Stale` when a verified link leaves the served keys (readers: unchecked) and never reads the served key version. `canonical.rs` holds one statement grammar for `encode_statement` and `parse_statement` (4 MiB, arrays at most four deep of plain ASCII strings and integers 0..2^53−1, no escapes, exactly the compact encoding); `MAX_ROSTER_MEMBERS` is 10,000; `bytes_of` refuses empty strings (the general `decode` keeps its behaviour); identity key versions are bounded to 1..2^53−1 in `signatures.rs`; pins' `checked_at` must be the canonical ISO form; chain indices go through `version_index`.
-- Successor consent (Fable F1, 2026-10-17; round 9): `SuccessionLink.consent` (optional, uniffi default `None`) is the old hybrid signature over `["hushos/identity/succession-consent",1,"old",…]` then the new one over the same with `"new"` (`signatures::succession_consent_statement(user_id, link, ConsentRole)`), `SUCCESSION_CONSENT_BYTES` = 6746. `identity_succeed` co-signs and returns `IdentitySuccession.consent`; `succession_consent_verify` checks each half under the keys the link names, in its role. `succession_path` takes a proof: with `consent_until` (the entry's keys) every link before them needs consent and after them its version 2 signature (the walk from the first keys in writer trust, and `signers_through`); without it, the version 2 signature (the lag, a personal pin's walk, `roster_entry_fold_in`). It caps links at 64 (`TooMany`), says `Stale` when the start itself is the served identity and a link leaves it, and remembers verifications under a typed key (member, proof, link). `succession_verify` and `succession_chain_verify` are unchanged, ignore `consent` and never read the walk's cache. The server and apps do not store or upload `consent` yet (1c, with a backfill of earlier links); until then only pre-entry history is affected.
-- Round 9 (2026-10-17): the first keys' walk in writer trust retires keys only up to the entry's (`up_to`) and never sets the fork verdict (only its own retirement is voided). Rosters carry `areas` (`RosterArea`, one row per area at its current version: `area_key_commitment`, HKDF-SHA-256 of the key under `hushos/group/area-key/commit/v1` || workspace id || u64be version; `MAX_ROSTER_AREAS` 10,000; uniffi default `[]`); the area rules (stay at the version with the same commitment, or step one; new areas and roster 1's at 1) live in `check_entries`/`roster_rules`; `AcceptedRosters::area_keys` (cached) holds every version's commitment. `area_grant_seal` grants only a listed key and `area_grant_open` refuses a version above the latest roster's, one never listed, or an opened key whose commitment differs; `area_write_version`, `next_area_key`, and `roster_next(.., areas)` (rows put in place). `JoinMark` adds `group_key_version` and `group_key_prefix` (16-64 hex), checked against the key the marked roster is under (a `GroupKey` fork otherwise). `roster_check_next` and `group_succession_check_next` return the extended chain. The web also has `acceptStoredChain` (server-only, TypeScript only).
-- Round 10 (2026-10-18): roster `areas` are delta rows (only areas the roster creates or rotates, `MAX_ROSTER_AREA_ROWS` 256), folded into `area_keys` (`fold_areas`); `check_areas` holds the version rule, the family removal's rotation of every area, and no admission on a roster that drops a holder; `areas_to_rotate` names what a family removal must rotate; `next_area_key` refuses an earlier key; `area_grant_open` lost its `highest_key_version` floor; `check_cache` checks only the last roster's rows (and roster 1's full set), earlier commitments trusted as stored. `JoinMark` is `{ roster_version, code }`, twelve words from `join_code` (SHA-256 over roster digest, group key digest and u64be key version, read as fingerprint words); a mismatch is a `Roster` fork. `roster_check_next` and `group_succession_check_next` return `()` again (no server role in Rust). `succession_path` takes `member_keys` and counts only links that could join the chain toward the 64 cap; `group_writer_trust` takes `cache: Option<Arc<SuccessionCache>>` (a uniffi object, `SuccessionCache::new()`) and asks consent on the pin walk when the pin is a later holder-written set. Codex round 3: record statements refuse empty ids and metadata versions above 2^53−1; `check_envelope` mirrors the web (key version 1..2^53−1, non-empty keys signature).
-- Round 11 (2026-10-19): `MAX_ROSTER_AREA_ROWS` and `MAX_FAMILY_AREAS` are 1,024 (`check_areas` refuses a family's 1,025th area, so a family removal always fits; area retirement must come before deletion). `roster_rules` refuses a signer not active on their own roster and a roster with no active `Members` holder. `roster_next` takes `area_keys: Option<Vec<AreaKey>>` and computes the rows (`area_rows`), refusing any key equal to any earlier commitment of any area; `area_key_commitment` is no longer uniffi-exported. `VerifiedPin.trusted_via` (uniffi default `None`) is set by `trust_as_group_does`; `roster_entry_new` refuses it; `group_writer_trust` takes `pinned_via` after `pinned` and asks consent on the pin walk exactly when it is set (the key-history heuristic is gone). `TooMany` on the lag or pin walk reads as links not loaded, not a fork. `VerifiedLinks` is a bounded LRU (4,096) keyed by SHA-256, with an internal mutex held only for lookups and stores; `SuccessionCache` holds one. `join_code` hashes a `hushos/group/join-code/v1` prefix. The fixture decoder returns an error for a malformed cache (`raw_cache`, judged refused).
-- Round 12 (2026-10-19): `area_key_commitment(&key)` is HKDF of the key alone under `hushos/group/area-key/v2`; `check_areas` refuses any commitment already on the chain (a `HashSet` in `State`, folded with the rows) or repeated in one roster; `area_rows` is one HKDF per key and keeps only commitments, the keys zeroized. `group_writer_trust` takes `pinned: Option<WriterPin>` (keys and `trusted_via` together; `pinned_via` is gone); an empty `trusted_via` reads `Unchecked`, and a pin that agrees returns its `trusted_via` as `via`. `VerifiedPin.trusted_via` has no binding default. The rival-key fork needs the departure rules to hold. iOS `ContactPin.trustedVia` and Android `ContactPin.trustedVia` exist; a words check clears it, a followed pin keeps it.
-- Milestone 1c core (groups 1c PR 1): `roster_first(group_id, kind, creator, area_keys)` builds roster version 1 (the creator as only entry and signer, roles sorted, `since_version` 1, rows at version 1 computed from the keys by `groups::rows_after`, the crate-private helper `area_rows` now wraps) and runs the version 1 `roster_rules` (signatures aside, a placeholder key in the state), so a creator never signs a first roster acceptance refuses; `roster_entry_own(user_id, identity, roles)` makes the creator's roster version 1 entry (`since_version` 1, for nothing else) from their own identity whose keys statement holds (the roster's signer signature, checked under the entry's keys, proves the entry and the signer are the same identity; that it is the newest is the creating client's check, design 3.1). Both are uniffi-exported for the phones (1d). Twins of the web's `firstRoster` and `ownRosterEntry`.
-- No exported parameter may be named after a C keyword (`signed`, `char`, `default`…): the Swift bindings go through a C header, and `ios:build` fails on it.
-- `ids.rs`: `IdKind::Group` (scoped to the creating account) and `IdKind::Workspace` (an area, scoped to its group), `check_id`.
-- `contacts.rs`: `digest_hex`, `digest_base64url`, `same_key_digest` convert key digests between contact pins (hex) and group statements (base64url).
-- Fixtures: `fixtures/web-groups.json` (`packages/crypto/scripts/group-fixtures.ts`, read by `tests/web_group_fixtures.rs`) and `packages/crypto/src/__fixtures__/core-groups.json` (`examples/group_fixtures.rs`, read by `packages/crypto/src/group-fixtures.test.ts`). Both twins derive every person and group key from the same seeds (`tests/common/groups.rs`, `group-testkit.ts`), build the same 150 `cases` in the same order (dead branches, marks and forks with their sides, refusals, the cache and its binding, the entry rules, the group's kind, succession ties and order, the next roster and succession checks, the reviews' probes, records read through the chain), 28 `sealCases` (the two openers, sealer histories up to the entry and never past it, a planted entry lending no history, planted keys, a forked sealer identity, a creator who left, seals bound to the sealer's roster, planted first keys with and without the member's consent, an earlier area version re-delivered after a rotation), 12 `sealerCases` (who may seal or grant, with which keys, at which roster, which area key), 4 `foldIns` (a forged or one-sided link folds nothing in), 7 `chainCases` (the strict personal-pin verifier: one-sided links held, junk after the chain, links out of order, another ML-DSA key at the start, a version beyond 2^53−1 refused), 18 `statementCases` (raw bytes against the statement grammar), 11 `firstRosterCases` (`roster_first` to the same statement bytes, or refused alike) and 7 `ownEntryCases` (`roster_entry_own`, or refused alike), plus `foldedSealer`; each must reproduce the other's full verdict (cache, key history, dead branches, own entries, record and next-statement verdicts, seal payloads). `bun run fixtures:groups` at the root rebuilds them.
+- `rekey`: a raw re-seal, never parsed.
+- `opening_key`: HChaCha20 of the key and the nonce's first 16 bytes.
+    - It comes from `chacha20` 0.9's `hchacha`. This is the only use of that crate.
+- `open_with_opening_key`: ChaCha20-Poly1305 IETF with `0⁴ ‖ nonce[16..24]`.
 
-- Roster format 2 (design 2.10, F14 and F11): `Roster.format` (1 or 2, uniffi default 1) is the statement's version; format 2 area rows are `[ws, v, "key", commitment, rootCommitment]` or `[ws, v, "retired"]` (`RosterArea.root_commitment`, `RosterArea.retired`, commitment empty on a tombstone). `area_root_commitment` is HKDF of the root's node key under `hushos/group/area-root/v1` (not exported to apps). `check_areas` holds the format never going down, no root commitment twice, tombstones only at an existing area's next version, nothing after a tombstone, removals rotating live areas only, and the 1,024 counting live areas (`AreaLedger`). `AcceptedRosters::area_roots` and `retired_areas` (cached as `GroupChainCache.area_roots`, `retired_areas`; a cache without them reads as none), `area_root_check(chain, ws, version, root_key) -> bool` (false: a format 1 version), `area_write_version` none for a retired area, `area_grant_seal` refuses one, `areas_to_rotate` skips it. `roster_first(.., format)`, `roster_next(.., retire_areas, format)` (the chain's format by default, never lower), `AreaKey.root_key` (required in format 2), `next_area_key(.., root_key)`. Review round (2026-10-17): `GroupChainCache.cache_version` (uniffi default 1; this core writes 2) says whether a cache carries `area_roots`/`retired_areas` (a version 2 cache with roots emptied is refused, never read as uncommitted); `area_root_check` refuses a version with no root entry at all, and answers `false` only for an explicit `None`. Fixtures: 23 format 2 cases at the end of `cases` (root probes in `CaseInput.root`), sealer case `granter-retired-area`; unit tests `groups.rs` `format_2_*`; fuzz `roster`/`roster_build` read and build both formats, `accept` carries the root probe.
+### Scoped ids (`ids.rs`)
 
-## Re-keyed records (2026-10-17, docs/integrity-design.md "Re-keyed records")
+- `derive_id(kind: IdKind, scope_id, seed) -> String`.
+- `new_id(kind, scope_id) -> NewId { id, seed }`.
+- The seed is base64url (16 bytes) both ways, as the API carries it: `idSeed`, `versionIdSeed`, `objectIdSeed`, `linkIdSeed`, `reportIdSeed`.
+- The scope is the workspace the item is created in. For a report, it is the reported item's.
+- `IdKind::Group` is scoped to the creating account.
+- `IdKind::Workspace` is an area, scoped to its group.
+- `check_id` checks an id against its scope and seed.
+- Known answers in the unit tests come from a third implementation.
+- `ids` in both fixture files pins the twins to each other.
 
-- `envelope.rs`: `rekey` (a raw re-seal, never parsed), `opening_key` (HChaCha20 of the key and the nonce's first 16 bytes, from `chacha20` 0.9's `hchacha`; the only use of that crate) and `open_with_opening_key` (ChaCha20-Poly1305 IETF with `0⁴ ‖ nonce[16..24]`).
-- `drive.rs`: `metadata_rekey`, `version_rekey`, `origin_opening_key`, `origin_key_wrap`/`origin_key_open` under `["hushos/drive/origin-key", 1, ws, node, "metadata"|"version", metadataVersion|versionId, keyEpoch, sha256(origin)]` (`OriginKeyContext`, `OriginRecord`).
-- `signatures.rs`: the rekeyed statements (`metadata_rekeyed_statement`, `*_rekey_sign`, `*_rekeyed_verify`; `RecordOrigin` carries the wrapped key, whose digest the statement covers), `metadata_rekeyed_integrity`/`version_rekeyed_integrity(node_key, trust, record) -> RekeyedVerdict { origin, rekeyer, bound: Option<bool> }` (`None` node key or trust is `Unchecked`: the core returns it here; `bound` is `Some(false)` only for bytes that differ or a wrap/origin that fails under a verified re-key signature, `None` for whatever a server alone could cause; a missing or bad re-key signature never sets it), `*_origin_carry(old_key, new_key, target_epoch, record) -> CoreResult<Option<Vec<u8>>>` (the next rotation's bound check before re-wrapping; `None` means drop the origin and sign legacy re-sealed; an error, which stops the rotation, for a malformed new key or epoch, refused served ids, or a current envelope `old_key` does not open), and the honest legacy form `*_compat_sign(seed, prior, own_record, …)`, which never refuses. `*_reseal_sign` is unchanged (renames, copies, and rotations until the apps move).
-- Contexts: `metadata_context`, `version_context` and `origin_key_context` validate as `drive.ts` does (lowercase UUIDs, epochs and versions 1..2^53−1, a readable suite) and return `CoreResult`; `metadata_seal`/`open` and `version_*` refuse such fields with `Input` now. `group_integrity` returns `Unsigned` before consulting any trust.
-- `group_trust.rs`: `group_metadata_rekeyed_integrity`/`group_version_rekeyed_integrity(node_key, GroupRekeyedTrust, record) -> GroupRekeyedVerdict`, the origin judged under the origin signer's `GroupWriterTrust`, the re-keyer under theirs.
-- Fixtures: `rekeyed` in both files (`tests/common/rekeyed.rs` and `packages/crypto/src/rekeyed-testkit.ts` read the same JSON and build the same 50 cases (each with whether the next rotation carries its origin) with the same declared verdicts; each generator checks its own verdicts before writing). Fuzz: `statements` covers the drive record statements in all four forms; `record_integrity` and `origin_open` are new; the `fuzzing` module gained raw openers and the writer-form statement builders for them.
+## Drive records (`drive.rs`)
 
-## The area ledger (groups 1d, core step 1: docs/groups-mobile-plan.md)
+### Content suite 3
 
-- `area_ledger.rs`: `AreaLedger` (a `uniffi::Object`, one per unlocked session: the app, the File Provider extension and the DocumentsProvider each fill theirs from listings) is the twin of the web worker's Drive key store and family write rules in `packages/crypto/src/area-ledger.ts` (`session.ts` and `session-groups.ts` call it). It holds every workspace and node key, each node key with the area version its path is rooted at, a walk's pending keys, the committed chains, the areas each family opened, and per (family, area) the write version, block reason, root-seen version and root node; it decides `KEY_CHANGE_PENDING`, `NOT_CARRIED`, `AREA_ROOT`, `KEYS_CHANGED`, `NOT_CHECKED_KEYS`, `NOT_COMMITTED_ROOT` and `OLDER_CHAIN` exactly as the worker does (same messages).
-    - **Area state is per (family, area), never per area.** An area resolves only through the family `open_area` derived its id under (`check_id`); another family's listing of it, or of the account's own workspace (`open_personal_workspace`, which apps call when they open the personal grant, before any family sync), is ignored and reported (`foreign_listings`), never a lock; an area no family opened resolves through none; `commit`, `uncommit` and `forget_group` touch only their own family's areas (`forget_group` drops the keys of the areas that family opened, nothing another family's chain merely lists). Review round (2026-10-18): the first port keyed it by area alone, as the web worker did, and a removed member who manages another family the victim is in could list the area at an old version and, with the server, get writes under the old top-level key.
-    - `commit` refuses a chain older than the one held (`OLDER_CHAIN`) and another chain at the version held (`SPLIT_CHAIN`): an app writes nothing of that acceptance (no record, no pin), re-reads after `OLDER_CHAIN` and shows `SPLIT_CHAIN` as the fork. Background walks need this. The web worker also passes its committed chain to acceptance as a mark (so the split view is the fork there before the ledger sees it); the core does so in `accept_served` (core step 3), and until then an app passes `pin_after` of its committed chain among the pins itself.
-    - A top-level row at the area's write version whose key holds pins the area's root node (an old-version top node never does); any other top-level node is refused without touching what was seen, and a root served at an older version never lowers `root_seen_at`.
-    - A walk goes node by node through `rotate_node(workspace_id, node, target_epoch, signing_seed)` (core step 2), which runs `require_writable` first (as `driveRotateNodes`), makes the fresh key, re-keys the node's records with it and only then marks it pending, as the worker's `rotateKey` does: a node whose records do not re-key leaves nothing pending. `rotate_drop` drops a refused batch, `rotate_drop_all(workspace_id)` one the app lost track of. `rotate_key` (the key half alone) is `#[doc(hidden)]` and not exported: the shared scenarios and the fuzz target call it; apps never see a walk's keys.
-- **Apps write family folders only through `AreaLedger`.** `node_wrap`, `node_open` and `previous_root_key_open` stay exported (personal folders, shares, the shipped apps) but check none of the family write rules: a wrap made with them in a family folder skips rooting, the write version and every refusal above. Wrap, re-wrap, create and walk in a family folder with `new_node_key`, `rewrap_node` and `rotate_node`, and take keys for writes from `writable_node_key` only.
-- `drive.rs`: `previous_root_key_wrap`/`previous_root_key_open` (option A's `hushos/drive/previous-root-key`, root only) and the crate-private checked node-key context (`node_wrap_checked`, `node_open_checked`: lowercase UUIDs and epochs 1..2^53−1, as the web refuses them). `node_open`/`node_wrap` keep their unchecked context for the shipped apps.
-- Fixtures: `fixtures/area-ledger-scenarios.json` (32 hand-written scenarios with stated outcomes, two-family ones included; both twins run them through `tests/common/area_ledger.rs` and `packages/crypto/src/area-ledger-testkit.ts`, which calls the worker's own ledger functions), `fixtures/web-area-ledger.json` (`packages/crypto/scripts/area-ledger-fixtures.ts`, read by `tests/area_ledger_fixtures.rs`) and `packages/crypto/src/__fixtures__/core-area-ledger.json` (`examples/area_ledger_fixtures.rs`, read by `packages/crypto/src/area-ledger-fixtures.test.ts`): every step's outcome must match, every key envelope the other twin made or served (option A's label included) must open to the key it says, and two rule oracles hold on every run (each successful create, re-wrap or walk key went under a parent rooted at the write version; each node a write made is writable at once). `bun run fixtures:groups` rebuilds both. Fuzz target `area_ledger` takes `{steps}` in the same vocabulary and asserts the oracles; the differential's fast-check side also draws random step sequences.
+- `content_layout`, `chunk_range` and `thumbnail_range` take the suite.
+- `chunk_encrypt` takes the file's bytes for the index and pads.
+- `chunk_decrypt` returns the file's bytes only.
+- `padded_length` is Padmé.
+- `version_seal` writes suite 3 (`content_suite()`).
 
-## Re-keyed walks and verdicts (groups 1d, core step 2)
+### Contexts
 
-- `rotation_records.rs`, the twin of `rekeyRecord`/`rekeyNode` in `packages/crypto/src/rotation-records.ts` (the worker calls it): `AreaLedger::rotate_node(workspace_id, node, target_epoch, signing_seed)` returns `RotatedNode` (the key envelope at the target; metadata and each version as `RotatedRecord`, re-keyed raw under the fresh key). A record that already carries an origin (`ServedRekey`) carries it after `*_origin_carry`'s bound check, or is re-sealed with `drop_origin` when the origin does not bind (a wrap at another epoch or for another version included), its writer is gone, or it names a writer with no signature; a signed record becomes its own origin; an unsigned one (no signature, or a writer served as nobody) is re-sealed as the walker's (decision D6; the residual, planted unsigned content reading "Re-locked by" the walker, is in docs/integrity-design.md). No legacy signature beside a re-key (decision D3). A node already at the target is only re-wrapped. Refused: a seed that is not the unlocked account's (`open_account`, `NOT_THIS_ACCOUNT`, `NO_ACCOUNT`), a workspace that is no family folder (`NOT_A_FAMILY_FOLDER`: the web's personal `legacyRecord` is not ported), a node with shares or links (`SHARED_IN_FAMILY`; the web's `rekeyNode` refuses them too since the Core 2 review: sharing is hidden in family folders, design 3.4, so any share is one the server listed), the top level (`AREA_ROOT`), and a second walk of a node to a target it is pending at (`ITEM_CHANGED`, both twins). Keys and seeds go through borrowed-slice internals (`*_with`) and are wiped.
-- `group_verdicts.rs`, the twin of `recordVerdicts`/`judgeWith` in `packages/crypto/src/group-verdicts.ts`: `AreaLedger::record_verdict(group_id, reader, writers, record, cache) -> CoreResult<RecordVerdict>` (this account's records by its own keys, everyone else's by `group_writer_trust` against the ledger's committed chain and the areas the family opened, a re-keyed record with the node key at its epoch from the ledger, unchecked without one). The family is the one the folder was opened under (`NOT_THIS_FAMILYS` otherwise, as the web's `groupVerify` now checks); the fork comes from the ledger (`uncommit(group_id, fork)`, cleared on commit and forget); `reader` must be the account `open_account` named. `AreaLedger::copy_form(...) -> Integrity`, the prior a `*_copy_sign` call takes (`Verified`, `SavedFromLink`, else `Resealed`; a former member's or key conflict's record and an unbound origin `Resealed`; unchecked refused, a re-keyed record without its epoch included, in both twins). Personal keys come from `GroupWriter::personal`; the web's copy uses its Drive trust set instead.
-- Fixtures: `rotations` in both area-ledger fixture files (`tests/common/rotations.rs`, `packages/crypto/src/rotation-testkit.ts`): eleven cases on a family whose roster 2 removed person 3 (a removal's walk keeping every writer's record, a second walk carrying bound origins and dropping a gone writer's and an unbound one, carried origins wrapped at another epoch, for another version or naming a writer with no signature dropped, the walker reading its own walk, a re-wrap at the target, a folder whose two children are wrapped under its pending key while their records are re-keyed with a child under its old key left unwritable, a three-version file with one writer since gone, a planted signer read back as a bad signature in its name, an unsigned record under the replaced key re-sealed as the walker's and read as re-locked, and a shared and a linked node both twins refuse with the same message). Each twin walks each case's nodes in order, checks its declared shapes, writes and verdicts (or the refusal), and writes the walked nodes; the other reads them on a fresh member's ledger with its own verdicts (`bound: true`, the origin's verdict kept, the removed member's file `former-member`) and walks the other's input nodes to the same shapes and writes. Each re-keyed record is a `record_integrity` seed (`rekeyedInputs`).
+- `metadata_context`, `version_context` and `origin_key_context` validate as `drive.ts` does, and return `CoreResult`.
+    - Lowercase UUIDs.
+    - Epochs and versions 1..2^53−1.
+    - A readable suite.
+- `metadata_seal`/`open` and `version_*` refuse such fields with `Input`.
 
-## The device record and the pins (groups 1d, core step 3)
+### Node keys
 
-- `device_record.rs`, the twin of the worker's device store and `accept` (`session-groups.ts`), the data layer's order (`packages/crypto/src/record-acceptance.ts`, `acceptFromRecord`, which `apps/web/src/lib/groups/sync.ts` calls) and `mergePin`/`pinAhead` (moved from `apps/web/src/lib/groups/pins.ts` into `packages/crypto/src/pins.ts`).
-    - `AreaLedger::open_account(user_id, signing_public_key, account_key)` derives and holds the device store key (HKDF-SHA-256 of the root, salt 32 zeros, info `hushos/group/device-store/v1`; a root of another length is an `Input` error), wiped by `clear`. Opening another user than the one open clears everything first (keys, chains, floors, settings), as the web's unlock of another user forgets the Drive keys and the families; the same user keeps them. `clear` and a switch of user bump a generation that survives `clear`: an acceptance commits, uncommits or marks a fork only under the session it began in (`NOT_THIS_ACCOUNT`, checked under the lock), and seals its record under the key held at commit.
-    - `AreaLedger::group_device_record_seal`/`_open(group_id, store, value)`: XChaCha20-Poly1305, AD `["hushos/group/device-store",1,userId,groupId,store]`, envelope base64url of `[1][nonce][ct]`, JSON text in and out. `DeviceStore` is `Outbox` and `Joins`; the chain record (`chains`) is sealed and opened only inside `accept_served`. `CoreError::Sealed` means the envelope did not open (delete it); anything else (no account, a malformed id) is `Input`, and the record stays.
-    - The chain record is `{"v":1,"cache":…,"pin":…}` with the cache as the web writes it (`cache_json`, `cacheVersion` 2, `areaRoots`, `retiredAreas`), read as `marksOf` reads it (`chain_record_read`): not version 1 is unreadable; a falsy cache is none; a cache the worker refuses by shape (not an object, any `origin`, a field of the wrong JSON kind, `areaRoots`/`retiredAreas` present but null, a version 2 cache without them) is refused (`RecordCache::Refused`, keeping only what a list `rosterDigests` counts); a pin of the wrong JSON kind refuses acceptance on every path. Numbers read as `JSON.parse` reads them.
-    - `AreaLedger::use_settings(user_id, pins: Option<map>)`: the settings document's group pins; none after settings that opened is refused within one unlock (D7, the worker's `useSettings`). `AreaLedger::legacy_settings(user_id)` is the worker's `legacySettings` for a version 1 document: refused after settings that opened, otherwise nothing set. Acceptance before any settings for the account is refused (`Open your settings first.`), after the record is opened, as `marksOf` orders it.
-    - `AreaLedger::accept_served(me, group_id, record, served: ServedChain, checked_at) -> ServedAcceptance` (`Accepted { chain, record, pin }`, `Fork`, `RecordUnreadable`, `FetchFromVersionOne`, `Overtaken { split }`). `record` none with `served.after` above 0 is `Input`, before the ledger is touched. A continuation refused or overtaken is `FetchFromVersionOne` (call again with the same record); from version 1, first with the cache, then without it and with the record's pin still a mark. Each run is the worker's `accept` against the family's **floor**: the highest chain committed this session (`State::floors`, raised by every commit, never dropped by `uncommit`, only by `forget_group` and `clear`; the web's ledger keeps the same in `area-ledger.ts`), the `OLDER_CHAIN` floor before acceptance and a mark (`pin_after` of it), and checked again by every commit (`State::commit`, so `commit` itself never goes below or beside it). `commit` is not exported: apps commit only through `accept_served` (Core 4's join and creation will too). A changed session or account, or settings not open, is passed straight back, never turned into `FetchFromVersionOne` (the web's `accountError`). A run overtaken from version 1 is `Overtaken`, never an English error; `served_race_message(split)` holds the words to show after three. Apps store the record only if no stored record is at a later roster version, and before they settle the pin (the web's `putChain` refuses a lower version).
-    - `merge_pin(group_id, current, next, opened: Vec<Arc<OpenedArea>>) -> CoreResult<PinMerge>` (`Merged`, `Behind`, `Conflict`; an opened area of another family is refused) and `pin_ahead`; check times compare by UTF-16 code units. `OpenedArea { group_id, workspace_id, version }` is a `uniffi::Object` only `open_area` makes (`AreaOpened::pin_area`), so the areas folded in from `opened` are ones this device opened for that family. `current` and `next` are plain records an app can fill: a forged area there only raises an area's mark, which is the limit of the type; app reviews hold that the only `next` is `ServedAcceptance::Accepted`'s `pin`. `opened_area`, `chain_record_seal_value` and `chain_record_open_value` are `#[doc(hidden)]`, not exported, for the fixtures and the fuzz target.
-- A record's pin is checked as the web's `checkGroupPin` checks the raw JSON (`pin_of`), field by field in its order and words; both twins now check every area id, then every area version (the web checked them entry by entry before), so a pin wrong in two places is refused for the same field.
-- Fixtures: `deviceRecords` in both area-ledger fixture files (`tests/common/device_records.rs`, `packages/crypto/src/device-record-testkit.ts`): 26 cases built alike (the last two: version 1 settings set nothing, and an unreadable record is the answer before settings are open) (cold: the cache continued, a refused continuation, unreadable records, newer or damaged caches from version 1, cuts below the record's pin with and without it, a refused pin, the cache and the committed chain as marks, no mark; warm, with a chain committed first: the record at the floor, behind it, damaged and headless caches, the refused continuation that must keep the floor, settings ahead of the record, settings on a branch, and a branch at roster 2 that only the cache shows at 2), each twin running the other's records and served chains to the same full outcome, refusal messages and whether it fetched from version 1 included; the app's own records (`stores`); `mergePins` from `fixtures/merge-pin-cases.json` (15 cases); `raceMessages`. Fuzz: kind `device_record` in `pins` (any JSON sealed as the chain record, served `through` roster 1 to 3, with a `held` chain committed first; an accepted chain never goes below the held one, and reaches and passes through the record's pin whenever it is one). The shared ledger scenarios gained one: a refusal never lowers the floor.
+- `node_wrap`/`node_open` keep their unchecked context for the shipped apps.
+- `node_wrap_checked` and `node_open_checked` are the crate-private checked node-key context.
+    - Lowercase UUIDs and epochs 1..2^53−1, as the web refuses them.
+- `previous_root_key_wrap`/`previous_root_key_open`: option A's `hushos/drive/previous-root-key`, for the root only.
+- `workspace_grant_rewrap` rewraps a workspace grant for a master-key rotation. It refuses a family self-grant (see [Self-grants in a master-key rotation](#self-grants-in-a-master-key-rotation)).
+- In a family folder, apps never use `node_wrap`, `node_open` or `previous_root_key_open` for writes. See [The area ledger](#the-area-ledger-area_ledgerrs).
 
-## Joining and successor consent (groups 1d, core step 4)
+### Re-keyed records
 
-- `join.rs`, the whole newcomer side, twin of the worker's join (`session-groups.ts`: `admission`, `groupJoinPreview`, `groupJoinCheck`, `groupAccept` with `joining`) and its escalation (`packages/crypto/src/join-session.ts`):
-    - `group_join_preview(me, group, record, served, holds)` → `JoinPreview::Code { roster_version, code, session }`. `holds` (the app's stored escalation, or none) is folded in first; then marks as `accept_served` reads them (`open_marks`, which checks `me` in the worker's order: another account `NO_ACCOUNT` first, then the record, the settings, then `Open your identity first.`), plus a chain or fork the session holds (`holds_family`). The code is the roster's where the account's entry last became active.
-    - Hidden positions: drawn from `OsRng` (`next_u32`, rejection-sampled below `2^32 - 4`, mod 12, distinct, ascending) only when the code has no entry in the family's book; never redrawn until a match on that code clears it. A family keeps at most 64 codes (`MAX_SHOWN_CODES`): the earliest unheld one goes, and a book of 64 held codes refuses to show another (`TOO_MANY`).
-    - `JoinSession`, `JoinMatched`: `uniffi::Object`s with no constructors. A session carries the account, the generation, the family, the mark and its positions; a check accepts it only while the book still holds exactly those positions for that mark in that generation (`NOT_SHOWN` otherwise: a lock, another account, or a restore that replaced positions not held).
-    - `join_check(me, group, record, served, session, typed, now, holds)`: the account, the restore, then not-shown (`NOT_SHOWN`) and incomplete before verifying; then the admission again (`Changed` with a showing, words unchecked); then the words. `WrongWords { holds }` the family's first miss (holds the code), `Mismatch { holds }` after (`held || tried`); `Matched { matched, holds }` clears `tried` and that code's hold and seals the joins record (`{v:3, groupId, joinMark, checkedAt}`, store `joins`, checked at the settings pin's time if any, else `now`). `holds` is the escalation sealed in store `holds` (`{v:1, tried, held:[{rosterVersion, code, positions}]}`), `None` when nothing is held: the app stores it in place of the one before, or deletes it on `None`.
-    - Restoring (`holds` on either call): only ever holds more. A held entry here is kept; an unheld one takes the stored positions and is held; a new one needs room. Roster versions 1 to 2^53 − 1 only. A blob that does not open on this account is refused with `HOLDS_UNREADABLE`, the only answer an app deletes it on.
-    - `accept_joining(me, group, record, served, matched)`: a token of another account is `NOT_THIS_ACCOUNT`; of an earlier unlock of the same account `STALE_MATCH` (reopen it from the record); of another family `OTHER_FAMILY`. Then single use: the record's SHA-256 is reserved under the lock (`JoinBook::consumed`, `USED` if taken) and released unless the join is `Accepted`. Then the admission again: `Changed` only when the account was let in again at a later roster and the chain still passes through the compared roster with the compared code; anything else (another code at the compared roster, a chain short of it) goes to `accept_once` with the join mark, which answers the fork or a refusal. `first_keys_checked` only where nothing marks the family, as the worker. `join_matched_open` reopens a kept record (`None`: another root, family, version, or any store but `joins`).
-    - What single use is: a joins record is a standing permission to commit the compared code for that family until the app deletes it. `consumed` only stops a double submission within one unlock; it is cleared by `forget_group`, a lock and another account, and a relaunch starts empty. The record is bound to the account root and the family by its AD, not to a ledger instance: any ledger of the same account opens it.
-    - Version 2 joins records (the data-layer escalation of round 1) are refused: a join in flight across this upgrade is compared once more.
-    - `JoinBook` lives in the ledger's `State` (dropped by `clear` and another account; `forget_group` keeps the escalation and clears only `consumed`).
-    - The `fixtures` feature (on for the crate's own tests through a self dev-dependency, and for the fuzz crate) gates `AreaLedger::with_draws(draws)` (replaces the CSPRNG), `join_words` (the bare typed-words rule: JavaScript's `trim` set, lowercased, two ascending positions in 0..=11, a twelve-word code), `join_draw_positions` and `device_store_seal_value`/`device_store_open_value`. None of them is in a release build. `join_check_message(again, them)` holds the two sentences.
-    - `DeviceStore` is `Outbox` only: `chains`, `joins` and `holds` are the core's.
-- `consent.rs`: `links_needing_consent(links, identities)`, twin of `consent-due.ts`, and `AreaLedger::succession_consent_sign(me, link, old_identity, next_identity)`, twin of the worker's `identityConsent`, signing with the account root the ledger holds (no account key crosses the FFI). In order: `me` of another account (`NO_ACCOUNT`), `me` without the identity the account opened (`OPEN_IDENTITY`), not two version 2 identities with the next later (`UPGRADED_ONLY`), either not opening on this account (`NOT_OWN`), `link` not naming both or not signed by the old identity (`This link is not one this account made.`), not adjacent in `me` (`NOT_CONSECUTIVE`). `me` is the full opened history: an app that leaves one out gets `NOT_CONSECUTIVE`.
-- Core 1 gap closed in this step: `State::held_back` (the worker's `heldBack`): while a family that opened a folder has no committed chain (after the last attempt's refusal or a fork), `open_listed_node` and `writable_node_key` refuse with `NO_CHAIN`, and `node_key` and `prev_node_key` (so `key_at_epoch`) give none; `parent_key_and_root` is reached only behind those gates or `require_writable`. Keys stay held for the next commit; `forget_group` drops them. A product change: a forked family's folders no longer read from keys already held. The ladder keeps the family committed between attempts: `accept_once` takes `retried` (every attempt but the last when there is a record), which checks the session but does not uncommit; the worker's `groupAccept` takes the same flag from `acceptFromRecord`. `join_check` re-reads the session's generation and positions under the lock after its unlocked admission (`AFTER_ADMISSION` is a `#[cfg(test)]` seam for the race).
-- Not here: the admin's join code over the committed chain (`groupJoinCode`), deferred to Core 5a.
-- Fixtures: `fixtures/web-join.json` (`packages/crypto/scripts/join-fixtures.ts`, read by `tests/join_fixtures.rs`) and `packages/crypto/src/__fixtures__/core-join.json` (`examples/join_fixtures.rs`, read by `join-fixtures.test.ts` and, for consent, `packages/db/src/auth.consent.test.ts`, which stores it through the backfill). `tests/common/join.rs` and `join-testkit.ts`: 22 `joinPreviews` over named histories with drawn positions (`draws()`, the same list in both), 23 `joinChecks` (`fixtures/join-check-cases.json`), `joinSessions` from `fixtures/join-session-scenarios.json` (22 scenarios run as the app drives them: the escalation kept from each check, restored after a lock or relaunch or from an earlier step; each twin's full outcomes matched step for step, plus each twin's joins record and kept escalation opened by the other), 9 due and 12 sign `consents`. Fuzz: `join_check`, `join_preview` (with `words` and `join`), `join_draws` (draws to positions across the twins) and `join_session` (an arbitrary op list through both interpreters, with the session rules: held positions never move until a match, a restore only holds more, the calm try and the alarm, a showing from before a lock refused, kept exactly while held, no join without a match and one per unlock) in `pins`; `consent_due` and `consent_sign` in `succession`.
+- Design: docs/integrity-design.md, "Re-keyed records".
+- `metadata_rekey` and `version_rekey` re-key a record raw.
+- `origin_opening_key` gives the origin's opening key.
+- `origin_key_wrap`/`origin_key_open` work under `["hushos/drive/origin-key", 1, ws, node, "metadata"|"version", metadataVersion|versionId, keyEpoch, sha256(origin)]`.
+    - Types: `OriginKeyContext`, `OriginRecord`.
+- The statements and verdicts are in [Signatures](#signatures-and-integrity-signaturesrs).
 
-## Roster calls (groups 1d, core step 5a)
+### Node attributes
 
-- `roster_calls.rs`, twin of the worker's `groupStage` (admission, role changes), `groupOpenSeal`, `groupGrants` and `groupJoinCode` (`session-groups.ts`) and of `packages/crypto/src/outbox.ts` (`outboxStep`, `readOutboxEntry`, which the web's outbox drives):
-    - `open_group_key(me, group, seal, sealer_ml_dsa_public_key, sealer_history, holder)`: route 8's seal opened against the committed chain with the holder envelope's KEM half; the seed is kept in `State::seeds` while it is the committed chain's current key version (`hold_seed`, session re-checked; `AFTER_OPENING` is its test seam), dropped by a commit to a later key, `forget_group` and `clear`.
-    - `use_settings(user_id, pins, contacts)`: the settings document's contact pins (fixtures-only since Core 6, which opens the served envelopes in the ledger: `use_settings_envelope`). `admit_body` (by `user_id`), `member_join_code` and `outbox_open` take the person's pin from there only (`contact_pin`).
-    - `admit_body`, `roles_body` (`MembersRole::{Grant, Take}`), `handover_body` (`Handover::{To, StepDown}`) answer `RosterCall` (`Staged`, `SyncFirst`, `OpenKeyFirst`, `OpenFoldersFirst`; the person's refusals are errors). `caller(.., manager)` checks the account, the chain, `members` (`NOT_MANAGER`), the seed, the identity, in that order; `stage` refuses `ALREADY_IN`, `NOT_CHECKED`, unchecked keys, `NOT_IN`, `UNCHANGED`, `SELF_TAKE`, `ORGANIZER_FIRST`, builds the roster (format 2), checks the signer's entry, answers `OpenFoldersFirst` before signing, signs, adds the succession when a holder loses `members`, accepts the **staged chain** (`stage_chain`; never committed, cached, a mark or returned), and `parts` seals and grants against it (live areas only, from `call_state`). `call_still_holds` re-checks session and chain under the lock (`AFTER_SIGNING` is its test seam), then the entry is sealed (store `outbox`) with the body as text and `previousRosterDigest`/`rosterDigest`.
-    - `grants_body(me, identity, group, missing)` -> `GrantsCall` (`Grants { requests }` per folder, 256 a request; `SyncFirst`; `OpenFoldersFirst`): what a `SendGrants` answer needs.
-    - `outbox_open(group, outbox_id, user_id, entry) -> OutboxCall` (`Send`, `Hold`, `Landed`, `Superseded`; `Sealed` to delete; another account's `user_id` an `Input` error) and `outbox_step(status, code)`. `entry_read` checks fields in the web's order (version as JS `=== 1`, non-empty id and the kept one, family, staged envelope, state, a JSON-object body as text or object, route), then awaiting-check, landed/superseded against the committed head, the admission's pin, committed.
-    - `member_join_code(group, user_id, rosters) -> MemberJoinCode` (`Code`, `OtherKeys`, `NotAdmitted`, `SyncFirst`, `NotPinned`).
-    - Fixtures-only: `group_device_record_seal`/`_open` and `DeviceStore` (the outbox is the core's), `identity_wrap` (fixed keys into an envelope), `outbox_entry_read(value, group, id, pin, head)` and `outbox_entry_seal`.
-- Fixtures: `fixtures/outbox-steps.json` and `fixtures/roster-call-sessions.json` (hand-written, both twins), `fixtures/web-roster-calls.json` (`packages/crypto/scripts/roster-call-fixtures.ts`, read by `tests/roster_call_fixtures.rs`) and `packages/crypto/src/__fixtures__/core-roster-calls.json` (`examples/roster_call_fixtures.rs`, read by `roster-call-fixtures.test.ts` and `packages/groups/src/server.test.ts`, which stores the family route by route and posts every body of both files, resent, and two on one head). `tests/common/roster_calls.rs` and `roster-calls-testkit.ts` build the same family (persons 1 to 5, a group id derived under person 1, rosters: create A1, admit 2, admit 3 with members, create A2, delete A2, create A3, rotate A3 to 2), 15 calls (5 built, 10 refused alike), 2 owed-grant calls, 8 join codes, 13 outbox entries, and run the session scenarios (`session_run`, `sessionRun`). Fuzz: kinds `outbox_entry`, `member_join_code`, `roster_call` and the stateful `roster_call_session` in `pins`.
+- `NodeMetadata.attributes: HashMap<String, String>`.
+    - `[String: String]` in Swift, `Map<String, String>` in Kotlin.
+    - No default: every construction says what it carries.
+- Keys match `^[a-z][a-z0-9_-]{0,31}$`. At most 32 keys.
+- The whole plaintext stays within 4096 bytes.
+- `metadata_seal` refuses a bad record (`Input`). `metadata_open` refuses one (`Sealed`). Neither trims.
+- Empty is written as no field (`skip_serializing_if`).
+- Keys are sorted (`sorted_attributes`), so the plaintext is the web's byte for byte.
+- `Debug` prints the keys only.
+- A client re-sealing a record builds it from the opened one.
+- `metadata_rekey` keeps the attributes untouched.
+- Fixtures: `node.attributed` in both files. Its `plaintext` is compared with what the other twin writes.
 
-## Roster calls that rotate (groups 1d, core step 5b)
+## Identity (`identity.rs`, `pq.rs`)
 
-- `roster_calls/removal.rs`, twin of the worker's `groupStage` kinds `remove`, `markLeft`, `rotate` and `retire`, of `groupRestage` with `rebuild`, and of `groupPreviousRoot` (`session-groups.ts`). The changes go through 5a's `stage` (`Change::{Remove, MarkLeft, Rotate, Retire}`), so the caller checks, the staged chain, `call_still_holds` and the sealed entry are 5a's:
-    - `removal_body(.., user_id, rotations, ends_lapsed, account_key_version, kems)` (route 19; `ends_lapsed` rides on the route and in the body when non-empty), `mark_left_body(.., user_ids, rotations, account_key_version, kems)` (route 7; none is `NOBODY_LEFT`), `area_rotation_body(.., rotation, account_key_version, kems)` (route 24), `area_delete_body(.., workspace_id, kems)` (route 30) answer `RosterCall`. `account_key_version` is the account key's (as for `open_family_area`): each rotation's self-grant names it, never the identity's key version, which a master-key rotation or a succession moves apart and the server refuses (`self-grant-key-version`). `StagedCall.replaced` names documents carried on empty.
-    - The rotations must be exactly the folders to rotate (`areas_to_rotate`, or the one a key replacement names), each once (`EVERY_FOLDER`), each live (`NOT_ON_LIST`); a deletion needs the folder live. Each gets a fresh area and root key (format 2 row with its root commitment), the new key granted to every member active on the staged roster, and `rotation_wire` (the worker's `rotationOf`): the root checked (parent, `parent_key_epoch` = to-version, a folder), the target epoch above the root's (`DRAW_EPOCH`), every document opened under the old key and sealed for its next version as the exact text read (`document_plaintext`, only the padding spaces trimmed; judged by `serde::de::IgnoredAny`, which takes what JSON.parse takes and a `serde_json::Value` refuses: lone surrogate escapes, numbers past an f64, any depth, iteratively; a `tags` document JSON.parse refuses goes on empty, any other kind is refused), the root's current key (`AreaLedger::rotation_root_key`, the worker's `currentKeyOf`: held at its epoch, else the served envelope under the area key at its wrapped version), shares or links refused (`SHARED_IN_FAMILY`), the root re-keyed by `rekey_node_records` (an unsigned root's metadata gets signed), the old key wrapped under the previous-root label, and both opened back (`KEYS_DID_NOT_OPEN`). The self-grant is sealed under the account root at the account key version passed in. The entry keeps `rotationKeys` (each folder's area and root key) for a rebuild.
-    - `outbox_rebuild(me, identity, group, outbox_id, entry, rotations) -> StagedCall`: what `OutboxStep::Rebuild` needs. The entry is read as `outbox_open` reads it and must still follow the committed chain; the roster's rows must be exactly the kept keys (count and commitments); only the folders named are made again (`NOT_ROTATED_HERE`), with the same keys, roster, grants and self-grant.
-    - `previous_root_repair(group, workspace_id, PreviousRoot) -> PreviousRootRepair` (`None`, `Opens`, `Repair { previous_root_key_envelope }`, `Cannot`): only the device's own previous key at that epoch (`own_previous_node_key`, kept by a Drive rotation's commit) is ever wrapped; a served envelope that opens to anything else is no better than one that does not open. An empty envelope is none, as the worker's `!root.prevKeyEnvelope` reads it.
-- Fixtures: the roster-call documents carry `removalCalls` (12 calls on person 1's device, account key 2 and identity 1: remove a member, remove a manager, mark left, replace A3's keys, delete A1, and 7 refused alike), `previousRoots` (6 route 25 envelopes) and `removalRoots` (the roots and documents the calls were built from), from `tests/common/removal_calls.rs` and `removal-calls-testkit.ts` over the 5a family (each live folder's root with an id derived from its seed and a name person 1 signed, built once per twin; A1's tags with a tag named by a lone surrogate, A3's junk). Each body is read by the other twin as every member reads it: the 5a verdict, then each new key from its grants (the roster commits to it), the root's new key against the root commitment, the old one under its previous-root label, the name, the self-grant and its account key version, and every document's text; the roster's area rows exactly what the call writes. `packages/groups/src/server.test.ts` stores the family with those roots, A3's walk finished, the documents and person 1's account key at 2, and posts every built body of both twins (each lands at version 8 and replays); with the account key at 1 the removal is refused (`self-grant-key-version`). It also refuses a removal that leaves one of two live areas unrotated (`roster-chain`) and stores nothing. The repair rule is held by each twin's unit tests only: a device's own previous key comes only from a Drive rotation's commit, which the fixtures do not run. Fuzz kinds `removal_call` and `previous_root` in `pins`, both twins.
+Design: docs/identity-pq-design.md.
 
-## Settings and self-grants in the ledger (groups 1d, core step 6)
+### ML-DSA-65 (`pq.rs`)
 
-- `ledger_settings.rs`, twin of the worker's `settingsKeyOpen`/`settingsOpen` (`settingsOpenFor` in `packages/crypto/src/settings-marks.ts`) and its settings marks (`settingsMarks`, `contactPinOf`, `settingsPinOf`, `refuseDowngrade`, which `session-groups.ts` calls): `AreaLedger::use_settings_envelope(user_id, key_envelope, settings_envelope)` opens the settings key under the root `open_account` holds and the document under it; none served is "no settings" (account checked), version 1 is `legacy_settings`, version 2 needs the key envelope; messages are the web's (`SETTINGS_NOT_OPENED` for any AEAD failure, `Invalid key encoding.` for a field that is not canonical base64url, empty included). A document below the highest settings version opened in this unlock is refused (`OLDER_SETTINGS`, `Settings::settings_version`, decided in `set_settings` under the lock; the worker's `settingsMarks` keeps the same floor). The plaintext is read as the web reads it (`read_document`: TextDecoder's lossy UTF-8 and BOM drop, unpaired surrogate escapes in strings written as `\uFFFD` (`without_lone_surrogates`, twin of `withoutLoneSurrogates` in `contacts.ts`), JSON, then `readSettingsDocument`'s shape: `version` the number 1 or 2, `contacts` an object, array or null); `groups` members are kept raw (`HeldPin::Raw`) and checked by `pin_of` only when acceptance reads that family's (a malformed pin refuses its family only, a JSON null is none); `contacts` are kept in document order (a custom deserializer: a repeated key keeps its first place, takes the last value) and found as the worker's `contactPin` finds them (`contact_pin_of`: first member whose key and string `userId` both lowercase to the id; members that are no object or have no string `userId` are skipped, in both twins now). Settings are set under the lock only while the generation and root they were opened under are still the ledger's (`NOT_THIS_ACCOUNT`; `AFTER_OPENING_SETTINGS` is the test seam).
-- `use_settings` is fixtures-only (`#[cfg(feature = "fixtures")]`, typed pins stored as `HeldPin::Typed` and contacts converted to the web's JSON); `roster_entry_new` and `area_grant_open` are no longer uniffi-exported, and `open_area` moved out of the exported impl: no exported function takes a `VerifiedPin` (the record stays, as `trust_as_group_does` returns one) or hands out a family folder's key. Admissions convert the found contact pin (`ContactPin::checked`: a words check with every key part a string, else `These are not the keys whose words were checked.`) and refuse an entry whose `userId` is not the person's exactly (the worker's check); the join code compares `Option` key parts (`entry_is_pin`).
-- `area_open.rs`, twin of the worker's `groupOpenArea` and `grantAreaKey`/`openAreaSelfGrant`: `AreaLedger::open_family_area(group_id, ServedArea, account_key_version) -> FamilyAreaOpened { opened, from: AreaKeyFrom, self_grant_to_store }`. In the worker's order: committed chain (`NO_CHAIN`, so held-back families open nothing), the id derived under the family, the area live, the account; the self-grant (context `["hushos/group/area-self-grant",1,user,group,workspace,keyVersion,workspaceKeyVersion]`, HKDF(salt, root, `hushos/workspace/grant-wrap/v1`)) only when at or above both the chain's latest and the served version, listed, and of the committed key, otherwise ignored; else the area grant (`GRANTER_KEY_NEEDED` without the granter's served ML-DSA key; the holder identity envelope opened under the root, `NOT_OWN_IDENTITY`); else `NOT_CHECKED_KEYS`. A grant at the version both the chain and the server call current is wrapped again for route 23. The key is held through `open_area_in` with the session and root re-checked under the lock (`AFTER_OPENING_AREA`). `area_self_grant_seal`/`_open` are fixtures-only.
-- Fixtures: `fixtures/settings-area-cases.json` (28 settings cases on person 1's device: envelopes, contacts and group pins of every odd shape, downgrades and older documents, a lone surrogate in a contact name, then acceptance, person 4's admission and person 2's join code; 18 area cases on person 2's device: self-grants current, stale, served ahead, beyond listed, of another family, folder, root or key, damaged; the granter gone; stores only at the current key), run by `tests/common/settings_areas.rs` and `packages/crypto/src/settings-areas-testkit.ts` into the roster-call documents (`settingsReadings`, `areaOpens`): each twin's envelopes and self-grants read by the other to the same full outcomes, every stored self-grant opened by the other to the folder's key and opening the folder there. `settings_seal_raw` (fixtures-only) seals documents `settings_seal` refuses. Unit tests in `ledger_settings.rs` and `area_open/tests.rs` with break-checks; survivors: `v > listed.len()` (duplicated by the commitment lookup, which returns none past the end) and the self-grant context label (one function seals and opens; the cross-twin fixtures catch it). Fuzz kinds `settings` (document text read and probed; text both JSON parsers read alike, `settings_fits`) and `area_open` (any self-grant envelope against the family; the self-grant branch is reached only from the seeds' sealed self-grants, since a mutated one never opens) in `pins`, both twins.
+- From `ml-dsa = "=0.1.1"`: pure FIPS 204.
+- Keys come from the 32-byte ξ.
+- Signing is hedged, through `sign_internal` over `0 || len(ctx) || ctx || M`.
+- `fixtures/ml-dsa-65-acvp.json` is a subset of NIST's ACVP-Server vectors (commit and file hashes inside).
+    - `pq.rs`'s tests and `packages/crypto/src/ml-dsa-acvp.test.ts` both pass it.
+    - Do not move either library without them.
 
-## Fuzzing (2026-10-17)
+### Identity envelopes
 
-- `fuzz/` is a cargo-fuzz crate with its own workspace and `Cargo.lock`: sixteen targets (`canonical`, `roster`, `group_succession`, `roster_build`, `statements`, `identity`, `succession`, `share_open`, `key_seal_open`, `area_grant_open`, `key_seal_context`, `pins`, `accept`, `record_integrity`, `origin_open`, `area_ledger`), built with the nightly in `fuzz/rust-toolchain.toml`, their verdicts in `fuzz/src/targets.rs`, the JSON shapes in `fuzz/src/shape.rs`, structured inputs (`arbitrary`) in `fuzz/src/structured.rs`. `packages/crypto/fuzz/verdicts.ts` is the twin: same names, same inputs, same verdicts, held to each other by `bun run fuzz:diff` through `fuzz/examples/verdicts.rs`. A new parser or verifier gets a target in both, or a kind in `statements`/`pins`.
-- The `fuzzing` feature exposes `hushos_core::fuzzing::{parse_statement, encode_statement}` for the fuzz crate only; nothing else may use it.
-- Run and triage as CONTRIBUTING.md (Fuzzing) says; `bun run core:check` also lints the `fuzzing` feature and formats and lints `fuzz/`. CI's Rust core job runs the fuzz crate's lib tests (`cargo test --manifest-path crates/hushos-core/fuzz/Cargo.toml --lib --locked`, on stable from the root): the oracles in `fuzz/src/targets.rs` held to the fixtures, so an oracle that misjudges a known chain fails there, not only in `fuzz:diff`.
+- Envelopes are version 2 (`ml_dsa`, `keys_signature`).
+- `IdentityKem.signature` is version 1 only.
+- `identity_create` writes version 2.
+- `identity_upgrade` keeps a version 1 identity's keys and key version, and adds ML-DSA (and ML-KEM if missing).
+- `identity_open` refuses a version 2 identity whose keys statement does not hold.
+- `identity_rewrap` rewraps the identity for a master-key rotation. It keeps the identity's key version.
+- `PinnedKeys` carries `ml_dsa_public_key_hash`.
 
-## Family self-grants in a master-key rotation (2026-10-19)
+### Successions
 
-- `area_open.rs`: `area_self_grant_rewrap(user_id, group_id, old_root, new_root, grant, key_version)`, the twin of `rewrapAreaSelfGrant`: `self_grant_open` then `self_grant_seal`, so there is one self-grant context and one wrapping key. It is the only self-grant function over UniFFI (two roots in, a sealed grant out); the opener and sealer stay fixtures-only. The security challenge serves each `workspaces` row with `groupId` (null for the personal workspace); the apps rewrap a row with one through it (`Auth.rewrapGrants` on both), never `workspace_grant_rewrap`, which refuses a self-grant. Fixtures both ways: `areaSelfGrant` in `fixtures/web.json`, `rotation.areaSelfGrant` in `core.json`.
+- `identity_succeed` needs version 2 and signs hybrid.
+    - It also co-signs the successor consent and returns it as `IdentitySuccession.consent`.
+- `succession_verify(user, link, signer)` verifies under the keys the reader trusts, never the link's.
+- `succession_chain_verify` (`identity::succession_chain_verify`) checks continuity by keys, not version numbers.
+    - It is the shipped strict verifier. Personal pins, Drive, iOS and Android rely on its contiguous-in-served-order chain.
+    - Never route group logic through it or change it for groups. Groups use `succession_path` (see [Succession paths](#succession-paths-succession_pathrs)).
+- `succession_verify` and `succession_chain_verify` ignore `consent` and never read the walk's cache.
 
-## First-seen pins (2026-10-26, docs/optional-verification.md PR 1)
+### Successor consent
 
-- `contacts.rs`: `PinKeys`, `pin_trust` (`Verified` / `Seen` / `Legacy` / `Invalid`; `Seen` is `fingerprint` exactly `""` with every key field canonical) and `key_commitment` (the version 3 fingerprint over the four keys, verified or not). Keys are compared by `key_commitment`, never by a pin's `fingerprint`: every first-seen pin holds `""`. `pin_verified` is unchanged, so a first-seen pin never passes it on any client.
-- `first_seen.rs`: `compare_pin` (twin of packages/drive's `comparePin`; a first-seen pin is held like a verified one, so `Succession` is allowed from it), `pin_of_served` (verified or first-seen), `pin_first_seen_of_legacy` (2.5: the pin's classical keys are the served ones and `identity_verify_keys` holds), and the guard's rule (2.8): `GuardEntry`, `GuardState` (`Absent` is first use, `Unreadable` never is), `guard_agrees` (the chain is checked from the guard's own keys with `succession_chain_verify`, never from the pin's or a link's), `guard_entry_next`. The guard's store is the app's (PR 5/6).
-- Verdicts: `Integrity::Seen` and `GroupVerdict::Seen`, given when the signature holds under `TrustedKeys { seen: true }` (default false over UniFFI); reseal and copy forms treat `Seen` as `Verified` (ordinary), and a `Seen` re-keyer attests. The Swift and Kotlin switches handle `Seen` as a stop-gap exactly as `UnknownSigner` (the apps never ask for it yet); PR 5/6 give it its own UI.
-- The outbox's `admits` is `{ userId, keys }` (the key commitment); an entry from before with only `fingerprint` matches a pin whose commitment it is, `keys` present decides alone, and `""` matches nothing (`admitted_keys`, `pin_commitment`).
-- `AreaLedger::admit_body` lets someone in over a first-seen pin as over a verified one (2026-11-03, Android 6e; the worker's `groupStage` since #231): a pin trusted via a group, one short of a key part, or one filed for them over other keys still refuses (`NOT_THE_PINNED_KEYS`), and an admission is never signed with a role (`ADMIT_AS_MEMBER`).
-- `AreaLedger::roles_body` keeps the manager rule (docs/optional-verification.md 3.6), the worker's `CHECK_MANAGER_FIRST` twin (2026-11-03, Android 6e part 2): granting `members` needs this account's own verified pin of the person (`words_checked`, `pin_verified`) whose key commitment is their current entry's (`entry_commitment`, the digests as hex); a first-seen pin, a family's word, or a verified pin over other keys refuses with `CHECK_MANAGER_FIRST`. Taking `members` away and the handover ask for no check. Test: `members_is_given_only_over_this_accounts_own_verified_pin_of_the_keys_their_entry_names`.
-- Fixtures: `fixtures/pin-cases.json` (hand-stated outcomes, written by `packages/crypto/scripts/pin-cases.ts`), read by `tests/pin_cases.rs` and `packages/drive/src/pin-cases.test.ts`: trust and commitment, comparisons, pins of served keys, guards without a chain, kept admissions, and the 0.10.0 apps' pin readers by their JSON shapes. Chain cases are unit tests in each twin (`first_seen/tests.rs`, `packages/crypto/src/first-seen.test.ts`). No fuzz kind yet.
+- `SuccessionLink.consent` is optional (uniffi default `None`).
+- It is two hybrid signatures:
+    - The old identity's over `["hushos/identity/succession-consent",1,"old",…]`.
+    - Then the new one's over the same with `"new"`.
+    - Built by `signatures::succession_consent_statement(user_id, link, ConsentRole)`.
+- `SUCCESSION_CONSENT_BYTES` = 6746.
+- `succession_consent_verify` checks each half under the keys the link names, in its role.
+- The server and apps do not store or upload `consent` yet. That comes with groups 1c, with a backfill of earlier links. Until then only pre-entry history is affected.
+- Signing consent for an app is `AreaLedger::succession_consent_sign` (see [Successor consent signing](#successor-consent-signing-consentrs)).
 
-## First use and the family check (2026-10-27, docs/optional-verification.md PR 2)
+## Signatures and integrity (`signatures.rs`)
 
-- `group_trust.rs`: `accept_rosters(group_id, first_keys, anchor: Option<GroupAnchor>, …)` replaces `first_keys_checked` (`Created`, `Join`, `FirstUse`; with any mark an anchor vouches for nothing and the marks decide). `FirstUse` vouches only with no pin, no cache and no pair mark, and only for a reader whose entry is active at the head (`NOT_LET_IN` otherwise). A join mark comes with `Join`, or with none beside marks. `accept_rosters_joining` takes `pair_marks: Vec<PairMark>` (a family check: the chain must hold a roster at its version over which `pair_code_of(…, reader, with)` is its code, else the fork with a side `MarkSource::Pair`; beyond the head, refused). `AcceptedRosters::checked()` (`FamilyChecked { how: Created | Join | Compared, roster_version }`) is worked out by acceptance, never passed in, not cached. `pair_code_of` is the raw code (`hushos/group/pair-code/v1` over the roster digest, group key digest and version, and the two lowercase ids sorted); `roster_entry_new` takes a verified or first-seen pin, never a `trusted_via` one.
-- `join.rs`: `pair_code(chain, me, other, rosters) -> PairCode` (`Code`, `OwnEntryWrong` where this account's own entry at that roster names none of its identities or acceptance found it wrong, `NotAdmitted`), at the later admission of the two. `AreaLedger::pair_match(me, group, other, rosters, roster_version, code, guard: GuardState, checked_at) -> PairMatch { check, pin }`: the check record only for this device's code; a verified pin only when the head entry is active and names the compared entry's keys, and those are the guard's keys (an unreadable guard: none) or else the settings pin's. `AreaLedger::join_first_use(me, group, record, served, guard, now) -> FirstUseJoin` seals the version 4 joins record of the head's pin (`{v:4, groupId, firstUse: <pin>}`, `pin_after`'s, read back with `pin_of`); `accept_joining` (now with a `FamilyGuard`) commits it with that pin as one more mark and no anchor, so its version 1 keys, roster and group key all hold on a reload. Joins records after a match are version 4 too (`joinMark`); version 3 is read alike.
-- `device_record.rs`: `FamilyGuard` (`Absent`, `Unreadable`, `Held { pin }`) on `accept_served`, `accept_joining` and `join_first_use`: the device's guard (design 2.8), a mark like any pin; `Unreadable` refuses with `GUARD_UNREADABLE`. The core decides how it advances: `ServedAcceptance::Accepted` and `JoinAcceptance::Accepted` carry `guard: Option<GroupPin>`, `guard_after` (twin of the web's `guardAfter`): `merge_pin(group, guard, pin, opened areas)` when `Merged` and `pin_ahead`, else none, so it never goes down. The app writes it before the record (no pending record, no wait for the settings save), apart from the chain record, never deletes it on a `not-member` wipe and wipes only through `AreaLedger::forget_group(group, guard, checked_at) -> GroupForget { forgotten, guard, unreadable }`, which drops nothing while the held guard does not cover the session's floor and hands back the guard to store (the held one moved on to the floor with the folders opened here, `guard_after`'s rule, `GuardAfter::Store`; an unreadable guard holds it up only over a floor), so it is called again after the store, forgets only over a held guard equal to the floor at its versions (`GuardAfter::Covered`), and refuses, nothing dropped, one that disagrees with it or crosses it (`GUARD_CONFLICT`, `GuardAfter::Conflict`; `merge_pin` calls crossed versions a conflict) or is past it (`GUARD_AHEAD`, `GuardAfter::Ahead`: accept up to it first); `commit` holds a chain to the whole floor and the held chain (`overtaken_by`: roster digest and group key at their versions), and `commit_served`/`uncommit_served` to the family's epoch the call took (`Reader::epoch`, bumped by every `forget_group`; `FAMILY_FORGOTTEN`, an account error); the store merges and never goes down (`merge_pin`, under the account's lock); nothing is written under an acceptance until its guard is stored. Admission counts the session floor as a mark (its pin among the pins), and the floor moves to a later group key at the same roster too (PR 5 for iOS; the stop-gap passes `Absent` and drops the returned guard). `ledger_settings.rs` reads `familyChecks` (`Settings::checks`, `AreaLedger::family_check`): a record with `code` is a pair mark (refused for that family when malformed, `Invalid pair mark.`), one without (the migration's `before`) is a mark only. `admit_body` admits over a first-seen pin since Android 6e part 1, and `roles_body` keeps the manager rule (below).
-- Fixtures: the group cases `anchor-*`, `pair-*`, `join-*-as-*`, `first-use-pin-*` (both twins, verdicts with `checked`), the join scenarios `a-first-use-*` (with `-record-binds-its-first-keys` and `-its-group-key` over the histories `madeUp` and `succOther`), `the-guard-is-a-mark-a-wipe-keeps`, `the-guard-advances-and-a-replay-below-it-is-refused` (histories `removal`, `removalFork`; ops `guard`, a step's `guard: "held"`), `a-family-check-*`, `a-check-record-*`, `no-first-use-*` (op `first-use`, a step's `guard`; settings `checked-before`, `checked-malformed` through the fixtures-only `use_family_checks`), `cross.firstUseRecord`, and `pairCodes` in the roster-call documents. `fixtures/v0.10.0/planted-join.json` is a real iOS 0.10.0 join over a planted entry, made by the core at the tag `v0.10.0` with `fixtures/v0.10.0/planted_join.rs` (how to run it is in its header), read by `tests/planted_join.rs` and `packages/crypto/src/planted-join.test.ts`.
-- Fuzz (the `pins` target, both twins, seeded from these fixtures): `join_session` takes every shared scenario but the one checking a showing from elsewhere (ops `first-use` and `guard`, a `guard` per sync, first use and accept, every scenario settings; no `restore` is `false`), with the rules that an unreadable guard never accepts, nothing is accepted past a mark it was given (the settings pin, the guard handed, the chain committed, a first use's record: the same first keys, roster statements through it and the succession statements into every key up to the one its roster is under, `k` = 1 + the successions tied at or below it in the mark's own history (later ones allowed), never the signatures, which ML-DSA makes at random; every guard handed back is under that `k` at its roster; `session_holds_mark` / `sessionHoldsMark`, held to the fixtures by a test in `fuzz/src/targets.rs` and `packages/crypto/fuzz/oracles.test.ts`), a first use needs settings that hold and, over a `before` check record, another mark, and a guard handed back covers the held one it was given; a step's `stored: false` is a failed guard write, and a `forget` (which passes the held guard) must hand back a guard reaching the chain committed when the held one is behind it; `settings` probes `familyChecks` per group id (probes are canonical lowercase UUIDs; both twins read `groups` and `familyChecks` only from an object) (`checks`: none, a mark, a pair mark, refused; `ledger_settings::family_check_of` is the one reader); `pair_code` works out the bare code (equal ids refused, the same with the ids swapped) and the chain's code as a roster-call member holding their own or another's keys (no code over keys the device does not hold, the same code when the other member works it out); `joins_record` seals any JSON as person 2's joins record through `device_store_seal_value` and reads it back by an acceptance joining (only version 3 or 4 of this family joins; a first use only over its pin's first keys and roster, never reported checked; a join mark always is). The `accept` kind mutates the anchor.
+### Hybrid signatures
 
-## Node attributes (2026-10-28)
+- `hybrid_sign`/`hybrid_verify`: Ed25519 (64 bytes) || ML-DSA-65 (3309 bytes).
+- Context `hushos/identity/v1`.
+- Both halves are required. A signature is never chosen by length.
+- `keys_statement` and `succession_statement` (version 2).
+- Identity key versions are bounded to 1..2^53−1.
+- `check_envelope` mirrors the web: key version 1..2^53−1, non-empty keys signature.
 
-- `drive.rs`: `NodeMetadata.attributes: HashMap<String, String>` (`[String: String]` in Swift, `Map<String, String>` in Kotlin, no default: every construction says what it carries). Keys `^[a-z][a-z0-9_-]{0,31}$`, at most 32, the whole plaintext within 4096 bytes; `metadata_seal` refuses a bad record (`Input`), `metadata_open` refuses one (`Sealed`), never trimmed. Empty is written as no field (`skip_serializing_if`), keys sorted (`sorted_attributes`), so the plaintext is the web's byte for byte. `Debug` prints the keys only. A client re-sealing a record builds it from the opened one; `metadata_rekey` keeps it untouched. Fixtures: `node.attributed` in both files, its `plaintext` compared with what the other twin writes.
+### Record statements
+
+- Metadata and version statements are signed with `IdentityKeys::signing_seed`.
+- The statement bytes are pinned against the server's builder in `packages/db/src/signatures.ts`.
+- Record statements refuse empty ids and metadata versions above 2^53−1.
+- There are four forms:
+
+| Form      | Sign and verify                                                  | Domain                                                          | Used for                                                      |
+| --------- | ---------------------------------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------- |
+| Ordinary  | `*_sign`, `*_verify`, `*_integrity`                              |                                                                 | A record its writer sealed                                    |
+| Re-sealed | `metadata_resealed_sign/verify`, `version_resealed_sign/verify`  | `hushos/drive/sig/{metadata,version}-resealed`                  | Renames, copies and rotations of a record that did not verify |
+| Saved     | `metadata_saved_sign/verify`, `version_saved_sign/verify`        | `hushos/drive/sig/{metadata,version}-saved`, ending in `"link"` | A copy saved from a link                                      |
+| Re-keyed  | `metadata_rekeyed_statement`, `*_rekey_sign`, `*_rekeyed_verify` |                                                                 | A record re-keyed in a walk, carrying its origin              |
+
+### Integrity verdicts
+
+- `*_integrity` return `Integrity`.
+- They take `Option<TrustedKeys>`.
+    - `current` verifies.
+    - `retired` only ever gives `RetiredKey`.
+    - `TrustedKeys { seen: true }` (default false over UniFFI) gives `Seen` when the signature holds.
+- The order of checks: ordinary, then saved (`Integrity::SavedFromLink`), then re-sealed.
+- Variants beyond `Verified`:
+    - `Resealed`.
+    - `SavedFromLink`.
+    - `RetiredKey`.
+    - `Seen`.
+    - `Unchecked`: never returned by the ordinary checks; apps use it when a check cannot run.
+- `group_integrity` returns `Unsigned` before consulting any trust.
+- Both apps handle `Seen` themselves, as unmarked (Android `Integrity.kt`, iOS `Integrity.swift`).
+
+### Signing a changed record
+
+- `metadata_reseal_sign`/`version_reseal_sign` (rotation, rename):
+    - Sign ordinary only when the prior verdict is `Verified` (or `Seen`, treated as `Verified`).
+    - Keep `SavedFromLink` as saved.
+    - Re-seal anything else that did not verify.
+    - Refuse `Unchecked`.
+    - `*_reseal_sign` is still used for renames, copies, and rotations until the apps move.
+- `metadata_copy_sign`/`version_copy_sign(seed, prior, from_link, …)` sign a copy by its source:
+    - `from_link`: saved, whatever `prior`.
+    - Otherwise as a reseal.
+- `*_compat_sign(seed, prior, own_record, …)` is the honest legacy form. It never refuses.
+
+### Re-keyed verdicts
+
+- `metadata_rekeyed_integrity`/`version_rekeyed_integrity(node_key, trust, record) -> RekeyedVerdict { origin, rekeyer, bound: Option<bool> }`.
+- `RecordOrigin` carries the wrapped key. The statement covers its digest.
+- A `None` node key or trust is `Unchecked`: the core does return it here.
+- `bound`:
+    - `Some(false)` only for bytes that differ, or a wrap or origin that fails under a verified re-key signature.
+    - `None` for whatever a server alone could cause.
+    - A missing or bad re-key signature never sets it.
+- A `Seen` re-keyer attests.
+- `*_origin_carry(old_key, new_key, target_epoch, record) -> CoreResult<Option<Vec<u8>>>` is the next rotation's bound check before re-wrapping.
+    - `None` means: drop the origin and sign legacy re-sealed.
+    - An error stops the rotation. It comes from a malformed new key or epoch, refused served ids, or a current envelope that `old_key` does not open.
+- Fixtures: `rekeyed` in both base files.
+    - `tests/common/rekeyed.rs` and `packages/crypto/src/rekeyed-testkit.ts` read the same JSON.
+    - They build the same 50 cases, each with whether the next rotation carries its origin, with the same declared verdicts.
+    - Each generator checks its own verdicts before writing.
+
+## Shares, links, reports and recovery
+
+### Shares (`shares.rs`)
+
+- Suite 4 only (4565 bytes). Suite 3 is refused.
+- `share_seal` takes the granter's `IdentityKeys`.
+- `share_open(envelope, HybridPublicKey, grantee, ctx)`.
+- `seal_hybrid`/`open_hybrid` are the suite 4 construction, with the payload, `info`, associated data and statement as parameters.
+    - Shares and the group seals all go through them. Do not fork it.
+    - `open_hybrid` takes a slice of signers.
+
+### Links (`links.rs`)
+
+- argon2id + BLAKE2b link keys.
+- The owner's sealed copy.
+- `link_url`/`link_parse`.
+
+### Reports (`reports.rs`)
+
+- Suite 1: a libsodium sealed box, done by hand over XSalsa20-Poly1305.
+- Suite 2: hybrid.
+- `pair_key` lives here, its only user.
+- `OperatorKeys` carries `ml_dsa_public_key`, `kem_public_key`, `keys_signature`.
+- `report_seal_key`:
+    - Checks a version 2 operator's keys statement.
+    - Seals a version 1 operator to the served KEM key unchecked. Nobody pins operator keys.
+    - Refuses only an operator with no KEM key.
+- The old KEM binding (`kem_binding_verify`, `OperatorKem`) is gone.
+
+### Recovery (`recovery.rs`)
+
+- The BIP-39 English list is embedded from `bip39-english.txt`.
+- `recovery_create/open/phrase`.
+
+## Contacts, pins and settings (`contacts.rs`, `first_seen.rs`)
+
+### Fingerprints and digests
+
+- Fingerprint version 3 covers X25519, Ed25519 and the SHA-256 of the ML-DSA and ML-KEM keys.
+- `identity_fingerprint` takes the digests. `identity_fingerprint_of_keys` takes the keys.
+- `key_digest` gives a key digest.
+- `digest_hex`, `digest_base64url` and `same_key_digest` convert key digests between contact pins (hex) and group statements (base64url).
+
+### Pins
+
+- `pin_verified` checks a words-checked pin. A first-seen pin never passes it, on any client.
+- `PinKeys`, `pin_trust`: `Verified` / `Seen` / `Legacy` / `Invalid`.
+    - `Seen` is `fingerprint` exactly `""` with every key field canonical.
+- `key_commitment` is the version 3 fingerprint over the four keys, verified or not.
+- Keys are compared by `key_commitment`, never by a pin's `fingerprint`: every first-seen pin holds `""`.
+- Design: docs/optional-verification.md.
+
+### First-seen pins (`first_seen.rs`)
+
+- `compare_pin`: twin of packages/drive's `comparePin`.
+    - A first-seen pin is held like a verified one, so `Succession` is allowed from it.
+- `pin_of_served`: a verified or first-seen pin.
+- `pin_first_seen_of_legacy` (design 2.5): the pin's classical keys are the served ones and `identity_verify_keys` holds.
+- The guard's rule (design 2.8):
+    - `GuardEntry`, `GuardState`. `Absent` is first use; `Unreadable` never is.
+    - `guard_agrees` checks the chain from the guard's own keys with `succession_chain_verify`, never from the pin's or a link's.
+    - `guard_entry_next`.
+    - The guard's store is the app's.
+- Fixtures: `fixtures/pin-cases.json` covers trust and commitment, comparisons, pins of served keys, guards without a chain, kept admissions, and the 0.10.0 apps' pin readers by their JSON shapes. No fuzz kind yet.
+
+### Settings document
+
+- Settings key: `settings_key_create/open/rewrap`.
+- Settings envelope version 2: `settings_seal(user_id, settings_key, …)`.
+- Version 1 documents were sealed under HKDF of the identity's X25519 private key.
+- `settings_open(user_id, settings_key, envelope) -> Option<String>`: `None` for a version 1 envelope.
+- Settings documents read as 1 or 2 and are always sealed as 2.
+- The ledger reads settings itself: see [Settings in the ledger](#settings-in-the-ledger-ledger_settingsrs).
+
+## Families
+
+Design: docs/groups-design.md and docs/groups-mobile-plan.md.
+
+- Guardian seals (docs/groups-design.md 2.9) were removed for milestone 1. Child accounts are a later milestone. Do not reintroduce them without the design's review.
+
+### Statement grammar (`canonical.rs`)
+
+- Group statements use lowercase UUIDs only, base64url digests and strictly ascending lists.
+- Statement fields are integers 1..=2^53-1.
+- One grammar serves `encode_statement` and `parse_statement`:
+    - At most 4 MiB.
+    - Arrays at most four deep, of plain ASCII strings and integers 0..2^53−1.
+    - No escapes.
+    - Exactly the compact encoding.
+- Every parser ends with the re-encode check.
+- `bytes_of` refuses empty strings. The general `decode` keeps its behaviour.
+- Pins' `checked_at` must be the canonical ISO form.
+- Chain indices go through `version_index`.
+
+### Group keys and statements (`groups.rs`)
+
+- The group key is a 64-byte seed: Ed25519, then the ML-DSA-65 ξ.
+- `group_public_key`, `group_sign`, `group_verify`. Context `hushos/group/v1`.
+- `group_fingerprint`.
+- Roster statements: `roster_statement`/`roster_parse`/`roster_sign`.
+- Succession statements: `group_succession_*`.
+- Members sign through a roster.
+    - `roster_member_signer` uses the served ML-DSA key only when its digest is the entry's.
+- `MAX_ROSTER_MEMBERS` is 10,000.
+
+### Group seals
+
+- `group_key_seal`/`_open` and `area_grant_seal`/`_open` all take `Arc<AcceptedRosters>`.
+- `GroupKeySealContext` and `AreaGrantContext` carry `roster_version` and `roster_digest`.
+    - The sealer must name their latest accepted roster.
+    - An opener must have it on its chain.
+- Area grants take the area's id seed. They refuse a workspace not derived under the group.
+- The seal functions take no history.
+    - The sealer's Ed25519 and ML-DSA keys (derived from the seeds) must be their entry's (`sealer_holds`).
+    - So a member seals only after their identity is folded in.
+- `group_key_seal` refuses a sealer who is not an active `Members` holder.
+    - The creator may seal key 1 only while active.
+- `area_grant_seal`:
+    - Refuses a granter who is not active.
+    - Grants only a listed key.
+    - Refuses a retired area.
+- `group_key_open` checks the reader is the holder. It takes the creator's key 1 seal only while the creator is active.
+- The openers take an optional `SignerHistory { served, links }` for the sealer or granter.
+    - They then also accept the keys on the signer's verified path, from their first `key_history` set up to and including their entry's keys, never past them (`groups::signers_through`).
+    - A seal from before a fold-in opens.
+    - A seal under the entry's keys after the member moved on opens.
+    - A seal under keys no roster has folded in does not.
+    - A forked identity lends nothing beyond the entry's own keys.
+- `area_grant_open`:
+    - Refuses a version above the latest roster's, one never listed, or an opened key whose commitment differs.
+    - Has no `highest_key_version` floor.
+    - Is not uniffi-exported. Apps open a family folder through `AreaLedger::open_family_area`, and its key never leaves the ledger.
+
+### Areas on the roster
+
+- Rosters carry `areas` as `RosterArea` rows (uniffi default `[]`).
+- Rows are deltas: only areas the roster creates or rotates.
+    - `MAX_ROSTER_AREA_ROWS` is 1,024.
+    - Rows are folded into `area_keys` (`fold_areas`).
+- `area_key_commitment(&key)` is HKDF of the key alone under `hushos/group/area-key/v2`.
+    - It is not uniffi-exported.
+- `AcceptedRosters::area_keys` (cached) holds every version's commitment.
+- The area rules live in `check_entries`/`roster_rules`, with `check_areas` holding:
+    - An area stays at its version with the same commitment, or steps one.
+    - New areas, and roster 1's, start at 1.
+    - A family removal rotates every live area.
+    - No admission on a roster that drops a holder.
+    - No commitment already on the chain (a `HashSet` in `State`, folded with the rows), and none repeated in one roster.
+    - At most `MAX_FAMILY_AREAS` (1,024) live areas: `check_areas` refuses a family's 1,025th. So a family removal always fits.
+- Area retirement must come before deletion.
+- `areas_to_rotate` names what a family removal must rotate. It skips retired areas.
+- `next_area_key` refuses an earlier key.
+- `check_cache` checks only the last roster's rows (and roster 1's full set). Earlier commitments are trusted as stored.
+- `area_write_version` gives an area's write version (none for a retired area).
+
+### Roster format 2
+
+Design 2.10, F14 and F11.
+
+- `Roster.format` (1 or 2, uniffi default 1) is the statement's version.
+- Format 2 area rows:
+    - `[ws, v, "key", commitment, rootCommitment]`.
+    - `[ws, v, "retired"]`, a tombstone.
+    - Fields: `RosterArea.root_commitment`, `RosterArea.retired`. The commitment is empty on a tombstone.
+- `area_root_commitment` is HKDF of the root's node key under `hushos/group/area-root/v1`. It is not exported to apps.
+- `check_areas` also holds (with `AreaLedger` counting):
+    - The format never goes down.
+    - No root commitment twice.
+    - Tombstones only at an existing area's next version.
+    - Nothing after a tombstone.
+    - Removals rotate live areas only.
+    - The 1,024 limit counts live areas.
+- `AcceptedRosters::area_roots` and `retired_areas` are cached as `GroupChainCache.area_roots` and `retired_areas`.
+    - A cache without them reads as none.
+- `GroupChainCache.cache_version` (uniffi default 1; this core writes 2) says whether a cache carries `area_roots`/`retired_areas`.
+    - A version 2 cache with roots emptied is refused, never read as uncommitted.
+- `area_root_check(chain, ws, version, root_key) -> bool`.
+    - `false` for a format 1 version, and only for an explicit `None`.
+    - It refuses a version with no root entry at all.
+- `area_write_version` is none for a retired area.
+- `AreaKey.root_key` is required in format 2.
+- `next_area_key(.., root_key)`.
+
+### Building rosters
+
+- `roster_first(group_id, kind, creator, area_keys, format)` builds roster version 1.
+    - The creator is the only entry and signer, roles sorted, `since_version` 1.
+    - Rows at version 1 are computed from the keys by `groups::rows_after` (the crate-private `area_rows` wraps it).
+    - It runs the version 1 `roster_rules`, signatures aside, with a placeholder key in the state. So a creator never signs a first roster that acceptance refuses.
+    - Twin of the web's `firstRoster`.
+- `roster_entry_own(user_id, identity, roles)` makes the creator's roster version 1 entry (`since_version` 1), for nothing else.
+    - It is built from their own identity, whose keys statement must hold.
+    - The roster's signer signature, checked under the entry's keys, proves the entry and the signer are the same identity.
+    - That the identity is the newest is the creating client's check (design 3.1).
+    - Twin of the web's `ownRosterEntry`.
+- `roster_next(.., area_keys: Option<Vec<AreaKey>>, retire_areas, format)` applies acceptance's rules (signatures aside) before a holder signs.
+    - It computes the rows (`area_rows`), one HKDF per key, keeping only commitments, the keys zeroized.
+    - It refuses any key equal to any earlier commitment of any area.
+    - The format is the chain's by default, never lower.
+- `roster_entry_new` takes a verified or first-seen pin, never a `trusted_via` one.
+    - It is not uniffi-exported.
+- `roster_first` and `roster_entry_own` are uniffi-exported for the phones.
+
+### Accepting a roster chain (`group_trust.rs`)
+
+The model: every device verifies the roster chain from version 1, or continues from its own cache.
+
+- Entry points:
+    - `accept_rosters(group_id, first_keys, anchor: Option<GroupAnchor>, pins, rosters, successions, ml_dsa_keys, me, cache)`.
+    - `accept_rosters_joining(.., join_mark, pair_marks: Vec<PairMark>)`. `accept_rosters` is it with neither.
+- Verify first, decide second.
+    - The chain is the one ending at the latest roster served, linked by `previous_roster_digest` to version 1 (or the cache's last roster).
+    - The chain is verified in full before any mark is compared. So a server alone gets refusals, never the warning.
+- Refusals:
+    - Two rosters at the latest version.
+    - A link that does not reach.
+    - Rosters after the cache that do not continue it ("fetch it again from version 1").
+    - A chain short of a mark (rollback).
+    - A succession whose new key is the old one or any earlier group key.
+- Any other served roster is a dead branch.
+    - Ignored and listed in `dead_branches()` (version, claimed signer).
+    - Never a warning.
+- `AcceptedRosters` is a `uniffi::Object` with getters and no constructor.
+    - Swift and Kotlin can read one but not write one out.
+    - The web freezes it and keeps a registry of accepted chains, and every seal function checks it.
+- `AcceptedRosters::own_entry_behind_at` is a soft note, not cached.
+- `AcceptedRosters::checked()` (`FamilyChecked { how: Created | Join | Compared, roster_version }`) is worked out by acceptance. It is never passed in and not cached.
+
+#### Marks
+
+- The person's marks:
+    - `pins`: every pin they hold, settings and device.
+    - `cache` (`AcceptedRosters::cache`): the device's own record. Roster digests, last statement, group keys, successions with tie, digest and signer, creator, `key_history`, wrong own entries.
+    - A join mark, and pair marks (below).
+- Marks that disagree with each other, or with the verified chain, are `RosterChain::Fork { of: Roster | GroupKey, version, sides }`.
+    - Each `MarkSide` is a digest, where it came from (`Pin`, `Cache`, `Served`, `Join`, `Pair` as `MarkSource`), and the signer only for a verified statement.
+    - No side is ever the culprit.
+- Version 1 keys other than a pin's or the cache's, with a chain verified under them, are a `GroupKey` fork at version 1.
+    - Its sides are the SHA-256 of the Ed25519 key and the ML-DSA digest.
+- A group key mark no valid succession meets waits. Rivals are kept in `waiting` with their keys.
+    - It is the warning only if a roster needing the next key holds under a rival key, signed by a `Members` holder, and the departure rules hold.
+    - A roster under the real (withheld) key, with only rivals served, is refused (`NO_SUCCESSION`).
+    - A mark still unmet at the end is a rollback, refused.
+
+#### Anchors (first use)
+
+- `anchor` replaced `first_keys_checked`. Values: `Created`, `Join`, `FirstUse`.
+- With any mark, an anchor vouches for nothing and the marks decide.
+- `FirstUse` vouches only with no pin, no cache and no pair mark.
+    - And only for a reader whose entry is active at the head (`NOT_LET_IN` otherwise).
+- A join mark comes with `Join`, or with no anchor beside marks.
+- With no pin, no cache and no anchor, nothing is accepted.
+
+#### Join marks and pair marks
+
+- `JoinMark` is `{ roster_version, code }`.
+    - The code is twelve words from `join_code`: SHA-256 over a `hushos/group/join-code/v1` prefix, the roster digest, the group key digest and the u64be key version, read as fingerprint words.
+    - A mismatch is a `Roster` fork, side `MarkSource::Join`.
+- A `PairMark` is a family check.
+    - The chain must hold a roster at its version over which `pair_code_of(…, reader, with)` is its code. Otherwise the fork, with a side `MarkSource::Pair`.
+    - Beyond the head: refused.
+- `pair_code_of` is the raw code: `hushos/group/pair-code/v1` over the roster digest, the group key digest and version, and the two lowercase ids sorted.
+
+#### The pass along the chain
+
+- Acceptance runs in four steps:
+    1. Marks against marks, and the served version 1 keys against the marks (before anything served).
+    2. Link.
+    3. Verify.
+    4. Marks against the chain.
+- Each roster is checked under the key current at its version.
+    - It is signed by a `Members` holder of the roster before it.
+    - One copy carries both signatures. Other copies of the same statement may fail.
+    - The entry rules hold.
+    - The succession a dropped holder made due is present.
+- `roster_rules` refuses a signer not active on their own roster, and a roster with no active `Members` holder.
+- Successions:
+    - Each is taken as soon as the roster it is tied to is held.
+    - One that does not hold is ignored.
+    - Two that hold are refused, unless a group key mark chooses.
+    - Candidate successions' signatures are checked once per statement (`State::signatures`).
+- The entry rules are only these:
+    - Entries never disappear.
+    - `since_version` is the version an entry last changed at.
+- Key versions are a holder's claim.
+    - Chains are followed from an entry's keys with no key-version floor (`pinned_of` has `key_version: None`).
+- `links_loaded` false (served identity or links not loaded) turns `BadSignature` into `Unchecked`.
+
+#### Checking the next statement
+
+- `roster_check_next(chain, roster, ml_dsa_keys, identities)` and `group_succession_check_next(chain, succession, ml_dsa_keys)` are acceptance itself, extending the chain's cache by one statement.
+    - Both return `()`. There is no server role in Rust.
+    - With `identities`, a new or changed entry must be one of its member's identities, with its keys statement holding.
+- The server runs both (in the TypeScript twin) before storing.
+- Clients run the succession check before signing.
+- The web also has `acceptStoredChain` (server-only, TypeScript only).
+
+### Succession paths (`succession_path.rs`)
+
+- `succession_path` is crate-private, the twin of `packages/crypto/src/succession-path.ts`.
+- It is the group core's own walk along a member's links.
+    - Each link is verified once (memoized per call site) by its successor consent (`succession_consent_verify`).
+    - The verified links form a graph, followed from a start key set.
+    - Two verified links leaving one key set to different keys are an identity fork (`SuccessionPath::Fork`), whatever the served order.
+- It takes a proof:
+    - With `consent_until` (the entry's keys): every link before them needs consent, and every link after them its version 2 signature. Used for the walk from the first keys in writer trust, and `signers_through`.
+    - Without it: the version 2 signature. Used for the lag, a personal pin's walk, and `roster_entry_fold_in`.
+- It takes `member_keys` and counts only links that could join the chain toward the 64 cap (`TooMany`).
+- It says `Stale` when the start itself is the served identity and a link leaves it.
+- The group walk returns `Stale` when a verified link leaves the served keys (readers: unchecked). It never reads the served key version.
+- It remembers verifications under a typed key (member, proof, link).
+- `VerifiedLinks` is a bounded LRU (4,096) keyed by SHA-256.
+    - An internal mutex is held only for lookups and stores.
+    - `SuccessionCache` holds one. `SuccessionCache::new()` is a uniffi object.
+
+### Writer trust
+
+- `group_writer_trust(group_id, areas, reading, workspace_id, writer_user_id, pinned: Option<WriterPin>, served, links, cache: Option<Arc<SuccessionCache>>)`.
+- `WriterPin` carries the keys and `trusted_via` together.
+    - An empty `trusted_via` reads `Unchecked`.
+    - A pin that agrees returns its `trusted_via` as `via`.
+    - Consent is asked on the pin walk exactly when `trusted_via` is set.
+- `VerifiedPin.trusted_via` has no binding default. It is set by `trust_as_group_does`.
+    - `roster_entry_new` refuses it.
+    - iOS `ContactPin.trustedVia` and Android `ContactPin.trustedVia` exist. A words check clears it; a followed pin keeps it.
+- Keys are retired only along the links `succession_path` verified, never a link served beside them.
+    - Unpinned: from the entry's keys and the member's first `key_history` set (the words-checked one), never a later set.
+    - Pinned: from the pin. Plus the keys before the pin on the path from the entry's or first keys, when the pin is at a later identity (`retired_before`).
+- The first keys' walk retires keys only up to the entry's (`up_to`).
+    - It never sets the fork verdict. Only its own retirement is voided.
+- An identity fork anywhere on those walks is `Unchecked`.
+- `TooMany` on the lag or pin walk reads as links not loaded, not a fork.
+- Own entries naming a replaced identity of the reader are in `own_entry_wrong_at` too.
+- Re-keyed records in families: `group_metadata_rekeyed_integrity`/`group_version_rekeyed_integrity(node_key, GroupRekeyedTrust, record) -> GroupRekeyedVerdict`.
+    - The origin is judged under the origin signer's `GroupWriterTrust`, the re-keyer under theirs.
+- `GroupVerdict::Seen` is given as `Integrity::Seen` is.
+
+### Group fixtures
+
+- Both twins derive every person and group key from the same seeds (`tests/common/groups.rs`, `group-testkit.ts`).
+- Each twin must reproduce the other's full verdict: cache, key history, dead branches, own entries, record and next-statement verdicts, seal payloads.
+- They build, in the same order:
+    - 150 `cases`: dead branches, marks and forks with their sides, refusals, the cache and its binding, the entry rules, the group's kind, succession ties and order, the next roster and succession checks, the reviews' probes, records read through the chain.
+        - 23 format 2 cases at the end, root probes in `CaseInput.root`.
+        - The first-use cases `anchor-*`, `pair-*`, `join-*-as-*`, `first-use-pin-*`, with verdicts that include `checked`.
+    - 28 `sealCases`: the two openers, sealer histories up to the entry and never past it, a planted entry lending no history, planted keys, a forked sealer identity, a creator who left, seals bound to the sealer's roster, planted first keys with and without the member's consent, an earlier area version re-delivered after a rotation.
+    - 12 `sealerCases`: who may seal or grant, with which keys, at which roster, which area key. Includes `granter-retired-area`.
+    - 4 `foldIns`: a forged or one-sided link folds nothing in.
+    - 7 `chainCases`, for the strict personal-pin verifier: one-sided links held, junk after the chain, links out of order, another ML-DSA key at the start, a version beyond 2^53−1 refused.
+    - 18 `statementCases`: raw bytes against the statement grammar.
+    - 11 `firstRosterCases`: `roster_first` to the same statement bytes, or refused alike.
+    - 7 `ownEntryCases`: `roster_entry_own`, or refused alike.
+    - `foldedSealer`.
+- Unit tests: `groups.rs` `format_2_*`.
+- The fixture decoder returns an error for a malformed cache (`raw_cache`, judged refused).
+
+### The area ledger (`area_ledger.rs`)
+
+- `AreaLedger` is a `uniffi::Object`, one per unlocked session.
+    - The app, the File Provider extension and the DocumentsProvider each fill theirs from listings.
+- It is the twin of the web worker's Drive key store and family write rules in `packages/crypto/src/area-ledger.ts`. `session.ts` and `session-groups.ts` call it.
+- It holds:
+    - Every workspace and node key, each node key with the area version its path is rooted at.
+    - A walk's pending keys.
+    - The committed chains.
+    - The areas each family opened.
+    - Per (family, area): the write version, block reason, root-seen version and root node.
+- It decides these exactly as the worker does, with the same messages: `KEY_CHANGE_PENDING`, `NOT_CARRIED`, `AREA_ROOT`, `KEYS_CHANGED`, `NOT_CHECKED_KEYS`, `NOT_COMMITTED_ROOT`, `OLDER_CHAIN`.
+
+#### Apps write family folders only through `AreaLedger`
+
+- `node_wrap`, `node_open` and `previous_root_key_open` stay exported, for personal folders, shares and the shipped apps.
+- They check none of the family write rules. A wrap made with them in a family folder skips rooting, the write version and every refusal above.
+- In a family folder:
+    - Wrap, re-wrap, create and walk with `new_node_key`, `rewrap_node` and `rotate_node`.
+    - Take keys for writes from `writable_node_key` only.
+
+#### Area state is per (family, area), never per area
+
+- An area resolves only through the family `open_area` derived its id under (`check_id`).
+- Another family's listing of it is ignored and reported (`foreign_listings`), never a lock.
+- So is any family's listing of the account's own workspace.
+    - Apps call `open_personal_workspace` when they open the personal grant, before any family sync.
+- An area no family opened resolves through none.
+- `commit`, `uncommit` and `forget_group` touch only their own family's areas.
+    - `forget_group` drops the keys of the areas that family opened, nothing another family's chain merely lists.
+- Why: keyed by area alone, a removed member who manages another family the victim is in could list the area at an old version and, with the server, get writes under the old top-level key.
+- `open_area` is not in the exported impl. No exported function hands out a family folder's key.
+
+#### Committing chains
+
+- `commit` refuses:
+    - A chain older than the one held (`OLDER_CHAIN`). The app re-reads.
+    - Another chain at the version held (`SPLIT_CHAIN`). The app shows it as the fork.
+    - On either, the app writes nothing of that acceptance: no record, no pin.
+- Background walks need this.
+- `commit` is not exported. Apps commit only through `accept_served`, and the join and creation paths.
+- The committed chain is passed to acceptance as a mark (`pin_after` of it) by `accept_served`, so the split view is the fork before the ledger sees it.
+- While a family that opened a folder has no committed chain (after the last attempt's refusal, or a fork), it is held back (`State::held_back`, the worker's `heldBack`):
+    - `open_listed_node` and `writable_node_key` refuse with `NO_CHAIN`.
+    - `node_key` and `prev_node_key` (so `key_at_epoch`) give none.
+    - `parent_key_and_root` is reached only behind those gates or `require_writable`.
+    - Keys stay held for the next commit. `forget_group` drops them.
+    - A forked family's folders do not read from keys already held.
+
+#### Roots
+
+- A top-level row at the area's write version, whose key holds, pins the area's root node.
+- An old-version top node never does.
+- Any other top-level node is refused without touching what was seen.
+- A root served at an older version never lowers `root_seen_at`.
+
+#### Walks
+
+- A walk goes node by node through `rotate_node(workspace_id, node, target_epoch, signing_seed)`. Details in [Re-keyed walks](#re-keyed-walks-rotation_recordsrs).
+    - It runs `require_writable` first (as `driveRotateNodes`).
+    - It makes the fresh key, re-keys the node's records with it, and only then marks it pending, as the worker's `rotateKey` does.
+    - A node whose records do not re-key leaves nothing pending.
+- `rotate_drop` drops a refused batch.
+- `rotate_drop_all(workspace_id)` drops one the app lost track of.
+- `rotate_key` (the key half alone) is `#[doc(hidden)]` and not exported.
+    - The shared scenarios and the fuzz target call it.
+    - Apps never see a walk's keys.
+
+#### Area ledger fixtures
+
+- `fixtures/area-ledger-scenarios.json`: hand-written scenarios with stated outcomes, two-family ones included.
+    - Both twins run them through `tests/common/area_ledger.rs` and `packages/crypto/src/area-ledger-testkit.ts`, which calls the worker's own ledger functions.
+    - One scenario: a refusal never lowers the floor.
+- `fixtures/web-area-ledger.json` and `core-area-ledger.json`:
+    - Every step's outcome must match.
+    - Every key envelope the other twin made or served (option A's label included) must open to the key it says.
+- Two rule oracles hold on every run:
+    - Each successful create, re-wrap or walk key went under a parent rooted at the write version.
+    - Each node a write made is writable at once.
+- Fuzz target `area_ledger` takes `{steps}` in the same vocabulary and asserts the oracles.
+- The differential's fast-check side also draws random step sequences.
+
+### Re-keyed walks (`rotation_records.rs`)
+
+- `AreaLedger::rotate_node(workspace_id, node, target_epoch, signing_seed)` returns `RotatedNode`.
+    - The key envelope at the target.
+    - Metadata and each version as `RotatedRecord`, re-keyed raw under the fresh key.
+- A record that already carries an origin (`ServedRekey`):
+    - Carries it after `*_origin_carry`'s bound check.
+    - Or is re-sealed with `drop_origin` when the origin does not bind (a wrap at another epoch or for another version included), its writer is gone, or it names a writer with no signature.
+- A signed record becomes its own origin.
+- An unsigned record (no signature, or a writer served as nobody) is re-sealed as the walker's (decision D6).
+    - The residual, planted unsigned content reading "Re-locked by" the walker, is in docs/integrity-design.md.
+- No legacy signature beside a re-key (decision D3).
+- A node already at the target is only re-wrapped.
+- Refused:
+    - A seed that is not the unlocked account's (`open_account`; `NOT_THIS_ACCOUNT`, `NO_ACCOUNT`).
+    - A workspace that is no family folder (`NOT_A_FAMILY_FOLDER`). The web's personal `legacyRecord` is not ported.
+    - A node with shares or links (`SHARED_IN_FAMILY`). Sharing is hidden in family folders (design 3.4), so any share is one the server listed. The web's `rekeyNode` refuses them too.
+    - The top level (`AREA_ROOT`).
+    - A second walk of a node to a target it is pending at (`ITEM_CHANGED`, both twins).
+- Keys and seeds go through borrowed-slice internals (`*_with`) and are wiped.
+- Fixtures: `rotations` in both area-ledger fixture files (`tests/common/rotations.rs`, `packages/crypto/src/rotation-testkit.ts`).
+    - Eleven cases on a family whose roster 2 removed person 3:
+        - A removal's walk keeping every writer's record.
+        - A second walk carrying bound origins, and dropping a gone writer's and an unbound one.
+        - Carried origins wrapped at another epoch, for another version, or naming a writer with no signature: dropped.
+        - The walker reading its own walk.
+        - A re-wrap at the target.
+        - A folder whose two children are wrapped under its pending key while their records are re-keyed, with a child under its old key left unwritable.
+        - A three-version file with one writer since gone.
+        - A planted signer read back as a bad signature in its name.
+        - An unsigned record under the replaced key, re-sealed as the walker's and read as re-locked.
+        - A shared and a linked node both twins refuse with the same message.
+    - Each twin walks each case's nodes in order, checks its declared shapes, writes and verdicts (or the refusal), and writes the walked nodes.
+    - The other reads them on a fresh member's ledger with its own verdicts (`bound: true`, the origin's verdict kept, the removed member's file `former-member`).
+    - It also walks the other's input nodes to the same shapes and writes.
+    - Each re-keyed record is a `record_integrity` seed (`rekeyedInputs`).
+
+### Record verdicts (`group_verdicts.rs`)
+
+- `AreaLedger::record_verdict(group_id, reader, writers, record, cache) -> CoreResult<RecordVerdict>`.
+    - This account's records are judged by its own keys.
+    - Everyone else's by `group_writer_trust`, against the ledger's committed chain and the areas the family opened.
+    - A re-keyed record with the node key at its epoch from the ledger. Unchecked without one.
+- The family is the one the folder was opened under. Otherwise `NOT_THIS_FAMILYS`, as the web's `groupVerify` checks.
+- The fork comes from the ledger: `uncommit(group_id, fork)`, cleared on commit and forget.
+- `reader` must be the account `open_account` named.
+- `AreaLedger::copy_form(...) -> Integrity` gives the prior a `*_copy_sign` call takes.
+    - `Verified`, `SavedFromLink`, else `Resealed`.
+    - A former member's or key conflict's record, and an unbound origin: `Resealed`.
+    - Unchecked is refused, a re-keyed record without its epoch included, in both twins.
+- Personal keys come from `GroupWriter::personal`. The web's copy uses its Drive trust set instead.
+
+### Device record, floor and guard (`device_record.rs`)
+
+Twin of the worker's device store and `accept` (`session-groups.ts`), the data layer's order (`packages/crypto/src/record-acceptance.ts`, `acceptFromRecord`, which `apps/web/src/lib/groups/sync.ts` calls) and `mergePin`/`pinAhead` (in `packages/crypto/src/pins.ts`).
+
+#### Opening the account
+
+- `AreaLedger::open_account(user_id, signing_public_key, account_key)` derives and holds the device store key.
+    - HKDF-SHA-256 of the root, salt 32 zeros, info `hushos/group/device-store/v1`.
+    - A root of another length is an `Input` error.
+    - `clear` wipes it.
+- Opening another user than the one open clears everything first: keys, chains, floors, settings.
+    - As the web's unlock of another user forgets the Drive keys and the families.
+    - The same user keeps them.
+- `clear` and a switch of user bump a generation that survives `clear`.
+    - An acceptance commits, uncommits or marks a fork only under the session it began in (`NOT_THIS_ACCOUNT`, checked under the lock).
+    - It seals its record under the key held at commit.
+
+#### Device stores
+
+- Device records are sealed with XChaCha20-Poly1305.
+    - AD `["hushos/group/device-store",1,userId,groupId,store]`.
+    - Envelope: base64url of `[1][nonce][ct]`. JSON text in and out.
+- `chains`, `joins`, `holds` and `outbox` are all the core's.
+    - The chain record is sealed and opened only inside `accept_served`.
+- `AreaLedger::group_device_record_seal`/`_open(group_id, store, value)` and `DeviceStore` (`Outbox` only) are fixtures-only.
+- `CoreError::Sealed` means the envelope did not open: delete it.
+- Anything else (no account, a malformed id) is `Input`, and the record stays.
+- `chain_record_seal_value`, `chain_record_open_value` and `opened_area` are `#[doc(hidden)]`, not exported, for the fixtures and the fuzz target.
+
+#### The chain record
+
+- `{"v":1,"cache":…,"pin":…}`.
+- The cache is written as the web writes it (`cache_json`, `cacheVersion` 2, `areaRoots`, `retiredAreas`).
+- It is read as `marksOf` reads it (`chain_record_read`):
+    - Not version 1 is unreadable.
+    - A falsy cache is none.
+    - A cache the worker refuses by shape is refused (`RecordCache::Refused`), keeping only what a list `rosterDigests` counts. Bad shapes: not an object, any `origin`, a field of the wrong JSON kind, `areaRoots`/`retiredAreas` present but null, a version 2 cache without them.
+    - A pin of the wrong JSON kind refuses acceptance on every path.
+    - Numbers read as `JSON.parse` reads them.
+- A record's pin is checked as the web's `checkGroupPin` checks the raw JSON (`pin_of`): field by field, in its order and words.
+    - Both twins check every area id, then every area version. So a pin wrong in two places is refused for the same field.
+
+#### Settings before acceptance
+
+- `AreaLedger::use_settings_envelope` sets the settings (see [Settings in the ledger](#settings-in-the-ledger-ledger_settingsrs)).
+- Settings that opened are never replaced by none within one unlock (D7, the worker's `useSettings`).
+- `AreaLedger::legacy_settings(user_id)` is the worker's `legacySettings` for a version 1 document.
+    - Refused after settings that opened. Otherwise nothing is set.
+- Acceptance before any settings for the account is refused (`Open your settings first.`).
+    - This comes after the record is opened, as `marksOf` orders it.
+
+#### `accept_served`
+
+- `AreaLedger::accept_served(me, group_id, record, served: ServedChain, checked_at) -> ServedAcceptance`.
+- Answers: `Accepted { chain, record, pin, guard }`, `Fork`, `RecordUnreadable`, `FetchFromVersionOne`, `Overtaken { split }`.
+- `record` none with `served.after` above 0 is `Input`, before the ledger is touched.
+- A continuation refused or overtaken is `FetchFromVersionOne`. Call again with the same record.
+- From version 1: first with the cache, then without it, with the record's pin still a mark.
+- Each run is the worker's `accept` against the family's floor.
+- A changed session or account, or settings not open, is passed straight back. It is never turned into `FetchFromVersionOne` (the web's `accountError`).
+- A run overtaken from version 1 is `Overtaken`, never an English error.
+    - `served_race_message(split)` holds the words to show after three.
+- Apps store the record only if no stored record is at a later roster version, and before they settle the pin.
+    - The web's `putChain` refuses a lower version.
+
+#### The floor
+
+- The floor is the highest chain committed this session (`State::floors`).
+    - Raised by every commit.
+    - Never dropped by `uncommit`. Only by `forget_group` and `clear`.
+    - The web's ledger keeps the same in `area-ledger.ts`.
+- It is the `OLDER_CHAIN` floor before acceptance, and a mark (`pin_after` of it).
+- Every commit checks it again (`State::commit`), so `commit` never goes below or beside it.
+- `commit` holds a chain to the whole floor and to the held chain (`overtaken_by`: roster digest and group key at their versions).
+- Admission counts the session floor as a mark (its pin among the pins).
+- The floor moves to a later group key at the same roster too.
+- `commit_served`/`uncommit_served` are held to the family's epoch the call took (`Reader::epoch`, bumped by every `forget_group`; `FAMILY_FORGOTTEN`, an account error).
+- The ladder keeps the family committed between attempts.
+    - `accept_once` takes `retried` (every attempt but the last when there is a record). It checks the session but does not uncommit.
+    - The worker's `groupAccept` takes the same flag from `acceptFromRecord`.
+
+#### The guard
+
+- `FamilyGuard` (`Absent`, `Unreadable`, `Held { pin }`) goes to `accept_served`, `accept_joining` and `join_first_use`.
+    - It is the device's guard (design 2.8), a mark like any pin.
+    - `Unreadable` refuses with `GUARD_UNREADABLE`.
+- The core decides how it advances.
+    - `ServedAcceptance::Accepted` and `JoinAcceptance::Accepted` carry `guard: Option<GroupPin>`.
+    - `guard_after` (twin of the web's `guardAfter`): `merge_pin(group, guard, pin, opened areas)` when `Merged` and `pin_ahead`, else none. So it never goes down.
+- The app's rules for the guard:
+    - Write it before the record. No pending record, no wait for the settings save.
+    - Store it apart from the chain record.
+    - Never delete it on a `not-member` wipe.
+    - The store merges and never goes down (`merge_pin`, under the account's lock).
+    - Nothing is written under an acceptance until its guard is stored.
+- Wipe a family only through `AreaLedger::forget_group(group, guard, checked_at) -> GroupForget { forgotten, guard, unreadable }`.
+    - It drops nothing while the held guard does not cover the session's floor. It hands back the guard to store: the held one moved on to the floor with the folders opened here (`guard_after`'s rule, `GuardAfter::Store`). Call it again after the store.
+    - An unreadable guard holds it up only over a floor.
+    - It forgets only over a held guard equal to the floor at its versions (`GuardAfter::Covered`).
+    - It refuses, nothing dropped, a guard that disagrees with the floor or crosses it (`GUARD_CONFLICT`, `GuardAfter::Conflict`; `merge_pin` calls crossed versions a conflict).
+    - It refuses one past the floor (`GUARD_AHEAD`, `GuardAfter::Ahead`): accept up to it first.
+- iOS passes the stored guard (`heldFamilyGuard` in `FamilySync.swift`).
+
+#### Merging pins
+
+- `merge_pin(group_id, current, next, opened: Vec<Arc<OpenedArea>>) -> CoreResult<PinMerge>`: `Merged`, `Behind`, `Conflict`.
+    - An opened area of another family is refused.
+- `pin_ahead`.
+- Check times compare by UTF-16 code units.
+- `OpenedArea { group_id, workspace_id, version }` is a `uniffi::Object` only `open_area` makes (`AreaOpened::pin_area`).
+    - So the areas folded in from `opened` are ones this device opened for that family.
+- `current` and `next` are plain records an app can fill.
+    - A forged area there only raises an area's mark, which is the limit of the type.
+    - App reviews hold that the only `next` is `ServedAcceptance::Accepted`'s `pin`.
+
+#### Device record fixtures
+
+- `deviceRecords` in both area-ledger fixture files (`tests/common/device_records.rs`, `packages/crypto/src/device-record-testkit.ts`): 26 cases built alike.
+    - Cold: the cache continued, a refused continuation, unreadable records, newer or damaged caches from version 1, cuts below the record's pin with and without it, a refused pin, the cache and the committed chain as marks, no mark.
+    - Warm, with a chain committed first: the record at the floor, behind it, damaged and headless caches, the refused continuation that must keep the floor, settings ahead of the record, settings on a branch, and a branch at roster 2 that only the cache shows at 2.
+    - The last two: version 1 settings set nothing, and an unreadable record is the answer before settings are open.
+    - Each twin runs the other's records and served chains to the same full outcome, refusal messages and whether it fetched from version 1 included.
+- The app's own records (`stores`).
+- `mergePins` from `fixtures/merge-pin-cases.json` (15 cases).
+- `raceMessages`.
+- Fuzz: kind `device_record` in `pins`.
+    - Any JSON sealed as the chain record, served `through` roster 1 to 3, with a `held` chain committed first.
+    - An accepted chain never goes below the held one.
+    - It reaches and passes through the record's pin whenever it is one.
+
+### Joining (`join.rs`)
+
+The whole newcomer side. Twin of the worker's join (`session-groups.ts`: `admission`, `groupJoinPreview`, `groupJoinCheck`, `groupAccept` with `joining`) and its escalation (`packages/crypto/src/join-session.ts`).
+
+#### Preview
+
+- `group_join_preview(me, group, record, served, holds)` → `JoinPreview::Code { roster_version, code, session }`.
+- `holds` (the app's stored escalation, or none) is folded in first.
+- Then marks, as `accept_served` reads them (`open_marks`), plus a chain or fork the session holds (`holds_family`).
+- `open_marks` checks `me` in the worker's order:
+    1. Another account: `NO_ACCOUNT`.
+    2. The record.
+    3. The settings.
+    4. `Open your identity first.`
+- The code is the roster's where the account's entry last became active.
+
+#### Hidden positions
+
+- Drawn from `OsRng` only when the code has no entry in the family's book.
+    - `next_u32`, rejection-sampled below `2^32 - 4`, mod 12, distinct, ascending.
+- Never redrawn until a match on that code clears it.
+- A family keeps at most 64 codes (`MAX_SHOWN_CODES`).
+    - The earliest unheld one goes.
+    - A book of 64 held codes refuses to show another (`TOO_MANY`).
+- `JoinSession` and `JoinMatched` are `uniffi::Object`s with no constructors.
+    - A session carries the account, the generation, the family, the mark and its positions.
+    - A check accepts it only while the book still holds exactly those positions for that mark in that generation.
+    - Otherwise `NOT_SHOWN`: a lock, another account, or a restore that replaced positions not held.
+
+#### Check
+
+- `join_check(me, group, record, served, session, typed, now, holds)`. In order:
+    1. The account, then the restore.
+    2. Not shown (`NOT_SHOWN`) and incomplete, before verifying.
+    3. The admission again: `Changed` with a showing, words unchecked.
+    4. The words.
+- `join_check` re-reads the session's generation and positions under the lock after its unlocked admission. `AFTER_ADMISSION` is a `#[cfg(test)]` seam for the race.
+- Answers:
+    - `WrongWords { holds }`: the family's first miss. It holds the code.
+    - `Mismatch { holds }`: after that (`held || tried`).
+    - `Matched { matched, holds }`: clears `tried` and that code's hold, and seals the joins record.
+- The joins record after a match: `{v:4, groupId, joinMark, checkedAt}`, store `joins`.
+    - Checked at the settings pin's time if any, else `now`.
+    - Version 3 records are read alike.
+    - Version 2 joins records (an older data-layer escalation) are refused: a join in flight across that upgrade is compared once more.
+- `holds` is the escalation sealed in store `holds`: `{v:1, tried, held:[{rosterVersion, code, positions}]}`.
+    - `None` when nothing is held.
+    - The app stores it in place of the one before, or deletes it on `None`.
+- `join_check_message(again, them)` holds the two sentences.
+
+#### Restoring holds
+
+- `holds` on either call only ever holds more.
+    - A held entry here is kept.
+    - An unheld one takes the stored positions and is held.
+    - A new one needs room.
+- Roster versions 1 to 2^53 − 1 only.
+- A blob that does not open on this account is refused with `HOLDS_UNREADABLE`. That is the only answer an app deletes it on.
+
+#### Accept
+
+- `accept_joining(me, group, record, served, matched, guard)`.
+- Token checks:
+    - A token of another account: `NOT_THIS_ACCOUNT`.
+    - Of an earlier unlock of the same account: `STALE_MATCH`. Reopen it from the record.
+    - Of another family: `OTHER_FAMILY`.
+- Single use:
+    - The record's SHA-256 is reserved under the lock (`JoinBook::consumed`, `USED` if taken).
+    - It is released unless the join is `Accepted`.
+- Then the admission again.
+    - `Changed` only when the account was let in again at a later roster and the chain still passes through the compared roster with the compared code.
+    - Anything else (another code at the compared roster, a chain short of it) goes to `accept_once` with the join mark, which answers the fork or a refusal.
+- The `Join` anchor (once `first_keys_checked`) is passed only where nothing marks the family, as in the worker.
+- `join_matched_open` reopens a kept record.
+    - `None`: another root, family, version, or any store but `joins`.
+
+#### What single use means
+
+- A joins record is a standing permission to commit the compared code for that family, until the app deletes it.
+- `consumed` only stops a double submission within one unlock.
+    - It is cleared by `forget_group`, a lock and another account.
+    - A relaunch starts empty.
+- The record is bound to the account root and the family by its AD, not to a ledger instance. Any ledger of the same account opens it.
+- `JoinBook` lives in the ledger's `State`.
+    - Dropped by `clear` and another account.
+    - `forget_group` keeps the escalation and clears only `consumed`.
+
+#### First use and family checks
+
+Design: docs/optional-verification.md.
+
+- `pair_code(chain, me, other, rosters) -> PairCode`, at the later admission of the two.
+    - `Code`.
+    - `OwnEntryWrong`: this account's own entry at that roster names none of its identities, or acceptance found it wrong.
+    - `NotAdmitted`.
+- `AreaLedger::pair_match(me, group, other, rosters, roster_version, code, guard: GuardState, checked_at) -> PairMatch { check, pin }`.
+    - The check record only for this device's code.
+    - A verified pin only when the head entry is active and names the compared entry's keys.
+    - And those keys are the guard's keys (an unreadable guard: none), or else the settings pin's.
+- `AreaLedger::join_first_use(me, group, record, served, guard, now) -> FirstUseJoin` seals the version 4 joins record of the head's pin.
+    - `{v:4, groupId, firstUse: <pin>}`, `pin_after`'s, read back with `pin_of`.
+- `accept_joining` commits it with that pin as one more mark and no anchor.
+    - So its version 1 keys, roster and group key all hold on a reload.
+
+- The admin's join code over the committed chain (`groupJoinCode`) is not here: it is `member_join_code`, in roster calls.
+
+#### Join fixtures
+
+- `tests/common/join.rs` and `join-testkit.ts`:
+    - 22 `joinPreviews` over named histories with drawn positions (`draws()`, the same list in both).
+    - 23 `joinChecks` (`fixtures/join-check-cases.json`).
+    - `joinSessions` from `fixtures/join-session-scenarios.json`: 22 scenarios run as the app drives them.
+        - The escalation kept from each check, restored after a lock or relaunch or from an earlier step.
+        - Each twin's full outcomes matched step for step.
+        - Each twin's joins record and kept escalation opened by the other.
+    - 9 due and 12 sign `consents`.
+- `packages/db/src/auth.consent.test.ts` stores the consents through the backfill.
+- First-use scenarios:
+    - `a-first-use-*`, with `-record-binds-its-first-keys` and `-its-group-key` over the histories `madeUp` and `succOther`.
+    - `the-guard-is-a-mark-a-wipe-keeps`.
+    - `the-guard-advances-and-a-replay-below-it-is-refused` (histories `removal`, `removalFork`; ops `guard`, a step's `guard: "held"`).
+    - `a-family-check-*`, `a-check-record-*`.
+    - `no-first-use-*` (op `first-use`, a step's `guard`; settings `checked-before`, `checked-malformed` through the fixtures-only `use_family_checks`).
+    - `cross.firstUseRecord`.
+    - `pairCodes` in the roster-call documents.
+- `fixtures/v0.10.0/planted-join.json` is a real iOS 0.10.0 join over a planted entry.
+
+#### The `fixtures` feature
+
+- It is on for the crate's own tests (through a self dev-dependency) and for the fuzz crate.
+- It gates:
+    - `AreaLedger::with_draws(draws)`, which replaces the CSPRNG.
+    - `join_words`: the bare typed-words rule. JavaScript's `trim` set, lowercased, two ascending positions in 0..=11, a twelve-word code.
+    - `join_draw_positions`.
+    - `device_store_seal_value`/`device_store_open_value`.
+- None of them is in a release build.
+
+### Successor consent signing (`consent.rs`)
+
+- `links_needing_consent(links, identities)`: twin of `consent-due.ts`.
+- `AreaLedger::succession_consent_sign(me, link, old_identity, next_identity)`: twin of the worker's `identityConsent`.
+    - It signs with the account root the ledger holds. No account key crosses the FFI.
+- Refusals, in order:
+    1. `me` of another account: `NO_ACCOUNT`.
+    2. `me` without the identity the account opened: `OPEN_IDENTITY`.
+    3. Not two version 2 identities with the next later: `UPGRADED_ONLY`.
+    4. Either not opening on this account: `NOT_OWN`.
+    5. `link` not naming both, or not signed by the old identity: `This link is not one this account made.`
+    6. Not adjacent in `me`: `NOT_CONSECUTIVE`.
+- `me` is the full opened history. An app that leaves one out gets `NOT_CONSECUTIVE`.
+
+### Roster calls (`roster_calls.rs`)
+
+Twin of the worker's `groupStage` (admission, role changes), `groupOpenSeal`, `groupGrants` and `groupJoinCode` (`session-groups.ts`), and of `packages/crypto/src/outbox.ts` (`outboxStep`, `readOutboxEntry`, which the web's outbox drives).
+
+#### Opening the group key
+
+- `open_group_key(me, group, seal, sealer_ml_dsa_public_key, sealer_history, holder)`.
+- Route 8's seal is opened against the committed chain with the holder envelope's KEM half.
+- The seed is kept in `State::seeds` while it is the committed chain's current key version (`hold_seed`, session re-checked).
+    - `AFTER_OPENING` is its test seam.
+    - Dropped by a commit to a later key, `forget_group` and `clear`.
+
+#### Contact pins for calls
+
+- `admit_body` (by `user_id`), `member_join_code` and `outbox_open` take the person's pin from the settings only (`contact_pin`).
+- `use_settings(user_id, pins, contacts)` is fixtures-only. Apps go through `use_settings_envelope`, which opens the served envelopes in the ledger.
+
+#### Staging a call
+
+- `admit_body`, `roles_body` (`MembersRole::{Grant, Take}`) and `handover_body` (`Handover::{To, StepDown}`) answer `RosterCall`.
+    - `Staged`, `SyncFirst`, `OpenKeyFirst`, `OpenFoldersFirst`.
+    - The person's refusals are errors.
+- `caller(.., manager)` checks, in order: the account, the chain, `members` (`NOT_MANAGER`), the seed, the identity.
+- `stage`:
+    - Refuses `ALREADY_IN`, `NOT_CHECKED`, unchecked keys, `NOT_IN`, `UNCHANGED`, `SELF_TAKE`, `ORGANIZER_FIRST`.
+    - Builds the roster (format 2).
+    - Checks the signer's entry.
+    - Answers `OpenFoldersFirst` before signing.
+    - Signs.
+    - Adds the succession when a holder loses `members`.
+    - Accepts the staged chain (`stage_chain`). It is never committed, cached, a mark or returned.
+    - `parts` seals and grants against it (live areas only, from `call_state`).
+- `call_still_holds` re-checks session and chain under the lock. `AFTER_SIGNING` is its test seam.
+- Then the entry is sealed (store `outbox`), with the body as text and `previousRosterDigest`/`rosterDigest`.
+
+#### Admissions
+
+- Admissions convert the found contact pin (`ContactPin::checked`).
+    - A words check with every key part a string. Otherwise `These are not the keys whose words were checked.`
+- They refuse an entry whose `userId` is not the person's exactly (the worker's check).
+- `admit_body` lets someone in over a first-seen pin as over a verified one (the worker's `groupStage` too).
+    - A pin trusted via a group, one short of a key part, or one filed for them over other keys still refuses (`NOT_THE_PINNED_KEYS`).
+    - An admission is never signed with a role (`ADMIT_AS_MEMBER`).
+
+#### The manager rule
+
+- `roles_body` keeps the manager rule (docs/optional-verification.md 3.6). It is the twin of the worker's `CHECK_MANAGER_FIRST`.
+- Granting `members` needs this account's own verified pin of the person (`words_checked`, `pin_verified`).
+    - Its key commitment must be their current entry's (`entry_commitment`, the digests as hex).
+- A first-seen pin, a family's word, or a verified pin over other keys refuses with `CHECK_MANAGER_FIRST`.
+- Taking `members` away, and the handover, ask for no check.
+- Test: `members_is_given_only_over_this_accounts_own_verified_pin_of_the_keys_their_entry_names`.
+
+#### Grants, outbox and join codes
+
+- `grants_body(me, identity, group, missing) -> GrantsCall`: what a `SendGrants` answer needs.
+    - `Grants { requests }` per folder, 256 a request.
+    - `SyncFirst`.
+    - `OpenFoldersFirst`.
+- `outbox_open(group, outbox_id, user_id, entry) -> OutboxCall`.
+    - `Send`, `Hold`, `Landed`, `Superseded`.
+    - `Sealed`: delete it.
+    - Another account's `user_id`: an `Input` error.
+- `outbox_step(status, code)`.
+- `entry_read` checks fields in the web's order:
+    1. Version as JS `=== 1`.
+    2. Non-empty id, and the kept one.
+    3. Family.
+    4. Staged envelope.
+    5. State.
+    6. A JSON-object body, as text or object.
+    7. Route.
+    8. Then awaiting-check, landed/superseded against the committed head, the admission's pin, committed.
+- The outbox's `admits` is `{ userId, keys }`, the key commitment (`admitted_keys`, `pin_commitment`).
+    - An older entry with only `fingerprint` matches a pin whose commitment it is.
+    - `keys` present decides alone.
+    - `""` matches nothing.
+- `member_join_code(group, user_id, rosters) -> MemberJoinCode`: `Code`, `OtherKeys`, `NotAdmitted`, `SyncFirst`, `NotPinned`.
+    - The join code compares `Option` key parts (`entry_is_pin`).
+- Fixtures-only: `group_device_record_seal`/`_open` and `DeviceStore` (the outbox is the core's), `identity_wrap` (fixed keys into an envelope), `outbox_entry_read(value, group, id, pin, head)` and `outbox_entry_seal`.
+
+#### Roster call fixtures
+
+- `fixtures/outbox-steps.json` and `fixtures/roster-call-sessions.json` are hand-written and run by both twins.
+- `packages/groups/src/server.test.ts` stores the family route by route and posts every body of both files: resent, and two on one head.
+- `tests/common/roster_calls.rs` and `roster-calls-testkit.ts` build the same family.
+    - Persons 1 to 5, a group id derived under person 1.
+    - Rosters: create A1, admit 2, admit 3 with members, create A2, delete A2, create A3, rotate A3 to 2.
+- They build:
+    - 15 calls (5 built, 10 refused alike).
+    - 2 owed-grant calls.
+    - 8 join codes.
+    - 13 outbox entries.
+    - The session scenarios (`session_run`, `sessionRun`).
+- Fuzz: kinds `outbox_entry`, `member_join_code`, `roster_call` and the stateful `roster_call_session` in `pins`.
+
+### Calls that rotate (`roster_calls/removal.rs`)
+
+- Twin of the worker's `groupStage` kinds `remove`, `markLeft`, `rotate` and `retire`, of `groupRestage` with `rebuild`, and of `groupPreviousRoot` (`session-groups.ts`).
+- The changes go through `stage` (`Change::{Remove, MarkLeft, Rotate, Retire}`). So the caller checks, the staged chain, `call_still_holds` and the sealed entry are the same as for other calls.
+
+#### Bodies
+
+| Function                                                                       | Route | Notes                                                           |
+| ------------------------------------------------------------------------------ | ----- | --------------------------------------------------------------- |
+| `removal_body(.., user_id, rotations, ends_lapsed, account_key_version, kems)` | 19    | `ends_lapsed` rides on the route and in the body when non-empty |
+| `mark_left_body(.., user_ids, rotations, account_key_version, kems)`           | 7     | None is `NOBODY_LEFT`                                           |
+| `area_rotation_body(.., rotation, account_key_version, kems)`                  | 24    |                                                                 |
+| `area_delete_body(.., workspace_id, kems)`                                     | 30    | The folder must be live                                         |
+
+- All answer `RosterCall`.
+- `account_key_version` is the account key's (as for `open_family_area`).
+    - Each rotation's self-grant names it.
+    - Never the identity's key version. A master-key rotation or a succession moves the two apart, and the server refuses it (`self-grant-key-version`).
+- `StagedCall.replaced` names documents carried on empty.
+
+#### Rotations
+
+- The rotations must be exactly the folders to rotate (`areas_to_rotate`, or the one a key replacement names).
+    - Each once (`EVERY_FOLDER`).
+    - Each live (`NOT_ON_LIST`).
+- Each gets a fresh area and root key: a format 2 row with its root commitment.
+- The new key is granted to every member active on the staged roster.
+- `rotation_wire` (the worker's `rotationOf`):
+    - The root is checked: parent, `parent_key_epoch` = to-version, a folder.
+    - The target epoch must be above the root's (`DRAW_EPOCH`).
+    - Every document is opened under the old key and sealed for its next version as the exact text read.
+    - The root's current key comes from `AreaLedger::rotation_root_key` (the worker's `currentKeyOf`): held at its epoch, else the served envelope under the area key at its wrapped version.
+    - Shares or links are refused (`SHARED_IN_FAMILY`).
+    - The root is re-keyed by `rekey_node_records`. An unsigned root's metadata gets signed.
+    - The old key is wrapped under the previous-root label.
+    - Both are opened back (`KEYS_DID_NOT_OPEN`).
+- Document text (`document_plaintext`):
+    - Only the padding spaces are trimmed.
+    - It is judged by `serde::de::IgnoredAny`, iteratively. That takes what JSON.parse takes and a `serde_json::Value` refuses: lone surrogate escapes, numbers past an f64, any depth.
+    - A `tags` document JSON.parse refuses goes on empty. Any other kind is refused.
+- The self-grant is sealed under the account root at the account key version passed in.
+- The entry keeps `rotationKeys` (each folder's area and root key) for a rebuild.
+
+#### Rebuild and repair
+
+- `outbox_rebuild(me, identity, group, outbox_id, entry, rotations) -> StagedCall`: what `OutboxStep::Rebuild` needs.
+    - The entry is read as `outbox_open` reads it, and must still follow the committed chain.
+    - The roster's rows must be exactly the kept keys (count and commitments).
+    - Only the folders named are made again (`NOT_ROTATED_HERE`), with the same keys, roster, grants and self-grant.
+- `previous_root_repair(group, workspace_id, PreviousRoot) -> PreviousRootRepair`: `None`, `Opens`, `Repair { previous_root_key_envelope }`, `Cannot`.
+    - Only the device's own previous key at that epoch is ever wrapped (`own_previous_node_key`, kept by a Drive rotation's commit).
+    - A served envelope that opens to anything else is no better than one that does not open.
+    - An empty envelope is none, as the worker's `!root.prevKeyEnvelope` reads it.
+
+#### Removal fixtures
+
+- The roster-call documents carry:
+    - `removalCalls`: 12 calls on person 1's device, account key 2 and identity 1. Remove a member, remove a manager, mark left, replace A3's keys, delete A1, and 7 refused alike.
+    - `previousRoots`: 6 route 25 envelopes.
+    - `removalRoots`: the roots and documents the calls were built from.
+- Built by `tests/common/removal_calls.rs` and `removal-calls-testkit.ts` over the roster-call family.
+    - Each live folder's root has an id derived from its seed and a name person 1 signed, built once per twin.
+    - A1's tags include a tag named by a lone surrogate. A3 has junk.
+- Each body is read by the other twin as every member reads it:
+    - The call verdict.
+    - Each new key from its grants (the roster commits to it).
+    - The root's new key against the root commitment, the old one under its previous-root label.
+    - The name, the self-grant and its account key version, and every document's text.
+    - The roster's area rows exactly what the call writes.
+- `packages/groups/src/server.test.ts`:
+    - Stores the family with those roots, A3's walk finished, the documents, and person 1's account key at 2.
+    - Posts every built body of both twins. Each lands at version 8 and replays.
+    - With the account key at 1, the removal is refused (`self-grant-key-version`).
+    - Refuses a removal that leaves one of two live areas unrotated (`roster-chain`), and stores nothing.
+- The repair rule is held by each twin's unit tests only. A device's own previous key comes only from a Drive rotation's commit, which the fixtures do not run.
+- Fuzz kinds `removal_call` and `previous_root` in `pins`, both twins.
+
+### Settings in the ledger (`ledger_settings.rs`)
+
+Twin of the worker's `settingsKeyOpen`/`settingsOpen` (`settingsOpenFor` in `packages/crypto/src/settings-marks.ts`) and its settings marks (`settingsMarks`, `contactPinOf`, `settingsPinOf`, `refuseDowngrade`, which `session-groups.ts` calls).
+
+#### Opening
+
+- `AreaLedger::use_settings_envelope(user_id, key_envelope, settings_envelope)` opens the settings key under the root `open_account` holds, and the document under it.
+    - None served is "no settings" (account checked).
+    - Version 1 is `legacy_settings`.
+    - Version 2 needs the key envelope.
+- Messages are the web's.
+    - `SETTINGS_NOT_OPENED` for any AEAD failure.
+    - `Invalid key encoding.` for a field that is not canonical base64url, empty included.
+- A document below the highest settings version opened in this unlock is refused (`OLDER_SETTINGS`).
+    - `Settings::settings_version`, decided in `set_settings` under the lock.
+    - The worker's `settingsMarks` keeps the same floor.
+- Settings are set under the lock only while the generation and root they were opened under are still the ledger's (`NOT_THIS_ACCOUNT`). `AFTER_OPENING_SETTINGS` is the test seam.
+
+#### Reading the document
+
+- The plaintext is read as the web reads it (`read_document`):
+    - TextDecoder's lossy UTF-8 and BOM drop.
+    - Unpaired surrogate escapes in strings are written as `\uFFFD` (`without_lone_surrogates`, twin of `withoutLoneSurrogates` in `contacts.ts`).
+    - JSON.
+    - Then `readSettingsDocument`'s shape: `version` the number 1 or 2, `contacts` an object, array or null.
+- `groups` members are kept raw (`HeldPin::Raw`).
+    - `pin_of` checks one only when acceptance reads that family's.
+    - A malformed pin refuses its family only. A JSON null is none.
+- `contacts` are kept in document order.
+    - A custom deserializer: a repeated key keeps its first place and takes the last value.
+- A contact is found as the worker's `contactPin` finds it (`contact_pin_of`).
+    - The first member whose key and string `userId` both lowercase to the id.
+    - Members that are no object, or have no string `userId`, are skipped, in both twins.
+- `familyChecks` are read too (`Settings::checks`, `AreaLedger::family_check`).
+    - A record with `code` is a pair mark. A malformed one is refused for that family (`Invalid pair mark.`).
+    - One without (the migration's `before`) is a mark only.
+    - `ledger_settings::family_check_of` is the one reader.
+
+#### Fixtures-only and not exported
+
+- `use_settings` is fixtures-only (`#[cfg(feature = "fixtures")]`).
+    - It stores typed pins as `HeldPin::Typed` and converts contacts to the web's JSON.
+- `settings_seal_raw` (fixtures-only) seals documents `settings_seal` refuses.
+- No exported function takes a `VerifiedPin`. The record stays, as `trust_as_group_does` returns one.
+- `roster_entry_new` and `area_grant_open` are not uniffi-exported.
+
+### Opening a family folder (`area_open.rs`)
+
+Twin of the worker's `groupOpenArea` and `grantAreaKey`/`openAreaSelfGrant`.
+
+- `AreaLedger::open_family_area(group_id, ServedArea, account_key_version) -> FamilyAreaOpened { opened, from: AreaKeyFrom, self_grant_to_store }`.
+- Checks, in the worker's order:
+    1. The committed chain (`NO_CHAIN`, so held-back families open nothing).
+    2. The id derived under the family.
+    3. The area live.
+    4. The account.
+- Then the key comes from, in order:
+    1. The self-grant, only when at or above both the chain's latest and the served version, listed, and of the committed key. Otherwise it is ignored.
+    2. The area grant. `GRANTER_KEY_NEEDED` without the granter's served ML-DSA key. The holder identity envelope is opened under the root (`NOT_OWN_IDENTITY`).
+    3. Else `NOT_CHECKED_KEYS`.
+- Self-grant context: `["hushos/group/area-self-grant",1,user,group,workspace,keyVersion,workspaceKeyVersion]`, wrapped with HKDF(salt, root, `hushos/workspace/grant-wrap/v1`).
+- A grant at the version both the chain and the server call current is wrapped again for route 23.
+- The key is held through `open_area_in`, with the session and root re-checked under the lock (`AFTER_OPENING_AREA`).
+- `area_self_grant_seal`/`_open` are fixtures-only.
+
+#### Self-grants in a master-key rotation
+
+- `area_self_grant_rewrap(user_id, group_id, old_root, new_root, grant, key_version)` is the twin of `rewrapAreaSelfGrant`.
+    - It is `self_grant_open` then `self_grant_seal`, so there is one self-grant context and one wrapping key.
+    - It is the only self-grant function over UniFFI: two roots in, a sealed grant out.
+    - The opener and sealer stay fixtures-only.
+- The security challenge serves each `workspaces` row with `groupId` (null for the personal workspace).
+- The apps rewrap a row with one through it (`Auth.rewrapGrants` on both), never through `workspace_grant_rewrap`, which refuses a self-grant.
+- Fixtures both ways: `areaSelfGrant` in `fixtures/web.json`, `rotation.areaSelfGrant` in `core.json`.
+
+#### Settings and area fixtures
+
+- `fixtures/settings-area-cases.json`, run by `tests/common/settings_areas.rs` and `packages/crypto/src/settings-areas-testkit.ts` into the roster-call documents (`settingsReadings`, `areaOpens`).
+    - 28 settings cases on person 1's device: envelopes, contacts and group pins of every odd shape, downgrades and older documents, a lone surrogate in a contact name, then acceptance, person 4's admission and person 2's join code.
+    - 18 area cases on person 2's device: self-grants current, stale, served ahead, beyond listed, of another family, folder, root or key, damaged; the granter gone; stores only at the current key.
+- Each twin's envelopes and self-grants are read by the other to the same full outcomes.
+- Every stored self-grant is opened by the other to the folder's key, and opens the folder there.
+- Unit tests in `ledger_settings.rs` and `area_open/tests.rs` come with break-checks.
+    - Known survivors: `v > listed.len()` (duplicated by the commitment lookup, which returns none past the end) and the self-grant context label (one function seals and opens; the cross-twin fixtures catch it).
+- Fuzz kinds in `pins`, both twins:
+    - `settings`: document text read and probed; text both JSON parsers read alike (`settings_fits`).
+    - `area_open`: any self-grant envelope against the family. The self-grant branch is reached only from the seeds' sealed self-grants, since a mutated one never opens.
+
+## Fuzzing
+
+- `fuzz/` is a cargo-fuzz crate with its own workspace and `Cargo.lock`.
+- It is built with the nightly in `fuzz/rust-toolchain.toml`.
+- Targets: `canonical`, `roster`, `group_succession`, `roster_build`, `statements`, `identity`, `succession`, `share_open`, `key_seal_open`, `area_grant_open`, `key_seal_context`, `pins`, `accept`, `record_integrity`, `origin_open`, `area_ledger`.
+
+| File                                   | Holds                                            |
+| -------------------------------------- | ------------------------------------------------ |
+| `fuzz/src/targets.rs`                  | The verdicts (oracles)                           |
+| `fuzz/src/shape.rs`                    | The JSON shapes                                  |
+| `fuzz/src/structured.rs`               | Structured inputs (`arbitrary`)                  |
+| `fuzz/examples/verdicts.rs`            | The Rust side of `bun run fuzz:diff`             |
+| `packages/crypto/fuzz/verdicts.ts`     | The twin: same names, same inputs, same verdicts |
+| `packages/crypto/fuzz/oracles.test.ts` | Holds the TypeScript oracles to the fixtures     |
+
+- A new parser or verifier gets a target in both twins, or a kind in `statements`/`pins`.
+- The `fuzzing` feature exposes `hushos_core::fuzzing::{parse_statement, encode_statement}` for the fuzz crate only. Nothing else may use it.
+    - The `fuzzing` module also has raw openers and the writer-form statement builders for `record_integrity` and `origin_open`.
+- CI runs the fuzz crate's lib tests: the oracles in `fuzz/src/targets.rs` held to the fixtures. So an oracle that misjudges a known chain fails there, not only in `fuzz:diff`.
+
+### What the targets cover
+
+- `statements` covers the drive record statements in all four forms.
+- `roster` and `roster_build` read and build both roster formats.
+- `accept` carries the root probe and mutates the anchor.
+- `area_ledger`: see [Area ledger fixtures](#area-ledger-fixtures).
+- `succession` has kinds `consent_due` and `consent_sign`.
+- `pins` has kinds `device_record`, `outbox_entry`, `member_join_code`, `roster_call`, `roster_call_session`, `removal_call`, `previous_root`, `settings`, `area_open`, `join_check`, `join_preview` (with `words` and `join`), `join_draws`, `join_session`, `pair_code` and `joins_record`.
+
+### `pins` kinds for joining and first use
+
+Seeded from the fixtures, both twins.
+
+- `join_draws`: draws to positions across the twins.
+- `join_session`: an arbitrary op list through both interpreters.
+    - It takes every shared scenario but the one checking a showing from elsewhere.
+    - Ops `first-use` and `guard`, a `guard` per sync, first use and accept, every scenario's settings. No `restore` is `false`.
+    - Session rules: held positions never move until a match, a restore only holds more, the calm try and the alarm, a showing from before a lock refused, kept exactly while held, no join without a match, and one per unlock.
+    - An unreadable guard never accepts.
+    - A first use needs settings that hold and, over a `before` check record, another mark.
+    - A guard handed back covers the held one it was given.
+    - A step's `stored: false` is a failed guard write.
+    - A `forget` (which passes the held guard) must hand back a guard reaching the chain committed when the held one is behind it.
+- Nothing is accepted past a mark it was given: the settings pin, the guard handed, the chain committed, a first use's record.
+    - "Past" means: the same first keys, the roster statements through it, and the succession statements into every key up to the one its roster is under.
+    - `k` = 1 + the successions tied at or below it in the mark's own history. Later ones are allowed.
+    - Never the signatures, which ML-DSA makes at random.
+    - Every guard handed back is under that `k` at its roster.
+    - `session_holds_mark` / `sessionHoldsMark`, held to the fixtures by a test in `fuzz/src/targets.rs` and `packages/crypto/fuzz/oracles.test.ts`.
+- `settings` probes `familyChecks` per group id.
+    - Probes are canonical lowercase UUIDs.
+    - Both twins read `groups` and `familyChecks` only from an object.
+    - `checks`: none, a mark, a pair mark, refused.
+- `pair_code` works out:
+    - The bare code: equal ids refused, the same with the ids swapped.
+    - The chain's code as a roster-call member holding their own or another's keys: no code over keys the device does not hold, the same code when the other member works it out.
+- `joins_record` seals any JSON as person 2's joins record through `device_store_seal_value` and reads it back by an acceptance joining.
+    - Only version 3 or 4 of this family joins.
+    - A first use only over its pin's first keys and roster, never reported checked.
+    - A join mark always is.

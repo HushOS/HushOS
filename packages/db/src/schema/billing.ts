@@ -97,7 +97,7 @@ export const accountIntents = pgTable('account_intents', {
 });
 
 /*
- * A group's customer at the provider (docs/polar-group-billing-spike.md 3): a
+ * A group's customer at the provider (docs/archive/polar-group-billing-spike.md 3): a
  * Polar team customer with external id `group:<groupId>`, whose owner member
  * is the paying person (external id: their user id). `payer_user_id` is who
  * HushOS lets raise, cut and open the portal; it moves only with a completed

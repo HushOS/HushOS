@@ -14,8 +14,8 @@ Each statement below is the exact byte layout that the web (`packages/crypto`) a
 
 Reviews applied:
 
-- **14 October**, the independent review in `docs/groups-crypto-review.md`. Every finding there is applied, and group signatures are post-quantum from the first version.
-- **15 October**, `docs/pq-devices-crypto-review.md`. Roster entries carry each member's ML-DSA key digest, and every conversion waits 7 days.
+- **14 October**, the independent review in `docs/archive/groups-crypto-review.md`. Every finding there is applied, and group signatures are post-quantum from the first version.
+- **15 October**, `docs/archive/pq-devices-crypto-review.md`. Roster entries carry each member's ML-DSA key digest, and every conversion waits 7 days.
 
 Nothing here changes what the server can read. It learns who is in which group, which it must know to authorise anything. Every key it handles stays sealed.
 
@@ -1627,7 +1627,7 @@ Open:
 #### The payer and Polar
 
 - **The payer** is a billing customer keyed by owner kind and id.
-    - In Polar, that is a team customer per group (`external_id: "group:<groupId>"`) whose owner is the paying member (`docs/polar-group-billing-spike.md` 5).
+    - In Polar, that is a team customer per group (`external_id: "group:<groupId>"`) whose owner is the paying member (`docs/archive/polar-group-billing-spike.md` 5).
     - Polar products carry `hushos_plan`, `quota_bytes`, `hushos_group_kind`, `included_members` and, for a family tier, `hushos_tier` metadata.
     - Business products carry `quota_bytes_per_member`: a company's pool grows with each paid member.
     - Members beyond those included are a quantity on the group's one subscription: a unit-based price beside the fixed base, free up to the included members. There is no upper limit; companies have a minimum.
@@ -2038,7 +2038,7 @@ Each fails on a defect a person would notice (see AGENTS.md).
 
 ## 8. Open questions
 
-- **Polar mechanics** are settled by `docs/polar-group-billing-spike.md` (decisions agreed 2026-10-15).
+- **Polar mechanics** are settled by `docs/archive/polar-group-billing-spike.md` (decisions agreed 2026-10-15).
     - Its sandbox results (section 8 there, 2026-10-17) are what 3.5 is built against.
     - Its open risks (section 7) still apply.
 - **Post-quantum identity signatures** are designed in `docs/identity-pq-design.md`. The migrations this design and that one need are in `docs/envelope-migrations.md`.
@@ -2059,7 +2059,7 @@ What is not done, and what it costs, follows. Server-side detail is in `docs/gro
 
 - **Mobile families (1d) are shipped.** Both phone apps show families and open family folders (`docs/groups-mobile-plan.md`).
 - **iOS and Android billing is read only.** The phones are to show the plan, the pool and who pays, with no purchase and no link out (`docs/groups-mobile-plan.md`, iOS 7). So a family chooses, changes and pays for its plan only on the web.
-- **Polar's `PaymentActionRequired` path is unreproduced.** A bank that asks the payer to confirm an off-session charge sends them to the portal. But no sandbox card has produced that answer (`docs/polar-group-billing-spike.md`, E3), so that path is built against Polar's documentation, not an observed response.
+- **Polar's `PaymentActionRequired` path is unreproduced.** A bank that asks the payer to confirm an off-session charge sends them to the portal. But no sandbox card has produced that answer (`docs/archive/polar-group-billing-spike.md`, E3), so that path is built against Polar's documentation, not an observed response.
 - **Billing handover of a live plan is not built.** While a plan is live its payer can't leave, be removed or delete their account, even when another member holds `billing`. They must cancel it first (`docs/self-hosting.md`, Family plans).
 - **The shared pool is built and rolled out:** families are on at hushos.com (`docs/families-shared-pool.md`, step 9). What it leaves open:
     - no per-member limits, so one member can fill the pool for everyone;

@@ -1,6 +1,6 @@
 # Envelope migrations: groups and post-quantum identities
 
-This is the last document of Phase A in the groups build plan. Revised on 15 October after the independent review in `docs/pq-devices-crypto-review.md`. It lists every envelope, signature and stored format that the group core (`docs/groups-design.md`) and post-quantum identities (`docs/identity-pq-design.md`) introduce or change. For each one it says how the format is versioned, who migrates existing data, in which release, and how the old form is retired.
+This is the last document of Phase A in the groups build plan. Revised on 15 October after the independent review in `docs/archive/pq-devices-crypto-review.md`. It lists every envelope, signature and stored format that the group core (`docs/groups-design.md`) and post-quantum identities (`docs/identity-pq-design.md`) introduce or change. For each one it says how the format is versioned, who migrates existing data, in which release, and how the old form is retired.
 
 Most of the group core needs no migration: groups, rosters, seals and area grants are new, and are written in their final form from the first byte. What does migrate is:
 

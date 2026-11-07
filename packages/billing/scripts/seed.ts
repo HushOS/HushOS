@@ -117,7 +117,7 @@ for (const tier of tiers) {
 
 /*
  * Family plans (docs/groups-design.md 3.5; the shape is the spike's E2
- * product, docs/polar-group-billing-spike.md 8): three tiers, each a monthly
+ * product, docs/archive/polar-group-billing-spike.md 8): three tiers, each a monthly
  * and a yearly product. Per currency, a fixed base and a graduated unit price,
  * free up to the included members, then a per-member rate, with
  * `minimum_units` at the included count and the same bound in every currency
