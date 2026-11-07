@@ -966,6 +966,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
      * the screens act on: a tab, a folder, a file, or the link browser.
      */
     fun openLink(link: String) {
+        // Asked for on a website: finished in the browser, whichever server this phone uses (a plan chosen there waits).
+        if (com.hushos.app.data.AppLinks.isWebRegister(link)) { openInBrowser(link); return }
         // A link that started the app arrives before the saved server and session are restored: read once they are,
         // against the server this phone uses, not the default.
         if (state.value.gate == Gate.CHECKING) {

@@ -1,6 +1,8 @@
 package com.hushos.app.data
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /*
@@ -137,6 +139,12 @@ class AppLinksTest {
         // Asked for on the web (no app=1): handed to the browser, where a plan chosen there is paid for.
         val web = "https://hushos.com/register/complete#verify=$token"
         assertEquals(opens(AppLink.WebRegister(web)), parse(web))
+        // Recognised before any server check: a phone set to another server still hands it to the browser.
+        assertTrue(AppLinks.isWebRegister(web))
+        assertTrue(AppLinks.isWebRegister("https://other.example/register/complete#verify=$token"))
+        assertFalse(AppLinks.isWebRegister("https://hushos.com/register/complete?app=1#verify=$token"))
+        assertFalse(AppLinks.isWebRegister("hushos://register/complete#verify=$token"))
+        assertFalse(AppLinks.isWebRegister("https://hushos.com/recover/complete#verify=$token"))
         // A sign-up link is never read as a recovery one, nor the other way round: each flow checks its own.
         assertEquals(opens(AppLink.Recover(token)), parse("https://hushos.com/recover/complete#verify=$token"))
     }

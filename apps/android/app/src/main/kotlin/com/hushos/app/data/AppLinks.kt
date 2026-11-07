@@ -68,6 +68,17 @@ object AppLinks {
      * `server` is the signed-in origin (e.g. https://hushos.com). https links must name
      * its host and port; hushos:// links carry no host and always mean the signed-in server.
      */
+    /*
+     * A sign-up link asked for on a website (https, /register/complete, no app=1), whichever server sent it: it goes to
+     * the browser before the server is checked, so a phone set to another server never stands in its way.
+     */
+    fun isWebRegister(link: String): Boolean {
+        val uri = runCatching { URI(link) }.getOrNull() ?: return false
+        val scheme = uri.scheme?.lowercase()
+        return (scheme == "https" || scheme == "http") && !uri.isOpaque &&
+            uri.rawPath.orEmpty().trimEnd('/') == "/register/complete" && !uri.rawQuery.orEmpty().split('&').contains("app=1")
+    }
+
     fun parse(link: String, server: String): AppLinkResult {
         val uri = runCatching { URI(link) }.getOrNull() ?: return refuse(AppLinkRefusal.Unsupported)
         val origin = runCatching { URI(server) }.getOrNull() ?: return refuse(AppLinkRefusal.Unsupported)
