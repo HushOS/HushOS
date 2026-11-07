@@ -76,15 +76,15 @@ Every module with a TypeScript twin is held to it by fixtures in both directions
 | `bytes.rs`                |                                                                                                                     | `SecretBytes`, encoding helpers                                              |
 | `envelope.rs`             |                                                                                                                     | Contexts, seals, the re-keying primitives                                    |
 | `ids.rs`                  |                                                                                                                     | Scoped ids                                                                   |
-| `drive.rs`                | `drive.ts`                                                                                                          | Node, metadata and version envelopes, content suites, node keys, origin keys |
+| `drive.rs`                | `packages/crypto/src/drive.ts`                                                                                      | Node, metadata and version envelopes, content suites, node keys, origin keys |
 | `identity.rs`             |                                                                                                                     | Identity envelopes, upgrades, successions                                    |
 | `pq.rs`                   |                                                                                                                     | ML-DSA-65                                                                    |
 | `signatures.rs`           | `packages/db/src/signatures.ts` (statement bytes)                                                                   | Hybrid signatures, record statements and integrity verdicts                  |
 | `shares.rs`               |                                                                                                                     | Share suite 4, `seal_hybrid`/`open_hybrid`                                   |
 | `links.rs`                |                                                                                                                     | Link keys                                                                    |
-| `reports.rs`              | `packages/crypto/reports.ts`                                                                                        | Report seals, `pair_key`                                                     |
+| `reports.rs`              | `packages/crypto/src/reports.ts`                                                                                    | Report seals, `pair_key`                                                     |
 | `recovery.rs`             |                                                                                                                     | Recovery phrases                                                             |
-| `contacts.rs`             | `contacts.ts`                                                                                                       | Fingerprints, key digests, pins, the settings document                       |
+| `contacts.rs`             | `packages/crypto/src/contacts.ts`                                                                                   | Fingerprints, key digests, pins, the settings document                       |
 | `first_seen.rs`           | `packages/drive` (`comparePin`), `packages/crypto/src/first-seen.test.ts`                                           | First-seen pins and the guard's rule                                         |
 | `canonical.rs`            |                                                                                                                     | The group statement grammar                                                  |
 | `groups.rs`               |                                                                                                                     | Group keys, rosters, area rows, group seals                                  |
@@ -270,7 +270,7 @@ Design: docs/identity-pq-design.md.
     - `Seen`.
     - `Unchecked`: never returned by the ordinary checks; apps use it when a check cannot run.
 - `group_integrity` returns `Unsigned` before consulting any trust.
-- The Swift and Kotlin switches handle `Seen` exactly as `UnknownSigner`, as a stop-gap: the apps never ask for it yet. First-seen PR 5/6 give it its own UI.
+- Both apps handle `Seen` themselves, as unmarked (Android `Integrity.kt`, iOS `Integrity.swift`).
 
 ### Signing a changed record
 
@@ -894,7 +894,7 @@ Twin of the worker's device store and `accept` (`session-groups.ts`), the data l
     - It forgets only over a held guard equal to the floor at its versions (`GuardAfter::Covered`).
     - It refuses, nothing dropped, a guard that disagrees with the floor or crosses it (`GUARD_CONFLICT`, `GuardAfter::Conflict`; `merge_pin` calls crossed versions a conflict).
     - It refuses one past the floor (`GUARD_AHEAD`, `GuardAfter::Ahead`): accept up to it first.
-- On iOS until first-seen PR 5, the stop-gap passes `Absent` and drops the returned guard.
+- iOS passes the stored guard (`heldFamilyGuard` in `FamilySync.swift`).
 
 #### Merging pins
 
