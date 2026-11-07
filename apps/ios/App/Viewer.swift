@@ -4,7 +4,8 @@ import SwiftUI
 
 /*
  * Opening a file (DESIGN.md): Apple's QuickLook in the middle, which
- * previews more kinds than we could, with HushOS around it. The header has Done, the
+ * previews more kinds than we could, with HushOS around it; Markdown is drawn by MarkdownView,
+ * since QuickLook shows it as raw text. The header has Done, the
  * name and where you are in the folder, Share and More (the same item menu as a
  * long-press); the foot says who can open it, its size and when it changed, with Send
  * a copy. Tap the left or right edge for the previous or next file. An earlier version
@@ -80,7 +81,14 @@ struct FileViewer: View {
         VStack(spacing: 0) {
             ZStack {
                 if let url {
-                    QuickLookView(url: url).ignoresSafeArea(edges: .horizontal)
+                    // Markdown as a document (MarkdownView); QuickLook shows it as raw text. Past the limit, QuickLook.
+                    // The limit is the opened file's own size: an earlier version's isn't the current one's.
+                    if MarkdownDocument.handles(name: current.name, mime: current.metadata.mime),
+                       let bytes = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, bytes <= MarkdownDocument.limit {
+                        MarkdownView(url: url)
+                    } else {
+                        QuickLookView(url: url).ignoresSafeArea(edges: .horizontal)
+                    }
                 } else if failed {
                     EmptyStateView(title: "“\(current.name)” couldn’t be opened",
                                    message: store.offline ? "You’re offline. Files you keep on this phone open without a connection." : "Check your connection and try again.") {

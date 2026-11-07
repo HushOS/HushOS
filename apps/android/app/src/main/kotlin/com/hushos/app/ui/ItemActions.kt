@@ -641,7 +641,7 @@ fun VersionsSheet(model: DriveViewModel, state: DriveState, item: Opened, dismis
                         DropdownMenu(expanded = menu?.id == v.id, onDismissRequest = { menu = null }, shape = RoundedCornerShape(16.dp), containerColor = alpine.menu) {
                             DropdownMenuItem(text = { Text("Preview") }, leadingIcon = { Icon(Icons.Outlined.Visibility, null) }, onClick = {
                                 menu = null
-                                scope.launch { model.download(current, v)?.let { openWith(context, it, mimeOf(item), model, item.name) } }
+                                scope.launch { model.download(current, v)?.let { openWith(context, it, mimeOf(item), model, item.name, item.id, item.node.workspaceId) } }
                             })
                             DropdownMenuItem(text = { Text("Restore") }, leadingIcon = { Icon(Icons.Outlined.Restore, null) }, onClick = {
                                 menu = null; restoring = v.id

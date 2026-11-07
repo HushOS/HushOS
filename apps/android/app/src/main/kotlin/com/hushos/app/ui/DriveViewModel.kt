@@ -131,6 +131,8 @@ data class DriveState(
     /* Files being fetched to open, by node id, with progress: a ring on the row, not a banner. */
     val opening: Map<String, Float> = emptyMap(),
     val notice: Notice? = null,
+    /* A Markdown file open in the app's own viewer (MarkdownViewer), over every screen. */
+    val reading: Reading? = null,
     /* An alert's words: a title, what to do, and the raw detail for Details only. */
     val error: com.hushos.app.data.Problem? = null,
     val busy: Boolean = false,
@@ -1667,6 +1669,10 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
             .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
         runCatching { context.startActivity(shareChooser(context, send, name).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
     }
+
+    /* A Markdown file, opened in HushOS's own viewer instead of whichever app claims text (openWith). */
+    fun read(name: String, uri: Uri, mime: String?, node: String?, workspace: String?) = _state.update { it.copy(reading = Reading(name, uri, mime, node, workspace)) }
+    fun closeReading() = _state.update { it.copy(reading = null) }
 
     /* One notice on screen at a time, until-read ones never lost to the next (NoticeQueue). */
     private val notices = NoticeQueue { notice -> _state.update { it.copy(notice = notice) } }

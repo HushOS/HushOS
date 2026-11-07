@@ -156,6 +156,12 @@ dependencies {
     implementation(libs.androidx.camera.view)
     // Scan document: Google's scanner, run by Play services on the phone (edges, cleanup, pages), handing back a PDF.
     implementation(libs.mlkit.document.scanner)
+    // The Markdown viewer: CommonMark and GitHub's tables, task lists, strikethrough and autolinks, as the web parses them.
+    implementation(libs.commonmark)
+    implementation(libs.commonmark.tables)
+    implementation(libs.commonmark.tasks)
+    implementation(libs.commonmark.strikethrough)
+    implementation(libs.commonmark.autolink)
     testImplementation(libs.junit)
     // JVM tests open real envelopes: JNA's desktop jar loads the core built for this machine.
     testImplementation(libs.jna)

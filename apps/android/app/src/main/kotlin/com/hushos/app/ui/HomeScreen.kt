@@ -203,7 +203,7 @@ fun HomeScreen(model: DriveViewModel, state: DriveState, screen: String, go: (St
                         // Offline, a file that isn't on this phone can't open: it dims and says so.
                         val away = state.unreachable && !item.isFolder && item.id !in kept
                         NodeRow(model, state, item, away = away, recent = true,
-                            onClick = { if (item.isFolder) go("folder:${item.id}") else scope.launch { model.downloadOpened(item)?.let { (uri, opened) -> openWith(context, uri, mimeOf(opened), model, opened.name) } } },
+                            onClick = { if (item.isFolder) go("folder:${item.id}") else scope.launch { model.downloadOpened(item)?.let { (uri, opened) -> openWith(context, uri, mimeOf(opened), model, opened.name, opened.id, opened.node.workspaceId) } } },
                             onLongClick = { selected = item }, onMore = { selected = item })
                     }
                 }
@@ -308,7 +308,7 @@ fun SearchScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) {
                 NodeRow(model, state, item, note = "In $where",
                     onClick = {
                         model.rememberSearch(query)
-                        if (item.isFolder) folder = item else scope.launch { model.downloadOpened(item)?.let { (uri, opened) -> openWith(context, uri, mimeOf(opened), model, opened.name) } }
+                        if (item.isFolder) folder = item else scope.launch { model.downloadOpened(item)?.let { (uri, opened) -> openWith(context, uri, mimeOf(opened), model, opened.name, opened.id, opened.node.workspaceId) } }
                     },
                     onLongClick = { selected = item }, onMore = { selected = item })
             }
@@ -338,7 +338,7 @@ fun OnThisPhoneScreen(model: DriveViewModel, state: DriveState, onBack: () -> Un
     val looseFiles = state.offline.filter { it.via == null }
     val open = { entry: Offline.Entry ->
         val file = Offline.file(context, entry)
-        if (file.exists()) openWith(context, androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.shared", file), entry.mime, model, entry.name)
+        if (file.exists()) openWith(context, androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.shared", file), entry.mime, model, entry.name, entry.id, entry.workspaceId)
     }
     Column(Modifier.fillMaxSize()) {
         DestinationBar("On this phone", onBack = onBack)
