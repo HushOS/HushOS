@@ -253,6 +253,12 @@ export async function requestRegistrationEmail(
     purpose: 'register' | 'recover' = 'register',
     address = 'unknown',
     intent?: SignupIntent,
+    /*
+     * Asked for by the phone apps' own sign-up: its link carries ?app=1, the only sign-up link the
+     * apps claim (app-links.server.ts). A web sign-up's link stays in the browser even on a phone
+     * with an app installed that can't finish it there.
+     */
+    { app = false }: { app?: boolean } = {},
 ) {
     const normalizedEmail = normalizeEmail(email);
     await limitEmailSend(address);
@@ -294,7 +300,7 @@ export async function requestRegistrationEmail(
         // The fragment is never sent in an HTTP request or recorded in access logs.
         await sendVerificationEmail(
             normalizedEmail,
-            `${config().origin}/${purpose === 'register' ? 'register' : 'recover'}/complete#verify=${token}`,
+            `${config().origin}/${purpose === 'register' ? 'register' : 'recover'}/complete${purpose === 'register' && app ? '?app=1' : ''}#verify=${token}`,
             purpose,
         );
     } catch (error) {

@@ -5,8 +5,8 @@ import SwiftUI
  * Sign in (DESIGN.md): "Welcome back" with the gear beside it, the server named under it
  * only when it isn't HushOS's own, one message above the fields when the server says
  * no, and a line under them when one is empty. The gear opens Self-hosting › Server address;
- * Forgot opens the reset in the app (RecoveryView). Creating an account stays on the web:
- * the hosted service says where in plain text, never pointing at plans (App Review 3.1.3(f)).
+ * Forgot opens the reset in the app (RecoveryView); Create an account runs sign-up in the app
+ * (SignupView), with no plans or prices anywhere on the way (App Review 3.1.3(f)).
  * The privacy policy and terms are a tap away before signing in (5.1.1(i)).
  */
 struct SignInView: View {

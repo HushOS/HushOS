@@ -16,7 +16,8 @@ public struct SignupEnrollment: Sendable, Equatable {
  */
 extension Auth {
     public static func requestSignupEmail(origin: String, email: String) async throws {
-        _ = try await recoveryRequest(origin, "/api/auth/register/email", body: ["email": email])
+        // `app`: the link comes back as /register/complete?app=1, the only sign-up link this app claims (apple-app-site-association).
+        _ = try await recoveryRequest(origin, "/api/auth/register/email", body: ["email": email, "app": true])
     }
 
     /* The emailed link's token, traded for the enrollment; a link meant for a reset says so. */

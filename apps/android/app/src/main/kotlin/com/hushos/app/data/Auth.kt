@@ -379,7 +379,8 @@ object Auth {
      * sent. The caller then signs in with the password, as the web does, and reads the phrase back.
      */
     fun requestSignupEmail(origin: String, email: String): String =
-        post(origin, "/api/auth/register/email", JSONObject().put("email", email)).body.optString("message")
+        // `app`: the link comes back as /register/complete?app=1, as iOS needs it (its apple-app-site-association claims only that).
+        post(origin, "/api/auth/register/email", JSONObject().put("email", email).put("app", true)).body.optString("message")
 
     /* A sign-up link's enrollment: the address it confirmed and the token the next steps need. */
     data class SignupEnrollment(val email: String, val token: String)

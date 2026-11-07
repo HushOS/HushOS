@@ -24,7 +24,12 @@ const appPaths = [
     { '/': '/s/*', comment: 'Share links; the key is in the fragment' },
     { '/': '/recover/complete', comment: 'The emailed link that starts recovery in the app' },
     { '/': '/join', comment: 'The emailed family invitation; the token is in the fragment' },
-    { '/': '/register/complete', comment: 'The emailed link that carries sign-up on in the app' },
+    {
+        '/': '/register/complete',
+        '?': { app: '1' },
+        comment:
+            'The sign-up link the app asked for; a web sign-up, unmarked, stays in the browser, so an older app that can’t finish it never catches it',
+    },
     { '/': '/app', comment: 'Home' },
     { '/': '/app/drive*', comment: 'Files, a folder, or a file in the viewer' },
     { '/': '/app/shared*', comment: 'Shared with me and by me' },
