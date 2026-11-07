@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from '@tanstack/react-router';
+import { createFileRoute, Link, useRouteContext } from '@tanstack/react-router';
 import { cn } from 'cn';
 import { ArrowRightIcon } from 'lucide-react';
 import { Cover } from '@/components/cover';
@@ -60,6 +60,7 @@ const linkClass =
     'inline-flex w-fit items-center gap-1.5 text-[15px] font-semibold text-primary underline-offset-4 hover:underline';
 
 function ItemLink({ link }: { link: RoadmapLink }) {
+    const { appStoreUrl, playStoreUrl } = useRouteContext({ from: '__root__' });
     const inside = (
         <>
             {link.label}
@@ -78,6 +79,16 @@ function ItemLink({ link }: { link: RoadmapLink }) {
                 {inside}
             </Link>
         );
+    if (link.kind === 'store') {
+        // A store listing only where this server names one (a self-hosted copy may not).
+        const listing = link.platform === 'ios' ? appStoreUrl : playStoreUrl;
+        if (!listing) return null;
+        return (
+            <a href={listing} target="_blank" rel="noreferrer" className={linkClass}>
+                {inside}
+            </a>
+        );
+    }
     const href =
         link.kind === 'docs'
             ? `${REPO}/blob/main/${link.path}`
