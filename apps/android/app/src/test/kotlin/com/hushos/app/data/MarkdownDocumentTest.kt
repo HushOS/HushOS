@@ -64,10 +64,36 @@ class MarkdownDocumentTest {
         var depth = 0
         while (true) { level = (level.firstOrNull() as? MdBlock.Quote ?: break).blocks; depth++ }
         assertEquals(MarkdownDocument.BLOCK_DEPTH, depth)
-        assertTrue((level.first() as MdBlock.Paragraph).inline.plainText.endsWith("hello"))
+        assertTrue((level.last() as MdBlock.Paragraph).inline.plainText.endsWith("hello"))
 
-        val emphasis = paragraph("*a ".repeat(3000) + "deep" + " a*".repeat(3000))
-        assertTrue(emphasis.plainText.contains("deep"))
+        val emphasis = MarkdownDocument.parse("*a ".repeat(3000) + "deep" + " a*".repeat(3000)).joinToString(" ") { (it as MdBlock.Paragraph).inline.plainText }
+        assertTrue(emphasis.contains("deep"))
+    }
+
+    @Test fun bigBlocksComeInPiecesTheViewerCanLayOutOneAtATime() {
+        // A 1.5 MB paragraph as one text held the UI thread for half a minute: it comes as paragraphs of at most the limit,
+        // cut between words, with every word kept.
+        val words = (0 until 150_000).map { "word$it" }
+        val paragraphs = MarkdownDocument.parse(words.joinToString(" ")).map { it as MdBlock.Paragraph }
+        assertTrue(paragraphs.size > 1)
+        assertTrue(paragraphs.all { it.inline.plainText.length <= MarkdownDocument.PARAGRAPH_CHARS })
+        assertEquals(words, paragraphs.flatMap { it.inline.plainText.split(' ') })
+
+        val code = MarkdownDocument.parse("```\n" + (1..1000).joinToString("\n") { "line $it" } + "\n```").map { it as MdBlock.Code }
+        assertEquals(5, code.size)
+        assertEquals((1..1000).map { "line $it" }, code.flatMap { it.text.split('\n') })
+
+        val tables = MarkdownDocument.parse("| A | B |\n| - | - |\n" + (1..450).joinToString("\n") { "| $it | x |" }).map { it as MdBlock.Table }
+        assertEquals(listOf(200, 200, 50), tables.map { it.rows.size })
+        // A single huge line, in code or in a table cell, never makes one huge text either.
+        val line = MarkdownDocument.parse("```\n" + "y".repeat(300_000) + "\n```").map { it as MdBlock.Code }
+        assertTrue(line.all { it.text.length <= MarkdownDocument.PARAGRAPH_CHARS })
+        assertEquals(300_000, line.sumOf { it.text.length })
+        val cell = (MarkdownDocument.parse("| A |\n| - |\n| " + "x".repeat(300_000) + " |").single() as MdBlock.Table).rows.single().single()
+        assertTrue(cell.plainText.length <= MarkdownDocument.CELL_CHARS + 2 && cell.plainText.endsWith("…"))
+
+        // Each piece keeps the head, so a column is never left unnamed.
+        assertTrue(tables.all { t -> t.head.map { it.plainText } == listOf("A", "B") })
     }
 
     @Test fun markdownFilesByNameOrType() {

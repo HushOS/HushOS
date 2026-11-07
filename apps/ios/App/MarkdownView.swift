@@ -81,10 +81,14 @@ private struct MarkdownBlockView: View {
                 }
             }
         case .code(_, let text):
-            ScrollView(.horizontal) {
-                Text(text).font(.system(.callout, design: .monospaced)).foregroundStyle(ink)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .padding(Alpine.Space.s3)
+            // Scrolled sideways like code, unless a line is so long that one unwrapped line would be an enormous layer: then it wraps.
+            let code = Text(text).font(.system(.callout, design: .monospaced)).foregroundStyle(ink)
+            Group {
+                if text.split(separator: "\n").contains(where: { $0.count > Self.longestUnwrapped }) {
+                    code.frame(maxWidth: .infinity, alignment: .leading).padding(Alpine.Space.s3)
+                } else {
+                    ScrollView(.horizontal) { code.fixedSize(horizontal: true, vertical: false).padding(Alpine.Space.s3) }
+                }
             }
             .background(Alpine.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         case .rule:
@@ -95,13 +99,18 @@ private struct MarkdownBlockView: View {
                     GridRow {
                         ForEach(Array(table.head.enumerated()), id: \.offset) { column, cell in
                             MarkdownText(inline: cell).font(Theme.Text.callout.weight(.semibold))
+                                .modifier(TableCellWidth(text: cell.plainText, max: Self.columnMax, alignment: Self.frameAlignment(table, column)))
                                 .gridColumnAlignment(Self.alignment(table, column))
                         }
                     }
                     Rectangle().fill(Alpine.rule).frame(height: 1).gridCellUnsizedAxes(.horizontal)
                     ForEach(Array(table.rows.enumerated()), id: \.offset) { _, row in
                         GridRow {
-                            ForEach(Array(row.enumerated()), id: \.offset) { _, cell in MarkdownText(inline: cell).font(Theme.Text.callout) }
+                            // A column as wide as its widest cell up to 320pt, and wrapping past that.
+                            ForEach(Array(row.enumerated()), id: \.offset) { column, cell in
+                                MarkdownText(inline: cell).font(Theme.Text.callout)
+                                    .modifier(TableCellWidth(text: cell.plainText, max: Self.columnMax, alignment: Self.frameAlignment(table, column)))
+                            }
                         }
                     }
                 }
@@ -133,11 +142,41 @@ private struct MarkdownBlockView: View {
         }
     }
 
+    private static let longestUnwrapped = 1000
+    private static let columnMax: CGFloat = 320
+
+    private static func frameAlignment(_ table: MarkdownTable, _ column: Int) -> Alignment {
+        switch alignment(table, column) {
+        case .center: .center
+        case .trailing: .trailing
+        default: .leading
+        }
+    }
+
     private static func alignment(_ table: MarkdownTable, _ column: Int) -> HorizontalAlignment {
         switch table.alignments.indices.contains(column) ? table.alignments[column] : .leading {
         case .leading: .leading
         case .center: .center
         case .trailing: .trailing
+        }
+    }
+}
+
+/*
+ * A table cell up to 320pt wide. Grid sizes a row from its cells' single-line heights, so a cell that will wrap is given
+ * its width outright: then its height is measured at the width it is drawn at, and the row grows to hold it.
+ */
+private struct TableCellWidth: ViewModifier {
+    let text: String
+    let max: CGFloat
+    let alignment: Alignment
+
+    @ViewBuilder func body(content: Self.Content) -> some View {
+        // A line of 40 characters fits in 320pt at this size, so only longer cells can wrap; explicit breaks Grid measures.
+        if text.count > 40 {
+            content.frame(width: max, alignment: alignment).fixedSize(horizontal: false, vertical: true)
+        } else {
+            content
         }
     }
 }

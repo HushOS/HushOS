@@ -36,7 +36,7 @@ public enum MarkdownDocument {
     static let maxDepth = 64
 
     public static func parse(_ text: String) -> [MarkdownBlock] {
-        if depth(of: text) > maxDepth { return [.code(language: nil, text: text)] }
+        if depth(of: text) > maxDepth { return cut(.code(language: nil, text: text)) }
         return blocks(of: Document(parsing: text).children, depth: 0)
     }
 
@@ -79,7 +79,128 @@ public enum MarkdownDocument {
     }
 
     private static func blocks(of children: MarkupChildren, depth: Int) -> [MarkdownBlock] {
-        children.compactMap { block($0, depth: depth) }
+        children.compactMap { block($0, depth: depth) }.flatMap(cut)
+    }
+
+    /*
+     * The most one block holds before it is cut into consecutive ones: the viewer lays out a block at a time and only
+     * those on screen, and one 1.5 MB paragraph as a single text held the main thread. A table chunk repeats its head;
+     * a cell past cellChars is shortened with "…" (Share shows the file whole). Android cuts at the same places.
+     */
+    static let paragraphChars = 4000
+    static let codeLines = 200
+    static let tableRows = 200
+    static let cellChars = 2000
+
+    static func cut(_ block: MarkdownBlock) -> [MarkdownBlock] {
+        switch block {
+        case .paragraph(let inline): return cutInline(inline).map { .paragraph($0) }
+        case let .code(language, text): return cutCode(text).map { .code(language: language, text: $0) }
+        case .table(let table):
+            let short = MarkdownTable(alignments: table.alignments, head: table.head.map(shortCell), rows: table.rows.map { $0.map(shortCell) })
+            guard short.rows.count > tableRows else { return [.table(short)] }
+            return stride(from: 0, to: short.rows.count, by: tableRows).map { start in
+                .table(MarkdownTable(alignments: short.alignments, head: short.head, rows: Array(short.rows[start..<min(start + tableRows, short.rows.count)])))
+            }
+        default: return [block]
+        }
+    }
+
+    /* A paragraph's runs in pieces of at most paragraphChars, cut at a space where there is one; linear in its length. */
+    private static func cutInline(_ inline: MarkdownInline) -> [MarkdownInline] {
+        guard inline.plainText.count > paragraphChars else { return [inline] }
+        var pieces: [MarkdownInline] = []
+        var current: [MarkdownInline.Run] = []
+        var length = 0
+        func close() {
+            if !current.isEmpty { pieces.append(MarkdownInline(runs: current)) }
+            current = []
+            length = 0
+        }
+        for run in inline.runs {
+            guard case .text(let text) = run else {
+                if case let .image(alt, _) = run {
+                    if length + alt.count > paragraphChars { close() }
+                    current.append(run)
+                    length += alt.count
+                }
+                continue
+            }
+            let characters = text.characters
+            var start = characters.startIndex
+            var remaining = characters.count
+            while length + remaining > paragraphChars {
+                let limit = characters.index(start, offsetBy: paragraphChars - length)
+                var space: AttributedString.Index?
+                var index = limit
+                while index > start {
+                    let before = characters.index(before: index)
+                    if characters[before] == " " { space = before; break }
+                    index = before
+                }
+                // No space to cut at in this run: a whole new piece if this one has words, else a hard cut.
+                let at = space ?? (length > 0 ? start : limit)
+                if at > start { current.append(.text(AttributedString(text[start..<at]))) }
+                var next = at
+                while next < characters.endIndex, characters[next] == " " { next = characters.index(after: next) }
+                remaining -= characters.distance(from: start, to: next)
+                start = next
+                close()
+            }
+            if start < characters.endIndex {
+                current.append(.text(AttributedString(text[start...])))
+                length += remaining
+            }
+        }
+        close()
+        return pieces
+    }
+
+    /* Code in pieces of at most codeLines lines and paragraphChars characters; a longer line is cut where it must be. */
+    private static func cutCode(_ text: String) -> [String] {
+        var pieces: [String] = []
+        var piece = ""
+        var count = 0, lines = 0
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            var segments: [Substring] = []
+            var rest = line[...]
+            repeat {
+                let end = rest.index(rest.startIndex, offsetBy: paragraphChars, limitedBy: rest.endIndex) ?? rest.endIndex
+                segments.append(rest[rest.startIndex..<end])
+                rest = rest[end...]
+            } while !rest.isEmpty
+            for segment in segments {
+                if lines > 0, lines >= codeLines || count + 1 + segment.count > paragraphChars {
+                    pieces.append(piece); piece = ""; count = 0; lines = 0
+                }
+                if lines > 0 { piece += "\n"; count += 1 }
+                piece += segment
+                count += segment.count
+                lines += 1
+            }
+        }
+        if lines > 0 { pieces.append(piece) }
+        return pieces
+    }
+
+    private static func shortCell(_ cell: MarkdownInline) -> MarkdownInline {
+        guard cell.plainText.count > cellChars else { return cell }
+        var runs: [MarkdownInline.Run] = []
+        var left = cellChars
+        for run in cell.runs where left > 0 {
+            switch run {
+            case .text(let text):
+                let characters = text.characters
+                let end = characters.index(characters.startIndex, offsetBy: left, limitedBy: characters.endIndex) ?? characters.endIndex
+                runs.append(.text(AttributedString(text[characters.startIndex..<end])))
+                left -= characters.distance(from: characters.startIndex, to: end)
+            case let .image(alt, _):
+                runs.append(run)
+                left -= alt.count
+            }
+        }
+        runs.append(.text(AttributedString(" …")))
+        return MarkdownInline(runs: runs)
     }
 
     private static func block(_ markup: Markup, depth: Int) -> MarkdownBlock? {

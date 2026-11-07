@@ -160,8 +160,12 @@ private fun MarkdownBlockView(block: MdBlock, muted: Boolean = false) {
             Box(Modifier.width(3.dp).fillMaxHeight().background(alpine.rule, RoundedCornerShape(1.5.dp)))
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) { block.blocks.forEach { MarkdownBlockView(it, muted = true) } }
         }
-        is MdBlock.Code -> Box(Modifier.fillMaxWidth().background(alpine.surface, RoundedCornerShape(12.dp)).horizontalScroll(rememberScrollState())) {
-            Text(block.text, style = type.bodyMedium.copy(fontFamily = FontFamily.Monospace), color = ink, softWrap = false, modifier = Modifier.padding(12.dp))
+        is MdBlock.Code -> {
+            // Scrolled sideways like code, unless a line is so long that its width can't be laid out (Compose's limit): then it wraps.
+            val wrap = remember(block.text) { block.text.lineSequence().any { it.length > LONGEST_UNWRAPPED } }
+            Box(Modifier.fillMaxWidth().background(alpine.surface, RoundedCornerShape(12.dp)).then(if (wrap) Modifier else Modifier.horizontalScroll(rememberScrollState()))) {
+                Text(block.text, style = type.bodyMedium.copy(fontFamily = FontFamily.Monospace), color = ink, softWrap = wrap, modifier = Modifier.padding(12.dp))
+            }
         }
         MdBlock.Rule -> Box(Modifier.fillMaxWidth().padding(vertical = 8.dp).height(1.dp).background(alpine.rule))
         is MdBlock.Table -> Box(Modifier.fillMaxWidth().background(alpine.surface, RoundedCornerShape(12.dp)).horizontalScroll(rememberScrollState())) {
@@ -189,6 +193,7 @@ private fun MarkdownTable(table: MdBlock.Table, ink: androidx.compose.ui.graphic
     val density = androidx.compose.ui.platform.LocalDensity.current
     val gap = with(density) { 8.dp.roundToPx() }
     val rule = with(density) { 1.dp.roundToPx() }
+    val columnMax = with(density) { 320.dp.roundToPx() }
     androidx.compose.ui.layout.Layout(
         content = {
             rows.forEachIndexed { r, row ->
@@ -203,7 +208,10 @@ private fun MarkdownTable(table: MdBlock.Table, ink: androidx.compose.ui.graphic
         modifier = Modifier.padding(horizontal = 4.dp, vertical = 12.dp),
     ) { measurables, _ ->
         val cells = measurables.dropLast(1)
-        val widths = IntArray(columns) { c -> rows.indices.maxOf { r -> cells[r * columns + c].maxIntrinsicWidth(androidx.compose.ui.unit.Constraints.Infinity) } }
+        // A column is as wide as its widest cell up to 320dp, and wraps past that; and the whole grid stays far inside what
+        // Compose can lay out (a 300 KB cell's width can't be represented, and threw).
+        val widest = minOf(columnMax, MAX_GRID_PX / columns)
+        val widths = IntArray(columns) { c -> rows.indices.maxOf { r -> cells[r * columns + c].maxIntrinsicWidth(androidx.compose.ui.unit.Constraints.Infinity) }.coerceIn(1, maxOf(1, widest)) }
         val placed = cells.mapIndexed { i, cell -> cell.measure(androidx.compose.ui.unit.Constraints.fixedWidth(widths[i % columns])) }
         val heights = IntArray(rows.size) { r -> (0 until columns).maxOf { c -> placed[r * columns + c].height } }
         val width = widths.sum()
@@ -265,6 +273,10 @@ private fun MarkdownText(inline: MdInline, style: TextStyle, color: androidx.com
 }
 
 private const val IMAGE_MARK = "image"
+
+/* A code line longer than this wraps instead of scrolling sideways; a grid never gets wider than this many pixels. */
+private const val LONGEST_UNWRAPPED = 1000
+private const val MAX_GRID_PX = 100_000
 
 /* A web link in a Custom Tab over the app; mail in the mail app. Nothing else is ever a link (MarkdownDocument.safeLink). */
 private fun openMarkdownLink(context: android.content.Context, link: String) {

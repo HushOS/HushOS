@@ -62,15 +62,15 @@ struct MarkdownDocumentTests {
     @Test func deepNestingKeepsItsWordsWithoutCrashing() {
         // Nesting past what a stack holds comes back as the file's text, never a crash.
         let source = String(repeating: "> ", count: 50_000) + "hello"
-        #expect(MarkdownDocument.parse(source) == [.code(language: nil, text: source)])
+        #expect(asText(MarkdownDocument.parse(source)) == source)
         let emphasis = String(repeating: "*a ", count: 20_000) + "deep" + String(repeating: " a*", count: 20_000)
-        #expect(MarkdownDocument.parse(emphasis) == [.code(language: nil, text: emphasis)])
+        #expect(asText(MarkdownDocument.parse(emphasis)) == emphasis)
         // The check parses as swift-markdown does: an autolink (which it doesn't make) mustn't hide the emphasis inside.
         let linked = "https://example.com/" + String(repeating: "*a/", count: 5000) + "deep" + String(repeating: "/a*", count: 5000)
-        #expect(MarkdownDocument.parse(linked) == [.code(language: nil, text: linked)])
+        #expect(asText(MarkdownDocument.parse(linked)) == linked)
         // Empty headings before the nesting mustn't throw the measure off.
         let headed = String(repeating: "#\n\n", count: 5000) + String(repeating: "> ", count: 5000) + "x"
-        #expect(MarkdownDocument.parse(headed) == [.code(language: nil, text: headed)])
+        #expect(asText(MarkdownDocument.parse(headed)) == headed.filter { $0 != "\n" })
 
         // Within the limit it is drawn, and past the drawing budget the words come as plain text.
         var level = MarkdownDocument.parse(String(repeating: "> ", count: 40) + "hello")
@@ -79,6 +79,48 @@ struct MarkdownDocumentTests {
         #expect(depth == MarkdownDocument.blockDepth)
         guard case .paragraph(let words) = level.first else { Issue.record("expected the words"); return }
         #expect(words.plainText == "hello")
+    }
+
+    /* Code blocks only, joined as they were cut: what a too-deep file shows. Nil if anything else came back. */
+    private func asText(_ blocks: [MarkdownBlock]) -> String? {
+        var pieces: [String] = []
+        for block in blocks { guard case .code(_, let text) = block else { return nil }; pieces.append(text) }
+        // Pieces cut at a line lose the break between them (they are drawn one under the other), so lines don't count.
+        return pieces.joined().filter { $0 != "\n" }
+    }
+
+    @Test func bigBlocksComeInPiecesTheViewerCanLayOutOneAtATime() {
+        // A 1.5 MB paragraph as one text held the main thread: it comes as paragraphs of at most the limit, cut between
+        // words, with every word kept.
+        let words = (0..<150_000).map { "word\($0)" }
+        var paragraphs: [MarkdownInline] = []
+        for block in MarkdownDocument.parse(words.joined(separator: " ")) {
+            guard case .paragraph(let inline) = block else { Issue.record("expected paragraphs"); return }
+            paragraphs.append(inline)
+        }
+        #expect(paragraphs.count > 1)
+        #expect(paragraphs.allSatisfy { $0.plainText.count <= MarkdownDocument.paragraphChars })
+        #expect(paragraphs.flatMap { $0.plainText.split(separator: " ").map(String.init) } == words)
+
+        let code = MarkdownDocument.parse("```\n" + (1...1000).map { "line \($0)" }.joined(separator: "\n") + "\n```")
+        #expect(code.count == 5)
+        let line = MarkdownDocument.parse("```\n" + String(repeating: "y", count: 300_000) + "\n```")
+        #expect(line.allSatisfy { if case .code(_, let text) = $0 { text.count <= MarkdownDocument.paragraphChars } else { false } })
+        #expect(asText(line)?.count == 300_000)
+
+        let tables = MarkdownDocument.parse("| A | B |\n| - | - |\n" + (1...450).map { "| \($0) | x |" }.joined(separator: "\n"))
+        var sizes: [Int] = []
+        for block in tables {
+            guard case .table(let table) = block else { Issue.record("expected tables"); return }
+            // Each piece keeps the head, so a column is never left unnamed.
+            #expect(table.head.map(\.plainText) == ["A", "B"])
+            sizes.append(table.rows.count)
+        }
+        #expect(sizes == [200, 200, 50])
+
+        guard case .table(let wide) = MarkdownDocument.parse("| A |\n| - |\n| " + String(repeating: "x", count: 300_000) + " |").first,
+              let cell = wide.rows.first?.first else { Issue.record("expected a table"); return }
+        #expect(cell.plainText.count <= MarkdownDocument.cellChars + 2 && cell.plainText.hasSuffix("…"))
     }
 
     @Test func markdownFilesByNameOrType() {

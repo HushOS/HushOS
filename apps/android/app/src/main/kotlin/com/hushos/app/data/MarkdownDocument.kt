@@ -62,16 +62,96 @@ object MarkdownDocument {
     const val BLOCK_DEPTH = 16
     const val INLINE_DEPTH = 32
 
+    /*
+     * The most one block holds before it is cut into consecutive ones: the viewer lays out a block at a time and only
+     * those on screen, and a 1.5 MB paragraph as one text took the UI thread for half a minute. A table chunk repeats
+     * its head. iOS cuts at the same places.
+     */
+    const val PARAGRAPH_CHARS = 4000
+    const val CODE_LINES = 200
+    const val TABLE_ROWS = 200
+    /* A table cell past this is shortened with "…": one cell can't be cut into pieces, and Open with shows it whole. */
+    const val CELL_CHARS = 2000
+
     fun parse(text: String): List<MdBlock> = try {
         blocks(parser.parse(text), 0)
     } catch (_: StackOverflowError) {
         // Nothing here should recurse that far; if the parser itself does, the file is shown as its text.
-        listOf(MdBlock.Code(null, text))
+        cut(MdBlock.Code(null, text))
     }
 
     private fun children(node: Node): Sequence<Node> = generateSequence(node.firstChild) { it.next }
 
-    private fun blocks(parent: Node, depth: Int): List<MdBlock> = children(parent).mapNotNull { block(it, depth) }.toList()
+    private fun blocks(parent: Node, depth: Int): List<MdBlock> = children(parent).mapNotNull { block(it, depth) }.flatMap(::cut).toList()
+
+    /* A block too big to lay out at once, as consecutive blocks of the same kind. */
+    internal fun cut(block: MdBlock): List<MdBlock> = when (block) {
+        is MdBlock.Paragraph -> cutInline(block.inline).map { MdBlock.Paragraph(it) }
+        is MdBlock.Code -> cutCode(block.text).map { MdBlock.Code(block.language, it) }
+        is MdBlock.Table -> {
+            val short = block.copy(head = block.head.map(::shortCell), rows = block.rows.map { row -> row.map(::shortCell) })
+            if (short.rows.size <= TABLE_ROWS) listOf(short) else short.rows.chunked(TABLE_ROWS).map { short.copy(rows = it) }
+        }
+        else -> listOf(block)
+    }
+
+    /* Code in pieces of at most CODE_LINES lines and PARAGRAPH_CHARS characters; a longer line is cut where it must be. */
+    private fun cutCode(text: String): List<String> {
+        val pieces = mutableListOf<String>()
+        val piece = StringBuilder()
+        var lines = 0
+        fun close() { if (lines > 0) pieces += piece.toString(); piece.setLength(0); lines = 0 }
+        for (line in text.split('\n')) {
+            for (segment in if (line.isEmpty()) listOf("") else line.chunked(PARAGRAPH_CHARS)) {
+                if (lines > 0 && (lines >= CODE_LINES || piece.length + 1 + segment.length > PARAGRAPH_CHARS)) close()
+                if (lines > 0) piece.append('\n')
+                piece.append(segment)
+                lines++
+            }
+        }
+        close()
+        return pieces
+    }
+
+    private fun shortCell(cell: MdInline): MdInline {
+        if (cell.plainText.length <= CELL_CHARS) return cell
+        val runs = mutableListOf<MdRun>()
+        var left = CELL_CHARS
+        for (run in cell.runs) {
+            if (left <= 0) break
+            when (run) {
+                is MdRun.Text -> { runs += run.copy(text = run.text.take(left)); left -= run.text.length }
+                is MdRun.Image -> { runs += run; left -= run.alt.length }
+            }
+        }
+        runs += MdRun.Text(" …")
+        return MdInline(runs)
+    }
+
+    /* A paragraph's runs in pieces of at most PARAGRAPH_CHARS, cut at a space where there is one. */
+    private fun cutInline(inline: MdInline): List<MdInline> {
+        if (inline.runs.sumOf { (it as? MdRun.Text)?.text?.length ?: (it as MdRun.Image).alt.length } <= PARAGRAPH_CHARS) return listOf(inline)
+        val pieces = mutableListOf<MdInline>()
+        var current = mutableListOf<MdRun>()
+        var length = 0
+        fun close() { if (current.isNotEmpty()) pieces += MdInline(current); current = mutableListOf(); length = 0 }
+        for (run in inline.runs) {
+            if (run is MdRun.Image) { if (length + run.alt.length > PARAGRAPH_CHARS) close(); current += run; length += run.alt.length; continue }
+            var rest = (run as MdRun.Text).text
+            while (length + rest.length > PARAGRAPH_CHARS) {
+                val room = PARAGRAPH_CHARS - length
+                val space = rest.lastIndexOf(' ', room).takeIf { it > 0 }
+                // No space to cut at in this run: a whole new piece if this one has words, else a hard cut.
+                val at = space ?: if (length > 0) 0 else room
+                if (at > 0) current += run.copy(text = rest.substring(0, at))
+                rest = rest.substring(at).trimStart(' ')
+                close()
+            }
+            if (rest.isNotEmpty()) { current += run.copy(text = rest); length += rest.length }
+        }
+        close()
+        return pieces
+    }
 
     private fun block(node: Node, depth: Int): MdBlock? = if (depth >= BLOCK_DEPTH) flatText(node).takeIf { it.isNotEmpty() }?.let { MdBlock.Paragraph(MdInline(listOf(MdRun.Text(it)))) } else when (node) {
         is Heading -> MdBlock.Heading(node.level, inline(node))
