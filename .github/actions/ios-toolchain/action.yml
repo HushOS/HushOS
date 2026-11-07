@@ -20,7 +20,8 @@ runs:
               [[ -n "$major" ]] || { echo "::error::No xcodeVersion in apps/ios/project.yml"; exit 1; }
               shopt -s nullglob
               all=(/Applications/Xcode_*.app)
-              matching=(/Applications/Xcode_"$major".*.app /Applications/Xcode_"$major".app)
+              matching=()
+              for x in "${all[@]}"; do [[ "${x##*/}" =~ ^Xcode_${major}(\.|\.app$) ]] && matching+=("$x"); done
               echo "Xcodes on this runner: ${all[*]##*/}"
               if (( ${#matching[@]} )); then
                   xcode=$(printf '%s\n' "${matching[@]}" | sort -V | tail -1)
