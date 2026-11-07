@@ -5,3 +5,9 @@
 -dontwarn com.google.errorprone.annotations.**
 -dontwarn javax.annotation.**
 -dontwarn java.awt.**
+
+# ML Kit (Scan document) finds its parts by the class names in its manifest meta-data and builds each with its
+# no-argument constructor. R8 doesn't read meta-data, so it dropped those constructors from the release build:
+# ML Kit started half set up and Scan document crashed the app (debug builds aren't shrunk, so it only showed
+# from Play).
+-keep class * implements com.google.firebase.components.ComponentRegistrar { <init>(); }
