@@ -20,6 +20,11 @@ class MainActivity : ComponentActivity() {
         const val SHOW_WORDS = "com.hushos.app.SHOW_WORDS"
         /* "Create an account in the HushOS app" from a file picker's sign-in screen: sign-up starts here, signed out. */
         const val SIGN_UP = "com.hushos.app.SIGN_UP"
+        /*
+         * The server chosen on a picker's sign-in screen, handed to RECOVER and SIGN_UP in memory (same process), not in
+         * the intent: this activity is exported, and another app's intent must not choose the server an account is made on.
+         */
+        val pickerOrigin = java.util.concurrent.atomic.AtomicReference<String?>(null)
     }
 
     private val model: DriveViewModel by viewModels()
@@ -69,8 +74,8 @@ class MainActivity : ComponentActivity() {
         // Recents must bring back sign-in, not a recovery begun once from a picker).
         if (intent == null || intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return
         when (intent.action) {
-            RECOVER -> { model.recoverWhenSignedOut(); return }
-            SIGN_UP -> { model.signUpWhenSignedOut(); return }
+            RECOVER -> { model.recoverWhenSignedOut(pickerOrigin.getAndSet(null)); return }
+            SIGN_UP -> { model.signUpWhenSignedOut(pickerOrigin.getAndSet(null)); return }
             SHOW_WORDS -> { if (model.recovery == null && model.signup == null) model.openRequest("words"); return }
         }
         // A launcher shortcut: the + menu's action (or Search), signed in or once signed in.

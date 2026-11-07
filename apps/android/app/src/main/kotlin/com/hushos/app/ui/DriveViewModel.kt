@@ -1055,9 +1055,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     fun startRecovery() { recovery = RecoveryFlow(RecoveryStep.EMAIL) }
 
     /* Sent from a file picker's sign-in screen: recovery starts once the gate says signed out (not over one under way). */
-    fun recoverWhenSignedOut() = viewModelScope.launch {
+    fun recoverWhenSignedOut(origin: String? = null) = viewModelScope.launch {
         val gate = state.first { it.gate != Gate.CHECKING }.gate
-        if (gate == Gate.SIGNED_OUT && recovery == null) startRecovery()
+        if (gate == Gate.SIGNED_OUT && recovery == null) { origin?.let(::setOrigin); startRecovery() }
     }
     fun leaveRecovery() {
         // Only words this recovery made (it marks them as it signs in, at NEW_PHRASE): a sign-up's kit that a reset
@@ -1191,9 +1191,10 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     private var signupAttempt = 0
 
     /* Sent from a file picker's sign-in screen: sign-up starts once the gate says signed out (not over one under way). */
-    fun signUpWhenSignedOut() = viewModelScope.launch {
+    /* `origin`: the server chosen on the picker's sign-in screen (its own view model), so the account is made there. */
+    fun signUpWhenSignedOut(origin: String? = null) = viewModelScope.launch {
         val gate = state.first { it.gate != Gate.CHECKING }.gate
-        if (gate == Gate.SIGNED_OUT && signup == null && recovery == null) startSignup()
+        if (gate == Gate.SIGNED_OUT && signup == null && recovery == null) { origin?.let(::setOrigin); startSignup() }
     }
     fun leaveSignup() {
         // Only once the words are confirmed (or nothing was made): a marker left for a new account keeps its words up.
@@ -1653,13 +1654,23 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
 
     suspend fun recoveryKit(): RecoveryKit? {
         val phrase = recoveryPhrase() ?: return null
-        val (recovery, confirmed) = withContext(Dispatchers.IO) { runCatching { Auth.recoveryBackup(context) }.getOrNull() } ?: return null
+        val backup = withContext(Dispatchers.IO) { runCatching { Auth.recoveryBackup(context) } }
+        if (backup.exceptionOrNull() is NotAuthenticated) { sessionLost(); return null }
+        val (recovery, confirmed) = backup.getOrNull() ?: return null
         return RecoveryKit(phrase, recovery, confirmed)
     }
 
     /* After the check: the server records that this phrase was saved. */
-    suspend fun confirmRecovery(kit: RecoveryKit): Boolean =
-        withContext(Dispatchers.IO) { runCatching { Auth.confirmRecovery(context, kit.recovery.getLong("recoveryVersion")) }.isSuccess }
+    /*
+     * True when recorded; false when it couldn't be; null when the session had ended, which goes back to sign-in (the
+     * words still marked as waiting, so they come first after it): a kit screen stands in for the drive, so nothing
+     * else would notice, and every retry would fail the same way.
+     */
+    suspend fun confirmRecovery(kit: RecoveryKit): Boolean? {
+        val result = withContext(Dispatchers.IO) { runCatching { Auth.confirmRecovery(context, kit.recovery.getLong("recoveryVersion")) } }
+        if (result.exceptionOrNull() is NotAuthenticated) { sessionLost(); return null }
+        return result.isSuccess
+    }
 
     /* Removes every earlier version now; files keep their current one. */
     suspend fun discardEarlierVersions(): Boolean {

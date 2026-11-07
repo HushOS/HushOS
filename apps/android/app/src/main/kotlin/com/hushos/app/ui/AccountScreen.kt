@@ -516,8 +516,12 @@ fun PhraseScreen(model: DriveViewModel, fresh: Boolean, firstKit: Boolean = fals
         BackHandler { checking = false }
         CheckWordsScreen(current.phrase, onBack = { checking = false }) {
             scope.launch {
-                if (model.confirmRecovery(current)) { model.notify("Recovery phrase saved"); onDone() }
-                else model.notify("Couldn’t record that. Check your connection and try again.")
+                when (model.confirmRecovery(current)) {
+                    true -> { model.notify("Recovery phrase saved"); onDone() }
+                    false -> model.notify("Couldn’t record that. Check your connection and try again.")
+                    // The session ended: sign-in is on screen now, and the words come first after it.
+                    null -> {}
+                }
             }
         }
         return

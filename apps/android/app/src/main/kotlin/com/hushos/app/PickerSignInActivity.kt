@@ -33,9 +33,11 @@ class PickerSignInActivity : ComponentActivity() {
                 PickerSignIn(
                     model,
                     recoverInApp = {
+                        MainActivity.pickerOrigin.set(model.state.value.origin)
                         startActivity(Intent(this, MainActivity::class.java).setAction(MainActivity.RECOVER).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                     },
                     signUpInApp = {
+                        MainActivity.pickerOrigin.set(model.state.value.origin)
                         startActivity(Intent(this, MainActivity::class.java).setAction(MainActivity.SIGN_UP).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                     },
                     showWords = {
