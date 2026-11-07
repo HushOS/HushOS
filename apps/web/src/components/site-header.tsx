@@ -4,6 +4,7 @@ import { CheckIcon, MenuIcon } from 'lucide-react';
 import { useState } from 'react';
 import { Brand, Wordmark } from '@/components/brand';
 import { container, SiteSwitch, StartFree } from '@/components/site';
+import { StoreLinks } from '@/components/store-links';
 import { useTheme } from '@/components/theme-provider';
 import { ThemeToggle, themeOptions } from '@/components/theme-toggle';
 import { buttonVariants } from '@/components/ui/button';
@@ -299,7 +300,9 @@ export function SiteFooter() {
 function FullFooter() {
     // Read once per mount: render stays pure, and the year cannot change between renders.
     const [year] = useState(() => new Date().getFullYear());
-    const { operatorName, billingEnabled } = useRouteContext({ from: '__root__' });
+    const { operatorName, billingEnabled, appStoreUrl, playStoreUrl } = useRouteContext({
+        from: '__root__',
+    });
     const shown = usePages();
     const columns: { title: string; items: FooterItem[] }[] = [
         {
@@ -307,6 +310,10 @@ function FullFooter() {
             // The roadmap is in the footer only: the header keeps to the pages people choose between.
             items: [
                 { label: 'Drive', to: '/' },
+                // The apps' page, where this server names a listing (as /apps itself requires).
+                ...(appStoreUrl || playStoreUrl
+                    ? [{ label: 'Phone apps', to: '/apps' } as const]
+                    : []),
                 ...shown.map(({ to, label }) => ({ to, label })),
                 { label: 'Roadmap', to: '/roadmap' },
                 { label: 'Follow on X', href: 'https://x.com/TheHushOS' },
@@ -348,6 +355,8 @@ function FullFooter() {
                         <p className="max-w-[19.9em] text-muted-foreground">
                             Private storage that works like the drive you already use.
                         </p>
+                        {/* The stores' badges, each only where this server names its listing. */}
+                        <StoreLinks className="mt-2" />
                     </div>
                     {columns.map((column) => (
                         <nav
