@@ -1057,7 +1057,12 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     /* Sent from a file picker's sign-in screen: recovery starts once the gate says signed out (not over one under way). */
     fun recoverWhenSignedOut(origin: String? = null) = viewModelScope.launch {
         val gate = state.first { it.gate != Gate.CHECKING }.gate
-        if (gate == Gate.SIGNED_OUT && recovery == null) { origin?.let(::setOrigin); startRecovery() }
+        if (gate == Gate.SIGNED_OUT && recovery == null) {
+            // Another server than a sign-up under way was begun on: that sign-up is left, not carried over to it.
+            if (origin != null && origin.trimEnd('/') != state.value.origin && signup?.step != SignupStep.PHRASE) signup = null
+            origin?.let(::setOrigin)
+            startRecovery()
+        }
     }
     fun leaveRecovery() {
         // Only words this recovery made (it marks them as it signs in, at NEW_PHRASE): a sign-up's kit that a reset
@@ -1280,12 +1285,15 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         creatingAccount.value = true
         viewModelScope.launch {
           try {
-            val origin = state.value.origin
+            // The server that issued the link, whatever this phone has been set to since: it alone sees the token, and
+            // the session is that server's.
+            val origin = enrollment.origin
+            setOrigin(origin)
             var created = false
             val result = withContext(Dispatchers.IO) {
                 runCatching {
                     // Marks the words as waiting (RecoveryWords) before the account is sent, not after its answer.
-                    Auth.register(origin, enrollment, name, password)
+                    Auth.register(enrollment, name, password)
                     created = true
                     try {
                         Auth.signIn(context, origin, enrollment.email, password)

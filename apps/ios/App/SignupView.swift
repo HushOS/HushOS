@@ -355,10 +355,10 @@ struct FirstKitView: View {
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(isPresented: $checking) {
                 if let phrase {
-                    CheckWordsView(phrase: phrase, recoveryVersion: nil) {
+                    CheckWordsView(phrase: phrase, recoveryVersion: nil, done: {
                         NoticeCenter.shared.show("Recovery phrase saved")
                         model.wordsChecked()
-                    }
+                    }, sessionEnded: { model.sessionLost() })
                 }
             }
             .task(id: attempt) { await load() }

@@ -1121,6 +1121,8 @@ struct CheckWordsView: View {
     /* The version to confirm, or nil to read it from the server (a phrase just made). */
     let recoveryVersion: UInt64?
     let done: () -> Void
+    /* A session that ended under the check, where nothing else would notice (a first kit stands in for the drive). */
+    var sessionEnded: (() -> Void)? = nil
     @Environment(\.dismiss) private var back
     @State private var questions: [RecoveryCheck.Question] = []
     @State private var picks: [Int: String] = [:]
@@ -1194,6 +1196,9 @@ struct CheckWordsView: View {
                 if let recoveryVersion { version = recoveryVersion } else { version = try await Auth.recoveryKey().envelope.recoveryVersion }
                 try await Auth.confirmRecovery(recoveryVersion: version)
                 done()
+            } catch AuthError.sessionEnded(let tag) where sessionEnded != nil && (tag == nil || tag == SharedKeychain.session?.tag) {
+                // Every retry would fail the same way: the caller goes back to sign-in (the words still waiting).
+                sessionEnded?()
             } catch {
                 self.error = "Couldn’t record that. Check your connection and try again."
             }

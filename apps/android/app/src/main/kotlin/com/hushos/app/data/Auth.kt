@@ -383,13 +383,14 @@ object Auth {
         post(origin, "/api/auth/register/email", JSONObject().put("email", email).put("app", true)).body.optString("message")
 
     /* A sign-up link's enrollment: the address it confirmed and the token the next steps need. */
-    data class SignupEnrollment(val email: String, val token: String)
+    /* `origin`: the server that issued it, the only one its token is ever sent to (a server changed since never sees it). */
+    data class SignupEnrollment(val email: String, val token: String, val origin: String)
 
     fun verifySignupLink(origin: String, verifyToken: String): SignupEnrollment {
         val reply = post(origin, "/api/auth/register/verify", JSONObject().put("token", verifyToken))
         val enrollment = reply.body.optJSONObject("enrollment") ?: throw AuthFailure("This link didn’t work.")
         if (enrollment.optString("purpose") != "register") throw AuthFailure("This link belongs to a different account flow. Request a new link.")
-        return SignupEnrollment(enrollment.getString("email"), reply.enrollment ?: throw AuthFailure("This link didn’t work."))
+        return SignupEnrollment(enrollment.getString("email"), reply.enrollment ?: throw AuthFailure("This link didn’t work."), origin)
     }
 
     /*
@@ -397,7 +398,8 @@ object Auth {
      * marker, set before the account is sent: if the server makes it but its answer is lost, the words still come first
      * at the next sign-in, here or in a picker.
      */
-    fun register(origin: String, enrollment: SignupEnrollment, name: String, password: String): String {
+    fun register(enrollment: SignupEnrollment, name: String, password: String): String {
+        val origin = enrollment.origin
         val cookie = (if (origin.startsWith("https:")) "__Host-hushos-enrollment" else "hushos-enrollment") + "=" + enrollment.token
         val registration = opaqueStartRegistration(password)
         val challenge = post(origin, "/api/auth/register/start", JSONObject().put("registrationRequest", registration.request), cookie).body
