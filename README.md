@@ -32,12 +32,12 @@
 <p align="center">
     <picture>
         <source media="(prefers-color-scheme: dark)" srcset="apps/web/src/screenshots/ios-home-dark.png">
-        <img src="apps/web/src/screenshots/ios-home.png" alt="HushOS on an iPhone: Home with search, tags and recent files." width="240">
+        <img src="apps/web/src/screenshots/ios-home.png" alt="HushOS on an iPhone: Home with search, tags and recent files." width="239">
     </picture>
     &nbsp;&nbsp;
     <picture>
         <source media="(prefers-color-scheme: dark)" srcset="apps/web/src/screenshots/android-home-dark.png">
-        <img src="apps/web/src/screenshots/android-home.png" alt="HushOS on Android: Home with search, tags and recent files." width="240">
+        <img src="apps/web/src/screenshots/android-home.png" alt="HushOS on Android: Home with search, tags and recent files." width="234">
     </picture>
 </p>
 
