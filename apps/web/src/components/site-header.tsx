@@ -309,6 +309,7 @@ function FullFooter() {
                 { label: 'Drive', to: '/' },
                 ...shown.map(({ to, label }) => ({ to, label })),
                 { label: 'Roadmap', to: '/roadmap' },
+                { label: 'Follow on X', href: 'https://x.com/TheHushOS' },
             ],
         },
         {
