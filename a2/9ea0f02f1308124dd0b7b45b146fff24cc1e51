@@ -1,0 +1,95 @@
+.github/actions/ios-toolchain/action.yml
+  s_566b8e0c4467a4::t_3bd74e2612da97 1-51
+.github/workflows/ios-release.yml
+  s_566b8e0c4467a4::t_8a994263bd56d3 1-232
+AGENTS.md
+  s_566b8e0c4467a4::t_351bceb1f039de 28
+CONTEXT.md
+  s_566b8e0c4467a4::t_3249ac0ab58d63 3
+CONTRIBUTING.md
+  s_566b8e0c4467a4::t_c609dd59e39341 3-228,232-241,243-245,251-253,255,257-260,262,264-267,269,271-273,277,279-293,295-296,300,302-304,306,308-312,314-315,317,319-322,326-330,332-338,346-382,386-391,393-399,411-466,468,470,472-543,547-576,578,580-586,593-664,668-714,716,726-766,768-771,773,775-796,800-948,950,952-954,956,958,960,962-966,968,970,972-974,976
+README.md
+  s_566b8e0c4467a4::t_31374a4c8beba5 19-24,32-43,46,48-50,52,54,56-61,63,65-72,83-87,89,91,95-96,98,101,103,105-109,111-128,131,133,137
+apps/ios/scripts/archive.sh
+  s_566b8e0c4467a4::t_be41d05d81452b 14-18,24-28,45,71
+apps/ios/scripts/submit-review.ts
+  s_566b8e0c4467a4::t_b38a7fe0440533 1-252
+apps/web/src/components/ui/autocomplete.tsx
+  s_566b8e0c4467a4::t_6ce320df611df8 1-99
+apps/web/src/lib/affiliate-form.test.ts
+  s_566b8e0c4467a4::t_29c45ea9b47468 1-113
+apps/web/src/lib/affiliate-form.ts
+  s_566b8e0c4467a4::t_916228929b73f0 1-131
+apps/web/src/lib/affiliate-routes.test.ts
+  s_566b8e0c4467a4::t_92576a25a929bd 1-33
+apps/web/src/lib/api.server.ts
+  s_566b8e0c4467a4::t_ad88529254ff72 251-255,1174-1189,1212,1237-1242
+apps/web/src/lib/growth-api.ts
+  s_566b8e0c4467a4::t_8081e772e317c3 14-20
+apps/web/src/lib/use-debounced-value.ts
+  s_566b8e0c4467a4::t_b9434fdc5120dc 1-11
+apps/web/src/routes/_authenticated/app/_drive/admin.affiliates.tsx
+  s_566b8e0c4467a4::t_c23ee4e83e43c7 20-26,44,46-54,58,366-370,372-373,375-390,393-395,397,401,417,424,450-455,472,487,492-494,500-503,508-513,515-523,528-718,725-730,733-740,742,744-748,762,771-772,774,777,787-788,790,793,797-798,800-801,803,806,810-814,816,819,846-851,856-879,881,883-885
+apps/web/src/routes/_authenticated/app/_drive/referrals.tsx
+  s_566b8e0c4467a4::t_1d664a80b681e8 1,3,211,213,217,219-244,250-291
+docs/families-shared-pool.md
+  s_566b8e0c4467a4::t_a8680f450a55fa 5,297
+docs/groups-mobile-plan.md
+  s_566b8e0c4467a4::t_4ecf61935e9ed6 3-5
+docs/groups-server.md
+  s_566b8e0c4467a4::t_b8c7a5c8111b74 5
+docs/optional-verification.md
+  s_566b8e0c4467a4::t_a7fe056820b68c 3-5
+docs/proposed.md
+  s_566b8e0c4467a4::t_56dd93ce02899f 3,5,7-9,35,37,39,41-63
+docs/release/README.md
+  s_566b8e0c4467a4::t_e50142f6f28e0c 3-27,31
+docs/release/apple.md
+  s_566b8e0c4467a4::t_b0091d9bd245de 9-11,120-145
+docs/release/checklist.md
+  s_566b8e0c4467a4::t_5920bac97d384a 3-4,13-14,25,36-37
+docs/release/google.md
+  s_566b8e0c4467a4::t_a5cbe18c530d08 9-11
+docs/release/store-listing.md
+  s_566b8e0c4467a4::t_c52c05d233e2c7 7-16
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_2bc4053851abfd 518,701
+packages/billing/src/api.ts
+  s_566b8e0c4467a4::t_f2a0ea14036766 231-232,249-250,322-327
+packages/billing/src/growth.ts
+  s_566b8e0c4467a4::t_1fba6d66a89c95 87,98-100,117,219-220,234,242-254,292-295,311,318-343,347-357,367-453,455-456,458,467-483
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_8b30fbbf92592a 196-199,767-769,787-789,1156,1252-1253,2617-3114
+packages/billing/src/server.ts
+  s_566b8e0c4467a4::t_900a93921805f7 631-657
+packages/db/drizzle/20261107215320_affiliate_pending_email/migration.sql
+  s_566b8e0c4467a4::t_5ee682fbd08edf 1
+packages/db/drizzle/20261107215320_affiliate_pending_email/snapshot.json
+  s_566b8e0c4467a4::t_bf335fb24bf5b1 1-37
+packages/db/src/growth.ts
+  s_566b8e0c4467a4::t_2008a147dd413a 1,296,300-338,359,361,379-380,390-401,418-419,421-426,430-435,437-438,442-483,506-507,524-525,529,536,545-571,585-588,597,599,625-630,687-688
+packages/db/src/readiness.ts
+  s_566b8e0c4467a4::t_68fa2673ec9be9 14
+packages/db/src/schema/growth.ts
+  s_566b8e0c4467a4::t_52416336e96fd4 45-47
+packages/db/test/helpers.ts
+  s_566b8e0c4467a4::t_8fc76fce6be0b2 11,71-105
+scripts/release-wizard.sh
+  s_566b8e0c4467a4::t_db0855382fd0b1 188
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a29ea0f02f1308124dd0b7b45b146fff24cc1e51",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
