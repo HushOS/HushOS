@@ -1,0 +1,27 @@
+docs/optional-verification.md
+  s_566b8e0c4467a4::t_399bd228bda202 3
+docs/proposed.md
+  s_566b8e0c4467a4::t_7d682a3f8f14c9 35-60
+docs/release/README.md
+  s_566b8e0c4467a4::t_02feb01671a3d3 3,21,31
+docs/release/checklist.md
+  s_566b8e0c4467a4::t_6554688cb765b3 3,14
+scripts/release-wizard.sh
+  s_566b8e0c4467a4::t_eeba50d7cc9170 188
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b45c4bc3a80fe1570fc69a1f5592b2a68c5b564e",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
