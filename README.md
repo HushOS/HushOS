@@ -17,9 +17,9 @@
 </p>
 
 <p align="center">
-    <a href="https://apps.apple.com/app/hushos-encrypted-cloud-drive/id6831238356"><img src="apps/web/src/badges/download-on-the-app-store-black-en-us.svg" alt="Download on the App Store" height="44"></a>
+    <a href="https://apps.apple.com/app/hushos-encrypted-cloud-drive/id6831238356"><img src="apps/web/src/badges/download-on-the-app-store-black-en-us.svg" alt="Download on the App Store" width="132" height="44"></a>
     &nbsp;
-    <a href="https://play.google.com/store/apps/details?id=com.hushos.app"><img src="apps/web/src/badges/GetItOnGooglePlay_Badge_Web_color_English.svg" alt="Get it on Google Play" height="44"></a>
+    <a href="https://play.google.com/store/apps/details?id=com.hushos.app"><img src="apps/web/src/badges/GetItOnGooglePlay_Badge_Web_color_English.svg" alt="Get it on Google Play" width="148" height="44"></a>
 </p>
 
 <p align="center">
