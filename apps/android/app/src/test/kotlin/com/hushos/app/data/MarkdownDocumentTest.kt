@@ -157,6 +157,14 @@ class MarkdownDocumentTest {
         assertEquals((1..5000).map { "line $it" }, quotes.flatMap { q -> q.blocks.map { (it as MdBlock.Paragraph).inline.plainText } })
     }
 
+    @Test fun aFileOfMarksIsShownAsText() {
+        // 2 MB of "*a* " ran the parser's heap out before any limit applied: shown as text, in bounded pieces.
+        val shown = MarkdownDocument.parse("*a* ".repeat(500_000))
+        assertTrue(shown.isNotEmpty() && shown.all { it is MdBlock.Code && it.text.length <= MarkdownDocument.PARAGRAPH_CHARS })
+        // Ordinary emphasis is still emphasis.
+        assertTrue((MarkdownDocument.parse("*a* ".repeat(100)).single() as MdBlock.Paragraph).inline.runs.any { (it as? MdRun.Text)?.italic == true })
+    }
+
     @Test fun aByteOrderMarkIsNotText() {
         assertTrue(MarkdownDocument.parse("\uFEFF# Title").single() is MdBlock.Heading)
     }

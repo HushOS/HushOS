@@ -103,10 +103,21 @@ object MarkdownDocument {
     // A UTF-8 byte order mark is not the document's (the web's TextDecoder drops it): left in, "# Title" isn't a heading.
     fun parse(text: String): List<MdBlock> = parseWhole(text.removePrefix("\uFEFF"))
 
+    /*
+     * Past this many emphasis and link marks the file is shown as its text, before the parser builds its tree: 2 MB of
+     * "*a* " made a million nodes and ran a 256 MB heap out inside the parser, before any limit here applied. Prose,
+     * notes and tables come nowhere near it.
+     */
+    const val MARKS = 200_000
+
     private fun parseWhole(text: String): List<MdBlock> = try {
-        blocks(parser.parse(text), 0)
+        if (text.count { it == '*' || it == '_' || it == '~' || it == '[' } > MARKS) cut(MdBlock.Code(null, flat(text)))
+        else blocks(parser.parse(text), 0)
     } catch (_: StackOverflowError) {
         // Nothing here should recurse that far; if the parser itself does, the file is shown as its text.
+        cut(MdBlock.Code(null, flat(text)))
+    } catch (_: OutOfMemoryError) {
+        // Anything else the scan above misses: the tree is dropped as this unwinds, and the text is shown instead.
         cut(MdBlock.Code(null, flat(text)))
     } catch (_: RuntimeException) {
         // The parser refuses some files outright (a table of more than a million cells, from 14 KB): shown as text too.

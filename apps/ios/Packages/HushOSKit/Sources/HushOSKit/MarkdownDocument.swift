@@ -34,10 +34,16 @@ public enum MarkdownDocument {
      * itself parses without recursion, so the depth is measured on its tree first, with its iterator.
      */
     static let maxDepth = 64
+    static let marks = 200_000
 
     public static func parse(_ text: String) -> [MarkdownBlock] {
         // A UTF-8 byte order mark is not the document's (the web's TextDecoder drops it): left in, "# Title" isn't a heading.
         let text = text.hasPrefix("\u{FEFF}") ? String(text.dropFirst()) : text
+        // Past this many emphasis and link marks, the text: 2 MB of "*a* " is a million nodes (Android's parser ran out of
+        // memory on it). Prose, notes and tables come nowhere near it.
+        if text.utf8.lazy.filter({ $0 == 0x2A || $0 == 0x5F || $0 == 0x7E || $0 == 0x5B }).count > marks {
+            return cut(.code(language: nil, text: flat(text)))
+        }
         if depth(of: text) > maxDepth { return cut(.code(language: nil, text: flat(text))) }
         return blocks(of: Document(parsing: text).children, depth: 0)
     }

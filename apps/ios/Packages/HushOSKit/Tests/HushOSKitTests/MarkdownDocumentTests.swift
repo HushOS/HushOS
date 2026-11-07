@@ -218,6 +218,11 @@ struct MarkdownDocumentTests {
         #expect(lines == (1...5000).map { "line \($0)" })
     }
 
+    @Test func aFileOfMarksIsShownAsText() {
+        let shown = MarkdownDocument.parse(String(repeating: "*a* ", count: 500_000))
+        #expect(!shown.isEmpty && shown.allSatisfy { if case let .code(_, text) = $0 { text.count <= MarkdownDocument.paragraphChars } else { false } })
+    }
+
     @Test func aByteOrderMarkIsNotText() {
         guard case .heading = MarkdownDocument.parse("\u{FEFF}# Title").first else { Issue.record("expected a heading"); return }
     }
