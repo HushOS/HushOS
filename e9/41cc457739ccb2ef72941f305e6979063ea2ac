@@ -1,0 +1,14 @@
+apps/android/app/proguard-rules.pro
+  h_f7ba60a6997566 8-13
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e941cc457739ccb2ef72941f305e6979063ea2ac",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
