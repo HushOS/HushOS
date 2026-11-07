@@ -6,14 +6,9 @@ Click by click, for HushOS, Inc. Requirements were checked on Apple's own pages 
 
 ## 0. Where things stand
 
-- **D-U-N-S: applied, waiting for D&B to issue it.** Apple says D&B takes up to 5 business days (paying to expedite doesn't help), then up to 2 more business days for Apple to receive the record. If two weeks pass, email D&B (https://developer.apple.com/help/account/membership/D-U-N-S/).
-- **While you wait, do these** (none needs the number):
-    1. The Apple Account with two-factor authentication (section 2).
-    2. A public support page and a business address and phone you're happy to publish (checklist.md, "Owner decisions"). Apple needs them for the Support URL and, in the EU, for trader status.
-    3. The demo accounts for App Review on hushos.com (section 9).
-    4. The app changes in checklist.md (privacy policy link, plan buttons, privacy manifest, iPad decision). Without them the first submission is rejected or the upload refused.
-    5. Screenshots (`scripts/store-screenshots.sh ios`), store copy (store-listing.md), privacy answers (privacy-answers.md).
-- **Only after the number is issued:** sections 1, 3 and everything after.
+- **Done:** HushOS, Inc. is enrolled (Team ID `9T67GJ663Z`), and the app is live on the App Store.
+- **Sections 1 to 6** were one-time setup, kept as a reference.
+- **For a release**, sections 7 (build and upload) and 15 (the version page) are the ones that still apply. docs/release/README.md has the short version.
 
 ## 1. Check the D-U-N-S number is live and matched
 
