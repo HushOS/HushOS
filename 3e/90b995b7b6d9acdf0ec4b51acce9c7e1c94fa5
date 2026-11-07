@@ -1,0 +1,19 @@
+apps/ios/scripts/submit-review.ts
+  s_566b8e0c4467a4::t_a88be95c5a1023 142-158,200,211
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3e90b995b7b6d9acdf0ec4b51acce9c7e1c94fa5",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
