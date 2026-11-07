@@ -362,7 +362,8 @@ final class AppModel {
     func open(_ url: URL) {
         switch AppLinks.parse(url, server: origin) {
         // Not over an account being made (it signs in and shows its words as it finishes): this link waits for it.
-        case .success(.recover), .success(.register) where creatingAccount:
+        // (The guard on each pattern: a `where` binds only to the pattern it follows.)
+        case .success(.recover) where creatingAccount, .success(.register) where creatingAccount:
             linkAfterCreating = url
         // The emailed reset link opens the reset here, signed in or not.
         case let .success(.recover(token)):

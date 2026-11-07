@@ -1058,8 +1058,10 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         if (gate == Gate.SIGNED_OUT && recovery == null) startRecovery()
     }
     fun leaveRecovery() {
+        // Only words this recovery made (it marks them as it signs in, at NEW_PHRASE): a sign-up's kit that a reset
+        // link interrupted still waits to be checked.
+        if (recovery?.step == RecoveryStep.NEW_PHRASE) com.hushos.app.data.RecoveryWords.settled()
         recovery = null
-        com.hushos.app.data.RecoveryWords.settled()
     }
     fun clearRecoveryError() { recovery = recovery?.takeIf { it.error != null }?.copy(error = null) ?: recovery }
     fun recoveryBack() {
@@ -1107,6 +1109,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         val enrollment = flow.enrollment ?: return
         recovery = flow.copy(pending = true, error = null)
         viewModelScope.launch {
+          // Whether this recovery marked its words: only then is the marker its own to clear.
+          var marked = false
           try {
             val origin = state.value.origin
             val result = withContext(Dispatchers.IO) {
@@ -1114,6 +1118,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
                     val recovered = Auth.recover(origin, enrollment, words.joinToString(" "), password)
                     // Before the session is stored: a picker's sign-in screen waits for this account's new words.
                     com.hushos.app.data.RecoveryWords.begun(recovered.userId)
+                    marked = true
                     val phrase = recovered.phrase
                     val user = try {
                         Auth.signIn(context, origin, enrollment.email, password)
@@ -1129,13 +1134,13 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
                     signedIn(user)
                 },
                 {
-                    com.hushos.app.data.RecoveryWords.settled()
+                    if (marked) com.hushos.app.data.RecoveryWords.settled()
                     recovery = recovery?.copy(pending = false, error = com.hushos.app.data.Problems.say(it, com.hushos.app.data.Problems.SERVER))
                 },
             )
           } finally {
             // Cancelled (the view model went) or failed: no new words are on screen, so nothing waits for them.
-            if (recovery?.step != RecoveryStep.NEW_PHRASE) com.hushos.app.data.RecoveryWords.settled()
+            if (marked && recovery?.step != RecoveryStep.NEW_PHRASE) com.hushos.app.data.RecoveryWords.settled()
           }
         }
     }
