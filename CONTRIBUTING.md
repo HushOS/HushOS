@@ -870,13 +870,31 @@ gh workflow run android-release.yml --ref vX.Y.Z -f action=promote
 - Without the environment's variables and the upload key, it logs a notice and does nothing.
 - One-time setup (Google Cloud, Play Console, the environment) and the first dry run are in docs/release/google-play-ci.md.
 
+### iPhone: the release workflow
+
+`.github/workflows/ios-release.yml` runs when the release is published.
+
+- **Sideload IPA:** built and attached to the release, with the notes' iOS section (`release-ipa.sh`).
+- **App Store upload:** archived, signed with the `app-store` environment's API key, and uploaded to TestFlight (`archive.sh`).
+- **Both skip with a warning** while GitHub's macOS runners lack the Xcode major version in `apps/ios/project.yml`. Build them by hand then (below).
+- **App Review is a separate step, by hand:**
+
+    ```sh
+    gh workflow run ios-release.yml --ref vX.Y.Z -f action=submit -f whats-new="…"
+    ```
+
+    - `-f action=dry-run` reads everything and changes nothing.
+    - `-f build=N` submits a re-upload made with `HUSHOS_BUILD_NUMBER`.
+
+- Setup (the API key, the environment) is in docs/release/apple.md, section 7.
+
 ### By hand, for every release
 
 After the tag and the GitHub release exist, in this order:
 
-1. **Store builds.** The Play bundle, unless the Android release workflow sent it: `git checkout vX.Y.Z`, `bun run android:bundle`, then upload to Google Play (docs/release/google.md). The iPhone archive the same way, with `bun run ios:archive`.
+1. **Store builds.** The Play bundle, unless the Android release workflow sent it: `git checkout vX.Y.Z`, `bun run android:bundle`, then upload to Google Play (docs/release/google.md). The iPhone archive the same way, with `bun run ios:archive`, unless the iOS release workflow uploaded it.
 2. **The APK.** The workflow attaches it. By hand: `bun run android:release-apk vX.Y.Z` from any up-to-date checkout of `main`.
-3. **The unsigned IPA** for sideloading (AltStore, SideStore, iloader): `bun run ios:release-ipa vX.Y.Z`.
+3. **The unsigned IPA** for sideloading (AltStore, SideStore, iloader), unless the iOS release workflow attached it: `bun run ios:release-ipa vX.Y.Z`.
 
 `android:release-apk`:
 

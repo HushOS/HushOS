@@ -1,0 +1,232 @@
+name: iOS release
+
+# The iPhone app of a release, built from its tag on a Mac runner. When release.yml's
+# release-please publishes vX.Y.Z (as the release GitHub App, so the event starts this workflow):
+#
+# - the ipa job builds the unsigned IPA for sideloading (AltStore, SideStore, iloader), attaches
+#   it to the GitHub release with its checksum and writes the notes' iOS section
+#   (apps/ios/scripts/release-ipa.sh). It holds no key.
+# - the app-store job archives, signs and uploads the build to App Store Connect, where it lands
+#   in TestFlight (apps/ios/scripts/archive.sh).
+#
+# App Review is a separate, deliberate step, run by hand from the tag once the build is checked:
+#
+#   gh workflow run ios-release.yml --ref vX.Y.Z -f action=submit -f whats-new="…"
+#
+# (add -f build=N to submit a re-upload made with HUSHOS_BUILD_NUMBER instead of the tag's build)
+# which makes the App Store version, writes What's New, attaches the build and submits it
+# (apps/ios/scripts/submit-review.ts). action=dry-run archives and exports without uploading,
+# and reads what a submit would do without changing anything; action=ipa rebuilds only the IPA.
+#
+# The App Store jobs run in the `app-store` environment, which only v* tags may use. It holds an
+# App Store Connect API key with the Admin role (ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8: the .p8
+# file's text) and the team (vars.APPLE_TEAM_ID). Xcode signs with it and keeps nothing: Apple
+# manages the distribution certificate. Until the environment holds the key, the App Store jobs
+# say what is missing and succeed without doing anything. See docs/release/apple.md.
+on:
+    release:
+        types: [published]
+    workflow_dispatch:
+        inputs:
+            action:
+                description: >-
+                    upload: the IPA on the release, and the build to App Store Connect. ipa: only
+                    the IPA. dry-run: archive and export, and read what a submit would do, changing
+                    nothing. submit: this tag's build to App Review.
+                type: choice
+                options: [upload, ipa, dry-run, submit]
+                default: upload
+            whats-new:
+                description: What's New in This Version, for submit (may be left out if the version already has it).
+                type: string
+                default: ''
+            build:
+                description: >-
+                    The build number to submit, when it isn't the tag's own (a re-upload with
+                    HUSHOS_BUILD_NUMBER). Left empty, submit takes scripts/build-number.sh --store.
+                type: string
+                default: ''
+
+permissions: {}
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: false
+
+jobs:
+    release:
+        name: Release tag
+        runs-on: ubuntu-latest
+        timeout-minutes: 2
+        outputs:
+            tag: ${{ steps.tag.outputs.tag }}
+            version: ${{ steps.tag.outputs.version }}
+            action: ${{ steps.tag.outputs.action }}
+        steps:
+            - name: The tag and what to do with it
+              id: tag
+              env:
+                  REF: ${{ github.ref }}
+                  ACTION: ${{ inputs.action || 'upload' }}
+                  PRERELEASE: ${{ github.event.release.prerelease || false }}
+              run: |
+                  if [[ ! "$REF" =~ ^refs/tags/(v([0-9]+\.[0-9]+\.[0-9]+))$ ]]; then
+                      if [[ "$GITHUB_EVENT_NAME" == release ]]; then
+                          echo "::notice title=Not a release tag::$REF is not a vX.Y.Z tag; nothing is built."
+                          echo "action=none" >> "$GITHUB_OUTPUT"
+                          exit 0
+                      fi
+                      echo "::error title=Run it from the tag::This workflow takes the release from the ref it runs on, and $REF is not a vX.Y.Z tag: gh workflow run ios-release.yml --ref vX.Y.Z -f action=$ACTION"
+                      exit 1
+                  fi
+                  if [[ "$PRERELEASE" == true ]]; then
+                      echo "::notice title=Prerelease::${BASH_REMATCH[1]} is a prerelease; nothing is built."
+                      echo "action=none" >> "$GITHUB_OUTPUT"
+                      exit 0
+                  fi
+                  {
+                      echo "tag=${BASH_REMATCH[1]}"
+                      echo "version=${BASH_REMATCH[2]}"
+                      echo "action=$ACTION"
+                  } >> "$GITHUB_OUTPUT"
+                  echo "${BASH_REMATCH[1]}: $ACTION"
+
+    # The unsigned IPA for sideloading, on the GitHub release. No key: nothing here is signed by a team.
+    ipa:
+        name: Sideload IPA on the GitHub release
+        needs: release
+        if: needs.release.outputs.action == 'upload' || needs.release.outputs.action == 'ipa'
+        runs-on: macos-26
+        timeout-minutes: 90
+        # release-notes-section.sh reads and rewrites the whole body of the release's notes: one
+        # writer per release at a time, with release.yml's notes job and android-release.yml's apk job.
+        concurrency:
+            group: release-notes-${{ needs.release.outputs.tag }}
+            cancel-in-progress: false
+            queue: max
+        permissions:
+            contents: write
+        steps:
+            # release-ipa.sh builds the tag in a worktree of its own, and checks it is on main.
+            - uses: actions/checkout@v7
+              with:
+                  ref: refs/tags/${{ needs.release.outputs.tag }}
+                  fetch-depth: 0
+                  persist-credentials: false
+            - uses: ./.github/actions/ios-toolchain
+              id: toolchain
+            - name: Build, check and attach the IPA
+              if: steps.toolchain.outputs.ready == 'true'
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  GH_REPO: ${{ github.repository }}
+                  TAG: ${{ needs.release.outputs.tag }}
+              run: apps/ios/scripts/release-ipa.sh "$TAG"
+
+    # The App Store build: archived, signed with the team's API key, uploaded to App Store Connect
+    # (or, for dry-run, exported and left here).
+    app-store:
+        name: App Store Connect (upload)
+        needs: release
+        if: needs.release.outputs.action == 'upload' || needs.release.outputs.action == 'dry-run'
+        runs-on: macos-26
+        timeout-minutes: 90
+        environment: app-store
+        permissions:
+            contents: read
+        steps:
+            - name: Release credentials
+              id: setup
+              env:
+                  KEY_ID: ${{ secrets.ASC_KEY_ID }}
+                  ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+                  KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+                  TEAM: ${{ vars.APPLE_TEAM_ID }}
+              run: |
+                  missing=()
+                  [[ -n "$KEY_ID" ]] || missing+=(secret ASC_KEY_ID)
+                  [[ -n "$ISSUER_ID" ]] || missing+=(secret ASC_ISSUER_ID)
+                  [[ -n "$KEY_P8" ]] || missing+=(secret ASC_KEY_P8)
+                  [[ -n "$TEAM" ]] || missing+=(variable APPLE_TEAM_ID)
+                  if (( ${#missing[@]} )); then
+                      echo "::notice title=App Store not set up::The app-store environment lacks: ${missing[*]}. Nothing is uploaded (docs/release/apple.md)."
+                      echo "configured=false" >> "$GITHUB_OUTPUT"
+                      exit 0
+                  fi
+                  echo "configured=true" >> "$GITHUB_OUTPUT"
+            - if: steps.setup.outputs.configured == 'true'
+              uses: actions/checkout@v7
+              with:
+                  ref: refs/tags/${{ needs.release.outputs.tag }}
+                  fetch-depth: 0
+                  persist-credentials: false
+            - if: steps.setup.outputs.configured == 'true'
+              id: toolchain
+              uses: ./.github/actions/ios-toolchain
+            # The Rust core first, with no key anywhere: its build scripts and proc-macros run
+            # third-party code. archive.sh skips the core when the xcframework is there.
+            - name: Build the Rust core
+              if: steps.setup.outputs.configured == 'true' && steps.toolchain.outputs.ready == 'true'
+              run: bun run core:apple
+            - name: Archive, sign and upload
+              if: steps.setup.outputs.configured == 'true' && steps.toolchain.outputs.ready == 'true'
+              env:
+                  DEVELOPMENT_TEAM: ${{ vars.APPLE_TEAM_ID }}
+                  KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+                  ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+                  ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+                  UPLOAD: ${{ needs.release.outputs.action == 'upload' && '1' || '0' }}
+              run: |
+                  umask 077
+                  export ASC_KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
+                  trap 'rm -f "$ASC_KEY_PATH"' EXIT
+                  printf '%s\n' "$KEY_P8" > "$ASC_KEY_PATH"
+                  unset KEY_P8
+                  apps/ios/scripts/archive.sh
+
+    # App Review: this tag's build, under the version made or found for it, with What's New.
+    # dry-run reads the same things and says what submit would do.
+    submit:
+        name: App Review
+        needs: release
+        if: needs.release.outputs.action == 'submit' || needs.release.outputs.action == 'dry-run'
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+        environment: app-store
+        permissions:
+            contents: read
+        steps:
+            - uses: actions/checkout@v7
+              with:
+                  ref: refs/tags/${{ needs.release.outputs.tag }}
+                  fetch-depth: 0
+                  persist-credentials: false
+            - uses: oven-sh/setup-bun@v2
+            - name: Submit for review
+              env:
+                  KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+                  ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+                  ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+                  VERSION: ${{ needs.release.outputs.version }}
+                  WHATS_NEW: ${{ inputs.whats-new }}
+                  BUILD_OVERRIDE: ${{ inputs.build }}
+                  DRY_RUN: ${{ needs.release.outputs.action == 'dry-run' && '1' || '0' }}
+              run: |
+                  if [[ -z "$KEY_P8" || -z "$ASC_KEY_ID" || -z "$ASC_ISSUER_ID" ]]; then
+                      echo "::error title=App Store not set up::The app-store environment needs ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_P8 (docs/release/apple.md)."
+                      exit 1
+                  fi
+                  umask 077
+                  printf '%s\n' "$KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
+                  trap 'rm -f "$RUNNER_TEMP/AuthKey.p8"' EXIT
+                  # The build number archive.sh uploaded for this tag, or the re-upload's when one is given.
+                  if [[ -n "$BUILD_OVERRIDE" ]]; then
+                      if [[ ! "$BUILD_OVERRIDE" =~ ^[0-9]+$ ]]; then
+                          echo "::error title=Not a build number::build is '$BUILD_OVERRIDE'; give the number alone, as HUSHOS_BUILD_NUMBER was."
+                          exit 1
+                      fi
+                      BUILD=$BUILD_OVERRIDE
+                  else
+                      BUILD=$(scripts/build-number.sh --store)
+                  fi
+                  BUILD=$BUILD ASC_KEY_PATH="$RUNNER_TEMP/AuthKey.p8" bun apps/ios/scripts/submit-review.ts

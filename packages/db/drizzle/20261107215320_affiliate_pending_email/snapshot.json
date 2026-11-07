@@ -1,0 +1,37 @@
+{
+    "type": "diff",
+    "version": "9",
+    "dialect": "postgres",
+    "id": "06196844-5470-4ccf-ac38-f7fc28e22503",
+    "prevIds": ["fc7e741b-e996-4753-97cb-643f4fa97eb9"],
+    "footprints": [
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "affiliates", "pending_email"],
+            "writes": [
+                "s|col|public.affiliates.pending_email",
+                "n|col|public.affiliates.pending_email",
+                "e|col|public.affiliates.pending_email"
+            ],
+            "reads": ["n|tbl|public.affiliates", "n|sch|public"]
+        }
+    ],
+    "deltas": [
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "affiliates",
+                "name": "pending_email",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        }
+    ]
+}

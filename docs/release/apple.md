@@ -6,14 +6,9 @@ Click by click, for HushOS, Inc. Requirements were checked on Apple's own pages 
 
 ## 0. Where things stand
 
-- **D-U-N-S: applied, waiting for D&B to issue it.** Apple says D&B takes up to 5 business days (paying to expedite doesn't help), then up to 2 more business days for Apple to receive the record. If two weeks pass, email D&B (https://developer.apple.com/help/account/membership/D-U-N-S/).
-- **While you wait, do these** (none needs the number):
-    1. The Apple Account with two-factor authentication (section 2).
-    2. A public support page and a business address and phone you're happy to publish (checklist.md, "Owner decisions"). Apple needs them for the Support URL and, in the EU, for trader status.
-    3. The demo accounts for App Review on hushos.com (section 9).
-    4. The app changes in checklist.md (privacy policy link, plan buttons, privacy manifest, iPad decision). Without them the first submission is rejected or the upload refused.
-    5. Screenshots (`scripts/store-screenshots.sh ios`), store copy (store-listing.md), privacy answers (privacy-answers.md).
-- **Only after the number is issued:** sections 1, 3 and everything after.
+- **Done:** HushOS, Inc. is enrolled (Team ID `9T67GJ663Z`), and the app is live on the App Store.
+- **Sections 1 to 6** were one-time setup, kept as a reference.
+- **For a release**, sections 7 (build and upload) and 15 (the version page) are the ones that still apply. docs/release/README.md has the short version.
 
 ## 1. Check the D-U-N-S number is live and matched
 
@@ -121,6 +116,32 @@ Nothing is edited, so there is nothing to commit afterwards.
 From Xcode instead: `bun run ios:project`, `bun run ios:open`, set the team on all five targets (or put `DEVELOPMENT_TEAM` in `project.yml`, signing.md), choose **Any iOS Device (arm64)**, **Product > Archive**. Then in the Organizer: **Distribute App > App Store Connect > Upload**.
 
 After the upload, App Store Connect > **TestFlight** shows the build as **Processing** (usually minutes, sometimes an hour), then asks about encryption, unless the Info.plist answers it (section 8).
+
+### From a release, in CI
+
+`.github/workflows/ios-release.yml` does this on every published release, on a macOS runner: the **ipa** job attaches the unsigned sideload IPA to the GitHub release (`apps/ios/scripts/release-ipa.sh`), and the **app-store** job runs `archive.sh` and uploads the build. App Review stays a step a person takes, from the tag, once the TestFlight build has been checked:
+
+```sh
+gh workflow run ios-release.yml --ref vX.Y.Z -f action=submit -f whats-new="Make your account in the app. …"
+```
+
+`apps/ios/scripts/submit-review.ts` waits for the build to finish processing, makes the App Store version if there isn't one (released automatically once approved), writes What's New on each of its languages, attaches the tag's build and submits it. It stops, changing nothing, while another version is in review. `-f action=dry-run` archives and exports without uploading and reads what a submit would do; `-f action=ipa` rebuilds only the IPA.
+
+The App Store jobs run in the **app-store** environment, which only `v*` tags may use, with `APPLE_TEAM_ID` as a variable. They need an App Store Connect API key:
+
+1. App Store Connect > **Users and Access** > **Integrations** > **App Store Connect API** > **Team Keys** > **+**: name it `GitHub release`, access **Admin** (Xcode creates the distribution certificate and profiles with it; Apple manages the certificate, so nothing about signing is kept in CI). Download the `.p8`: Apple offers it once.
+2. Note the **Key ID** beside it and the **Issuer ID** above the list.
+3. Put the three in the environment, from a checkout:
+
+    ```sh
+    gh secret set ASC_KEY_ID --env app-store --body <Key ID>
+    gh secret set ASC_ISSUER_ID --env app-store --body <Issuer ID>
+    gh secret set ASC_KEY_P8 --env app-store < AuthKey_<Key ID>.p8
+    ```
+
+    then delete the downloaded file. Until all three are set the app-store job says what is missing and uploads nothing; the IPA is attached either way.
+
+The build jobs need the Xcode `project.yml` names (`options.xcodeVersion`, by major version): the app uses that SDK's APIs. GitHub's macOS images trail Xcode releases, and a new major Xcode has come with the next macOS image, so for a while after one ships the runner may not have it. Then the ipa and app-store jobs say so and build nothing, and both are done on a Mac as before (`bun run ios:release-ipa vX.Y.Z`; `git checkout vX.Y.Z` and `bun run ios:archive`); submit needs no Xcode and works either way. When an image with it appears, move `runs-on` in ios-release.yml to it.
 
 ## 8. Encryption and export compliance: decide before the first upload
 
