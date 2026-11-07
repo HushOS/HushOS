@@ -18,8 +18,12 @@ runs:
           run: |
               major=$(sed -n "s/^[[:space:]]*xcodeVersion: '\{0,1\}\([0-9]*\).*/\1/p" apps/ios/project.yml)
               [[ -n "$major" ]] || { echo "::error::No xcodeVersion in apps/ios/project.yml"; exit 1; }
-              xcode=$(ls -d /Applications/Xcode_"$major"*.app 2> /dev/null | sort -V | tail -1)
-              [[ -n "$xcode" ]] || { echo "::error::This runner has no Xcode $major: $(ls -d /Applications/Xcode_*.app | xargs -n1 basename | tr '\n' ' ')"; exit 1; }
+              shopt -s nullglob
+              all=(/Applications/Xcode_*.app)
+              matching=(/Applications/Xcode_"$major".*.app /Applications/Xcode_"$major".app)
+              echo "Xcodes on this runner: ${all[*]##*/}"
+              (( ${#matching[@]} )) || { echo "::error::This runner has no Xcode $major (it has: ${all[*]##*/})"; exit 1; }
+              xcode=$(printf '%s\n' "${matching[@]}" | sort -V | tail -1)
               sudo xcode-select -s "$xcode/Contents/Developer"
               xcodebuild -version
         - name: Rust iOS targets and XcodeGen

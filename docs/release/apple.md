@@ -122,6 +122,30 @@ From Xcode instead: `bun run ios:project`, `bun run ios:open`, set the team on a
 
 After the upload, App Store Connect > **TestFlight** shows the build as **Processing** (usually minutes, sometimes an hour), then asks about encryption, unless the Info.plist answers it (section 8).
 
+### From a release, in CI
+
+`.github/workflows/ios-release.yml` does this on every published release, on a macOS runner: the **ipa** job attaches the unsigned sideload IPA to the GitHub release (`apps/ios/scripts/release-ipa.sh`), and the **app-store** job runs `archive.sh` and uploads the build. App Review stays a step a person takes, from the tag, once the TestFlight build has been checked:
+
+```sh
+gh workflow run ios-release.yml --ref vX.Y.Z -f action=submit -f whats-new="Make your account in the app. …"
+```
+
+`apps/ios/scripts/submit-review.ts` waits for the build to finish processing, makes the App Store version if there isn't one (released automatically once approved), writes What's New on each of its languages, attaches the tag's build and submits it. It stops, changing nothing, while another version is in review. `-f action=dry-run` archives and exports without uploading and reads what a submit would do; `-f action=ipa` rebuilds only the IPA.
+
+The App Store jobs run in the **app-store** environment, which only `v*` tags may use, with `APPLE_TEAM_ID` as a variable. They need an App Store Connect API key:
+
+1. App Store Connect > **Users and Access** > **Integrations** > **App Store Connect API** > **Team Keys** > **+**: name it `GitHub release`, access **Admin** (Xcode creates the distribution certificate and profiles with it; Apple manages the certificate, so nothing about signing is kept in CI). Download the `.p8`: Apple offers it once.
+2. Note the **Key ID** beside it and the **Issuer ID** above the list.
+3. Put the three in the environment, from a checkout:
+
+   ```sh
+   gh secret set ASC_KEY_ID --env app-store --body <Key ID>
+   gh secret set ASC_ISSUER_ID --env app-store --body <Issuer ID>
+   gh secret set ASC_KEY_P8 --env app-store < AuthKey_<Key ID>.p8
+   ```
+
+   then delete the downloaded file. Until all three are set the app-store job says what is missing and uploads nothing; the IPA is attached either way.
+
 ## 8. Encryption and export compliance: decide before the first upload
 
 HushOS encrypts files itself, with standard published algorithms (XChaCha20-Poly1305, X25519, ML-KEM-768, Ed25519, Argon2id, OPAQUE) implemented in the app's Rust core, not with the operating system's encryption. What Apple says (checked 2026-10-05):
