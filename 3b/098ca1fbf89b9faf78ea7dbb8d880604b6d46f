@@ -1,0 +1,47 @@
+AGENTS.md
+  s_566b8e0c4467a4::t_92949b76d5b94c 25
+CONTRIBUTING.md
+  s_566b8e0c4467a4::t_4dd77e00f10f3a 281-282,453
+apps/web/src/lib/affiliate-routes.test.ts
+  s_566b8e0c4467a4::t_62930ea3e48f68 2-9
+apps/web/src/lib/api.server.ts
+  s_566b8e0c4467a4::t_ccbc1d42094bb0 4-5,7,9,13-25,37-42
+apps/web/src/lib/api/admin.server.ts
+  s_566b8e0c4467a4::t_72fc9bbe3afe9f 1-328
+apps/web/src/lib/api/auth.server.ts
+  s_566b8e0c4467a4::t_033ea5eeb3276d 1-434
+apps/web/src/lib/api/billing.server.ts
+  s_566b8e0c4467a4::t_8e1434a5745bee 1-268
+apps/web/src/lib/api/drive.server.ts
+  s_566b8e0c4467a4::t_5fdaebc6496515 1-860
+apps/web/src/lib/api/groups.server.ts
+  s_566b8e0c4467a4::t_e3916e5d4b58f4 1-419
+apps/web/src/lib/api/shared.server.ts
+  s_566b8e0c4467a4::t_6675a6351218ca 1-720
+apps/web/src/lib/api/system.server.ts
+  s_566b8e0c4467a4::t_759d36447ac5b6 1-20
+apps/web/src/lib/auth-log-routes.test.ts
+  s_566b8e0c4467a4::t_ab727fb95ada5f 3-10
+apps/web/src/lib/group-log-routes.test.ts
+  s_566b8e0c4467a4::t_1c40c1896e1b2f 3-10
+apps/web/src/lib/group-write-floor.test.ts
+  s_566b8e0c4467a4::t_29f09a674c71d0 8-15,86
+apps/web/src/lib/signup-intent.test.ts
+  s_566b8e0c4467a4::t_0d3649cad9ed90 5-12
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3b098ca1fbf89b9faf78ea7dbb8d880604b6d46f",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
