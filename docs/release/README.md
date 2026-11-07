@@ -1,6 +1,6 @@
 # Releasing the HushOS apps
 
-Both apps are live: the iPhone app on the App Store and the Android app on Google Play, since 1.0 (November 2026).
+Both apps are live: the Android app on Google Play since October 2026, and the iPhone app on the App Store since 1.0 (November 2026).
 
 - **Each release** follows the steps below.
 - **The first submission** (enrolment, the app records, review) is done. apple.md, google.md and checklist.md keep it as a reference, for a new app or a second account.
@@ -18,7 +18,7 @@ Both apps are live: the iPhone app on the App Store and the Android app on Googl
 
     ```sh
     git checkout vX.Y.Z
-    bun run ios:archive                # uploads to App Store Connect
+    DEVELOPMENT_TEAM=9T67GJ663Z bun run ios:archive   # uploads to App Store Connect
     bun run ios:release-ipa vX.Y.Z     # the unsigned IPA on the GitHub release
     ```
 
@@ -28,7 +28,7 @@ Both apps are live: the iPhone app on the App Store and the Android app on Googl
 
 | Document                                 | What it's for                                                                                                                                                 |
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [checklist.md](checklist.md)             | The single list to finish before submitting. **Start here**: it lists the decisions only you can make and the app changes that block submission.              |
+| [checklist.md](checklist.md)             | The list for the first submission, done; kept as a reference.                                                                                                 |
 | [apple.md](apple.md)                     | Apple, click by click: enrollment, signing, App Store Connect, TestFlight, review.                                                                            |
 | [google.md](google.md)                   | Google Play, click by click: developer account, app content, internal testing, production.                                                                    |
 | [signing.md](signing.md)                 | Certificates, bundle IDs, the app group, the Android upload key, and where the Team ID and fingerprints go.                                                   |

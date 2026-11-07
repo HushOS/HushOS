@@ -10,17 +10,37 @@ What the Alpine design board (`apps/design`, removed after the redesign; it is i
 
 ## Waiting for a decision
 
-### 1. Create an account in the phone apps
-
-A welcome screen with Create account and Sign in. The steps and words are the web's: email, the verification link (which opens the app through its app links), name and password, then the recovery phrase with Save the kit and a check of three words. Today the apps open on sign in and send new people to the web.
-
-Open: the web's consent checkboxes and plan choice need a phone form; the verification link must open the app on the phone that asked and the web anywhere else.
-
 ### 2. Invite by email
 
 Sharing with someone who has no HushOS account: they get an email, create an account, and the share completes once their keys exist. People already on HushOS are added at once, with "Check it's them" as a quiet later step in Contacts.
 
 Open: the share has to wait, sealed, for keys that don't exist yet, so the server holds an invitation, not a share; the sharer still checks the twelve words afterwards. Today adding by email only finds existing accounts and no email is sent.
+
+### 5. Home screen widgets
+
+Recent and Storage, on both platforms.
+
+Open: file names on the home screen show what is private to anyone holding the phone; Storage alone may be the only widget worth having.
+
+### 7. Team plan
+
+One bill for the whole team, folders that belong to the team rather than to whoever made them, and one place to add and remove people. The pricing page's Business tab and the For teams page show it as "coming soon", with what teams can do today beside it and "Talk to us".
+
+Open: a new kind of workspace, admin roles, and handing over keys when someone leaves.
+
+### 8. Desktop apps
+
+Listed under "Coming soon" on the For teams page. There is no plan behind it yet.
+
+## Shipped
+
+Kept for the record, as they were written before they shipped.
+
+### 1. Create an account in the phone apps
+
+A welcome screen with Create account and Sign in. The steps and words are the web's: email, the verification link (which opens the app through its app links), name and password, then the recovery phrase with Save the kit and a check of three words. Today the apps open on sign in and send new people to the web.
+
+Open: the web's consent checkboxes and plan choice need a phone form; the verification link must open the app on the phone that asked and the web anywhere else.
 
 ### 3. Transfer notifications
 
@@ -32,27 +52,11 @@ An iOS share extension and an Android share target, so a photo, a scan or a Mail
 
 Open: the extension needs the vault (keys, upload sealing) outside the app process, through the app group on iOS.
 
-### 5. Home screen widgets
-
-Recent and Storage, on both platforms.
-
-Open: file names on the home screen show what is private to anyone holding the phone; Storage alone may be the only widget worth having.
-
 ### 6. Family plan
 
 One bill and a private drive for each person in the household. Pricing shows it as a "coming soon" line with no price and no button.
 
 Open: seats and invitations in Polar billing; shares most of its work with the team plan.
-
-### 7. Team plan
-
-One bill for the whole team, folders that belong to the team rather than to whoever made them, and one place to add and remove people. The pricing page's Business tab and the For teams page show it as "coming soon", with what teams can do today beside it and "Talk to us".
-
-Open: a new kind of workspace, admin roles, and handing over keys when someone leaves.
-
-### 8. Desktop apps
-
-Listed under "Coming soon" on the For teams page. There is no plan behind it yet.
 
 ### 9. Account recovery in the phone apps
 

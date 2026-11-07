@@ -1,6 +1,6 @@
 # Pre-submission checklist
 
-The list for the **first** submission to both stores, which is done: both apps are live since 1.0. It stays as a reference for a new app or a second account. Items left unticked are ones still open on production, not blockers for a release.
+The list for the **first** submission to both stores, which is done: the Android app is live since October 2026 and the iPhone app since 1.0. It stays as a reference for a new app or a second account. Items left unticked are ones still open on production, not blockers for a release.
 
 One list for both stores. Tick everything before pressing Submit (Apple) or Send changes for review (Google). Items marked **blocker** will get the upload refused or the review rejected; they were found in the code on 2026-10-05.
 
@@ -11,7 +11,7 @@ One list for both stores. Tick everything before pressing Submit (Apple) or Send
 - [x] **Export compliance.** Declared 2026-11-05 (standard algorithms, no France); on 2026-11-07 App Store Connect's result said to set `ITSAppUsesNonExemptEncryption = false`, which the app does from the release after 1.1.1 (apple.md, section 8). France is decided (2026-11-05): left out of the first release, so no French encryption declaration is needed yet.
 - [x] **Privacy answers.** Decided 2026-11-05: encrypted photos and files are not collected, as Proton Drive's label also treats them; account data the server can read is declared as collected and linked (privacy-answers.md).
 - [x] **Version.** `1.0.0`, shipped: the first release pull request proposes it (CONTRIBUTING.md, Releasing). Build numbers are the commit count on main.
-- [ ] **App Store name.** `HushOS: Encrypted Drive`, or `HushOS Drive`, if available.
+- [x] **App Store name.** `HushOS: Encrypted Cloud Drive`.
 
 ## App changes before the first submission
 
