@@ -1,0 +1,29 @@
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_7d3a471ca085a7 1192-1195,1198,1202
+apps/android/app/src/main/kotlin/com/hushos/app/ui/SignInScreen.kt
+  s_566b8e0c4467a4::t_e89ac18e427aae 141-146
+apps/android/app/src/main/kotlin/com/hushos/app/ui/SignupScreen.kt
+  s_566b8e0c4467a4::t_bd96e914412415 41,105-113,120
+apps/ios/App/AccountView.swift
+  s_566b8e0c4467a4::t_a4767d4455147c 1090,1104-1106
+apps/ios/App/AppModel.swift
+  s_566b8e0c4467a4::t_551447f0a29782 96,118-119,130-132,373-375
+apps/ios/App/SignupView.swift
+  s_566b8e0c4467a4::t_fe8771c12b3484 20-21,33,39,63-76,98-105,107-111,113-114,224,244-249,255-256
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c5461e2b60c3800d1ccf240d6f6bc462ca75f648",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
