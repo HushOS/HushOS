@@ -48,7 +48,7 @@ export type RoadmapSection = {
 };
 
 /* The day this file last changed what the page says (YYYY-MM-DD). */
-export const updated = '2026-11-05';
+export const updated = '2026-11-07';
 
 export const sections: RoadmapSection[] = [
     {
@@ -57,13 +57,30 @@ export const sections: RoadmapSection[] = [
         summary: 'Live at hushos.com, and in a self-hosted copy that runs the latest code.',
         items: [
             {
+                id: 'phone-apps',
+                status: 'shipped',
+                month: 'November 2026',
+                area: 'Apps',
+                title: 'The iPhone app on the App Store',
+                body: 'The same folders, sharing, links, families, files kept on the phone and HushOS in the phone’s Files app as the Android app, with Scan document from version 1.1. For iPhone, on iOS 26 and later.',
+                links: [{ kind: 'blog', slug: 'phone-apps', label: 'Read the announcement' }],
+            },
+            {
+                id: 'families-on-phones',
+                status: 'shipped',
+                month: 'November 2026',
+                area: 'Apps',
+                title: 'Families on iPhone',
+                body: 'Family folders in the iPhone app, with joining, inviting and letting people in, as in the Android app.',
+            },
+            {
                 id: 'families',
                 status: 'shipped',
                 // The month families are switched on at hushos.com, set when this is merged.
                 month: 'November 2026',
                 area: 'Families',
                 title: 'Family plans',
-                body: 'One plan’s storage for up to 20 people, covering everyone’s own files and the family folders. Someone who manages the family lets each newcomer in, and anyone in it can check the others with twelve words. On the web and in the Android app.',
+                body: 'One plan’s storage for up to 20 people, covering everyone’s own files and the family folders. Someone who manages the family lets each newcomer in, and anyone in it can check the others with twelve words. On the web and in the iPhone and Android apps.',
                 links: [{ kind: 'blog', slug: 'family-plans', label: 'Read the announcement' }],
             },
             {
@@ -169,20 +186,6 @@ export const sections: RoadmapSection[] = [
         title: 'Now',
         summary: 'Being built, or built and being finished.',
         items: [
-            {
-                id: 'phone-apps',
-                status: 'now',
-                area: 'Apps',
-                title: 'The iPhone app on the App Store',
-                body: 'Built, with the same folders, sharing, links, offline files and Files app as the Android app, and being prepared for the App Store.',
-            },
-            {
-                id: 'families-on-phones',
-                status: 'now',
-                area: 'Apps',
-                title: 'Families on iPhone',
-                body: 'Family folders in the iPhone app, with joining, inviting and letting people in, as in the Android app. It comes with the app’s App Store release.',
-            },
             {
                 id: 'releases',
                 status: 'now',

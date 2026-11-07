@@ -683,15 +683,17 @@ function LeaveDialog({
 }
 
 /*
- * Under Members, where it helps them: the family can use the Android app (StoreLinks), shown only
- * where this server names the store listings. One quiet line, tucked under the list it follows.
+ * Under Members, where it helps them: the family can use the phone apps (StoreLinks), shown only
+ * where this server names their store listings. One quiet line, tucked under the list it follows.
  */
 function FamilyApps() {
-    const { playStoreUrl } = useRouteContext({ from: '__root__' });
-    if (!playStoreUrl) return null;
+    const { playStoreUrl, appStoreUrl } = useRouteContext({ from: '__root__' });
+    if (!playStoreUrl && !appStoreUrl) return null;
+    const phones =
+        playStoreUrl && appStoreUrl ? 'Android and iPhone' : appStoreUrl ? 'iPhone' : 'Android';
     return (
         <div className="-mt-5 flex flex-col gap-7">
-            <p className="text-sm text-muted-foreground">Your family can use HushOS on Android.</p>
+            <p className="text-sm text-muted-foreground">Your family can use HushOS on {phones}.</p>
             <StoreLinks />
         </div>
     );
