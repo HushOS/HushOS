@@ -7,8 +7,8 @@
 #   bun dev                                   # the debug apps talk to http://localhost:5173
 #   scripts/site-phone-shots.sh ios           # or: android, or both (the default)
 #
-# Its own devices, never the ones you develop on: an iPhone 18 Pro simulator ("HushOS Site 6.3",
-# 402x874 pt, captured at 3x) and a Pixel 8 Pro emulator ("HushOS_Site", 448x997 dp at 3x, on
+# Its own devices, never the ones you develop on: an iPhone 18 Pro Max simulator ("HushOS Site 6.9",
+# 440x956 pt, captured at 3x, the Pixel's size so the two pictures match) and a Pixel 8 Pro emulator ("HushOS_Site", 448x997 dp at 3x, on
 # port 5562). It asks you to sign in once per device (the password goes on the clipboard, never on
 # screen), then takes every picture itself. Times read mid-morning (e2e/morning-zone.ts).
 # Output: apps/web/src/screenshots/{ios,android}-{home,folder}[-dark][@1.5x|@1x].png.
@@ -17,7 +17,7 @@
 #          say) rebuilds the Android debug app to talk to it; on iOS, set the sign-in sheet's
 #          Self-hosting address to http://localhost:<port> before signing in.
 #   DB     its database (default hushos), in the hushos-db-1 container.
-#   SIM    another iPhone 18 Pro simulator's name, if "HushOS Site 6.3" can't be used.
+#   SIM    another iPhone 18 Pro Max simulator's name, if "HushOS Site 6.9" can't be used.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
@@ -73,15 +73,15 @@ scales() { # capture name width2x height2x
 }
 
 ios() {
-    local name="${SIM:-HushOS Site 6.3}" udid app="apps/ios/DerivedData/Build/Products/Debug-iphonesimulator/HushOS.app"
+    local name="${SIM:-HushOS Site 6.9}" udid app="apps/ios/DerivedData/Build/Products/Debug-iphonesimulator/HushOS.app"
     udid=$(xcrun simctl list devices available | grep "$name (" | grep -oE '[0-9A-F-]{36}' | head -1 || true)
     if [[ -z "$udid" ]]; then
-        # The newest runtime that has the iPhone 18 Pro (a newer one may not).
+        # The newest runtime that has the iPhone 18 Pro Max (a newer one may not).
         local runtime
         for runtime in $(xcrun simctl list runtimes available | grep -oE 'com\.apple\.CoreSimulator\.SimRuntime\.iOS-[0-9-]+' | sort -rV); do
-            udid=$(xcrun simctl create "$name" com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro "$runtime" 2>/dev/null) && break
+            udid=$(xcrun simctl create "$name" com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro-Max "$runtime" 2>/dev/null) && break
         done
-        [[ -n "$udid" ]] || fail "Couldn't create an iPhone 18 Pro simulator."
+        [[ -n "$udid" ]] || fail "Couldn't create an iPhone 18 Pro Max simulator."
     fi
     [[ -d "$app" ]] || bun run ios:build
     xcrun simctl boot "$udid" 2>/dev/null || true
@@ -115,7 +115,7 @@ ios() {
         fi
         sleep 2
         steady "$TMP/$1.png" ios_frame
-        scales "$TMP/$1.png" "$1" 804 1748
+        scales "$TMP/$1.png" "$1" 880 1912
     }
     for theme in light dark; do
         local suffix=""
