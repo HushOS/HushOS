@@ -1,18 +1,15 @@
-import { Link, useRouteContext } from '@tanstack/react-router';
+import { Link } from '@tanstack/react-router';
 import { ArrowRightIcon } from 'lucide-react';
-import { useEffect } from 'react';
 import { Phones } from '@/components/screenshot';
 import { H1, SitePage } from '@/components/site';
 import { SiteFooter, SiteHeader } from '@/components/site-header';
 import { StoreLinks } from '@/components/store-links';
 
 /*
- * The share links for the phone apps: /ios and /android each send a visitor on to their store,
- * and /apps sends a phone to its own store and shows a computer both badges. They exist for
- * their card: a link straight to a store shows the store's, which messengers crop. The page is
- * HushOS's own, with our card (cardMeta), so a link preview reads it; crawlers run no script,
- * so the move to the store, made here in the browser, never reaches them. Without script the
- * page still has the badge to tap.
+ * The share links for the phone apps. /apps is a page: both badges, for the visitor to tap.
+ * /ios and /android send a person straight to their store from the server (appStoreRedirect),
+ * and show this page, with our card (cardMeta), only to link previews: a link straight to a
+ * store shows the store's card, which messengers crop.
  */
 
 export type AppStore = 'appStore' | 'play';
@@ -32,26 +29,7 @@ const words = {
     },
 } as const;
 
-/* Where this visitor should go: the page's own store, or on /apps the store for their phone. */
-function destination(
-    store: AppStore | null,
-    urls: { appStore: string | null; play: string | null },
-) {
-    if (store) return urls[store];
-    const agent = navigator.userAgent;
-    // iPadOS reports a Mac, and the app is for iPhone: an iPad stays on the page with both badges.
-    if (/iPhone|iPod/.test(agent)) return urls.appStore;
-    if (/Android/.test(agent)) return urls.play;
-    return null;
-}
-
 export function AppLinksPage({ only }: { only: AppStore | null }) {
-    const { appStoreUrl, playStoreUrl } = useRouteContext({ from: '__root__' });
-    useEffect(() => {
-        const url = destination(only, { appStore: appStoreUrl, play: playStoreUrl });
-        // Replaced, not pushed: Back from the store returns to where the link was tapped.
-        if (url) window.location.replace(url);
-    }, [only, appStoreUrl, playStoreUrl]);
     const { title, body } = words[only ?? 'apps'];
     return (
         <SitePage>
