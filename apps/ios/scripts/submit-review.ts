@@ -123,28 +123,34 @@ const buildId = uploaded.id;
 console.log(`Build ${version} (${build}) is ready.`);
 
 // One submission at a time: a version already in review is for a person to withdraw or wait for.
-const versions = await list(`/v1/apps/${app.id}/appStoreVersions?filter[platform]=IOS&limit=20`);
+const versions = await list(`/v1/apps/${app.id}/appStoreVersions?filter[platform]=IOS&limit=200`);
+// appVersionState, or the older appStoreState where Apple sends only that; their names differ.
+const state = (v: Resource) => text(v, 'appVersionState') || text(v, 'appStoreState');
 const IN_REVIEW = [
     'WAITING_FOR_REVIEW',
     'IN_REVIEW',
+    'ACCEPTED',
+    'PENDING_APPLE_RELEASE',
     'PENDING_DEVELOPER_RELEASE',
     'PROCESSING_FOR_DISTRIBUTION',
+    'PROCESSING_FOR_APP_STORE',
 ];
-const busy = versions.find((v) => IN_REVIEW.includes(text(v, 'appStoreState')));
+const busy = versions.find((v) => IN_REVIEW.includes(state(v)));
 if (busy)
     throw new Error(
-        `Version ${text(busy, 'versionString')} is ${text(busy, 'appStoreState')}; withdraw it or wait before submitting ${version}.`,
+        `Version ${text(busy, 'versionString')} is ${state(busy)}; withdraw it or wait before submitting ${version}.`,
     );
 
 let target = versions.find((v) => text(v, 'versionString') === version);
-if (target && ['READY_FOR_SALE', 'READY_FOR_DISTRIBUTION'].includes(text(target, 'appStoreState')))
+if (target && ['READY_FOR_SALE', 'READY_FOR_DISTRIBUTION'].includes(state(target)))
     throw new Error(`Version ${version} is already released.`);
 
-// A draft submission of this app's (one left from App Store Connect, say) is reused. It may already
+// A draft submission of this app's (one left from App Store Connect, say), or the one App Review
+// sent back (UNRESOLVED_ISSUES, resubmitted with the new build), is reused. It may already
 // hold other things (a product page, an event, another version), and submitting it would send those
 // too, so it may hold this version and nothing else. Checked before anything is changed.
 const [draft] = await list(
-    `/v1/reviewSubmissions?filter[app]=${app.id}&filter[platform]=IOS&filter[state]=READY_FOR_REVIEW&limit=1`,
+    `/v1/reviewSubmissions?filter[app]=${app.id}&filter[platform]=IOS&filter[state]=READY_FOR_REVIEW,UNRESOLVED_ISSUES&limit=1`,
 );
 const draftItems = draft
     ? await list(`/v1/reviewSubmissions/${draft.id}/items?include=appStoreVersion`)

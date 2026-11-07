@@ -153,8 +153,6 @@ jobs:
                       echo "configured=false" >> "$GITHUB_OUTPUT"
                       exit 0
                   fi
-                  umask 077
-                  printf '%s\n' "$KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
                   echo "configured=true" >> "$GITHUB_OUTPUT"
             - if: steps.setup.outputs.configured == 'true'
               uses: actions/checkout@v7
@@ -165,18 +163,26 @@ jobs:
             - if: steps.setup.outputs.configured == 'true'
               id: toolchain
               uses: ./.github/actions/ios-toolchain
+            # The Rust core first, with no key anywhere: its build scripts and proc-macros run
+            # third-party code. archive.sh skips the core when the xcframework is there.
+            - name: Build the Rust core
+              if: steps.setup.outputs.configured == 'true' && steps.toolchain.outputs.ready == 'true'
+              run: bun run core:apple
             - name: Archive, sign and upload
               if: steps.setup.outputs.configured == 'true' && steps.toolchain.outputs.ready == 'true'
               env:
                   DEVELOPMENT_TEAM: ${{ vars.APPLE_TEAM_ID }}
-                  ASC_KEY_PATH: ${{ runner.temp }}/AuthKey.p8
+                  KEY_P8: ${{ secrets.ASC_KEY_P8 }}
                   ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
                   ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
                   UPLOAD: ${{ needs.release.outputs.action == 'upload' && '1' || '0' }}
-              run: apps/ios/scripts/archive.sh
-            - name: Forget the key
-              if: always()
-              run: rm -f "$RUNNER_TEMP/AuthKey.p8"
+              run: |
+                  umask 077
+                  export ASC_KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
+                  trap 'rm -f "$ASC_KEY_PATH"' EXIT
+                  printf '%s\n' "$KEY_P8" > "$ASC_KEY_PATH"
+                  unset KEY_P8
+                  apps/ios/scripts/archive.sh
 
     # App Review: this tag's build, under the version made or found for it, with What's New.
     # dry-run reads the same things and says what submit would do.

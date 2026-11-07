@@ -29,7 +29,8 @@ runs:
               shopt -s nullglob
               all=(/Applications/Xcode_*.app)
               matching=()
-              for x in "${all[@]}"; do [[ "${x##*/}" =~ ^Xcode_${major}(\.|\.app$) ]] && matching+=("$x"); done
+              # Releases only: App Store Connect refuses an upload built with a beta Xcode.
+              for x in "${all[@]}"; do [[ "${x##*/}" =~ ^Xcode_${major}(\.|\.app$) && "${x##*/}" != *[Bb]eta* ]] && matching+=("$x"); done
               echo "Xcodes on this runner: ${all[*]##*/}"
               if (( ! ${#matching[@]} )); then
                   # GitHub's images trail Xcode releases; a new major version has come with the next macOS image.
