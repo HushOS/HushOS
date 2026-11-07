@@ -2,7 +2,7 @@
 
 This document attacks the group core in `docs/groups-design.md` and the company extensions in the build plan ("HushOS for Companies — Build Plan"). For each adversary it says what they want, what stops them, and what stays possible. It is part of Phase A's design gate: building starts when its open decisions (section 7) are settled and the design is changed where it says so.
 
-Revised on 14 October after the independent review in `docs/groups-crypto-review.md`, and on 15 October after `docs/pq-devices-crypto-review.md` and the fourth review of the group core (the hard warning only on the person's own conflicting marks; key versions a holder's claim; `checkNextSuccession`).
+Revised on 14 October after the independent review in `docs/archive/groups-crypto-review.md`, and on 15 October after `docs/archive/pq-devices-crypto-review.md` and the fourth review of the group core (the hard warning only on the person's own conflicting marks; key versions a holder's claim; `checkNextSuccession`).
 
 The standard is the one the rest of HushOS holds itself to: a server that turns hostile must not learn file contents, names or keys, and must not be able to make a member trust something false without a warning.
 

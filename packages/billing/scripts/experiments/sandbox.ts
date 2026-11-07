@@ -1,7 +1,7 @@
 import { createPolar } from '@polar-sh/sdk/2026-04';
 
 /*
- * Shared setup for the Polar group-billing experiments (docs/polar-group-billing-spike.md 6).
+ * Shared setup for the Polar group-billing experiments (docs/archive/polar-group-billing-spike.md 6).
  * Sandbox only: every script imports this first, and it refuses to build a client unless
  * POLAR_ENVIRONMENT is exactly "sandbox". The server URL is pinned rather than derived from
  * the environment name, so a typo cannot fall through to production. The token is read here

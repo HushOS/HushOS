@@ -2,7 +2,7 @@
 
 This document adds devices to HushOS accounts: a list of the devices signed in to an account, an optional rule that a new device must be approved by one of them, and push notifications for approvals, security notices, shares and family events. Device approval is what child accounts rely on at conversion (`docs/envelope-migrations.md` 7), and what company sign-in assumes for key unlock (the build plan's SSO layer).
 
-Revised on 15 October after the independent review in `docs/pq-devices-crypto-review.md`, and on 16 October for step 1 as built (section 12).
+Revised on 15 October after the independent review in `docs/archive/pq-devices-crypto-review.md`, and on 16 October for step 1 as built (section 12).
 
 Decisions settled with the owner (2026-10-15):
 
