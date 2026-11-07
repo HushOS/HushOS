@@ -73,7 +73,7 @@ function ContextMenuLabel({
         <ContextMenuPrimitive.GroupLabel
             data-slot="context-menu-label"
             data-inset={inset}
-            className={cn('eyebrow px-2 py-2 text-muted-foreground data-inset:pl-7', className)}
+            className={cn('px-2 py-2 text-[13px] text-muted-foreground data-inset:pl-7', className)}
             {...props}
         />
     );

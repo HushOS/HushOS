@@ -786,7 +786,7 @@ function Actions({ report }: { report: ReportView }) {
                             </p>
                             <label
                                 htmlFor={`${id}-authority`}
-                                className="eyebrow text-muted-foreground"
+                                className="text-[13px] font-semibold"
                             >
                                 Authority
                             </label>
@@ -799,7 +799,7 @@ function Actions({ report }: { report: ReportView }) {
                             />
                             <label
                                 htmlFor={`${id}-reference`}
-                                className="eyebrow text-muted-foreground"
+                                className="text-[13px] font-semibold"
                             >
                                 Their reference
                             </label>
