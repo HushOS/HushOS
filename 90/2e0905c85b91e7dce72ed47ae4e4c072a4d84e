@@ -1,0 +1,34 @@
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/MarkdownDocumentTests.swift
+  s_566b8e0c4467a4::t_6d33a05a6a5b49 124-168
+  s_566b8e0c4467a4::t_5a3a06686befae 169-171
+apps/android/app/src/test/kotlin/com/hushos/app/data/MarkdownDocumentTest.kt
+  s_566b8e0c4467a4::t_27670f6854f617 97-128
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_94e9c708379f6d 25
+apps/android/app/src/main/kotlin/com/hushos/app/data/MarkdownDocument.kt
+  s_566b8e0c4467a4::t_0f6d1830d1890f 73,75-81,97-99,108-162,198,311-312,325,345-349,355
+apps/android/app/src/main/kotlin/com/hushos/app/ui/MarkdownViewer.kt
+  s_566b8e0c4467a4::t_ee8a15821fde8f 46-47,113,115,148-149,158
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_d68879d9136b51 30
+apps/ios/App/MarkdownView.swift
+  s_566b8e0c4467a4::t_23ca7e3ba2e202 69,71
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/MarkdownDocument.swift
+  s_566b8e0c4467a4::t_cec0e31b0dc2cf 94-100,105-107,119-178,181,360-362,404-413,435-436
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "902e0905c85b91e7dce72ed47ae4e4c072a4d84e",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
