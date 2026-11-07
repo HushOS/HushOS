@@ -84,6 +84,7 @@ async function view(row: Awaited<ReturnType<typeof growthRepository.getAffiliate
         commissionBps: row.commissionBps,
         active: row.active,
         userId: row.userId,
+        pendingEmail: row.pendingEmail,
         notes: row.notes,
         providerDiscountId: row.providerDiscountId,
         createdAt: row.createdAt.toISOString(),
@@ -94,7 +95,9 @@ async function view(row: Awaited<ReturnType<typeof growthRepository.getAffiliate
 export async function getReferralSummary(userId: string): Promise<ReferralSummary> {
     const settings = referralSettings();
     const summary = await growthRepository.getReferralSummary(userId);
-    const affiliate = await growthRepository.getAffiliateForUser(userId);
+    // A creator enrolled under this account's email before it existed becomes its own here.
+    await growthRepository.linkPendingAffiliates(userId);
+    const affiliates = await growthRepository.listAffiliatesForUser(userId);
     return {
         code: summary.code,
         url: `${appEnv.APP_ORIGIN}/r/${summary.code}`,
@@ -111,7 +114,7 @@ export async function getReferralSummary(userId: string): Promise<ReferralSummar
             bonusBytes: settings.paidBonusBytes.toString(),
             capBytes: settings.paidCapBytes.toString(),
         },
-        affiliate: affiliate ? await view(affiliate) : null,
+        affiliates: await Promise.all(affiliates.map(view)),
     };
 }
 
@@ -213,6 +216,8 @@ export async function rememberCoupon(userId: string, code: string) {
 }
 
 export async function listAffiliates() {
+    // Pending emails whose accounts now exist are linked before the operator sees them.
+    await growthRepository.linkAllPendingAffiliates();
     const rows = await growthRepository.listAffiliates();
     return rows.map((row) => ({
         id: row.id,
@@ -226,6 +231,7 @@ export async function listAffiliates() {
         commissionBps: row.commissionBps,
         active: row.active,
         userId: row.userId,
+        pendingEmail: row.pendingEmail,
         notes: row.notes,
         providerDiscountId: row.providerDiscountId,
         createdAt: row.createdAt.toISOString(),
@@ -233,11 +239,19 @@ export async function listAffiliates() {
     })) satisfies AffiliateView[];
 }
 
-async function userIdForEmail(email: string | null | undefined) {
-    if (!email) return null;
-    const userId = await growthRepository.findUserIdByEmail(email.trim().toLowerCase());
-    if (!userId) throw new BillingError('No account has that email address.', 404);
-    return userId;
+/*
+ * The creator's account, from the email an operator gave: linked now when an
+ * account has it, else kept as pending and linked when that account signs up.
+ * The caller has checked the address's form (the API uses the auth rule).
+ */
+async function accountForEmail(
+    email: string | null | undefined,
+    executor?: growthRepository.Executor,
+) {
+    const normalized = email?.trim().toLowerCase();
+    if (!normalized) return { userId: null, pendingEmail: null };
+    const userId = await growthRepository.findUserIdByEmail(normalized, executor);
+    return userId ? { userId, pendingEmail: null } : { userId: null, pendingEmail: normalized };
 }
 
 function validate(input: AffiliateInput) {
@@ -275,7 +289,10 @@ function validate(input: AffiliateInput) {
  */
 export async function createAffiliate(input: AffiliateInput) {
     const { name, slug, code, durationMonths } = validate(input);
-    const userId = await userIdForEmail(input.userEmail);
+    // Before the provider: a refused handle must not leave a discount behind at Polar.
+    await assertHandleFree(slug, undefined, 'slug');
+    await assertHandleFree(code, undefined, 'code');
+    const account = await accountForEmail(input.userEmail);
     const providerDiscountId = await createProviderDiscount({
         name: `${name} (${code})`,
         code,
@@ -291,19 +308,52 @@ export async function createAffiliate(input: AffiliateInput) {
         duration: input.duration,
         durationMonths,
         commissionBps: input.commissionBps,
-        userId,
+        ...account,
         notes: input.notes?.trim() || null,
         providerDiscountId,
     });
     return view(row);
 }
 
-/* A slug or code is one handle: the offer page resolves either, so neither may be another affiliate's. */
-async function assertHandleFree(handle: string, id: string, what: 'slug' | 'code') {
-    const taken = await growthRepository.findAffiliateByHandle(handle);
-    if (taken && taken.id !== id)
+/*
+ * A slug or code is one handle: the offer page resolves either, so neither may
+ * be another affiliate's slug or code. `except` is the affiliate being edited,
+ * whose own handles are free to it. The admin form asks this as the operator
+ * types; saving asks again, and that answer is the one that counts.
+ */
+export async function isHandleFree(handle: string, except?: string) {
+    return handleFree(handle, except);
+}
+
+/* The same rule, inside the affiliate's lock: through its transaction. */
+async function handleFree(
+    handle: string,
+    except: string | undefined,
+    executor?: growthRepository.Executor,
+) {
+    return !(await growthRepository.findAffiliateByHandle(handle, except, executor));
+}
+
+async function assertHandleFree(
+    handle: string,
+    except: string | undefined,
+    what: 'slug' | 'code',
+    executor?: growthRepository.Executor,
+) {
+    if (!(await handleFree(handle, except, executor)))
         throw new BillingError(`That ${what} belongs to another affiliate.`);
 }
+
+/* What the enrolment form sets about the offer; a patch naming none of them leaves them alone. */
+const TERMS = [
+    'name',
+    'slug',
+    'code',
+    'percentOff',
+    'duration',
+    'durationMonths',
+    'commissionBps',
+] as const satisfies readonly (keyof AffiliateInput)[];
 
 /*
  * Edits an affiliate. Everything the enrolment form set can change; the code
@@ -314,52 +364,98 @@ export async function updateAffiliate(
     id: string,
     patch: Partial<AffiliateInput> & { active?: boolean },
 ) {
-    const row = await growthRepository.getAffiliate(id);
-    if (!row) throw new BillingError('That affiliate does not exist.', 404);
-    const merged: AffiliateInput = {
-        name: patch.name ?? row.name,
-        slug: patch.slug ?? row.slug,
-        code: patch.code ?? row.code,
-        percentOff: patch.percentOff ?? row.percentOff,
-        duration: patch.duration ?? row.duration,
-        durationMonths:
-            patch.durationMonths !== undefined
-                ? patch.durationMonths
-                : (patch.duration ?? row.duration) === 'repeating'
-                  ? row.durationMonths
-                  : null,
-        commissionBps: patch.commissionBps ?? row.commissionBps,
-    };
-    const { name, slug, code, durationMonths } = validate(merged);
-    if (slug !== row.slug) await assertHandleFree(slug, id, 'slug');
-    if (code !== row.code) await assertHandleFree(code, id, 'code');
-    const changes: Parameters<typeof growthRepository.updateAffiliate>[1] = {
-        name,
-        slug,
-        code,
-        percentOff: merged.percentOff,
-        duration: merged.duration,
-        durationMonths,
-        commissionBps: merged.commissionBps,
-    };
+    // Pause, unlink and notes name no term: they write their own columns only, outside
+    // the lock, and cannot put back terms a save changed while they ran.
+    if (!TERMS.some((key) => patch[key] !== undefined)) {
+        if (!(await growthRepository.getAffiliate(id)))
+            throw new BillingError('That affiliate does not exist.', 404);
+        return view(await growthRepository.updateAffiliate(id, await otherChanges(patch)));
+    }
+    // A change of terms holds the affiliate's lock from its read to its write, so the
+    // provider and the row end on the same terms whichever of two saves came first.
+    const row = await underAffiliateLock(id, async (tx) => {
+        const row = await growthRepository.getAffiliate(id, tx);
+        if (!row) throw new BillingError('That affiliate does not exist.', 404);
+        const merged: AffiliateInput = {
+            name: patch.name ?? row.name,
+            slug: patch.slug ?? row.slug,
+            code: patch.code ?? row.code,
+            percentOff: patch.percentOff ?? row.percentOff,
+            duration: patch.duration ?? row.duration,
+            durationMonths:
+                patch.durationMonths !== undefined
+                    ? patch.durationMonths
+                    : (patch.duration ?? row.duration) === 'repeating'
+                      ? row.durationMonths
+                      : null,
+            commissionBps: patch.commissionBps ?? row.commissionBps,
+        };
+        const { name, slug, code, durationMonths } = validate(merged);
+        if (slug !== row.slug) await assertHandleFree(slug, id, 'slug', tx);
+        if (code !== row.code) await assertHandleFree(code, id, 'code', tx);
+        const termsChanged =
+            name !== row.name ||
+            code !== row.code ||
+            merged.percentOff !== row.percentOff ||
+            merged.duration !== row.duration ||
+            durationMonths !== row.durationMonths;
+        if (termsChanged && row.providerDiscountId)
+            await updateProviderDiscount(row.providerDiscountId, {
+                name: `${name} (${code})`,
+                code,
+                percentOff: merged.percentOff,
+                duration: merged.duration,
+                durationMonths,
+            });
+        // The whole term set, as the provider was just sent it.
+        return growthRepository.updateAffiliate(
+            id,
+            {
+                name,
+                slug,
+                code,
+                percentOff: merged.percentOff,
+                duration: merged.duration,
+                durationMonths,
+                commissionBps: merged.commissionBps,
+                ...(await otherChanges(patch, tx)),
+            },
+            tx,
+        );
+    });
+    return view(row);
+}
+
+/*
+ * The affiliate's lock, for a change of terms or a removal. Every read inside
+ * goes through `tx`. A lock already held is a plain refusal, at once, to retry.
+ */
+async function underAffiliateLock<T>(
+    id: string,
+    run: Parameters<typeof growthRepository.withAffiliateLock<T>>[1],
+) {
+    try {
+        return await growthRepository.withAffiliateLock(id, run);
+    } catch (error) {
+        if (error instanceof growthRepository.AffiliateBusyError)
+            throw new BillingError('This affiliate is being changed. Try again in a moment.', 409, {
+                cause: error,
+            });
+        throw error;
+    }
+}
+
+/* The columns a patch sets besides the terms: notes, the account, and whether it is live. */
+async function otherChanges(
+    patch: Partial<AffiliateInput> & { active?: boolean },
+    executor?: growthRepository.Executor,
+) {
+    const changes: Parameters<typeof growthRepository.updateAffiliate>[1] = {};
     if (patch.notes !== undefined) changes.notes = patch.notes?.trim() || null;
-    if (patch.userEmail !== undefined) changes.userId = await userIdForEmail(patch.userEmail);
+    if (patch.userEmail !== undefined)
+        Object.assign(changes, await accountForEmail(patch.userEmail, executor));
     if (patch.active !== undefined) changes.active = patch.active;
-    const termsChanged =
-        name !== row.name ||
-        code !== row.code ||
-        merged.percentOff !== row.percentOff ||
-        merged.duration !== row.duration ||
-        durationMonths !== row.durationMonths;
-    if (termsChanged && row.providerDiscountId)
-        await updateProviderDiscount(row.providerDiscountId, {
-            name: `${name} (${code})`,
-            code,
-            percentOff: merged.percentOff,
-            duration: merged.duration,
-            durationMonths,
-        });
-    return view(await growthRepository.updateAffiliate(id, changes));
+    return changes;
 }
 
 /*
@@ -368,17 +464,23 @@ export async function updateAffiliate(
  * attributions and the ledger of what was paid. Commission still owed blocks it.
  */
 export async function deleteAffiliate(id: string) {
-    const row = await growthRepository.getAffiliate(id);
-    if (!row) throw new BillingError('That affiliate does not exist.', 404);
-    const stats = await growthRepository.affiliateStats(id);
-    if (Object.values(stats.earnings).some((total) => total.unpaid > 0))
-        throw new BillingError(
-            'This affiliate is still owed commission. Mark it paid first, or pause them instead.',
-            409,
-        );
-    if (row.providerDiscountId) await deleteProviderDiscount(row.providerDiscountId);
-    await growthRepository.deleteAffiliate(id);
-    return { deleted: true as const };
+    // Under the affiliate's lock: a removal never interleaves with a change of terms.
+    return underAffiliateLock(id, async (tx) => {
+        // Locked before anything owed is counted: an earning recorded while Polar deletes the
+        // discount waits for this removal, then fails where the webhook sees it, rather than
+        // being deleted with the affiliate after the count found nothing owed.
+        const row = await growthRepository.getAffiliate(id, tx, { forUpdate: true });
+        if (!row) throw new BillingError('That affiliate does not exist.', 404);
+        const stats = await growthRepository.affiliateStats(id, tx);
+        if (Object.values(stats.earnings).some((total) => total.unpaid > 0))
+            throw new BillingError(
+                'This affiliate is still owed commission. Mark it paid first, or pause them instead.',
+                409,
+            );
+        if (row.providerDiscountId) await deleteProviderDiscount(row.providerDiscountId);
+        await growthRepository.deleteAffiliate(id, tx);
+        return { deleted: true as const };
+    });
 }
 
 export async function markAffiliatePaid(id: string) {
