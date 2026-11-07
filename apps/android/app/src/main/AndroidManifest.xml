@@ -17,6 +17,15 @@
     -->
     <uses-feature android:name="android.hardware.screen.portrait" android:required="false" />
 
+    <!-- The phone's browser, by name: a sign-up link asked for on the web is handed to it (DriveViewModel.openInBrowser). -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
+    </queries>
+
     <application
         android:name=".HushOSApplication"
         android:allowBackup="false"

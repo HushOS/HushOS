@@ -361,6 +361,9 @@ final class AppModel {
     /* Universal links, hushos:// links, and hushos://node/<id>: kept until the drive can open them. */
     func open(_ url: URL) {
         switch AppLinks.parse(url, server: origin) {
+        // Not over an account being made (it signs in and shows its words as it finishes): this link waits for it.
+        case .success(.recover), .success(.register) where creatingAccount:
+            linkAfterCreating = url
         // The emailed reset link opens the reset here, signed in or not.
         case let .success(.recover(token)):
             signingUp = false
@@ -417,6 +420,10 @@ final class AppModel {
 
     func startSignup() { signingUp = true }
 
+    /* An account being made (createAccount), and a sign-up or reset link that arrived meanwhile, opened after it. */
+    private var creatingAccount = false
+    private var linkAfterCreating: URL?
+
     func signupDone() {
         signingUp = false
         signupLink = nil
@@ -428,6 +435,11 @@ final class AppModel {
      * when the account exists but the sign-in didn't happen.
      */
     func createAccount(_ enrollment: SignupEnrollment, name: String, password: String) async throws -> Bool {
+        creatingAccount = true
+        defer {
+            creatingAccount = false
+            if let url = linkAfterCreating { linkAfterCreating = nil; open(url) }
+        }
         signInGeneration += 1
         await wiping?.value
         let previous = AccountStore.shared.owner()

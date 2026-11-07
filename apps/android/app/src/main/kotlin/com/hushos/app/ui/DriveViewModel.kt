@@ -977,6 +977,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
             if (target is com.hushos.app.data.AppLink.Recover) { openRecoveryLink(target.verify); return }
             // The emailed sign-up link carries sign-up on here, whether it began here or on the web.
             if (target is com.hushos.app.data.AppLink.Register) { openSignupLink(link); return }
+            if (target is com.hushos.app.data.AppLink.WebRegister) { openInBrowser(target.url); return }
         }
         if (state.value.gate != Gate.SIGNED_IN) {
             pendingLink = link
@@ -999,7 +1000,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
                     // No key after the #: the link browser says the link is incomplete and asks for the whole one.
                     com.hushos.app.data.AppLink.IncompleteShare -> "link:${origin.trimEnd('/')}/s/"
                     is com.hushos.app.data.AppLink.Node -> "node:${target.id}"
-                    is com.hushos.app.data.AppLink.Recover, is com.hushos.app.data.AppLink.Register -> null
+                    is com.hushos.app.data.AppLink.Recover, is com.hushos.app.data.AppLink.Register, is com.hushos.app.data.AppLink.WebRegister -> null
                     // The invitation is a sheet of its own (Main), started here so it outlives whatever is on screen.
                     is com.hushos.app.data.AppLink.Join -> { families.invite(target.token); null }
                     com.hushos.app.data.AppLink.IncompleteInvite -> { families.invite(null); null }
@@ -1087,6 +1088,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
 
     /* The emailed link: the address is confirmed and the kit comes next, or the link says why it can't be used. */
     fun openRecoveryLink(verify: String) {
+        // Not over an account being made: that one signs in and shows its words as it finishes, then this goes on.
+        if (creatingAccount.value) { viewModelScope.launch { creatingAccount.first { !it }; openRecoveryLink(verify) }; return }
         signup = null
         recovery = RecoveryFlow(RecoveryStep.CHECKING, email = recovery?.email.orEmpty())
         viewModelScope.launch {
@@ -1155,8 +1158,28 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
 
     fun startSignup() { signup = SignupFlow(SignupStep.EMAIL) }
 
+    /*
+     * A link the website should finish, in the phone's browser by name: an ordinary view of it would come back here,
+     * since the app claims its path. A Custom Tab when no browser can be named.
+     */
+    private fun openInBrowser(url: String) {
+        val uri = android.net.Uri.parse(url)
+        val pm = context.packageManager
+        val probe = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://example.com")).addCategory(android.content.Intent.CATEGORY_BROWSABLE)
+        val browser = pm.resolveActivity(probe, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName
+            ?.takeIf { it != "android" && it != context.packageName }
+            ?: pm.queryIntentActivities(probe, 0).map { it.activityInfo.packageName }.firstOrNull { it != context.packageName }
+        if (browser != null) {
+            runCatching { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, uri).setPackage(browser).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            return
+        }
+        runCatching { androidx.browser.customtabs.CustomTabsIntent.Builder().build().apply { intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK) }.launchUrl(context, uri) }
+    }
+
     /* The token of the sign-up link last opened: the same link opened again doesn't spend it twice (openSignupLink). */
     private var signupVerify: String? = null
+    /* An account being made (createAccount): sign-up and recovery links wait for it, so nothing replaces its flow. */
+    private val creatingAccount = kotlinx.coroutines.flow.MutableStateFlow(false)
     /* Counts sign-up link checks: only the latest one's answer lands (openSignupLink). */
     private var signupAttempt = 0
 
@@ -1203,6 +1226,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
      * Otherwise the address is confirmed and the name and password come next, or the link says why it can't be used.
      */
     fun openSignupLink(link: String) = viewModelScope.launch {
+        // Not over an account being made (it signs in as it finishes): then the gate below says so.
+        creatingAccount.first { !it }
         // A link that started the app comes before the stored session is restored: decided once it has been, so a
         // signed-in phone never spends the one-use link.
         if (state.first { it.gate != Gate.CHECKING }.gate == Gate.SIGNED_IN) {
@@ -1244,7 +1269,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         val enrollment = flow.enrollment ?: return
         if (flow.pending) return
         signup = flow.copy(pending = true, error = null)
+        creatingAccount.value = true
         viewModelScope.launch {
+          try {
             val origin = state.value.origin
             var created = false
             val result = withContext(Dispatchers.IO) {
@@ -1269,6 +1296,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
                     if (!created) signup = signup?.copy(pending = false, error = com.hushos.app.data.Problems.say(it, com.hushos.app.data.Problems.SERVER))
                 },
             )
+          } finally {
+            creatingAccount.value = false
+          }
         }
     }
 

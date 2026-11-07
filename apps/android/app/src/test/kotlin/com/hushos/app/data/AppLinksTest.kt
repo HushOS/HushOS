@@ -132,8 +132,11 @@ class AppLinksTest {
     }
     @Test
     fun theSignUpLinkOpensSignUpWithItsToken() {
-        assertEquals(opens(AppLink.Register(token)), parse("https://hushos.com/register/complete#verify=$token"))
+        assertEquals(opens(AppLink.Register(token)), parse("https://hushos.com/register/complete?app=1#verify=$token"))
         assertEquals(opens(AppLink.Register(token)), parse("hushos://register/complete#verify=$token"))
+        // Asked for on the web (no app=1): handed to the browser, where a plan chosen there is paid for.
+        val web = "https://hushos.com/register/complete#verify=$token"
+        assertEquals(opens(AppLink.WebRegister(web)), parse(web))
         // A sign-up link is never read as a recovery one, nor the other way round: each flow checks its own.
         assertEquals(opens(AppLink.Recover(token)), parse("https://hushos.com/recover/complete#verify=$token"))
     }

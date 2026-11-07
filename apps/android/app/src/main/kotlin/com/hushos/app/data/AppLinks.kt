@@ -29,6 +29,11 @@ sealed interface AppLink {
     data object IncompleteInvite : AppLink
     /* The emailed sign-up link, /register/complete#verify=<token>: creating the account carries on in the app. */
     data class Register(val verify: String) : AppLink
+    /*
+     * A sign-up link asked for on the web (no app=1, which only the apps add): it finishes in the browser, where a plan
+     * chosen there is paid for and a family made. The app claims the path but not the query, so it hands these on.
+     */
+    data class WebRegister(val url: String) : AppLink
 }
 
 sealed interface AppLinkRefusal {
@@ -103,7 +108,8 @@ object AppLinks {
                 when {
                     verify == null || !TOKEN.matches(verify) -> refuse(AppLinkRefusal.Malformed)
                     path[0] == "recover" -> open(AppLink.Recover(verify))
-                    else -> open(AppLink.Register(verify))
+                    scheme == "hushos" || uri.rawQuery.orEmpty().split('&').contains("app=1") -> open(AppLink.Register(verify))
+                    else -> open(AppLink.WebRegister(link))
                 }
             }
             "join" -> {
