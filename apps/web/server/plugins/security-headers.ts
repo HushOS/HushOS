@@ -64,5 +64,10 @@ export default definePlugin((nitroApp) => {
                 'Strict-Transport-Security',
                 'max-age=31536000; includeSubDomains',
             );
+        // Nitro marks everything under /assets/ immutable for a year, misses included. During a
+        // deploy the old server answers 404 for the new build's files, and a CDN that keeps that
+        // 404 breaks the page wherever it is cached, for a year. An error is never kept.
+        if (response.status >= 400 && new URL(event.req.url).pathname.startsWith('/assets/'))
+            response.headers.set('Cache-Control', 'no-store');
     });
 });
