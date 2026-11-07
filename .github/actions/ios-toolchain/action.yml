@@ -3,7 +3,14 @@ description: >-
     What apps/ios/scripts/release-ipa.sh and archive.sh need on a macOS runner: Bun, the Xcode
     project.yml names (options.xcodeVersion, by its major version), Rust's iOS targets for the core
     (apps/ios/scripts/build-core.sh) and XcodeGen. The runner's stable Rust is used as it comes.
-    Run after actions/checkout.
+    Run after actions/checkout. `ready` is false, and nothing else is installed, when the runner has
+    no Xcode of that major version: the app uses that SDK's APIs, and a build with an older one
+    would not compile (or, worse, would leave them out), so the caller skips its build instead.
+
+outputs:
+    ready:
+        description: true when the project's Xcode is selected and the rest installed.
+        value: ${{ steps.xcode.outputs.ready }}
 
 runs:
     using: composite
@@ -14,6 +21,7 @@ runs:
         # The newest installed Xcode of the major version the project is made for: the SDK it
         # builds against and the toolchain App Store Connect checks uploads against.
         - name: Xcode
+          id: xcode
           shell: bash
           run: |
               major=$(sed -n "s/^[[:space:]]*xcodeVersion: '\{0,1\}\([0-9]*\).*/\1/p" apps/ios/project.yml)
@@ -23,16 +31,18 @@ runs:
               matching=()
               for x in "${all[@]}"; do [[ "${x##*/}" =~ ^Xcode_${major}(\.|\.app$) ]] && matching+=("$x"); done
               echo "Xcodes on this runner: ${all[*]##*/}"
-              if (( ${#matching[@]} )); then
-                  xcode=$(printf '%s\n' "${matching[@]}" | sort -V | tail -1)
-              else
-                  # GitHub's images trail Xcode releases: the newest there is until they catch up.
-                  xcode=$(printf '%s\n' "${all[@]}" | sort -V | tail -1)
-                  echo "::warning title=Older Xcode::This runner has no Xcode $major; building with ${xcode##*/}."
+              if (( ! ${#matching[@]} )); then
+                  # GitHub's images trail Xcode releases; a new major version has come with the next macOS image.
+                  echo "::warning title=No Xcode $major on this runner::It has ${all[*]##*/}. Nothing is built here: build on a Mac with Xcode $major (bun run ios:release-ipa vX.Y.Z, bun run ios:archive at the tag), or move runs-on to an image that has it."
+                  echo "ready=false" >> "$GITHUB_OUTPUT"
+                  exit 0
               fi
+              xcode=$(printf '%s\n' "${matching[@]}" | sort -V | tail -1)
               sudo xcode-select -s "$xcode/Contents/Developer"
               xcodebuild -version
+              echo "ready=true" >> "$GITHUB_OUTPUT"
         - name: Rust iOS targets and XcodeGen
+          if: steps.xcode.outputs.ready == 'true'
           shell: bash
           run: |
               rustup target add aarch64-apple-ios aarch64-apple-ios-sim

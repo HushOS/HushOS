@@ -107,7 +107,9 @@ jobs:
                   fetch-depth: 0
                   persist-credentials: false
             - uses: ./.github/actions/ios-toolchain
+              id: toolchain
             - name: Build, check and attach the IPA
+              if: steps.toolchain.outputs.ready == 'true'
               env:
                   GH_TOKEN: ${{ github.token }}
                   GH_REPO: ${{ github.repository }}
@@ -154,9 +156,10 @@ jobs:
                   fetch-depth: 0
                   persist-credentials: false
             - if: steps.setup.outputs.configured == 'true'
+              id: toolchain
               uses: ./.github/actions/ios-toolchain
             - name: Archive, sign and upload
-              if: steps.setup.outputs.configured == 'true'
+              if: steps.setup.outputs.configured == 'true' && steps.toolchain.outputs.ready == 'true'
               env:
                   DEVELOPMENT_TEAM: ${{ vars.APPLE_TEAM_ID }}
                   ASC_KEY_PATH: ${{ runner.temp }}/AuthKey.p8
