@@ -59,6 +59,22 @@ struct MarkdownDocumentTests {
         #expect(list.ordered && list.start == 3 && list.items.count == 2)
     }
 
+    @Test func deepNestingKeepsItsWordsWithoutCrashing() {
+        // Nesting past what a stack holds comes back as the file's text, never a crash.
+        let source = String(repeating: "> ", count: 50_000) + "hello"
+        #expect(MarkdownDocument.parse(source) == [.code(language: nil, text: source)])
+        let emphasis = String(repeating: "*a ", count: 20_000) + "deep" + String(repeating: " a*", count: 20_000)
+        #expect(MarkdownDocument.parse(emphasis) == [.code(language: nil, text: emphasis)])
+
+        // Within the limit it is drawn, and past the drawing budget the words come as plain text.
+        var level = MarkdownDocument.parse(String(repeating: "> ", count: 40) + "hello")
+        var depth = 0
+        while case .quote(let inner) = level.first { depth += 1; level = inner }
+        #expect(depth == MarkdownDocument.blockDepth)
+        guard case .paragraph(let words) = level.first else { Issue.record("expected the words"); return }
+        #expect(words.plainText == "hello")
+    }
+
     @Test func markdownFilesByNameOrType() {
         #expect(MarkdownDocument.handles(name: "README.md", mime: nil))
         #expect(MarkdownDocument.handles(name: "notes.MARKDOWN", mime: nil))

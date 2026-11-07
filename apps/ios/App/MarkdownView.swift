@@ -32,11 +32,16 @@ struct MarkdownView: View {
         .tint(Alpine.primary)
         .task(id: url) {
             let url = url
+            // The last file's words go at once: paging to the next shows it loading, never the last one under the new name.
+            blocks = nil
             // Read and parsed off the main thread: a long file shouldn't hold up the viewer's bars.
-            blocks = await Task.detached(priority: .userInitiated) {
+            let parsed = await Task.detached(priority: .userInitiated) {
                 let data = (try? Data(contentsOf: url)) ?? Data()
                 return MarkdownDocument.parse(String(decoding: data, as: UTF8.self))
             }.value
+            // Paged on while it parsed: a slower earlier file must not land over the one now shown.
+            guard !Task.isCancelled else { return }
+            blocks = parsed
         }
     }
 }

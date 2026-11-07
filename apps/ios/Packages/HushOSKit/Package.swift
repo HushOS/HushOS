@@ -10,10 +10,14 @@ let package = Package(
         .package(path: "../HushOSCore"),
         // Apple's Markdown parser (cmark-gfm underneath), for the Markdown viewer: CommonMark and GitHub's tables, task lists, strikethrough.
         .package(url: "https://github.com/swiftlang/swift-markdown.git", exact: "0.9.0"),
+        // Its cmark, used directly only to measure a file's nesting first (MarkdownDocument.depth): the version swift-markdown resolves.
+        .package(url: "https://github.com/swiftlang/swift-cmark.git", exact: "0.9.0"),
     ],
     targets: [
         // The BIP-39 English list, copied from crates/hushos-core/src/bip39-english.txt (a test keeps them equal), for fingerprint words.
-        .target(name: "HushOSKit", dependencies: [.product(name: "HushOSCore", package: "HushOSCore"), .product(name: "Markdown", package: "swift-markdown")], resources: [.copy("Resources/bip39-english.txt")]),
+        .target(name: "HushOSKit", dependencies: [.product(name: "HushOSCore", package: "HushOSCore"), .product(name: "Markdown", package: "swift-markdown"),
+            .product(name: "cmark-gfm", package: "swift-cmark"), .product(name: "cmark-gfm-extensions", package: "swift-cmark"),
+        ], resources: [.copy("Resources/bip39-english.txt")]),
         .testTarget(name: "HushOSKitTests", dependencies: ["HushOSKit"]),
     ]
 )

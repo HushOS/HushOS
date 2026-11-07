@@ -55,18 +55,30 @@ object MarkdownDocument {
         return name.contains('.') && ext in setOf("md", "markdown", "mdx")
     }
 
-    fun parse(text: String): List<MdBlock> = blocks(parser.parse(text))
+    /*
+     * How deep quotes and lists, and emphasis and links, are drawn as such; past this their words come as plain text, so
+     * the steps below and the viewer's never recurse further. commonmark-java stops nesting blocks at 100 itself.
+     */
+    const val BLOCK_DEPTH = 16
+    const val INLINE_DEPTH = 32
+
+    fun parse(text: String): List<MdBlock> = try {
+        blocks(parser.parse(text), 0)
+    } catch (_: StackOverflowError) {
+        // Nothing here should recurse that far; if the parser itself does, the file is shown as its text.
+        listOf(MdBlock.Code(null, text))
+    }
 
     private fun children(node: Node): Sequence<Node> = generateSequence(node.firstChild) { it.next }
 
-    private fun blocks(parent: Node): List<MdBlock> = children(parent).mapNotNull(::block).toList()
+    private fun blocks(parent: Node, depth: Int): List<MdBlock> = children(parent).mapNotNull { block(it, depth) }.toList()
 
-    private fun block(node: Node): MdBlock? = when (node) {
+    private fun block(node: Node, depth: Int): MdBlock? = if (depth >= BLOCK_DEPTH) flatText(node).takeIf { it.isNotEmpty() }?.let { MdBlock.Paragraph(MdInline(listOf(MdRun.Text(it)))) } else when (node) {
         is Heading -> MdBlock.Heading(node.level, inline(node))
         is Paragraph -> MdBlock.Paragraph(inline(node))
-        is BulletList -> MdBlock.ListBlock(ordered = false, start = 1, items = items(node))
-        is OrderedList -> MdBlock.ListBlock(ordered = true, start = node.markerStartNumber ?: 1, items = items(node))
-        is BlockQuote -> MdBlock.Quote(blocks(node))
+        is BulletList -> MdBlock.ListBlock(ordered = false, start = 1, items = items(node, depth))
+        is OrderedList -> MdBlock.ListBlock(ordered = true, start = node.markerStartNumber ?: 1, items = items(node, depth))
+        is BlockQuote -> MdBlock.Quote(blocks(node, depth + 1))
         is FencedCodeBlock -> MdBlock.Code(node.info?.takeIf { it.isNotBlank() }, node.literal.removeSuffix("\n"))
         is IndentedCodeBlock -> MdBlock.Code(null, node.literal.removeSuffix("\n"))
         is ThematicBreak -> MdBlock.Rule
@@ -76,10 +88,32 @@ object MarkdownDocument {
         else -> null
     }
 
-    private fun items(list: Node): List<MdItem> = children(list).filterIsInstance<ListItem>().map { item ->
+    private fun items(list: Node, depth: Int): List<MdItem> = children(list).filterIsInstance<ListItem>().map { item ->
         val marker = children(item).filterIsInstance<TaskListItemMarker>().firstOrNull()
-        MdItem(check = marker?.isChecked, blocks = blocks(item))
+        MdItem(check = marker?.isChecked, blocks = blocks(item, depth + 1))
     }.toList()
+
+    /* The words under a node, walked with a stack of our own, not recursion: what a too-deep part shows. Raw HTML stays out. */
+    internal fun flatText(root: Node): String {
+        val words = StringBuilder()
+        val stack = ArrayDeque<Node>().apply { addLast(root) }
+        while (stack.isNotEmpty()) {
+            when (val node = stack.removeLast()) {
+                is Text -> words.append(node.literal)
+                is Code -> words.append(node.literal)
+                is FencedCodeBlock -> words.append(node.literal)
+                is IndentedCodeBlock -> words.append(node.literal)
+                is SoftLineBreak, is HardLineBreak -> words.append(' ')
+                is HtmlInline, is HtmlBlock -> Unit
+                else -> {
+                    // Blocks are kept apart by a space; children go on last-first, so they come off in order.
+                    if (node is org.commonmark.node.Block && words.isNotEmpty() && words.last() != ' ') words.append(' ')
+                    children(node).toList().asReversed().forEach(stack::addLast)
+                }
+            }
+        }
+        return words.toString()
+    }
 
     private fun table(table: TableBlock): MdBlock.Table {
         val rows = children(table).flatMap { section ->
@@ -115,12 +149,13 @@ object MarkdownDocument {
             current = null
             text.setLength(0)
         }
-        fun walk(node: Node, style: MdRun.Text) {
+        fun walk(node: Node, style: MdRun.Text, depth: Int) {
             fun add(piece: String, extra: MdRun.Text = style) {
                 if (current != extra) flush()
                 current = extra
                 text.append(piece)
             }
+            if (depth >= INLINE_DEPTH) { add(flatText(node)); return }
             when (node) {
                 is Text -> add(node.literal)
                 is Code -> add(node.literal, style.copy(code = true))
@@ -129,14 +164,14 @@ object MarkdownDocument {
                 // Dropped, as on the web.
                 is HtmlInline, is TaskListItemMarker -> Unit
                 is Image -> { flush(); runs += MdRun.Image(alt = plain(node), source = node.destination) }
-                is Link -> children(node).forEach { walk(it, style.copy(link = safeLink(node.destination) ?: style.link)) }
-                is Emphasis -> children(node).forEach { walk(it, style.copy(italic = true)) }
-                is StrongEmphasis -> children(node).forEach { walk(it, style.copy(bold = true)) }
-                is Strikethrough -> children(node).forEach { walk(it, style.copy(strike = true)) }
-                else -> children(node).forEach { walk(it, style) }
+                is Link -> children(node).forEach { walk(it, style.copy(link = safeLink(node.destination) ?: style.link), depth + 1) }
+                is Emphasis -> children(node).forEach { walk(it, style.copy(italic = true), depth + 1) }
+                is StrongEmphasis -> children(node).forEach { walk(it, style.copy(bold = true), depth + 1) }
+                is Strikethrough -> children(node).forEach { walk(it, style.copy(strike = true), depth + 1) }
+                else -> children(node).forEach { walk(it, style, depth + 1) }
             }
         }
-        children(parent).forEach { walk(it, MdRun.Text("")) }
+        children(parent).forEach { walk(it, MdRun.Text(""), 0) }
         flush()
         return MdInline(runs)
     }

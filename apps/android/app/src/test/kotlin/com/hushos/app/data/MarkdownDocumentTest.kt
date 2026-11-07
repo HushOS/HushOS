@@ -58,6 +58,18 @@ class MarkdownDocumentTest {
         assertEquals(2, list.items.size)
     }
 
+    @Test fun deepNestingIsDrawnOnlySoFarAndKeepsItsWords() {
+        // Past the drawing budget the words come as plain text, so neither the parse nor the viewer recurses further.
+        var level = MarkdownDocument.parse("> ".repeat(5000) + "hello")
+        var depth = 0
+        while (true) { level = (level.firstOrNull() as? MdBlock.Quote ?: break).blocks; depth++ }
+        assertEquals(MarkdownDocument.BLOCK_DEPTH, depth)
+        assertTrue((level.first() as MdBlock.Paragraph).inline.plainText.endsWith("hello"))
+
+        val emphasis = paragraph("*a ".repeat(3000) + "deep" + " a*".repeat(3000))
+        assertTrue(emphasis.plainText.contains("deep"))
+    }
+
     @Test fun markdownFilesByNameOrType() {
         assertTrue(MarkdownDocument.handles("README.md", null))
         assertTrue(MarkdownDocument.handles("notes.MARKDOWN", null))
