@@ -23,5 +23,10 @@ const PREVIEWS =
 export function appStoreRedirect(url: string) {
     const agent = readAgent();
     if (!agent || PREVIEWS.test(agent)) return;
-    throw redirect({ href: url, statusCode: 302 });
+    // On the redirect itself: Start answers it before the route's own headers run.
+    throw redirect({
+        href: url,
+        statusCode: 302,
+        headers: { 'Cache-Control': 'private, no-store', Vary: 'User-Agent' },
+    });
 }
