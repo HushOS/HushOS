@@ -36,19 +36,20 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.hushos.app.data.FamilyFork
 import com.hushos.app.data.FamilyMemberRef
 import com.hushos.app.data.FamilyState
@@ -152,8 +153,10 @@ fun FamilyPage(model: DriveViewModel, groupId: String, openFolder: (com.hushos.a
     // Who this person checked, on this phone (3.8): read again after every finished check of the family and every trust change.
     var standings by remember { mutableStateOf<Map<String, MemberStanding>?>(null) }
     var checkedWith by remember { mutableStateOf<String?>(null) }
-    // Observed, not read once: a trust change must start the read again.
-    val trust = model.state.collectAsStateWithLifecycle().value.trust
+    // Observed, not read once: a trust change must start the read again. Derived, so other state changes
+    // (transfer progress) don't recompose the page.
+    val drive = model.state.collectAsStateWithLifecycle()
+    val trust by remember { derivedStateOf { drive.value.trust } }
     LaunchedEffect(view?.rosterDigest, families.refreshed[groupId], trust) {
         // Read for the session the page began in: what lands after a sign-out or a switch is dropped, never drawn.
         val session = families.begin() ?: return@LaunchedEffect
