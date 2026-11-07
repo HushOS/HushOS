@@ -2,7 +2,7 @@
 
 An addendum to `docs/groups-design.md` 3.5 (Storage and the payer), decided by the owner on 19 October 2026, the day families launched on the web with no subscribers. Where this and 3.5 disagree, this wins; 3.5 points here, and was rewritten to match by the docs step (section 11, step 7) on 20 October 2026.
 
-Families are switched off on hushos.com (`GROUPS_ENABLED=false`) from today until this ships. The last step of the plan (section 9) switches them back on.
+**Status:** shipped. Families are on at hushos.com, and family plans are on sale.
 
 ## 1. What is wrong with what shipped
 
@@ -294,7 +294,7 @@ Proposed, in the 1.0 post's style (an italic dated line at the end, and the body
 
 > _Corrected {ship date}: this post first said a family's storage was for its family folders only, with each member's own files on their own plan. From {ship date}, a family's storage covers everyone's own files and the family folders together, and someone who already paid for their own plan stops renewing it when they join. An account can be in one family. It also said families work in the iPhone and Android apps; they are on the web, and the apps follow. The text above now says so._
 
-Today, while families are switched off on hushos.com, the post needs one line at the top so it doesn't sell something nobody can buy: "Family plans are paused while we change how their storage works; this post will say when they're back." The `<Cta>` ("Open Families in Drive and create one") goes until they are back.
+This applied while families were switched off; they are back on, so no pause line is needed.
 
 ### 7.7 The roadmap
 

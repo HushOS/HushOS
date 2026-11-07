@@ -1,5 +1,7 @@
 # Pre-submission checklist
 
+The list for the **first** submission to both stores, which is done: the Android app is live since October 2026 and the iPhone app since 1.0. It stays as a reference for a new app or a second account. Items left unticked are ones still open on production, not blockers for a release.
+
 One list for both stores. Tick everything before pressing Submit (Apple) or Send changes for review (Google). Items marked **blocker** will get the upload refused or the review rejected; they were found in the code on 2026-10-05.
 
 ## Owner decisions (nobody else can make these)
@@ -8,8 +10,8 @@ One list for both stores. Tick everything before pressing Submit (Apple) or Send
 - [x] **iPhone only.** Decided 2026-11-05: `TARGETED_DEVICE_FAMILY: '1'` in `apps/ios/project.yml`, so no iPad screenshots. iPad can be added in a later release; it's dropping it after a universal release that Apple refuses.
 - [x] **Export compliance.** Declared 2026-11-05 (standard algorithms, no France); on 2026-11-07 App Store Connect's result said to set `ITSAppUsesNonExemptEncryption = false`, which the app does from the release after 1.1.1 (apple.md, section 8). France is decided (2026-11-05): left out of the first release, so no French encryption declaration is needed yet.
 - [x] **Privacy answers.** Decided 2026-11-05: encrypted photos and files are not collected, as Proton Drive's label also treats them; account data the server can read is declared as collected and linked (privacy-answers.md).
-- [ ] **Version.** `1.0.0`, decided: the first release pull request proposes it (CONTRIBUTING.md, Releasing). Build numbers are the commit count on main.
-- [ ] **App Store name.** `HushOS: Encrypted Drive`, or `HushOS Drive`, if available.
+- [x] **Version.** `1.0.0`, shipped: the first release pull request proposes it (CONTRIBUTING.md, Releasing). Build numbers are the commit count on main.
+- [x] **App Store name.** `HushOS: Encrypted Cloud Drive`.
 
 ## App changes before the first submission
 
@@ -20,7 +22,7 @@ The blockers were fixed on 2026-10-05; the boxes stay for a last look on the rel
 - [x] **Blocker, Apple: `PrivacyInfo.xcprivacy` in the app and all four extensions.** UserDefaults and file-timestamp APIs are used and undeclared; Apple refuses such uploads. Contents and reasons: privacy-answers.md.
 - [x] **Recommended, Android: no cleartext in release.** The release network security config allows no cleartext; only the debug build (`src/debug`) allows http, for the dev server.
 - [ ] **Recommended, Android: data-sync foreground service.** Either record the declaration video (google.md, section 3.2) or move transfers to user-initiated data transfer jobs, which Google recommends for user-started transfers.
-- [ ] **Sign-up in the app, both stores.** "New to HushOS? Create an account" on the sign-in screen runs the whole sign-up in the app (email, the emailed link, name and password, the recovery kit and its three-word check) with no plans, prices or codes on the way. On the release build: make a throwaway account on hushos.com through the app, tap the emailed link on the phone (it opens the app), save the kit, land on the empty drive, then delete the account in the app. Both stores' account-deletion rules apply in full now; deletion is in the app and at `https://hushos.com/support#delete-account`.
+- [x] **Sign-up in the app, both stores** (shipped in 1.2). "New to HushOS? Create an account" on the sign-in screen runs the whole sign-up in the app (email, the emailed link, name and password, the recovery kit and its three-word check) with no plans, prices or codes on the way. On the release build: make a throwaway account on hushos.com through the app, tap the emailed link on the phone (it opens the app), save the kit, land on the empty drive, then delete the account in the app. Both stores' account-deletion rules apply in full now; deletion is in the app and at `https://hushos.com/support#delete-account`.
 - [ ] **Check on a device: saving a photo from "Send a copy".** iOS asks for `NSPhotoLibraryAddUsageDescription` when someone picks Save Image in the share sheet; the string is now set. Tap Save Image once on a phone to see the prompt.
 
 ## Web and accounts
@@ -31,8 +33,8 @@ The blockers were fixed on 2026-10-05; the boxes stay for a last look on the rel
 - [x] **Recommended: the privacy policy covers the apps.** Section 4 describes only browser storage. Add the apps: the session and remembered device in the keychain or Android Keystore, the local file mirror and kept files, the camera used only on the phone for Take photo and the recovery-kit scan, local notifications only.
 - [x] **Google: an account-deletion URL.** `https://hushos.com/support#delete-account` names HushOS, gives the web and app steps, says what is deleted, and gives the contact email for anyone who can't sign in.
 - [ ] **Review demo accounts on production.** `appreview@hushos.com` with sample folders, photos, a shared folder and a link; `appreview-delete@hushos.com` for the deletion test. Signed in once on each app from a real phone. Passwords are in the review notes and in App access. apple.md, section 9.
-- [ ] **`APPLE_APP_IDS=<TEAMID>.com.hushos.app` on production.** `https://hushos.com/.well-known/apple-app-site-association` returns JSON naming it (404 today).
-- [ ] **`ANDROID_APP_CERT_SHA256=<Play app signing SHA-256>,<upload SHA-256>` on production.** `https://hushos.com/.well-known/assetlinks.json` returns JSON with both (404 today).
+- [x] **`APPLE_APP_IDS=<TEAMID>.com.hushos.app` on production.** `https://hushos.com/.well-known/apple-app-site-association` returns JSON naming it.
+- [x] **`ANDROID_APP_CERT_SHA256=<Play app signing SHA-256>,<upload SHA-256>` on production.** `https://hushos.com/.well-known/assetlinks.json` returns JSON with both.
 
 ## Builds
 

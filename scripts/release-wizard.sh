@@ -185,7 +185,7 @@ finish() {
 # ──────────────────────────────────────────────────────────────────────────
 
 # HushOS store release: the steps only the owner can take (accounts, keys, portal pages),
-# in the order of docs/release/README.md, with checks where a machine can check. Values that
+# in the order of the first submission (docs/release/apple.md and google.md), with checks where a machine can check. Values that
 # are not secret (D-U-N-S, Team ID, certificate fingerprints) go to .env.release, which git
 # ignores; passwords go to the macOS keychain and are never printed. Re-run it any time: each
 # stage shows what is already done. Run from the repository root: scripts/release-wizard.sh

@@ -1,6 +1,8 @@
 # Groups milestone 1d: families on iOS and Android
 
-Milestone 1c shipped families on the web (`docs/groups-design.md` 9). The phones show none: a member reaches family folders only in a browser, the iOS Files location and the Android DocumentsProvider list the personal drive only, and the native apps' identity successions carry no successor consent (flag F8). This plan brings families to both apps without a second implementation of any rule the web worker enforces: every rule lives once in `crates/hushos-core`, pinned to its TypeScript twin by shared fixtures in both directions and by the differential fuzzer, and the apps only fetch, store and draw.
+**Status:** shipped. Families are in both phone apps (Android first, then iPhone). The rest of this page is the plan as written.
+
+Milestone 1c shipped families on the web (`docs/groups-design.md` 9). When this was written, the phones showed none: a member reaches family folders only in a browser, the iOS Files location and the Android DocumentsProvider list the personal drive only, and the native apps' identity successions carry no successor consent (flag F8). This plan brings families to both apps without a second implementation of any rule the web worker enforces: every rule lives once in `crates/hushos-core`, pinned to its TypeScript twin by shared fixtures in both directions and by the differential fuzzer, and the apps only fetch, store and draw.
 
 Each step below is one pull request with the full review (an independent review, then a `verify-hushos` live run where the web is touched, then a maintain-verification pass), and lists what it tests and what screenshot or simulator check proves it. Steps are ordered by dependency; a step never ships a code path a later step is needed to make safe.
 

@@ -1,4 +1,6 @@
+import type { AffiliateView } from '@hushos/billing/api';
 import { createFileRoute } from '@tanstack/react-router';
+import { cn } from 'cn';
 import { CheckIcon, CopyIcon, RotateCcwIcon, Share2Icon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -206,42 +208,84 @@ function Referrals() {
                     </p>
                 </section>
 
-                {data.affiliate && (
+                {data.affiliates.length === 1 ? (
                     <section aria-labelledby="creator-title" className="flex flex-col gap-3">
-                        <div className="flex items-center gap-2 border-b border-rule pb-3">
+                        <CreatorCode affiliate={data.affiliates[0]!}>
                             <h2 id="creator-title" className="text-lg font-bold">
                                 Your creator code
                             </h2>
-                            <Badge variant="secondary">
-                                {data.affiliate.active ? 'Active' : 'Paused'}
-                            </Badge>
-                        </div>
-                        <p className="text-sm text-muted-foreground">
-                            People who sign up through your page get{' '}
-                            {describeDiscount(data.affiliate)}, and you earn{' '}
-                            {describeCommission(data.affiliate.commissionBps)} of what they pay.
-                            HushOS pays out what’s owed.
-                        </p>
-                        <dl className="divide-y divide-rule rounded-xl border border-rule px-4">
-                            <Fact label="Your page">
-                                <CopyValue value={data.affiliate.url} label="Affiliate link" wrap />
-                            </Fact>
-                            <Fact label="Code">
-                                <CopyValue value={data.affiliate.code} label="Affiliate code" />
-                            </Fact>
-                            <Fact label="Sign-ups">{data.affiliate.stats.signups}</Fact>
-                            <Fact label="Paid orders">{data.affiliate.stats.orders}</Fact>
-                            <Fact label="Owed to you">
-                                {money(data.affiliate.stats.earnings, 'unpaid')}
-                            </Fact>
-                            <Fact label="Paid out">
-                                {money(data.affiliate.stats.earnings, 'paid')}
-                            </Fact>
-                        </dl>
+                        </CreatorCode>
                     </section>
-                )}
+                ) : data.affiliates.length > 1 ? (
+                    <section aria-labelledby="creator-title" className="flex flex-col gap-6">
+                        <h2
+                            id="creator-title"
+                            className="border-b border-rule pb-3 text-lg font-bold"
+                        >
+                            Your creator codes
+                        </h2>
+                        {data.affiliates.map((affiliate) => (
+                            <section
+                                key={affiliate.id}
+                                aria-labelledby={`creator-${affiliate.id}`}
+                                className="flex flex-col gap-3"
+                            >
+                                <CreatorCode affiliate={affiliate} plain>
+                                    <h3
+                                        id={`creator-${affiliate.id}`}
+                                        className="min-w-0 text-base font-bold wrap-anywhere"
+                                    >
+                                        {affiliate.name}
+                                    </h3>
+                                </CreatorCode>
+                            </section>
+                        ))}
+                    </section>
+                ) : null}
             </div>
         </div>
+    );
+}
+
+/*
+ * One creator code the account runs: its heading and state, what it offers and
+ * earns, its page and code to copy, and its numbers. Earnings stay per code:
+ * each is owed and paid out on its own, often in different currencies.
+ */
+function CreatorCode({
+    affiliate,
+    plain,
+    children,
+}: {
+    affiliate: AffiliateView;
+    /* Under a section's own heading: no rule above the name. */
+    plain?: boolean;
+    children: React.ReactNode;
+}) {
+    return (
+        <>
+            <div className={cn('flex items-center gap-2', !plain && 'border-b border-rule pb-3')}>
+                {children}
+                <Badge variant="secondary">{affiliate.active ? 'Active' : 'Paused'}</Badge>
+            </div>
+            <p className="text-sm text-muted-foreground">
+                People who sign up through your page get {describeDiscount(affiliate)}, and you earn{' '}
+                {describeCommission(affiliate.commissionBps)} of what they pay. HushOS pays out
+                what’s owed.
+            </p>
+            <dl className="divide-y divide-rule rounded-xl border border-rule px-4">
+                <Fact label="Your page">
+                    <CopyValue value={affiliate.url} label="Affiliate link" wrap />
+                </Fact>
+                <Fact label="Code">
+                    <CopyValue value={affiliate.code} label="Affiliate code" />
+                </Fact>
+                <Fact label="Sign-ups">{affiliate.stats.signups}</Fact>
+                <Fact label="Paid orders">{affiliate.stats.orders}</Fact>
+                <Fact label="Owed to you">{money(affiliate.stats.earnings, 'unpaid')}</Fact>
+                <Fact label="Paid out">{money(affiliate.stats.earnings, 'paid')}</Fact>
+            </dl>
+        </>
     );
 }
 

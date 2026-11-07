@@ -778,7 +778,17 @@ Commissions:
 - are recorded from Polar's `order.paid` webhook, once per order;
 - are shown as owed until an operator marks them paid. Paying them is done outside HushOS.
 
-A creator whose HushOS account is linked sees their code and earnings on their own Invite friends page. Without billing, affiliates can still be enrolled and attributed, but no discount exists to apply.
+A creator whose HushOS account is linked sees their code and earnings on their own Invite friends page.
+
+- The operator links the account by email.
+- An email with no account yet is kept, and linked once an account signs up with it.
+- Without billing, affiliates can still be enrolled and attributed, but no discount exists to apply.
+
+If an affiliate is removed while one of their orders is being paid, that order's commission can't be recorded:
+
+- The web server logs an error, `Commission not recorded: its affiliate was removed while the order was paid`.
+- The log names the order, discount, affiliate, code, amount and currency, under `billing` in its console output (JSON in production).
+- Pay that commission by hand.
 
 ### Codes made at Polar
 

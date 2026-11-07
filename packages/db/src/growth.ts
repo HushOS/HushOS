@@ -1,6 +1,5 @@
-import { and, count, desc, eq, isNull, or, sql, sum } from 'drizzle-orm';
+import { and, count, desc, eq, isNull, ne, or, sql, sum } from 'drizzle-orm';
 import { db } from './client';
-import { pgCode } from './readiness';
 import {
     accountIntents,
     affiliateEarnings,
@@ -294,8 +293,48 @@ export type AffiliateInput = {
     durationMonths: number | null;
     commissionBps: number;
     userId: string | null;
+    pendingEmail?: string | null;
     notes: string | null;
 };
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+/* The database itself, or a transaction holding the affiliate lock. */
+export type Executor = typeof db | Tx;
+
+/*
+ * One affiliate's terms change one change at a time: a transaction-scoped
+ * advisory lock keyed by the affiliate's id, held while `run` reads the row,
+ * asks the provider, and writes. Two changes that each read, sent the provider
+ * their merged terms and wrote would otherwise leave the provider with one set
+ * and the row with another. The lock is held across the provider's call, which
+ * is admin-only, rare and per affiliate. A change that finds it held is refused
+ * at once rather than queued: a waiter would hold a pooled connection for as
+ * long as the provider takes. A hash collision only refuses a second affiliate.
+ */
+export const AFFILIATE_LOCK_SPACE = 0x61666c74;
+
+/* Another change of this affiliate holds the lock. */
+export class AffiliateBusyError extends Error {
+    constructor() {
+        super('This affiliate is being changed.');
+        this.name = 'AffiliateBusyError';
+    }
+}
+
+/*
+ * Everything `run` reads or writes goes through `tx`, never the global `db`:
+ * the lock is held for the whole transaction, and a second connection asked
+ * for inside it could wait on a pool that is full.
+ */
+export async function withAffiliateLock<T>(id: string, run: (tx: Tx) => Promise<T>) {
+    return db.transaction(async (tx) => {
+        const taken = await tx.execute<{ locked: boolean }>(
+            sql`select pg_try_advisory_xact_lock(${AFFILIATE_LOCK_SPACE}::int, hashtext(${id})) as locked`,
+        );
+        if (!taken.rows[0]?.locked) throw new AffiliateBusyError();
+        return run(tx);
+    });
+}
 
 export async function createAffiliate(
     input: AffiliateInput & { providerDiscountId: string | null },
@@ -317,8 +356,9 @@ export async function updateAffiliate(
         active?: boolean;
         providerDiscountId?: string | null;
     },
+    executor: Executor = db,
 ) {
-    const [row] = await db
+    const [row] = await executor
         .update(affiliates)
         .set({
             ...patch,
@@ -336,8 +376,8 @@ export async function updateAffiliate(
  * people who signed up through them (their accounts stay; an affiliate
  * attribution carries no reward) and the ledger of their earnings.
  */
-export async function deleteAffiliate(id: string) {
-    return db.transaction(async (tx) => {
+export async function deleteAffiliate(id: string, executor: Executor = db) {
+    return executor.transaction(async (tx) => {
         await tx.delete(referrals).where(eq(referrals.affiliateId, id));
         const rows = await tx
             .delete(affiliates)
@@ -347,8 +387,18 @@ export async function deleteAffiliate(id: string) {
     });
 }
 
-export async function getAffiliate(id: string) {
-    const [row] = await db.select().from(affiliates).where(eq(affiliates.id, id));
+/*
+ * `forUpdate` locks the row to the transaction's end: an earning recorded for
+ * it meanwhile waits on its foreign key, and after a removal fails, instead of
+ * being deleted with the affiliate unseen.
+ */
+export async function getAffiliate(
+    id: string,
+    executor: Executor = db,
+    options: { forUpdate?: boolean } = {},
+) {
+    const query = executor.select().from(affiliates).where(eq(affiliates.id, id));
+    const [row] = await (options.forUpdate ? query.for('update') : query);
     return row ?? null;
 }
 
@@ -365,23 +415,72 @@ export async function getAffiliateBySlug(slug: string) {
  * Any affiliate, paused or not, whose slug or code this is. The offer page
  * asks before falling back to the provider's discount codes, so pausing a
  * creator takes their page down instead of leaving it up under their code.
+ * `except` leaves one affiliate out, in the query itself: a handle can be one
+ * affiliate's slug and another's code, and the row left out must not hide the other.
  */
-export async function findAffiliateByHandle(handle: string) {
-    const [row] = await db
+export async function findAffiliateByHandle(
+    handle: string,
+    except?: string,
+    executor: Executor = db,
+) {
+    const [row] = await executor
         .select()
         .from(affiliates)
         .where(
-            or(
-                eq(affiliates.slug, normalizeSlug(handle)),
-                eq(affiliates.code, normalizeAffiliateCode(handle)),
+            and(
+                or(
+                    eq(affiliates.slug, normalizeSlug(handle)),
+                    eq(affiliates.code, normalizeAffiliateCode(handle)),
+                ),
+                except ? ne(affiliates.id, except) : undefined,
             ),
-        );
+        )
+        .limit(1);
     return row ?? null;
 }
 
-export async function getAffiliateForUser(userId: string) {
-    const [row] = await db.select().from(affiliates).where(eq(affiliates.userId, userId));
-    return row ?? null;
+/*
+ * Creators an operator gave an email before its account existed, linked once
+ * it does. Done when the links are read, not at sign-up: an account made while
+ * the operator's save waits on the provider exists before the row it should
+ * link to, and a step at sign-up that failed would never run again. Every
+ * account verified its email before it was created, so only the address's
+ * owner can take the link. This one is for one account, reading its own page.
+ */
+export async function linkPendingAffiliates(userId: string) {
+    const rows = await db
+        .update(affiliates)
+        .set({ userId, pendingEmail: null, updatedAt: new Date() })
+        .from(users)
+        .where(
+            and(
+                eq(users.id, userId),
+                eq(affiliates.pendingEmail, users.normalizedEmail),
+                isNull(affiliates.userId),
+            ),
+        )
+        .returning({ id: affiliates.id });
+    return rows.length;
+}
+
+/* Every pending creator whose account now exists: the operator's list reads this first. */
+export async function linkAllPendingAffiliates() {
+    const rows = await db
+        .update(affiliates)
+        .set({ userId: sql`${users.id}`, pendingEmail: null, updatedAt: new Date() })
+        .from(users)
+        .where(and(eq(users.normalizedEmail, affiliates.pendingEmail), isNull(affiliates.userId)))
+        .returning({ id: affiliates.id });
+    return rows.length;
+}
+
+/* Every creator an account runs, as its own page lists them: the oldest first. */
+export async function listAffiliatesForUser(userId: string) {
+    return db
+        .select()
+        .from(affiliates)
+        .where(eq(affiliates.userId, userId))
+        .orderBy(affiliates.createdAt, affiliates.id);
 }
 
 export async function findAffiliateByDiscount(providerDiscountId: string) {
@@ -404,8 +503,8 @@ export async function findAffiliateForCustomer(userId: string) {
 
 export type EarningTotals = Record<string, { unpaid: number; paid: number }>;
 
-async function earningTotals(affiliateId: string): Promise<EarningTotals> {
-    const rows = await db
+async function earningTotals(affiliateId: string, executor: Executor = db): Promise<EarningTotals> {
+    const rows = await executor
         .select({
             currency: affiliateEarnings.currency,
             paid: sql<boolean>`${affiliateEarnings.paidAt} is not null`,
@@ -422,19 +521,19 @@ async function earningTotals(affiliateId: string): Promise<EarningTotals> {
     return totals;
 }
 
-export async function affiliateStats(affiliateId: string) {
-    const [signups] = await db
+export async function affiliateStats(affiliateId: string, executor: Executor = db) {
+    const [signups] = await executor
         .select({ value: count() })
         .from(referrals)
         .where(eq(referrals.affiliateId, affiliateId));
-    const [orders] = await db
+    const [orders] = await executor
         .select({ value: count() })
         .from(affiliateEarnings)
         .where(eq(affiliateEarnings.affiliateId, affiliateId));
     return {
         signups: signups?.value ?? 0,
         orders: orders?.value ?? 0,
-        earnings: await earningTotals(affiliateId),
+        earnings: await earningTotals(affiliateId, executor),
     };
 }
 
@@ -443,12 +542,38 @@ export async function listAffiliates() {
     return Promise.all(rows.map(async (row) => ({ ...row, stats: await affiliateStats(row.id) })));
 }
 
+/* The commission on an order's net amount, in its smallest unit: rounded down. */
+export function commissionFor(netAmount: number, commissionBps: number) {
+    return Math.floor((netAmount * commissionBps) / 10_000);
+}
+
+/* An earning whose affiliate was removed while its order was on the way. */
+export class AffiliateGoneError extends Error {
+    constructor(options?: { cause?: unknown }) {
+        super('The affiliate was removed.', options);
+        this.name = 'AffiliateGoneError';
+    }
+}
+
+const EARNING_AFFILIATE_KEY = 'affiliate_earnings_affiliate_id_affiliates_id_fkey';
+const EARNING_ACCOUNT_KEY = 'affiliate_earnings_user_id_users_id_fkey';
+
+/* The foreign key a driver error says was violated, within a few causes; null for anything else. */
+function violatedForeignKey(error: unknown) {
+    let at = error;
+    for (let depth = 0; depth < 5 && at && typeof at === 'object'; depth++) {
+        const { code, constraint } = at as { code?: unknown; constraint?: unknown };
+        if (code === '23503') return typeof constraint === 'string' ? constraint : null;
+        at = (at as { cause?: unknown }).cause;
+    }
+    return null;
+}
+
 /*
  * One order's earning, recorded or withdrawn: both take this lock first, so a commission is never
  * recorded after the order was refunded whole (withdrawEarning), however their deliveries race.
  */
 const EARNING_LOCK_SPACE = 0x6561726e;
-type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 const lockOrder = (tx: Tx, orderId: string) =>
     tx.execute(sql`select pg_advisory_xact_lock(${EARNING_LOCK_SPACE}::int, hashtext(${orderId}))`);
 
@@ -457,6 +582,10 @@ const lockOrder = (tx: Tx, orderId: string) =>
  * webhook or a second attribution path records nothing the second time. Nothing either for an
  * order HushOS refunded whole: withdrawEarning kept it, and a delivery that arrives after (or
  * raced it) finds it under the same lock.
+ * An account deleted while the order was on its way leaves the earning with no account, as
+ * `on delete set null` leaves every earlier one: commission is owed whether or not the buyer still
+ * has an account. An affiliate removed meanwhile throws AffiliateGoneError: there is nothing left
+ * to record it on.
  */
 export async function recordEarning(input: {
     affiliateId: string;
@@ -465,9 +594,9 @@ export async function recordEarning(input: {
     currency: string;
     netAmount: number;
     commissionBps: number;
-}) {
+}): Promise<typeof affiliateEarnings.$inferSelect | null> {
     if (input.netAmount <= 0) return null;
-    const commission = Math.floor((input.netAmount * input.commissionBps) / 10_000);
+    const commission = commissionFor(input.netAmount, input.commissionBps);
     const record = (userId: string | null) =>
         db.transaction(async (tx) => {
             await lockOrder(tx, input.orderId);
@@ -493,9 +622,12 @@ export async function recordEarning(input: {
     try {
         return await record(input.userId);
     } catch (error) {
-        // The customer deleted their account since paying (a late delivery): the commission is still the
-        // affiliate's, recorded with nobody named, as a deletion leaves an earning already recorded.
-        if (input.userId && pgCode(error) === '23503') return record(null);
+        // Told apart by the constraint's name. The customer deleted their account since paying (a
+        // late delivery): the commission is still the affiliate's, recorded with nobody named, as a
+        // deletion leaves an earning already recorded. The affiliate removed: nothing to record it on.
+        const key = violatedForeignKey(error);
+        if (key === EARNING_ACCOUNT_KEY && input.userId) return record(null);
+        if (key === EARNING_AFFILIATE_KEY) throw new AffiliateGoneError({ cause: error });
         throw error;
     }
 }
@@ -552,8 +684,8 @@ export async function markEarningsPaid(affiliateId: string) {
 }
 
 /* The account behind an email, for linking a creator to their affiliate record. */
-export async function findUserIdByEmail(normalizedEmail: string) {
-    const [row] = await db
+export async function findUserIdByEmail(normalizedEmail: string, executor: Executor = db) {
+    const [row] = await executor
         .select({ id: users.id })
         .from(users)
         .where(eq(users.normalizedEmail, normalizedEmail));
