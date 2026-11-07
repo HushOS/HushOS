@@ -1,0 +1,21 @@
+.github/workflows/ios-release.yml
+  s_566b8e0c4467a4::t_bfa84e2f63bee2 16,43-48,206,216-226
+apps/ios/scripts/submit-review.ts
+  s_566b8e0c4467a4::t_5d210f714fc63a 54-59,197-209
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1d0b01dfcf4fe9d23eb11f0ee8285cf384b515ca",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
