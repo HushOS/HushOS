@@ -42,6 +42,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.semantics
@@ -151,7 +152,9 @@ fun FamilyPage(model: DriveViewModel, groupId: String, openFolder: (com.hushos.a
     // Who this person checked, on this phone (3.8): read again after every finished check of the family and every trust change.
     var standings by remember { mutableStateOf<Map<String, MemberStanding>?>(null) }
     var checkedWith by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(view?.rosterDigest, families.refreshed[groupId], model.state.value.trust) {
+    // Observed, not read once: a trust change must start the read again.
+    val trust = model.state.collectAsStateWithLifecycle().value.trust
+    LaunchedEffect(view?.rosterDigest, families.refreshed[groupId], trust) {
         // Read for the session the page began in: what lands after a sign-out or a switch is dropped, never drawn.
         val session = families.begin() ?: return@LaunchedEffect
         val read = view?.let { shown -> families.run(session) { it.memberStandings(shown) } ?: return@LaunchedEffect }
