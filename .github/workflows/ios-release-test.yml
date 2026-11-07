@@ -19,3 +19,49 @@ jobs:
               env:
                   UPLOAD: '0'
               run: apps/ios/scripts/release-ipa.sh v1.2.0
+
+    # Temporary: the API key reads App Store Connect (submit, DRY_RUN) and signs an archive (no upload).
+    submit-dry-run:
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        environment: app-store
+        steps:
+            - uses: actions/checkout@v7
+              with:
+                  fetch-depth: 0
+                  persist-credentials: false
+            - uses: oven-sh/setup-bun@v2
+            - env:
+                  KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+                  ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+                  ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+                  VERSION: '1.2.0'
+                  BUILD: '701'
+                  DRY_RUN: '1'
+              run: |
+                  umask 077
+                  printf '%s\n' "$KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
+                  ASC_KEY_PATH="$RUNNER_TEMP/AuthKey.p8" bun apps/ios/scripts/submit-review.ts || true
+                  rm -f "$RUNNER_TEMP/AuthKey.p8"
+    sign-dry-run:
+        runs-on: macos-26
+        timeout-minutes: 90
+        environment: app-store
+        steps:
+            - uses: actions/checkout@v7
+              with:
+                  fetch-depth: 0
+                  persist-credentials: false
+            - uses: ./.github/actions/ios-toolchain
+            - env:
+                  KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+                  DEVELOPMENT_TEAM: ${{ vars.APPLE_TEAM_ID }}
+                  ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+                  ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+                  UPLOAD: '0'
+                  HUSHOS_BUILD_NUMBER: '701'
+              run: |
+                  umask 077
+                  printf '%s\n' "$KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
+                  trap 'rm -f "$RUNNER_TEMP/AuthKey.p8"' EXIT
+                  ASC_KEY_PATH="$RUNNER_TEMP/AuthKey.p8" apps/ios/scripts/archive.sh
