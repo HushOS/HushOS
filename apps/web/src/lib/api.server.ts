@@ -735,13 +735,21 @@ export const apiApp = new Elysia({ prefix: '/api' })
     )
     .post(
         '/auth/register/email',
-        { body: t.Object({ email: emailSchema, intent: t.Optional(intentSchema) }) },
+        {
+            body: t.Object({
+                email: emailSchema,
+                intent: t.Optional(intentSchema),
+                // The phone apps' own sign-up: its link carries ?app=1, which only the apps open.
+                app: t.Optional(t.Boolean()),
+            }),
+        },
         ({ body, request }) =>
             auth.requestRegistrationEmail(
                 body.email,
                 'register',
                 requestAddress(request),
                 body.intent,
+                { app: body.app },
             ),
     )
     .post(

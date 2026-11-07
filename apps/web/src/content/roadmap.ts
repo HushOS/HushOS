@@ -187,6 +187,13 @@ export const sections: RoadmapSection[] = [
         summary: 'Being built, or built and being finished.',
         items: [
             {
+                id: 'app-sign-up',
+                status: 'now',
+                area: 'Apps',
+                title: 'Create your account in the app',
+                body: 'Make your account on your phone, without the web: confirm your email, choose a password, save your recovery kit, and your drive opens. Built for Android and iPhone, and coming in their next releases.',
+            },
+            {
                 id: 'releases',
                 status: 'now',
                 area: 'Platform',

@@ -17,6 +17,15 @@
     -->
     <uses-feature android:name="android.hardware.screen.portrait" android:required="false" />
 
+    <!-- The phone's browser, by name: a sign-up link asked for on the web is handed to it (DriveViewModel.openInBrowser). -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
+    </queries>
+
     <application
         android:name=".HushOSApplication"
         android:allowBackup="false"
@@ -83,10 +92,12 @@
                 <data android:pathPrefix="/app/drive" />
                 <data android:pathPrefix="/app/shared" />
                 <data android:pathPrefix="/app/trash" />
-                <!-- The emailed recovery link: recovery carries on in the app. -->
+                <!-- The emailed recovery and sign-up links: both carry on in the app. -->
                 <data android:path="/recover/complete" />
                 <!-- The emailed family invitation, /join#invite=<token>: the invitation sheet. -->
                 <data android:path="/join" />
+                <!-- The emailed sign-up link, /register/complete#verify=<token>: sign-up carries on in the app. -->
+                <data android:path="/register/complete" />
             </intent-filter>
         </activity>
 

@@ -26,6 +26,7 @@ import androidx.compose.material3.adaptive.navigation.rememberSupportingPaneScaf
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffoldLayout
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
 import androidx.compose.runtime.remember
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.draw.clip
 import androidx.compose.material3.CircularProgressIndicator
@@ -55,6 +56,8 @@ import kotlinx.coroutines.launch
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
@@ -116,12 +119,25 @@ fun HushOSApp(model: DriveViewModel = viewModel()) {
     val state by model.state.collectAsStateWithLifecycle()
     // Account recovery, signed in or out: its own screens until the new phrase, which is saved signed in.
     model.recovery?.let { flow ->
-        if (flow.step != DriveViewModel.RecoveryStep.NEW_PHRASE) { FormColumn { RecoverScreen(model, state) }; return }
-        if (state.gate == Gate.SIGNED_IN) { FormColumn { PhraseScreen(model, fresh = true) { model.leaveRecovery() } }; return }
+        if (flow.step != DriveViewModel.RecoveryStep.NEW_PHRASE) { Noticed(model, state) { FormColumn { RecoverScreen(model, state) } }; return }
+        if (state.gate == Gate.SIGNED_IN) { Noticed(model, state) { FormColumn { PhraseScreen(model, fresh = true) { model.leaveRecovery() } } }; return }
     }
+    // Sign-up, signed out until the account exists; then its recovery kit, with no way into Drive but checking it.
+    model.signup?.let { flow ->
+        if (flow.step != DriveViewModel.SignupStep.PHRASE) { Noticed(model, state) { SignupScreen(model, state) }; return }
+        if (state.gate == Gate.SIGNED_IN) {
+            BackHandler {}
+            Noticed(model, state) { PhraseScreen(model, fresh = true, firstKit = true) { model.leaveSignup(); model.openRequest("files::") } }
+            return
+        }
+    }
+    // Words this phone made (a sign-up or a recovery) that the app was stopped before they were checked: shown again first.
+    val waitingFor by com.hushos.app.data.RecoveryWords.waitingFor.collectAsStateWithLifecycle()
+    val signedInAs = state.user?.id?.takeIf { state.gate == Gate.SIGNED_IN }
+    if (signedInAs != null && waitingFor?.equals(signedInAs, ignoreCase = true) == true) { Noticed(model, state) { WordsWaiting(model) }; return }
     when (state.gate) {
         Gate.CHECKING -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { LoadingIndicator() }
-        Gate.SIGNED_OUT -> FormColumn { if (state.accountDeleted) AccountDeletedScreen(onDone = model::clearSignedOut) else SignInScreen(model, state) }
+        Gate.SIGNED_OUT -> Noticed(model, state) { FormColumn { if (state.accountDeleted) AccountDeletedScreen(onDone = model::clearSignedOut) else SignInScreen(model, state) } }
         Gate.SIGNED_IN -> {
             // While the app is on screen the lists follow the server, as the web's feed does; in the background nothing polls.
             val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
@@ -168,10 +184,43 @@ fun HushOSApp(model: DriveViewModel = viewModel()) {
     }
 }
 
+/*
+ * A screen drawn instead of Main (sign-in, sign-up, recovery, a kit waiting to be checked), with Main's notices at its
+ * foot: a failed word check, or a link that can't be used here, says so on these screens too.
+ */
+@Composable
+private fun Noticed(model: DriveViewModel, state: DriveState, content: @Composable () -> Unit) {
+    Box(Modifier.fillMaxSize()) {
+        content()
+        state.notice?.let { notice ->
+            NoticeBar(notice, model, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding().widthIn(max = SnackbarMax).padding(12.dp))
+        }
+    }
+}
+
 /* Signed out and in recovery, a form's column: phone-width fields and buttons, centred on a wide window. */
 @Composable
 private fun FormColumn(content: @Composable () -> Unit) {
     Box(Modifier.fillMaxSize().readableWidth(Frame.Form)) { content() }
+}
+
+/*
+ * A new account's or a recovery's words, left unchecked when the app was stopped: the server decides. Checked already
+ * (on the web, say) lets Drive open; waiting, or no answer, keeps the words and their check up, as the web's setup page does.
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun WordsWaiting(model: DriveViewModel) {
+    var unsaved by remember { mutableStateOf<Boolean?>(null) }
+    var asked by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        unsaved = model.recoveryWordsUnsaved()
+        asked = true
+        if (unsaved == false) com.hushos.app.data.RecoveryWords.settled()
+    }
+    if (!asked || unsaved == false) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { LoadingIndicator() }; return }
+    BackHandler {}
+    PhraseScreen(model, fresh = true, firstKit = true) { com.hushos.app.data.RecoveryWords.settled() }
 }
 
 private enum class Tab(val label: String) { HOME("Home"), FILES("Files"), SHARED("Shared"), ACCOUNT("Account") }

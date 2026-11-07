@@ -196,7 +196,7 @@ public struct RecoveredAccount: Sendable {
 }
 
 extension Auth {
-    private static func recoveryRequest(_ origin: String, _ path: String, method: String = "POST", body: [String: Any]? = nil,
+    static func recoveryRequest(_ origin: String, _ path: String, method: String = "POST", body: [String: Any]? = nil,
                                         enrollment: String? = nil) async throws -> (body: [String: Any], setCookie: String?) {
         guard let url = URL(string: origin + path) else { throw AuthError.message("Bad HushOS address.") }
         var request = URLRequest(url: url)
