@@ -1176,7 +1176,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         signup = (signup ?: SignupFlow(SignupStep.EMAIL)).copy(pending = true, error = null, email = address)
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) { runCatching { Auth.requestSignupEmail(state.value.origin, address) } }
+            // Only the steps that sent it take the answer: a link opened meanwhile has moved on, and mustn't be sent back.
             signup = signup?.let { flow ->
+                if (flow.step != SignupStep.EMAIL && flow.step != SignupStep.SENT) return@let flow
                 result.fold(
                     { flow.copy(step = SignupStep.SENT, pending = false, resent = again) },
                     { flow.copy(pending = false, error = com.hushos.app.data.Problems.say(it, com.hushos.app.data.Problems.SERVER)) },

@@ -138,10 +138,15 @@ struct SignupView: View {
         Task {
             do {
                 try await Auth.requestSignupEmail(origin: model.origin, email: address)
-                if case .inbox = step { resent = true }
-                step = .inbox(address)
+                // Only the steps that sent it take the answer: a link opened meanwhile has moved on, and mustn't be sent back.
+                switch step {
+                case .email: step = .inbox(address)
+                case .inbox: resent = true; step = .inbox(address)
+                default: break
+                }
             } catch {
-                if let words = ErrorWords.say(error, otherwise: "Please try again.") { self.error = words }
+                if case .email = step, let words = ErrorWords.say(error, otherwise: "Please try again.") { self.error = words }
+                else if case .inbox = step, let words = ErrorWords.say(error, otherwise: "Please try again.") { self.error = words }
             }
             pending = false
         }
