@@ -1,0 +1,28 @@
+.github/workflows/ios-release.yml
+  s_566b8e0c4467a4::t_70b1b2438cce2e 1-206
+apps/ios/scripts/submit-review.ts
+  s_566b8e0c4467a4::t_7d6159aacdb96b 1-148
+  s_566b8e0c4467a4::t_4d186148e5606e 149-211
+.github/actions/ios-toolchain/action.yml
+  s_566b8e0c4467a4::t_4cdd963d5fef05 1-30
+.github/workflows/ios-release-test.yml
+  s_566b8e0c4467a4::t_9be82636aff5d5 1-21
+apps/ios/scripts/archive.sh
+  s_566b8e0c4467a4::t_914eb1aa6715d3 14-18,24-28,45,71
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "50548cfaf0947d2e93741f5f2999d43bf13666ff",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
