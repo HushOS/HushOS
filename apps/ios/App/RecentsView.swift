@@ -224,17 +224,20 @@ struct TrashView: View {
     private var failedIds: Set<String> { Set(store.restoreProblem?.failed.map(\.entry.item.id) ?? []) }
     @Environment(\.dismiss) private var dismissView
 
-    /* Select all and Done while selecting; otherwise Select and Empty, or how emptying is going. */
+    /*
+     * Select all and Done while selecting; otherwise only Select, as Files' and Photos' Recently
+     * Deleted have it. Emptying is Delete All in the bar that selecting shows, never a red word
+     * up here beside the title.
+     */
     @ViewBuilder private var trashActions: some View {
         if selecting {
             let all = !store.trash.isEmpty && selection.count == store.trash.count
-            Button { selection = all ? [] : Set(store.trash.map(\.item.id)) } label: { HeaderWord(text: all ? "Deselect all" : "Select all") }
+            Button { selection = all ? [] : Set(store.trash.map(\.item.id)) } label: { HeaderWord(text: all ? "Deselect All" : "Select All") }
             Button { selecting = false; selection = [] } label: { HeaderWord(text: "Done") }
         } else if store.emptyingTrash {
             EmptyView()
         } else if !store.trash.isEmpty {
             Button { selecting = true } label: { HeaderWord(text: "Select") }
-            Button(role: .destructive) { confirmEmpty = true } label: { HeaderWord(text: "Empty Trash").foregroundStyle(Alpine.danger) }
         }
     }
     private var picked: [(item: Opened, parentTrashed: Bool)] { store.trash.filter { selection.contains($0.item.id) } }
@@ -341,39 +344,56 @@ struct TrashView: View {
         }
         .overlay(alignment: .bottom) {
             if selecting {
-                // The same bar Files shows while selecting: what is picked, and what can be done with it.
+                // The bar Files and Photos show in Recently Deleted: with nothing picked it acts on
+                // everything (Restore All, Delete All), with rows picked on those.
+                let all = selection.isEmpty
                 HStack(spacing: 18) {
-                    Text("\(selection.count) selected").font(.footnote).foregroundStyle(Alpine.inkMuted)
+                    if !all { Text("\(selection.count) selected").font(.footnote).foregroundStyle(Alpine.inkMuted) }
                     Spacer()
                     // Once acted on, select mode ends, as in Files, and the notice says how it went.
-                    Button { let entries = picked; selecting = false; selection = []; Task { await store.restoreMany(entries) } } label: { Label("Restore", systemImage: "arrow.uturn.backward") }
-                    Button(role: .destructive) { confirmDelete = true } label: { Label("Delete", systemImage: "trash.slash") }
+                    Button {
+                        let entries = all ? store.trash : picked
+                        selecting = false
+                        selection = []
+                        Task { await store.restoreMany(entries) }
+                    } label: { Label(all ? "Restore All" : "Restore", systemImage: "arrow.uturn.backward") }
+                    Button(role: .destructive) {
+                        if all { confirmEmpty = true } else { confirmDelete = true }
+                    } label: { Label(all ? "Delete All" : "Delete", systemImage: "trash.slash") }
+                    // On the button, so iOS 26's popover points at it, not at the top of the list.
+                    .confirmationDialog(
+                        selection.count == 1 ? "Delete this item forever?" : "Delete \(selection.count) items forever?",
+                        isPresented: $confirmDelete, titleVisibility: .visible
+                    ) {
+                        Button("Delete forever", role: .destructive) {
+                            let entries = picked
+                            selecting = false
+                            selection = []
+                            Task { await store.purgeMany(entries) }
+                        }
+                    } message: {
+                        Text(selection.count == 1 ? "It can’t be restored after this." : "They can’t be restored after this.")
+                    }
+                    .confirmationDialog(
+                        store.trash.count == 1 ? "Delete this item forever?" : "Delete all \(store.trash.count) items forever?",
+                        isPresented: $confirmEmpty, titleVisibility: .visible
+                    ) {
+                        Button("Delete All", role: .destructive) {
+                            selecting = false
+                            selection = []
+                            Task { await store.emptyTrash() }
+                        }
+                    } message: {
+                        Text(store.trash.count == 1 ? "It can’t be restored after this." : "They can’t be restored after this.")
+                    }
                 }
                 .labelStyle(.titleAndIcon)
                 .font(.subheadline.weight(.medium))
-                .disabled(selection.isEmpty || !store.trashWorking.isEmpty)
+                .disabled(store.trash.isEmpty || !store.trashWorking.isEmpty || store.emptyingTrash)
                 .padding(.horizontal, 20).padding(.vertical, 12)
                 .glassEffect(.regular, in: .capsule)
                 .padding(.horizontal, 16).padding(.bottom, 16)
             }
-        }
-        .confirmationDialog(
-            selection.count == 1 ? "Delete this item forever?" : "Delete \(selection.count) items forever?",
-            isPresented: $confirmDelete, titleVisibility: .visible
-        ) {
-            Button("Delete forever", role: .destructive) {
-                let entries = picked
-                selecting = false
-                selection = []
-                Task { await store.purgeMany(entries) }
-            }
-        } message: {
-            Text(selection.count == 1 ? "It can’t be restored after this." : "They can’t be restored after this.")
-        }
-        .confirmationDialog("Empty the Trash?", isPresented: $confirmEmpty, titleVisibility: .visible) {
-            Button("Empty Trash", role: .destructive) { Task { await store.emptyTrash() } }
-        } message: {
-            Text(store.trash.count == 1 ? "It’s deleted for good. This can’t be undone." : "All \(store.trash.count) items are deleted for good. This can’t be undone.")
         }
         .alert(deleting.map { "Delete “\($0.name)” forever?" } ?? "", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
             Button("Cancel", role: .cancel) { deleting = nil }
