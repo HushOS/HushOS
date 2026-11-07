@@ -388,6 +388,254 @@ Motion has a purpose or it does not ship: feedback for a press, a state that cha
 - **Navigation bar.** A 2px primary hairline across the top while a page under `/app` loads; it waits 150ms, creeps toward 85%, then fills and fades in 200ms.
 - `prefers-reduced-motion` collapses CSS animation to nothing and limits Motion to opacity and colour. The phones follow the system's Reduce Motion.
 
+## Grammar
+
+This section says where every verb in the product lives, so nobody has to ask why something is a dialog.
+
+- **Nouns** are the things a person handles: a file, a family, a plan.
+- **Verbs** are what they do to them: rename, move, let in.
+- **Layers** are where the doing happens: the page, a menu, a toast, a dialog.
+
+Where a verb lives follows from its noun, and from how temporary and how consequential it is. A surface is never chosen case by case.
+
+- Each noun is a concept in Daniel Jackson's sense (_The Essence of Software_): one purpose, its own state, and an operational principle.
+- The verbs form an object-action matrix, after Daniel Rosenberg's _Semantic Interaction Design_.
+- `docs/grammar-audit.md` checks today's web app against these rules.
+
+### Nouns
+
+Each noun has a purpose, its state, and a principle: one sentence on how it behaves. The words are the ones the screens use.
+
+One noun, one word. A word that already names a noun is never reused for another. "Places" are a plan's room for people, so the destinations of Move are My files and family folders, not places.
+
+#### Drive
+
+| Noun     | Purpose                                                         | State                                                                                              | Principle                                                                                                        |
+| -------- | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| File     | Keeps one private thing you can open wherever you're signed in. | Name, folder, size, Changed and Added, who can open it, tags, an earlier version, kept on a phone. | If you upload a file, only you can open it until you share it or put it in a family folder.                      |
+| Folder   | Keeps files together, so they're found and shared together.     | Name, colour, the folder it's in, who can open it.                                                 | If you share a folder, the same people can open everything in it, including what's added later.                  |
+| Version  | Lets you go back after a file is replaced.                      | The current version and at most one earlier one, kept 30 days.                                     | If you replace a file, the earlier version stays for 30 days, and Restore swaps the two back.                    |
+| Share    | Lets one person open one item in HushOS.                        | The person, Can view or Can edit.                                                                  | If you stop sharing, they can't open it in HushOS any more. Copies they downloaded stay with them.               |
+| Link     | Lets anyone who has it open one item without an account.        | Password, end date, how it has been used.                                                          | If you turn a link off, or it ends, nobody opens the item with it again. Other links keep working.               |
+| Tag      | Finds things across folders.                                    | Name, colour, the items that carry it.                                                             | If you tag items, the tag's page lists them wherever they are. Removing the tag never touches them.              |
+| Trash    | Holds what you removed until you're sure.                       | Each item, and when it went there.                                                                 | If you move something to Trash, it leaves every list. It's deleted for good after 30 days unless you restore it. |
+| Transfer | An upload or download while it runs.                            | Waiting, moving, paused, failed, done.                                                             | If a transfer fails, its row says why and what to do.                                                            |
+| Report   | Shows the people who run this HushOS something shared with you. | What it is, a note.                                                                                | If you report an item, they can open it to look. Whoever shared it isn't told who reported it.                   |
+
+#### People
+
+| Noun         | Purpose                     | State                                                       | Principle                                                                                                                                                               |
+| ------------ | --------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Contact      | Someone you share with.     | Name, email, Verified or not, an account that changed.      | If you add someone, what you share with them is sealed to the keys HushOS remembered for them. A change to those keys is shown to you before anything new goes to them. |
+| Twelve words | Let someone check it's you. | Worked out from your account; the same on all your devices. | If two people's words match, each knows the account they share with is really the other's.                                                                              |
+
+#### Families
+
+Only on servers that offer them.
+
+| Noun                 | Purpose                                                                                             | State                                                                             | Principle                                                                                                                                      |
+| -------------------- | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Family               | Shares folders among the people in it and, where plans are sold, one plan's storage among up to 20. | Name, members, family folders, plan, storage, whether this device has checked it. | If you're let into a family, you can open all its folders. You can be in one family at a time.                                                 |
+| Member               | Someone in the family.                                                                              | Name and email; Organizer, Manages the family or neither; Verified or not.        | If a member leaves or is removed, they lose the family folders at once and HushOS replaces the folders' keys. Their own files stay theirs.     |
+| Invitation           | Asks an email address to join.                                                                      | Open until a date, accepted, cancelled.                                           | If someone accepts, they wait until someone who manages the family lets them in. Cancelling stops the link working.                            |
+| Waiting to join      | Someone who accepted and isn't in yet.                                                              | Accepted when, already in a family, can join once there's a plan.                 | If you let them in, they're a member. If you choose Not now, they need a new invitation.                                                       |
+| Family folder        | A folder everyone in the family can open.                                                           | Name, files, its Trash, a key change in progress.                                 | If you add a file, everyone in the family can open it. If a manager deletes the folder, it's gone for everyone.                                |
+| The family's storage | One amount of space for everyone's own files and the family folders.                                | Used, size; for managers, each member's own use, rounded up to the whole GB.      | If it's full, nobody can upload, to their own files or the family folders, until there's room.                                                 |
+| Family plan          | Pays for the family's storage and its places.                                                       | Tier, monthly or yearly, renews or ends on a date, a change waiting, who pays.    | If the plan ends, nobody uploads to the family folders or joins until it's renewed. Nothing is deleted.                                        |
+| Place                | One person's room in a family plan.                                                                 | Taken, included, paid for, going at renewal, waiting for the bank.                | If every place is taken, letting someone in adds one and charges for it now. Removing places takes effect at renewal and never removes anyone. |
+
+#### Account
+
+| Noun            | Purpose                                                                            | State                                                                       | Principle                                                                                                                  |
+| --------------- | ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Account         | You, to HushOS.                                                                    | Name, email, password, your family and your plan.                           | If you change your password, your other devices are signed out. If you delete the account, everything in it goes for good. |
+| Plan            | Pays for more space of your own. Its page is Plan and storage.                     | Free or a plan, renews or ends on a date, a payment that didn't go through. | If you cancel, you keep the plan until it would renew, then have Free's storage. Nothing is deleted.                       |
+| Recovery phrase | The only way back in without your password, as 24 words or the printed kit's code. | The current phrase.                                                         | If you forget your password, the words or the kit let you set a new one. Making a new phrase stops the old one working.    |
+| Device          | Somewhere your account is signed in.                                               | Name, how it got in, last seen.                                             | If you remove a device, it's signed out and needs your password to come back.                                              |
+| This browser    | The device you're using now.                                                       | Unlocked or locked, appearance, sounds.                                     | If you lock HushOS here, nothing opens on this browser until your password is typed again, and uploads pause.              |
+
+#### Phones
+
+The phones add one noun: **a kept copy** (Keep on this phone). If you keep a folder, its files open with no connection. Removing them from the phone leaves them in HushOS.
+
+### Verbs
+
+#### Reading the matrix
+
+- Rows are nouns. Columns are verbs.
+- A cell names where the verb lives on the web today.
+- That holds however the verb starts: a row menu, the selection bar, a key, a drag or the command palette.
+- A `·` is a verb the noun doesn't have.
+- A `†` breaks the surface rules below. The number after it is the finding in `docs/grammar-audit.md`.
+
+| In a cell     | Means                                                                 |
+| ------------- | --------------------------------------------------------------------- |
+| page          | The noun's own page, with its own URL.                                |
+| inline        | In place, inside the surface already open.                            |
+| in place of X | A step that takes over the open dialog X. Closing it comes back to X. |
+| at once       | It happens, and a toast says so.                                      |
+| Undo          | At once, with Undo in the toast.                                      |
+| menu          | A menu anchored to its trigger.                                       |
+| popover       | A popover anchored to its trigger.                                    |
+| panel         | Beside the list, until it's closed.                                   |
+| dialog        | A dialog over the scrim.                                              |
+| confirm       | An alert dialog that asks once.                                       |
+| portal        | Polar's billing portal, reached from Card and invoices.               |
+| Polar         | Polar's checkout.                                                     |
+
+#### Drive
+
+| Noun     | Open                  | New                                   | Rename     | Move                  | Share  | Copy link       | Change                                                   | Tag        | Trash or remove                   | Restore                | Delete forever            | Check                               |
+| -------- | --------------------- | ------------------------------------- | ---------- | --------------------- | ------ | --------------- | -------------------------------------------------------- | ---------- | --------------------------------- | ---------------------- | ------------------------- | ----------------------------------- |
+| File     | page (the viewer)     | upload, then the transfers panel      | dialog †2  | dialog †3; drag: Undo | dialog | inline in Share | ·                                                        | dialog †16 | Undo                              | at once, from Trash    | confirm                   | popover, then dialog                |
+| Folder   | page                  | dialog †15                            | dialog †2  | dialog †3; drag: Undo | dialog | inline in Share | colour: dialog †10                                       | dialog †16 | Undo                              | at once, from Trash    | confirm                   | ·                                   |
+| Version  | dialog (Versions) †14 | replace on upload: dialog             | ·          | ·                     | ·      | ·               | ·                                                        | ·          | ·                                 | inline in Versions †14 | confirm over Versions †14 | ·                                   |
+| Share    | in Share              | inline (people field)                 | ·          | ·                     | ·      | ·               | inline (role)                                            | ·          | in place of Share (Stop sharing)  | ·                      | ·                         | in place of Share (Check it's Maya) |
+| Link     | in Share, Shared page | inline in Share                       | ·          | ·                     | ·      | inline †18      | in place of Share (password, end date); inline (QR code) | ·          | in place of Share (Turn off link) | ·                      | ·                         | ·                                   |
+| Tag      | page                  | inline on Tags and in the tags dialog | dialog †21 | ·                     | ·      | ·               | popover (colour)                                         | ·          | confirm                           | ·                      | ·                         | ·                                   |
+| Trash    | page                  | ·                                     | ·          | ·                     | ·      | ·               | ·                                                        | ·          | ·                                 | ·                      | confirm (Empty Trash)     | ·                                   |
+| Transfer | panel                 | ·                                     | ·          | ·                     | ·      | ·               | inline (Pause, Resume, Retry)                            | ·          | confirm (Cancel)                  | ·                      | ·                         | ·                                   |
+| Report   | ·                     | dialog                                | ·          | ·                     | ·      | ·               | ·                                                        | ·          | ·                                 | ·                      | ·                         | ·                                   |
+
+#### People and families
+
+| Noun            | Open                       | Add or create      | Rename     | Invite | Let in                               | Not now                     | Check                 | Change role            | Remove                             | Leave                                | Cancel  | Delete             |
+| --------------- | -------------------------- | ------------------ | ---------- | ------ | ------------------------------------ | --------------------------- | --------------------- | ---------------------- | ---------------------------------- | ------------------------------------ | ------- | ------------------ |
+| Contact         | page (Contacts)            | dialog (email) †20 | ·          | ·      | ·                                    | ·                           | dialog                | ·                      | confirm †20                        | ·                                    | ·       | ·                  |
+| Twelve words    | dialog                     | ·                  | ·          | ·      | ·                                    | ·                           | ·                     | ·                      | ·                                  | ·                                    | ·       | ·                  |
+| Family          | page (Family)              | dialog †13         | dialog †21 | ·      | ·                                    | ·                           | ·                     | ·                      | ·                                  | confirm, inside Technical details †4 | ·       | ·                  |
+| Member          | row on the family page     | ·                  | ·          | ·      | ·                                    | ·                           | row menu, then dialog | menu, then confirm †12 | confirm, then a progress dialog †8 | ·                                    | ·       | ·                  |
+| Invitation      | row on the family page     | ·                  | ·          | dialog | ·                                    | ·                           | ·                     | ·                      | ·                                  | ·                                    | confirm | ·                  |
+| Waiting to join | row on the family page     | ·                  | ·          | ·      | on the row, at once; a charge too †1 | on the row, then confirm †1 | row menu, then dialog | ·                      | ·                                  | ·                                    | ·       | ·                  |
+| Family folder   | page                       | dialog †13         | ·          | ·      | ·                                    | ·                           | ·                     | ·                      | ·                                  | ·                                    | ·       | confirm (row menu) |
+| Family storage  | section on the family page | ·                  | ·          | ·      | ·                                    | ·                           | ·                     | ·                      | ·                                  | ·                                    | ·       | ·                  |
+
+#### Plans and account
+
+| Noun            | Open                        | Choose                                                       | Change                                                                       | Keep (withdraw a change)  | Cancel                    | Resume  | Rename       | Remove or sign out | Lock                                                        |
+| --------------- | --------------------------- | ------------------------------------------------------------ | ---------------------------------------------------------------------------- | ------------------------- | ------------------------- | ------- | ------------ | ------------------ | ----------------------------------------------------------- |
+| Family plan     | Billing, on the family page | inline tiers, then Polar (confirm if it ends an unpaid plan) | Change plan: dialog, with the bank step                                      | at once (Keep Family Pro) | dialog, with a reason †22 | at once | ·            | ·                  | ·                                                           |
+| Place           | Billing, on the family page | ·                                                            | Add places: dialog, with the bank step; Remove places at renewal: dialog †11 | at once (Keep 8 places)   | ·                         | ·       | ·            | ·                  | ·                                                           |
+| Plan            | page (Plan and storage)     | Polar (confirm when switching)                               | confirm (Switch to Pro?)                                                     | ·                         | dialog, with a reason †22 | at once | ·            | ·                  | ·                                                           |
+| Account         | page (Account)              | ·                                                            | password: dialog                                                             | ·                         | ·                         | ·       | name: inline | delete: dialog     | ·                                                           |
+| Recovery phrase | page                        | ·                                                            | Make a new phrase: dialog                                                    | ·                         | ·                         | ·       | ·            | ·                  | ·                                                           |
+| Device          | section on Account          | ·                                                            | ·                                                                            | ·                         | ·                         | ·       | dialog †21   | confirm            | ·                                                           |
+| This browser    | section on Account          | ·                                                            | ·                                                                            | ·                         | ·                         | ·       | ·            | confirm (Sign out) | confirm from the menu and Account †9; at once from Sign out |
+
+### Layers
+
+- Nine layers. Each sits a little higher off the ground than the one before, and each has one job.
+- A thing is only as high as it is temporary.
+- Only a dialog stops the page behind it. So only a dialog or a sheet takes `xl` and the scrim.
+
+#### What each layer is for
+
+| Layer           | Job                                                                                                                                               | Anchored to                                                                                                      | Lasts                                                  |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| Ground          | The window: the sidebar, and what the page rests on.                                                                                              | The window.                                                                                                      | Always.                                                |
+| Page            | One noun's home: a folder, a tag, the family, Contacts, Account. Has its own URL. The viewer is a page over the shell.                            | The ground, inset 10px on a desk; full bleed on a phone.                                                         | Until you go somewhere else.                           |
+| Card            | A group inside the page: list groups, fact boxes, banners, inline alerts.                                                                         | Its place in the page.                                                                                           | As long as what it shows is true.                      |
+| Panel           | Work kept open beside the content: Info, transfers.                                                                                               | An edge of the page (Info, right of the list) or of the window (transfers).                                      | Until it's closed, or its work ends.                   |
+| Bar             | Acts on what's selected: the selection bar, the phones' paste bar.                                                                                | The foot of the list.                                                                                            | While something is selected.                           |
+| Menu or popover | One choice of a verb or a value: row and right-click menus, Add, the account menu, selects, the colour pickers, the Unverified popover, tooltips. | Its trigger. The command palette has no trigger, so it opens in the window's centre.                             | Until the next click or Escape.                        |
+| Toast           | Says what just happened, with at most one way back.                                                                                               | The window's foot: bottom right on the web, above the selection and paste bars, in front of the transfers panel. | 3.5s; 8s with Undo; until an Undo it started finishes. |
+| Dialog          | One decision that must interrupt, or one step that must hold focus. An alert dialog asks once.                                                    | The window's centre, over `scrim`.                                                                               | Until it's answered or closed.                         |
+| Sheet           | A dialog or a panel from an edge: the sidebar on a phone; on iOS and Android, what the web puts in a dialog.                                      | A window edge, over `scrim`.                                                                                     | Until it's dismissed or answered.                      |
+
+#### How each layer looks
+
+| Layer           | Fill                                          | Corners                   | Shadow                   | Hairline                            | Motion                                                                                                           |
+| --------------- | --------------------------------------------- | ------------------------- | ------------------------ | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Ground          | `ground`                                      | none                      | none                     | none                                | Never moves.                                                                                                     |
+| Page            | `panel`: `surface` in light, `ground` in dark | `card` (16) on a desk     | `sm`, or none on the web | `rule` on the web                   | Only the navigation hairline moves, while the next page loads.                                                   |
+| Card            | `surface`, or a soft status fill              | `card`                    | none                     | `rule`, or none                     | An alert arrives once (fade and a 4px rise, 200ms `ease-out-expo`) and collapses when it goes (`Collapse`, 0.4). |
+| Panel           | `surface`                                     | `card`                    | `md`                     | `rule` (Info) or `edge` (transfers) | The list makes room. The panel doesn't fly in.                                                                   |
+| Bar             | `secondary` (ink)                             | `card`                    | `lg`                     | none                                | Rides the list's foot.                                                                                           |
+| Menu or popover | `surface`                                     | `card`                    | `lg` (`shadow-overlay`)  | `edge`                              | Grows from its trigger (fade and 95%, 100ms).                                                                    |
+| Toast           | `snackbar`                                    | `card`                    | `lg`                     | none                                | Rises from the foot (200ms `ease-out-expo`).                                                                     |
+| Dialog          | `surface`, over `scrim`                       | `sheet` (20)              | `xl`                     | `edge`                              | Settles in place (fade and 98%, 150ms `ease-out-soft`).                                                          |
+| Sheet           | `surface`, over `scrim`                       | `sheet`, on its free side | `xl`                     | `edge`                              | Slides from its edge (2.5rem, 200ms).                                                                            |
+
+#### Three rules for height
+
+- **Height shows three ways at once.**
+    - Shadow climbs `sm`, `md`, `lg`, `xl`.
+    - The hairline goes from none, to `rule` inside the page, to `edge` on anything raised.
+    - Motion says where a thing comes from: a menu from its trigger, a toast from the foot, a sheet from its edge, a dialog in place.
+    - In high contrast every shadow is `none` and `edge` becomes a solid line, so the hairline carries height on its own.
+- **Springs belong to content, not to layers.**
+    - Swaps (`0.3`, no bounce), arrivals (`0.45`, bounce `0.15`), icon swaps (`0.22`) and collapses (`0.4`) move things inside a layer.
+    - A layer itself never bounces. Nothing on the ground or the page moves on arrival.
+- **Nothing floats without a reason.**
+    - A thing leaves the page's flow only when it's anchored to something that moves or must stay in reach: the bar to the list's foot, a menu to its trigger, a toast to the window, a dialog to a decision.
+    - A card that would read the same in the flow stays in the flow. Nothing is raised to look important.
+
+### Surface rules
+
+#### Four questions
+
+Ask them in order. The first answer that fits decides.
+
+1. **Is it the noun's own home?** Then it's a page, with its own URL.
+    - A folder, a tag, Trash, the family, Contacts, Account, Plan and storage, the recovery phrase, a file in the viewer.
+2. **Is it a choice among verbs?** Then it's a menu anchored to the noun.
+    - The row's ⋯ menu and the right-click menu are one menu: same entries, same order.
+    - The selection bar is that menu for many items.
+3. **Is it reversible?** Then it never interrupts.
+    - **One field, edited where it's shown** (a name, a role): inline. Enter saves, Escape puts it back, and the field says what went wrong. Rename is inline.
+    - **No fields** (Move to Trash, Restore, Keep Family Pro, Resume): at once. A toast says so, with Undo when undoing is one more request.
+    - **Several fields or steps, beside the content** (Info, Versions, a link's password and end date, transfers): a panel beside the list on a wide window, a sheet on a narrow one, or a step inside the surface already open.
+    - **A choice from a few values** (tags on an item, a tag's or a folder's colour): a popover anchored to the verb, applied as it's chosen.
+4. **Is it irreversible or consequential, or must it hold focus?** Then it's a dialog, and its confirm repeats the verb.
+    - Irreversible or consequential: it deletes for good, spends money, removes someone, leaves a family, ends someone else's access, or sends something that can't be unsent.
+    - Examples: Delete forever, Add places, letting someone in when that buys a place, Remove from family, Leave family, Stop sharing, Invite someone, Report.
+    - Holding focus: the step can't survive being looked away from. Confirm with your bank, reading twelve words aloud, typing a password.
+
+#### Four rules that keep the answer stable
+
+- **One verb, one surface.** However a verb is started (menu, selection bar, key, drag, command palette), it lives on the same surface and ends the same way: same toast, same Undo.
+- **A dialog belongs to whoever opened it.**
+    - Once open, it stays until it's answered or closed, even if a refresh means its verb is no longer offered.
+    - A step it holds, such as Confirm with your bank, is never taken away. The page offers the same step until it's done.
+- **One dialog at a time.**
+    - Anything else a dialog needs takes its place as the next step, a confirm included, and closing it comes back.
+    - Share does this for Stop sharing, Turn off link, a link's password and end date, and Check it's Maya. Info does it for the contact checks.
+- **Leaving HushOS is a link that says where it goes** (Card and invoices, Polar's checkout).
+    - A dialog asks first only when something in HushOS changes before you leave, as choosing a plan ends one whose payment failed.
+
+#### On the phones
+
+- A dialog is a sheet (iOS) or a bottom sheet or dialog (Android).
+- A panel is a pushed screen.
+- A menu is the platform's menu.
+- Inline stays inline.
+
+### Attention
+
+- **Only the person's own action may interrupt.**
+    - Nothing opens a dialog by itself: not a page load, a sync, another device, another member or a key change.
+- **Attention from elsewhere doesn't interrupt.**
+    - It lands where its noun lives: an inline alert at the top of that page, or one quiet line ("Checking Lindqvist family’s member list").
+    - It moves once, as it arrives, then holds still. It never pulses.
+- **A toast confirms what the person just did. It never asks for a step.**
+    - Anything that needs doing is an inline alert: a title, a sentence and at most one action. It stays until it's done or no longer true.
+    - A failure may be a toast only when trying again is the answer. Otherwise it's said where it happened, on the row or in the dialog.
+- **Confirm once, where it happened.**
+    - A button that changes its own word ("Copied") needs no toast.
+    - A menu item that closes needs one.
+- **Nothing pulses, loops or blinks.**
+    - What keeps moving: a spinner beside a word that says what's working ("Leaving"), a transfer's progress, and the navigation hairline.
+    - Loading rows are still.
+- **One colour.**
+    - Blue is the screen's one primary action, links, focus and the active place.
+    - Warning, danger and success come with words: on their soft fills in inline alerts, or as a destructive item and its confirm.
+    - Danger is for something that will be lost. Never for a routine event, such as a changed account.
+- **Focus moves with the work.**
+    - A dialog takes focus and gives it back to what opened it.
+    - A step finished inside a dialog moves focus to the next step's heading.
+    - A toast never takes focus.
+- **Sound follows the same rule.** A cue confirms what the person did. Nothing sounds for what arrived on its own.
+
 ## Dither
 
 Alpine is the system; Dither is its voice on the public face of HushOS. It is the texture of a locked file: words spelled in dots on a field of faint dots, with loose dots around them or an ordered-dither (Bayer 4×4) wash rising from the foot. It decorates; it never carries information that is not also in words.
