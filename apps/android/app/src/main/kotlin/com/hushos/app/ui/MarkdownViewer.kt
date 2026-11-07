@@ -263,10 +263,15 @@ private fun MarkdownText(inline: MdInline, style: TextStyle, color: androidx.com
                             withLink(LinkAnnotation.Url(link, linkStyle) { openMarkdownLink(context, link) }) { withStyle(span) { append(run.text) } }
                         } else withStyle(span) { append(run.text) }
                     }
-                    is MdRun.Image -> withStyle(SpanStyle(color = alpine.inkMuted)) {
-                        appendInlineContent(IMAGE_MARK, "[image]")
-                        append(" ")
-                        append(run.alt.ifBlank { "Image" })
+                    is MdRun.Image -> {
+                        val link = run.link
+                        val name: AnnotatedString.Builder.() -> Unit = {
+                            appendInlineContent(IMAGE_MARK, "[image]")
+                            append(" ")
+                            append(run.alt.ifBlank { "Image" })
+                        }
+                        if (link != null) withLink(LinkAnnotation.Url(link, linkStyle) { openMarkdownLink(context, link) }) { name() }
+                        else withStyle(SpanStyle(color = alpine.inkMuted)) { name() }
                     }
                 }
             }

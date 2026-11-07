@@ -36,6 +36,8 @@ public enum MarkdownDocument {
     static let maxDepth = 64
 
     public static func parse(_ text: String) -> [MarkdownBlock] {
+        // A UTF-8 byte order mark is not the document's (the web's TextDecoder drops it): left in, "# Title" isn't a heading.
+        let text = text.hasPrefix("\u{FEFF}") ? String(text.dropFirst()) : text
         if depth(of: text) > maxDepth { return cut(.code(language: nil, text: flat(text))) }
         return blocks(of: Document(parsing: text).children, depth: 0)
     }
@@ -243,7 +245,7 @@ public enum MarkdownDocument {
         }
         for run in inline.runs {
             guard case .text(let text) = run else {
-                if case let .image(alt, _) = run {
+                if case let .image(alt, _, _) = run {
                     let cost = max(alt.count, imageChars)
                     if length + cost > paragraphChars { close() }
                     current.append(run)
@@ -319,7 +321,7 @@ public enum MarkdownDocument {
                 let end = characters.index(characters.startIndex, offsetBy: left, limitedBy: characters.endIndex) ?? characters.endIndex
                 runs.append(.text(AttributedString(text[characters.startIndex..<end])))
                 left -= characters.distance(from: characters.startIndex, to: end)
-            case let .image(alt, _):
+            case let .image(alt, _, _):
                 runs.append(run)
                 left -= max(alt.count, imageChars)
             }
@@ -415,7 +417,8 @@ public enum MarkdownDocument {
                 flush()
                 // Its alt text bounded, so a paragraph's pieces stay bounded too (cutInline never cuts inside an image).
                 let alt = flat(image.plainText)
-                runs.append(.image(alt: alt.count > cellChars ? String(alt.prefix(cellChars)) + " …" : alt, source: image.source))
+                // Inside a link (a badge, a thumbnail), the mark and its words open the link; the picture still isn't fetched.
+                runs.append(.image(alt: alt.count > cellChars ? String(alt.prefix(cellChars)) + " …" : alt, source: image.source, link: link))
             case let anchor as Markdown.Link:
                 let target = anchor.destination.flatMap(safeLink)
                 for child in anchor.children { walk(child, intent, target ?? link, depth + 1) }
@@ -452,7 +455,8 @@ public struct MarkdownInline: Sendable, Equatable {
     public enum Run: Sendable, Equatable {
         case text(AttributedString)
         /* Named, never fetched: the viewer shows the alt text with an image mark, and the source only as text. */
-        case image(alt: String, source: String?)
+        /* `link`: the link it sits in (a badge or a thumbnail that is a link), opened on a tap like any other. */
+        case image(alt: String, source: String?, link: URL? = nil)
     }
 
     public let runs: [Run]
@@ -462,7 +466,7 @@ public struct MarkdownInline: Sendable, Equatable {
         runs.reduce(0) { total, run in
             switch run {
             case .text(let text): total + text.characters.count
-            case .image(let alt, _): total + max(alt.count, MarkdownDocument.imageChars)
+            case .image(let alt, _, _): total + max(alt.count, MarkdownDocument.imageChars)
             }
         }
     }
@@ -472,7 +476,7 @@ public struct MarkdownInline: Sendable, Equatable {
         runs.map { run in
             switch run {
             case .text(let text): String(text.characters)
-            case .image(let alt, _): alt
+            case .image(let alt, _, _): alt
             }
         }.joined()
     }

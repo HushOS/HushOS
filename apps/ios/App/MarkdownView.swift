@@ -192,8 +192,10 @@ private struct MarkdownText: View {
             switch run {
             case .text(let words):
                 return Text("\(text)\(Text(words))")
-            case .image(let alt, _):
-                let name = Text("\(Image(systemName: "photo")) \(alt.isEmpty ? "Image" : alt)").foregroundStyle(Alpine.inkMuted)
+            case let .image(alt, _, link):
+                var words = AttributedString(" " + (alt.isEmpty ? "Image" : alt))
+                if let link { words.link = link }
+                let name = Text("\(Image(systemName: "photo"))\(Text(words))").foregroundStyle(link == nil ? Alpine.inkMuted : Alpine.primary)
                 return Text("\(text)\(name)")
             }
         }

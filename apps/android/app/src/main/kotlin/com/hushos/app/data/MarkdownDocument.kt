@@ -100,7 +100,10 @@ object MarkdownDocument {
     private const val LINE_WEIGHT = 20
     private const val CHARS_PER_WEIGHT = 200
 
-    fun parse(text: String): List<MdBlock> = try {
+    // A UTF-8 byte order mark is not the document's (the web's TextDecoder drops it): left in, "# Title" isn't a heading.
+    fun parse(text: String): List<MdBlock> = parseWhole(text.removePrefix("\uFEFF"))
+
+    private fun parseWhole(text: String): List<MdBlock> = try {
         blocks(parser.parse(text), 0)
     } catch (_: StackOverflowError) {
         // Nothing here should recurse that far; if the parser itself does, the file is shown as its text.
@@ -382,7 +385,8 @@ object MarkdownDocument {
                 // Dropped, as on the web.
                 is HtmlInline, is TaskListItemMarker -> Unit
                 // Its alt text bounded, so a paragraph's pieces stay bounded too (cutInline never cuts inside an image).
-                is Image -> { flush(); runs += MdRun.Image(alt = shortAlt(flatText(node)), source = node.destination) }
+                // Inside a link (a badge, a thumbnail), the mark and its words open the link; the picture still isn't fetched.
+                is Image -> { flush(); runs += MdRun.Image(alt = shortAlt(flatText(node)), source = node.destination, link = style.link) }
                 is Link -> children(node).forEach { walk(it, style.copy(link = safeLink(node.destination) ?: style.link), depth + 1) }
                 is Emphasis -> children(node).forEach { walk(it, style.copy(italic = true), depth + 1) }
                 is StrongEmphasis -> children(node).forEach { walk(it, style.copy(bold = true), depth + 1) }
@@ -439,7 +443,8 @@ sealed interface MdRun {
         val link: String? = null,
     ) : MdRun
     /* Named, never fetched: the viewer shows the alt text with an image mark, and the source only as text. */
-    data class Image(val alt: String, val source: String?) : MdRun {
+    /* `link`: the link it sits in (a badge or a thumbnail that is a link), opened on a tap like any other. */
+    data class Image(val alt: String, val source: String?, val link: String? = null) : MdRun {
         val cost: Int get() = maxOf(alt.length, MarkdownDocument.IMAGE_CHARS)
     }
 }

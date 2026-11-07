@@ -25,6 +25,10 @@ class MarkdownDocumentTest {
     @Test fun anImageIsNamedNotFetched() {
         val inline = paragraph("Look ![the tracker](https://tracker.example/pixel.png) here")
         assertTrue(inline.runs.contains(MdRun.Image("the tracker", "https://tracker.example/pixel.png")))
+
+        // A badge that is a link keeps its link (a tap opens the page), and only a link the viewer may open.
+        val badge = paragraph("[![CI](badge.svg)](https://example.com/build) [![x](y.png)](javascript:alert(1))")
+        assertEquals(listOf("https://example.com/build", null), badge.runs.filterIsInstance<MdRun.Image>().map { it.link })
         // Nothing about the image is a link the viewer would open or load.
         assertTrue(links(inline).isEmpty())
     }
@@ -151,6 +155,10 @@ class MarkdownDocumentTest {
         val quotes = MarkdownDocument.parse((1..5000).joinToString("\n>\n") { "> line $it" }).map { it as MdBlock.Quote }
         assertTrue(quotes.size > 1 && quotes.all { MarkdownDocument.weight(it) <= MarkdownDocument.BLOCK_WEIGHT })
         assertEquals((1..5000).map { "line $it" }, quotes.flatMap { q -> q.blocks.map { (it as MdBlock.Paragraph).inline.plainText } })
+    }
+
+    @Test fun aByteOrderMarkIsNotText() {
+        assertTrue(MarkdownDocument.parse("\uFEFF# Title").single() is MdBlock.Heading)
     }
 
     @Test fun markdownFilesByNameOrType() {

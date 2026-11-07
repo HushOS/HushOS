@@ -26,6 +26,12 @@ struct MarkdownDocumentTests {
     @Test func anImageIsNamedNotFetched() throws {
         let inline = try #require(paragraph("Look ![the tracker](https://tracker.example/pixel.png) here"))
         #expect(inline.runs.contains(.image(alt: "the tracker", source: "https://tracker.example/pixel.png")))
+
+        // A badge that is a link keeps its link (a tap opens the page), and only a link the viewer may open.
+        guard case .paragraph(let badge) = MarkdownDocument.parse("[![CI](badge.svg)](https://example.com/build) [![x](y.png)](javascript:alert(1))").first
+        else { Issue.record("expected a paragraph"); return }
+        let badgeLinks = badge.runs.compactMap { if case let .image(_, _, link) = $0 { link?.absoluteString ?? "none" } else { nil } }
+        #expect(badgeLinks == ["https://example.com/build", "none"])
         // Nothing about the image is a link the viewer would open or load.
         #expect(links(inline).isEmpty)
     }
@@ -131,7 +137,7 @@ struct MarkdownDocumentTests {
         // description is shortened and every piece stays within the limit.
         let pictured = MarkdownDocument.parse("![" + String(repeating: "a", count: 5000) + "](x.png) " + words.prefix(2000).joined(separator: " "))
         #expect(pictured.allSatisfy { if case .paragraph(let inline) = $0 { inline.length <= MarkdownDocument.paragraphChars } else { false } })
-        guard case .paragraph(let first) = pictured.first, case .image(let alt, _) = first.runs.first else { Issue.record("expected an image"); return }
+        guard case .paragraph(let first) = pictured.first, case .image(let alt, _, _) = first.runs.first else { Issue.record("expected an image"); return }
         #expect(alt.hasSuffix("…"))
 
         // Images without words are each drawn as a mark: 10,000 of them aren't one paragraph.
@@ -162,7 +168,7 @@ struct MarkdownDocumentTests {
 
         // An image description is text like any other: its separators are spaces too.
         guard case .paragraph(let described) = MarkdownDocument.parse("![" + String(repeating: "x\u{2028}", count: 1000) + "](x.png)").first,
-              case .image(let separated, _) = described.runs.first else { Issue.record("expected an image"); return }
+              case .image(let separated, _, _) = described.runs.first else { Issue.record("expected an image"); return }
         #expect(!separated.contains("\u{2028}"))
 
         // A million cells from 14 KB (Android's parser refuses it): no crash here, and whatever comes back is bounded.
@@ -210,6 +216,10 @@ struct MarkdownDocumentTests {
             return inner.compactMap { if case .paragraph(let inline) = $0 { inline.plainText } else { nil } }
         }
         #expect(lines == (1...5000).map { "line \($0)" })
+    }
+
+    @Test func aByteOrderMarkIsNotText() {
+        guard case .heading = MarkdownDocument.parse("\u{FEFF}# Title").first else { Issue.record("expected a heading"); return }
     }
 
     @Test func markdownFilesByNameOrType() {
