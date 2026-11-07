@@ -970,7 +970,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         (com.hushos.app.data.AppLinks.parse(link, state.value.origin) as? com.hushos.app.data.AppLinkResult.Open)?.link?.let { target ->
             if (target is com.hushos.app.data.AppLink.Recover) { openRecoveryLink(target.verify); return }
             // The emailed sign-up link carries sign-up on here, whether it began here or on the web.
-            if (target is com.hushos.app.data.AppLink.Register) { openSignupLink(target.verify); return }
+            if (target is com.hushos.app.data.AppLink.Register) { openSignupLink(link); return }
         }
         if (state.value.gate != Gate.SIGNED_IN) {
             pendingLink = link
@@ -1191,7 +1191,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
      * The emailed link. Signed in, it isn't used (the web asks to sign out first): the link stays good for after.
      * Otherwise the address is confirmed and the name and password come next, or the link says why it can't be used.
      */
-    fun openSignupLink(verify: String) = viewModelScope.launch {
+    fun openSignupLink(link: String) = viewModelScope.launch {
         // A link that started the app comes before the stored session is restored: decided once it has been, so a
         // signed-in phone never spends the one-use link.
         if (state.first { it.gate != Gate.CHECKING }.gate == Gate.SIGNED_IN) {
@@ -1199,10 +1199,20 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
             notifyUntilRead("You’re signed in${who?.let { " as $it" }.orEmpty()}. To create another account, sign out, then open the link again.")
             return@launch
         }
+        // Checked again against the server restored meanwhile (a link that started the app was first read against the
+        // default): its one-use token goes only to the server it names.
+        val origin = state.value.origin
+        val verify = when (val parsed = com.hushos.app.data.AppLinks.parse(link, origin)) {
+            is com.hushos.app.data.AppLinkResult.Open -> (parsed.link as? com.hushos.app.data.AppLink.Register)?.verify
+            is com.hushos.app.data.AppLinkResult.Refused -> (parsed.reason as? com.hushos.app.data.AppLinkRefusal.OtherServer)?.let {
+                notifyUntilRead("That link is for another HushOS server (${it.host}). This phone uses ${hostOf(origin)}.")
+                return@launch
+            }
+        } ?: return@launch
         recovery = null
         signup = SignupFlow(SignupStep.CHECKING, email = signup?.email.orEmpty())
         run {
-            val result = withContext(Dispatchers.IO) { runCatching { Auth.verifySignupLink(state.value.origin, verify) } }
+            val result = withContext(Dispatchers.IO) { runCatching { Auth.verifySignupLink(origin, verify) } }
             signup = result.fold(
                 { SignupFlow(SignupStep.DETAILS, email = it.email, enrollment = it) },
                 { SignupFlow(SignupStep.LINK_FAILED, error = com.hushos.app.data.Problems.say(it, "This link didn’t work.")) },

@@ -362,6 +362,13 @@ struct FirstKitView: View {
         if let key = try? await Auth.recoveryKey(), key.confirmed { model.wordsChecked(); return }
         guard let vault = model.vault else { error = "Your recovery phrase didn’t open. Try again."; return }
         do { phrase = try await vault.recoveryPhrase() } catch {
+            // The session ended under this screen (it stands in for the drive, so the drive's own signed-out alert
+            // isn't here): back to sign-in, the words still marked as waiting, so they come first after it. Unless a
+            // sign-in has replaced that session since: then Try again uses the new one.
+            if case AuthError.sessionEnded(let tag) = error, tag == nil || tag == SharedKeychain.session?.tag {
+                model.sessionLost()
+                return
+            }
             self.error = ErrorWords.say(error, otherwise: "Your recovery phrase didn’t open. Try again.") ?? ""
         }
     }
