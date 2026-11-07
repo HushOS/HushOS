@@ -1157,6 +1157,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
 
     /* The token of the sign-up link last opened: the same link opened again doesn't spend it twice (openSignupLink). */
     private var signupVerify: String? = null
+    /* Counts sign-up link checks: only the latest one's answer lands (openSignupLink). */
+    private var signupAttempt = 0
 
     /* Sent from a file picker's sign-in screen: sign-up starts once the gate says signed out (not over one under way). */
     fun signUpWhenSignedOut() = viewModelScope.launch {
@@ -1222,12 +1224,13 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         if (verify == signupVerify && signup != null && signup?.step != SignupStep.LINK_FAILED) return@launch
         signupVerify = verify
         recovery = null
-        val checking = SignupFlow(SignupStep.CHECKING, email = signup?.email.orEmpty())
-        signup = checking
+        // Numbered, not compared: two links' checking flows are equal, and state keeps the first of two equal values.
+        val attempt = ++signupAttempt
+        signup = SignupFlow(SignupStep.CHECKING, email = signup?.email.orEmpty())
         run {
             val result = withContext(Dispatchers.IO) { runCatching { Auth.verifySignupLink(origin, verify) } }
             // Only into the flow that asked: one left, or replaced by a newer link, keeps what it has.
-            if (signup !== checking) return@launch
+            if (attempt != signupAttempt || signup?.step != SignupStep.CHECKING) return@launch
             signup = result.fold(
                 { SignupFlow(SignupStep.DETAILS, email = it.email, enrollment = it) },
                 { SignupFlow(SignupStep.LINK_FAILED, error = com.hushos.app.data.Problems.say(it, "This link didn’t work.")) },
