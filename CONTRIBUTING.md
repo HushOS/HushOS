@@ -278,7 +278,8 @@ The workspace turns on:
 
 - Web pages and layouts live in `apps/web/src/routes/` as directory routes (`app/route.tsx`, `app/index.tsx`).
 - Reusable UI lives in `src/components/`; shared helpers in `src/lib/`.
-- Elysia handlers stay together in `apps/web/src/lib/api.server.ts`. `src/routes/api/$.ts` hands `/api` requests to that app.
+- Elysia handlers live in one Elysia instance per feature in `apps/web/src/lib/api/` (`auth`, `billing`, `drive`, `admin`, `groups`, `system`). Shared context, schemas and helpers are in `api/shared.server.ts`.
+- `apps/web/src/lib/api.server.ts` composes them into one app, and `src/routes/api/$.ts` hands `/api` requests to it. A new route goes in its feature's file.
 - Extract more modules when reuse or complexity calls for it.
 - `routeTree.gen.ts` is checked in. The dev server and the build regenerate it, and CI fails when the committed copy is stale.
 
@@ -449,7 +450,7 @@ Other entries: `./device-storage`, `./protocol`, `./worker`.
 
 The web app implements `AuthApi` in `apps/web/src/lib/auth-api.ts` with the Eden Treaty client. A route or response change the client does not expect then fails `bun run typecheck` there.
 
-Error handlers in `api.server.ts` must return literal status codes. A plain `number` erases every inferred response type.
+Error handlers (`onError` in `api/shared.server.ts`) must return literal status codes. A plain `number` erases every inferred response type.
 
 ### Drive: `@hushos/drive`
 

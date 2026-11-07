@@ -2,10 +2,17 @@ import { checkClient, parseMinimums } from '@hushos/drive/protocol';
 import { GROUP_WRITE_HEADER, GROUP_WRITE_PROTOCOL } from '@hushos/groups/protocol';
 import { describe, expect, test } from 'vitest';
 // The source, not the module: importing the handlers needs a whole server environment.
-import source from './api.server.ts?raw';
 import clientSource from './api-client.ts?raw';
 import { followsGroupWrites, groupWriteMinimums } from './group-write-floor';
 import { HUSHOS_VERSION } from './version';
+// The API's source: the app in api.server.ts and its feature instances in api/.
+const source = Object.values(
+    import.meta.glob<string>(['./api.server.ts', './api/*.server.ts'], {
+        query: '?raw',
+        import: 'default',
+        eager: true,
+    }),
+).join('\n');
 
 /*
  * The client floor on family-changing routes (docs/optional-verification.md
@@ -76,7 +83,7 @@ describe('the family-change version floor', () => {
 });
 
 /*
- * Every route, by method and path, as api.server.ts mounts it, with the helper its handler
+ * Every route, by method and path, as the API mounts it, with the helper its handler
  * calls first: groupWriter (floored) or groupUser.
  */
 function routes() {
