@@ -48,7 +48,7 @@ export type RoadmapSection = {
 };
 
 /* The day this file last changed what the page says (YYYY-MM-DD). */
-export const updated = '2026-11-07';
+export const updated = '2026-11-08';
 
 export const sections: RoadmapSection[] = [
     {
@@ -56,6 +56,14 @@ export const sections: RoadmapSection[] = [
         title: 'Shipped',
         summary: 'Live at hushos.com, and in a self-hosted copy that runs the latest code.',
         items: [
+            {
+                id: 'app-sign-up',
+                status: 'shipped',
+                month: 'November 2026',
+                area: 'Apps',
+                title: 'Create your account in the app',
+                body: 'Make your account on your phone, without the web: confirm your email, choose a password, save your recovery kit, and your drive opens. On iPhone and Android from version 1.2.',
+            },
             {
                 id: 'phone-apps',
                 status: 'shipped',
@@ -89,7 +97,7 @@ export const sections: RoadmapSection[] = [
                 month: 'October 2026',
                 area: 'Apps',
                 title: 'The Android app on Google Play',
-                body: 'Your folders, sharing and links, files kept on the phone to open without a connection, and HushOS in the phone’s Files app. It’s on Google Play, and its APK is also on each GitHub release. You make your account on the web.',
+                body: 'Your folders, sharing and links, files kept on the phone to open without a connection, and HushOS in the phone’s Files app. It’s on Google Play, and its APK is also on each GitHub release.',
             },
             {
                 id: 'devices',
@@ -186,13 +194,6 @@ export const sections: RoadmapSection[] = [
         title: 'Now',
         summary: 'Being built, or built and being finished.',
         items: [
-            {
-                id: 'app-sign-up',
-                status: 'now',
-                area: 'Apps',
-                title: 'Create your account in the app',
-                body: 'Make your account on your phone, without the web: confirm your email, choose a password, save your recovery kit, and your drive opens. Built for Android and iPhone, and coming in their next releases.',
-            },
             {
                 id: 'releases',
                 status: 'now',
