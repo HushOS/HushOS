@@ -350,8 +350,9 @@ public enum MarkdownDocument {
                     default: .leading
                     }
                 },
-                head: Array(table.head.cells).map { inline($0.children) },
-                rows: Array(table.body.rows).map { row in Array(row.cells).map { inline($0.children) } }
+                // Past tableColumns, only one more cell is read (narrow makes it the "…" column).
+                head: table.head.cells.prefix(tableColumns + 1).map { inline($0.children) },
+                rows: table.body.rows.map { row in row.cells.prefix(tableColumns + 1).map { inline($0.children) } }
             ))
         // Raw HTML is dropped, as on the web: not drawn, not run, not shown as text.
         case is HTMLBlock: return nil
@@ -413,7 +414,7 @@ public enum MarkdownDocument {
             case let image as Markdown.Image:
                 flush()
                 // Its alt text bounded, so a paragraph's pieces stay bounded too (cutInline never cuts inside an image).
-                let alt = image.plainText
+                let alt = flat(image.plainText)
                 runs.append(.image(alt: alt.count > cellChars ? String(alt.prefix(cellChars)) + " …" : alt, source: image.source))
             case let anchor as Markdown.Link:
                 let target = anchor.destination.flatMap(safeLink)

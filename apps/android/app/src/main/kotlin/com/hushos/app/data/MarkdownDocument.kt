@@ -338,7 +338,9 @@ object MarkdownDocument {
                 else -> emptySequence()
             }
         }.toList()
-        val cells = rows.map { row -> children(row).filterIsInstance<TableCell>().toList() }
+        // Past TABLE_COLUMNS, only one more cell is read (narrow makes it the "…" column): a 1.8 MB table of 999 columns
+        // read whole ran the heap out before any cap applied.
+        val cells = rows.map { row -> children(row).filterIsInstance<TableCell>().take(TABLE_COLUMNS + 1).toList() }
         val head = cells.firstOrNull().orEmpty()
         return MdBlock.Table(
             alignments = head.map {

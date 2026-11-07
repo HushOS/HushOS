@@ -160,6 +160,11 @@ struct MarkdownDocumentTests {
         #expect(tall.allSatisfy { $0.rows.reduce(0) { $0 + $1.reduce(0) { $0 + $1.length } } <= MarkdownDocument.tableChars })
         #expect(tall.allSatisfy { !$0.rows.contains { $0.contains { $0.plainText.contains("\u{2028}") } } })
 
+        // An image description is text like any other: its separators are spaces too.
+        guard case .paragraph(let described) = MarkdownDocument.parse("![" + String(repeating: "x\u{2028}", count: 1000) + "](x.png)").first,
+              case .image(let separated, _) = described.runs.first else { Issue.record("expected an image"); return }
+        #expect(!separated.contains("\u{2028}"))
+
         // A million cells from 14 KB (Android's parser refuses it): no crash here, and whatever comes back is bounded.
         let million = MarkdownDocument.parse("|" + String(repeating: " c |", count: 1000) + "\n|" + String(repeating: " - |", count: 1000) + "\n" + String(repeating: "| x |\n", count: 1000))
         #expect(million.allSatisfy { block in
