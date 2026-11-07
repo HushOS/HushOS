@@ -1,0 +1,57 @@
+packages/db/src/readiness.ts
+  s_566b8e0c4467a4::t_a62c3aba0c13a3 14
+apps/web/src/lib/affiliate-routes.test.ts
+  s_566b8e0c4467a4::t_7b00a8ef0b3963 1-33
+packages/billing/src/growth.ts
+  s_566b8e0c4467a4::t_d30079adea2116 87,98-100,117,219-220,234,242-254,292-295,311,318-343,347-357,367-453,455-456,458,467-483
+apps/web/src/lib/affiliate-form.test.ts
+  s_566b8e0c4467a4::t_1080228d944689 1-113
+packages/billing/src/api.ts
+  s_566b8e0c4467a4::t_ed0b9b299c3582 231-232,249-250,322-327
+packages/db/src/schema/growth.ts
+  s_566b8e0c4467a4::t_3538e58aa7c465 45-47
+packages/db/drizzle/20261107215320_affiliate_pending_email/migration.sql
+  s_566b8e0c4467a4::t_cbda29e5fd4bd4 1
+apps/web/src/components/ui/autocomplete.tsx
+  s_566b8e0c4467a4::t_82d391467be1fc 1-99
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_42d1de434df4b6 518
+apps/web/src/lib/api.server.ts
+  s_566b8e0c4467a4::t_a339efdfbb435c 251-255,1174-1189,1212,1237-1242
+packages/billing/src/server.ts
+  s_566b8e0c4467a4::t_b3692c90ec99fb 631-657
+packages/db/drizzle/20261107215320_affiliate_pending_email/snapshot.json
+  s_566b8e0c4467a4::t_eba919a1917102 1-37
+apps/web/src/routes/_authenticated/app/_drive/admin.affiliates.tsx
+  s_566b8e0c4467a4::t_8287d882ff3c3a 20-26,44,46-54,58,366-370,372-373,375-390,393-395,397,401,417,424,450-455,472,487,492-494,500-503,508-513,515-523,528-718,725-730,733-740,742,744-748,762,771-772,774,777,787-788,790,793,797-798,800-801,803,806,810-814,816,819,846-851,856-879,881,883-885
+apps/web/src/lib/use-debounced-value.ts
+  s_566b8e0c4467a4::t_70a4ed82a761b3 1-11
+packages/db/test/helpers.ts
+  s_566b8e0c4467a4::t_a6389e34cbb8be 11,71-105
+apps/web/src/lib/growth-api.ts
+  s_566b8e0c4467a4::t_97267de06dd7b2 14-20
+apps/web/src/lib/affiliate-form.ts
+  s_566b8e0c4467a4::t_18547cbbba8563 1-131
+packages/db/src/growth.ts
+  s_566b8e0c4467a4::t_be54e44749a78a 1,296,300-338,359,361,379-380,390-401,418-419,421-426,430-435,437-438,442-483,506-507,524-525,529,536,545-571,585-588,597,599,625-630,687-688
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_0409c7d249bb82 196-199,767-769,787-789,1156,1252-1253,2617-3114
+apps/web/src/routes/_authenticated/app/_drive/referrals.tsx
+  s_566b8e0c4467a4::t_78ff13f05eb23a 1,3,211,213,217,219-244,250-291
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a488092b03d02ed723f727715e6796c133733116",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
