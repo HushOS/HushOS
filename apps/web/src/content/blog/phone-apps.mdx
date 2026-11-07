@@ -16,7 +16,11 @@ HushOS is on the App Store and Google Play from today. Your files, your folders 
 
 <StoreLinks className="mt-5" />
 
-<Phones screen="home" alt="HushOS Home: search, tags and recent files" />
+<Phones
+    screen="home"
+    alt="HushOS Home: search, tags and recent files"
+    className="mt-10 flex items-end justify-center gap-4 sm:gap-6"
+/>
 
 ## What the apps do
 
@@ -33,7 +37,11 @@ The apps are HushOS, not a viewer for it. They open the same account as the web,
 
 Each app looks like it belongs on its phone: system menus, sheets and search, on iPhone and on Android, with HushOS's own folders, marks and colours.
 
-<Phones screen="folder" alt="A folder in HushOS" />
+<Phones
+    screen="folder"
+    alt="A folder in HushOS"
+    className="mt-6 flex items-end justify-center gap-4 sm:gap-6"
+/>
 
 ## What they don't do yet
 
@@ -51,8 +59,8 @@ One thing is worth saying plainly. On Android, Scan document opens Google's docu
 
 ## Getting them
 
-- **iPhone**: on the [App Store](https://apps.apple.com/app/hushos-encrypted-cloud-drive/id6831238356), for iOS 26 and later.
-- **Android**: on Google Play, for Android 10 and later. Each [release on GitHub](https://github.com/HushOS/HushOS/releases) also carries the APK, with its checksum, if you'd rather not use Google Play.
+- **iPhone**: on the [App Store](https://apps.apple.com/app/hushos-encrypted-cloud-drive/id6831238356), for iOS 26 and later. Each [release on GitHub](https://github.com/HushOS/HushOS/releases) also carries an unsigned IPA, with its checksum, for sideloading with AltStore or SideStore.
+- **Android**: on [Google Play](https://play.google.com/store/apps/details?id=com.hushos.app), for Android 10 and later. Each [release on GitHub](https://github.com/HushOS/HushOS/releases) also carries the APK, with its checksum, if you'd rather not use Google Play.
 
 Both apps are open source, like the rest of HushOS, and both can sign in to your own HushOS server: the gear on the sign-in screen takes its address.
 
