@@ -171,7 +171,7 @@ areas   = [[workspaceId,workspaceKeyVersion,commitment], ...]
 - The signer must be active with `members` on the previous roster (the creator, for version 1).
 - The signer must also be active on the roster they sign. A holder's own departure, with the rotations it carries, is another holder's to sign.
 - Every roster keeps at least one active `members` holder, so the group can always sign its next roster (round 11).
-- Both rules hold in `rosterRules` / `roster_rules`, so `nextRoster` and `checkNextRoster` inherit them.
+- The rules that need the signed roster (the signer active on it, and at least one active `members` holder) hold in `rosterRules` / `roster_rules`, so `nextRoster` and `checkNextRoster` inherit them.
 
 #### Folding in changes
 
@@ -330,7 +330,7 @@ Only the worker (or the core's ledger) passes one, in exactly these places:
 - It runs inside the crypto worker, over keys it just made. The creating device generated the group seed itself, so it knows the version 1 keys without asking anyone.
 - It passes `created` only while it still holds the seed of this creation (in its staged secrets, or the sealed outbox entry of the creating call).
 - It passes it only for served first keys equal to that seed's public key.
-- It passes it twice:
+- It passes it:
     - once to accept its own unsent roster version 1 as a staged chain (below);
     - once more to accept what the server serves after the call succeeds. That acceptance writes the device's first cache and pin.
 - After that the group needs the anchor no more on that device. The creator's other devices start from the synced pin.
@@ -431,7 +431,7 @@ The hard warning ("Acme's member list was shown differently to you") appears onl
 **What is not the warning.**
 
 - Served version 1 keys other than the marks' are a refusal, not the warning. A server can make up a group key and sign anything under it.
-- A group key mark that the valid successions served do not meet waits, while the one it names may still be tied to a roster not reached yet.
+- A group key mark that the valid successions served do not meet waits as long as the key it names may still be tied to a roster not reached yet.
     - It is the warning only if a roster needing the next key holds under one of the others, signed by a `members` holder: a real other history the mark contradicts.
     - A roster under the marked (withheld) key while only the others are served is refused as a missing succession.
     - A mark still unmet once the chain is verified is a rollback, refused.
@@ -477,7 +477,8 @@ The family's version 1 words add nothing once the code is checked, and the flow 
 **What it covers, honestly.**
 
 - A newcomer admitted on the real chain whom the server would start on any other history, such as a removed holder's branch.
-- Also a concurrent upload's loser when the admitting roster is the one the server stored. If the server lies to the admin about a 409 and keeps the admitting roster as the loser, the code binds the newcomer to that branch. Admin and newcomer sit on it together: the fork-consistency residual.
+- Also a newcomer the server would start on a concurrent upload's losing roster, when the admitting roster is the one it stored.
+- Residual: if the server lies to the admin about a 409 and keeps the admitting roster as the loser, the code binds the newcomer to that branch. Admin and newcomer sit on it together: the fork-consistency residual.
 - Matching the code with another roster is a second preimage on 132 bits, out of reach, so the digest alone holds.
 - The group key is defence in depth. It adds something only because of the flow rule above (no admission on a holder's removal): the admitting roster is then under a group key no holder removed before it ever held.
 
@@ -541,10 +542,12 @@ The function is `pairCodeOf`, Rust `pair_code_of`.
 **A match** (`pairMatch`, Rust `AreaLedger::pair_match`, the worker's `groupPairMatch`) gives two things:
 
 - The check record to save in the settings: `familyChecks[groupId] = { rosterVersion, with, code, checkedAt }`. Only when the code is this device's.
-- Separately, a verified pin of the other member's keys, only when their entry at the head is active and names the very keys of their entry at the compared roster. Those keys must also be:
+- Separately, a verified pin of the other member's keys, only when their entry at the head is active and names the very keys of their entry at the compared roster. Those keys must also match:
     - the ones this device's guard holds for them (2.8 of the optional-verification design; an unreadable guard writes none);
-    - or, without a guard entry, the settings pin's;
-    - with neither, the pin is written.
+    - or, without a guard entry, the settings pin's.
+
+    With neither a guard entry nor a settings pin, the pin is written.
+
 - A member whose keys moved since (a handover, or a Continue) is checked with personal words instead.
 
 **Acceptance holds the record as a pair mark.**
@@ -1040,7 +1043,7 @@ Two verified links leaving one of the member's key sets for different keys mean 
 
 **On the walk from the first keys**, a fork (or a rollback) voids only that walk's retirement, never the member's verdicts.
 
-- Whoever holds the first keys can mint two consented links leaving them: a holder who planted them, or who provisioned the member's first device.
+- Whoever holds the first keys can mint two consented links leaving them: a holder who planted them, or whoever provisioned the member's first device.
 - Otherwise they could turn every record of the member, forgeries included, to `unchecked`.
 - A genuine fork before the entry then costs only the retirement of the keys before it. Those read bad-signature, the conservative outcome.
 
@@ -1199,7 +1202,7 @@ A root commitment binds only the root's key. The node id, area and area version 
 **Writes.**
 
 - A write in a group area needs a key rooted at the area's write version. Writes are: a new node, an upload or new version, a rename, a share or link, a move's re-wrap.
-- So such keys, and keys cached under a root a rotation replaced, read but write nothing.
+- So keys rooted nowhere, and keys cached under a root a rotation replaced, read but write nothing.
 - A folder takes writes again once the walk re-keys it under the new root.
 - Reading old content through the previous root stays allowed.
 
@@ -1312,8 +1315,8 @@ The family's Trash page does not list a deleted folder. It lists what each live 
 
 #### Compatibility
 
-- Only the web verifies family rosters today (and the server, through the same TypeScript core).
-- The iOS and Android apps have no families, call no group route and never parse a roster. They carry a contact pin's `trustedVia` and nothing else of groups. So no shipped app sees format 2.
+- When format 2 shipped, only the web verified family rosters (and the server, through the same TypeScript core).
+- The iOS and Android apps then had no families, called no group route and never parsed a roster; they carried a contact pin's `trustedVia` and nothing else of groups. So no shipped phone app had to read format 2.
 - The Rust core reads and builds both formats now, so the phone apps' families (1d) start on format 2.
 - The web writes format 2 from a family's first roster and on an existing family's next roster.
     - Every client that reads family rosters is the web this same server serves.
@@ -1400,7 +1403,7 @@ Creating the first shared area ("Family") is part of the same flow.
     - **"They match".**
         - The newcomer's client works the code out again over what route 5 serves now. Another code keeps nothing, and is the one to compare.
         - Then the two typed words must be the code's at the hidden positions, or nothing is kept.
-        - Only then does it record the code in a sealed joins record: version 4 with `joinMark`, so a reload finishes the join. A version 3 record from an earlier release is read alike.
+        - Only then does it record the code in a sealed joins record (version 4 with `joinMark`, so a reload finishes the join; a version 3 record from an earlier release is read alike), and accept the chain:
         - It accepts the chain from version 1 with the code as the join mark (the `join` anchor when there is no other mark, 2.4).
         - Then it writes its cache and pins the group.
 
@@ -1653,7 +1656,7 @@ Open:
     - It sets to end at its period's end any live plan (`active`, `trialing`, `past_due`) that isn't set to end, of a family that isn't dissolved, whose payer on record (`group_billing_customers.payer_user_id`) is no longer an active member: they left or were removed.
     - Never revoked or refunded. The payer keeps what they paid for.
     - It is the backstop for every way such a plan comes to renew:
-        - a resume Polar kept whose reconcile failed before the payer left, on the stale reading;
+        - a resume Polar kept whose reconcile failed before the payer left on the stale reading;
         - a resume the payer made in Polar's portal after leaving.
     - Each plan is set under its change claim, read again first, and only while it still renews and its payer is still away.
     - The same retries, refusals and failing record as the dissolved family's apply.
@@ -2054,7 +2057,7 @@ Each fails on a defect a person would notice (see AGENTS.md).
 
 What is not done, and what it costs, follows. Server-side detail is in `docs/groups-server.md`, "Still open", and the core's open flags in `docs/groups-invariants.md`, "Flags".
 
-- **Mobile families (1d) are shipped.** Both phone apps show families and open family folders, on the native core's write rules (Core 1) and walks, re-keyed records and verdicts (Core 2) (`docs/groups-mobile-plan.md`).
+- **Mobile families (1d) are shipped.** Both phone apps show families and open family folders (`docs/groups-mobile-plan.md`).
 - **iOS and Android billing is read only.** The phones are to show the plan, the pool and who pays, with no purchase and no link out (`docs/groups-mobile-plan.md`, iOS 7). So a family chooses, changes and pays for its plan only on the web.
 - **Polar's `PaymentActionRequired` path is unreproduced.** A bank that asks the payer to confirm an off-session charge sends them to the portal. But no sandbox card has produced that answer (`docs/polar-group-billing-spike.md`, E3), so that path is built against Polar's documentation, not an observed response.
 - **Billing handover of a live plan is not built.** While a plan is live its payer can't leave, be removed or delete their account, even when another member holds `billing`. They must cancel it first (`docs/self-hosting.md`, Family plans).
