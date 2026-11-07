@@ -4,16 +4,16 @@ Ready to paste. Every claim here was checked against the apps on branch `redesig
 
 ## Shared facts
 
-| Field                                    | Value                                                                                                                                                                                                                                                                                                   |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Seller / developer name                  | HushOS, Inc. (Apple takes it from D&B; it can't be a trade name)                                                                                                                                                                                                                                        |
-| Privacy policy URL                       | `https://hushos.com/privacy`                                                                                                                                                                                                                                                                            |
-| Marketing URL (Apple) / Website (Google) | `https://hushos.com`                                                                                                                                                                                                                                                                                    |
-| Support URL                              | **Missing.** Apple requires a page with real contact information: legal address, email and phone. hushos.com has none (`/support` is a 404; the only address published is `hello@hushos.com`, inside the privacy policy). Make `https://hushos.com/support` first; until then nothing can be submitted. |
-| Support email                            | `hello@hushos.com` (the operator contact on the live privacy page). Confirm it reaches a person; Google shows it publicly.                                                                                                                                                                              |
-| Copyright (Apple)                        | `2026 HushOS, Inc.` (Apple adds the ©)                                                                                                                                                                                                                                                                  |
-| Category                                 | Apple: Productivity (primary), Utilities (secondary). Google: Productivity.                                                                                                                                                                                                                             |
-| Price                                    | Free on both. Plans are bought on the web; nothing is sold in the apps.                                                                                                                                                                                                                                 |
+| Field                                    | Value                                                                                                                      |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Seller / developer name                  | HushOS, Inc. (Apple takes it from D&B; it can't be a trade name)                                                           |
+| Privacy policy URL                       | `https://hushos.com/privacy`                                                                                               |
+| Marketing URL (Apple) / Website (Google) | `https://hushos.com`                                                                                                       |
+| Support URL                              | `https://hushos.com/support`: contact email, who runs the service, account recovery and deletion                           |
+| Support email                            | `hello@hushos.com` (the operator contact on the live privacy page). Confirm it reaches a person; Google shows it publicly. |
+| Copyright (Apple)                        | `2026 HushOS, Inc.` (Apple adds the ©)                                                                                     |
+| Category                                 | Apple: Productivity (primary), Utilities (secondary). Google: Productivity.                                                |
+| Price                                    | Free on both. Plans are bought on the web; nothing is sold in the apps.                                                    |
 
 ## Apple App Store
 

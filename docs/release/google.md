@@ -6,15 +6,9 @@ Click by click, for HushOS, Inc. Requirements were checked on Google's own pages
 
 ## 0. Where things stand
 
-- **D-U-N-S: applied, waiting for D&B to issue it.** Google says obtaining one "can take up to 30 days" (https://support.google.com/googleplay/android-developer/answer/13628312). Apple's figure is 5 business days; plan for the longer one.
-- **While you wait, do these** (none needs the number):
-    1. **The Google account** that will own the developer account (section 1, step 1).
-    2. **Website ownership in Search Console** (section 1, step 2). It only needs that Google account and hushos.com's DNS.
-    3. **The upload key** (`scripts/release-wizard.sh`, stage 7, or signing.md).
-    4. **The demo accounts**, made once for both stores (apple.md, section 9).
-    5. **The app changes** in checklist.md (privacy policy link, plan buttons, cleartext traffic) are done; check them on the release build.
-    6. **Screenshots** (`scripts/store-screenshots.sh android`), copy (store-listing.md), Data safety answers (privacy-answers.md), the graphics (`docs/release/assets/`).
-- **Only after the number is issued:** section 1 from step 3 onwards, and everything after.
+- **Done:** the developer account is verified, and the app is live on Google Play.
+- **Sections 1 to 8** were one-time setup, kept as a reference.
+- **For a release**, the Android release workflow does the upload (google-play-ci.md). Section 10 is the fallback by hand.
 
 ## 1. The developer account, as an organization
 
