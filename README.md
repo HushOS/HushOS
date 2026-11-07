@@ -55,7 +55,7 @@ HushOS is an open-source, end-to-end encrypted productivity suite. Version 1 is 
 
 - **Accounts.** The password never leaves your device (OPAQUE). A 24-word recovery phrase gets you back in. Sign up on the web or in the phone apps.
 - **Drive.** Encrypted folders and files, resumable uploads, previews (images, PDF, video, audio, Markdown, code, Office files), versions, trash, folder colours and tags. Search runs on your device.
-- **Sharing.** Share with people you've checked, as viewer or editor, or by a link with an optional password and expiry. Stopping a share changes the keys.
+- **Sharing.** Share with people you've added, as viewer or editor, or by a link with an optional password and expiry. Checking someone's twelve words is optional and can come later. Stopping a share gives the folder tree new keys; file contents already shared keep theirs.
 - **Families.** Up to 20 people share one plan's storage and the family's folders. Everyone's own files stay private to them.
 - **Phone apps.** iPhone (SwiftUI) and Android (Jetpack Compose) on one Rust core that does all the cryptography. Offline files, the system Files app, the share menu, and Scan document.
 - **Self-hosting.** One Docker Compose file runs the whole stack, with billing off by default.
