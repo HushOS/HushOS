@@ -829,7 +829,7 @@ export async function reconcileCustomer(userId: string) {
  * Before an account is deleted: stop billing now, then forget the customer at
  * the provider. A person who pays for a family's live plan is refused first:
  * the card on the family's customer is theirs and would go on being charged
- * (docs/polar-group-billing-spike.md 3).
+ * (docs/archive/polar-group-billing-spike.md 3).
  */
 export async function revokeForDeletion(userId: string) {
     if (!billingEnabled()) return;

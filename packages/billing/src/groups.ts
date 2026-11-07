@@ -46,7 +46,7 @@ import {
 export { quoteUnitsChange, spaceOf };
 
 /*
- * Family billing (docs/groups-design.md 3.5, docs/polar-group-billing-spike.md
+ * Family billing (docs/groups-design.md 3.5, docs/archive/polar-group-billing-spike.md
  * 5 and 8). One Polar team customer per group, `group:<groupId>`, whose owner
  * member is the payer; one subscription whose `units` is the member capacity
  * bought: a fixed base plus a graduated unit price, free up to the plan's
