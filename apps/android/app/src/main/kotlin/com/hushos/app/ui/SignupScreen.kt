@@ -29,6 +29,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.retain.retain
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -134,7 +135,8 @@ private fun SignupSent(model: DriveViewModel, flow: DriveViewModel.SignupFlow) {
     if (flow.resent) FlowNote("New link sent to ${flow.email}.", danger = false)
     flow.error?.let { FlowNote(it) }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-        TextButton(onClick = model::signupEmailAgain) { Text("Use another email") }
+        // Not while a link is on its way: its answer would take the flow back to the inbox from the new address.
+        TextButton(onClick = model::signupEmailAgain, enabled = !flow.pending) { Text("Use another email") }
         TextButton(enabled = !flow.pending, onClick = { model.sendSignupEmail(flow.email, again = true) }) { Text(if (flow.pending) "Sending…" else "Send a new link") }
     }
     Text("Not there? Check your spam folder. The link opens HushOS on this phone, or the web anywhere else.", style = MaterialTheme.typography.bodySmall, color = Alpine.colors.inkMuted)
@@ -157,12 +159,12 @@ private fun SignupLinkFailed(model: DriveViewModel, flow: DriveViewModel.SignupF
     Button(onClick = model::signupEmailAgain, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text("Send a new link") }
 }
 
-/* Name and password, as the web's "Set up your account". The password stays in memory, never in saved state. */
+/* Name and password, as the web's "Set up your account". The password is retained in memory through a rotation, never in saved state. */
 @Composable
 private fun SignupDetails(model: DriveViewModel, flow: DriveViewModel.SignupFlow) {
     var name by rememberSaveable { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var confirm by remember { mutableStateOf("") }
+    var password by retain { mutableStateOf("") }
+    var confirm by retain { mutableStateOf("") }
     var tried by remember { mutableStateOf(false) }
     val nameError = SignupRules.name(name)
     val passwordError = SignupRules.password(password)

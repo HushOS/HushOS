@@ -392,7 +392,11 @@ object Auth {
         return SignupEnrollment(enrollment.getString("email"), reply.enrollment ?: throw AuthFailure("This link didn’t work."))
     }
 
-    /* Creates the account; returns its user id. Nothing is stored here: the caller signs in next. */
+    /*
+     * Creates the account; returns its user id. The caller signs in next. The one thing stored is the RecoveryWords
+     * marker, set before the account is sent: if the server makes it but its answer is lost, the words still come first
+     * at the next sign-in, here or in a picker.
+     */
     fun register(origin: String, enrollment: SignupEnrollment, name: String, password: String): String {
         val cookie = (if (origin.startsWith("https:")) "__Host-hushos-enrollment" else "hushos-enrollment") + "=" + enrollment.token
         val registration = opaqueStartRegistration(password)
@@ -401,6 +405,7 @@ object Auth {
         val registered = opaqueFinishRegistration(password, registration.state, challenge.getString("registrationResponse"))
         val made = com.hushos.core.accountCreate(userId, registered.exportKey)
         val sealed = made.envelope
+        RecoveryWords.begun(userId)
         post(origin, "/api/auth/register/finish", JSONObject().put("name", name).put("registrationRecord", registered.record)
             .put("envelope", JSONObject().put("envelopeVersion", sealed.envelopeVersion.toInt()).put("keyVersion", sealed.keyVersion.toLong())
                 .put("credentialVersion", sealed.credentialVersion.toLong()).put("wrappingSalt", sealed.wrappingSalt)

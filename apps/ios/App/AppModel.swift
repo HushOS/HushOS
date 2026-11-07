@@ -431,8 +431,8 @@ final class AppModel {
         signInGeneration += 1
         await wiping?.value
         let previous = AccountStore.shared.owner()
-        let userId = try await Auth.register(enrollment, name: name, password: password)
-        WordsWaiting.set(userId: userId)
+        // Marks the words as waiting (WordsWaiting) before the account is sent, not after its answer.
+        _ = try await Auth.register(enrollment, name: name, password: password)
         let user: SessionUser
         do {
             user = try await Auth.signIn(origin: origin, email: enrollment.email, password: password)

@@ -33,7 +33,11 @@ extension Auth {
         return SignupEnrollment(email: email, origin: origin, token: cookie)
     }
 
-    /* Creates the account; returns its user id. Nothing is stored here: the caller signs in next. */
+    /*
+     * Creates the account; returns its user id. The caller signs in next. The one thing stored is
+     * WordsWaiting, set before the account is sent: if the server makes it but its answer is lost,
+     * the words still come first at the next sign-in, wherever it happens on this phone.
+     */
     public static func register(_ enrollment: SignupEnrollment, name: String, password: String) async throws -> String {
         let origin = enrollment.origin
         let registration = try opaqueStartRegistration(password: password)
@@ -45,6 +49,7 @@ extension Auth {
         let registered = try opaqueFinishRegistration(password: password, state: registration.state, registrationResponse: registrationResponse)
         let made = try accountCreate(userId: userId, exportKey: registered.exportKey)
         let sealed = made.envelope
+        WordsWaiting.set(userId: userId)
         _ = try await recoveryRequest(origin, "/api/auth/register/finish", body: [
             "name": name,
             "registrationRecord": registered.record,

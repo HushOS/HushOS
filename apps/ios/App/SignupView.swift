@@ -164,8 +164,10 @@ struct SignupView: View {
                 Button(action: send) { Text(pending ? "Sending…" : "Send a new link").frame(maxWidth: .infinity) }
                     .buttonStyle(SecondaryCapsuleStyle()).disabled(pending)
                     .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
+                // Not while a link is on its way: its answer would take the flow back to the inbox from the new address.
                 Button("Use another email") { resent = false; step = .email }
-                    .font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.primary)
+                    .disabled(pending)
+                    .font(Theme.Text.callout.weight(.semibold)).foregroundStyle(pending ? Alpine.inkMuted : Alpine.primary)
                     .frame(maxWidth: .infinity, minHeight: Theme.control).listRowBackground(Color.clear).listRowSeparator(.hidden)
             } footer: {
                 Text("Not there? Check your spam folder. The link opens HushOS on this phone, or the web anywhere else.")

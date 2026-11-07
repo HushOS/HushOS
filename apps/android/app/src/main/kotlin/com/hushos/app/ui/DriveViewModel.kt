@@ -1169,7 +1169,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
             else -> leaveSignup()
         }
     }
-    fun signupEmailAgain() { signup = SignupFlow(SignupStep.EMAIL, email = signup?.email.orEmpty()) }
+    fun signupEmailAgain() { if (signup?.pending != true) signup = SignupFlow(SignupStep.EMAIL, email = signup?.email.orEmpty()) }
 
     fun sendSignupEmail(email: String, again: Boolean = false) {
         val address = email.trim()
@@ -1221,10 +1221,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
             var created = false
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    val userId = Auth.register(origin, enrollment, name, password)
+                    // Marks the words as waiting (RecoveryWords) before the account is sent, not after its answer.
+                    Auth.register(origin, enrollment, name, password)
                     created = true
-                    // Before any session is stored: the account's words wait to be seen and checked, here and in a picker.
-                    com.hushos.app.data.RecoveryWords.begun(userId)
                     try {
                         Auth.signIn(context, origin, enrollment.email, password)
                     } catch (error: Exception) {
