@@ -13,6 +13,7 @@ name: iOS release
 #
 #   gh workflow run ios-release.yml --ref vX.Y.Z -f action=submit -f whats-new="…"
 #
+# (add -f build=N to submit a re-upload made with HUSHOS_BUILD_NUMBER instead of the tag's build)
 # which makes the App Store version, writes What's New, attaches the build and submits it
 # (apps/ios/scripts/submit-review.ts). action=dry-run archives and exports without uploading,
 # and reads what a submit would do without changing anything; action=ipa rebuilds only the IPA.
@@ -37,6 +38,12 @@ on:
                 default: upload
             whats-new:
                 description: What's New in This Version, for submit (may be left out if the version already has it).
+                type: string
+                default: ''
+            build:
+                description: >-
+                    The build number to submit, when it isn't the tag's own (a re-upload with
+                    HUSHOS_BUILD_NUMBER). Left empty, submit takes scripts/build-number.sh --store.
                 type: string
                 default: ''
 
@@ -196,6 +203,7 @@ jobs:
                   ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
                   VERSION: ${{ needs.release.outputs.version }}
                   WHATS_NEW: ${{ inputs.whats-new }}
+                  BUILD_OVERRIDE: ${{ inputs.build }}
                   DRY_RUN: ${{ needs.release.outputs.action == 'dry-run' && '1' || '0' }}
               run: |
                   if [[ -z "$KEY_P8" || -z "$ASC_KEY_ID" || -z "$ASC_ISSUER_ID" ]]; then
@@ -205,5 +213,14 @@ jobs:
                   umask 077
                   printf '%s\n' "$KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
                   trap 'rm -f "$RUNNER_TEMP/AuthKey.p8"' EXIT
-                  # The build number archive.sh uploaded for this tag.
-                  BUILD=$(scripts/build-number.sh --store) ASC_KEY_PATH="$RUNNER_TEMP/AuthKey.p8" bun apps/ios/scripts/submit-review.ts
+                  # The build number archive.sh uploaded for this tag, or the re-upload's when one is given.
+                  if [[ -n "$BUILD_OVERRIDE" ]]; then
+                      if [[ ! "$BUILD_OVERRIDE" =~ ^[0-9]+$ ]]; then
+                          echo "::error title=Not a build number::build is '$BUILD_OVERRIDE'; give the number alone, as HUSHOS_BUILD_NUMBER was."
+                          exit 1
+                      fi
+                      BUILD=$BUILD_OVERRIDE
+                  else
+                      BUILD=$(scripts/build-number.sh --store)
+                  fi
+                  BUILD=$BUILD ASC_KEY_PATH="$RUNNER_TEMP/AuthKey.p8" bun apps/ios/scripts/submit-review.ts

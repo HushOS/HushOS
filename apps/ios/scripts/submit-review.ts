@@ -51,7 +51,12 @@ function token(): string {
     return `${unsigned}.${signature.toString('base64url')}`;
 }
 
-type Resource = { id: string; type: string; attributes?: Record<string, unknown> };
+type Resource = {
+    id: string;
+    type: string;
+    attributes?: Record<string, unknown>;
+    relationships?: Record<string, { data?: { id: string; type: string } | null }>;
+};
 /* An attribute as text, or '' when it is missing or not text. */
 const text = (resource: Resource | undefined, name: string): string => {
     const value = resource?.attributes?.[name];
@@ -189,7 +194,19 @@ const submission =
         },
     }));
 if (submission && target) {
-    const items = await list(`/v1/reviewSubmissions/${submission.id}/items`);
+    // A draft may already hold other things (a product page, an event, another version): submitting
+    // it would send those too, so it has to hold this version and nothing else.
+    const items = await list(
+        `/v1/reviewSubmissions/${submission.id}/items?include=appStoreVersion`,
+    );
+    const versionId = target.id;
+    const others = items.filter(
+        (item) => item.relationships?.appStoreVersion?.data?.id !== versionId,
+    );
+    if (others.length)
+        throw new Error(
+            `The draft review submission ${submission.id} holds ${others.length} other item(s); remove them in App Store Connect or submit it there.`,
+        );
     if (!items.length)
         await write(`add version ${version} to it`, 'POST', '/v1/reviewSubmissionItems', {
             data: {
