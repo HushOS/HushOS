@@ -407,33 +407,33 @@ The startup plugin validates server environment with T3 Env and Zod. An invalid 
 
 ### Auth and email settings
 
-| Setting                                                                                                     | Purpose                                                                                                                                 |
-| ----------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `APP_ORIGIN`                                                                                                | Exact public origin, HTTPS except HTTP localhost. No path, query, or credentials.                                                       |
-| `OPERATOR_NAME`, `OPERATOR_JURISDICTION`, `OPERATOR_CONTACT`                                                | Optional legal name, jurisdiction and contact email of whoever runs the instance. See [notes](#operator-and-contact-settings).          |
-| `OPERATOR_ADDRESS`, `OPERATOR_PHONE`                                                                        | Optional postal address and phone of whoever runs the instance, shown on `/support`. Write line breaks in the address as `\n`.          |
-| `SALES_CONTACT`                                                                                             | Optional email for teams and sales questions. The website's "Talk to us" writes to it; unset, there is no "Talk to us".                 |
-| `HELP_CONTACT`                                                                                              | Optional email for people using this instance. Help in the app's account menu writes to it; unset, there is no Help.                    |
-| `SECURITY_CONTACT`                                                                                          | Optional email for vulnerability reports. Set, the web serves `/.well-known/security.txt`. See [notes](#operator-and-contact-settings). |
-| `APPLE_APP_IDS`                                                                                             | Optional. The iOS apps allowed to open this instance's links and fill its saved passwords. See [phone apps](#phone-app-settings).       |
-| `ANDROID_APP_PACKAGE`                                                                                       | The Android app's package; default `com.hushos.app`.                                                                                    |
-| `ANDROID_APP_CERT_SHA256`                                                                                   | Optional. SHA-256 fingerprints of the certificates that sign your Android build. See [phone apps](#phone-app-settings).                 |
-| `PLAY_STORE_URL`                                                                                            | Optional. The Android app's Google Play listing. See [phone apps](#phone-app-settings).                                                 |
-| `APP_STORE_URL`                                                                                             | Optional. The iPhone app's App Store listing. See [phone apps](#phone-app-settings).                                                    |
-| `OPAQUE_SERVER_SETUP`                                                                                       | Optional. The server-side OPAQUE setup every password depends on. Never change it once set. See [above](#the-opaque-server-setup).      |
-| `OPAQUE_SERVER_SETUP_ID`                                                                                    | Stable identifier for that setup; default `primary`.                                                                                    |
-| `INITIAL_STORAGE_QUOTA_BYTES`                                                                               | Initial allowance for newly created accounts; default `2147483648` (2 GiB).                                                             |
-| `REFERRAL_BONUS_BYTES`, `REFERRAL_SIGNUP_CAP_BYTES`, `REFERRAL_PAID_BONUS_BYTES`, `REFERRAL_PAID_CAP_BYTES` | Referrals, paid in storage. `0` turns a reward off. See [Referrals and affiliates](#referrals-and-affiliates).                          |
-| `TRUSTED_PROXY_HEADER`                                                                                      | Header your proxy sets with the client address, such as `x-forwarded-for`. Required behind a proxy so rate limits key on clients.       |
-| `TRUSTED_COUNTRY_HEADER`                                                                                    | Optional. Header a geolocating proxy sets with the visitor's country code, such as `cf-ipcountry`. Picks the pricing currency.          |
-| `EMAIL_ADAPTER`                                                                                             | `smtp`, `resend`, `ses`, or `log`. See [the `log` adapter](#the-log-adapter).                                                           |
-| `EMAIL_FROM`                                                                                                | Sender address, optionally with display name.                                                                                           |
-| `SMTP_HOST`, `SMTP_PORT`                                                                                    | SMTP endpoint; local defaults `127.0.0.1:1025`.                                                                                         |
-| `SMTP_SECURE`, `SMTP_REQUIRE_TLS`                                                                           | Implicit TLS and required STARTTLS respectively.                                                                                        |
-| `SMTP_USER`, `SMTP_PASSWORD`                                                                                | Set both if SMTP requires authentication.                                                                                               |
-| `RESEND_API_KEY`                                                                                            | Required for the Resend adapter.                                                                                                        |
-| `AWS_REGION`                                                                                                | Required for SES. The AWS SDK supports workload credentials or environment credentials.                                                 |
-| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`                                           | Optional explicit AWS credentials; access key and secret must be supplied together.                                                     |
+| Setting                                                                                                     | Purpose                                                                                                                                             |
+| ----------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `APP_ORIGIN`                                                                                                | Exact public origin, HTTPS except HTTP localhost. No path, query, or credentials.                                                                   |
+| `OPERATOR_NAME`, `OPERATOR_JURISDICTION`, `OPERATOR_CONTACT`                                                | Optional legal name, jurisdiction and contact email of whoever runs the instance. See [notes](#operator-and-contact-settings).                      |
+| `OPERATOR_ADDRESS`, `OPERATOR_PHONE`                                                                        | Optional postal address and phone of whoever runs the instance, shown on `/support`. Write line breaks in the address as `\n`.                      |
+| `SALES_CONTACT`                                                                                             | Optional email for teams and sales questions. The website's "Talk to us" writes to it; unset, there is no "Talk to us".                             |
+| `HELP_CONTACT`                                                                                              | Optional email for people using this instance. Help in the app's account menu writes to it; unset, there is no Help.                                |
+| `SECURITY_CONTACT`                                                                                          | Optional email for vulnerability reports. Set, the web serves `/.well-known/security.txt`. See [notes](#operator-and-contact-settings).             |
+| `APPLE_APP_IDS`                                                                                             | Optional. The iOS apps allowed to open this instance's links and fill its saved passwords. See [phone apps](#phone-app-settings).                   |
+| `ANDROID_APP_PACKAGE`                                                                                       | The Android app's package; default `com.hushos.app`.                                                                                                |
+| `ANDROID_APP_CERT_SHA256`                                                                                   | Optional. SHA-256 fingerprints of the certificates that sign your Android build. See [phone apps](#phone-app-settings).                             |
+| `PLAY_STORE_URL`                                                                                            | Optional. The Android app's Google Play listing. See [phone apps](#phone-app-settings).                                                             |
+| `APP_STORE_URL`                                                                                             | Optional. The iPhone app's App Store listing. See [phone apps](#phone-app-settings).                                                                |
+| `OPAQUE_SERVER_SETUP`                                                                                       | Optional. The server-side OPAQUE setup every password depends on. Never change it once set. See [above](#the-opaque-server-setup).                  |
+| `OPAQUE_SERVER_SETUP_ID`                                                                                    | Stable identifier for that setup; default `primary`.                                                                                                |
+| `INITIAL_STORAGE_QUOTA_BYTES`                                                                               | Initial allowance for newly created accounts; default `2147483648` (2 GiB).                                                                         |
+| `REFERRAL_BONUS_BYTES`, `REFERRAL_SIGNUP_CAP_BYTES`, `REFERRAL_PAID_BONUS_BYTES`, `REFERRAL_PAID_CAP_BYTES` | Referrals, paid in storage. `0` turns a reward off. See [Referrals and affiliates](#referrals-and-affiliates).                                      |
+| `TRUSTED_PROXY_HEADER`                                                                                      | Header your proxy sets with the client address, such as `x-forwarded-for`. Required behind a proxy so rate limits key on clients.                   |
+| `TRUSTED_COUNTRY_HEADER`                                                                                    | Optional. Header a geolocating proxy sets with the visitor's country code, such as `cf-ipcountry`. Picks the currency the pricing page shows first. |
+| `EMAIL_ADAPTER`                                                                                             | `smtp`, `resend`, `ses`, or `log`. See [the `log` adapter](#the-log-adapter).                                                                       |
+| `EMAIL_FROM`                                                                                                | Sender address, optionally with display name.                                                                                                       |
+| `SMTP_HOST`, `SMTP_PORT`                                                                                    | SMTP endpoint; local defaults `127.0.0.1:1025`.                                                                                                     |
+| `SMTP_SECURE`, `SMTP_REQUIRE_TLS`                                                                           | Implicit TLS and required STARTTLS respectively.                                                                                                    |
+| `SMTP_USER`, `SMTP_PASSWORD`                                                                                | Set both if SMTP requires authentication.                                                                                                           |
+| `RESEND_API_KEY`                                                                                            | Required for the Resend adapter.                                                                                                                    |
+| `AWS_REGION`                                                                                                | Required for SES. The AWS SDK supports workload credentials or environment credentials.                                                             |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`                                           | Optional explicit AWS credentials; access key and secret must be supplied together.                                                                 |
 
 #### Operator and contact settings
 
@@ -870,7 +870,7 @@ The token needs no scopes beyond those.
 - In the Customer Portal settings, keep "Enable subscription plan changes" and "Enable subscription seat management" off.
     - With plan changes on, Polar's portal lets any subscriber move to any product in the organisation: a family onto a personal plan, or the reverse. That goes around HushOS's storage check and tier rules.
     - HushOS's own pages already make every plan change: "Switch to …" for a personal plan, under Billing; Change plan for a family.
-- Keep "Allow multiple subscriptions" off. Polar then refuses a second paid checkout for a family's customer (proved in the sandbox), on top of HushOS's one open checkout per family.
+- In the same Customer Portal settings, keep "Allow multiple subscriptions" off. Polar then refuses a second paid checkout for a family's customer (proved in the sandbox), on top of HushOS's one open checkout per family.
 
 ### Plans are Polar products
 
@@ -1186,6 +1186,8 @@ A payer whose plan Polar shows live again and not set to end can't leave, be rem
 - A locked plan says "Polar is still working on a change to the family's Family Pro plan, so it can't be ended yet." and logs `A lapsed family plan could not be revoked: Polar says it is locked` at error level.
 - A 5xx or no answer refuses but keeps the ending.
 
+##### Plans HushOS won't end yet
+
 Never ended by a checkout, a leave, a removal or a deletion (both are refused, with what to do instead):
 
 - an `incomplete` plan younger than a day: a checkout still waiting on the bank. Polar documents no window, and Stripe, under it, expires an incomplete first payment after 23 hours.
@@ -1292,8 +1294,7 @@ Switching back to `BILLING_PROVIDER=none` stops reading pools.
 A member who pays for a personal plan stops paying for it when their files join the pool. Once let in (or once the family's plan goes live), the worker's `billing.end-personal-plan` job:
 
 - revokes their personal subscription at Polar at once;
-- refunds the unused part of the current period, prorated by the second from the revoke, before tax;
-- on every order that paid for that period: a renewal, and a mid-period upgrade's change order.
+- refunds the unused part of the current period, prorated by the second from the revoke, before tax, on every order that paid for that period: a renewal, and a mid-period upgrade's change order.
 
 How the refund is worked out:
 
@@ -1744,7 +1745,7 @@ How sending works:
 
 #### When Polar refuses to end it
 
-A refusal at Polar is 403 `InactiveSubscription`: Polar won't change a plan that isn't active, such as one past due. (An unpaid, incomplete or paused plan is never sent; see below.)
+A 403 `InactiveSubscription` refusal (Polar won't change a plan that isn't active, such as one past due) is handled like this. (An unpaid, incomplete or paused plan is never sent; see below.)
 
 - It is not retried.
 - It is logged as `Polar refused to end a dissolved family’s plan: cancel it in Polar` at error level.
@@ -1755,7 +1756,7 @@ A refusal at Polar is 403 `InactiveSubscription`: Polar won't change a plan that
 Every other error is retried with backoff:
 
 - 409 `SubscriptionLocked` (an update pending, as during a renewal);
-- a token error (401, or a 403 other than the two above);
+- a token error (401, or any 403 other than `InactiveSubscription`);
 - 402, 422, 429, a 5xx and a timeout.
 
 A job that fails all ten tries is queued again by the next reconcile.
