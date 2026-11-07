@@ -5,8 +5,8 @@ import SwiftUI
  * Sign in (DESIGN.md): "Welcome back" with the gear beside it, the server named under it
  * only when it isn't HushOS's own, one message above the fields when the server says
  * no, and a line under them when one is empty. The gear opens Self-hosting › Server address;
- * Forgot opens the reset in the app (RecoveryView). Creating an account stays on the web:
- * the hosted service says where in plain text, never pointing at plans (App Review 3.1.3(f)).
+ * Forgot opens the reset in the app (RecoveryView); Create an account runs sign-up in the app
+ * (SignupView), with no plans or prices anywhere on the way (App Review 3.1.3(f)).
  * The privacy policy and terms are a tap away before signing in (5.1.1(i)).
  */
 struct SignInView: View {
@@ -124,10 +124,14 @@ struct SignInView: View {
                         }
                     }
 
-                    // Where accounts come from: hushos.com, or the self-hosted server's own address (as Android says it).
-                    Text("New to HushOS? Create an account at \(model.selfHostedName ?? "hushos.com").")
-                        .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted)
-                        .padding(.horizontal, Alpine.Space.s4)
+                    // Sign-up runs here in the app, against the server above (SignupView); nothing on the way names plans or prices.
+                    HStack(spacing: Alpine.Space.s1) {
+                        Text("New to HushOS?").foregroundStyle(Alpine.inkMuted)
+                        Button("Create an account") { model.startSignup() }
+                            .fontWeight(.semibold).foregroundStyle(Alpine.primary).frame(minHeight: Theme.control)
+                    }
+                    .font(Theme.Text.callout)
+                    .padding(.horizontal, Alpine.Space.s4)
                 }
                 .padding(.horizontal, Alpine.Space.s4).padding(.top, Alpine.Space.s2)
             }

@@ -24,6 +24,8 @@ public enum AppLink: Equatable, Sendable {
     case node(id: String)
     /* The emailed link that starts a password reset: /recover/complete#verify=<token>. */
     case recover(token: String)
+    /* The emailed sign-up link that carries account creation on in the app: /register/complete#verify=<token>. */
+    case register(token: String)
     /* The mailed family invitation: /join#invite=<token>. The token rides in the fragment and never reaches a server log. */
     case join(token: String)
     /* An invitation link whose token (after the #) was cut off: "This invitation link is incomplete". */
@@ -65,12 +67,13 @@ public enum AppLinks {
         let query = Dictionary((components.queryItems ?? []).compactMap { item in item.value.map { (item.name, $0) } }, uniquingKeysWith: { first, _ in first })
 
         switch path.first {
-        case "recover":
-            // The emailed reset link; its one-time token rides in the fragment and never reaches a server log.
-            guard path == ["recover", "complete"] else { return .failure(.webOnly) }
+        case "recover", "register":
+            // The emailed reset and sign-up links; the one-time token rides in the fragment and never reaches a server log.
+            // The sign-up form itself (with any plan or code it carries) stays on the web.
+            guard let flow = path.first, path == [flow, "complete"] else { return .failure(.webOnly) }
             let fragment = URLComponents(string: "?" + (components.fragment ?? ""))?.queryItems ?? []
             guard let token = fragment.first(where: { $0.name == "verify" })?.value, isToken(token) else { return .failure(.malformed) }
-            return .success(.recover(token: token))
+            return .success(flow == "recover" ? .recover(token: token) : .register(token: token))
         case "join":
             // The web's join page reads `invite=` from the fragment the same way (routes/join/route.tsx).
             guard path == ["join"] else { return .failure(.webOnly) }

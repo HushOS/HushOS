@@ -54,7 +54,8 @@ struct RootView: View {
             case .signedOut:
                 SignInView()
             case .signedIn:
-                MainView()
+                // A new account's words (or a recovery's) this phone made come first, until they are checked.
+                if model.wordsWaiting { FirstKitView() } else { MainView() }
             case .deleted:
                 AccountDeletedView()
             }
@@ -68,6 +69,7 @@ struct RootView: View {
             await model.start()
         }
         .fullScreenCover(isPresented: Binding(get: { model.recovering }, set: { if !$0 { model.recoveryDone() } })) { RecoveryView() }
+        .fullScreenCover(isPresented: Binding(get: { model.signingUp }, set: { if !$0 { model.signupDone() } })) { SignupView() }
         // hushos:// links, and https links when the system hands them over as a URL.
         .onOpenURL { url in model.open(url) }
         // Universal links: https://<server>/s/…, /join, /recover/complete, /app, /app/drive…, /app/shared…, /app/trash….

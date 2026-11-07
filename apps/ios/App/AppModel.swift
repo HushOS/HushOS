@@ -93,6 +93,7 @@ final class AppModel {
     }
 
     func start() async {
+        defer { if let url = deferredSignup { deferredSignup = nil; open(url) } }
         do {
             let check = try await Auth.checkSession()
             if case let .signedIn(user, device) = check, let session = SharedKeychain.session {
@@ -114,6 +115,8 @@ final class AppModel {
                 user = SessionUser(id: session.userId, name: "", email: "", credentialVersion: 0, role: "member")
                 vault = Vault.fromKeychain()
                 owner = AccountOwner(session)
+                // Offline too, words this phone made and nobody checked come before the drive.
+                wordsWaiting = WordsWaiting.isWaiting(for: session.userId)
                 state = .signedIn
                 return
             }
@@ -123,6 +126,9 @@ final class AppModel {
         if let ended = SharedKeychain.session { lastOwner = AccountOwner(ended) }
         state = .signedOut
     }
+
+    /* A sign-up link that arrived while `start` was still checking the stored session. */
+    private var deferredSignup: URL?
 
     /* The stored session `start` last found ended, so `checkAccount` only follows a new one. */
     private var declinedToken: String?
@@ -162,6 +168,8 @@ final class AppModel {
         // vault is made: a claim ends the copies' session, and a vault keeps to the session it was made in.
         TemporaryCopies.claim(owner)
         vault = Vault.fromKeychain()
+        // A new account (or a recovery) whose words this phone made and nobody checked yet: they come before the drive.
+        wordsWaiting = WordsWaiting.isWaiting(for: user.id)
         state = .signedIn
         if let owner { Task { await FilesDomain.register(for: owner) } }
     }
@@ -352,13 +360,35 @@ final class AppModel {
 
     /* Universal links, hushos:// links, and hushos://node/<id>: kept until the drive can open them. */
     func open(_ url: URL) {
+        switch AppLinks.parse(url, server: origin) {
+        // Not over an account being made (it signs in and shows its words as it finishes): this link waits for it.
+        // (The guard on each pattern: a `where` binds only to the pattern it follows.)
+        case .success(.recover) where creatingAccount, .success(.register) where creatingAccount:
+            linkAfterCreating = url
         // The emailed reset link opens the reset here, signed in or not.
-        if case let .success(.recover(token)) = AppLinks.parse(url, server: origin) {
+        case let .success(.recover(token)):
+            signingUp = false
+            signupLink = nil
             recoveryLink = token
             recovering = true
-            return
+        // The emailed sign-up link carries sign-up on here, wherever it began. Signed in, it isn't used (the web asks to
+        // sign out first), so the link stays good for later.
+        case let .success(.register(token)):
+            // A link that started the app comes before start() has restored any session: decided once it has, so a
+            // signed-in phone never spends the one-use link.
+            if state == .checking { deferredSignup = url; return }
+            if state == .signedIn {
+                let who = user.map { $0.email.isEmpty ? "" : " as \($0.email)" } ?? ""
+                NoticeCenter.shared.show("You’re signed in\(who). To create another account, sign out, then open the link again.")
+                return
+            }
+            recovering = false
+            recoveryLink = nil
+            signupLink = token
+            signingUp = true
+        default:
+            pendingLink = url
         }
-        pendingLink = url
     }
 
     /* A family invitation's link waits for sign-in (it carries its token only in memory, never to disk). */
@@ -382,12 +412,66 @@ final class AppModel {
         recoveryLink = nil
     }
 
+    /* Create an account, in the app: shown over sign-in (or opened by the emailed link). Never over a signed-in drive. */
+    var signingUp = false
+    /* The emailed sign-up link's token, until the sign-up screen trades it for the enrollment. */
+    var signupLink: String?
+    /* Signed in with words this phone made that wait to be checked (WordsWaiting): the kit shows before the drive. */
+    private(set) var wordsWaiting = false
+
+    func startSignup() { signingUp = true }
+
+    /* An account being made (createAccount), and a sign-up or reset link that arrived meanwhile, opened after it. */
+    private var creatingAccount = false
+    private var linkAfterCreating: URL?
+
+    func signupDone() {
+        signingUp = false
+        signupLink = nil
+    }
+
+    /*
+     * The account, then a sign-in with its password as the web does. The words wait from before any session exists, so
+     * a sign-in that fails here, or an app stopped before the check, still shows them first next time. Returns false
+     * when the account exists but the sign-in didn't happen.
+     */
+    func createAccount(_ enrollment: SignupEnrollment, name: String, password: String) async throws -> Bool {
+        creatingAccount = true
+        defer {
+            creatingAccount = false
+            if let url = linkAfterCreating { linkAfterCreating = nil; open(url) }
+        }
+        signInGeneration += 1
+        await wiping?.value
+        let previous = AccountStore.shared.owner()
+        // Marks the words as waiting (WordsWaiting) before the account is sent, not after its answer.
+        _ = try await Auth.register(enrollment, name: name, password: password)
+        let user: SessionUser
+        do {
+            user = try await Auth.signIn(origin: origin, email: enrollment.email, password: password)
+        } catch {
+            return false
+        }
+        await anotherAccount(since: previous)
+        signupDone()
+        signedIn(user)
+        return true
+    }
+
+    /* The words were checked (here or, as the server says, anywhere): the drive opens. */
+    func wordsChecked() {
+        WordsWaiting.clear()
+        wordsWaiting = false
+    }
+
     /* The reset, then the app signed in under the new password, as a sign-in leaves it. */
     func recover(_ enrollment: RecoveryEnrollment, password: String, phrase: [String]) async throws -> RecoveredAccount {
         signInGeneration += 1
         await wiping?.value
         let previous = AccountStore.shared.owner()
         let account = try await Auth.recover(enrollment, password: password, phrase: phrase)
+        // The new words wait to be checked even if the app is stopped before they are (the drive shows them first).
+        WordsWaiting.set(userId: account.user.id)
         await anotherAccount(since: previous)
         signedIn(account.user)
         return account

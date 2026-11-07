@@ -507,6 +507,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     fun signOut() {
         showingOwnWords = false
         contactStep = null
+        signup = null
         // Queued transfers belong to the account signing out: stopped now; Auth.signOut removes
         // their copies with every other file of the account (AccountStore).
         androidx.work.WorkManager.getInstance(context).cancelAllWorkByTag(com.hushos.app.data.TransferQueue.TAG)
@@ -536,6 +537,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     private fun sessionLost() {
         showingOwnWords = false
         contactStep = null
+        signup = null
         val ended = Shared.session(context)
         Shared.clearSession(context)
         endFamilyCleanups()
@@ -966,9 +968,20 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
      * the screens act on: a tab, a folder, a file, or the link browser.
      */
     fun openLink(link: String) {
+        // Asked for on a website: finished in the browser, whichever server this phone uses (a plan chosen there waits).
+        if (com.hushos.app.data.AppLinks.isWebRegister(link)) { openInBrowser(link); return }
+        // A link that started the app arrives before the saved server and session are restored: read once they are,
+        // against the server this phone uses, not the default.
+        if (state.value.gate == Gate.CHECKING) {
+            viewModelScope.launch { state.first { it.gate != Gate.CHECKING }; openLink(link) }
+            return
+        }
         // The emailed recovery link picks up recovery, signed in or not; it never waits for a sign-in.
         (com.hushos.app.data.AppLinks.parse(link, state.value.origin) as? com.hushos.app.data.AppLinkResult.Open)?.link?.let { target ->
             if (target is com.hushos.app.data.AppLink.Recover) { openRecoveryLink(target.verify); return }
+            // The emailed sign-up link carries sign-up on here, whether it began here or on the web.
+            if (target is com.hushos.app.data.AppLink.Register) { openSignupLink(link); return }
+            if (target is com.hushos.app.data.AppLink.WebRegister) { openInBrowser(target.url); return }
         }
         if (state.value.gate != Gate.SIGNED_IN) {
             pendingLink = link
@@ -991,7 +1004,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
                     // No key after the #: the link browser says the link is incomplete and asks for the whole one.
                     com.hushos.app.data.AppLink.IncompleteShare -> "link:${origin.trimEnd('/')}/s/"
                     is com.hushos.app.data.AppLink.Node -> "node:${target.id}"
-                    is com.hushos.app.data.AppLink.Recover -> null
+                    is com.hushos.app.data.AppLink.Recover, is com.hushos.app.data.AppLink.Register, is com.hushos.app.data.AppLink.WebRegister -> null
                     // The invitation is a sheet of its own (Main), started here so it outlives whatever is on screen.
                     is com.hushos.app.data.AppLink.Join -> { families.invite(target.token); null }
                     com.hushos.app.data.AppLink.IncompleteInvite -> { families.invite(null); null }
@@ -1044,13 +1057,20 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     fun startRecovery() { recovery = RecoveryFlow(RecoveryStep.EMAIL) }
 
     /* Sent from a file picker's sign-in screen: recovery starts once the gate says signed out (not over one under way). */
-    fun recoverWhenSignedOut() = viewModelScope.launch {
+    fun recoverWhenSignedOut(origin: String? = null) = viewModelScope.launch {
         val gate = state.first { it.gate != Gate.CHECKING }.gate
-        if (gate == Gate.SIGNED_OUT && recovery == null) startRecovery()
+        if (gate == Gate.SIGNED_OUT && recovery == null) {
+            // Another server than a sign-up under way was begun on: that sign-up is left, not carried over to it.
+            if (origin != null && origin.trimEnd('/') != state.value.origin && signup?.step != SignupStep.PHRASE) signup = null
+            origin?.let(::setOrigin)
+            startRecovery()
+        }
     }
     fun leaveRecovery() {
+        // Only words this recovery made (it marks them as it signs in, at NEW_PHRASE): a sign-up's kit that a reset
+        // link interrupted still waits to be checked.
+        if (recovery?.step == RecoveryStep.NEW_PHRASE) com.hushos.app.data.RecoveryWords.settled()
         recovery = null
-        com.hushos.app.data.RecoveryWords.settled()
     }
     fun clearRecoveryError() { recovery = recovery?.takeIf { it.error != null }?.copy(error = null) ?: recovery }
     fun recoveryBack() {
@@ -1079,6 +1099,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
 
     /* The emailed link: the address is confirmed and the kit comes next, or the link says why it can't be used. */
     fun openRecoveryLink(verify: String) {
+        // Not over an account being made: that one signs in and shows its words as it finishes, then this goes on.
+        if (creatingAccount.value) { viewModelScope.launch { creatingAccount.first { !it }; openRecoveryLink(verify) }; return }
+        signup = null
         recovery = RecoveryFlow(RecoveryStep.CHECKING, email = recovery?.email.orEmpty())
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) { runCatching { Auth.verifyRecoveryLink(state.value.origin, verify) } }
@@ -1095,6 +1118,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         val enrollment = flow.enrollment ?: return
         recovery = flow.copy(pending = true, error = null)
         viewModelScope.launch {
+          // Whether this recovery marked its words: only then is the marker its own to clear.
+          var marked = false
           try {
             val origin = state.value.origin
             val result = withContext(Dispatchers.IO) {
@@ -1102,6 +1127,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
                     val recovered = Auth.recover(origin, enrollment, words.joinToString(" "), password)
                     // Before the session is stored: a picker's sign-in screen waits for this account's new words.
                     com.hushos.app.data.RecoveryWords.begun(recovered.userId)
+                    marked = true
                     val phrase = recovered.phrase
                     val user = try {
                         Auth.signIn(context, origin, enrollment.email, password)
@@ -1117,13 +1143,185 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
                     signedIn(user)
                 },
                 {
-                    com.hushos.app.data.RecoveryWords.settled()
+                    if (marked) com.hushos.app.data.RecoveryWords.settled()
                     recovery = recovery?.copy(pending = false, error = com.hushos.app.data.Problems.say(it, com.hushos.app.data.Problems.SERVER))
                 },
             )
           } finally {
             // Cancelled (the view model went) or failed: no new words are on screen, so nothing waits for them.
-            if (recovery?.step != RecoveryStep.NEW_PHRASE) com.hushos.app.data.RecoveryWords.settled()
+            if (marked && recovery?.step != RecoveryStep.NEW_PHRASE) com.hushos.app.data.RecoveryWords.settled()
+          }
+        }
+    }
+
+    /*
+     * Sign-up in the app, the web's /register: email, the emailed link (which opens the app),
+     * name and password, then the recovery phrase, shown and checked before Drive opens. Keys
+     * are made on the phone by the core; the enrollment token stays in memory, as recovery's.
+     * Nothing on the way mentions plans or prices (store payment rules).
+     */
+    enum class SignupStep { EMAIL, SENT, CHECKING, LINK_FAILED, DETAILS, CREATED, PHRASE }
+
+    data class SignupFlow(
+        val step: SignupStep, val email: String = "", val enrollment: Auth.SignupEnrollment? = null,
+        val pending: Boolean = false, val error: String? = null, val resent: Boolean = false,
+    )
+
+    internal var signup by mutableStateOf<SignupFlow?>(null)
+        private set
+
+    fun startSignup() { signup = SignupFlow(SignupStep.EMAIL) }
+
+    /*
+     * A link the website should finish, in the phone's browser by name: an ordinary view of it would come back here,
+     * since the app claims its path. A Custom Tab when no browser can be named.
+     */
+    private fun openInBrowser(url: String) {
+        val uri = android.net.Uri.parse(url)
+        val pm = context.packageManager
+        val probe = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://example.com")).addCategory(android.content.Intent.CATEGORY_BROWSABLE)
+        val browser = pm.resolveActivity(probe, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName
+            ?.takeIf { it != "android" && it != context.packageName }
+            ?: pm.queryIntentActivities(probe, 0).map { it.activityInfo.packageName }.firstOrNull { it != context.packageName }
+        if (browser != null) {
+            runCatching { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, uri).setPackage(browser).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            return
+        }
+        runCatching { androidx.browser.customtabs.CustomTabsIntent.Builder().build().apply { intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK) }.launchUrl(context, uri) }
+    }
+
+    /* The token of the sign-up link last opened: the same link opened again doesn't spend it twice (openSignupLink). */
+    private var signupVerify: String? = null
+    /* An account being made (createAccount): sign-up and recovery links wait for it, so nothing replaces its flow. */
+    private val creatingAccount = kotlinx.coroutines.flow.MutableStateFlow(false)
+    /* Counts sign-up link checks: only the latest one's answer lands (openSignupLink). */
+    private var signupAttempt = 0
+
+    /* Sent from a file picker's sign-in screen: sign-up starts once the gate says signed out (not over one under way). */
+    /* `origin`: the server chosen on the picker's sign-in screen (its own view model), so the account is made there. */
+    fun signUpWhenSignedOut(origin: String? = null) = viewModelScope.launch {
+        val gate = state.first { it.gate != Gate.CHECKING }.gate
+        if (gate == Gate.SIGNED_OUT && signup == null && recovery == null) { origin?.let(::setOrigin); startSignup() }
+    }
+    fun leaveSignup() {
+        // Only once the words are confirmed (or nothing was made): a marker left for a new account keeps its words up.
+        if (signup?.step == SignupStep.PHRASE) com.hushos.app.data.RecoveryWords.settled()
+        signup = null
+    }
+    fun clearSignupError() { signup = signup?.takeIf { it.error != null }?.copy(error = null) ?: signup }
+    fun signupBack() {
+        val flow = signup ?: return
+        if (flow.pending) return
+        when (flow.step) {
+            SignupStep.SENT, SignupStep.LINK_FAILED -> signupEmailAgain()
+            SignupStep.CHECKING, SignupStep.PHRASE -> {}
+            else -> leaveSignup()
+        }
+    }
+    fun signupEmailAgain() { if (signup?.pending != true) signup = SignupFlow(SignupStep.EMAIL, email = signup?.email.orEmpty()) }
+
+    fun sendSignupEmail(email: String, again: Boolean = false) {
+        val address = email.trim()
+        signup = (signup ?: SignupFlow(SignupStep.EMAIL)).copy(pending = true, error = null, email = address)
+        viewModelScope.launch {
+            val origin = state.value.origin
+            val result = withContext(Dispatchers.IO) {
+                runCatching { Auth.requestSignupEmail(origin, address) }
+                    // Kept as this phone's server once its link is on the way: if the app is stopped while the person
+                    // reads their mail, the link still opens sign-up here, not as another server's. A link never sets it.
+                    .onSuccess { Shared.writeOrigin(context, origin) }
+            }
+            // Only the steps that sent it take the answer: a link opened meanwhile has moved on, and mustn't be sent back.
+            signup = signup?.let { flow ->
+                if (flow.step != SignupStep.EMAIL && flow.step != SignupStep.SENT) return@let flow
+                result.fold(
+                    { flow.copy(step = SignupStep.SENT, pending = false, resent = again) },
+                    { flow.copy(pending = false, error = com.hushos.app.data.Problems.say(it, com.hushos.app.data.Problems.SERVER)) },
+                )
+            }
+        }
+    }
+
+    /*
+     * The emailed link. Signed in, it isn't used (the web asks to sign out first): the link stays good for after.
+     * Otherwise the address is confirmed and the name and password come next, or the link says why it can't be used.
+     */
+    fun openSignupLink(link: String) = viewModelScope.launch {
+        // Not over an account being made (it signs in as it finishes): then the gate below says so.
+        creatingAccount.first { !it }
+        // A link that started the app comes before the stored session is restored: decided once it has been, so a
+        // signed-in phone never spends the one-use link.
+        if (state.first { it.gate != Gate.CHECKING }.gate == Gate.SIGNED_IN) {
+            val who = state.value.user?.email?.ifEmpty { null }
+            notifyUntilRead("You’re signed in${who?.let { " as $it" }.orEmpty()}. To create another account, sign out, then open the link again.")
+            return@launch
+        }
+        // Checked again against the server restored meanwhile (a link that started the app was first read against the
+        // default): its one-use token goes only to the server it names.
+        val origin = state.value.origin
+        val verify = when (val parsed = com.hushos.app.data.AppLinks.parse(link, origin)) {
+            is com.hushos.app.data.AppLinkResult.Open -> (parsed.link as? com.hushos.app.data.AppLink.Register)?.verify
+            is com.hushos.app.data.AppLinkResult.Refused -> (parsed.reason as? com.hushos.app.data.AppLinkRefusal.OtherServer)?.let {
+                notifyUntilRead("That link is for another HushOS server (${it.host}). This phone uses ${hostOf(origin)}.")
+                return@launch
+            }
+        } ?: return@launch
+        // The same link again (opened twice, or after it worked): its token is spent, so the flow it started stands.
+        if (verify == signupVerify && signup != null && signup?.step != SignupStep.LINK_FAILED) return@launch
+        signupVerify = verify
+        recovery = null
+        // Numbered, not compared: two links' checking flows are equal, and state keeps the first of two equal values.
+        val attempt = ++signupAttempt
+        signup = SignupFlow(SignupStep.CHECKING, email = signup?.email.orEmpty())
+        run {
+            val result = withContext(Dispatchers.IO) { runCatching { Auth.verifySignupLink(origin, verify) } }
+            // Only into the flow that asked: one left, or replaced by a newer link, keeps what it has.
+            if (attempt != signupAttempt || signup?.step != SignupStep.CHECKING) return@launch
+            signup = result.fold(
+                { SignupFlow(SignupStep.DETAILS, email = it.email, enrollment = it) },
+                { SignupFlow(SignupStep.LINK_FAILED, error = com.hushos.app.data.Problems.say(it, "This link didn’t work.")) },
+            )
+        }
+    }
+
+    /* Name and password: the account, then a sign-in with the password (as the web does), then the phrase to save. */
+    fun createAccount(name: String, password: String) {
+        val flow = signup ?: return
+        val enrollment = flow.enrollment ?: return
+        if (flow.pending) return
+        signup = flow.copy(pending = true, error = null)
+        creatingAccount.value = true
+        viewModelScope.launch {
+          try {
+            // The server that issued the link, whatever this phone has been set to since: it alone sees the token, and
+            // the session is that server's.
+            val origin = enrollment.origin
+            setOrigin(origin)
+            var created = false
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    // Marks the words as waiting (RecoveryWords) before the account is sent, not after its answer.
+                    Auth.register(enrollment, name, password)
+                    created = true
+                    try {
+                        Auth.signIn(context, origin, enrollment.email, password)
+                    } catch (error: Exception) {
+                        android.util.Log.w("HushOS", "sign-in after sign-up failed", error)
+                        null
+                    }
+                }
+            }
+            result.fold(
+                { user ->
+                    if (user == null) signup = SignupFlow(SignupStep.CREATED, email = enrollment.email)
+                    else { signup = SignupFlow(SignupStep.PHRASE, email = enrollment.email); signedIn(user) }
+                },
+                {
+                    if (!created) signup = signup?.copy(pending = false, error = com.hushos.app.data.Problems.say(it, com.hushos.app.data.Problems.SERVER))
+                },
+            )
+          } finally {
+            creatingAccount.value = false
           }
         }
     }
@@ -1472,13 +1670,23 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
 
     suspend fun recoveryKit(): RecoveryKit? {
         val phrase = recoveryPhrase() ?: return null
-        val (recovery, confirmed) = withContext(Dispatchers.IO) { runCatching { Auth.recoveryBackup(context) }.getOrNull() } ?: return null
+        val backup = withContext(Dispatchers.IO) { runCatching { Auth.recoveryBackup(context) } }
+        if (backup.exceptionOrNull() is NotAuthenticated) { sessionLost(); return null }
+        val (recovery, confirmed) = backup.getOrNull() ?: return null
         return RecoveryKit(phrase, recovery, confirmed)
     }
 
     /* After the check: the server records that this phrase was saved. */
-    suspend fun confirmRecovery(kit: RecoveryKit): Boolean =
-        withContext(Dispatchers.IO) { runCatching { Auth.confirmRecovery(context, kit.recovery.getLong("recoveryVersion")) }.isSuccess }
+    /*
+     * True when recorded; false when it couldn't be; null when the session had ended, which goes back to sign-in (the
+     * words still marked as waiting, so they come first after it): a kit screen stands in for the drive, so nothing
+     * else would notice, and every retry would fail the same way.
+     */
+    suspend fun confirmRecovery(kit: RecoveryKit): Boolean? {
+        val result = withContext(Dispatchers.IO) { runCatching { Auth.confirmRecovery(context, kit.recovery.getLong("recoveryVersion")) } }
+        if (result.exceptionOrNull() is NotAuthenticated) { sessionLost(); return null }
+        return result.isSuccess
+    }
 
     /* Removes every earlier version now; files keep their current one. */
     suspend fun discardEarlierVersions(): Boolean {

@@ -1084,11 +1084,12 @@ struct SavedCheck: View {
     let title: String
     let next: () -> Void
 
-    var body: some View {
+    @ViewBuilder var body: some View {
         Section {
             Button { saved.toggle() } label: {
                 HStack(alignment: .top, spacing: Alpine.Space.s3) {
-                    Image(systemName: saved ? "checkmark.square.fill" : "square").font(.title3).foregroundStyle(saved ? Alpine.primary : Alpine.field)
+                    // Round, as on the sign-up's agree row and iOS's own.
+                    Image(systemName: saved ? "checkmark.circle.fill" : "circle").font(.title3).foregroundStyle(saved ? Alpine.primary : Alpine.field)
                     Text("I’ve saved my kit or written the words down, somewhere private.").foregroundStyle(Alpine.ink).frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .contentShape(Rectangle())
@@ -1096,9 +1097,13 @@ struct SavedCheck: View {
             .buttonStyle(.plain)
             .accessibilityAddTraits(saved ? .isSelected : [])
             .alpineRow()
+            .listRowSeparator(.hidden)
+        }
+        // Its own section: in the tick's, the clear button row took the card's rounded foot and left the tick's cut off.
+        Section {
             Button(action: next) { Text(title).frame(maxWidth: .infinity) }
                 .buttonStyle(PrimaryCapsuleStyle()).disabled(!saved)
-                .listRowBackground(Color.clear).listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
         }
     }
 }
@@ -1113,6 +1118,8 @@ struct CheckWordsView: View {
     /* The version to confirm, or nil to read it from the server (a phrase just made). */
     let recoveryVersion: UInt64?
     let done: () -> Void
+    /* A session that ended under the check, where nothing else would notice (a first kit stands in for the drive). */
+    var sessionEnded: (() -> Void)? = nil
     @Environment(\.dismiss) private var back
     @State private var questions: [RecoveryCheck.Question] = []
     @State private var picks: [Int: String] = [:]
@@ -1164,10 +1171,10 @@ struct CheckWordsView: View {
                 Button(action: finish) { Text(pending ? "Saving…" : "Finish").frame(maxWidth: .infinity) }
                     .buttonStyle(PrimaryCapsuleStyle())
                     .disabled(pending || questions.isEmpty || !questions.allSatisfy { right($0.position) })
-                    .listRowBackground(Color.clear).listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
                 Button("Show my words again") { back() }
                     .font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.primary)
-                    .frame(maxWidth: .infinity).listRowBackground(Color.clear)
+                    .frame(maxWidth: .infinity, minHeight: Theme.control).listRowBackground(Color.clear).listRowSeparator(.hidden)
             }
         }
         .listStyle(.insetGrouped)
@@ -1186,6 +1193,9 @@ struct CheckWordsView: View {
                 if let recoveryVersion { version = recoveryVersion } else { version = try await Auth.recoveryKey().envelope.recoveryVersion }
                 try await Auth.confirmRecovery(recoveryVersion: version)
                 done()
+            } catch AuthError.sessionEnded(let tag) where sessionEnded != nil && (tag == nil || tag == SharedKeychain.session?.tag) {
+                // Every retry would fail the same way: the caller goes back to sign-in (the words still waiting).
+                sessionEnded?()
             } catch {
                 self.error = "Couldn’t record that. Check your connection and try again."
             }
