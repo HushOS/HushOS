@@ -1,0 +1,21 @@
+apps/web/src/content/roadmap.ts
+  s_566b8e0c4467a4::t_15d328ad43ed2a 20-21,28-29,76-79,106
+apps/web/src/routes/roadmap/route.tsx
+  s_566b8e0c4467a4::t_6d710838e77207 1,63,82-91
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d6d995315326f4554b0f207d5cbdb0cfccedf856",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
