@@ -1227,7 +1227,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
                 runCatching { Auth.requestSignupEmail(origin, address) }
                     // Kept as this phone's server once its link is on the way: if the app is stopped while the person
                     // reads their mail, the link still opens sign-up here, not as another server's. A link never sets it.
-                    .onSuccess { Shared.writeOrigin(context, origin) }
+                    // Only while it is still the server chosen: a request left behind for another doesn't overwrite it.
+                    .onSuccess { if (state.value.origin == origin) Shared.writeOrigin(context, origin) }
             }
             // Only the steps that sent it take the answer: a link opened meanwhile has moved on, and mustn't be sent back.
             signup = signup?.let { flow ->

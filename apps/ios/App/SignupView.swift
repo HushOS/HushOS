@@ -150,7 +150,8 @@ struct SignupView: View {
                 try await Auth.requestSignupEmail(origin: origin, email: address)
                 // Kept as this phone's server once its link is on the way: if the app is stopped while the person reads
                 // their mail, the link still opens sign-up here, not as another server's. A link never sets it.
-                try? SharedKeychain.write(SharedKeychain.configAccount, SharedKeychain.Config(origin: origin))
+                // Only while it is still the server chosen: a request left behind for another doesn't overwrite it.
+                if model.origin == origin { try? SharedKeychain.write(SharedKeychain.configAccount, SharedKeychain.Config(origin: origin)) }
                 // Only the steps that sent it take the answer: a link opened meanwhile has moved on, and mustn't be sent back.
                 switch step {
                 case .email: step = .inbox(address)
