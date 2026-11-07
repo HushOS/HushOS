@@ -1,0 +1,41 @@
+docs/archive/README.md
+  s_566b8e0c4467a4::t_e183aab23401ea 1-9
+docs/archive/pq-devices-crypto-review.md
+  s_566b8e0c4467a4::t_6f72a6a64e1722 5
+docs/devices-design.md
+  s_566b8e0c4467a4::t_17a9df032e53c4 5
+docs/envelope-migrations.md
+  s_566b8e0c4467a4::t_904c2766ac5b25 3
+docs/groups-design.md
+  s_566b8e0c4467a4::t_4e11ac6f1fa9dd 5,377,604,613
+docs/groups-threat-model.md
+  s_566b8e0c4467a4::t_d3772d0d7fb626 5
+packages/billing/scripts/experiments/sandbox.ts
+  s_566b8e0c4467a4::t_0f77eeaea86a0b 4
+packages/billing/scripts/seed.ts
+  s_566b8e0c4467a4::t_4281fd5e73023b 120
+packages/billing/src/groups.ts
+  s_566b8e0c4467a4::t_ab708b0f98c3b5 49
+packages/billing/src/protocol.ts
+  s_566b8e0c4467a4::t_7419e3cae84273 77
+packages/billing/src/server.ts
+  s_566b8e0c4467a4::t_7fafd04bd60009 832
+packages/db/src/schema/billing.ts
+  s_566b8e0c4467a4::t_3b61b29acc583f 100
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "61ca1aa7812a6dad83956ebe9b1a1556deb3ed7f",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
