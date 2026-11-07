@@ -82,7 +82,7 @@ struct AccountView: View {
                 }
                 Section {
                     NavigationLink { AdvancedView().environment(store).environment(model) } label: {
-                        row("gearshape.2", "Advanced", "Sharing keys, account ID, server, delete account", muted: true)
+                        row("gearshape.2", "Advanced", "Keys, server, delete account", muted: true)
                     }
                     .alpineRow()
                 } footer: {

@@ -183,7 +183,7 @@ fun AccountScreen(model: DriveViewModel, state: DriveState) {
             Subheader("This phone")
             AccountRow("HushOS in Files", "Open and save files from the Files app and other apps", Icons.Outlined.FolderOpen, onClick = null)
             BackgroundStatus()
-            AccountRow("Advanced", "Sharing keys, account ID, delete account", Icons.Outlined.Settings) { page = Page.ADVANCED }
+            AccountRow("Advanced", "Keys, account ID, delete account", Icons.Outlined.Settings) { page = Page.ADVANCED }
             // The signed-in server's own pages (hushos.com's by default), as the stores require.
             Subheader("About")
             AccountRow("Privacy policy", null, Icons.Outlined.PrivacyTip) { openWebPage(context, privacyUrl(state.origin)) }
