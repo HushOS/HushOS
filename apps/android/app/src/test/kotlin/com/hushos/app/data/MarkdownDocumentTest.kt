@@ -104,6 +104,17 @@ class MarkdownDocumentTest {
         val pictured = MarkdownDocument.parse("![" + "a".repeat(5000) + "](x.png) " + words.take(2000).joinToString(" ")).map { it as MdBlock.Paragraph }
         assertTrue(pictured.all { it.inline.length <= MarkdownDocument.PARAGRAPH_CHARS })
         assertTrue((pictured.first().inline.runs.first() as MdRun.Image).alt.endsWith("…"))
+
+        // Images without words are each drawn as a mark: 10,000 of them aren't one paragraph.
+        val marks = MarkdownDocument.parse("![](x) ".repeat(10_000)).map { it as MdBlock.Paragraph }
+        assertTrue(marks.size > 1 && marks.all { it.inline.runs.size <= MarkdownDocument.PARAGRAPH_CHARS / MarkdownDocument.IMAGE_CHARS * 2 })
+        assertEquals(10_000, marks.sumOf { p -> p.inline.runs.count { it is MdRun.Image } })
+
+        // A 1,000-column table: 50 columns and a "…" one, in pieces of a bounded number of cells.
+        val wide = MarkdownDocument.parse("|" + " c |".repeat(1000) + "\n|" + " - |".repeat(1000) + "\n" + "| x |\n".repeat(200)).map { it as MdBlock.Table }
+        assertTrue(wide.all { it.head.size == MarkdownDocument.TABLE_COLUMNS + 1 && it.head.last().plainText == "…" })
+        assertTrue(wide.all { (it.rows.size + 1) * it.head.size <= MarkdownDocument.TABLE_CELLS + it.head.size })
+        assertEquals(200, wide.sumOf { it.rows.size })
     }
 
     @Test fun bigListsAndQuotesComeInPiecesNumberedOn() {

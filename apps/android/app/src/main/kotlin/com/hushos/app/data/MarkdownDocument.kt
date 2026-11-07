@@ -78,6 +78,15 @@ object MarkdownDocument {
      * froze the viewer as one paragraph had. An item too heavy for one piece goes on in the next without its marker.
      */
     const val BLOCK_WEIGHT = 200
+    /*
+     * A table piece holds at most TABLE_CELLS cells (TABLE_ROWS rows of a narrow table, fewer of a wide one), and a table
+     * shows at most TABLE_COLUMNS columns, the rest standing as one "…" column: its grid is laid out whole, and a 9 KB
+     * file of 1,000 empty columns makes hundreds of thousands of cells. An image counts as at least IMAGE_CHARS, so a
+     * paragraph of empty-alt images (each drawn as a mark and a word) is cut too.
+     */
+    const val TABLE_CELLS = 4000
+    const val TABLE_COLUMNS = 50
+    const val IMAGE_CHARS = 20
     private const val CHARS_PER_WEIGHT = 200
 
     fun parse(text: String): List<MdBlock> = try {
@@ -99,10 +108,20 @@ object MarkdownDocument {
         is MdBlock.ListBlock -> if (weight(block) <= BLOCK_WEIGHT) listOf(block) else cutList(block)
         is MdBlock.Code -> cutCode(block.text).map { MdBlock.Code(block.language, it) }
         is MdBlock.Table -> {
-            val short = block.copy(head = block.head.map(::shortCell), rows = block.rows.map { row -> row.map(::shortCell) })
-            if (short.rows.size <= TABLE_ROWS) listOf(short) else short.rows.chunked(TABLE_ROWS).map { short.copy(rows = it) }
+            val narrow = narrow(block)
+            val short = narrow.copy(head = narrow.head.map(::shortCell), rows = narrow.rows.map { row -> row.map(::shortCell) })
+            val rows = minOf(TABLE_ROWS, maxOf(1, TABLE_CELLS / maxOf(1, short.head.size)))
+            if (short.rows.size <= rows) listOf(short) else short.rows.chunked(rows).map { short.copy(rows = it) }
         }
         else -> listOf(block)
+    }
+
+    /* At most TABLE_COLUMNS columns: past that, one "…" column stands for the rest (Open with shows the file whole). */
+    private fun narrow(table: MdBlock.Table): MdBlock.Table {
+        if (table.head.size <= TABLE_COLUMNS) return table
+        val more = MdInline(listOf(MdRun.Text("…")))
+        fun keep(cells: List<MdInline>) = cells.take(TABLE_COLUMNS) + more
+        return MdBlock.Table(table.alignments.take(TABLE_COLUMNS) + MdAlign.START, keep(table.head), table.rows.map(::keep))
     }
 
     /* How much laying a block out costs, roughly: see BLOCK_WEIGHT. Its children were cut first, so each is bounded. */
@@ -110,7 +129,7 @@ object MarkdownDocument {
         is MdBlock.Paragraph -> 1 + block.inline.length / CHARS_PER_WEIGHT
         is MdBlock.Heading -> 1 + block.inline.length / CHARS_PER_WEIGHT
         is MdBlock.Code -> 1 + block.text.length / CHARS_PER_WEIGHT
-        is MdBlock.Table -> 1 + block.rows.size
+        is MdBlock.Table -> 1 + (block.rows.size + 1) * block.head.size / 20
         is MdBlock.Quote -> 1 + block.blocks.sumOf(::weight)
         is MdBlock.ListBlock -> 1 + block.items.sumOf(::weight)
         MdBlock.Rule -> 1
@@ -179,14 +198,14 @@ object MarkdownDocument {
     }
 
     private fun shortCell(cell: MdInline): MdInline {
-        if (cell.plainText.length <= CELL_CHARS) return cell
+        if (cell.length <= CELL_CHARS) return cell
         val runs = mutableListOf<MdRun>()
         var left = CELL_CHARS
         for (run in cell.runs) {
             if (left <= 0) break
             when (run) {
                 is MdRun.Text -> { runs += run.copy(text = run.text.take(left)); left -= run.text.length }
-                is MdRun.Image -> { runs += run; left -= run.alt.length }
+                is MdRun.Image -> { runs += run; left -= run.cost }
             }
         }
         runs += MdRun.Text(" …")
@@ -201,7 +220,7 @@ object MarkdownDocument {
         var length = 0
         fun close() { if (current.isNotEmpty()) pieces += MdInline(current); current = mutableListOf(); length = 0 }
         for (run in inline.runs) {
-            if (run is MdRun.Image) { if (length + run.alt.length > PARAGRAPH_CHARS) close(); current += run; length += run.alt.length; continue }
+            if (run is MdRun.Image) { if (length + run.cost > PARAGRAPH_CHARS) close(); current += run; length += run.cost; continue }
             var rest = (run as MdRun.Text).text
             while (length + rest.length > PARAGRAPH_CHARS) {
                 val room = PARAGRAPH_CHARS - length
@@ -352,7 +371,8 @@ enum class MdAlign { START, CENTER, END }
 
 data class MdInline(val runs: List<MdRun>) {
     val plainText: String get() = runs.joinToString("") { if (it is MdRun.Text) it.text else (it as MdRun.Image).alt }
-    val length: Int get() = runs.sumOf { if (it is MdRun.Text) it.text.length else (it as MdRun.Image).alt.length }
+    /* What cutting counts: characters, and an image at least MarkdownDocument.IMAGE_CHARS. */
+    val length: Int get() = runs.sumOf { if (it is MdRun.Text) it.text.length else (it as MdRun.Image).cost }
 }
 
 sealed interface MdRun {
@@ -365,5 +385,7 @@ sealed interface MdRun {
         val link: String? = null,
     ) : MdRun
     /* Named, never fetched: the viewer shows the alt text with an image mark, and the source only as text. */
-    data class Image(val alt: String, val source: String?) : MdRun
+    data class Image(val alt: String, val source: String?) : MdRun {
+        val cost: Int get() = maxOf(alt.length, MarkdownDocument.IMAGE_CHARS)
+    }
 }

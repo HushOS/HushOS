@@ -98,6 +98,15 @@ public enum MarkdownDocument {
      */
     static let blockWeight = 200
     static let charsPerWeight = 200
+    /*
+     * A table piece holds at most tableCells cells (tableRows rows of a narrow table, fewer of a wide one), and a table
+     * shows at most tableColumns columns, the rest standing as one "…" column: its grid is laid out whole, and a 9 KB
+     * file of 1,000 empty columns makes hundreds of thousands of cells. An image counts as at least imageChars, so a
+     * paragraph of empty-alt images (each drawn as a mark and a word) is cut too.
+     */
+    static let tableCells = 4000
+    static let tableColumns = 50
+    static let imageChars = 20
 
     static func cut(_ block: MarkdownBlock) -> [MarkdownBlock] {
         switch block {
@@ -107,13 +116,23 @@ public enum MarkdownDocument {
         case .list(let list): return weight(block) <= blockWeight ? [block] : cutList(list)
         case let .code(language, text): return cutCode(text).map { .code(language: language, text: $0) }
         case .table(let table):
-            let short = MarkdownTable(alignments: table.alignments, head: table.head.map(shortCell), rows: table.rows.map { $0.map(shortCell) })
-            guard short.rows.count > tableRows else { return [.table(short)] }
-            return stride(from: 0, to: short.rows.count, by: tableRows).map { start in
-                .table(MarkdownTable(alignments: short.alignments, head: short.head, rows: Array(short.rows[start..<min(start + tableRows, short.rows.count)])))
+            let narrow = narrow(table)
+            let short = MarkdownTable(alignments: narrow.alignments, head: narrow.head.map(shortCell), rows: narrow.rows.map { $0.map(shortCell) })
+            let rows = min(tableRows, max(1, tableCells / max(1, short.head.count)))
+            guard short.rows.count > rows else { return [.table(short)] }
+            return stride(from: 0, to: short.rows.count, by: rows).map { start in
+                .table(MarkdownTable(alignments: short.alignments, head: short.head, rows: Array(short.rows[start..<min(start + rows, short.rows.count)])))
             }
         default: return [block]
         }
+    }
+
+    /* At most tableColumns columns: past that, one "…" column stands for the rest (Share shows the file whole). */
+    private static func narrow(_ table: MarkdownTable) -> MarkdownTable {
+        guard table.head.count > tableColumns else { return table }
+        let more = MarkdownInline(runs: [.text(AttributedString("…"))])
+        func keep(_ cells: [MarkdownInline]) -> [MarkdownInline] { Array(cells.prefix(tableColumns)) + [more] }
+        return MarkdownTable(alignments: Array(table.alignments.prefix(tableColumns)) + [.leading], head: keep(table.head), rows: table.rows.map(keep))
     }
 
     /* How much laying a block out costs, roughly: see blockWeight. Its children were cut first, so each is bounded. */
@@ -121,7 +140,7 @@ public enum MarkdownDocument {
         switch block {
         case .heading(_, let inline), .paragraph(let inline): return 1 + inline.length / charsPerWeight
         case .code(_, let text): return 1 + text.count / charsPerWeight
-        case .table(let table): return 1 + table.rows.count
+        case .table(let table): return 1 + (table.rows.count + 1) * table.head.count / 20
         case .quote(let blocks): return 1 + blocks.reduce(0) { $0 + weight($1) }
         case .list(let list): return 1 + list.items.reduce(0) { $0 + weight($1) }
         case .rule: return 1
@@ -190,9 +209,10 @@ public enum MarkdownDocument {
         for run in inline.runs {
             guard case .text(let text) = run else {
                 if case let .image(alt, _) = run {
-                    if length + alt.count > paragraphChars { close() }
+                    let cost = max(alt.count, imageChars)
+                    if length + cost > paragraphChars { close() }
                     current.append(run)
-                    length += alt.count
+                    length += cost
                 }
                 continue
             }
@@ -254,7 +274,7 @@ public enum MarkdownDocument {
     }
 
     private static func shortCell(_ cell: MarkdownInline) -> MarkdownInline {
-        guard cell.plainText.count > cellChars else { return cell }
+        guard cell.length > cellChars else { return cell }
         var runs: [MarkdownInline.Run] = []
         var left = cellChars
         for run in cell.runs where left > 0 {
@@ -266,7 +286,7 @@ public enum MarkdownDocument {
                 left -= characters.distance(from: characters.startIndex, to: end)
             case let .image(alt, _):
                 runs.append(run)
-                left -= alt.count
+                left -= max(alt.count, imageChars)
             }
         }
         runs.append(.text(AttributedString(" …")))
@@ -401,12 +421,12 @@ public struct MarkdownInline: Sendable, Equatable {
 
     public let runs: [Run]
 
-    /* Its length in characters, as cutting counts it. */
+    /* Its length as cutting counts it: characters, and an image at least MarkdownDocument.imageChars. */
     public var length: Int {
         runs.reduce(0) { total, run in
             switch run {
             case .text(let text): total + text.characters.count
-            case .image(let alt, _): total + alt.count
+            case .image(let alt, _): total + max(alt.count, MarkdownDocument.imageChars)
             }
         }
     }

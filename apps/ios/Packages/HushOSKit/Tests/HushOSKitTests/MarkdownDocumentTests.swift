@@ -133,6 +133,22 @@ struct MarkdownDocumentTests {
         #expect(pictured.allSatisfy { if case .paragraph(let inline) = $0 { inline.length <= MarkdownDocument.paragraphChars } else { false } })
         guard case .paragraph(let first) = pictured.first, case .image(let alt, _) = first.runs.first else { Issue.record("expected an image"); return }
         #expect(alt.hasSuffix("…"))
+
+        // Images without words are each drawn as a mark: 10,000 of them aren't one paragraph.
+        let marks = MarkdownDocument.parse(String(repeating: "![](x) ", count: 10_000))
+        #expect(marks.count > 1)
+        #expect(marks.allSatisfy { if case .paragraph(let inline) = $0 { inline.length <= MarkdownDocument.paragraphChars } else { false } })
+
+        // A 1,000-column table: 50 columns and a "…" one, in pieces of a bounded number of cells.
+        let wideTable = MarkdownDocument.parse("|" + String(repeating: " c |", count: 1000) + "\n|" + String(repeating: " - |", count: 1000) + "\n" + String(repeating: "| x |\n", count: 200))
+        var rowsSeen = 0
+        for block in wideTable {
+            guard case .table(let table) = block else { Issue.record("expected tables"); return }
+            #expect(table.head.count == MarkdownDocument.tableColumns + 1 && table.head.last?.plainText == "…")
+            #expect((table.rows.count + 1) * table.head.count <= MarkdownDocument.tableCells + table.head.count)
+            rowsSeen += table.rows.count
+        }
+        #expect(rowsSeen == 200)
     }
 
     @Test func bigListsAndQuotesComeInPiecesNumberedOn() {
