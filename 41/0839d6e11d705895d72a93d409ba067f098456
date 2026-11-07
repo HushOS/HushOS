@@ -1,0 +1,25 @@
+apps/android/app/src/main/kotlin/com/hushos/app/MainActivity.kt
+  s_566b8e0c4467a4::t_e4cf106c3b7fa0 23-27,77-78
+apps/android/app/src/main/kotlin/com/hushos/app/PickerSignInActivity.kt
+  s_566b8e0c4467a4::t_1f4baf368b5596 36,40
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AccountScreen.kt
+  s_566b8e0c4467a4::t_9e0c2c67df05e1 519-524
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_8ab32fc9122859 1058,1060,1194-1195,1197,1657-1659,1664-1673
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "410839d6e11d705895d72a93d409ba067f098456",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
