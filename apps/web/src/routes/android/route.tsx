@@ -1,12 +1,16 @@
 import { createFileRoute, notFound } from '@tanstack/react-router';
 import { AppLinksPage } from '@/components/app-links-page';
+import { appStoreRedirect } from '@/lib/app-links';
 import { cardMeta, publicOrigin } from '@/lib/social';
 
-/* The share link for the Android app (AppLinksPage): our card, then on to Google Play. Only where this server names the listing. */
+/* The share link for the Android app: a person goes straight to Google Play (appStoreRedirect), a link preview gets this page and its card. Only where this server names the listing. */
 export const Route = createFileRoute('/android')({
     beforeLoad: ({ context }) => {
         if (!context.playStoreUrl) throw notFound();
+        appStoreRedirect(context.playStoreUrl);
     },
+    // Who asked decides the answer (a person is redirected, a preview is not), so nothing keeps it.
+    headers: () => ({ 'Cache-Control': 'private, no-store', Vary: 'User-Agent' }),
     loader: () => ({ origin: publicOrigin() }),
     head: ({ loaderData }) => ({
         meta: [

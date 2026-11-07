@@ -2,7 +2,7 @@ import { createFileRoute, notFound } from '@tanstack/react-router';
 import { AppLinksPage } from '@/components/app-links-page';
 import { cardMeta, publicOrigin } from '@/lib/social';
 
-/* The share link for both phone apps (AppLinksPage): a phone goes on to its own store, a computer sees both badges. Only where this server names a listing. */
+/* The share link for both phone apps (AppLinksPage): the page and both badges, for the visitor to tap; it never redirects. Only where this server names a listing. */
 export const Route = createFileRoute('/apps')({
     beforeLoad: ({ context }) => {
         if (!context.appStoreUrl && !context.playStoreUrl) throw notFound();
