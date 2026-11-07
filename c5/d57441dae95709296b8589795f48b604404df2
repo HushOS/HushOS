@@ -1,0 +1,27 @@
+apps/android/app/src/main/AndroidManifest.xml
+  s_566b8e0c4467a4::t_e8447ee2fbe42b 20-28
+apps/android/app/src/main/kotlin/com/hushos/app/data/AppLinks.kt
+  s_566b8e0c4467a4::t_fbc7fc90ab6780 32-36,111-112
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_1f93846d37e314 980,1003,1091-1092,1161-1178,1181-1182,1229-1230,1272,1274,1299-1301
+apps/android/app/src/test/kotlin/com/hushos/app/data/AppLinksTest.kt
+  s_566b8e0c4467a4::t_8df5ae436acbb5 135,137-139
+apps/ios/App/AppModel.swift
+  s_566b8e0c4467a4::t_130218bb08ae8c 364-366,423-426,438-442
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c5d57441dae95709296b8589795f48b604404df2",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
