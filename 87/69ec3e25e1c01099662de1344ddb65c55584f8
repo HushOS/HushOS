@@ -1,0 +1,51 @@
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_a7eee82b2bcc7e 390
+  s_566b8e0c4467a4::t_f28129a42c019c 3,5-7,9-18,27-68,72-316,318-349,351-365,367,369-386,388,392-411,413,416-426,428,430-500,502,507-512,514-1086,1152-1161
+  s_566b8e0c4467a4::t_3e925c2a0d33d4 415
+  s_566b8e0c4467a4::t_33941bab69376f 8
+  s_566b8e0c4467a4::t_4c41c2707f430a 501
+  s_566b8e0c4467a4::t_c6077c970f39b0 503-506
+  s_566b8e0c4467a4::t_c808c28f8a6fa4 1087-1089,1149-1151
+  s_b40e5c26b6ad26::t_c941fe64a37774 1090-1148
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_91ed6d78860e69 34
+  s_566b8e0c4467a4::t_8b311d2f383beb 31-33
+  s_566b8e0c4467a4::t_2686966f967e2a 35-37
+  s_d87fbbb12966be::t_8256381416ff3e 3-8,10,16-18,21-30,38-58,62-147,151,153,155-163,165,167-1477
+crates/hushos-core/AGENTS.md
+  s_566b8e0c4467a4::t_68ef7ae2dbd980 998
+  s_566b8e0c4467a4::t_c81b0b9055e411 3-7,11-16,18-997,999-1029,1031-1365,1367,1369,1371-1397
+  s_566b8e0c4467a4::t_8b8233f796b88c 1030
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8769ec3e25e1c01099662de1344ddb65c55584f8",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_b40e5c26b6ad26": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a614c0bdcce21b29e",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_d87fbbb12966be": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-af6dac60a4aee52c9",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
