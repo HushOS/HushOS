@@ -121,8 +121,17 @@ function Frame({
 const LINK =
     'block shrink-0 rounded-[8px] outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-solid focus-visible:outline-ring';
 
-export function StoreLinks({ className }: { className?: string }) {
-    const { playStoreUrl, appStoreUrl } = useRouteContext({ from: '__root__' });
+/* Both stores' badges, or `only` one of them (the /ios and /android pages). */
+export function StoreLinks({
+    className,
+    only,
+}: {
+    className?: string;
+    only?: 'play' | 'appStore';
+}) {
+    const context = useRouteContext({ from: '__root__' });
+    const playStoreUrl = only === 'appStore' ? null : context.playStoreUrl;
+    const appStoreUrl = only === 'play' ? null : context.appStoreUrl;
     if (!playStoreUrl && !appStoreUrl) return null;
     return (
         <div className={cn('flex flex-wrap items-start gap-2', className)}>

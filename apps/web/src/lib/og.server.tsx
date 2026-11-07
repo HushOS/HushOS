@@ -117,6 +117,31 @@ const fixed: Record<string, Card> = {
         ground: '#ffffff',
         art: { word: 'OPEN', tone: 'mint' },
     },
+    // The share links for the phone apps (/apps, /ios, /android): ours, not the stores' cards.
+    apps: {
+        title: 'HushOS on\nyour phone.',
+        description:
+            'For iPhone and Android. Your files, folders and family, locked on your phone before they upload.',
+        label: 'HushOS · Apps',
+        ground: '#ecf7f0',
+        art: { word: 'APPS', tone: 'mint' },
+    },
+    ios: {
+        title: 'HushOS for\niPhone.',
+        description:
+            'On the App Store. Your files, folders and family, locked on your iPhone before they upload.',
+        label: 'HushOS · App Store',
+        ground: '#eaeef8',
+        art: { word: 'IPHONE', tone: 'blue' },
+    },
+    android: {
+        title: 'HushOS for\nAndroid.',
+        description:
+            'On Google Play. Your files, folders and family, locked on your phone before they upload.',
+        label: 'HushOS · Google Play',
+        ground: '#f4f7e4',
+        art: { word: 'ANDROID', tone: 'lime' },
+    },
     privacy: {
         title: 'Privacy Policy',
         description: 'Exactly what is stored, what is never stored, and how long it is kept.',
