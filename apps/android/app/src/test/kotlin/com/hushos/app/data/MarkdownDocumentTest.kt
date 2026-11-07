@@ -115,6 +115,15 @@ class MarkdownDocumentTest {
         assertTrue(wide.all { it.head.size == MarkdownDocument.TABLE_COLUMNS + 1 && it.head.last().plainText == "…" })
         assertTrue(wide.all { (it.rows.size + 1) * it.head.size <= MarkdownDocument.TABLE_CELLS + it.head.size })
         assertEquals(200, wide.sumOf { it.rows.size })
+
+        // One the parser refuses (over a million cells, from 14 KB) is shown as its text, not a crash.
+        val refused = MarkdownDocument.parse("|" + " c |".repeat(1000) + "\n|" + " - |".repeat(1000) + "\n" + "| x |\n".repeat(1000))
+        assertTrue(refused.isNotEmpty() && refused.all { it is MdBlock.Code })
+
+        // A hard cut never splits an emoji between two blocks.
+        fun whole(text: String) = text.isEmpty() || (!Character.isLowSurrogate(text.first()) && !Character.isHighSurrogate(text.last()))
+        assertTrue(MarkdownDocument.parse("a" + "😀".repeat(2200)).all { whole((it as MdBlock.Paragraph).inline.plainText) })
+        assertTrue(MarkdownDocument.parse("```\na" + "😀".repeat(2200) + "\n```").all { whole((it as MdBlock.Code).text) })
     }
 
     @Test fun bigListsAndQuotesComeInPiecesNumberedOn() {

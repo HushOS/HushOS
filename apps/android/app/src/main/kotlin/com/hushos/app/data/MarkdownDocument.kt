@@ -94,6 +94,9 @@ object MarkdownDocument {
     } catch (_: StackOverflowError) {
         // Nothing here should recurse that far; if the parser itself does, the file is shown as its text.
         cut(MdBlock.Code(null, text))
+    } catch (_: RuntimeException) {
+        // The parser refuses some files outright (a table of more than a million cells, from 14 KB): shown as text too.
+        cut(MdBlock.Code(null, text))
     }
 
     private fun children(node: Node): Sequence<Node> = generateSequence(node.firstChild) { it.next }
@@ -186,7 +189,7 @@ object MarkdownDocument {
         var lines = 0
         fun close() { if (lines > 0) pieces += piece.toString(); piece.setLength(0); lines = 0 }
         for (line in text.split('\n')) {
-            for (segment in if (line.isEmpty()) listOf("") else line.chunked(PARAGRAPH_CHARS)) {
+            for (segment in if (line.isEmpty()) listOf("") else pieces(line, PARAGRAPH_CHARS)) {
                 if (lines > 0 && (lines >= CODE_LINES || piece.length + 1 + segment.length > PARAGRAPH_CHARS)) close()
                 if (lines > 0) piece.append('\n')
                 piece.append(segment)
@@ -197,6 +200,25 @@ object MarkdownDocument {
         return pieces
     }
 
+    /*
+     * Where a hard cut at `end` may fall: never between the two halves of a character outside the BMP (an emoji), which
+     * would show as two broken halves in separate blocks.
+     */
+    private fun safeEnd(text: String, end: Int): Int =
+        if (end in 1 until text.length && Character.isHighSurrogate(text[end - 1]) && Character.isLowSurrogate(text[end])) end - 1 else end
+
+    /* A long line in pieces of at most `size`, cut at safe ends. */
+    private fun pieces(line: String, size: Int): List<String> {
+        val parts = mutableListOf<String>()
+        var start = 0
+        while (start < line.length) {
+            val end = if (line.length - start <= size) line.length else safeEnd(line, start + size).takeIf { it > start } ?: (start + size)
+            parts += line.substring(start, end)
+            start = end
+        }
+        return parts
+    }
+
     private fun shortCell(cell: MdInline): MdInline {
         if (cell.length <= CELL_CHARS) return cell
         val runs = mutableListOf<MdRun>()
@@ -204,7 +226,7 @@ object MarkdownDocument {
         for (run in cell.runs) {
             if (left <= 0) break
             when (run) {
-                is MdRun.Text -> { runs += run.copy(text = run.text.take(left)); left -= run.text.length }
+                is MdRun.Text -> { runs += run.copy(text = run.text.substring(0, safeEnd(run.text, minOf(left, run.text.length)))); left -= run.text.length }
                 is MdRun.Image -> { runs += run; left -= run.cost }
             }
         }
@@ -226,7 +248,7 @@ object MarkdownDocument {
                 val room = PARAGRAPH_CHARS - length
                 val space = rest.lastIndexOf(' ', room).takeIf { it > 0 }
                 // No space to cut at in this run: a whole new piece if this one has words, else a hard cut.
-                val at = space ?: if (length > 0) 0 else room
+                val at = space ?: if (length > 0) 0 else safeEnd(rest, room).takeIf { it > 0 } ?: room
                 if (at > 0) current += run.copy(text = rest.substring(0, at))
                 rest = rest.substring(at).trimStart(' ')
                 close()
@@ -341,7 +363,7 @@ object MarkdownDocument {
         return MdInline(runs)
     }
 
-    private fun shortAlt(alt: String): String = if (alt.length <= CELL_CHARS) alt else alt.take(CELL_CHARS) + " …"
+    private fun shortAlt(alt: String): String = if (alt.length <= CELL_CHARS) alt else alt.substring(0, safeEnd(alt, CELL_CHARS)) + " …"
 
     /* A link the viewer may open on a tap: http, https or mailto only, as the web's sanitiser allows. */
     fun safeLink(destination: String?): String? {

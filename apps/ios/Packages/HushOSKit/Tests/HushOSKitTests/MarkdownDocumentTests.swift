@@ -149,6 +149,16 @@ struct MarkdownDocumentTests {
             rowsSeen += table.rows.count
         }
         #expect(rowsSeen == 200)
+
+        // A million cells from 14 KB (Android's parser refuses it): no crash here, and whatever comes back is bounded.
+        let million = MarkdownDocument.parse("|" + String(repeating: " c |", count: 1000) + "\n|" + String(repeating: " - |", count: 1000) + "\n" + String(repeating: "| x |\n", count: 1000))
+        #expect(million.allSatisfy { block in
+            switch block {
+            case .table(let table): (table.rows.count + 1) * table.head.count <= MarkdownDocument.tableCells + table.head.count
+            case .paragraph(let inline): inline.length <= MarkdownDocument.paragraphChars
+            default: true
+            }
+        })
     }
 
     @Test func bigListsAndQuotesComeInPiecesNumberedOn() {
