@@ -120,6 +120,24 @@ import kotlinx.coroutines.launch
 /* Opens a decrypted file with whatever app handles its type. */
 fun openWith(context: android.content.Context, uri: android.net.Uri, mime: String?, model: DriveViewModel? = null, name: String? = null) {
     val type = name?.let { mimeFor(it, mime) } ?: mime
+    // Markdown opens in HushOS's own viewer, as on the web and iPhone: Android has no viewer of its own, and a
+    // text editor shows the raw marks. Past the web's limit it goes to another app as before.
+    if (model != null && name != null && com.hushos.app.data.MarkdownDocument.handles(name, type) && sizeOf(context, uri)?.let { it <= com.hushos.app.data.MarkdownDocument.LIMIT } == true) {
+        model.read(name, uri, type)
+        return
+    }
+    openElsewhere(context, uri, type, model, name)
+}
+
+/* The file's size from its provider, or null when it doesn't say. */
+private fun sizeOf(context: android.content.Context, uri: android.net.Uri): Long? = runCatching {
+    context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+        if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0) else null
+    }
+}.getOrNull()
+
+/* To another app: the person's default for this type, or Android's own chooser. */
+fun openElsewhere(context: android.content.Context, uri: android.net.Uri, type: String?, model: DriveViewModel? = null, name: String? = null) {
     // Straight to the app Android picks for this type: the person's default, or Android's own
     // "Just once / Always" when there is none, so a default sticks.
     val intent = Intent(Intent.ACTION_VIEW).setDataAndType(uri, type ?: "*/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)

@@ -148,6 +148,15 @@ fun HushOSApp(model: DriveViewModel = viewModel()) {
         },
         confirmButton = { TextButton(onClick = model::clearSignedOut) { Text("Sign in") } },
     )
+    state.reading?.let { reading ->
+        val context = LocalContext.current
+        // Open with leaves the viewer first: with no app for the type, the notice offering Send a copy is drawn
+        // on the screen beneath, which the viewer would otherwise cover.
+        MarkdownViewer(reading, close = model::closeReading, openElsewhere = {
+            model.closeReading()
+            openElsewhere(context, reading.uri, reading.mime, model, reading.name)
+        })
+    }
     // What happened and what to do, in plain words. The exception's own text went to the log (DriveViewModel.io).
     state.error?.let { problem ->
         AlertDialog(
