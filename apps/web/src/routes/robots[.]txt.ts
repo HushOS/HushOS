@@ -10,6 +10,9 @@ export const Route = createFileRoute('/robots.txt')({
                         'User-agent: *',
                         'Allow: /',
                         'Disallow: /app',
+                        // Rules match by prefix, so /app also caught /apps, the phone apps' share
+                        // link, whose card a preview must read. The longer rule wins (RFC 9309).
+                        'Allow: /apps',
                         'Disallow: /api',
                         '',
                         `Sitemap: ${publicOrigin()}/sitemap.xml`,
