@@ -36,7 +36,7 @@ public enum MarkdownDocument {
     static let maxDepth = 64
 
     public static func parse(_ text: String) -> [MarkdownBlock] {
-        if depth(of: text) > maxDepth { return cut(.code(language: nil, text: text)) }
+        if depth(of: text) > maxDepth { return cut(.code(language: nil, text: flat(text))) }
         return blocks(of: Document(parsing: text).children, depth: 0)
     }
 
@@ -107,6 +107,24 @@ public enum MarkdownDocument {
     static let tableCells = 4000
     static let tableColumns = 50
     static let imageChars = 20
+    /* A table piece's text, at most: 200 rows of 2,000-character cells would be far taller than a layout can be. */
+    static let tableChars = 40_000
+    /* A line costs as much as this many characters (see weight). */
+    static let lineWeight = 20
+
+    /*
+     * Characters a text layout breaks a line at besides "\n" (line and paragraph separators, form feeds and the like):
+     * drawn as spaces, as the web's normal white space does, so a 400 KB table cell can't become 100,000 lines. "\n"
+     * only comes from Markdown's own line breaks and code, and counts toward a block's weight.
+     */
+    static func flat(_ text: String) -> String {
+        guard text.unicodeScalars.contains(where: isBreak) else { return text }
+        return String(String.UnicodeScalarView(text.unicodeScalars.map { isBreak($0) ? " " : $0 }))
+    }
+
+    private static func isBreak(_ scalar: Unicode.Scalar) -> Bool {
+        ["\u{000B}", "\u{000C}", "\r", "\u{0085}", "\u{2028}", "\u{2029}"].contains(scalar)
+    }
 
     static func cut(_ block: MarkdownBlock) -> [MarkdownBlock] {
         switch block {
@@ -118,13 +136,25 @@ public enum MarkdownDocument {
         case .table(let table):
             let narrow = narrow(table)
             let short = MarkdownTable(alignments: narrow.alignments, head: narrow.head.map(shortCell), rows: narrow.rows.map { $0.map(shortCell) })
-            let rows = min(tableRows, max(1, tableCells / max(1, short.head.count)))
-            guard short.rows.count > rows else { return [.table(short)] }
-            return stride(from: 0, to: short.rows.count, by: rows).map { start in
-                .table(MarkdownTable(alignments: short.alignments, head: short.head, rows: Array(short.rows[start..<min(start + rows, short.rows.count)])))
-            }
+            return tablePieces(short.rows, columns: short.head.count).map { .table(MarkdownTable(alignments: short.alignments, head: short.head, rows: $0)) }
         default: return [block]
         }
+    }
+
+    /* Rows in pieces of at most tableRows rows, tableCells cells and tableChars characters (a heavier row alone). */
+    private static func tablePieces(_ rows: [[MarkdownInline]], columns: Int) -> [[[MarkdownInline]]] {
+        var pieces: [[[MarkdownInline]]] = []
+        var current: [[MarkdownInline]] = []
+        var chars = 0
+        for row in rows {
+            let each = row.reduce(0) { $0 + $1.length }
+            let full = current.count >= tableRows || (current.count + 1) * columns > tableCells || chars + each > tableChars
+            if !current.isEmpty, full { pieces.append(current); current = []; chars = 0 }
+            current.append(row)
+            chars += each
+        }
+        if !current.isEmpty || pieces.isEmpty { pieces.append(current) }
+        return pieces
     }
 
     /* At most tableColumns columns: past that, one "…" column stands for the rest (Share shows the file whole). */
@@ -138,9 +168,14 @@ public enum MarkdownDocument {
     /* How much laying a block out costs, roughly: see blockWeight. Its children were cut first, so each is bounded. */
     static func weight(_ block: MarkdownBlock) -> Int {
         switch block {
-        case .heading(_, let inline), .paragraph(let inline): return 1 + inline.length / charsPerWeight
-        case .code(_, let text): return 1 + text.count / charsPerWeight
-        case .table(let table): return 1 + (table.rows.count + 1) * table.head.count / 20
+        case .heading(_, let inline), .paragraph(let inline):
+            let lines = inline.runs.reduce(0) { total, run in
+                if case .text(let text) = run { total + text.characters.filter { $0 == "\n" }.count } else { total }
+            }
+            return 1 + (inline.length + lines * lineWeight) / charsPerWeight
+        case .code(_, let text): return 1 + (text.count + text.filter { $0 == "\n" }.count * lineWeight) / charsPerWeight
+        case .table(let table):
+            return 1 + (table.rows.count + 1) * table.head.count / 20 + table.rows.reduce(0) { $0 + $1.reduce(0) { $0 + $1.length } } / charsPerWeight
         case .quote(let blocks): return 1 + blocks.reduce(0) { $0 + weight($1) }
         case .list(let list): return 1 + list.items.reduce(0) { $0 + weight($1) }
         case .rule: return 1
@@ -304,7 +339,7 @@ public enum MarkdownDocument {
         case let list as OrderedList: return .list(MarkdownList(ordered: true, start: Int(list.startIndex), items: items(list.listItems, depth: depth)))
         case let list as UnorderedList: return .list(MarkdownList(ordered: false, start: 1, items: items(list.listItems, depth: depth)))
         case let quote as BlockQuote: return .quote(blocks(of: quote.children, depth: depth + 1))
-        case let code as CodeBlock: return .code(language: code.language, text: code.code.hasSuffix("\n") ? String(code.code.dropLast()) : code.code)
+        case let code as CodeBlock: return .code(language: code.language, text: flat(code.code.hasSuffix("\n") ? String(code.code.dropLast()) : code.code))
         case is ThematicBreak: return .rule
         case let table as Table:
             return .table(MarkdownTable(
@@ -348,7 +383,7 @@ public enum MarkdownDocument {
                 stack.append(contentsOf: node.children.reversed())
             }
         }
-        return words
+        return flat(words)
     }
 
     /* A paragraph's runs: styled text, with images named in their own runs. */
@@ -369,8 +404,8 @@ public enum MarkdownDocument {
             }
             if depth >= inlineDepth { styled(flatText(markup)); return }
             switch markup {
-            case let plain as Markdown.Text: styled(plain.string)
-            case let code as InlineCode: styled(code.code, .code)
+            case let plain as Markdown.Text: styled(flat(plain.string))
+            case let code as InlineCode: styled(flat(code.code), .code)
             case is SoftBreak: styled(" ")
             case is LineBreak: styled("\n")
             // Dropped, as on the web.

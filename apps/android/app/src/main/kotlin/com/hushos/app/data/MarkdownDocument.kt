@@ -87,16 +87,27 @@ object MarkdownDocument {
     const val TABLE_CELLS = 4000
     const val TABLE_COLUMNS = 50
     const val IMAGE_CHARS = 20
+    /* A table piece's text, at most: 200 rows of 2,000-character cells would be far taller than a layout can be. */
+    const val TABLE_CHARS = 40_000
+    /*
+     * Characters a text layout breaks a line at besides "\n" (line and paragraph separators, form feeds and the like):
+     * drawn as spaces, as the web's normal white space does, so a 400 KB table cell can't become 100,000 lines. "\n"
+     * only comes from Markdown's own line breaks and code, and counts toward a block's weight.
+     */
+    private val LINE_BREAKS = Regex("[\u000B\u000C\r\u0085\u2028\u2029]")
+    private fun flat(text: String) = if (LINE_BREAKS.containsMatchIn(text)) text.replace(LINE_BREAKS, " ") else text
+    /* A line costs as much as this many characters (see weight). */
+    private const val LINE_WEIGHT = 20
     private const val CHARS_PER_WEIGHT = 200
 
     fun parse(text: String): List<MdBlock> = try {
         blocks(parser.parse(text), 0)
     } catch (_: StackOverflowError) {
         // Nothing here should recurse that far; if the parser itself does, the file is shown as its text.
-        cut(MdBlock.Code(null, text))
+        cut(MdBlock.Code(null, flat(text)))
     } catch (_: RuntimeException) {
         // The parser refuses some files outright (a table of more than a million cells, from 14 KB): shown as text too.
-        cut(MdBlock.Code(null, text))
+        cut(MdBlock.Code(null, flat(text)))
     }
 
     private fun children(node: Node): Sequence<Node> = generateSequence(node.firstChild) { it.next }
@@ -113,10 +124,25 @@ object MarkdownDocument {
         is MdBlock.Table -> {
             val narrow = narrow(block)
             val short = narrow.copy(head = narrow.head.map(::shortCell), rows = narrow.rows.map { row -> row.map(::shortCell) })
-            val rows = minOf(TABLE_ROWS, maxOf(1, TABLE_CELLS / maxOf(1, short.head.size)))
-            if (short.rows.size <= rows) listOf(short) else short.rows.chunked(rows).map { short.copy(rows = it) }
+            tableRows(short.rows, short.head.size).map { short.copy(rows = it) }
         }
         else -> listOf(block)
+    }
+
+    /* Rows in pieces of at most TABLE_ROWS rows, TABLE_CELLS cells and TABLE_CHARS characters (a heavier row alone). */
+    private fun tableRows(rows: List<List<MdInline>>, columns: Int): List<List<List<MdInline>>> {
+        val pieces = mutableListOf<List<List<MdInline>>>()
+        var current = mutableListOf<List<MdInline>>()
+        var chars = 0
+        for (row in rows) {
+            val each = row.sumOf { it.length }
+            val full = current.size >= TABLE_ROWS || (current.size + 1) * columns > TABLE_CELLS || chars + each > TABLE_CHARS
+            if (current.isNotEmpty() && full) { pieces += current; current = mutableListOf(); chars = 0 }
+            current += row
+            chars += each
+        }
+        if (current.isNotEmpty() || pieces.isEmpty()) pieces += current
+        return pieces
     }
 
     /* At most TABLE_COLUMNS columns: past that, one "…" column stands for the rest (Open with shows the file whole). */
@@ -129,14 +155,18 @@ object MarkdownDocument {
 
     /* How much laying a block out costs, roughly: see BLOCK_WEIGHT. Its children were cut first, so each is bounded. */
     internal fun weight(block: MdBlock): Int = when (block) {
-        is MdBlock.Paragraph -> 1 + block.inline.length / CHARS_PER_WEIGHT
-        is MdBlock.Heading -> 1 + block.inline.length / CHARS_PER_WEIGHT
-        is MdBlock.Code -> 1 + block.text.length / CHARS_PER_WEIGHT
-        is MdBlock.Table -> 1 + (block.rows.size + 1) * block.head.size / 20
+        is MdBlock.Paragraph -> 1 + text(block.inline)
+        is MdBlock.Heading -> 1 + text(block.inline)
+        is MdBlock.Code -> 1 + text(block.text.length, block.text.count { it == '\n' })
+        is MdBlock.Table -> 1 + (block.rows.size + 1) * block.head.size / 20 + block.rows.sumOf { row -> row.sumOf { it.length } } / CHARS_PER_WEIGHT
         is MdBlock.Quote -> 1 + block.blocks.sumOf(::weight)
         is MdBlock.ListBlock -> 1 + block.items.sumOf(::weight)
         MdBlock.Rule -> 1
     }
+
+    /* Text's weight: its characters, and its lines (each worth LINE_WEIGHT characters), so a block of short lines counts. */
+    private fun text(chars: Int, lines: Int) = (chars + lines * LINE_WEIGHT) / CHARS_PER_WEIGHT
+    private fun text(inline: MdInline) = text(inline.length, inline.runs.sumOf { run -> (run as? MdRun.Text)?.text?.count { it == '\n' } ?: 0 })
 
     private fun weight(item: MdItem): Int = 1 + item.blocks.sumOf(::weight)
 
@@ -265,8 +295,8 @@ object MarkdownDocument {
         is BulletList -> MdBlock.ListBlock(ordered = false, start = 1, items = items(node, depth))
         is OrderedList -> MdBlock.ListBlock(ordered = true, start = node.markerStartNumber ?: 1, items = items(node, depth))
         is BlockQuote -> MdBlock.Quote(blocks(node, depth + 1))
-        is FencedCodeBlock -> MdBlock.Code(node.info?.takeIf { it.isNotBlank() }, node.literal.removeSuffix("\n"))
-        is IndentedCodeBlock -> MdBlock.Code(null, node.literal.removeSuffix("\n"))
+        is FencedCodeBlock -> MdBlock.Code(node.info?.takeIf { it.isNotBlank() }, flat(node.literal.removeSuffix("\n")))
+        is IndentedCodeBlock -> MdBlock.Code(null, flat(node.literal.removeSuffix("\n")))
         is ThematicBreak -> MdBlock.Rule
         is TableBlock -> table(node)
         // Raw HTML is dropped, as on the web: not drawn, not run, not shown as text.
@@ -298,7 +328,7 @@ object MarkdownDocument {
                 }
             }
         }
-        return words.toString()
+        return flat(words.toString())
     }
 
     private fun table(table: TableBlock): MdBlock.Table {
@@ -343,8 +373,8 @@ object MarkdownDocument {
             }
             if (depth >= INLINE_DEPTH) { add(flatText(node)); return }
             when (node) {
-                is Text -> add(node.literal)
-                is Code -> add(node.literal, style.copy(code = true))
+                is Text -> add(flat(node.literal))
+                is Code -> add(flat(node.literal), style.copy(code = true))
                 is SoftLineBreak -> add(" ")
                 is HardLineBreak -> add("\n")
                 // Dropped, as on the web.

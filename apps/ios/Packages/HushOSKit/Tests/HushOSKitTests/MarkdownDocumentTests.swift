@@ -150,6 +150,16 @@ struct MarkdownDocumentTests {
         }
         #expect(rowsSeen == 200)
 
+        // A table of cells made of line separators: drawn as spaces, and in pieces of bounded text.
+        let tallCell = String(repeating: "x\u{2028}", count: 500)
+        let tall = MarkdownDocument.parse("> | A |\n> | - |\n" + String(repeating: "> | \(tallCell) |\n", count: 200)).flatMap { block -> [MarkdownTable] in
+            guard case .quote(let inner) = block else { return [] }
+            return inner.compactMap { if case .table(let table) = $0 { table } else { nil } }
+        }
+        #expect(tall.count > 1)
+        #expect(tall.allSatisfy { $0.rows.reduce(0) { $0 + $1.reduce(0) { $0 + $1.length } } <= MarkdownDocument.tableChars })
+        #expect(tall.allSatisfy { !$0.rows.contains { $0.contains { $0.plainText.contains("\u{2028}") } } })
+
         // A million cells from 14 KB (Android's parser refuses it): no crash here, and whatever comes back is bounded.
         let million = MarkdownDocument.parse("|" + String(repeating: " c |", count: 1000) + "\n|" + String(repeating: " - |", count: 1000) + "\n" + String(repeating: "| x |\n", count: 1000))
         #expect(million.allSatisfy { block in

@@ -120,6 +120,11 @@ class MarkdownDocumentTest {
         val refused = MarkdownDocument.parse("|" + " c |".repeat(1000) + "\n|" + " - |".repeat(1000) + "\n" + "| x |\n".repeat(1000))
         assertTrue(refused.isNotEmpty() && refused.all { it is MdBlock.Code })
 
+        // A table of cells made of line separators: drawn as spaces, and in pieces of bounded text.
+        val tall = MarkdownDocument.parse("> | A |\n> | - |\n" + "> | ${"x\u2028".repeat(500)} |\n".repeat(200)).flatMap { (it as MdBlock.Quote).blocks }.map { it as MdBlock.Table }
+        assertTrue(tall.size > 1 && tall.all { t -> t.rows.sumOf { r -> r.sumOf { it.length } } <= MarkdownDocument.TABLE_CHARS })
+        assertTrue(tall.none { t -> t.rows.any { r -> r.any { '\u2028' in it.plainText } } })
+
         // A hard cut never splits an emoji between two blocks.
         fun whole(text: String) = text.isEmpty() || (!Character.isLowSurrogate(text.first()) && !Character.isHighSurrogate(text.last()))
         assertTrue(MarkdownDocument.parse("a" + "😀".repeat(2200)).all { whole((it as MdBlock.Paragraph).inline.plainText) })
