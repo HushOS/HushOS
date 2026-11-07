@@ -17,14 +17,16 @@ export type RoadmapStatus = 'shipped' | 'now' | 'next' | 'later';
 
 /*
  * Where an item points: a blog post (by slug), a page on this site, a document
- * in the repository's docs/ folder, or a release (by tag) on GitHub.
+ * in the repository's docs/ folder, a release (by tag) on GitHub, or a phone app's store listing
+ * (the URL this server is configured with; left out where it has none, as a self-hosted copy may).
  */
 export type RoadmapLink =
     | { kind: 'blog'; slug: string; label: string }
     /* Typed by the router: a page that doesn't exist fails the typecheck. */
     | { kind: 'page'; to: NonNullable<LinkProps['to']>; label: string }
     | { kind: 'docs'; path: string; label: string }
-    | { kind: 'release'; tag: string; label: string };
+    | { kind: 'release'; tag: string; label: string }
+    | { kind: 'store'; platform: 'ios' | 'android'; label: string };
 
 type Base = {
     /* The item's anchor on the page (/roadmap#<id>): lowercase words and hyphens, never reused. */
@@ -71,7 +73,10 @@ export const sections: RoadmapSection[] = [
                 area: 'Apps',
                 title: 'The iPhone app on the App Store',
                 body: 'The same folders, sharing, links, families, files kept on the phone and HushOS in the phone’s Files app as the Android app, with Scan document from version 1.1. For iPhone, on iOS 26 and later.',
-                links: [{ kind: 'blog', slug: 'phone-apps', label: 'Read the announcement' }],
+                links: [
+                    { kind: 'store', platform: 'ios', label: 'Get it on the App Store' },
+                    { kind: 'blog', slug: 'phone-apps', label: 'Read the announcement' },
+                ],
             },
             {
                 id: 'families-on-phones',
@@ -98,6 +103,7 @@ export const sections: RoadmapSection[] = [
                 area: 'Apps',
                 title: 'The Android app on Google Play',
                 body: 'Your folders, sharing and links, files kept on the phone to open without a connection, and HushOS in the phone’s Files app. It’s on Google Play, and its APK is also on each GitHub release.',
+                links: [{ kind: 'store', platform: 'android', label: 'Get it on Google Play' }],
             },
             {
                 id: 'devices',
