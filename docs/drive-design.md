@@ -274,8 +274,13 @@ Metadata is a JSON object:
 - Keys match `^[a-z][a-z0-9_-]{0,31}$`.
 - There are at most 32 of them.
 - Every value is a string (well-formed Unicode).
+
+#### Record limits
+
+These hold for every metadata record, with attributes or without.
+
 - The whole plaintext stays within 4096 bytes before padding.
-- A record that breaks any of these is refused, when sealing and when opening, and never trimmed. So is:
+- A record that breaks any of these, or the attribute rules above, is refused, when sealing and when opening, and never trimmed. So is:
     - plaintext that is not UTF-8 (or starts with a byte order mark);
     - any object in it that names a key twice, escapes decoded;
     - any string in it, key or value, unknown fields included, that holds a lone surrogate (`"\ud800"`).
@@ -710,7 +715,10 @@ In one transaction, under the workspace lock, the server:
     - if the destination is in another workspace, effectively trashed, or if the moved node appears in the chain, which is the cycle check;
     - if the destination's depth plus one plus the node's `height_bound` exceeds 64;
     - if the node's chain contains the root of a running rotation and the destination's does not;
-    - if the node itself still carries a previous envelope from that rotation, as the sharing section explains;
+    - if the node itself still carries a previous envelope from a running rotation.
+
+    Both rotation conditions are explained in the sharing section.
+
 3. refuses if `parentKeyEpoch` is not the destination's current `key_epoch`, then updates `parent_id`, `parent_key_epoch` and the envelope on the node and assigns it the workspace's next `change_seq`.
 
 Cost is one small AEAD on the client and, on the server, two bounded walks and one row update, whatever the size of the subtree.
@@ -748,8 +756,7 @@ A copy costs quota like any other file even though the bytes are stored once. So
 A move between two workspaces (a person's own files and their family's folders) cannot be a tree move: each workspace has its own keys.
 
 - The device reads the file, encrypts it again under the destination's keys, and uploads it with `moveOf` naming the source and the version it read.
-- Its completion deletes the source in the same transaction.
-- Or it fails `move-stale` and releases the copy if the source changed (a new version uploading on it included).
+- Its completion deletes the source in the same transaction, unless the source changed (a new version uploading on it included): then it fails `move-stale` and releases the copy.
 - Where both draw from one storage pool, the upload reserves only what the copy adds beyond what the source's versions free.
 - Across two pools it reserves the whole copy, as any upload does.
 
@@ -784,11 +791,12 @@ It runs in one transaction under the same workspace lock, and in the same order 
 
 A batch waits at most 2 s for any lock or statement, and holds the workspace's lock at most 2 s, or rolls back and is answered 409 `conflict` to try again. The bound exists because every other write in the workspace waits on that lock holding a pooled connection.
 
+A writer whose access to a family folder ended or is held moves nothing, as for one.
+
 Each node in the batch:
 
 - moves exactly as a single trash would move it, or is refused on its own (`not-found`, `forbidden`, `root`, `trashed`);
 - one refusal keeps none of the rest back, since nothing about trashing one node depends on another;
-- a writer whose access to a family folder ended or is held moves nothing, as for one;
 - a node inside a folder of the same request that goes is answered `covered` by that folder and keeps no `trashed_at` of its own, so Undo of the folder brings it back;
 - a node inside a refused one is judged on its own;
 - each node that moves takes its own `change_seq`, consecutive in the order sent, so a feed read a page at a time never splits a batch on a shared number.
@@ -1033,7 +1041,7 @@ Either failure leaves the upload `conflicted`, and the client tries again with f
 
 ### 5. Abort
 
-`DELETE /api/drive/uploads/:id`, or the worker's hourly `drive.expire-uploads` job for anything past `expires_at`:
+`DELETE /api/drive/uploads/:id`, or the worker's hourly `drive.expire-uploads` job for anything past `expires_at`. Both first refuse an upload that is `completing`; otherwise they:
 
 - abort the multipart upload at the store;
 - release `reserved_bytes`;
@@ -1041,7 +1049,6 @@ Either failure leaves the upload `conflicted`, and the client tries again with f
 
 Then:
 
-- Both refuse an upload that is `completing`.
 - An aborted `conflicted` upload's object goes into the deletion outbox as never published, so it is deleted at once and waits for no replica.
 - The expiry job resolves a `completing` upload older than an hour by asking the store:
     - an object present at the recorded size is finalised as step three above;
