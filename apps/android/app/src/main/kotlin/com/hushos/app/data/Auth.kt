@@ -27,6 +27,9 @@ data class SessionUser(val id: String, val name: String, val email: String, val 
 /* `status` is the HTTP status when the server refused, 0 otherwise: 409 on settings means another device saved first. */
 open class AuthFailure(message: String, val status: Int = 0) : Exception(message)
 
+/* An answer other than 200 to the session check: not about the session (see sessionCheck), handled as being offline. */
+class SessionUnavailable(val status: Int) : java.io.IOException("HushOS answered $status while checking the session.")
+
 /* The account has no recovery words to show (no recovery key on the server): a definite answer, unlike a failure. */
 class NoRecoveryKey : AuthFailure("This account has no recovery key.")
 
@@ -520,9 +523,16 @@ object Auth {
     fun mayForgetRemoved(ended: Shared.Session, current: Shared.Session?, owner: String?): Boolean =
         current == null && owner != null && owner.equals(ended.userId, ignoreCase = true)
 
-    /* What the server says about `session` (the stored one by default); throws when HushOS is unreachable. */
-    fun sessionCheck(context: Context, session: Shared.Session? = Shared.session(context)): SessionCheck {
-        session ?: return SessionCheck.Ended
+    /*
+     * What the server says about `session` (the stored one by default); throws when HushOS is unreachable, and
+     * SessionUnavailable on any answer but 200. The server answers every session, dead or removed included, with
+     * 200, so anything else came from something in the way (an error on its side, a deploy, a proxy): callers keep
+     * the stored session as if offline, as the web does.
+     */
+    fun sessionCheck(context: Context, session: Shared.Session? = Shared.session(context)): SessionCheck =
+        session?.let { sessionCheckAt(it) } ?: SessionCheck.Ended
+
+    internal fun sessionCheckAt(session: Shared.Session): SessionCheck {
         val connection = URL(session.origin + "/api/auth/session").openConnection() as HttpURLConnection
         val cookieName = if (session.origin.startsWith("https:")) "__Host-hushos-session" else "hushos-session"
         connection.setRequestProperty("Cookie", "$cookieName=${session.token}")
@@ -530,7 +540,8 @@ object Auth {
         connection.setRequestProperty("HushOS-Client", CLIENT_HEADER)
         connection.connectTimeout = 20_000
         connection.readTimeout = 20_000
-        if (connection.responseCode != 200) return SessionCheck.Ended
+        val status = connection.responseCode
+        if (status != 200) throw SessionUnavailable(status)
         return SessionCheck.from(JSONObject(connection.inputStream.bufferedReader().use { it.readText() }))
     }
 

@@ -236,12 +236,23 @@ public enum Auth {
         case removed
     }
 
+    /*
+     * An answer other than 200. The server answers every session, dead or removed included, with 200
+     * (`user: null` when it's over), so anything else came from something in the way: an error on its
+     * side, a deploy, a proxy or CDN. Thrown, as when HushOS can't be reached, so callers keep the
+     * stored session and the drive as if offline, as the web does: nothing but the server's own
+     * answer signs anyone out.
+     */
+    public struct SessionUnavailable: Error, Equatable {
+        public let status: Int
+    }
+
     public static func checkSession() async throws -> SessionCheck {
         guard let session = SharedKeychain.session else { return .ended }
         return try await checkSession(session)
     }
 
-    public static func checkSession(_ session: SharedKeychain.Session) async throws -> SessionCheck {
+    public static func checkSession(_ session: SharedKeychain.Session, transport: URLSessionConfiguration? = nil) async throws -> SessionCheck {
         guard let url = URL(string: session.origin + "/api/auth/session") else { return .ended }
         var request = URLRequest(url: url)
         request.httpShouldHandleCookies = false
@@ -250,8 +261,9 @@ public enum Auth {
         request.setValue(session.origin, forHTTPHeaderField: "Origin")
         request.setValue(DriveAPI.clientHeader, forHTTPHeaderField: "HushOS-Client")
         request.timeoutInterval = 20
-        let (data, response) = try await URLSession(configuration: testTransport ?? .ephemeral).data(for: request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return .ended }
+        let (data, response) = try await URLSession(configuration: transport ?? testTransport ?? .ephemeral).data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        guard http.statusCode == 200 else { throw SessionUnavailable(status: http.statusCode) }
         return try SessionCheck(body: data)
     }
 
