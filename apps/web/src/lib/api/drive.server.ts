@@ -37,6 +37,22 @@ import {
     uuidSchema,
     versionEnvelopeSchema,
 } from '@/lib/api/shared.server';
+import {
+    changesResponse,
+    documentResponse,
+    linkListingResponse,
+    listingResponse,
+    nodeLinksResponse,
+    nodeSharesResponse,
+    openLinkResponse,
+    rotationWorkResponse,
+    shareChangesResponse,
+    sharedByMeResponse,
+    sharedWithMeResponse,
+    spacesResponse,
+    versionsResponse,
+    workspaceResponse,
+} from '@/lib/api/drive-responses.server';
 
 /* Drive: workspaces, nodes, uploads, versions, shares, links, reports and spaces (/api/drive). */
 export const driveApi = new Elysia()
@@ -51,16 +67,21 @@ export const driveApi = new Elysia()
      * the link (never the path, which reverse proxies log), bounded per address and
      * token. The paths that carried the token answer 410 so an old client says why.
      */
-    .get('/drive/links/open', { headers: linkHeadersSchema }, ({ request, headers }) => {
-        requireClient(request);
-        return drive.openLink(headers[LINK_TOKEN_HEADER], requestAddress(request));
-    })
+    .get(
+        '/drive/links/open',
+        { headers: linkHeadersSchema, response: { 200: openLinkResponse } },
+        ({ request, headers }) => {
+            requireClient(request);
+            return drive.openLink(headers[LINK_TOKEN_HEADER], requestAddress(request));
+        },
+    )
     .get(
         '/drive/links/nodes/:nodeId/children',
         {
             headers: linkHeadersSchema,
             params: t.Object({ nodeId: uuidSchema }),
             query: t.Object({ after: cursorSchema }),
+            response: { 200: linkListingResponse },
         },
         ({ request, headers, params, query }) => {
             requireClient(request);
@@ -162,7 +183,9 @@ export const driveApi = new Elysia()
     )
     .guard({ mutation: true, client: true, session: 'drive' }, (app) =>
         app
-            .get('/drive/workspace', async ({ user }) => drive.getWorkspace(user.id))
+            .get('/drive/workspace', { response: { 200: workspaceResponse } }, async ({ user }) =>
+                drive.getWorkspace(user.id),
+            )
             .post(
                 '/drive/workspaces/:id/epochs',
                 {
@@ -189,6 +212,7 @@ export const driveApi = new Elysia()
                 {
                     params: t.Object({ id: uuidSchema }),
                     query: t.Object({ workspaceId: uuidSchema, after: cursorSchema }),
+                    response: { 200: listingResponse },
                 },
                 async ({ user, params, query }) =>
                     drive.listChildren(user.id, query.workspaceId, params.id, query.after),
@@ -460,6 +484,7 @@ export const driveApi = new Elysia()
                 {
                     params: t.Object({ id: uuidSchema }),
                     query: t.Object({ workspaceId: uuidSchema }),
+                    response: { 200: versionsResponse },
                 },
                 async ({ user, params, query }) =>
                     drive.listVersions(user.id, query.workspaceId, params.id),
@@ -523,6 +548,7 @@ export const driveApi = new Elysia()
                 {
                     params: t.Object({ id: uuidSchema }),
                     query: t.Object({ workspaceId: uuidSchema }),
+                    response: { 200: nodeSharesResponse },
                 },
                 async ({ user, params, query }) =>
                     drive.listNodeShares(user.id, query.workspaceId, params.id),
@@ -549,8 +575,14 @@ export const driveApi = new Elysia()
                 async ({ user, params, body }) =>
                     drive.revokeShare(user.id, body.workspaceId, params.id),
             )
-            .get('/drive/shares', async ({ user }) => drive.listSharedWithMe(user.id))
-            .get('/drive/shares/mine', async ({ user }) => drive.listSharedByMe(user.id))
+            .get('/drive/shares', { response: { 200: sharedWithMeResponse } }, async ({ user }) =>
+                drive.listSharedWithMe(user.id),
+            )
+            .get(
+                '/drive/shares/mine',
+                { response: { 200: sharedByMeResponse } },
+                async ({ user }) => drive.listSharedByMe(user.id),
+            )
             .post(
                 '/drive/nodes/:id/links',
                 {
@@ -576,6 +608,7 @@ export const driveApi = new Elysia()
                 {
                     params: t.Object({ id: uuidSchema }),
                     query: t.Object({ workspaceId: uuidSchema }),
+                    response: { 200: nodeLinksResponse },
                 },
                 async ({ user, params, query }) =>
                     drive.listNodeLinks(user.id, query.workspaceId, params.id),
@@ -615,7 +648,10 @@ export const driveApi = new Elysia()
             // Sealed workspace documents: the tag registry, replaced whole under a version precondition.
             .get(
                 '/drive/workspaces/:id/documents/:kind',
-                { params: t.Object({ id: uuidSchema, kind: documentKindSchema }) },
+                {
+                    params: t.Object({ id: uuidSchema, kind: documentKindSchema }),
+                    response: { 200: documentResponse },
+                },
                 async ({ user, params }) =>
                     drive.workspaceDocument(user.id, params.id, params.kind),
             )
@@ -640,6 +676,7 @@ export const driveApi = new Elysia()
                         since: t.Integer({ minimum: 0 }),
                         limit: t.Optional(t.Integer({ minimum: 1, maximum: 500 })),
                     }),
+                    response: { 200: changesResponse },
                 },
                 async ({ user, params, query }) =>
                     drive.changes(user.id, params.id, query.since, query.limit),
@@ -650,6 +687,7 @@ export const driveApi = new Elysia()
                     params: t.Object({ id: uuidSchema }),
                     // Opaque and sealed by the server; absent means from the start of the share.
                     query: t.Object({ cursor: t.Optional(t.String({ maxLength: 128 })) }),
+                    response: { 200: shareChangesResponse },
                 },
                 async ({ user, params, query }) =>
                     drive.shareChanges(user.id, params.id, query.cursor),
@@ -672,6 +710,7 @@ export const driveApi = new Elysia()
                         workspaceId: uuidSchema,
                         after: t.Optional(t.String({ minLength: 38, maxLength: 40 })),
                     }),
+                    response: { 200: rotationWorkResponse },
                 },
                 async ({ user, params, query }) =>
                     drive.rotationWork(user.id, query.workspaceId, params.id, query.after ?? null),
@@ -733,7 +772,7 @@ export const driveApi = new Elysia()
                 async ({ user, params, query }) => drive.listTrash(user.id, params.id, query.after),
             )
             // Every space the account can open: their own, and each group's areas once groups are on.
-            .get('/drive/spaces', async ({ user }) => {
+            .get('/drive/spaces', { response: { 200: spacesResponse } }, async ({ user }) => {
                 const personal = await drive.getWorkspace(user.id);
                 return {
                     spaces: [
