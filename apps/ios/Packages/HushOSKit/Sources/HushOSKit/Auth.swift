@@ -236,12 +236,26 @@ public enum Auth {
         case removed
     }
 
+    /*
+     * The server answered, but not about the session: an error on its side (5xx), a timeout (408) or
+     * too many requests (429). Thrown, as when HushOS can't be reached, so callers keep the stored
+     * session and the drive as if offline: an outage or a deploy never signs anyone out.
+     */
+    public struct SessionUnavailable: Error, Equatable {
+        public let status: Int
+    }
+
+    /* Whether an answer that isn't 200 says nothing about the session: the server is unwell, not the session over. */
+    static func isTransient(status: Int) -> Bool {
+        status >= 500 || status == 408 || status == 429
+    }
+
     public static func checkSession() async throws -> SessionCheck {
         guard let session = SharedKeychain.session else { return .ended }
         return try await checkSession(session)
     }
 
-    public static func checkSession(_ session: SharedKeychain.Session) async throws -> SessionCheck {
+    public static func checkSession(_ session: SharedKeychain.Session, transport: URLSessionConfiguration? = nil) async throws -> SessionCheck {
         guard let url = URL(string: session.origin + "/api/auth/session") else { return .ended }
         var request = URLRequest(url: url)
         request.httpShouldHandleCookies = false
@@ -250,9 +264,11 @@ public enum Auth {
         request.setValue(session.origin, forHTTPHeaderField: "Origin")
         request.setValue(DriveAPI.clientHeader, forHTTPHeaderField: "HushOS-Client")
         request.timeoutInterval = 20
-        let (data, response) = try await URLSession(configuration: testTransport ?? .ephemeral).data(for: request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return .ended }
-        return try SessionCheck(body: data)
+        let (data, response) = try await URLSession(configuration: transport ?? testTransport ?? .ephemeral).data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        if http.statusCode == 200 { return try SessionCheck(body: data) }
+        if isTransient(status: http.statusCode) { throw SessionUnavailable(status: http.statusCode) }
+        return .ended
     }
 
     /* Who the stored session belongs to, or nil when it is gone. */
