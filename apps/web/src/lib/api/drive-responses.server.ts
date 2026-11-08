@@ -3,10 +3,11 @@ import type * as drive from '@hushos/drive/server';
 import { t } from 'elysia';
 
 /*
- * What the Drive reads that carry keys and the tree answer (drive.server.ts), field for field.
- * Elysia checks a reply against its schema and drops every field the schema does not name, so a
- * column added to a row later stays on the server. Each mirrors the view @hushos/drive/server
- * builds (nodeView, versionView, shareView, linkView, publicIdentity, rotationWorkView): a field
+ * What every Drive route answers (drive.server.ts), field for field: the reads that carry keys and
+ * the tree, then the writes, uploads, URLs, storage, trash and reports. Elysia checks a reply
+ * against its schema and drops every field the schema does not name, so a column added to a row
+ * later stays on the server. Each mirrors what @hushos/drive/server returns (nodeView,
+ * versionView, shareView, linkView, uploadView, publicIdentity, rotationWorkView): a field
  * the schema misses is silently dropped, and one it requires that the view leaves out fails the
  * request. Envelopes, signatures and salts are Base64url, kept as plain strings; byte counts are
  * decimal strings and dates ISO strings, as the views make them. Suites and key-derivation
@@ -367,6 +368,267 @@ export const linkListingResponse = t.Object({
     ancestors: t.Array(visitorNode),
     children: t.Array(visitorNode),
     nextCursor: t.Nullable(t.String()),
+});
+
+/* ------------------------------------------------------------------------- */
+/* The rest of Drive: writes, uploads, URLs, storage, trash and reports       */
+/* ------------------------------------------------------------------------- */
+
+/*
+ * GET /drive/capabilities. `groups` is always sent by this server; the type keeps it optional for
+ * servers from before families, so the schema does too.
+ */
+export const capabilitiesResponse = t.Object({
+    protocolVersion: t.Integer(),
+    contentSuites: t.Array(t.Integer()),
+    envelopeSuites: t.Array(t.Integer()),
+    chunkSize: t.Integer(),
+    maxFileBytes: t.String(),
+    maxDepth: t.Integer(),
+    nameMaxCodePoints: t.Integer(),
+    tombstoneDays: t.Integer(),
+    trashRetentionDays: t.Integer(),
+    groups: t.Optional(t.Boolean()),
+});
+
+/* POST /drive/workspaces/:id/epochs: the epochs reserved, both ends included. */
+export const epochsResponse = t.Object({ from: t.Integer(), to: t.Integer() });
+
+/* POST /drive/workspaces/:id/root: false when the root was there already (a retry). */
+export const rootResponse = t.Object({ created: t.Boolean(), root: node });
+
+/* POST /drive/folders: the folders in the order sent, and the last change number they took. */
+export const foldersResponse = t.Object({ nodes: t.Array(node), changeSeq: t.Integer() });
+
+/*
+ * One node as it is now: rename, move, trash, restore, copy and a version restored, in the member's
+ * view. A known gap, not a choice: an editor working through a share is served it too, with the
+ * owner's changeSeq, where every read gives them granteeView without it. To fix in the handlers.
+ */
+export const nodeResponse = t.Object({ node });
+
+/*
+ * The batches: one result per id, in order, told apart by `status`, so no result matches two
+ * variants. A refusal carries the single route's words for it.
+ */
+const trashRefusal = t.Union([
+    t.Literal('not-found'),
+    t.Literal('forbidden'),
+    t.Literal('root'),
+    t.Literal('trashed'),
+]);
+const restoreRefusal = t.Union([
+    t.Literal('not-found'),
+    t.Literal('not-trashed'),
+    t.Literal('removed'),
+    t.Literal('parent-trashed'),
+]);
+const purgeRefusal = t.Union([
+    t.Literal('not-found'),
+    t.Literal('root'),
+    t.Literal('not-trashed'),
+    t.Literal('busy'),
+]);
+/* Inside `by`, a folder of the same request that went: it went with it. */
+const covered = t.Object({ id: t.String(), status: t.Literal('covered'), by: t.String() });
+const refusedFields = { id: t.String(), status: t.Literal('refused'), message: t.String() };
+
+/* POST /drive/workspaces/:id/trash-batch. */
+export const trashBatchResponse = t.Object({
+    results: t.Array(
+        t.Union([
+            t.Object({
+                id: t.String(),
+                status: t.Literal('trashed'),
+                trashedAt: t.String(),
+                changeSeq: t.Integer(),
+            }),
+            covered,
+            t.Object({ ...refusedFields, reason: trashRefusal }),
+        ]),
+    ),
+});
+/* POST /drive/workspaces/:id/restore-batch: in place only, so nothing is covered. */
+export const restoreBatchResponse = t.Object({
+    results: t.Array(
+        t.Union([
+            t.Object({ id: t.String(), status: t.Literal('restored'), changeSeq: t.Integer() }),
+            t.Object({ ...refusedFields, reason: restoreRefusal }),
+        ]),
+    ),
+});
+/* POST /drive/workspaces/:id/purge-batch. */
+export const purgeBatchResponse = t.Object({
+    results: t.Array(
+        t.Union([
+            t.Object({ id: t.String(), status: t.Literal('purged'), changeSeq: t.Integer() }),
+            covered,
+            t.Object({ ...refusedFields, reason: purgeRefusal }),
+        ]),
+    ),
+});
+
+/*
+ * An upload as uploadView makes it. The object's framing is gone once an aborted upload's object
+ * row is retired: objectId null, chunkCount 0 and ciphertextSize '0' then.
+ */
+const upload = t.Object({
+    id: t.String(),
+    nodeId: t.String(),
+    versionId: t.String(),
+    objectId: t.Nullable(t.String()),
+    status: t.Union([
+        t.Literal('open'),
+        t.Literal('completing'),
+        t.Literal('conflicted'),
+        t.Literal('completed'),
+        t.Literal('aborted'),
+    ]),
+    chunkCount: t.Integer(),
+    ciphertextSize: t.String(),
+    expiresAt: t.String(),
+});
+/* Presigned part URLs, each with the exact length its part must have. */
+const partUrlsFields = {
+    parts: t.Array(t.Object({ partNumber: t.Integer(), length: t.Integer(), url: t.String() })),
+    urlExpiresAt: t.String(),
+};
+
+/* POST /drive/uploads: the upload and its first part URLs. */
+export const beginUploadResponse = t.Object({ upload, ...partUrlsFields });
+
+/* GET /drive/uploads/:id/parts. */
+export const partUrlsResponse = t.Object(partUrlsFields);
+
+/* GET /drive/uploads/:id: the upload and the parts the store holds (none unless it is open). */
+export const uploadStateResponse = t.Object({
+    upload,
+    parts: t.Array(t.Object({ partNumber: t.Integer(), etag: t.String(), size: t.Integer() })),
+});
+
+/*
+ * POST /drive/uploads/:id/complete and /attach: the published node, or null when a retry finds
+ * the upload completed and its node gone since.
+ */
+export const completedUploadResponse = t.Object({
+    status: t.Literal('completed'),
+    node: t.Nullable(node),
+});
+
+/* POST /drive/uploads/:id/abort. */
+export const abortedUploadResponse = t.Object({ aborted: t.Boolean() });
+
+/*
+ * Presigned GETs by version (GET /drive/thumbnails, POST /drive/versions/urls and the link
+ * visitor's two): versions not readable or not ready are left out, so the list may be shorter.
+ */
+export const objectUrlsResponse = t.Object({
+    urls: t.Array(t.Object({ versionId: t.String(), url: t.String() })),
+    urlExpiresAt: t.String(),
+});
+
+/*
+ * GET /drive/versions/:id/url: one version's GET, with its node and the version's framing. A
+ * grantee's node has changeSeq null.
+ */
+export const downloadUrlResponse = t.Object({
+    url: t.String(),
+    urlExpiresAt: t.String(),
+    node,
+    version,
+});
+
+/* GET /drive/links/versions/:versionId/url: as above, as a visitor sees it (no signer anywhere). */
+export const linkDownloadUrlResponse = t.Object({
+    url: t.String(),
+    urlExpiresAt: t.String(),
+    node: visitorNode,
+    version: visitorVersion,
+});
+
+/* DELETE /drive/nodes/:id. */
+export const purgedResponse = t.Object({ purged: t.Boolean() });
+
+/* DELETE /drive/versions/:id. */
+export const discardedResponse = t.Object({ discarded: t.Boolean() });
+
+/* POST /drive/nodes/:id/shares: the new share as the owner lists it. */
+export const shareResponse = t.Object({ share: t.Object(shareFields) });
+
+/* PUT /drive/shares/:id/envelope. */
+export const resealedResponse = t.Object({ resealed: t.Literal(true) });
+
+/* DELETE /drive/shares/:id and DELETE /drive/links/:id. */
+export const revokedResponse = t.Object({ revoked: t.Boolean() });
+
+/* POST /drive/nodes/:id/links and PATCH /drive/links/:id: the link as the owner lists it. */
+export const linkResponse = t.Object({ link: t.Object(linkFields) });
+
+/* PUT /drive/workspaces/:id/documents/:kind: the document as written. */
+export const putDocumentResponse = t.Object({
+    document: t.Object({
+        kind: t.String(),
+        version: t.Integer(),
+        envelope: t.String(),
+        updatedAt: t.String(),
+        envelopeSuite: t.Integer(),
+    }),
+});
+
+/* POST /drive/nodes/:id/rotation: the rotation started, or the one already running there. */
+export const startRotationResponse = t.Object({ rotation });
+
+/*
+ * POST /drive/nodes/:id/rotation/nodes: each node's outcome, in order. A reply holding
+ * `bad-signature` or `unsupported` is refused as an error instead; the type keeps them.
+ */
+export const rotateNodesResponse = t.Object({
+    results: t.Array(
+        t.Object({
+            id: t.String(),
+            status: t.Union([
+                t.Literal('ok'),
+                t.Literal('stale'),
+                t.Literal('not-found'),
+                t.Literal('parent-not-ready'),
+                t.Literal('already'),
+                t.Literal('bad-signature'),
+                t.Literal('unsupported'),
+                t.Literal('forbidden'),
+            ]),
+        }),
+    ),
+});
+
+/* GET /drive/workspaces/:id/storage: bytes as decimal strings, counts as numbers. */
+export const storageResponse = t.Object({
+    trashBytes: t.String(),
+    trashItems: t.Integer(),
+    supersededBytes: t.String(),
+    supersededVersions: t.Integer(),
+});
+
+/*
+ * POST /drive/workspaces/:id/trash/empty and /versions/discard-superseded: how many went in this
+ * step, and how many remain (bounded for the trash: the client needs only zero or not).
+ */
+export const drainResponse = t.Object({ purged: t.Integer(), remaining: t.Integer() });
+
+/* GET /drive/workspaces/:id/trash: each trash root with the folders above it. */
+export const trashResponse = t.Object({
+    items: t.Array(t.Object({ node, ancestors: t.Array(node), parentTrashed: t.Boolean() })),
+    nextCursor: t.Nullable(t.String()),
+});
+
+/* GET /drive/reports/operators: who a report is sealed to; empty when nobody takes reports. */
+export const reportOperatorsResponse = t.Object({
+    operators: t.Array(t.Object({ ...servedIdentityFields, userId: t.String() })),
+});
+
+/* POST /drive/reports: the report's id; duplicate when one was already open for this item. */
+export const fileReportResponse = t.Object({
+    report: t.Object({ id: t.String() }),
+    duplicate: t.Boolean(),
 });
 
 /*

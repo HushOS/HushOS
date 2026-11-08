@@ -5,18 +5,48 @@ import type { NodeRow, VersionRow, rotationsRepository } from '@hushos/db';
 import type * as drive from '@hushos/drive/server';
 import type * as groups from '@hushos/groups/server';
 import {
+    abortedUploadResponse,
+    beginUploadResponse,
+    capabilitiesResponse,
     changesResponse,
+    completedUploadResponse,
+    discardedResponse,
     documentResponse,
+    downloadUrlResponse,
+    drainResponse,
+    epochsResponse,
+    fileReportResponse,
+    foldersResponse,
+    linkDownloadUrlResponse,
     linkListingResponse,
+    linkResponse,
     listingResponse,
     nodeLinksResponse,
+    nodeResponse,
     nodeSharesResponse,
+    objectUrlsResponse,
     openLinkResponse,
+    partUrlsResponse,
+    purgeBatchResponse,
+    purgedResponse,
+    putDocumentResponse,
+    reportOperatorsResponse,
+    resealedResponse,
+    restoreBatchResponse,
+    revokedResponse,
+    rootResponse,
+    rotateNodesResponse,
     rotationWorkResponse,
     shareChangesResponse,
+    shareResponse,
     sharedByMeResponse,
     sharedWithMeResponse,
     spacesResponse,
+    startRotationResponse,
+    storageResponse,
+    trashBatchResponse,
+    trashResponse,
+    uploadStateResponse,
     versionsResponse,
     workspaceResponse,
 } from '@/lib/api/drive-responses.server';
@@ -24,7 +54,7 @@ import { loadApi, type ApiRoute } from '@/test/api-app';
 import type { personalSpace as personalSpaceOf } from '@/lib/api/drive-responses.server';
 
 /*
- * The Drive reads' reply schemas, through a real Elysia route so normalisation runs as it does in
+ * The Drive routes' reply schemas, through a real Elysia route so normalisation runs as it does in
  * the app: what the Drive package returns goes out unchanged (every variant: legacy suites,
  * unsigned and re-keyed records, nulls), a field the schema does not name is dropped, and a reply
  * missing a field a client needs fails instead of going out short. Nodes are made by the
@@ -68,6 +98,7 @@ const versionId = '7c2f7e8d-d1bf-4db8-8b1a-9c80bef06f87';
 const objectId = '8d308f9e-e2c0-4ec9-9c2b-ad91cf017098';
 const shareId = '9e41908f-f3d1-4fda-8d3c-bea2d01281a9';
 const linkId = 'af52a190-04e2-40eb-9e4d-cfb3e12392ba';
+const uploadId = 'b063c2a1-15f3-41fc-8f5e-d0c4f234a3cc';
 const at = (hour: number) => new Date(Date.UTC(2026, 10, 8, hour));
 const iso = (hour: number) => at(hour).toISOString();
 
@@ -349,6 +380,64 @@ const workRow: rotationsRepository.RotationWorkNode = {
         // A link from before the current derivation: its version is sent so the client ends it.
         { id: shareId, hasPassword: false, secretEnvelope: null, kdfVersion: 1 },
     ],
+};
+
+/*
+ * A route several package functions answer: a sample must be what every one of them returns, so
+ * a field any of them gains fails typecheck. (A tuple, not an intersection: some are the same type.)
+ */
+type Every<T extends unknown[]> = T extends [infer Head, ...infer Rest]
+    ? Head & Every<Rest>
+    : unknown;
+type NodeReply = Every<
+    [
+        Reply<typeof drive.renameNode>,
+        Reply<typeof drive.moveNode>,
+        Reply<typeof drive.trashNode>,
+        Reply<typeof drive.restoreNode>,
+        Reply<typeof drive.copyNode>,
+        Reply<typeof drive.restoreVersion>,
+    ]
+>;
+type ObjectUrlsReply = Every<
+    [
+        Reply<typeof drive.thumbnailUrls>,
+        Reply<typeof drive.downloadUrls>,
+        Reply<typeof drive.linkThumbnailUrls>,
+        Reply<typeof drive.linkDownloadUrls>,
+    ]
+>;
+type CompletedReply = Every<[Reply<typeof drive.completeUpload>, Reply<typeof drive.attachUpload>]>;
+type LinkReply = Every<[Reply<typeof drive.createLink>, Reply<typeof drive.updateLink>]>;
+type RevokedReply = Every<[Reply<typeof drive.revokeShare>, Reply<typeof drive.revokeLink>]>;
+type DrainReply = Every<
+    [Reply<typeof drive.emptyTrash>, Reply<typeof drive.discardSupersededVersions>]
+>;
+
+/* An upload as uploadView makes it: open with its object, and aborted with the object retired. */
+const openUpload = {
+    id: uploadId,
+    nodeId: fileId,
+    versionId,
+    objectId,
+    status: 'open' as const,
+    chunkCount: 2,
+    ciphertextSize: '4194418',
+    expiresAt: iso(33),
+};
+const abortedUpload = {
+    ...openUpload,
+    objectId: null,
+    status: 'aborted' as const,
+    chunkCount: 0,
+    ciphertextSize: '0',
+};
+const partUrls = {
+    parts: [
+        { partNumber: 1, length: 4_194_320, url: 'https://store.example/o?partNumber=1&sig=a' },
+        { partNumber: 2, length: 98, url: 'https://store.example/o?partNumber=2&sig=b' },
+    ],
+    urlExpiresAt: iso(10),
 };
 
 type SpacesReply = {
@@ -739,6 +828,397 @@ const cases: Record<string, Case> = {
         stray: (v) => [v.folder, ...v.children, v.children[0].currentVersion],
         required: ['listing', (v) => delete v.folder.metadataEnvelope],
     },
+    'GET /drive/capabilities': {
+        schema: capabilitiesResponse,
+        samples: {
+            capabilities: {
+                protocolVersion: 3,
+                contentSuites: [3],
+                envelopeSuites: [1],
+                chunkSize: 4_194_304,
+                maxFileBytes: '10737418240',
+                maxDepth: 64,
+                nameMaxCodePoints: 255,
+                tombstoneDays: 90,
+                trashRetentionDays: 30,
+                groups: true,
+            } satisfies Reply<typeof drive.capabilities>,
+            // The type's shape from before families: no `groups`, which a client reads as off.
+            'before families': {
+                protocolVersion: 3,
+                contentSuites: [3],
+                envelopeSuites: [1],
+                chunkSize: 4_194_304,
+                maxFileBytes: '10737418240',
+                maxDepth: 64,
+                nameMaxCodePoints: 255,
+                tombstoneDays: 90,
+                trashRetentionDays: 30,
+            } satisfies Reply<typeof drive.capabilities>,
+        },
+        stray: () => [],
+        required: ['capabilities', (v) => delete v.maxFileBytes],
+    },
+    'POST /drive/workspaces/:id/epochs': {
+        schema: epochsResponse,
+        samples: { range: { from: 5, to: 68 } satisfies Reply<typeof drive.allocateEpochs> },
+        stray: () => [],
+        required: ['range', (v) => delete v.to],
+    },
+    'POST /drive/workspaces/:id/root': {
+        schema: rootResponse,
+        samples: {
+            created: { created: true, root: nodes.root } satisfies Reply<typeof drive.createRoot>,
+            'a retry': { created: false, root: nodes.root } satisfies Reply<
+                typeof drive.createRoot
+            >,
+        },
+        stray: (v) => [v.root],
+        required: ['created', (v) => delete v.created],
+    },
+    'POST /drive/folders': {
+        schema: foldersResponse,
+        samples: {
+            folders: {
+                nodes: [nodes.folder, { ...nodes.folder, id: fileId, parentId: folderId }],
+                changeSeq: 43,
+            } satisfies Reply<typeof drive.createFolders>,
+        },
+        stray: (v) => v.nodes,
+        required: ['folders', (v) => delete v.changeSeq],
+    },
+    'POST /drive/nodes/:id/{metadata,parent,trash,restore,copy}, /drive/versions/:id/restore': {
+        schema: nodeResponse,
+        samples: {
+            member: { node: nodes.rekeyed } satisfies NodeReply,
+            legacy: { node: nodes.legacyFile } satisfies NodeReply,
+            trashed: { node: nodes.dropped } satisfies NodeReply,
+        },
+        stray: (v) =>
+            [v.node, v.node.currentVersion, v.node.metadataRekey, v.node.currentVersion?.rekey]
+                .concat(v.node.metadataOriginDropped ?? [])
+                .filter(Boolean),
+        required: ['member', (v) => delete v.node.metadataSignature],
+    },
+    'POST /drive/workspaces/:id/trash-batch': {
+        schema: trashBatchResponse,
+        samples: {
+            results: {
+                results: [
+                    { id: folderId, status: 'trashed', trashedAt: iso(11), changeSeq: 44 },
+                    { id: fileId, status: 'covered', by: folderId },
+                    {
+                        id: rootId,
+                        status: 'refused',
+                        reason: 'root',
+                        message: 'The top folder cannot be moved to the trash.',
+                    },
+                    {
+                        id: versionId,
+                        status: 'refused',
+                        reason: 'forbidden',
+                        message: 'You do not have permission to do that here.',
+                    },
+                ],
+            } satisfies Reply<typeof drive.trashNodes>,
+        },
+        stray: (v) => v.results,
+        required: ['results', (v) => delete v.results[0].trashedAt],
+    },
+    'POST /drive/workspaces/:id/restore-batch': {
+        schema: restoreBatchResponse,
+        samples: {
+            results: {
+                results: [
+                    { id: folderId, status: 'restored', changeSeq: 45 },
+                    {
+                        id: fileId,
+                        status: 'refused',
+                        reason: 'parent-trashed',
+                        message: 'The folder this was in is still in the trash.',
+                    },
+                    {
+                        id: rootId,
+                        status: 'refused',
+                        reason: 'removed',
+                        message: 'This item was removed by the operator of this instance.',
+                    },
+                ],
+            } satisfies Reply<typeof drive.restoreNodes>,
+        },
+        stray: (v) => v.results,
+        required: ['results', (v) => delete v.results[1].reason],
+    },
+    'POST /drive/workspaces/:id/purge-batch': {
+        schema: purgeBatchResponse,
+        samples: {
+            results: {
+                results: [
+                    { id: folderId, status: 'purged', changeSeq: 46 },
+                    { id: fileId, status: 'covered', by: folderId },
+                    {
+                        id: versionId,
+                        status: 'refused',
+                        reason: 'busy',
+                        message: 'There wasn’t time to delete this one yet. Try again.',
+                    },
+                    {
+                        id: rootId,
+                        status: 'refused',
+                        reason: 'not-trashed',
+                        message: 'Move this item to the trash first.',
+                    },
+                ],
+            } satisfies Reply<typeof drive.purgeNodes>,
+        },
+        stray: (v) => v.results,
+        required: ['results', (v) => delete v.results[1].by],
+    },
+    'POST /drive/uploads': {
+        schema: beginUploadResponse,
+        samples: {
+            begun: { upload: openUpload, ...partUrls } satisfies Reply<typeof drive.beginUpload>,
+        },
+        stray: (v) => [v.upload, ...v.parts],
+        required: ['begun', (v) => delete v.parts[1].length],
+    },
+    'GET /drive/uploads/:id': {
+        schema: uploadStateResponse,
+        samples: {
+            open: {
+                upload: openUpload,
+                parts: [
+                    { partNumber: 1, etag: '"9b2cf535f27731c974343645a3985328"', size: 4_194_320 },
+                ],
+            } satisfies Reply<typeof drive.getUploadState>,
+            aborted: { upload: abortedUpload, parts: [] } satisfies Reply<
+                typeof drive.getUploadState
+            >,
+        },
+        stray: (v) => [v.upload, ...v.parts],
+        required: ['open', (v) => delete v.parts[0].etag],
+    },
+    'GET /drive/uploads/:id/parts': {
+        schema: partUrlsResponse,
+        samples: { parts: partUrls satisfies Reply<typeof drive.uploadPartUrls> },
+        stray: (v) => v.parts,
+        required: ['parts', (v) => delete v.urlExpiresAt],
+    },
+    'POST /drive/uploads/:id/{complete,attach}': {
+        schema: completedUploadResponse,
+        samples: {
+            published: { status: 'completed', node: nodes.file } satisfies CompletedReply,
+            // A retry after the node it published was purged.
+            gone: { status: 'completed', node: null } satisfies CompletedReply,
+        },
+        stray: (v) => [v.node, v.node?.currentVersion].filter(Boolean),
+        required: ['published', (v) => delete v.status],
+    },
+    'POST /drive/uploads/:id/abort': {
+        schema: abortedUploadResponse,
+        samples: { aborted: { aborted: true } satisfies Reply<typeof drive.abortUpload> },
+        stray: () => [],
+        required: ['aborted', (v) => delete v.aborted],
+    },
+    'GET /drive/thumbnails, POST /drive/versions/urls and the link visitor’s two': {
+        schema: objectUrlsResponse,
+        samples: {
+            urls: {
+                urls: [
+                    { versionId, url: 'https://store.example/a?sig=1' },
+                    { versionId: shareId, url: 'https://store.example/b?sig=2' },
+                ],
+                urlExpiresAt: iso(10),
+            } satisfies ObjectUrlsReply,
+            // A link that no longer resolves, or nothing readable among the ids.
+            none: { urls: [], urlExpiresAt: iso(9) } satisfies ObjectUrlsReply,
+        },
+        stray: (v) => v.urls,
+        required: ['urls', (v) => delete v.urls[1].versionId],
+    },
+    'GET /drive/versions/:id/url': {
+        schema: downloadUrlResponse,
+        samples: {
+            member: {
+                url: 'https://store.example/a?sig=1',
+                urlExpiresAt: iso(10),
+                node: nodes.rekeyed,
+                version: nodes.rekeyed.currentVersion!,
+            } satisfies Reply<typeof drive.downloadUrl>,
+            grantee: {
+                url: 'https://store.example/a?sig=2',
+                urlExpiresAt: iso(9),
+                node: granteeView(nodes.legacyFile),
+                version: nodes.legacyFile.currentVersion!,
+            } satisfies Reply<typeof drive.downloadUrl>,
+        },
+        stray: (v) => [v.node, v.version, v.version.rekey].filter(Boolean),
+        required: ['member', (v) => delete v.version.chunkSize],
+    },
+    'GET /drive/links/versions/:versionId/url': {
+        schema: linkDownloadUrlResponse,
+        samples: {
+            visitor: {
+                url: 'https://store.example/a?sig=3',
+                urlExpiresAt: iso(9),
+                node: visitor(nodes.file),
+                version: visitor(nodes.file).currentVersion!,
+            } satisfies Reply<typeof drive.linkDownloadUrl>,
+        },
+        stray: (v) => [v.node, v.node.currentVersion, v.version],
+        required: ['visitor', (v) => delete v.version.contentKeyEnvelope],
+    },
+    'DELETE /drive/nodes/:id': {
+        schema: purgedResponse,
+        samples: { purged: { purged: true } satisfies Reply<typeof drive.purgeNode> },
+        stray: () => [],
+        required: ['purged', (v) => delete v.purged],
+    },
+    'DELETE /drive/versions/:id': {
+        schema: discardedResponse,
+        samples: { discarded: { discarded: true } satisfies Reply<typeof drive.discardVersion> },
+        stray: () => [],
+        required: ['discarded', (v) => delete v.discarded],
+    },
+    'POST /drive/nodes/:id/shares': {
+        schema: shareResponse,
+        samples: { share: { share } satisfies Reply<typeof drive.shareNode> },
+        stray: (v) => [v.share, v.share.grantee],
+        required: ['share', (v) => delete v.share.grantee.name],
+    },
+    'PUT /drive/shares/:id/envelope': {
+        schema: resealedResponse,
+        samples: { resealed: { resealed: true } satisfies Reply<typeof drive.resealShare> },
+        stray: () => [],
+        required: ['resealed', (v) => delete v.resealed],
+    },
+    'DELETE /drive/shares/:id and /drive/links/:id': {
+        schema: revokedResponse,
+        samples: { revoked: { revoked: true } satisfies RevokedReply },
+        stray: () => [],
+        required: ['revoked', (v) => delete v.revoked],
+    },
+    'POST /drive/nodes/:id/links and PATCH /drive/links/:id': {
+        schema: linkResponse,
+        samples: {
+            link: { link } satisfies LinkReply,
+            legacy: { link: legacyLink } satisfies LinkReply,
+        },
+        stray: (v) => [v.link],
+        required: ['link', (v) => delete v.link.kdfVersion],
+    },
+    'PUT /drive/workspaces/:id/documents/:kind': {
+        schema: putDocumentResponse,
+        samples: {
+            document: {
+                document: {
+                    kind: 'tags',
+                    version: 4,
+                    envelope: b64(552),
+                    updatedAt: iso(10),
+                    envelopeSuite: 1,
+                },
+            } satisfies Reply<typeof drive.putWorkspaceDocument>,
+        },
+        stray: (v) => [v.document],
+        required: ['document', (v) => delete v.document.updatedAt],
+    },
+    'POST /drive/nodes/:id/rotation': {
+        schema: startRotationResponse,
+        samples: {
+            rotation: {
+                rotation: { id: shareId, nodeId: folderId, targetEpoch: 4 },
+            } satisfies Reply<typeof drive.startRotation>,
+        },
+        stray: (v) => [v.rotation],
+        required: ['rotation', (v) => delete v.rotation.targetEpoch],
+    },
+    'POST /drive/nodes/:id/rotation/nodes': {
+        schema: rotateNodesResponse,
+        samples: {
+            results: {
+                results: [
+                    { id: folderId, status: 'ok' },
+                    { id: fileId, status: 'already' },
+                    { id: rootId, status: 'parent-not-ready' },
+                    { id: versionId, status: 'stale' },
+                    { id: shareId, status: 'not-found' },
+                    { id: linkId, status: 'forbidden' },
+                ],
+            } satisfies Reply<typeof drive.rotateNodes>,
+        },
+        stray: (v) => v.results,
+        required: ['results', (v) => delete v.results[0].status],
+    },
+    'GET /drive/workspaces/:id/storage': {
+        schema: storageResponse,
+        samples: {
+            storage: {
+                trashBytes: '9007199254740993',
+                trashItems: 12,
+                supersededBytes: '0',
+                supersededVersions: 0,
+            } satisfies Reply<typeof drive.storageBreakdown>,
+        },
+        stray: () => [],
+        required: ['storage', (v) => delete v.trashBytes],
+    },
+    'POST /drive/workspaces/:id/{trash/empty,versions/discard-superseded}': {
+        schema: drainResponse,
+        samples: {
+            more: { purged: 100, remaining: 101 } satisfies DrainReply,
+            done: { purged: 3, remaining: 0 } satisfies DrainReply,
+        },
+        stray: () => [],
+        required: ['more', (v) => delete v.remaining],
+    },
+    'GET /drive/workspaces/:id/trash': {
+        schema: trashResponse,
+        samples: {
+            trash: {
+                items: [
+                    { node: nodes.dropped, ancestors: [nodes.root], parentTrashed: false },
+                    {
+                        node: { ...nodes.file, trashedAt: iso(11) },
+                        ancestors: [nodes.root, nodes.dropped],
+                        parentTrashed: true,
+                    },
+                ],
+                nextCursor: `1762592400000000.${fileId}`,
+            } satisfies Reply<typeof drive.listTrash>,
+            empty: { items: [], nextCursor: null } satisfies Reply<typeof drive.listTrash>,
+        },
+        stray: (v) => v.items.flatMap((i: any) => [i, i.node, ...i.ancestors]),
+        required: ['trash', (v) => delete v.items[0].parentTrashed],
+    },
+    'GET /drive/reports/operators': {
+        schema: reportOperatorsResponse,
+        samples: {
+            operators: {
+                operators: [
+                    { ...identityV2, userId: owner },
+                    { ...identityV1, userId: editor },
+                ],
+            } satisfies Reply<typeof drive.reportOperators>,
+            // No operator yet: this instance takes no reports.
+            none: { operators: [] } satisfies Reply<typeof drive.reportOperators>,
+        },
+        stray: (v) => v.operators,
+        required: ['operators', (v) => delete v.operators[0].userId],
+    },
+    'POST /drive/reports': {
+        schema: fileReportResponse,
+        samples: {
+            filed: { report: { id: shareId }, duplicate: false } satisfies Reply<
+                typeof drive.fileReport
+            >,
+            duplicate: { report: { id: shareId }, duplicate: true } satisfies Reply<
+                typeof drive.fileReport
+            >,
+        },
+        stray: (v) => [v.report],
+        required: ['filed', (v) => delete v.report.id],
+    },
 };
 
 describe.each(Object.entries(cases))('%s', (_route, { schema, samples, stray, required }) => {
@@ -785,6 +1265,46 @@ test("strips the writer from what a link's visitor is sent", async () => {
     expect(JSON.stringify(body)).not.toContain(editor);
 });
 
+/* The same for a file a visitor downloads: its node and version name no writer. */
+test("strips the writer from a link visitor's download", async () => {
+    const download = clone(
+        cases['GET /drive/links/versions/:versionId/url']!.samples.visitor,
+    ) as Reply<typeof drive.linkDownloadUrl>;
+    const leaky = {
+        ...download,
+        node: nodes.rekeyed,
+        version: nodes.rekeyed.currentVersion!,
+    };
+    const { status, body } = await serve(linkDownloadUrlResponse, leaky);
+    expect(status).toBe(200);
+    expect(body).toEqual({
+        ...download,
+        node: { ...visitor(nodes.rekeyed), changeSeq: 41 },
+        version: visitor(nodes.rekeyed).currentVersion,
+    });
+    expect(JSON.stringify(body)).not.toContain(owner);
+    expect(JSON.stringify(body)).not.toContain(editor);
+});
+
+/*
+ * A batch result is matched by its status alone: a refusal that claims a reason of another
+ * batch, or a status no batch has, fails rather than going out as something a client misreads.
+ */
+test('refuses a batch result outside its own set', async () => {
+    const trash = clone(cases['POST /drive/workspaces/:id/trash-batch']!.samples.results) as any;
+    trash.results[2].reason = 'busy';
+    expect((await serve(trashBatchResponse, trash)).status).toBe(500);
+    const restore = clone(
+        cases['POST /drive/workspaces/:id/restore-batch']!.samples.results,
+    ) as any;
+    restore.results[0].status = 'covered';
+    restore.results[0].by = folderId;
+    expect((await serve(restoreBatchResponse, restore)).status).toBe(500);
+    const purge = clone(cases['POST /drive/workspaces/:id/purge-batch']!.samples.results) as any;
+    purge.results[0].status = 'trashed';
+    expect((await serve(purgeBatchResponse, purge)).status).toBe(500);
+});
+
 /* A field typed as one of a set: a value outside it fails rather than going out. */
 test('refuses a role, a node kind or a suite outside its set', async () => {
     const shares = clone(cases['GET /drive/nodes/:id/shares']!.samples.shares) as any;
@@ -798,29 +1318,90 @@ test('refuses a role, a node kind or a suite outside its set', async () => {
     expect((await serve(sharedByMeResponse, mine)).status).toBe(500);
 });
 
-/* The schemas guard nothing unless the routes carry them: each read names its own. */
-test('each Drive read carries its reply schema', async () => {
+/*
+ * The schemas guard nothing unless the routes carry them: each Drive route names its own, but
+ * the retired link paths, which only ever answer 410.
+ */
+const expectedSchemas: Record<string, AnySchema> = {
+    'GET /api/drive/workspace': workspaceResponse,
+    'GET /api/drive/spaces': spacesResponse,
+    'GET /api/drive/shares': sharedWithMeResponse,
+    'GET /api/drive/shares/mine': sharedByMeResponse,
+    'GET /api/drive/nodes/:id/children': listingResponse,
+    'GET /api/drive/nodes/:id/versions': versionsResponse,
+    'GET /api/drive/nodes/:id/shares': nodeSharesResponse,
+    'GET /api/drive/nodes/:id/links': nodeLinksResponse,
+    'GET /api/drive/workspaces/:id/documents/:kind': documentResponse,
+    'GET /api/drive/workspaces/:id/changes': changesResponse,
+    'GET /api/drive/shares/:id/changes': shareChangesResponse,
+    'GET /api/drive/nodes/:id/rotation/work': rotationWorkResponse,
+    'GET /api/drive/links/open': openLinkResponse,
+    'GET /api/drive/links/nodes/:nodeId/children': linkListingResponse,
+    'GET /api/drive/capabilities': capabilitiesResponse,
+    'GET /api/drive/links/versions/:versionId/url': linkDownloadUrlResponse,
+    'POST /api/drive/links/versions/urls': objectUrlsResponse,
+    'GET /api/drive/links/thumbnails': objectUrlsResponse,
+    'GET /api/drive/reports/operators': reportOperatorsResponse,
+    'POST /api/drive/reports': fileReportResponse,
+    'POST /api/drive/workspaces/:id/epochs': epochsResponse,
+    'POST /api/drive/workspaces/:id/root': rootResponse,
+    'POST /api/drive/folders': foldersResponse,
+    'POST /api/drive/nodes/:id/metadata': nodeResponse,
+    'POST /api/drive/nodes/:id/parent': nodeResponse,
+    'POST /api/drive/nodes/:id/trash': nodeResponse,
+    'POST /api/drive/nodes/:id/restore': nodeResponse,
+    'POST /api/drive/workspaces/:id/trash-batch': trashBatchResponse,
+    'POST /api/drive/workspaces/:id/restore-batch': restoreBatchResponse,
+    'POST /api/drive/workspaces/:id/purge-batch': purgeBatchResponse,
+    'POST /api/drive/uploads': beginUploadResponse,
+    'GET /api/drive/uploads/:id': uploadStateResponse,
+    'GET /api/drive/uploads/:id/parts': partUrlsResponse,
+    'POST /api/drive/uploads/:id/complete': completedUploadResponse,
+    'POST /api/drive/uploads/:id/attach': completedUploadResponse,
+    'POST /api/drive/uploads/:id/abort': abortedUploadResponse,
+    'GET /api/drive/thumbnails': objectUrlsResponse,
+    'DELETE /api/drive/nodes/:id': purgedResponse,
+    'POST /api/drive/nodes/:id/copy': nodeResponse,
+    'POST /api/drive/versions/:id/restore': nodeResponse,
+    'DELETE /api/drive/versions/:id': discardedResponse,
+    'POST /api/drive/nodes/:id/shares': shareResponse,
+    'PUT /api/drive/shares/:id/envelope': resealedResponse,
+    'DELETE /api/drive/shares/:id': revokedResponse,
+    'POST /api/drive/nodes/:id/links': linkResponse,
+    'PATCH /api/drive/links/:id': linkResponse,
+    'DELETE /api/drive/links/:id': revokedResponse,
+    'PUT /api/drive/workspaces/:id/documents/:kind': putDocumentResponse,
+    'POST /api/drive/nodes/:id/rotation': startRotationResponse,
+    'POST /api/drive/nodes/:id/rotation/nodes': rotateNodesResponse,
+    'GET /api/drive/workspaces/:id/storage': storageResponse,
+    'POST /api/drive/workspaces/:id/versions/discard-superseded': drainResponse,
+    'POST /api/drive/workspaces/:id/trash/empty': drainResponse,
+    'POST /api/drive/versions/urls': objectUrlsResponse,
+    'GET /api/drive/versions/:id/url': downloadUrlResponse,
+    'GET /api/drive/workspaces/:id/trash': trashResponse,
+};
+const retired = new Set([
+    'GET /api/drive/links/:id/open',
+    'GET /api/drive/links/:id/nodes/:nodeId/children',
+    'GET /api/drive/links/:id/versions/:versionId/url',
+    'POST /api/drive/links/:id/versions/urls',
+    'GET /api/drive/links/:id/thumbnails',
+]);
+
+test('each Drive route carries its reply schema', async () => {
     const app = await loadApi();
-    const routes = app.routes as unknown as (ApiRoute & { hooks: { response?: unknown } })[];
-    const expected: Record<string, AnySchema> = {
-        '/api/drive/workspace': workspaceResponse,
-        '/api/drive/spaces': spacesResponse,
-        '/api/drive/shares': sharedWithMeResponse,
-        '/api/drive/shares/mine': sharedByMeResponse,
-        '/api/drive/nodes/:id/children': listingResponse,
-        '/api/drive/nodes/:id/versions': versionsResponse,
-        '/api/drive/nodes/:id/shares': nodeSharesResponse,
-        '/api/drive/nodes/:id/links': nodeLinksResponse,
-        '/api/drive/workspaces/:id/documents/:kind': documentResponse,
-        '/api/drive/workspaces/:id/changes': changesResponse,
-        '/api/drive/shares/:id/changes': shareChangesResponse,
-        '/api/drive/nodes/:id/rotation/work': rotationWorkResponse,
-        '/api/drive/links/open': openLinkResponse,
-        '/api/drive/links/nodes/:nodeId/children': linkListingResponse,
-    };
-    for (const [path, schema] of Object.entries(expected)) {
-        const route = routes.find((r) => r.method === 'GET' && r.path === path);
-        expect(route, path).toBeDefined();
-        expect((route!.hooks.response as Record<number, unknown>)[200], path).toEqual(schema);
+    const routes = (
+        app.routes as unknown as (ApiRoute & { hooks: { response?: unknown } })[]
+    ).filter((r) => r.path.startsWith('/api/drive/'));
+    for (const [key, schema] of Object.entries(expectedSchemas)) {
+        const [method, path] = key.split(' ');
+        const route = routes.find((r) => r.method === method && r.path === path);
+        expect(route, key).toBeDefined();
+        expect((route!.hooks.response as Record<number, unknown>)[200], key).toEqual(schema);
     }
+    // A route added later without a schema, or one this list forgot, fails here.
+    const unlisted = routes
+        .map((r) => `${r.method} ${r.path}`)
+        .filter((key) => !(key in expectedSchemas) && !retired.has(key));
+    expect(unlisted).toEqual([]);
 });
