@@ -54,6 +54,14 @@ async fn run() -> Result<(), String> {
         api::MAX_LIMIT_ENTRIES,
     );
     let deliveries = tokio::spawn(api::run_deliveries(deliverer.clone(), jobs));
+    let idle = relay.clone();
+    tokio::spawn(async move {
+        let mut minutely = tokio::time::interval(Duration::from_secs(60));
+        loop {
+            minutely.tick().await;
+            idle.forget_idle();
+        }
+    });
     let counts = deliverer.clone();
     tokio::spawn(async move {
         let mut hourly = tokio::time::interval(Duration::from_secs(3600));

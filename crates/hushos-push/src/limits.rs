@@ -246,6 +246,13 @@ impl Limiter {
         true
     }
 
+    /// Forgets every record that has refilled. Run once a minute, so an address or handle is held
+    /// at most about an hour after its last use however quiet the relay is; without it, records
+    /// went only when the table filled or every 10,000 requests.
+    pub fn forget_idle(&self, now: Duration) {
+        self.inner.lock().unwrap().sweep(now);
+    }
+
     #[cfg(test)]
     fn len(&self) -> usize {
         self.inner.lock().unwrap().buckets.len()
@@ -367,6 +374,23 @@ mod tests {
         assert!(ping(&limiter, later, 5, Class::Security));
         assert_eq!(limiter.len(), 2);
         assert_eq!(passed(&limiter, later, 1, Class::Security, 25), 3);
+    }
+
+    #[test]
+    fn a_quiet_relay_forgets_each_record_within_an_hour_of_its_last_use() {
+        let limiter = Limiter::new(100);
+        assert_eq!(passed(&limiter, Duration::ZERO, 1, Class::Security, 20), 20);
+        assert!(ping(&limiter, Duration::ZERO, 2, Class::Security));
+        // Far below the table's size and the request count that would sweep on their own.
+        limiter.forget_idle(30 * MINUTE);
+        assert_eq!(limiter.len(), 1, "the lightly used record has refilled and goes");
+        // The spent one has earned back only part of its budget, so it is kept until it refills.
+        limiter.forget_idle(59 * MINUTE);
+        assert_eq!(limiter.len(), 1);
+        limiter.forget_idle(60 * MINUTE);
+        assert_eq!(limiter.len(), 0, "nothing is held past an hour after its last use");
+        // Forgetting gives nothing back early: the spent handle's budget was already whole.
+        assert_eq!(passed(&limiter, 60 * MINUTE, 1, Class::Security, 25), 20);
     }
 
     #[test]

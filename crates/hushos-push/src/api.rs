@@ -12,7 +12,7 @@ use std::sync::Arc;
 use axum::body::Bytes;
 use axum::extract::{ConnectInfo, DefaultBodyLimit, FromRequestParts, Path, State};
 use axum::http::request::Parts;
-use axum::http::{HeaderName, StatusCode};
+use axum::http::{header, HeaderName, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
@@ -157,12 +157,20 @@ pub fn relay(
     (Arc::new(relay), deliverer, jobs)
 }
 
+impl Relay {
+    /// Forgets rate-limit records that have refilled (see `Limiter::forget_idle`).
+    pub fn forget_idle(&self) {
+        self.limiter.forget_idle(self.clock.now());
+    }
+}
+
 pub fn router(relay: Arc<Relay>) -> Router {
     Router::new()
         .route("/v1/register", post(register))
         .route("/v1/register/{handle}", delete(unregister))
         .route("/v1/ping", post(ping))
         .route("/healthz", get(healthz))
+        .route("/", get(page))
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
         .with_state(relay)
 }
@@ -378,6 +386,25 @@ async fn ping(State(relay): State<Arc<Relay>>, address: ClientAddress, body: Byt
         count(&relay.deliverer.counters.dropped);
     }
     StatusCode::ACCEPTED.into_response()
+}
+
+/// What this service is and keeps, for anyone who opens push.hushos.com, a self-hoster among them.
+/// Static and script-free: the policy allows only its own inline style.
+async fn page() -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (
+                header::CONTENT_SECURITY_POLICY,
+                "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+            ),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            (header::REFERRER_POLICY, "no-referrer"),
+            (header::CACHE_CONTROL, "public, max-age=3600"),
+        ],
+        include_str!("page.html"),
+    )
+        .into_response()
 }
 
 async fn healthz(State(relay): State<Arc<Relay>>) -> Response {
