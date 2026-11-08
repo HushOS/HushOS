@@ -323,6 +323,8 @@ The same four tabs as iOS: Home, Files, Shared and Account.
 - Revoking a share rotates the subtree (`data/Rotation.kt`, the same protocol as the web).
 - Never send a node beside its parent in one batch (`deferChildren`).
     - Why: the server judges each node on its own. Another device can win the parent while this one wins the child, sealed under a key nobody kept.
+- A batch goes in parts of at most 4 MiB, each node whole (`rotationParts`), in both walks. Each part is settled as it lands.
+    - Test: `RotationPartsTest`.
 - A parent another device re-keyed is read from the server (`adoptServedKey`) before its children are wrapped under it.
 - Test: `RotationRaceTest`. FakeDrive judges each node; `rekeyedElsewhere` and `beforeRotationSend` stand in for the other device.
 

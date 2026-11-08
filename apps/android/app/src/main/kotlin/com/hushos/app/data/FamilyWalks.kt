@@ -196,9 +196,12 @@ internal fun Vault.walkFamilyFolder(target: WalkTarget, progress: (Int) -> Unit 
                 // The walk's own count first (its folder let go of since it began), then the final gate on the way out.
                 synchronized(familyCopiesLock) { requireWriteStands(ws) }
                 sent = true
-                val outcomes = api.rotateNodes(ws, rootId, batch)
-                if (outcomes.any { it.second == "bad-signature" }) throw ApiError(400, "This change was not signed by your keys. Sign in again and retry.")
-                outcomes.filter { it.second == "ok" || it.second == "already" }.forEach { kept.add(it.first) }
+                // Sent in parts by size, in order; what one part applied is kept even if a later part fails.
+                for (part in rotationParts(ws, batch, rotationPartBytes)) {
+                    val outcomes = api.rotateNodes(ws, rootId, part)
+                    if (outcomes.any { it.second == "bad-signature" }) throw ApiError(400, "This change was not signed by your keys. Sign in again and retry.")
+                    outcomes.filter { it.second == "ok" || it.second == "already" }.forEach { kept.add(it.first) }
+                }
             }
         } finally {
             // The keys made become the nodes' own only for what the server applied; every other one is dropped, so a retry

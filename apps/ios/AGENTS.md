@@ -521,6 +521,8 @@ See `docs/identity-pq-design.md`.
 - Work in depth order, parents first.
 - Never a node beside its parent in one batch (`deferChildren`).
     - Why: the server judges each node on its own. Another device can win the parent while this one wins the child, sealed under a key nobody kept.
+- A batch goes in parts of at most 4 MiB, each node whole (`rotationParts`). Each part is settled as it lands, so a later part that stops undoes only its own nodes.
+    - Test: `RotationPartsTests`.
 - A parent another device re-keyed is read from the server (`adoptServedKey`) before its children are wrapped under it.
     - Test: `RotationTests.aFolderAnotherDeviceReKeysFirstNeverLeavesWhatItHoldsUnderAKeyNobodyKept`.
 - Previous keys are kept for children wrapped under them.

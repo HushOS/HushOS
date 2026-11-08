@@ -257,8 +257,11 @@ extension Vault {
         // The folder's write rules as they stand now, right before the send (DriveAPI's final gate checks again).
         _ = try familyTarget(workspaceId)
         sent = true
-        let results = try await api.rotateNodes(workspaceId: workspaceId, nodeId: rootId, nodes: batch)
-        kept = Set(results.filter { $0.status == "ok" || $0.status == "already" }.map { $0.id.lowercased() })
+        // Sent in parts by size, in order; what one part applied is kept (and committed above) even if a later part fails.
+        for part in try rotationParts(workspaceId: workspaceId, nodes: batch, limit: rotationPartBytes) {
+            let results = try await api.rotateNodes(workspaceId: workspaceId, nodeId: rootId, nodes: part)
+            kept.formUnion(results.filter { $0.status == "ok" || $0.status == "already" }.map { $0.id.lowercased() })
+        }
         return kept
     }
 

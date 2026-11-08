@@ -69,6 +69,14 @@ export const MAX_FOLDER_BATCH = 64;
 export const MAX_TRASH_BATCH = 200;
 /* Batch trash and restore requests one account may make a minute, both together. */
 export const TRASH_BATCHES_PER_MINUTE = 60;
+/*
+ * The most a rotation request's body may weigh as a client sends it. A work page is sent in parts
+ * up to this size, each node whole: a page of widely shared files runs to megabytes (a hybrid share
+ * is about 6 KB), and the server applies each node on its own, so nothing ties a page to one
+ * request. A node heavier than this goes alone; the server's cap (body-caps.ts) takes the heaviest
+ * node its schema allows.
+ */
+export const ROTATION_REQUEST_BYTES = 4 * 1024 * 1024;
 
 /*
  * A share envelope is suite 4 (an ephemeral X25519 key, ML-KEM-768 and the

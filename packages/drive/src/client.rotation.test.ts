@@ -94,7 +94,7 @@ const envelopesOf = (row: NodeView) => ({
     version: null,
 });
 
-async function setup() {
+async function setup(options: { rotationPartBytes?: number } = {}) {
     const root = crypto.getRandomValues(new Uint8Array(32));
     const grant = await createWorkspaceGrant(root, USER, WS, 1);
     const identity = await createIdentity(root, USER);
@@ -239,8 +239,14 @@ async function setup() {
      */
     const asked: string[] = [];
     let askedNext: ((operation: string) => void) | null = null;
+    /* What this tab's walk committed and dropped after each batch, as it told the worker. */
+    const settled = { committed: [] as string[][], dropped: [] as string[][] };
     const tab = (async (operation: string, input: unknown) => {
         asked.push(operation);
+        if (operation === 'driveRotateCommit' || operation === 'driveRotateDrop')
+            settled[operation === 'driveRotateCommit' ? 'committed' : 'dropped'].push(
+                (input as { nodeIds: string[] }).nodeIds,
+            );
         askedNext?.(operation);
         if (operation === 'driveUploadSend')
             return { ok: true, etag: `etag-${(input as { index: number }).index}`, bytes: 0 };
@@ -417,6 +423,7 @@ async function setup() {
 
     const client = createDriveClient(tab, api, {
         signers: async () => ({}),
+        ...options,
     });
     await client.open(USER);
     const finished = new Map<string, (outcome: string) => void>();
@@ -452,6 +459,7 @@ async function setup() {
         asked,
         rows,
         batches,
+        settled,
         row,
         rekeyedElsewhere,
         open,
@@ -499,6 +507,50 @@ describe('two devices walking one rotation', () => {
         for (const batch of h.batches)
             for (const id of batch) expect(batch).not.toContain(h.row(id).parentId);
         expect(h.batches.map((batch) => [...batch].sort())).toEqual([[S], [P, Q].sort(), [C], [D]]);
+    });
+});
+
+describe('a batch sent in parts', () => {
+    /*
+     * P and Q go in one batch, here one part each. The first part lands; the second is lost on
+     * the way. What the server applied must be committed in the worker and the rest dropped, so
+     * the worker never holds a key the server refused nor drops one it kept; the retry finishes
+     * from there and a device that never saw any of it reads the whole tree.
+     */
+    test('a part that landed stays applied when a later part is lost', async () => {
+        const h = await setup({ rotationPartBytes: 1 });
+        h.setBeforeNode(async () => {
+            if (h.batches.length === 3) throw new Error('The connection dropped.');
+        });
+
+        await expect(h.client.rotate(h.row(S) as never)).rejects.toThrow('The connection dropped.');
+
+        // S alone, then P and Q one part each.
+        expect(h.batches.map((batch) => batch.length)).toEqual([1, 1, 1]);
+        const [landed, lost] = [h.batches[1]![0]!, h.batches[2]![0]!];
+        expect([landed, lost].sort()).toEqual([P, Q].sort());
+        expect(h.row(landed).keyEpoch).toBe(TARGET);
+        expect(h.row(lost).keyEpoch).toBeLessThan(TARGET);
+        // The batch that failed settles what the server holds: the landed part kept, the lost one dropped.
+        expect(h.settled.committed.at(-1)).toEqual([landed]);
+        expect(h.settled.dropped.at(-1)).toContain(lost);
+        expect(h.settled.dropped.at(-1)).not.toContain(landed);
+
+        await h.client.rotate(h.row(S) as never);
+        for (const id of [S, P, Q, C, D]) expect(h.row(id).keyEpoch).toBe(TARGET);
+        const fresh = await h.open('fresh-device');
+        const { nodes } = await fresh('driveOpenNodes', {
+            workspaceId: WS,
+            nodes: [ROOT, S, P, Q, C, D].map((id) => envelopesOf(h.row(id))),
+        });
+        expect(nodes.map((n) => n.error ?? n.metadata?.name)).toEqual([
+            'Files',
+            'S',
+            'P',
+            'Q',
+            'C',
+            'D',
+        ]);
     });
 });
 

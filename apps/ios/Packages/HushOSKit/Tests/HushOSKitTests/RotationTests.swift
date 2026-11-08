@@ -93,6 +93,40 @@ extension OnFakeDrive {
         #expect(await vault.previousKeysKept(in: server.workspace) == 0)
     }
 
+    /*
+     * A batch sent in parts (here one node each): F's part lands, F2's is lost on the way. What the server applied must
+     * stay applied here, F's previous key kept beside A's for what still hangs under it, while F2 goes back to the key
+     * the server holds. The retry finishes only F2, and every node opens.
+     */
+    @Test func aPartThatLandedStaysAppliedWhenALaterPartOfTheBatchIsLost() async throws {
+        let server = try FakeDrive(sibling: true)
+        let vault = try await readyVault(server)
+        _ = try await vault.listChildren(of: server.root)
+        _ = try await vault.listChildren(of: server.a)
+        await vault.setRotationPartBytes(1)
+        // Send 1 is A alone (its children wait for its key); sends 2 and 3 are F's part and F2's.
+        server.failRotationSends = [3]
+        let a = try #require(await vault.item(server.a))
+        await #expect(throws: (any Error).self) { try await vault.rotate(a) }
+        // One page, two parts: whichever file the work listed first went alone, then the other.
+        #expect(server.rotationBatches.count == 3)
+        let landed = try #require(server.rotationBatches[1].first)
+        let lost = try #require(server.rotationBatches[2].first)
+        #expect(Set([landed, lost]) == [server.f, server.f2])
+        #expect(server.nodes[landed]?.keyEpoch == 2 && server.nodes[lost]?.keyEpoch == 1)
+        // A and the part that landed keep their previous keys; the lost part keeps none.
+        #expect(await vault.previousKeysKept(in: server.workspace) == 2)
+
+        let outcome = try await vault.rotate(try await vault.resolve(server.a))
+        #expect(outcome.rotated == 1)
+        #expect(server.nodes[server.f]?.keyEpoch == 2 && server.nodes[server.f2]?.keyEpoch == 2)
+        let listing = try await vault.listChildren(of: server.a)
+        #expect(Set(listing.children.map(\.id)) == [server.f, server.f2])
+        #expect(await vault.item(server.f)?.name == "f.txt")
+        #expect(await vault.item(server.f2)?.name == "f2.txt")
+        #expect(await vault.previousKeysKept(in: server.workspace) == 0)
+    }
+
     /* Whether something happened, from a closure the server runs. */
     final class Once: @unchecked Sendable { var done = false }
 
@@ -237,6 +271,8 @@ extension Vault {
     /* How many previous keys an unfinished rotation keeps in this workspace. */
     func previousKeysKept(in workspaceId: String) -> Int { rotatedKeys.values(in: workspaceId).count }
 
+    func setRotationPartBytes(_ bytes: Int) { rotationPartBytes = bytes }
+
     /* As a finished catalogue build leaves it: every opened folder's children filed. */
     func markCatalogueReady() {
         catalogueChildren = [:]
@@ -277,6 +313,8 @@ final class FakeDrive: @unchecked Sendable {
     let b = UUID().uuidString.lowercased()
     let f = UUID().uuidString.lowercased()
     let g = UUID().uuidString.lowercased()
+    /* A second file in A, made only with `sibling`: a batch that holds two nodes side by side. */
+    let f2 = UUID().uuidString.lowercased()
     var nodes: [String: NodeView] = [:]
     var failMoves = false
     /* At most this many nodes per batch of rotation work (nil: all at once), as the server sizes them. */
@@ -308,7 +346,7 @@ final class FakeDrive: @unchecked Sendable {
         "g.txt": ["colour": "red", "later_feature": "{\"x\":1}"],
     ]
 
-    init(attributed: Bool = false) throws {
+    init(attributed: Bool = false, sibling: Bool = false) throws {
         workspaceKey = try randomBytes(length: 32)
         let accountKey = try randomBytes(length: 32)
         identity = try identityOpen(userId: session.userId, accountKey: accountKey, envelope: try identityCreate(userId: session.userId, accountKey: accountKey, keyVersion: 1))
@@ -317,7 +355,9 @@ final class FakeDrive: @unchecked Sendable {
         var keys: [String: Data] = [:]
         defer { self.keys = keys }
         // Parents first, so each key wraps under its parent's.
-        for (id, parent, kind, name) in [(root, nil, "folder", "Files"), (a, root, "folder", "A"), (b, root, "folder", "B"), (f, a, "file", "f.txt"), (g, b, "file", "g.txt")] as [(String, String?, String, String)] {
+        let tree: [(String, String?, String, String)] = [(root, nil, "folder", "Files"), (a, root, "folder", "A"), (b, root, "folder", "B"), (f, a, "file", "f.txt"), (g, b, "file", "g.txt")]
+            + (sibling ? [(f2, a, "file", "f2.txt")] : [])
+        for (id, parent, kind, name) in tree {
             let key = try randomBytes(length: 32)
             keys[id] = key
             let parentKey = parent.flatMap { keys[$0] } ?? workspaceKey

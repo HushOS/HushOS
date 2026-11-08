@@ -19,12 +19,12 @@ export const DEFAULT_BODY_BYTES = 64 * KiB;
 export const TRASH_BATCH_BODY_BYTES = 12 * KiB;
 
 /*
- * A rotation work page is sent whole by every client: 200 nodes, about 400 KB typically, but each
- * hybrid share is about 6 KB, so a page of widely shared files runs to megabytes. Too low a cap
- * would leave such a rotation failing for good; this one is read only for a signed-in account,
- * rate limited (`signedIn` below), until clients split pages by size.
+ * A rotation request: clients send a work page in parts of at most 4 MiB (ROTATION_REQUEST_BYTES
+ * in @hushos/drive/protocol), each node whole, so the cap must take the heaviest single node the
+ * route's schema allows, about 6.8 MiB (a thousand hybrid shares). rotation-body.test.ts holds the
+ * two together. Read only for a signed-in account, rate limited (`signedIn` below).
  */
-export const ROTATION_BODY_BYTES = 64 * MiB;
+export const ROTATION_BODY_BYTES = 8 * MiB;
 
 type Cap = { method: string; path: RegExp; bytes: number; signedInFirst?: boolean };
 
@@ -60,8 +60,7 @@ export const BODY_CAPS: readonly Cap[] = [
         bytes: 1.5 * MiB,
         signedInFirst: true,
     },
-    // A rotation work page, 200 nodes with their versions and shares: about 400 KB typically,
-    // megabytes for files with many versions or shares.
+    // A part of a rotation work page: up to 4 MiB, or one node heavier than that.
     {
         method: 'POST',
         path: /^\/drive\/nodes\/[^/]+\/rotation\/nodes$/,

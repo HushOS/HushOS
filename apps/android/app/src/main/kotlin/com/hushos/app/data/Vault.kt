@@ -184,6 +184,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
     /* The tree mirror on disk and the catalogue built from it (see Catalogue.kt). */
     internal val mirror = Mirror.shared(context)
     @Volatile internal var catalogueState: CatalogueState = CatalogueState.IDLE
+    /* The most a rotation request's body weighs here (`rotationParts`); tests lower it to send each node alone. */
+    internal var rotationPartBytes = ROTATION_REQUEST_BYTES
     /* The catalogue holds what the server sent this session, not only what the phone had: a node missing from it is gone. */
     @Volatile internal var cataloguePulled = false
     /* Where this vault's catalogue stands in the feed: its own, since other vaults in this process share the mirror. */

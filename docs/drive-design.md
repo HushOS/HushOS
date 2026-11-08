@@ -1441,6 +1441,11 @@ The distinction matters because the tree moves while a rotation runs:
 - Starting a second is refused until the first finishes, which keeps the frontier a single line.
 - The client works top-down in batches of 200 through `POST /api/drive/nodes/rotate`.
 - Each batch is a set of nodes whose parents have already reached the target epoch.
+- A batch is sent in parts of at most 4 MiB, in order, each node whole (`rotationParts` on every client). A node heavier than that goes alone.
+    - Why: a page of widely shared files runs to megabytes (a hybrid share is about 6 KB), and the server applies each node on its own, so nothing ties a batch to one request.
+    - The part size is `ROTATION_REQUEST_BYTES` on the web and Android and `rotationRequestBytes` on iOS; each client's tests hold it at or below the server's cap.
+    - The server's cap on the route is 8 MiB, above the heaviest node its schema accepts (about 6.8 MiB). `rotation-body.test.ts` holds the two together.
+    - What one part applied is kept even if a later part fails. Tests: `a part that landed stays applied when a later part is lost` (web), `aPartThatLandedStaysAppliedWhenALaterPartOfTheBatchIsLost` (iOS `RotationTests`, Android `ContactTrustTest`).
 - The node's `change_seq` as the client read it is the precondition on every row.
 
 Epochs alone are not enough for that check.
