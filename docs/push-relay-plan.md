@@ -22,6 +22,7 @@ How the push design in `docs/devices-design.md` 5 and 7 gets built, in four pull
     - `DELETE /v1/register/:handle`: `{ deleteSecret }` → 204. A wrong secret and an unknown handle both get the same 404.
     - `POST /v1/ping`: `{ handle, id, class }` → 202. `id` must be a lowercase UUID, so a server cannot put words of its own in the payload.
     - `GET /healthz`.
+    - `GET /`: a plain page saying what the relay is, what it keeps and how a self-hosted server turns it off.
 
     Bytes are base64url without padding.
 
