@@ -9,7 +9,7 @@ import * as billing from '@hushos/billing/server';
 import { authRepository } from '@hushos/db';
 import * as groups from '@hushos/groups/server';
 import { createGroupRequestHandler } from '@/lib/group-requests';
-import { boundTrashBatch } from '@/lib/trash-batch-request';
+import { boundBody } from '@/lib/body-caps';
 import { useLogger } from '@/lib/logging.server';
 import { authApi } from '@/lib/api/auth.server';
 import { billingApi } from '@/lib/api/billing.server';
@@ -54,9 +54,14 @@ export async function handleApiRequest(request: Request): Promise<Response> {
     const pathname = new URL(request.url).pathname;
     if (pathname === '/api/billing/webhook') return handleBillingWebhook(request);
     if (/^\/api\/(groups|invitations)(\/|$)/.test(pathname)) return handleGroupRequest(request);
-    const batch = await boundTrashBatch(request);
-    if (batch instanceof Response) return batch;
-    if (batch) request = batch;
+    // Every other write is read under its route's cap before anything parses it (lib/body-caps.ts).
+    if (!pathname.startsWith('/api/auth/')) {
+        const bounded = await boundBody(request, async () =>
+            Boolean(await auth.getSessionUser(readSessionToken(request))),
+        );
+        if (bounded instanceof Response) return bounded;
+        request = bounded;
+    }
     // Settings carry every pin and the sharing ledger: up to 64 KiB sealed, Base64url, in JSON.
     /*
      * Auth bodies are small, so they are read whole under a cap. A few carry
