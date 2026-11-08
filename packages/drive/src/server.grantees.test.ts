@@ -53,7 +53,7 @@ beforeEach(async () => {
 afterAll(closeDatabase);
 
 /* A new file's begin as `writer` signs it, into the shared folder. */
-async function beginAs(writer: Account, size: bigint) {
+async function beginAs(writer: Account, size: bigint, keyEpoch?: number) {
     const node = minted('node', owner.workspaceId);
     const version = minted('version', owner.workspaceId);
     const object = minted('object', owner.workspaceId);
@@ -67,7 +67,7 @@ async function beginAs(writer: Account, size: bigint) {
             id: nodeId,
             idSeed: node.seed,
             parentId: project.id,
-            keyEpoch: await epoch(owner.workspaceId),
+            keyEpoch: keyEpoch ?? (await epoch(owner.workspaceId)),
             parentKeyEpoch: project.keyEpoch,
             keyEnvelope: b64(randomBytes(72)),
             metadataEnvelope: b64(metadata),
@@ -156,14 +156,18 @@ async function copyAs(writer: Account, source: Awaited<ReturnType<typeof file>>)
 }
 
 /* A new folder in `parent` as `writer` signs it, in the shape createFolders takes. */
-async function folderAs(writer: Account, parent: { id: string; keyEpoch: number }) {
+async function folderAs(
+    writer: Account,
+    parent: { id: string; keyEpoch: number },
+    keyEpoch?: number,
+) {
     const node = minted('node', owner.workspaceId);
     const metadata = paddedMetadata();
     return {
         id: node.id,
         idSeed: node.seed,
         parentId: parent.id,
-        keyEpoch: await epoch(owner.workspaceId),
+        keyEpoch: keyEpoch ?? (await epoch(owner.workspaceId)),
         parentKeyEpoch: parent.keyEpoch,
         keyEnvelope: b64(randomBytes(72)),
         metadataEnvelope: b64(metadata),
@@ -334,5 +338,99 @@ describe('a grantee', () => {
         expect(
             (await server.listChildren(owner.userId, owner.workspaceId, project.id)).children,
         ).toEqual([]);
+    });
+
+    /*
+     * The owner's epoch counter climbs with every node and rotation anywhere in their drive. An
+     * editor asking for epochs gets 1 to n whatever the owner has done, epochs the server takes,
+     * and the counter itself never moves for them beyond n.
+     */
+    test('draws epochs that say nothing of the owner’s counter, and the server takes them', async () => {
+        const ws = owner.workspaceId;
+        expect(await server.allocateEpochs(guest.userId, ws, 3)).toEqual({ from: 1, to: 3 });
+        const before = await server.allocateEpochs(owner.userId, ws, 1);
+        for (let i = 0; i < 3; i++) await folder(owner, top);
+        expect(await server.allocateEpochs(guest.userId, ws, 3)).toEqual({ from: 1, to: 3 });
+        // The owner's own draws go on from where theirs were, untouched by the editor's.
+        const after = await server.allocateEpochs(owner.userId, ws, 1);
+        expect(after.from).toBe(before.from + 3 + 1);
+        // Past the counter, an editor's range still holds: the counter is raised to cover it.
+        const wide = await server.allocateEpochs(guest.userId, ws, 5_000);
+        expect(wide).toEqual({ from: 1, to: 5_000 });
+        const made = await server.createFolders(guest.userId, ws, [
+            await folderAs(guest, project, 5_000),
+        ]);
+        expect(made.nodes[0]!.keyEpoch).toBe(5_000);
+        // Or another editor's node at the same epoch: each node's context binds its own id.
+        const twin = await server.createFolders(guest.userId, ws, [
+            await folderAs(guest, project, 5_000),
+        ]);
+        expect(twin.nodes[0]!.keyEpoch).toBe(5_000);
+    });
+
+    /*
+     * Held to the counter, a write would say where it stands: accepted at or below it, refused
+     * above it, and an editor could read it exactly with a few rolled-back probes. An editor's
+     * epoch is held to their own cap instead, whatever the owner's counter is.
+     */
+    test('cannot read the owner’s counter from which epochs a write accepts', async () => {
+        const ws = owner.workspaceId;
+        const counter = (await server.allocateEpochs(owner.userId, ws, 1)).to;
+        expect(counter).toBeLessThan(100);
+        // Just above the owner's counter: an editor's write goes, as any epoch to the cap does.
+        const above = await server.createFolders(guest.userId, ws, [
+            await folderAs(guest, project, counter + 1),
+        ]);
+        expect(above.nodes[0]!.keyEpoch).toBe(counter + 1);
+        // Past the cap it is refused, whatever the counter.
+        const past = await server
+            .createFolders(guest.userId, ws, [await folderAs(guest, project, 10_001)])
+            .catch((error: unknown) => error);
+        expect(past).toMatchObject({ status: 409, code: 'stale' });
+        // A member's write is still held to the counter.
+        const counterNow = (await server.allocateEpochs(owner.userId, ws, 1)).to;
+        const owners = await server
+            .createFolders(owner.userId, ws, [await folderAs(owner, project, counterNow + 1)])
+            .catch((error: unknown) => error);
+        expect(owners).toMatchObject({ status: 409, code: 'stale' });
+    });
+
+    /*
+     * An editor may write above the counter without asking for epochs, so the write raises it:
+     * else the next rotation could draw a target at or below that node's epoch, count it as
+     * re-keyed already, and only re-wrap it, carrying a key the stopped editor holds into the new
+     * tree. Through a folder and an upload's new file alike.
+     */
+    test('raises the counter past an epoch it writes, so the next rotation re-keys that node', async () => {
+        const ws = owner.workspaceId;
+        const counter = (await server.allocateEpochs(owner.userId, ws, 1)).to;
+        const made = await server.createFolders(guest.userId, ws, [
+            await folderAs(guest, project, counter + 5),
+        ]);
+        const begun = await beginAs(guest, 1024n, counter + 7);
+        expect(begun.upload.status).toBe('open');
+        const { rotation } = await server.startRotation(owner.userId, ws, project.id);
+        expect(rotation.targetEpoch).toBeGreaterThan(counter + 7);
+        const work = await server.rotationWork(owner.userId, ws, project.id, null);
+        expect(work.nodes.map((node) => node.id)).toEqual(
+            expect.arrayContaining([made.nodes[0]!.id, begun.upload.nodeId]),
+        );
+    });
+
+    /*
+     * A rotation's target is drawn above the counter, so a node an editor made at a low epoch is
+     * below it and is re-keyed with the rest when the share is stopped, never left under a key
+     * the stopped editor holds.
+     */
+    test('makes nodes the next rotation of the share re-keys', async () => {
+        const ws = owner.workspaceId;
+        const { from } = await server.allocateEpochs(guest.userId, ws, 1);
+        const made = await server.createFolders(guest.userId, ws, [
+            await folderAs(guest, project, from),
+        ]);
+        const { rotation } = await server.startRotation(owner.userId, ws, project.id);
+        expect(rotation.targetEpoch).toBeGreaterThan(from);
+        const work = await server.rotationWork(owner.userId, ws, project.id, null);
+        expect(work.nodes.map((node) => node.id)).toContain(made.nodes[0]!.id);
     });
 });

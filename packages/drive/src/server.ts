@@ -436,13 +436,14 @@ async function requireUploadAccess(userId: string, workspaceId: string, uploadId
     if (!driveRepository.atLeast(access.role, 'editor')) throw forbidden();
     return access;
 }
-/* Editors of a shared folder need epochs in its owner's workspace for the nodes they create. */
+/*
+ * Editors of a shared folder need epochs in its owner's workspace for the nodes they create.
+ * Whether the caller is a member, or an editor through a share, who is told less.
+ */
 async function requireEpochs(userId: string, workspaceId: string) {
-    if (
-        !(await driveRepository.isMember(userId, workspaceId)) &&
-        !(await driveRepository.hasEditorShare(userId, workspaceId))
-    )
-        throw new DriveError('not-found', 'This workspace does not exist.', 404);
+    if (await driveRepository.isMember(userId, workspaceId)) return 'member' as const;
+    if (await driveRepository.hasEditorShare(userId, workspaceId)) return 'editor' as const;
+    throw new DriveError('not-found', 'This workspace does not exist.', 404);
 }
 /*
  * The versions among `ids` the caller may read, and how long their URLs live:
@@ -546,10 +547,14 @@ export async function getWorkspace(userId: string) {
 }
 
 export async function allocateEpochs(userId: string, workspaceId: string, count: number) {
-    await requireEpochs(userId, workspaceId);
+    const writer = await requireEpochs(userId, workspaceId);
     if (!Number.isInteger(count) || count < 1 || count > 10_000)
         throw new DriveError('invalid', 'Invalid epoch count.');
-    const range = await driveRepository.allocateKeyEpochs(workspaceId, count, userId);
+    // An editor through a share gets epochs that say nothing of the owner's counter.
+    const range =
+        writer === 'member'
+            ? await driveRepository.allocateKeyEpochs(workspaceId, count, userId)
+            : await driveRepository.allocateGranteeKeyEpochs(workspaceId, count);
     if (!range) throw notFound();
     return range;
 }
@@ -827,9 +832,8 @@ async function busyAsConflict<T>(pending: Promise<T>) {
  */
 export async function trashNodes(userId: string, workspaceId: string, nodeIds: string[]) {
     await requireBatch(userId, nodeIds);
-    await requireEpochs(userId, workspaceId);
     // An editor through a share is told what moved, never the owner's change count.
-    const member = await driveRepository.isMember(userId, workspaceId);
+    const member = (await requireEpochs(userId, workspaceId)) === 'member';
     const outcomes = await busyAsConflict(
         driveRepository.trashNodes({ workspaceId, nodeIds, writer: userId }),
     );

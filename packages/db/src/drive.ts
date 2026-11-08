@@ -443,7 +443,44 @@ export async function allocateKeyEpochs(workspaceId: string, count: number, writ
     });
 }
 
-async function epochWasAllocated(tx: Tx, workspaceId: string, keyEpoch: number) {
+/*
+ * Epochs for an editor working through a share: always 1 to `count`, with the counter raised to
+ * at least `count` so each is one the workspace has drawn. Never the counter itself, which climbs
+ * with every node and rotation anywhere in the owner's drive, so an editor cannot count the
+ * owner's activity by asking. Sound because an epoch only has to stay at or below every later
+ * rotation's target (drawn above the counter): a node made at a low epoch is re-keyed by the next
+ * rotation that covers it, and its context binds its own id, so two nodes may share an epoch.
+ */
+/* The highest epoch an editor through a share is handed, or may write a node at. */
+export const GRANTEE_EPOCH_MAX = 10_000;
+export async function allocateGranteeKeyEpochs(workspaceId: string, count: number) {
+    if (!Number.isInteger(count) || count < 1 || count > GRANTEE_EPOCH_MAX)
+        throw new Error('Invalid epoch count.');
+    const [row] = await db
+        .update(workspaces)
+        .set({ keyEpochSeq: sql`greatest(${workspaces.keyEpochSeq}, ${count})` })
+        .where(eq(workspaces.id, workspaceId))
+        .returning({ id: workspaces.id });
+    return row ? { from: 1, to: count } : null;
+}
+
+/*
+ * Whether a new node's key epoch is one the workspace has drawn. For an editor through a share it
+ * is any epoch allocateGranteeKeyEpochs could hand out, with the counter raised to cover it here:
+ * held to the counter itself, an accepted or refused write would tell an editor where it stands,
+ * and a few rolled-back probes would read it exactly.
+ */
+async function epochWasAllocated(tx: Tx, workspaceId: string, keyEpoch: number, writer?: string) {
+    if (writer && !(await holdsWorkspace(tx, writer, workspaceId))) {
+        if (!Number.isInteger(keyEpoch) || keyEpoch < 1 || keyEpoch > GRANTEE_EPOCH_MAX)
+            return false;
+        const [row] = await tx
+            .update(workspaces)
+            .set({ keyEpochSeq: sql`greatest(${workspaces.keyEpochSeq}, ${keyEpoch})` })
+            .where(eq(workspaces.id, workspaceId))
+            .returning({ id: workspaces.id });
+        return row !== undefined;
+    }
     const [row] = await tx
         .select({ keyEpochSeq: workspaces.keyEpochSeq })
         .from(workspaces)
@@ -935,7 +972,14 @@ export async function createFolders(input: {
             if (parentDepth + 1 > MAX_DEPTH) return { status: 'too-deep' as const, id: folder.id };
             if (folder.envelopes.parentKeyEpoch !== parentEpoch)
                 return { status: 'stale' as const, id: folder.parentId };
-            if (!(await epochWasAllocated(tx, input.workspaceId, folder.envelopes.keyEpoch)))
+            if (
+                !(await epochWasAllocated(
+                    tx,
+                    input.workspaceId,
+                    folder.envelopes.keyEpoch,
+                    input.userId,
+                ))
+            )
                 return { status: 'stale' as const, id: folder.id };
             const [row] = await tx
                 .insert(driveNodes)
@@ -1861,7 +1905,14 @@ async function beginUploadOnce(input: UploadBegin) {
             if (parent.depth + 1 > MAX_DEPTH) return { status: 'too-deep' as const };
             if (input.node.envelopes.parentKeyEpoch !== parent.node.key_epoch)
                 return { status: 'stale' as const };
-            if (!(await epochWasAllocated(tx, input.workspaceId, input.node.envelopes.keyEpoch)))
+            if (
+                !(await epochWasAllocated(
+                    tx,
+                    input.workspaceId,
+                    input.node.envelopes.keyEpoch,
+                    input.userId,
+                ))
+            )
                 return { status: 'stale' as const };
             keyEpoch = input.node.envelopes.keyEpoch;
             ancestors = [
@@ -2577,7 +2628,7 @@ async function attachUploadOnce(
         if (parent.depth + 1 > MAX_DEPTH) return { status: 'too-deep' as const };
         if (input.node.parentKeyEpoch !== parent.node.key_epoch)
             return { status: 'stale' as const };
-        if (!(await epochWasAllocated(tx, workspaceId, input.node.keyEpoch)))
+        if (!(await epochWasAllocated(tx, workspaceId, input.node.keyEpoch, input.userId)))
             return { status: 'stale' as const };
         const [created] = await tx
             .insert(driveNodes)
@@ -2832,7 +2883,14 @@ async function copyFileOnce(input: CopyFile) {
         if (parent.depth + 1 > MAX_DEPTH) return { status: 'too-deep' as const };
         if (input.node.envelopes.parentKeyEpoch !== parent.node.key_epoch)
             return { status: 'stale' as const };
-        if (!(await epochWasAllocated(tx, input.workspaceId, input.node.envelopes.keyEpoch)))
+        if (
+            !(await epochWasAllocated(
+                tx,
+                input.workspaceId,
+                input.node.envelopes.keyEpoch,
+                input.userId,
+            ))
+        )
             return { status: 'stale' as const };
         if (input.version.contentKeyEnvelope.length !== envelopeLengthFor(version.contentSuite))
             return { status: 'invalid' as const };
