@@ -551,9 +551,9 @@ export async function rekeyNode(input: {
     }
     const links: Extract<RotatedNode, { links: unknown }>['links'] = [];
     for (const link of node.links) {
-        // No sealed secret, or a password key from an older derivation: the link is ended rather
-        // than carried, with its weaker key, into the new epoch. (A server from before it sent the
-        // version: the secret below decides, as before.)
+        // No sealed secret, or one made under an older derivation (its secret no longer opens, and
+        // every reader refuses such a link): the link is ended, as the phones do. A server from
+        // before it sent the version: the secret below decides.
         if (
             !link.secretEnvelope ||
             (link.kdfVersion !== undefined && link.kdfVersion !== LINK_KDF_VERSION)
@@ -563,11 +563,16 @@ export async function rekeyNode(input: {
         }
         const oldCtx = { workspaceId, nodeId, keyEpoch: node.keyEpoch, linkId: link.id };
         const newCtx = { workspaceId, nodeId, keyEpoch: targetEpoch, linkId: link.id };
-        const { secret, token, fromPassword } = await openLinkSecret(
-            decode(link.secretEnvelope),
-            old,
-            oldCtx,
-        );
+        // A secret that no longer opens (an older derivation, a damaged row) is a link to end, not a
+        // rotation to fail on every retry: as the phones do.
+        let opened: Awaited<ReturnType<typeof openLinkSecret>>;
+        try {
+            opened = await openLinkSecret(decode(link.secretEnvelope), old, oldCtx);
+        } catch {
+            links.push({ id: link.id, unsealable: true });
+            continue;
+        }
+        const { secret, token, fromPassword } = opened;
         try {
             // A password link sealed before the password key was kept cannot be re-sealed without the password.
             if (link.hasPassword && !fromPassword) {

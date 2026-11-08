@@ -69,7 +69,7 @@ The code lives in `packages/drive`, `packages/db/src/drive.ts` and `packages/cry
 - **Links**:
     - `drive_links` rows, keyed by the hash of a path token the client mints and shows once.
     - The node key is sealed under BLAKE2b("hushos/drive/link/key/v2" || secret || argon2id(password, salt)) with the link's context.
-    - The derivation's version is kept on the link, so a later one can sit beside it.
+    - The derivation's version is kept on the link (`kdf_version`). Every reader refuses a link of an older version, so a later derivation replaces an earlier one rather than sitting beside it.
     - A password is at least 8 characters, since whoever holds the URL can try passwords offline.
     - Viewer-only; expiry capped at a year; revocation; a use count.
     - Visitor routes under `/api/drive/links/:token/*` require no session, are bounded per address and per token, and authorize exactly the subtree beneath the linked node.
@@ -1395,6 +1395,11 @@ Which shares and links a rotation seals again is not the server's to say.
 - It is written when they share or make a link, and cleared before a stop reaches the server.
 - A rotation, and the pass that upgrades older shares to the hybrid suite, seal only what the ledger holds.
 - A share or link the server lists that the ledger does not is left with its old envelope, which the rotation makes unopenable.
+- A link the ledger holds is ended, not sealed again, when it can't be carried into the new epoch. Rotation work sends each link's `kdfVersion`, and every client (web, iOS, Android) reports such a link `unsealable` and the server revokes it:
+    - its row names an older derivation;
+    - it has no sealed secret;
+    - its sealed secret no longer opens (an older derivation or a damaged row), which ends the link instead of failing the rotation on every retry;
+    - it is a password link sealed before the password key was kept, which can't be sealed again without the password.
 
 ### What a rotation must visit
 
