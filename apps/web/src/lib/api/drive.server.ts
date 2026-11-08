@@ -49,6 +49,7 @@ import {
     shareChangesResponse,
     sharedByMeResponse,
     sharedWithMeResponse,
+    personalSpace,
     spacesResponse,
     versionsResponse,
     workspaceResponse,
@@ -776,19 +777,7 @@ export const driveApi = new Elysia()
                 const personal = await drive.getWorkspace(user.id);
                 return {
                     spaces: [
-                        {
-                            space: { kind: 'personal' as const },
-                            areas: [
-                                {
-                                    workspaceId: personal.workspaceId,
-                                    workspaceKeyVersion: personal.grant?.workspaceKeyVersion ?? 1,
-                                    changeSeq: personal.changeSeq,
-                                    root: personal.root,
-                                    rotation: personal.rotation,
-                                    selfGrant: personal.grant,
-                                },
-                            ],
-                        },
+                        personalSpace(personal),
                         ...(groups.groupsEnabled() ? await groups.spaces(user.id) : []),
                     ],
                 };

@@ -21,6 +21,7 @@ import {
     workspaceResponse,
 } from '@/lib/api/drive-responses.server';
 import { loadApi, type ApiRoute } from '@/test/api-app';
+import type { personalSpace as personalSpaceOf } from '@/lib/api/drive-responses.server';
 
 /*
  * The Drive reads' reply schemas, through a real Elysia route so normalisation runs as it does in
@@ -350,22 +351,10 @@ const workRow: rotationsRepository.RotationWorkNode = {
 };
 
 type SpacesReply = {
-    spaces: (
-        | {
-              space: { kind: 'personal' };
-              areas: {
-                  workspaceId: string;
-                  workspaceKeyVersion: number;
-                  changeSeq: number;
-                  root: drive.NodeView | null;
-                  rotation: { id: string; nodeId: string; targetEpoch: number } | null;
-                  selfGrant: typeof selfGrant | null;
-              }[];
-          }
-        | Reply<typeof groups.spaces>[number]
-    )[];
+    spaces: (ReturnType<typeof personalSpaceOf> | Reply<typeof groups.spaces>[number])[];
 };
-const personalSpace: SpacesReply['spaces'][number] = {
+
+const personalSpace: ReturnType<typeof personalSpaceOf> = {
     space: { kind: 'personal' },
     areas: [
         {

@@ -1,4 +1,5 @@
 import '@/lib/server-only';
+import type * as drive from '@hushos/drive/server';
 import { t } from 'elysia';
 
 /*
@@ -366,3 +367,24 @@ export const linkListingResponse = t.Object({
     children: t.Array(visitorNode),
     nextCursor: t.Nullable(t.String()),
 });
+
+/*
+ * The account's own space in /drive/spaces, built from its workspace. A function, not inline in
+ * the route, so the test's sample is typed by what the route really sends: a field added here and
+ * not to `spacesResponse` fails typecheck there instead of being stripped unseen.
+ */
+export function personalSpace(personal: Awaited<ReturnType<typeof drive.getWorkspace>>) {
+    return {
+        space: { kind: 'personal' as const },
+        areas: [
+            {
+                workspaceId: personal.workspaceId,
+                workspaceKeyVersion: personal.grant?.workspaceKeyVersion ?? 1,
+                changeSeq: personal.changeSeq,
+                root: personal.root,
+                rotation: personal.rotation,
+                selfGrant: personal.grant,
+            },
+        ],
+    };
+}
