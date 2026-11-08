@@ -12,7 +12,7 @@ How the push design in `docs/devices-design.md` 5 and 7 gets built, in four pull
     - pings for the events in 5, with `other` pings coalesced (no new ping while the device has an unfetched one from the last minute);
     - `PUSH_RELAY_URL` (default `https://push.hushos.com`; empty turns app pushes off), written up in `docs/self-hosting.md` with what the relay sees and that a server can locate a device by pinging it (section 7).
 3. **Web Push** (RFC 8291). The payload is the event id only. The server makes its VAPID key pair at first use (`server_secrets`), and pushes only to the four browsers' push services. The service worker (`public/push-sw.js`, scope `/hushos-push/`) asks an open tab for the words and shows "New activity in HushOS" otherwise; Account → Notifications turns it on for a browser. For Shared with you the sender is named from the person's checked contacts; naming the item from the share's keys is still to come. The CSP needs nothing new: the worker is a same-origin script.
-4. **The apps.** The iOS Notification Service Extension, and the Android FCM data message with `VISIBILITY_PRIVATE`. Both register with the relay and hand only the handle to their server. The public roadmap gets its item when this reaches hushos.com and is switched on.
+4. **The apps.** The iOS Notification Service Extension, and the Android FCM data message with `VISIBILITY_PRIVATE`. Both register with the relay and hand only the handle to their server. The public roadmap gets its item when this reaches hushos.com and is switched on, and the relay's page (`crates/hushos-push/src/page.html`) drops "aren't switched on yet" and its "will".
 
 ## The relay as built (PR 1)
 
@@ -45,6 +45,7 @@ How the push design in `docs/devices-design.md` 5 and 7 gets built, in four pull
     - Addresses listed in `PUSH_TRUSTED_SENDERS` (hushos.com's own) skip the per-address and per-block limits, but never the per-handle ones. An IPv4 address matches whether it arrives plain or mapped into IPv6.
     - The sending address comes from `PUSH_TRUSTED_PROXY_HEADER` only on connections from `PUSH_TRUSTED_PROXIES`; from anyone else the header is ignored, so a client cannot claim a trusted sender's address or spend another server's budget. The header is read right to left, past every hop that is a listed proxy, so nothing a client wrote further left is reached. The relay refuses to start with the header and no proxies.
     - When the limit table is full, new keys are refused until a sweep frees room; a sweep runs at most once a second.
+    - Every minute a sweep forgets each record that has refilled, so an address or handle is held at most about an hour after its last use however quiet the relay is. The public page (`GET /`) promises this; keep the two together.
     - Limits are kept in memory, so run one instance. A restart refills them.
 - **Logs.** No requests or payloads. One line an hour of counts.
 
@@ -87,8 +88,8 @@ Nothing here is done by an agent. Credentials go straight from the console into 
 
 **DNS and hosting**
 
-- [ ] Point `push.hushos.com` at the Coolify host, preferably DNS-only (not through Cloudflare's proxy): the relay then sees each server's own address. Set `PUSH_TRUSTED_PROXY_HEADER=x-forwarded-for` (what Coolify's proxy appends) and `PUSH_TRUSTED_PROXIES` to that proxy's range on the container network.
-    - If it does go through Cloudflare's proxy, add Cloudflare's published ranges (cloudflare.com/ips) to `PUSH_TRUSTED_PROXIES` too. The relay reads the header right to left past every listed proxy; without Cloudflare listed, every server through one Cloudflare location would share one budget, and `PUSH_TRUSTED_SENDERS` would never match.
+- [ ] Point `push.hushos.com` at the Coolify host, DNS-only (not through Cloudflare's proxy), with no proxy access log on the way: the relay then sees each server's own address, and the public page's "the proxy in front of it keeps none" stays true. A deletion carries the raw handle in its URL, so an access log would tie a handle to a phone's address and time. Set `PUSH_TRUSTED_PROXY_HEADER=x-forwarded-for` (what Coolify's proxy appends) and `PUSH_TRUSTED_PROXIES` to that proxy's range on the container network.
+    - If it ever has to go through Cloudflare's proxy, change the public page first, then add Cloudflare's published ranges (cloudflare.com/ips) to `PUSH_TRUSTED_PROXIES` too. The relay reads the header right to left past every listed proxy; without Cloudflare listed, every server through one Cloudflare location would share one budget, and `PUSH_TRUSTED_SENDERS` would never match.
 - [ ] Make the GHCR package `hushos-push` public after its first publish, as the other images are, or give Coolify a pull token.
 - [ ] Create the Coolify application as above. Add these settings:
     - `DATABASE_URL_FILE`;

@@ -19,7 +19,7 @@ code { font: 0.9em ui-monospace, SFMono-Regular, Menlo, monospace; }
 <body>
 <main>
 <h1>HushOS push relay</h1>
-<p>This service wakes the HushOS apps on iPhone and Android when something happens in an account, such as a new sign-in or a file shared with you. Apple and Google deliver notifications to an app only from its publisher, so every HushOS server with notifications turned on, hushos.com or one you run yourself, sends its wake-ups for phones through here. Phone notifications are still being built and aren't switched on yet.</p>
+<p>This service wakes the HushOS apps on iPhone and Android when something happens in an account, such as a new sign-in or a file shared with you. Apple and Google deliver notifications to an app only from its publisher, so HushOS servers with notifications turned on, hushos.com or one you run yourself, send their wake-ups for phones through here by default. Phone notifications are still being built and aren't switched on yet.</p>
 
 <h2>What a wake-up carries</h2>
 <p>A random event ID and a short label for the account. Never what happened, who it involves or a file name. The app fetches the event from its own server, over its own connection, and writes the notification itself. On iPhone, Apple shows "New activity in HushOS" if the app can't.</p>
@@ -27,7 +27,7 @@ code { font: 0.9em ui-monospace, SFMono-Regular, Menlo, monospace; }
 
 <h2>What this service keeps</h2>
 <ul>
-<li><strong>On disk:</strong> one entry for each account signed in on each phone. It holds the address Apple or Google use to reach the phone, which of the two it is, and scrambled (hashed) copies of a random ID and a deletion key the phone was given. No account, email, name, server address or times.</li>
+<li><strong>On disk:</strong> one entry for each account signed in on each phone. It holds the delivery code Apple or Google gave the phone, which of the two it is, and scrambled (hashed) copies of a random ID and a deletion key the phone was given. No account, email, name, server address or times.</li>
 <li><strong>In memory, to limit abuse:</strong> the addresses of servers and phones that used it and when, kept at most about an hour after their last use. In that hour, the times could link a phone's last wake-up to the server that sent it.</li>
 <li><strong>Logs:</strong> its own logs are hourly counts, and the proxy in front of it keeps none.</li>
 </ul>
