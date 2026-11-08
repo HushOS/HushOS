@@ -25,6 +25,30 @@ import {
     uuidSchema,
     workspaceKeySchema,
 } from '@/lib/api/shared.server';
+import {
+    acceptedResponse,
+    areaRootResponse,
+    chainHeadResponse,
+    declinedResponse,
+    groupDetailResponse,
+    groupResponse,
+    groupsResponse,
+    heldResponse,
+    identitiesResponse,
+    invitationsResponse,
+    invitedResponse,
+    keySealResponse,
+    leftResponse,
+    myInvitationsResponse,
+    openedInvitationResponse,
+    pendingResponse,
+    previousRootResponse,
+    removalPreviewResponse,
+    revokedResponse,
+    rostersResponse,
+    selfGrantResponse,
+    storedResponse,
+} from '@/lib/api/groups-responses.server';
 
 /* Families (docs/groups-server.md 4): groups and invitations, served only with GROUPS_ENABLED. */
 export const groupsApi = new Elysia()
@@ -53,6 +77,8 @@ export const groupsApi = new Elysia()
                             grant: t.Object({ envelope: b64Schema(6087) }),
                         }),
                     }),
+                    // 201, or 200 for a replay: each status is checked only against its own schema.
+                    response: { 200: groupResponse, 201: groupResponse },
                 },
                 async ({ user, body, set }) => {
                     const result = await groups.createGroup(user.id, body);
@@ -60,15 +86,20 @@ export const groupsApi = new Elysia()
                     return { group: result.group };
                 },
             )
-            .get('/groups', async ({ user }) => groups.listGroups(user.id))
-            .get('/groups/:id', { params: groupParams }, async ({ user, params }) =>
-                groups.getGroup(user.id, params.id),
+            .get('/groups', { response: { 200: groupsResponse } }, async ({ user }) =>
+                groups.listGroups(user.id),
+            )
+            .get(
+                '/groups/:id',
+                { params: groupParams, response: { 200: groupDetailResponse } },
+                async ({ user, params }) => groups.getGroup(user.id, params.id),
             )
             .patch(
                 '/groups/:id',
                 {
                     params: groupParams,
                     body: t.Object({ name: t.String({ minLength: 1, maxLength: 400 }) }),
+                    response: { 200: groupResponse },
                 },
                 async ({ user, params, body }) => groups.renameGroup(user.id, params.id, body),
             )
@@ -80,22 +111,34 @@ export const groupsApi = new Elysia()
                         after: t.Optional(t.Numeric({ minimum: 0, maximum: 9007199254740991 })),
                         limit: t.Optional(t.Numeric({ minimum: 1, maximum: 200 })),
                     }),
+                    response: { 200: rostersResponse },
                 },
                 async ({ user, params, query }) => groups.getRosters(user.id, params.id, query),
             )
             .get(
                 '/groups/:id/identities',
-                { params: groupParams, query: t.Object({ after: t.Optional(uuidSchema) }) },
+                {
+                    params: groupParams,
+                    query: t.Object({ after: t.Optional(uuidSchema) }),
+                    response: { 200: identitiesResponse },
+                },
                 async ({ user, params, query }) =>
                     groups.getIdentities(user.id, params.id, query.after ?? null),
             )
             .post(
                 '/groups/:id/rosters',
-                { groupWrite: true, params: groupParams, body: t.Object(rosterCallFields) },
+                {
+                    groupWrite: true,
+                    params: groupParams,
+                    body: t.Object(rosterCallFields),
+                    response: { 200: chainHeadResponse },
+                },
                 async ({ user, params, body }) => groups.postRoster(user.id, params.id, body),
             )
-            .get('/groups/:id/key-seal', { params: groupParams }, async ({ user, params }) =>
-                groups.getKeySeal(user.id, params.id),
+            .get(
+                '/groups/:id/key-seal',
+                { params: groupParams, response: { 200: keySealResponse } },
+                async ({ user, params }) => groups.getKeySeal(user.id, params.id),
             )
             .put(
                 '/groups/:id/key-seals',
@@ -105,6 +148,7 @@ export const groupsApi = new Elysia()
                     body: t.Object({
                         seals: t.Array(sealSchema, { minItems: 1, maxItems: MAX_SEALS_PER_CALL }),
                     }),
+                    response: { 200: storedResponse },
                 },
                 async ({ user, params, body }) => groups.putKeySeals(user.id, params.id, body),
             )
@@ -118,6 +162,7 @@ export const groupsApi = new Elysia()
                         succession: signedStatementSchema,
                         seals: t.Array(sealSchema, { maxItems: MAX_SEALS_PER_CALL }),
                     }),
+                    response: { 200: chainHeadResponse },
                 },
                 async ({ user, params, body }) => groups.postSuccession(user.id, params.id, body),
             )
@@ -129,6 +174,8 @@ export const groupsApi = new Elysia()
                         email: emailSchema,
                         roles: t.Array(groupRoleSchema, { maxItems: 3 }),
                     }),
+                    // Always 201: a 200 schema alone would leave the reply unchecked.
+                    response: { 201: invitedResponse },
                 },
                 async ({ user, params, body, set }) => {
                     const result = await groups.invite(user.id, params.id, body);
@@ -136,8 +183,10 @@ export const groupsApi = new Elysia()
                     return result;
                 },
             )
-            .get('/groups/:id/invitations', { params: groupParams }, async ({ user, params }) =>
-                groups.listInvitations(user.id, params.id),
+            .get(
+                '/groups/:id/invitations',
+                { params: groupParams, response: { 200: invitationsResponse } },
+                async ({ user, params }) => groups.listInvitations(user.id, params.id),
             )
             .delete(
                 '/groups/:id/invitations/:invitationId',
@@ -145,25 +194,33 @@ export const groupsApi = new Elysia()
                 {
                     params: t.Object({ id: uuidSchema, invitationId: uuidSchema }),
                     body: t.Object({}),
+                    response: { 200: revokedResponse },
                 },
                 async ({ user, params }) =>
                     groups.revokeInvitation(user.id, params.id, params.invitationId),
             )
-            .get('/invitations', async ({ user }) => groups.listMyInvitations(user.id))
+            .get('/invitations', { response: { 200: myInvitationsResponse } }, async ({ user }) =>
+                groups.listMyInvitations(user.id),
+            )
             .post(
                 '/invitations/open',
-                { body: t.Object({ token: tokenSchema }) },
+                {
+                    body: t.Object({ token: tokenSchema }),
+                    response: { 200: openedInvitationResponse },
+                },
                 async ({ user, request, body }) =>
                     groups.openInvitation(user.id, body.token, requestAddress(request)),
             )
             .post(
                 '/invitations/accept',
-                { body: t.Object({ token: tokenSchema }) },
+                { body: t.Object({ token: tokenSchema }), response: { 200: acceptedResponse } },
                 async ({ user, request, body }) =>
                     groups.acceptInvitation(user.id, body.token, requestAddress(request)),
             )
-            .get('/groups/:id/pending', { params: groupParams }, async ({ user, params }) =>
-                groups.listPending(user.id, params.id),
+            .get(
+                '/groups/:id/pending',
+                { params: groupParams, response: { 200: pendingResponse } },
+                async ({ user, params }) => groups.listPending(user.id, params.id),
             )
             .post(
                 '/groups/:id/members/:userId/admit',
@@ -171,6 +228,7 @@ export const groupsApi = new Elysia()
                     groupWrite: true,
                     params: memberParams,
                     body: t.Object({ ...rosterCallFields, keySeal: t.Optional(sealSchema) }),
+                    response: { 200: chainHeadResponse },
                 },
                 async ({ user, request, params, body }) =>
                     groups.admit(
@@ -193,6 +251,7 @@ export const groupsApi = new Elysia()
                     groupWrite: true,
                     params: memberParams,
                     body: t.Object({ ...rosterCallFields, keySeal: t.Optional(sealSchema) }),
+                    response: { 200: chainHeadResponse },
                 },
                 async ({ user, params, body }) =>
                     groups.patchMember(user.id, params.id, params.userId, body),
@@ -203,25 +262,30 @@ export const groupsApi = new Elysia()
                     groupWrite: true,
                     params: memberParams,
                     body: t.Object({ ...rosterCallFields, endsLapsed: endsLapsedSchema }),
+                    response: { 200: chainHeadResponse },
                 },
                 async ({ user, params, body }) =>
                     groups.removeMember(user.id, params.id, params.userId, body),
             )
             .post(
                 '/groups/:id/members/:userId/remove-preview',
-                { params: memberParams, body: t.Object({}) },
+                {
+                    params: memberParams,
+                    body: t.Object({}),
+                    response: { 200: removalPreviewResponse },
+                },
                 async ({ user, params }) =>
                     groups.removalPreview(user.id, params.id, params.userId),
             )
             .post(
                 '/groups/:id/members/:userId/decline',
-                { params: memberParams, body: t.Object({}) },
+                { params: memberParams, body: t.Object({}), response: { 200: declinedResponse } },
                 async ({ user, params }) =>
                     groups.declinePending(user.id, params.id, params.userId),
             )
             .post(
                 '/groups/:id/members/:userId/hold',
-                { params: memberParams, body: t.Object({}) },
+                { params: memberParams, body: t.Object({}), response: { 200: heldResponse } },
                 async ({ user, params }) => groups.hold(user.id, params.id, params.userId),
             )
             .post(
@@ -232,6 +296,7 @@ export const groupsApi = new Elysia()
                         endsLapsed: endsLapsedSchema,
                         expect: t.Optional(t.Literal('accepted')),
                     }),
+                    response: { 200: leftResponse },
                 },
                 async ({ user, params, body }) => groups.leave(user.id, params.id, body),
             )
@@ -241,6 +306,7 @@ export const groupsApi = new Elysia()
                     groupWrite: true,
                     params: groupParams,
                     body: t.Object({ ...rosterCallFields, area: areaSchema }),
+                    response: { 200: chainHeadResponse },
                 },
                 async ({ user, params, body }) => groups.createArea(user.id, params.id, body),
             )
@@ -255,13 +321,18 @@ export const groupsApi = new Elysia()
                             maxItems: MAX_GRANTS_PER_CALL,
                         }),
                     }),
+                    response: { 200: storedResponse },
                 },
                 async ({ user, params, body }) =>
                     groups.postGrants(user.id, params.id, params.workspaceId, body),
             )
             .put(
                 '/groups/:id/areas/:workspaceId/self-grant',
-                { params: areaParams, body: t.Object({ grant: workspaceKeySchema }) },
+                {
+                    params: areaParams,
+                    body: t.Object({ grant: workspaceKeySchema }),
+                    response: { 200: selfGrantResponse },
+                },
                 async ({ user, params, body }) =>
                     groups.putSelfGrant(user.id, params.id, params.workspaceId, body),
             )
@@ -275,6 +346,7 @@ export const groupsApi = new Elysia()
                         rotationId: uuidSchema,
                         previousRootKeyEnvelope: keyEnvelopeSchema,
                     }),
+                    response: { 200: previousRootResponse },
                 },
                 async ({ user, params, body }) =>
                     groups.putPreviousRoot(user.id, params.id, params.workspaceId, body),
@@ -282,13 +354,18 @@ export const groupsApi = new Elysia()
             // Route 29: what a holder's device re-keys when a roster rotates the area.
             .get(
                 '/groups/:id/areas/:workspaceId/root',
-                { params: areaParams },
+                { params: areaParams, response: { 200: areaRootResponse } },
                 async ({ user, params }) => groups.areaRoot(user.id, params.id, params.workspaceId),
             )
             // Deleting a family folder: its tombstone on the next roster (groups design 2.10).
             .post(
                 '/groups/:id/areas/:workspaceId/delete',
-                { groupWrite: true, params: areaParams, body: t.Object(rosterCallFields) },
+                {
+                    groupWrite: true,
+                    params: areaParams,
+                    body: t.Object(rosterCallFields),
+                    response: { 200: chainHeadResponse },
+                },
                 async ({ user, params, body }) =>
                     groups.deleteArea(user.id, params.id, params.workspaceId, body),
             )
@@ -298,6 +375,7 @@ export const groupsApi = new Elysia()
                     groupWrite: true,
                     params: areaParams,
                     body: t.Object({ ...rosterCallFields, rotation: rotationSchema }),
+                    response: { 200: chainHeadResponse },
                 },
                 async ({ user, params, body }) =>
                     groups.rotateArea(user.id, params.id, params.workspaceId, body),

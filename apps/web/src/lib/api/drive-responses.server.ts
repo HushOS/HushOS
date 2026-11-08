@@ -309,40 +309,45 @@ export const shareChangesResponse = t.Object({
 });
 
 /*
+ * A node of a rotation's work (rotationWorkView): the node, its versions, its live shares with
+ * their grantees' identities and its live links. Also what a family folder's root is served as
+ * (groups route 29).
+ */
+export const rotationWorkNode = t.Object({
+    ...nodeFields,
+    depth: t.Integer(),
+    versions: t.Array(
+        t.Object({
+            id: t.String(),
+            objectId: t.String(),
+            contentKeyEnvelope: t.String(),
+            contentSuite: t.Integer(),
+            plaintextSize: t.Nullable(t.String()),
+            signer: t.Nullable(signer),
+            signature: t.Nullable(t.String()),
+            rekey,
+        }),
+    ),
+    shares: t.Array(
+        t.Object({ id: t.String(), granteeUserId: t.String(), grantee: servedIdentity }),
+    ),
+    links: t.Array(
+        t.Object({
+            id: t.String(),
+            hasPassword: t.Boolean(),
+            secretEnvelope: t.Nullable(t.String()),
+            kdfVersion: t.Integer(),
+        }),
+    ),
+});
+
+/*
  * GET /drive/nodes/:id/rotation/work: a batch of nodes with everything sealed under their keys.
  * The rotation is served without its id here; links without their derivation version.
  */
 export const rotationWorkResponse = t.Object({
     rotation: t.Object({ nodeId: t.String(), targetEpoch: t.Integer() }),
-    nodes: t.Array(
-        t.Object({
-            ...nodeFields,
-            depth: t.Integer(),
-            versions: t.Array(
-                t.Object({
-                    id: t.String(),
-                    objectId: t.String(),
-                    contentKeyEnvelope: t.String(),
-                    contentSuite: t.Integer(),
-                    plaintextSize: t.Nullable(t.String()),
-                    signer: t.Nullable(signer),
-                    signature: t.Nullable(t.String()),
-                    rekey,
-                }),
-            ),
-            shares: t.Array(
-                t.Object({ id: t.String(), granteeUserId: t.String(), grantee: servedIdentity }),
-            ),
-            links: t.Array(
-                t.Object({
-                    id: t.String(),
-                    hasPassword: t.Boolean(),
-                    secretEnvelope: t.Nullable(t.String()),
-                    kdfVersion: t.Integer(),
-                }),
-            ),
-        }),
-    ),
+    nodes: t.Array(rotationWorkNode),
     nextCursor: t.Nullable(t.String()),
     done: t.Boolean(),
 });
