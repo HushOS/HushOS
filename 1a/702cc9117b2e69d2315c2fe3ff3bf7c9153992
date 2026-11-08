@@ -1,0 +1,21 @@
+apps/web/src/lib/api/drive-responses.test.ts
+  s_566b8e0c4467a4::t_bd8a268c8c2c2a 886-890,899,930-933
+packages/drive/src/server.grantees.test.ts
+  s_566b8e0c4467a4::t_a2c062af8610e9 158-207,276-337
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1a702cc9117b2e69d2315c2fe3ff3bf7c9153992",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
