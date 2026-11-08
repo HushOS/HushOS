@@ -824,7 +824,7 @@ const allowedByCheck = (name: string) => {
     const list = /\bin \(([^)]*)\)/.exec(check.slice(0, check.indexOf('),')))?.[1];
     expect(list, name).toBeDefined();
     return [...list!.matchAll(/'([^']*)'/g)]
-        .map((match) => match[1])
+        .map((match) => match[1]!)
         .sort((a, b) => a.localeCompare(b));
 };
 const literals = (schema: unknown): string[] =>
