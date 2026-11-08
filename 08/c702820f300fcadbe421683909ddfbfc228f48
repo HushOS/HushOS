@@ -1,0 +1,33 @@
+docs/drive-design.md
+  s_566b8e0c4467a4::t_c160fa993430f3 64-65,626-627
+packages/db/src/drive.rotations.test.ts
+  s_566b8e0c4467a4::t_fdcdcc0ae7668e 526-529
+packages/db/src/drive.signatures.test.ts
+  s_566b8e0c4467a4::t_6f88a1a6b23b7b 2,590
+packages/db/src/drive.test.ts
+  s_566b8e0c4467a4::t_75f594925974dd 7,14,105-110,112-125,127-140,143-155
+packages/db/src/drive.ts
+  s_566b8e0c4467a4::t_5c1b58fbab84c6 425-427,429-439,442,445-456,469-472,474,476,479-486,973,1899,2615,2870
+packages/db/test/helpers.ts
+  s_566b8e0c4467a4::t_4d8ce25ca3ef18 349-357
+packages/drive/src/server.grantees.test.ts
+  s_566b8e0c4467a4::t_81b6f725db2f41 10,345-347,349,352,355-367,372,381-382,386-387,389-398
+packages/drive/src/server.ts
+  s_566b8e0c4467a4::t_7c856b93a38457 553-558
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "08c702820f300fcadbe421683909ddfbfc228f48",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
