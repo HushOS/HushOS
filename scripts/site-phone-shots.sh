@@ -12,6 +12,8 @@
 # port 5562). It asks you to sign in once per device (the password goes on the clipboard, never on
 # screen), then takes every picture itself. Times read mid-morning (e2e/morning-zone.ts).
 # Output: apps/web/src/screenshots/{ios,android}-{home,folder}[-dark][@1.5x|@1x].png.
+# The {ios,android}-scan pictures (the + menu open on Home, for the scanning post) were taken by
+# hand the same way: the menu needs a tap, which this script doesn't make.
 #
 #   PORT   the web server the apps talk to (default 5173). Another port (an isolated instance,
 #          say) rebuilds the Android debug app to talk to it; on iOS, set the sign-in sheet's
