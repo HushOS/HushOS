@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { readFileSync } from 'node:fs';
 import { Elysia, type AnySchema } from 'elysia';
 import { describe, expect, test } from 'vitest';
 import type * as auth from '@hushos/auth/server';
@@ -750,10 +751,11 @@ test('refuses a role, device kind, security action or identity version outside i
 });
 
 /*
- * Sign-up and recovery answer the same whether or not the address has an account, and sign-in
- * gives an unknown address a decoy KE2, so none of them says who has one. The schemas must keep
- * it that way: each pair goes out with the same keys, in the same order, every value the same
- * length. The sign-in pair is made by OPAQUE itself, as startLogin makes it on either path.
+ * Sign-in gives an unknown address a decoy KE2, so the reply does not say who has an account.
+ * The schema must keep it that way: the real and the decoy challenge go out with the same keys, in
+ * the same order, every value the same length. Both come from OPAQUE's server.startLogin, the
+ * real one with the stored record and the decoy without one, as auth's startLogin calls it.
+ * (Sign-up and recovery return one constant object on both paths; auth's own tests cover that.)
  */
 const sameShape = (a: unknown, b: unknown) => {
     const shape = (value: unknown) =>
@@ -765,18 +767,6 @@ const sameShape = (a: unknown, b: unknown) => {
     expect(shape(a)).toEqual(shape(b));
     expect(JSON.stringify(a).length).toBe(JSON.stringify(b).length);
 };
-
-test("sign-up's and recovery's email reply is the same with an account and without", async () => {
-    // requestRegistrationEmail returns one object on both paths: a link minted, or the notice.
-    const linked = await serve(emailSentResponse, {
-        message: 'Check your inbox for a verification link.',
-    } satisfies Reply<typeof auth.requestRegistrationEmail>);
-    const noticed = await serve(emailSentResponse, {
-        message: 'Check your inbox for a verification link.',
-    } satisfies Reply<typeof auth.requestRegistrationEmail>);
-    expect(noticed).toEqual(linked);
-    sameShape(noticed.body, linked.body);
-});
 
 test("sign-in's decoy challenge goes out exactly as wide as a real one", async () => {
     await ready;
@@ -817,6 +807,41 @@ test("sign-in's decoy challenge goes out exactly as wide as a real one", async (
     expect(real.status).toBe(200);
     expect(decoy.status).toBe(200);
     sameShape(real.body, decoy.body);
+});
+
+/*
+ * Role and approval kind are closed sets in the response, so a value the database later allows
+ * but the schema does not would turn sign-in and the device list into a 500 after the write has
+ * committed (a phone that cannot read its own device back registers again on every sign-in).
+ * Each set must be exactly the one the database's check constraint allows.
+ */
+const allowedByCheck = (name: string) => {
+    const source = readFileSync(
+        new URL('../../../../../packages/db/src/schema/auth.ts', import.meta.url),
+        'utf8',
+    );
+    const check = source.slice(source.indexOf(`'${name}'`));
+    const list = /\bin \(([^)]*)\)/.exec(check.slice(0, check.indexOf('),')))?.[1];
+    expect(list, name).toBeDefined();
+    return [...list!.matchAll(/'([^']*)'/g)].map((match) => match[1]).sort();
+};
+const literals = (schema: unknown): string[] =>
+    JSON.stringify(schema)
+        .match(/"const":"[^"]*"/g)!
+        .map((entry) => entry.slice(9, -1))
+        .sort();
+
+test('role and approval kind allow exactly what the database allows', () => {
+    const session = sessionResponse.anyOf[0].properties.user.properties;
+    const device = devicesResponse.properties.devices.items.properties;
+    expect(literals(session.role)).toEqual(allowedByCheck('users_role_valid'));
+    expect(literals(authUserResponse.properties.user.properties.role)).toEqual(
+        allowedByCheck('users_role_valid'),
+    );
+    expect(literals(device.approvedBy)).toEqual(
+        allowedByCheck('account_devices_approved_by_valid'),
+    );
+    expect(literals(device.kind)).toEqual(allowedByCheck('account_devices_kind_valid'));
 });
 
 /* The schemas guard nothing unless the routes carry them: every auth route names its own. */
