@@ -38,19 +38,49 @@ import {
     versionEnvelopeSchema,
 } from '@/lib/api/shared.server';
 import {
+    abortedUploadResponse,
+    beginUploadResponse,
+    capabilitiesResponse,
     changesResponse,
+    completedUploadResponse,
+    discardedResponse,
     documentResponse,
+    downloadUrlResponse,
+    drainResponse,
+    epochsResponse,
+    fileReportResponse,
+    foldersResponse,
+    linkDownloadUrlResponse,
     linkListingResponse,
+    linkResponse,
     listingResponse,
     nodeLinksResponse,
+    nodeResponse,
     nodeSharesResponse,
+    objectUrlsResponse,
     openLinkResponse,
+    partUrlsResponse,
+    personalSpace,
+    purgeBatchResponse,
+    purgedResponse,
+    putDocumentResponse,
+    reportOperatorsResponse,
+    resealedResponse,
+    restoreBatchResponse,
+    revokedResponse,
+    rootResponse,
+    rotateNodesResponse,
     rotationWorkResponse,
     shareChangesResponse,
+    shareResponse,
     sharedByMeResponse,
     sharedWithMeResponse,
-    personalSpace,
     spacesResponse,
+    startRotationResponse,
+    storageResponse,
+    trashBatchResponse,
+    trashResponse,
+    uploadStateResponse,
     versionsResponse,
     workspaceResponse,
 } from '@/lib/api/drive-responses.server';
@@ -58,7 +88,7 @@ import {
 /* Drive: workspaces, nodes, uploads, versions, shares, links, reports and spaces (/api/drive). */
 export const driveApi = new Elysia()
     .use(guards)
-    .get('/drive/capabilities', ({ request, set }) => {
+    .get('/drive/capabilities', { response: { 200: capabilitiesResponse } }, ({ request, set }) => {
         requireClient(request);
         set.headers['Cache-Control'] = 'public, max-age=300';
         return drive.capabilities();
@@ -96,7 +126,11 @@ export const driveApi = new Elysia()
     )
     .get(
         '/drive/links/versions/:versionId/url',
-        { headers: linkHeadersSchema, params: t.Object({ versionId: uuidSchema }) },
+        {
+            headers: linkHeadersSchema,
+            params: t.Object({ versionId: uuidSchema }),
+            response: { 200: linkDownloadUrlResponse },
+        },
         ({ request, headers, params }) => {
             requireClient(request);
             return drive.linkDownloadUrl(
@@ -111,6 +145,7 @@ export const driveApi = new Elysia()
         {
             headers: linkHeadersSchema,
             body: t.Object({ versionIds: t.Array(uuidSchema, { minItems: 1, maxItems: 100 }) }),
+            response: { 200: objectUrlsResponse },
         },
         ({ request, headers, body }) => {
             requireClient(request);
@@ -126,6 +161,7 @@ export const driveApi = new Elysia()
         {
             headers: linkHeadersSchema,
             query: t.Object({ versions: t.String({ minLength: 36, maxLength: 3700 }) }),
+            response: { 200: objectUrlsResponse },
         },
         ({ request, headers, query }) => {
             requireClient(request);
@@ -142,10 +178,14 @@ export const driveApi = new Elysia()
     .post('/drive/links/:id/versions/urls', () => drive.linkPathRetired())
     .get('/drive/links/:id/thumbnails', () => drive.linkPathRetired())
     // Reports: anyone who can see a node through a link or a share may file one, session or not.
-    .get('/drive/reports/operators', ({ request }) => {
-        requireClient(request);
-        return drive.reportOperators();
-    })
+    .get(
+        '/drive/reports/operators',
+        { response: { 200: reportOperatorsResponse } },
+        ({ request }) => {
+            requireClient(request);
+            return drive.reportOperators();
+        },
+    )
     .post(
         '/drive/reports',
         {
@@ -172,6 +212,7 @@ export const driveApi = new Elysia()
                     { minItems: 1, maxItems: MAX_REPORT_OPERATORS },
                 ),
             }),
+            response: { 200: fileReportResponse },
         },
         async ({ request, sessionToken, body }) => {
             requireClient(request);
@@ -192,6 +233,7 @@ export const driveApi = new Elysia()
                 {
                     params: t.Object({ id: uuidSchema }),
                     body: t.Object({ count: t.Integer({ minimum: 1, maximum: 10_000 }) }),
+                    response: { 200: epochsResponse },
                 },
                 async ({ user, params, body }) =>
                     drive.allocateEpochs(user.id, params.id, body.count),
@@ -205,6 +247,7 @@ export const driveApi = new Elysia()
                         idSeed: idSeedSchema,
                         ...nodeEnvelopesSchema,
                     }),
+                    response: { 200: rootResponse },
                 },
                 async ({ user, params, body }) => drive.createRoot(user.id, params.id, body),
             )
@@ -236,6 +279,7 @@ export const driveApi = new Elysia()
                             },
                         ),
                     }),
+                    response: { 200: foldersResponse },
                 },
                 async ({ user, body }) =>
                     drive.createFolders(user.id, body.workspaceId, body.folders),
@@ -251,6 +295,7 @@ export const driveApi = new Elysia()
                         metadataEnvelope: metadataEnvelopeSchema,
                         metadataSignature: signatureSchema,
                     }),
+                    response: { 200: nodeResponse },
                 },
                 async ({ user, params, body }) =>
                     drive.renameNode(user.id, body.workspaceId, params.id, body),
@@ -265,6 +310,7 @@ export const driveApi = new Elysia()
                         parentKeyEpoch: epochSchema,
                         keyEnvelope: keyEnvelopeSchema,
                     }),
+                    response: { 200: nodeResponse },
                 },
                 async ({ user, params, body }) =>
                     drive.moveNode(user.id, body.workspaceId, params.id, body),
@@ -274,6 +320,7 @@ export const driveApi = new Elysia()
                 {
                     params: t.Object({ id: uuidSchema }),
                     body: t.Object({ workspaceId: uuidSchema }),
+                    response: { 200: nodeResponse },
                 },
                 async ({ user, params, body }) =>
                     drive.trashNode(user.id, body.workspaceId, params.id),
@@ -291,6 +338,7 @@ export const driveApi = new Elysia()
                             }),
                         ),
                     }),
+                    response: { 200: nodeResponse },
                 },
                 async ({ user, params, body }) =>
                     drive.restoreNode(user.id, body.workspaceId, params.id, body.toRoot),
@@ -301,6 +349,7 @@ export const driveApi = new Elysia()
                 {
                     params: t.Object({ id: uuidSchema }),
                     body: t.Object({ nodeIds: nodeBatchSchema }),
+                    response: { 200: trashBatchResponse },
                 },
                 async ({ user, params, body }) =>
                     drive.trashNodes(user.id, params.id, body.nodeIds),
@@ -310,6 +359,7 @@ export const driveApi = new Elysia()
                 {
                     params: t.Object({ id: uuidSchema }),
                     body: t.Object({ nodeIds: nodeBatchSchema }),
+                    response: { 200: restoreBatchResponse },
                 },
                 async ({ user, params, body }) =>
                     drive.restoreNodes(user.id, params.id, body.nodeIds),
@@ -320,6 +370,7 @@ export const driveApi = new Elysia()
                 {
                     params: t.Object({ id: uuidSchema }),
                     body: t.Object({ nodeIds: nodeBatchSchema }),
+                    response: { 200: purgeBatchResponse },
                 },
                 async ({ user, params, body }) =>
                     drive.purgeNodes(user.id, params.id, body.nodeIds),
@@ -352,6 +403,7 @@ export const driveApi = new Elysia()
                             }),
                         ),
                     }),
+                    response: { 200: beginUploadResponse },
                 },
                 async ({ user, body }) => drive.beginUpload(user.id, body.workspaceId, body),
             )
@@ -360,6 +412,7 @@ export const driveApi = new Elysia()
                 {
                     params: t.Object({ id: uuidSchema }),
                     query: t.Object({ workspaceId: uuidSchema }),
+                    response: { 200: uploadStateResponse },
                 },
                 async ({ user, params, query }) =>
                     drive.getUploadState(user.id, query.workspaceId, params.id),
@@ -373,6 +426,7 @@ export const driveApi = new Elysia()
                         from: t.Integer({ minimum: 1, maximum: 10_000 }),
                         count: t.Optional(t.Integer({ minimum: 1, maximum: 64 })),
                     }),
+                    response: { 200: partUrlsResponse },
                 },
                 async ({ user, params, query }) =>
                     drive.uploadPartUrls(
@@ -391,6 +445,7 @@ export const driveApi = new Elysia()
                         workspaceId: uuidSchema,
                         parts: t.Array(partSchema, { minItems: 1, maxItems: 10_000 }),
                     }),
+                    response: { 200: completedUploadResponse },
                 },
                 async ({ user, params, body }) =>
                     drive.completeUpload(user.id, body.workspaceId, params.id, body.parts),
@@ -421,6 +476,7 @@ export const driveApi = new Elysia()
                             }),
                         ]),
                     }),
+                    response: { 200: completedUploadResponse },
                 },
                 async ({ user, params, body }) =>
                     drive.attachUpload(user.id, body.workspaceId, params.id, body.attach),
@@ -430,6 +486,7 @@ export const driveApi = new Elysia()
                 {
                     params: t.Object({ id: uuidSchema }),
                     body: t.Object({ workspaceId: uuidSchema }),
+                    response: { 200: abortedUploadResponse },
                 },
                 async ({ user, params, body }) =>
                     drive.abortUpload(user.id, body.workspaceId, params.id),
@@ -441,6 +498,7 @@ export const driveApi = new Elysia()
                         workspaceId: uuidSchema,
                         versions: t.String({ minLength: 36, maxLength: 3700 }),
                     }),
+                    response: { 200: objectUrlsResponse },
                 },
                 async ({ user, query }) =>
                     drive.thumbnailUrls(
@@ -454,6 +512,7 @@ export const driveApi = new Elysia()
                 {
                     params: t.Object({ id: uuidSchema }),
                     body: t.Object({ workspaceId: uuidSchema }),
+                    response: { 200: purgedResponse },
                 },
                 async ({ user, params, body }) =>
                     drive.purgeNode(user.id, body.workspaceId, params.id),
@@ -476,6 +535,7 @@ export const driveApi = new Elysia()
                         contentKeyEnvelope: anyVersionEnvelopeSchema,
                         versionSignature: signatureSchema,
                     }),
+                    response: { 200: nodeResponse },
                 },
                 async ({ user, params, body }) =>
                     drive.copyNode(user.id, body.workspaceId, params.id, body),
@@ -495,6 +555,7 @@ export const driveApi = new Elysia()
                 {
                     params: t.Object({ id: uuidSchema }),
                     body: t.Object({ workspaceId: uuidSchema }),
+                    response: { 200: nodeResponse },
                 },
                 async ({ user, params, body }) =>
                     drive.restoreVersion(user.id, body.workspaceId, params.id),
@@ -504,6 +565,7 @@ export const driveApi = new Elysia()
                 {
                     params: t.Object({ id: uuidSchema }),
                     body: t.Object({ workspaceId: uuidSchema }),
+                    response: { 200: discardedResponse },
                 },
                 async ({ user, params, body }) =>
                     drive.discardVersion(user.id, body.workspaceId, params.id),
@@ -519,6 +581,7 @@ export const driveApi = new Elysia()
                         keyEpoch: epochSchema,
                         shareEnvelope: shareEnvelopeSchema,
                     }),
+                    response: { 200: shareResponse },
                 },
                 async ({ user, params, body, log }) => {
                     const result = await drive.shareNode(
@@ -563,6 +626,7 @@ export const driveApi = new Elysia()
                         keyEpoch: epochSchema,
                         shareEnvelope: shareEnvelopeSchema,
                     }),
+                    response: { 200: resealedResponse },
                 },
                 async ({ user, params, body }) =>
                     drive.resealShare(user.id, body.workspaceId, params.id, body),
@@ -572,6 +636,7 @@ export const driveApi = new Elysia()
                 {
                     params: t.Object({ id: uuidSchema }),
                     body: t.Object({ workspaceId: uuidSchema }),
+                    response: { 200: revokedResponse },
                 },
                 async ({ user, params, body }) =>
                     drive.revokeShare(user.id, body.workspaceId, params.id),
@@ -600,6 +665,7 @@ export const driveApi = new Elysia()
                         hasPassword: t.Boolean(),
                         expiresAt: t.Union([t.String({ format: 'date-time' }), t.Null()]),
                     }),
+                    response: { 200: linkResponse },
                 },
                 async ({ user, params, body }) =>
                     drive.createLink(user.id, body.workspaceId, params.id, body),
@@ -633,6 +699,7 @@ export const driveApi = new Elysia()
                             t.Union([t.String({ format: 'date-time' }), t.Null()]),
                         ),
                     }),
+                    response: { 200: linkResponse },
                 },
                 async ({ user, params, body }) =>
                     drive.updateLink(user.id, body.workspaceId, params.id, body),
@@ -642,6 +709,7 @@ export const driveApi = new Elysia()
                 {
                     params: t.Object({ id: uuidSchema }),
                     body: t.Object({ workspaceId: uuidSchema }),
+                    response: { 200: revokedResponse },
                 },
                 async ({ user, params, body }) =>
                     drive.revokeLink(user.id, body.workspaceId, params.id),
@@ -664,6 +732,7 @@ export const driveApi = new Elysia()
                         version: t.Integer({ minimum: 0, maximum: 2147483646 }),
                         envelope: documentEnvelopeSchema,
                     }),
+                    response: { 200: putDocumentResponse },
                 },
                 async ({ user, params, body }) =>
                     drive.putWorkspaceDocument(user.id, params.id, params.kind, body),
@@ -699,6 +768,7 @@ export const driveApi = new Elysia()
                 {
                     params: t.Object({ id: uuidSchema }),
                     body: t.Object({ workspaceId: uuidSchema }),
+                    response: { 200: startRotationResponse },
                 },
                 async ({ user, params, body }) =>
                     drive.startRotation(user.id, body.workspaceId, params.id),
@@ -724,24 +794,33 @@ export const driveApi = new Elysia()
                         workspaceId: uuidSchema,
                         nodes: t.Array(rotatedNodeSchema, { minItems: 1, maxItems: 200 }),
                     }),
+                    response: { 200: rotateNodesResponse },
                 },
                 async ({ user, params, body }) =>
                     drive.rotateNodes(user.id, body.workspaceId, params.id, body.nodes),
             )
             .get(
                 '/drive/workspaces/:id/storage',
-                { params: t.Object({ id: uuidSchema }) },
+                { params: t.Object({ id: uuidSchema }), response: { 200: storageResponse } },
                 async ({ user, params }) => drive.storageBreakdown(user.id, params.id),
             )
             .post(
                 '/drive/workspaces/:id/versions/discard-superseded',
-                { params: t.Object({ id: uuidSchema }), body: t.Object({}) },
+                {
+                    params: t.Object({ id: uuidSchema }),
+                    body: t.Object({}),
+                    response: { 200: drainResponse },
+                },
                 async ({ user, params }) => drive.discardSupersededVersions(user.id, params.id),
             )
             .post(
                 '/drive/workspaces/:id/trash/empty',
                 // A JSON body, empty or not: the mutation guard accepts nothing else.
-                { params: t.Object({ id: uuidSchema }), body: t.Object({}) },
+                {
+                    params: t.Object({ id: uuidSchema }),
+                    body: t.Object({}),
+                    response: { 200: drainResponse },
+                },
                 async ({ user, params }) => drive.emptyTrash(user.id, params.id),
             )
             .post(
@@ -751,6 +830,7 @@ export const driveApi = new Elysia()
                         workspaceId: uuidSchema,
                         versionIds: t.Array(uuidSchema, { minItems: 1, maxItems: 100 }),
                     }),
+                    response: { 200: objectUrlsResponse },
                 },
                 async ({ user, body }) =>
                     drive.downloadUrls(user.id, body.workspaceId, body.versionIds),
@@ -760,6 +840,7 @@ export const driveApi = new Elysia()
                 {
                     params: t.Object({ id: uuidSchema }),
                     query: t.Object({ workspaceId: uuidSchema }),
+                    response: { 200: downloadUrlResponse },
                 },
                 async ({ user, params, query }) =>
                     drive.downloadUrl(user.id, query.workspaceId, params.id),
@@ -769,6 +850,7 @@ export const driveApi = new Elysia()
                 {
                     params: t.Object({ id: uuidSchema }),
                     query: t.Object({ after: trashCursorSchema }),
+                    response: { 200: trashResponse },
                 },
                 async ({ user, params, query }) => drive.listTrash(user.id, params.id, query.after),
             )
