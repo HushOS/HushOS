@@ -7,7 +7,6 @@ import {
     notificationEvents,
     notificationRegistrations,
     notificationSettings,
-    serverSecrets,
     type NotificationClass,
     type NotificationKind,
     users,
@@ -369,26 +368,4 @@ export async function dropWebSubscription(deviceId: string, endpoint: string) {
                 eq(notificationRegistrations.webEndpoint, endpoint),
             ),
         );
-}
-
-/*
- * This server's VAPID key pair (RFC 8292), made at first use and kept in server_secrets: every
- * browser subscribes with its public key, so it must not change. `make` creates a pair when none
- * is stored; two servers starting at once keep whichever wrote first.
- */
-export async function vapidKeyPair(make: () => { privateKey: string; publicKey: string }) {
-    const read = async () => {
-        const [row] = await db
-            .select({ value: serverSecrets.value })
-            .from(serverSecrets)
-            .where(eq(serverSecrets.name, 'webpush-vapid'));
-        return row ? (JSON.parse(row.value) as { privateKey: string; publicKey: string }) : null;
-    };
-    const stored = await read();
-    if (stored) return stored;
-    await db
-        .insert(serverSecrets)
-        .values({ name: 'webpush-vapid', value: JSON.stringify(make()) })
-        .onConflictDoNothing();
-    return (await read())!;
 }

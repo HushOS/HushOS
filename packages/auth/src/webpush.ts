@@ -131,7 +131,7 @@ export function vapidAuthorization(
 const PUSH_HOSTS = [
     /^fcm\.googleapis\.com$/,
     /^updates\.push\.services\.mozilla\.com$/,
-    /^web\.push\.apple\.com$/,
+    /^[a-z0-9-]+\.push\.apple\.com$/,
     /^[a-z0-9-]+\.notify\.windows\.com$/,
 ];
 
@@ -152,6 +152,20 @@ export function isPushEndpoint(endpoint: string) {
     );
 }
 
+/* Whether `p256dh` and `auth` are keys a browser could have made: a P-256 point, 16 bytes. */
+export function isSubscriptionKey(p256dh: string, auth: string) {
+    const point = unb64(p256dh);
+    if (point.length !== 65 || point[0] !== 4 || unb64(auth).length !== 16) return false;
+    try {
+        const ecdh = createECDH('prime256v1');
+        ecdh.generateKeys();
+        ecdh.computeSecret(point);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 export type WebPushOutcome = 'delivered' | 'gone' | 'failed';
 
 /*
@@ -167,11 +181,17 @@ export async function sendWebPush(
     urgency: 'high' | 'normal',
 ): Promise<WebPushOutcome> {
     if (!isPushEndpoint(subscription.endpoint)) return 'gone';
-    const body = encryptWebPush({
-        plaintext: Buffer.from(JSON.stringify({ id })),
-        p256dh: unb64(subscription.p256dh),
-        auth: unb64(subscription.auth),
-    });
+    let body: ReturnType<typeof encryptWebPush>;
+    try {
+        body = encryptWebPush({
+            plaintext: Buffer.from(JSON.stringify({ id })),
+            p256dh: unb64(subscription.p256dh),
+            auth: unb64(subscription.auth),
+        });
+    } catch {
+        // Keys no browser could have made (a point off the curve): nothing will ever reach it.
+        return 'gone';
+    }
     try {
         const response = await fetch(subscription.endpoint, {
             method: 'POST',

@@ -22,21 +22,27 @@ async function askTab(id) {
     const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     const tabs = windows.filter((client) => new URL(client.url).origin === self.location.origin);
     if (!tabs.length) return null;
-    const answers = tabs.map(
-        (tab) =>
-            new Promise((resolve) => {
-                const channel = new MessageChannel();
-                channel.port1.onmessage = (event) => resolve(event.data || null);
-                tab.postMessage({ type: 'push-notice', id }, [channel.port2]);
-            }),
-    );
-    const timeout = new Promise((resolve) => setTimeout(() => resolve(null), ASK_MS));
-    // The first tab that can say more than the generic text wins.
-    const said = await Promise.race([
-        Promise.all(answers).then((all) => all.find((answer) => answer && answer.title) || null),
-        timeout,
-    ]);
-    return said;
+    // The first tab that can say more than the generic text wins at once. Only app tabs answer,
+    // so a public page or sign-in tab costs the wait only when no tab has words.
+    return new Promise((resolve) => {
+        let waiting = tabs.length;
+        const timer = setTimeout(() => resolve(null), ASK_MS);
+        const settle = (answer) => {
+            waiting -= 1;
+            if (answer && answer.title) {
+                clearTimeout(timer);
+                resolve(answer);
+            } else if (waiting === 0) {
+                clearTimeout(timer);
+                resolve(null);
+            }
+        };
+        for (const tab of tabs) {
+            const channel = new MessageChannel();
+            channel.port1.onmessage = (event) => settle(event.data || null);
+            tab.postMessage({ type: 'push-notice', id }, [channel.port2]);
+        }
+    });
 }
 
 function isEventId(value) {
@@ -74,6 +80,24 @@ self.addEventListener('push', (event) => {
     );
 });
 
+/*
+ * The push service replaced this browser's subscription. The server's copy is now dead, so tell
+ * an open app tab, which hands the new one over its session the next time it starts too.
+ */
+self.addEventListener('pushsubscriptionchange', (event) => {
+    event.waitUntil(
+        (async () => {
+            const windows = await self.clients.matchAll({
+                type: 'window',
+                includeUncontrolled: true,
+            });
+            for (const client of windows)
+                if (new URL(client.url).origin === self.location.origin)
+                    client.postMessage({ type: 'push-resubscribe' });
+        })(),
+    );
+});
+
 self.addEventListener('notificationclick', (event) => {
     event.notification.close();
     const url = event.notification.data?.url || GENERIC.url;
@@ -83,12 +107,16 @@ self.addEventListener('notificationclick', (event) => {
                 type: 'window',
                 includeUncontrolled: true,
             });
+            // This worker controls no page (its scope is /hushos-push/), so it cannot navigate a
+            // tab itself: an app tab moves through its own router; otherwise a new window opens.
             const open = windows.find(
-                (client) => new URL(client.url).origin === self.location.origin,
+                (client) =>
+                    new URL(client.url).origin === self.location.origin &&
+                    new URL(client.url).pathname.startsWith('/app'),
             );
             if (open) {
                 await open.focus();
-                if ('navigate' in open) await open.navigate(url).catch(() => {});
+                open.postMessage({ type: 'push-open', url });
                 return;
             }
             await self.clients.openWindow(url);

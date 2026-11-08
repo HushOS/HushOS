@@ -1,9 +1,11 @@
 import { createDecipheriv, createECDH, createHmac, createPublicKey, verify } from 'node:crypto';
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import {
     encryptWebPush,
     isPushEndpoint,
+    isSubscriptionKey,
     makeVapidKeys,
+    sendWebPush,
     vapidAuthorization,
     vapidKeys,
 } from './webpush';
@@ -14,6 +16,31 @@ import {
  */
 
 const b = (text: string) => Buffer.from(text, 'base64url');
+
+/* The browser's side, as a push service hands the body over: what it opens is what was sent. */
+function open(body: Buffer, uaPrivate: Buffer, auth: Buffer) {
+    const salt = body.subarray(0, 16);
+    const idLength = body.readUInt8(20);
+    const senderPublic = body.subarray(21, 21 + idLength);
+    const ua = createECDH('prime256v1');
+    ua.setPrivateKey(uaPrivate);
+    const ecdh = ua.computeSecret(senderPublic);
+    const hk = (s: Buffer, ikm: Buffer, info: Buffer, n: number) =>
+        createHmac('sha256', createHmac('sha256', s).update(ikm).digest())
+            .update(Buffer.concat([info, Buffer.from([1])]))
+            .digest()
+            .subarray(0, n);
+    const info = Buffer.concat([Buffer.from('WebPush: info\0'), ua.getPublicKey(), senderPublic]);
+    const ikm = hk(auth, ecdh, info, 32);
+    const cek = hk(salt, ikm, Buffer.from('Content-Encoding: aes128gcm\0'), 16);
+    const nonce = hk(salt, ikm, Buffer.from('Content-Encoding: nonce\0'), 12);
+    const sealed = body.subarray(21 + idLength);
+    const decipher = createDecipheriv('aes-128-gcm', cek, nonce);
+    decipher.setAuthTag(sealed.subarray(sealed.length - 16));
+    const padded = Buffer.concat([decipher.update(sealed.subarray(0, -16)), decipher.final()]);
+    expect(padded.at(-1)).toBe(2);
+    return padded.subarray(0, -1);
+}
 
 describe('RFC 8291 encryption', () => {
     // RFC 8291 Appendix A, character for character.
@@ -42,35 +69,6 @@ describe('RFC 8291 encryption', () => {
         // The body is the header's bytes then the ciphertext's.
         expect(body).toEqual(Buffer.concat([b(vector.header), b(vector.ciphertext)]));
     });
-
-    /* The browser's side, as a push service hands the body over: what it opens is what was sent. */
-    function open(body: Buffer, uaPrivate: Buffer, auth: Buffer) {
-        const salt = body.subarray(0, 16);
-        const idLength = body.readUInt8(20);
-        const senderPublic = body.subarray(21, 21 + idLength);
-        const ua = createECDH('prime256v1');
-        ua.setPrivateKey(uaPrivate);
-        const ecdh = ua.computeSecret(senderPublic);
-        const hk = (s: Buffer, ikm: Buffer, info: Buffer, n: number) =>
-            createHmac('sha256', createHmac('sha256', s).update(ikm).digest())
-                .update(Buffer.concat([info, Buffer.from([1])]))
-                .digest()
-                .subarray(0, n);
-        const info = Buffer.concat([
-            Buffer.from('WebPush: info\0'),
-            ua.getPublicKey(),
-            senderPublic,
-        ]);
-        const ikm = hk(auth, ecdh, info, 32);
-        const cek = hk(salt, ikm, Buffer.from('Content-Encoding: aes128gcm\0'), 16);
-        const nonce = hk(salt, ikm, Buffer.from('Content-Encoding: nonce\0'), 12);
-        const sealed = body.subarray(21 + idLength);
-        const decipher = createDecipheriv('aes-128-gcm', cek, nonce);
-        decipher.setAuthTag(sealed.subarray(sealed.length - 16));
-        const padded = Buffer.concat([decipher.update(sealed.subarray(0, -16)), decipher.final()]);
-        expect(padded.at(-1)).toBe(2);
-        return padded.subarray(0, -1);
-    }
 
     test('a fresh message opens with the browser’s keys, and every one differs', () => {
         const ua = createECDH('prime256v1');
@@ -160,6 +158,7 @@ describe('push endpoints', () => {
             'https://fcm.googleapis.com/fcm/send/dXk',
             'https://updates.push.services.mozilla.com/wpush/v2/gAAA',
             'https://web.push.apple.com/QGx',
+            'https://api.push.apple.com/3/device/x',
             'https://wns2-par02p.notify.windows.com/w/?token=x',
         ])
             expect(isPushEndpoint(ok), ok).toBe(true);
@@ -168,6 +167,8 @@ describe('push endpoints', () => {
             'https://fcm.googleapis.com:8443/fcm/send/dXk',
             'https://evil.example/fcm.googleapis.com',
             'https://fcm.googleapis.com.evil.example/x',
+            'https://push.apple.com.evil.example/x',
+            'https://evil.example/push.apple.com',
             'https://user:pass@fcm.googleapis.com/x',
             'https://localhost/x',
             'https://169.254.169.254/latest',
@@ -175,5 +176,111 @@ describe('push endpoints', () => {
             `https://fcm.googleapis.com/${'a'.repeat(1100)}`,
         ])
             expect(isPushEndpoint(bad), bad).toBe(false);
+    });
+});
+
+describe('subscription keys', () => {
+    test('only a point on P-256 and a 16-byte secret', () => {
+        const ua = createECDH('prime256v1');
+        ua.generateKeys();
+        const point = ua.getPublicKey();
+        const auth = Buffer.alloc(16, 1).toString('base64url');
+        expect(isSubscriptionKey(point.toString('base64url'), auth)).toBe(true);
+        // 65 bytes and the right prefix, but off the curve: encrypting to it would throw.
+        const off = Buffer.from(point);
+        off[64] = off[64]! ^ 1;
+        expect(isSubscriptionKey(off.toString('base64url'), auth)).toBe(false);
+        expect(
+            isSubscriptionKey(point.toString('base64url'), Buffer.alloc(8).toString('base64url')),
+        ).toBe(false);
+        // A compressed point is not what browsers hand over.
+        expect(
+            isSubscriptionKey(
+                Buffer.from(ua.getPublicKey(null, 'compressed')).toString('base64url'),
+                auth,
+            ),
+        ).toBe(false);
+    });
+});
+
+describe('sending', () => {
+    const keys = vapidKeys(makeVapidKeys());
+    const ua = createECDH('prime256v1');
+    ua.generateKeys();
+    const subscription = {
+        endpoint: 'https://fcm.googleapis.com/fcm/send/abc',
+        p256dh: ua.getPublicKey().toString('base64url'),
+        auth: Buffer.alloc(16, 3).toString('base64url'),
+    };
+    const id = '6f1c6a8e-2c7b-4b2f-9a0d-3c1e8f7a5b42';
+
+    afterEach(() => vi.unstubAllGlobals());
+
+    function answering(status: number) {
+        const fetch = vi.fn(async () => new Response(null, { status }));
+        vi.stubGlobal('fetch', fetch);
+        return fetch;
+    }
+
+    test('a dropped subscription is gone; a refusal or an outage is only a failure', async () => {
+        answering(201);
+        expect(await sendWebPush(keys, 'https://hushos.com', subscription, id, 'normal')).toBe(
+            'delivered',
+        );
+        for (const status of [404, 410]) {
+            answering(status);
+            expect(await sendWebPush(keys, 'https://hushos.com', subscription, id, 'normal')).toBe(
+                'gone',
+            );
+        }
+        // A wrong VAPID key or a push service outage must not delete the person's subscription.
+        for (const status of [401, 403, 429, 500, 503]) {
+            answering(status);
+            expect(await sendWebPush(keys, 'https://hushos.com', subscription, id, 'normal')).toBe(
+                'failed',
+            );
+        }
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () => Promise.reject(new TypeError('network'))),
+        );
+        expect(await sendWebPush(keys, 'https://hushos.com', subscription, id, 'normal')).toBe(
+            'failed',
+        );
+    });
+
+    test('what goes out opens to the event id, for the browser that subscribed', async () => {
+        const fetch = answering(201);
+        await sendWebPush(keys, 'https://hushos.com', subscription, id, 'high');
+        const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+        expect(url).toBe(subscription.endpoint);
+        const body = Buffer.from(init.body as Uint8Array);
+        const opened = open(body, ua.getPrivateKey(), b(subscription.auth));
+        expect(JSON.parse(opened.toString())).toEqual({ id });
+    });
+
+    test('a stored key off the curve is dropped as gone, and nothing is sent', async () => {
+        const fetch = answering(201);
+        const off = b(subscription.p256dh);
+        off[64] = off[64]! ^ 1;
+        expect(
+            await sendWebPush(
+                keys,
+                'https://hushos.com',
+                { ...subscription, p256dh: off.toString('base64url') },
+                id,
+                'normal',
+            ),
+        ).toBe('gone');
+        expect(
+            await sendWebPush(
+                keys,
+                'https://hushos.com',
+                { ...subscription, endpoint: 'https://evil.example/x' },
+                id,
+                'normal',
+            ),
+        ).toBe('gone');
+        expect(fetch).not.toHaveBeenCalled();
     });
 });

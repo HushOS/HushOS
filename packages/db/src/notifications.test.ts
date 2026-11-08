@@ -330,16 +330,4 @@ describe('web push', () => {
             db.insert(notificationRegistrations).values({ deviceId, userId: owner.userId }),
         ).rejects.toThrow();
     });
-
-    test('the VAPID pair is made once and never replaced', async () => {
-        let made = 0;
-        const make = () => {
-            made += 1;
-            return { privateKey: `p${made}`, publicKey: `k${made}` };
-        };
-        const first = await notifications.vapidKeyPair(make);
-        const second = await notifications.vapidKeyPair(make);
-        expect(second).toEqual(first);
-        expect(made).toBe(1);
-    });
 });

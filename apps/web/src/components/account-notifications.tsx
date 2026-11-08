@@ -18,7 +18,8 @@ type Toggles = { shared: boolean; family: boolean };
  * notifications off. The browser asks its permission only from the switch, never on its own.
  */
 export function AccountNotifications() {
-    const [toggles, setToggles] = useState<Toggles | null>(null);
+    // undefined while loading, null on a server with notifications off.
+    const [toggles, setToggles] = useState<Toggles | null | undefined>(undefined);
     const [browser, setBrowser] = useState(false);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -27,7 +28,12 @@ export function AccountNotifications() {
         let current = true;
         void notificationSettings()
             .then((settings) => current && setToggles(settings))
-            .catch(() => current && setToggles(null));
+            .catch(() => {
+                if (!current) return;
+                // Shown with the defaults, so the section never vanishes on a passing error.
+                setToggles({ shared: true, family: true });
+                setError('Your notification settings couldn’t be read. Please reload the page.');
+            });
         void webPushOn()
             .then((on) => current && setBrowser(on))
             .catch(() => {});
@@ -52,12 +58,13 @@ export function AccountNotifications() {
     }
 
     async function setToggle(key: keyof Toggles, on: boolean) {
-        const next = { ...toggles!, [key]: on };
-        setToggles(next);
+        const before = toggles!;
+        setToggles({ ...before, [key]: on });
+        setError(null);
         try {
-            setToggles(await saveNotificationSettings(next));
+            setToggles(await saveNotificationSettings({ ...before, [key]: on }));
         } catch {
-            setToggles(toggles);
+            setToggles(before);
             setError('Your notification settings weren’t saved. Please try again.');
         }
     }
@@ -77,13 +84,6 @@ export function AccountNotifications() {
                             disabled={busy}
                             onCheckedChange={(on) => void setBrowserOn(on)}
                         />
-                    }
-                    below={
-                        error ? (
-                            <p role="alert" className="text-sm text-destructive">
-                                {error}
-                            </p>
-                        ) : undefined
                     }
                 >
                     <span className="text-muted-foreground">
@@ -119,6 +119,11 @@ export function AccountNotifications() {
                     Invitations, and people waiting to join your family
                 </span>
             </Setting>
+            {error && (
+                <p role="alert" className="text-sm text-destructive">
+                    {error}
+                </p>
+            )}
         </SettingsGroup>
     );
 }

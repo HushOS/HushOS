@@ -1,11 +1,18 @@
-import { notificationsRepository } from '@hushos/db';
+import { authRepository, notificationsRepository } from '@hushos/db';
 import type { NotificationData, NotificationKind } from '@hushos/db/schema';
 import { notificationsEnv } from '@hushos/env/notifications';
 import { log as serverLog } from '@hushos/logging';
 import { authEnv } from '@hushos/env/auth';
 import { getSession } from './server';
 import { AuthError } from './tokens';
-import { isPushEndpoint, makeVapidKeys, sendWebPush, vapidKeys, type VapidKeys } from './webpush';
+import {
+    isPushEndpoint,
+    isSubscriptionKey,
+    makeVapidKeys,
+    sendWebPush,
+    vapidKeys,
+    type VapidKeys,
+} from './webpush';
 
 /*
  * Notifications (docs/devices-design.md 5). Each event is a row; a push only names it, and the
@@ -80,9 +87,11 @@ export async function notify<K extends NotificationKind>(
 let vapid: Promise<VapidKeys> | undefined;
 /* This server's VAPID keys, made and stored at first use (docs/devices-design.md 5). */
 function vapidKeysOnce() {
-    vapid ??= notificationsRepository
-        .vapidKeyPair(makeVapidKeys)
-        .then(vapidKeys)
+    vapid ??= authRepository
+        .ensureServerSecret('webpush-vapid', () => JSON.stringify(makeVapidKeys()))
+        .then((stored) =>
+            vapidKeys(JSON.parse(stored) as { privateKey: string; publicKey: string }),
+        )
         .catch((error: unknown) => {
             vapid = undefined;
             throw error;
@@ -197,7 +206,11 @@ export async function registerForNotifications(
         // Only the browsers' own push services: else this server would post wherever a client said.
         if (!isPushEndpoint(endpoint))
             throw new AuthError('This browser’s push service isn’t one HushOS can reach.');
-        if (!/^[A-Za-z0-9_-]{87}$/.test(keys.p256dh) || !/^[A-Za-z0-9_-]{22}$/.test(keys.auth))
+        if (
+            !/^[A-Za-z0-9_-]{87}$/.test(keys.p256dh) ||
+            !/^[A-Za-z0-9_-]{22}$/.test(keys.auth) ||
+            !isSubscriptionKey(keys.p256dh, keys.auth)
+        )
             throw new AuthError('That is not a push subscription.');
         await notificationsRepository.putRegistration({
             userId,

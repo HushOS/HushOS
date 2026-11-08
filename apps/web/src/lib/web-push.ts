@@ -1,6 +1,8 @@
 import { apiClient, unwrap } from '@/lib/api-client';
 import { unlockedNow } from '@/lib/auth-view';
+import { pinTrust } from '@hushos/crypto/pins';
 import { readSettingsForWrite } from '@/lib/contacts';
+import { pinOf } from '@/lib/family-pin';
 
 /*
  * Web Push in this browser (docs/devices-design.md 5). The push service worker (public/push-sw.js)
@@ -37,23 +39,26 @@ export async function webPushOn() {
     return Boolean(await found?.pushManager.getSubscription());
 }
 
+function sameBytes(a: ArrayBuffer | null | undefined, b: Uint8Array) {
+    if (!a || a.byteLength !== b.length) return false;
+    const view = new Uint8Array(a);
+    return view.every((byte, at) => byte === b[at]);
+}
+
 /*
- * Asks the browser's permission (only from a click, as browsers require), subscribes with this
- * server's key and hands the subscription to the server for this device.
+ * This browser's subscription, made with this server's current key: one made with an older key
+ * would be refused by the push service on every send, so it is replaced.
  */
-export async function turnOnWebPush() {
-    const permission = await Notification.requestPermission();
-    if (permission !== 'granted')
-        throw new Error('Notifications are blocked for HushOS in this browser’s settings.');
+async function currentSubscription(sw: ServiceWorkerRegistration) {
     const { publicKey } = await unwrap(apiClient().notifications['web-push-key'].get());
-    const sw = await registration();
+    const key = keyBytes(publicKey);
     const existing = await sw.pushManager.getSubscription();
-    const subscription =
-        existing ??
-        (await sw.pushManager.subscribe({
-            userVisibleOnly: true,
-            applicationServerKey: keyBytes(publicKey),
-        }));
+    if (existing && sameBytes(existing.options.applicationServerKey, key)) return existing;
+    await existing?.unsubscribe();
+    return sw.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+}
+
+async function register(subscription: PushSubscription) {
     const json = subscription.toJSON();
     await unwrap(
         apiClient().notifications.registration.put({
@@ -64,6 +69,37 @@ export async function turnOnWebPush() {
             },
         }),
     );
+}
+
+/*
+ * Asks the browser's permission (only from a click, as browsers require), subscribes with this
+ * server's key and hands the subscription to the server for this device. When the server does
+ * not take it, the subscription goes too, so the switch never reads on with nothing behind it.
+ */
+export async function turnOnWebPush() {
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted')
+        throw new Error('Notifications are blocked for HushOS in this browser’s settings.');
+    const subscription = await currentSubscription(await registration());
+    try {
+        await register(subscription);
+    } catch (error) {
+        await subscription.unsubscribe().catch(() => {});
+        throw error;
+    }
+}
+
+/*
+ * Hands the server this browser's subscription again, renewed if the push service or the server's
+ * key changed it: on every app start and when the worker says the subscription changed. The
+ * server drops a subscription its push service calls gone, so without this one rotation would
+ * end notifications here while the switch still read on. Quiet: nothing to do when it is off.
+ */
+async function refreshWebPush() {
+    if (!webPushSupported() || Notification.permission !== 'granted') return;
+    const found = await navigator.serviceWorker.getRegistration(SW_SCOPE);
+    if (!found || !(await found.pushManager.getSubscription())) return;
+    await register(await currentSubscription(found));
 }
 
 export async function turnOffWebPush() {
@@ -105,14 +141,19 @@ async function noticeFor(id: string): Promise<Notice | null> {
                 url: '/app/account#devices',
             };
         case 'shared': {
-            // Named from this person's own contacts: a stranger's choice of words never shows.
+            // Named only from a contact this person checked themselves. A first-seen pin's
+            // name is whatever the sharer called themselves, so a stranger's words never show.
             const { settings } = await readSettingsForWrite(userId);
-            const pin = settings.contacts[notification.data.granterUserId];
+            const pinned = pinOf(settings.contacts, notification.data.granterUserId);
+            const checked =
+                pinned !== null &&
+                !pinned.pin.trustedVia &&
+                (await pinTrust(pinned.pin)) === 'verified';
             return {
                 title: 'Shared with you',
-                body: pin
-                    ? `${pin.name} shared something with you.`
-                    : 'Someone you haven’t checked shared something with you.',
+                body: checked
+                    ? `${pinned.pin.name} shared something with you.`
+                    : 'Someone shared something with you.',
                 url: '/app/shared',
             };
         }
@@ -132,18 +173,32 @@ async function noticeFor(id: string): Promise<Notice | null> {
 }
 
 let listening = false;
-/* Answers the push worker's questions from this tab, once per page. */
-export function answerPushes() {
+/*
+ * Answers the push worker from this tab, once per page: the words for a push, opening what a
+ * tapped notice is about (through `open`, the app's router), and renewing the subscription.
+ */
+export function answerPushes(open: (url: string) => void) {
     if (listening || !webPushSupported()) return;
     listening = true;
     navigator.serviceWorker.addEventListener('message', (event) => {
-        const data = event.data as { type?: string; id?: string } | null;
+        // Only this origin's own worker; a page cannot post here as it.
+        if (event.origin && event.origin !== window.location.origin) return;
+        const data = event.data as { type?: string; id?: string; url?: string } | null;
+        if (data?.type === 'push-open') {
+            if (typeof data.url === 'string' && data.url.startsWith('/app')) open(data.url);
+            return;
+        }
+        if (data?.type === 'push-resubscribe') {
+            void refreshWebPush().catch(() => {});
+            return;
+        }
         const port = event.ports[0];
         if (data?.type !== 'push-notice' || typeof data.id !== 'string' || !port) return;
         void noticeFor(data.id)
             .catch(() => null)
             .then((notice) => port.postMessage(notice));
     });
+    void refreshWebPush().catch(() => {});
 }
 
 /* The notification settings, or null when this server has notifications off. */

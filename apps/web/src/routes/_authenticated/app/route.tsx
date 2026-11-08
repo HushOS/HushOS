@@ -108,8 +108,9 @@ function AppLayout() {
     useEffect(() => {
         latestUser.current = user;
     }, [user]);
-    // A push to this browser asks an open tab for its words (public/push-sw.js): answer it here.
-    useEffect(() => answerPushes(), []);
+    // A push to this browser asks an open tab for its words (public/push-sw.js): answer it here,
+    // open what a tapped notice is about, and keep the server's copy of the subscription current.
+    useEffect(() => answerPushes((url) => router.history.push(url)), [router]);
     useEffect(() => {
         const validated = seenLockRevision.current === lockRevision;
         seenLockRevision.current = lockRevision;
