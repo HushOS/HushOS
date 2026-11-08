@@ -12,7 +12,7 @@ How the push design in `docs/devices-design.md` 5 and 7 gets built, in four pull
     - pings for the events in 5, with `other` pings coalesced (no new ping while the device has an unfetched one from the last minute);
     - `PUSH_RELAY_URL` (default `https://push.hushos.com`; empty turns app pushes off), written up in `docs/self-hosting.md` with what the relay sees and that a server can locate a device by pinging it (section 7).
 3. **Web Push** (RFC 8291). The payload is the event id only. The server makes its VAPID key pair at first use (`server_secrets`), and pushes only to the four browsers' push services. The service worker (`public/push-sw.js`, scope `/hushos-push/`) asks an open tab for the words and shows "New activity in HushOS" otherwise; Account → Notifications turns it on for a browser. For Shared with you the sender is named from the person's checked contacts; naming the item from the share's keys is still to come. The CSP needs nothing new: the worker is a same-origin script.
-4. **The apps.** The iOS Notification Service Extension, and the Android FCM data message with `VISIBILITY_PRIVATE`. Both register with the relay and hand only the handle to their server. The public roadmap gets its item when this reaches hushos.com and is switched on, and the relay's page (`crates/hushos-push/src/page.html`) drops "aren't switched on yet" and its "will".
+4. **The apps.** The iOS Notification Service Extension, and the Android FCM data message with `VISIBILITY_PRIVATE`. Both register with the relay and hand only the handle to their server. The public roadmap gets its item when this reaches hushos.com and is switched on.
 
 ## The relay as built (PR 1)
 
