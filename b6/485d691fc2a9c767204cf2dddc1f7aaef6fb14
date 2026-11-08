@@ -1,0 +1,62 @@
+apps/android/app/src/test/kotlin/com/hushos/app/data/RotationPartsTest.kt
+  s_566b8e0c4467a4::t_256eb527b9233e 1-71
+  s_566b8e0c4467a4::t_3526826241a0a0 72
+apps/web/src/lib/api/rotation-body.test.ts
+  s_566b8e0c4467a4::t_74bb8b70a16e47 1-92
+  s_566b8e0c4467a4::t_3487a1b48bd4c6 93-94
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/RotationPartsTests.swift
+  s_566b8e0c4467a4::t_a4bf3e4142f5ef 1-49
+  s_566b8e0c4467a4::t_610fb1be9f8a1b 50
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_c2990ddd37edca 326-327
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyWalks.kt
+  s_566b8e0c4467a4::t_a58eafd7ddc447 199-204
+apps/android/app/src/main/kotlin/com/hushos/app/data/Rotation.kt
+  s_566b8e0c4467a4::t_882e220e05c3b6 92-121,335-358
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_566b8e0c4467a4::t_9050298e1b796c 187-188
+apps/android/app/src/test/kotlin/com/hushos/app/data/ContactTrustTest.kt
+  s_566b8e0c4467a4::t_aa055b6b96ee03 463-494
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_59772716cab8b9 524-525
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyWalks.swift
+  s_566b8e0c4467a4::t_4dc87dff316353 260-264
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Rotation.swift
+  s_566b8e0c4467a4::t_19ed8030368065 148-175,435-451,453-454
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault.swift
+  s_566b8e0c4467a4::t_4959d89edcb5e2 194-195
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/RotationTests.swift
+  s_566b8e0c4467a4::t_07426607cd57f6 96-129,274-275,316-317,349,358-360
+apps/web/src/lib/api.server.ts
+  s_566b8e0c4467a4::t_bb656435995865 52-54
+apps/web/src/lib/body-caps.ts
+  s_566b8e0c4467a4::t_a3111880d2b8b3 22-25,27,63
+docs/drive-design.md
+  s_566b8e0c4467a4::t_0a5dba10b5cc00 1444-1448
+packages/drive/src/client.rotation.test.ts
+  s_566b8e0c4467a4::t_3679c28d954e6f 97,242-243,246-249,426,462,513-556
+packages/drive/src/client.ts
+  s_566b8e0c4467a4::t_9b30907da11a04 49,304-305,1912-1915
+packages/drive/src/protocol.ts
+  s_566b8e0c4467a4::t_e73f8c206098cc 72-79
+packages/drive/src/rotation-parts.test.ts
+  s_566b8e0c4467a4::t_069893ac3dc60b 1-59
+packages/drive/src/rotation-parts.ts
+  s_566b8e0c4467a4::t_f41eae2272d4d5 1-32
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b6485d691fc2a9c767204cf2dddc1f7aaef6fb14",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
