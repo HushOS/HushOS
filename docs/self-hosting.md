@@ -847,6 +847,16 @@ Every page carries one:
 - The script's origin is added to the Content Security Policy for scripts and connections.
 - Umami sets no cookie.
 
+## Notifications
+
+Off by default while the apps that show them are built: `NOTIFICATIONS_ENABLED=true` turns them on, and the web service and the worker read it alike. The design is `docs/devices-design.md` 5; the relay is `docs/push-relay-plan.md`.
+
+- **What happens.** Each event (a new sign-in, a device removed, something shared, a family invitation, someone waiting to join) is a row. A push names it by a random id, and the device fetches it over its own session and writes the notification itself. Nothing in a push says what happened.
+- **The phone apps** can only be reached through Apple and Google with HushOS's own credentials, so pings for them go to the relay: `PUSH_RELAY_URL`, `https://push.hushos.com` by default. Set it empty to send none; the apps then show notifications only when they are open.
+- **What the relay learns:** that a handle got a ping, from your server's address, at a time. It holds each device's APNs or FCM token, which identifies the device to Apple or Google, never the account or what happened. Apple and Google learn that a device received a ping at a time.
+- **A ping can locate a device.** Every ping wakes the device to fetch from your server, so your server, or anyone who learns a handle, can make a phone connect and log its address, up to the relay's limits. Every ping shows a notification, so this is seen, not prevented.
+- **What the server keeps:** each device's relay handle, the events for 30 days, and two toggles per account (Shared with you, Families). Security notices cannot be turned off.
+
 ## Billing (optional)
 
 Self-hosted instances have no billing. Leave `BILLING_PROVIDER=none`, and every account keeps the allowance set by `INITIAL_STORAGE_QUOTA_BYTES`.

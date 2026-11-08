@@ -689,6 +689,7 @@ const SIGN_IN = {
     drive: 'Sign in to open Drive.',
     billing: 'Sign in to manage billing.',
     groups: 'Sign in to open your groups.',
+    notifications: 'Sign in to manage notifications.',
 } as const;
 
 /*

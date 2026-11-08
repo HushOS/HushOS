@@ -604,6 +604,20 @@ export const driveApi = new Elysia()
                                 }),
                             );
                     else log.set({ share: { notify: 'limited' } });
+                    // And the grantee's devices, which name the sender from their own pins and the
+                    // item from the share's keys. Off with their Shared toggle; never raised.
+                    void auth
+                        .notify(body.granteeUserId, 'shared', {
+                            granterUserId: user.id,
+                            shareId: result.share.id,
+                            role: body.role,
+                        })
+                        .catch((error: unknown) =>
+                            serverLog.error({
+                                message: 'Share push failed.',
+                                share: { failure: describeFailure(error) },
+                            }),
+                        );
                     return result;
                 },
             )

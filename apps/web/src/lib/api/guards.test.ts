@@ -92,6 +92,8 @@ function expected(route: Route): string[] | null {
         return ['sameOrigin', 'operatorOnly'];
     if (path === '/billing' || path.startsWith('/billing/')) return ['sameOrigin', 'signedIn'];
     if (path.startsWith('/drive/')) return ['sameOrigin', 'namedClient', 'signedIn'];
+    if (path === '/notifications' || path.startsWith('/notifications/'))
+        return ['sameOrigin', 'signedIn'];
     if (path.startsWith('/groups') || path.startsWith('/invitations'))
         return [
             'groupsOffered',

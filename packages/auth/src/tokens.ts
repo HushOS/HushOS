@@ -22,7 +22,7 @@ export class AuthError extends Error {
     readonly code?: AuthErrorCode;
     constructor(
         message: string,
-        readonly status: 400 | 401 | 403 | 404 | 409 | 429 | 503 = 400,
+        readonly status: 400 | 401 | 403 | 404 | 409 | 429 | 501 | 503 = 400,
         options?: { cause?: unknown; code?: AuthErrorCode },
     ) {
         super(message, options);

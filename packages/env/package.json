@@ -14,7 +14,8 @@
         "./app": "./src/app.ts",
         "./storage": "./src/storage.ts",
         "./groups": "./src/groups.ts",
-        "./group-limits": "./src/group-limits.ts"
+        "./group-limits": "./src/group-limits.ts",
+        "./notifications": "./src/notifications.ts"
     },
     "scripts": {
         "typecheck": "tsc --noEmit",

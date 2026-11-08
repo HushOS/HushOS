@@ -16,6 +16,7 @@ import { billingApi } from '@/lib/api/billing.server';
 import { driveApi } from '@/lib/api/drive.server';
 import { adminApi } from '@/lib/api/admin.server';
 import { groupsApi } from '@/lib/api/groups.server';
+import { notificationsApi } from '@/lib/api/notifications.server';
 import { systemApi } from '@/lib/api/system.server';
 import {
     describeFailure,
@@ -39,6 +40,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
     .use(driveApi)
     .use(adminApi)
     .use(groupsApi)
+    .use(notificationsApi)
     .use(systemApi);
 
 export type Api = typeof apiApp;

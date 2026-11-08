@@ -30,6 +30,7 @@ import {
 } from '@hushos/emails/server';
 import { ready, server, client } from '@hushos/crypto/server';
 import { SECURITY_CHANGE_IDENTITY_BYTES, SECURITY_CHANGE_REST_BYTES } from './limits';
+import { notify } from './notifications';
 import { boundAttemptHolds, type BoundPurpose } from './bound-attempt';
 
 import {
@@ -1609,6 +1610,12 @@ export async function notifyDevices(
         return;
     const user = await authRepository.getUserById(userId);
     if (!user) return;
+    // Every device too, within the same bound. A push problem is never the mail's.
+    const pushed =
+        kind === 'devices-removed'
+            ? notify(userId, kind, { count: count ?? 1 })
+            : notify(userId, kind, {});
+    void pushed.catch(() => {});
     await sendSecurityNotice(user.email, {
         kind,
         when: noticeWhen(at),
@@ -2182,3 +2189,5 @@ export async function finishSecurityChange(
     if (!changed) throw failure();
     return { success: true };
 }
+
+export * from './notifications';
