@@ -48,7 +48,7 @@ export const requestContext = new Elysia({ name: 'hushos-api-context' })
         sessionToken: readSessionToken(request),
         enrollmentToken: readEnrollmentToken(request),
     }))
-    .error(({ error, status, request }) => {
+    .onError(({ error, status, request }) => {
         // A route the API does not define is not an outage: nothing is logged as an error. Drive
         // and admin answer 501, never 404: their clients read a 404 as "this item is gone" and drop
         // what they hold, and an unknown route there means a client newer than this server.
