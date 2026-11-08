@@ -1,0 +1,25 @@
+crates/hushos-push/src/api.rs
+  s_566b8e0c4467a4::t_ff2e9b9fd88c19 219-221,224-238,325-329
+crates/hushos-push/src/api/tests.rs
+  s_566b8e0c4467a4::t_9ec41f648bc381 308,310-312,332-364
+crates/hushos-push/src/limits.rs
+  s_566b8e0c4467a4::t_99dbd2c0e2f3bd 138
+docs/push-relay-plan.md
+  s_566b8e0c4467a4::t_af88c15a71ed0a 43,45,89-90
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9df76ea8854ca14bdac5dfa826610adbc75a558c",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
