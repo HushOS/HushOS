@@ -5,6 +5,26 @@ import { REPORT_CATEGORIES } from '@hushos/drive/api';
 import * as drive from '@hushos/drive/server';
 import { useLogger } from '@/lib/logging.server';
 import {
+    accountResponse,
+    accountsResponse,
+    evidenceRequestResponse,
+    openedReportResponse,
+    overviewResponse,
+    reportChildrenResponse,
+    reportDetailResponse,
+    reportDownloadUrlResponse,
+    reportEventResponse,
+    reportKeyHoldersResponse,
+    reportResponse,
+    reportsResponse,
+    reportUrlsResponse,
+    resealedReportResponse,
+    storageGrantResponse,
+    storageRevokedResponse,
+    suspensionResponse,
+    workspacesResponse,
+} from '@/lib/api/admin-responses.server';
+import {
     MAX_REPORT_OPERATORS,
     guards,
     reportEnvelopeSchema,
@@ -34,6 +54,7 @@ export const adminApi = new Elysia().use(guards).guard({ mutation: true, admin: 
                         t.Union(REPORT_CATEGORIES.map((value) => t.Literal(value))),
                     ),
                 }),
+                response: { 200: reportsResponse },
             },
             async ({ query, set }) => {
                 set.headers['Cache-Control'] = 'no-store';
@@ -42,7 +63,7 @@ export const adminApi = new Elysia().use(guards).guard({ mutation: true, admin: 
         )
         .get(
             '/admin/reports/:id',
-            { params: t.Object({ id: uuidSchema }) },
+            { params: t.Object({ id: uuidSchema }), response: { 200: reportDetailResponse } },
             async ({ params, set }) => {
                 set.headers['Cache-Control'] = 'no-store';
                 return drive.getReport(params.id);
@@ -50,14 +71,21 @@ export const adminApi = new Elysia().use(guards).guard({ mutation: true, admin: 
         )
         .post(
             '/admin/reports/:id/open',
-            { params: t.Object({ id: uuidSchema }), body: t.Object({}) },
+            {
+                params: t.Object({ id: uuidSchema }),
+                body: t.Object({}),
+                response: { 200: openedReportResponse },
+            },
             async ({ operator, params }) => {
                 return drive.openReport(operator.id, params.id);
             },
         )
         .get(
             '/admin/reports/:id/nodes/:nodeId/children',
-            { params: t.Object({ id: uuidSchema, nodeId: uuidSchema }) },
+            {
+                params: t.Object({ id: uuidSchema, nodeId: uuidSchema }),
+                response: { 200: reportChildrenResponse },
+            },
             async ({ params }) => {
                 return drive.reportChildren(params.id, params.nodeId);
             },
@@ -67,6 +95,7 @@ export const adminApi = new Elysia().use(guards).guard({ mutation: true, admin: 
             {
                 params: t.Object({ id: uuidSchema }),
                 body: t.Object({ versionIds: t.Array(uuidSchema, { minItems: 1, maxItems: 100 }) }),
+                response: { 200: reportUrlsResponse },
             },
             async ({ params, body }) => {
                 return drive.reportDownloadUrls(params.id, body.versionIds);
@@ -74,7 +103,10 @@ export const adminApi = new Elysia().use(guards).guard({ mutation: true, admin: 
         )
         .get(
             '/admin/reports/:id/versions/:versionId/url',
-            { params: t.Object({ id: uuidSchema, versionId: uuidSchema }) },
+            {
+                params: t.Object({ id: uuidSchema, versionId: uuidSchema }),
+                response: { 200: reportDownloadUrlResponse },
+            },
             async ({ params }) => {
                 return drive.reportDownloadUrl(params.id, params.versionId);
             },
@@ -84,6 +116,7 @@ export const adminApi = new Elysia().use(guards).guard({ mutation: true, admin: 
             {
                 params: t.Object({ id: uuidSchema }),
                 query: t.Object({ versions: t.String({ minLength: 36, maxLength: 3700 }) }),
+                response: { 200: reportUrlsResponse },
             },
             async ({ params, query }) => {
                 return drive.reportThumbnailUrls(
@@ -94,14 +127,21 @@ export const adminApi = new Elysia().use(guards).guard({ mutation: true, admin: 
         )
         .post(
             '/admin/reports/:id/evidence',
-            { params: t.Object({ id: uuidSchema }), body: t.Object({}) },
+            {
+                params: t.Object({ id: uuidSchema }),
+                body: t.Object({}),
+                response: { 200: evidenceRequestResponse },
+            },
             async ({ operator, params }) => {
                 return drive.requestEvidence(operator.id, params.id);
             },
         )
         .get(
             '/admin/reports/:id/evidence/:requestId',
-            { params: t.Object({ id: uuidSchema, requestId: uuidSchema }) },
+            {
+                params: t.Object({ id: uuidSchema, requestId: uuidSchema }),
+                response: { 200: evidenceRequestResponse },
+            },
             async ({ params, set }) => {
                 set.headers['Cache-Control'] = 'no-store';
                 return drive.getEvidenceRequest(params.id, params.requestId);
@@ -109,7 +149,7 @@ export const adminApi = new Elysia().use(guards).guard({ mutation: true, admin: 
         )
         .get(
             '/admin/reports/:id/keys',
-            { params: t.Object({ id: uuidSchema }) },
+            { params: t.Object({ id: uuidSchema }), response: { 200: reportKeyHoldersResponse } },
             async ({ params, set }) => {
                 set.headers['Cache-Control'] = 'no-store';
                 return drive.reportKeyHolders(params.id);
@@ -129,6 +169,7 @@ export const adminApi = new Elysia().use(guards).guard({ mutation: true, admin: 
                         { minItems: 1, maxItems: MAX_REPORT_OPERATORS },
                     ),
                 }),
+                response: { 200: resealedReportResponse },
             },
             async ({ operator, params, body }) => {
                 return drive.resealReport(operator.id, params.id, body.keys);
@@ -136,7 +177,11 @@ export const adminApi = new Elysia().use(guards).guard({ mutation: true, admin: 
         )
         .post(
             '/admin/reports/:id/packet',
-            { params: t.Object({ id: uuidSchema }), body: t.Object({}) },
+            {
+                params: t.Object({ id: uuidSchema }),
+                body: t.Object({}),
+                response: { 200: reportEventResponse },
+            },
             async ({ operator, params }) => {
                 return drive.recordPacket(operator.id, params.id);
             },
@@ -154,6 +199,7 @@ export const adminApi = new Elysia().use(guards).guard({ mutation: true, admin: 
                         filedReference: t.Nullable(t.String({ maxLength: 200 })),
                     }),
                 ]),
+                response: { 200: reportResponse },
             },
             async ({ operator, params, body }) => {
                 return drive.resolveReport(operator.id, params.id, body);
@@ -161,21 +207,33 @@ export const adminApi = new Elysia().use(guards).guard({ mutation: true, admin: 
         )
         .post(
             '/admin/reports/:id/hold',
-            { params: t.Object({ id: uuidSchema }), body: t.Object({ held: t.Boolean() }) },
+            {
+                params: t.Object({ id: uuidSchema }),
+                body: t.Object({ held: t.Boolean() }),
+                response: { 200: reportResponse },
+            },
             async ({ operator, params, body }) => {
                 return drive.holdReport(operator.id, params.id, body.held);
             },
         )
         .post(
             '/admin/reports/:id/reopen',
-            { params: t.Object({ id: uuidSchema }), body: t.Object({}) },
+            {
+                params: t.Object({ id: uuidSchema }),
+                body: t.Object({}),
+                response: { 200: reportResponse },
+            },
             async ({ operator, params }) => {
                 return drive.reopenReport(operator.id, params.id);
             },
         )
         .post(
             '/admin/reports/:id/uploader',
-            { params: t.Object({ id: uuidSchema }), body: t.Object({ suspended: t.Boolean() }) },
+            {
+                params: t.Object({ id: uuidSchema }),
+                body: t.Object({ suspended: t.Boolean() }),
+                response: { 200: reportResponse },
+            },
             async ({ operator, params, body }) => {
                 return drive.suspendUploader(operator.id, params.id, body.suspended);
             },
@@ -185,15 +243,20 @@ export const adminApi = new Elysia().use(guards).guard({ mutation: true, admin: 
             {
                 params: t.Object({ id: uuidSchema }),
                 body: t.Object({ note: t.String({ minLength: 1, maxLength: 2000 }) }),
+                response: { 200: reportEventResponse },
             },
             async ({ operator, params, body }) => {
                 return drive.noteReport(operator.id, params.id, body.note);
             },
         )
-        .get('/admin/overview', async ({ sessionToken, set }) => {
-            set.headers['Cache-Control'] = 'no-store';
-            return auth.getAdminOverview(sessionToken);
-        })
+        .get(
+            '/admin/overview',
+            { response: { 200: overviewResponse } },
+            async ({ sessionToken, set }) => {
+                set.headers['Cache-Control'] = 'no-store';
+                return auth.getAdminOverview(sessionToken);
+            },
+        )
         // Not UnionEnum: Elysia fills an absent optional UnionEnum query field with its first value.
         .get(
             '/admin/accounts',
@@ -204,6 +267,7 @@ export const adminApi = new Elysia().use(guards).guard({ mutation: true, admin: 
                     sort: t.Optional(t.Union([t.Literal('joined'), t.Literal('stored')])),
                     offset: t.Optional(t.Numeric({ minimum: 0, maximum: 1_000_000 })),
                 }),
+                response: { 200: accountsResponse },
             },
             async ({ sessionToken, query, set }) => {
                 set.headers['Cache-Control'] = 'no-store';
@@ -217,7 +281,7 @@ export const adminApi = new Elysia().use(guards).guard({ mutation: true, admin: 
         )
         .get(
             '/admin/accounts/:id',
-            { params: t.Object({ id: uuidSchema }) },
+            { params: t.Object({ id: uuidSchema }), response: { 200: accountResponse } },
             async ({ sessionToken, params, set }) => {
                 set.headers['Cache-Control'] = 'no-store';
                 return auth.getAdminAccount(sessionToken, params.id);
@@ -225,7 +289,11 @@ export const adminApi = new Elysia().use(guards).guard({ mutation: true, admin: 
         )
         .post(
             '/admin/accounts/:id/suspension',
-            { params: t.Object({ id: uuidSchema }), body: t.Object({ suspended: t.Boolean() }) },
+            {
+                params: t.Object({ id: uuidSchema }),
+                body: t.Object({ suspended: t.Boolean() }),
+                response: { 200: suspensionResponse },
+            },
             async ({ sessionToken, params, body }) => {
                 const result = await auth.setAdminAccountSuspended(
                     sessionToken,
@@ -253,6 +321,7 @@ export const adminApi = new Elysia().use(guards).guard({ mutation: true, admin: 
                     expiresAt: t.Optional(t.Nullable(t.String({ format: 'date-time' }))),
                     note: t.Optional(t.Nullable(t.String({ maxLength: 500 }))),
                 }),
+                response: { 200: storageGrantResponse },
             },
             async ({ sessionToken, params, body }) => {
                 const result = await auth.grantAdminAccountStorage(sessionToken, params.id, body);
@@ -268,7 +337,11 @@ export const adminApi = new Elysia().use(guards).guard({ mutation: true, admin: 
         )
         .post(
             '/admin/accounts/:id/storage/:entitlementId/revoke',
-            { params: t.Object({ id: uuidSchema, entitlementId: uuidSchema }), body: t.Object({}) },
+            {
+                params: t.Object({ id: uuidSchema, entitlementId: uuidSchema }),
+                body: t.Object({}),
+                response: { 200: storageRevokedResponse },
+            },
             async ({ sessionToken, params }) => {
                 const result = await auth.revokeAdminAccountStorage(
                     sessionToken,
@@ -292,6 +365,7 @@ export const adminApi = new Elysia().use(guards).guard({ mutation: true, admin: 
                     sort: t.Optional(t.Union([t.Literal('stored'), t.Literal('created')])),
                     offset: t.Optional(t.Numeric({ minimum: 0, maximum: 1_000_000 })),
                 }),
+                response: { 200: workspacesResponse },
             },
             async ({ sessionToken, query, set }) => {
                 set.headers['Cache-Control'] = 'no-store';

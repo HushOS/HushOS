@@ -90,11 +90,11 @@ const nodeFields = {
     metadataRekey: rekey,
     metadataOriginDropped: dropped,
 };
-const node = t.Object(nodeFields);
+export const node = t.Object(nodeFields);
 const visitorNode = t.Object({ ...visitorNodeFields, currentVersion: t.Nullable(visitorVersion) });
 
 /* Someone's public identity (publicIdentity): a version 1 identity has no ML-DSA key or statement. */
-const servedIdentityFields = {
+export const servedIdentityFields = {
     keyVersion: t.Integer(),
     identityVersion: t.Union([t.Literal(1), t.Literal(2)]),
     encryptionPublicKey: t.String(),
