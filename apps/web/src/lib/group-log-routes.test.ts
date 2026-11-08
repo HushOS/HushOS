@@ -1,31 +1,23 @@
+// @vitest-environment node
 import { groupLogAction } from '@hushos/logging';
 import { expect, test } from 'vitest';
-// The API's source: the app in api.server.ts and its feature instances in api/.
-const source = Object.values(
-    import.meta.glob<string>(['./api.server.ts', './api/*.server.ts'], {
-        query: '?raw',
-        import: 'default',
-        eager: true,
-    }),
-).join('\n');
-// The source, not the module: importing the handlers needs a whole server environment.
+import { loadApi, type ApiRoute } from '@/test/api-app';
 
 /*
  * Group routes carry group, account, area and invitation ids in their paths:
  * the log keeps only each route's pattern, from an allowlist in the logging
  * package. A route added here and not there would be logged as "unknown".
  */
-test('every group route is logged under its own pattern', () => {
+test('every group route is logged under its own pattern', async () => {
+    const routes = (await loadApi()).routes as unknown as ApiRoute[];
     const paths = [
         ...new Set(
-            Array.from(source.matchAll(/'(\/(?:groups|invitations)(?:\/[^']*)?)'/g), (m) => m[1]!),
+            routes.map((r) => r.path).filter((p) => /^\/api\/(groups|invitations)(\/|$)/.test(p)),
         ),
     ];
-    // Fewer than this and the pattern no longer matches how routes are written.
     expect(paths.length).toBeGreaterThan(20);
-    expect(source).not.toMatch(/["`]\/(groups|invitations)\//);
     const uuid = '0b7f1c2e-3d4a-4b5c-8d6e-7f8091a2b3c4';
-    const real = paths.map((path) => `/api${path.replace(/:[^/]+/g, uuid)}`);
+    const real = paths.map((path) => path.replace(/:[^/]+/g, uuid));
     expect(real.filter((path) => groupLogAction(path) === 'unknown')).toEqual([]);
     // Ids never survive into the action.
     expect(real.map(groupLogAction).filter((action) => action.includes(uuid))).toEqual([]);

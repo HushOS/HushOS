@@ -331,6 +331,7 @@ const NOT_STORAGE = new Set([
     'hushos-sealed',
     'hushos-api',
     'hushos-api-context',
+    'hushos-api-guards',
     'hushos.logging.stripped',
     // The server's registry of Postgres pools, a Symbol.for key (packages/db/src/client.ts).
     'hushos.db.pools',

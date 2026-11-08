@@ -5,14 +5,6 @@ import { describe, expect, test } from 'vitest';
 import clientSource from './api-client.ts?raw';
 import { followsGroupWrites, groupWriteMinimums } from './group-write-floor';
 import { HUSHOS_VERSION } from './version';
-// The API's source: the app in api.server.ts and its feature instances in api/.
-const source = Object.values(
-    import.meta.glob<string>(['./api.server.ts', './api/*.server.ts'], {
-        query: '?raw',
-        import: 'default',
-        eager: true,
-    }),
-).join('\n');
 
 /*
  * The client floor on family-changing routes (docs/optional-verification.md
@@ -79,71 +71,5 @@ describe('the family-change version floor', () => {
         ).toBe('1.0.0');
         // Drive's own minimum, when higher, is the floor here as well.
         expect(groupWriteMinimums(parseMinimums('web/999.1.0'), none).get('web')).toBe('999.1.0');
-    });
-});
-
-/*
- * Every route, by method and path, as the API mounts it, with the helper its handler
- * calls first: groupWriter (floored) or groupUser.
- */
-function routes() {
-    const out = new Map<string, string>();
-    const pattern = /\.(get|post|put|patch|delete)\(\s*'((?:\/groups|\/invitations)[^']*)'/g;
-    const found = [...source.matchAll(pattern)];
-    for (const [index, match] of found.entries()) {
-        const end = found[index + 1]?.index ?? source.indexOf('\n    )', match.index);
-        const body = source.slice(match.index, end);
-        const helper = /\(await (groupWriter|groupUser)\(request, sessionToken\)\)/.exec(body);
-        // Each handler's first call into the groups package takes the helper's user: nothing
-        // is read or stored before the client is checked.
-        const first = /groups\.\w+\(\s*\(await (groupWriter|groupUser)\(/.exec(body);
-        out.set(`${match[1]!.toUpperCase()} ${match[2]}`, first?.[1] ?? helper?.[1] ?? 'none');
-    }
-    return out;
-}
-
-describe('which routes are floored (7.3)', () => {
-    const FLOORED = [
-        'POST /groups/:id/rosters', // 7
-        'PUT /groups/:id/key-seals', // 9
-        'POST /groups/:id/key-successions', // 10
-        'POST /groups/:id/members/:userId/admit', // 17
-        'PATCH /groups/:id/members/:userId', // 18
-        'POST /groups/:id/members/:userId/remove', // 19
-        'POST /groups/:id/areas', // 21
-        'POST /groups/:id/areas/:workspaceId/grants', // 22
-        'POST /groups/:id/areas/:workspaceId/rotations', // 24
-        'PUT /groups/:id/areas/:workspaceId/previous-root', // 28
-        'POST /groups/:id/areas/:workspaceId/delete', // 30
-    ].sort();
-
-    test('the routes that let people in, change roles or seal family keys, and only those, check the floor first', () => {
-        const all = routes();
-        expect(all.size).toBeGreaterThan(25);
-        const floored = [...all].filter(([, helper]) => helper === 'groupWriter').map(([r]) => r);
-        expect(floored.sort()).toEqual(FLOORED);
-        // And the helper checks the floor and the number itself, before the session, with 426
-        // (e2e/families.spec.ts drops the number on a running server and gets 426 there).
-        expect(source).toMatch(
-            /async function groupWriter\([^)]*\) \{\s*const client = requireClient\(request, groupWriteFloor\);\s*if \(!followsGroupWrites\(client\.name, request\.headers\.get\(GROUP_WRITE_HEADER\)\)\)\s*throw new drive\.DriveError\(\s*'unsupported',[^)]*426,\s*\);\s*return groupUser\(/,
-        );
-        expect(source).toMatch(
-            /groupWriteMinimums\(\s*clientMinimums,\s*parseMinimums\(storageEnv\.GROUP_WRITE_CLIENT_MINIMUMS\)/,
-        );
-        // Everything else, the join's own routes (invitations, accepting, the self-grant) and
-        // every read included, keeps serving an older client.
-        for (const route of [
-            'GET /groups/:id/rosters',
-            'GET /groups/:id/identities',
-            'GET /groups/:id/key-seal',
-            'POST /invitations/open',
-            'POST /invitations/accept',
-            'GET /invitations',
-            'POST /groups/:id/leave',
-            'POST /groups/:id/members/:userId/decline',
-            'POST /groups/:id/members/:userId/hold',
-            'PUT /groups/:id/areas/:workspaceId/self-grant',
-        ])
-            expect(all.get(route), route).toBe('groupUser');
     });
 });

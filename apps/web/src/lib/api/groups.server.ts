@@ -12,13 +12,10 @@ import {
     grantSchema,
     groupParams,
     groupRoleSchema,
-    groupUser,
-    groupWriter,
-    groupsGate,
+    guards,
     keyEnvelopeSchema,
     memberParams,
     requestAddress,
-    requestContext,
     revisionSchema,
     rosterCallFields,
     rotationSchema,
@@ -31,11 +28,11 @@ import {
 
 /* Families (docs/groups-server.md 4): groups and invitations, served only with GROUPS_ENABLED. */
 export const groupsApi = new Elysia()
-    .use(requestContext)
+    .use(guards)
     // Groups (docs/groups-server.md 4): served only with GROUPS_ENABLED. The edge
     // (handleGroupRequest) refuses first; this gate holds if a route is ever
     // reached some other way, such as a test or a future mount that skips it.
-    .guard({ beforeHandle: groupsGate }, (app) =>
+    .guard({ groups: true, mutation: true, client: true, session: 'groups' }, (app) =>
         app
             .post(
                 '/groups',
@@ -57,23 +54,15 @@ export const groupsApi = new Elysia()
                         }),
                     }),
                 },
-                async ({ request, sessionToken, body, set }) => {
-                    const result = await groups.createGroup(
-                        (await groupUser(request, sessionToken)).id,
-                        body,
-                    );
+                async ({ user, body, set }) => {
+                    const result = await groups.createGroup(user.id, body);
                     set.status = result.replayed ? 200 : 201;
                     return { group: result.group };
                 },
             )
-            .get('/groups', async ({ request, sessionToken }) =>
-                groups.listGroups((await groupUser(request, sessionToken)).id),
-            )
-            .get(
-                '/groups/:id',
-                { params: groupParams },
-                async ({ request, sessionToken, params }) =>
-                    groups.getGroup((await groupUser(request, sessionToken)).id, params.id),
+            .get('/groups', async ({ user }) => groups.listGroups(user.id))
+            .get('/groups/:id', { params: groupParams }, async ({ user, params }) =>
+                groups.getGroup(user.id, params.id),
             )
             .patch(
                 '/groups/:id',
@@ -81,12 +70,7 @@ export const groupsApi = new Elysia()
                     params: groupParams,
                     body: t.Object({ name: t.String({ minLength: 1, maxLength: 400 }) }),
                 },
-                async ({ request, sessionToken, params, body }) =>
-                    groups.renameGroup(
-                        (await groupUser(request, sessionToken)).id,
-                        params.id,
-                        body,
-                    ),
+                async ({ user, params, body }) => groups.renameGroup(user.id, params.id, body),
             )
             .get(
                 '/groups/:id/rosters',
@@ -97,57 +81,37 @@ export const groupsApi = new Elysia()
                         limit: t.Optional(t.Numeric({ minimum: 1, maximum: 200 })),
                     }),
                 },
-                async ({ request, sessionToken, params, query }) =>
-                    groups.getRosters(
-                        (await groupUser(request, sessionToken)).id,
-                        params.id,
-                        query,
-                    ),
+                async ({ user, params, query }) => groups.getRosters(user.id, params.id, query),
             )
             .get(
                 '/groups/:id/identities',
                 { params: groupParams, query: t.Object({ after: t.Optional(uuidSchema) }) },
-                async ({ request, sessionToken, params, query }) =>
-                    groups.getIdentities(
-                        (await groupUser(request, sessionToken)).id,
-                        params.id,
-                        query.after ?? null,
-                    ),
+                async ({ user, params, query }) =>
+                    groups.getIdentities(user.id, params.id, query.after ?? null),
             )
             .post(
                 '/groups/:id/rosters',
-                { params: groupParams, body: t.Object(rosterCallFields) },
-                async ({ request, sessionToken, params, body }) =>
-                    groups.postRoster(
-                        (await groupWriter(request, sessionToken)).id,
-                        params.id,
-                        body,
-                    ),
+                { groupWrite: true, params: groupParams, body: t.Object(rosterCallFields) },
+                async ({ user, params, body }) => groups.postRoster(user.id, params.id, body),
             )
-            .get(
-                '/groups/:id/key-seal',
-                { params: groupParams },
-                async ({ request, sessionToken, params }) =>
-                    groups.getKeySeal((await groupUser(request, sessionToken)).id, params.id),
+            .get('/groups/:id/key-seal', { params: groupParams }, async ({ user, params }) =>
+                groups.getKeySeal(user.id, params.id),
             )
             .put(
                 '/groups/:id/key-seals',
                 {
+                    groupWrite: true,
                     params: groupParams,
                     body: t.Object({
                         seals: t.Array(sealSchema, { minItems: 1, maxItems: MAX_SEALS_PER_CALL }),
                     }),
                 },
-                async ({ request, sessionToken, params, body }) =>
-                    groups.putKeySeals(
-                        (await groupWriter(request, sessionToken)).id,
-                        params.id,
-                        body,
-                    ),
+                async ({ user, params, body }) => groups.putKeySeals(user.id, params.id, body),
             )
             .post(
                 '/groups/:id/key-successions',
                 {
+                    groupWrite: true,
                     params: groupParams,
                     body: t.Object({
                         expectedRevision: revisionSchema,
@@ -155,12 +119,7 @@ export const groupsApi = new Elysia()
                         seals: t.Array(sealSchema, { maxItems: MAX_SEALS_PER_CALL }),
                     }),
                 },
-                async ({ request, sessionToken, params, body }) =>
-                    groups.postSuccession(
-                        (await groupWriter(request, sessionToken)).id,
-                        params.id,
-                        body,
-                    ),
+                async ({ user, params, body }) => groups.postSuccession(user.id, params.id, body),
             )
             .post(
                 '/groups/:id/invitations',
@@ -171,21 +130,14 @@ export const groupsApi = new Elysia()
                         roles: t.Array(groupRoleSchema, { maxItems: 3 }),
                     }),
                 },
-                async ({ request, sessionToken, params, body, set }) => {
-                    const result = await groups.invite(
-                        (await groupUser(request, sessionToken)).id,
-                        params.id,
-                        body,
-                    );
+                async ({ user, params, body, set }) => {
+                    const result = await groups.invite(user.id, params.id, body);
                     set.status = 201;
                     return result;
                 },
             )
-            .get(
-                '/groups/:id/invitations',
-                { params: groupParams },
-                async ({ request, sessionToken, params }) =>
-                    groups.listInvitations((await groupUser(request, sessionToken)).id, params.id),
+            .get('/groups/:id/invitations', { params: groupParams }, async ({ user, params }) =>
+                groups.listInvitations(user.id, params.id),
             )
             .delete(
                 '/groups/:id/invitations/:invitationId',
@@ -194,51 +146,35 @@ export const groupsApi = new Elysia()
                     params: t.Object({ id: uuidSchema, invitationId: uuidSchema }),
                     body: t.Object({}),
                 },
-                async ({ request, sessionToken, params }) =>
-                    groups.revokeInvitation(
-                        (await groupUser(request, sessionToken)).id,
-                        params.id,
-                        params.invitationId,
-                    ),
+                async ({ user, params }) =>
+                    groups.revokeInvitation(user.id, params.id, params.invitationId),
             )
-            .get('/invitations', async ({ request, sessionToken }) =>
-                groups.listMyInvitations((await groupUser(request, sessionToken)).id),
-            )
+            .get('/invitations', async ({ user }) => groups.listMyInvitations(user.id))
             .post(
                 '/invitations/open',
                 { body: t.Object({ token: tokenSchema }) },
-                async ({ request, sessionToken, body }) =>
-                    groups.openInvitation(
-                        (await groupUser(request, sessionToken)).id,
-                        body.token,
-                        requestAddress(request),
-                    ),
+                async ({ user, request, body }) =>
+                    groups.openInvitation(user.id, body.token, requestAddress(request)),
             )
             .post(
                 '/invitations/accept',
                 { body: t.Object({ token: tokenSchema }) },
-                async ({ request, sessionToken, body }) =>
-                    groups.acceptInvitation(
-                        (await groupUser(request, sessionToken)).id,
-                        body.token,
-                        requestAddress(request),
-                    ),
+                async ({ user, request, body }) =>
+                    groups.acceptInvitation(user.id, body.token, requestAddress(request)),
             )
-            .get(
-                '/groups/:id/pending',
-                { params: groupParams },
-                async ({ request, sessionToken, params }) =>
-                    groups.listPending((await groupUser(request, sessionToken)).id, params.id),
+            .get('/groups/:id/pending', { params: groupParams }, async ({ user, params }) =>
+                groups.listPending(user.id, params.id),
             )
             .post(
                 '/groups/:id/members/:userId/admit',
                 {
+                    groupWrite: true,
                     params: memberParams,
                     body: t.Object({ ...rosterCallFields, keySeal: t.Optional(sealSchema) }),
                 },
-                async ({ request, sessionToken, params, body }) =>
+                async ({ user, request, params, body }) =>
                     groups.admit(
-                        (await groupWriter(request, sessionToken)).id,
+                        user.id,
                         params.id,
                         params.userId,
                         body,
@@ -254,60 +190,39 @@ export const groupsApi = new Elysia()
             .patch(
                 '/groups/:id/members/:userId',
                 {
+                    groupWrite: true,
                     params: memberParams,
                     body: t.Object({ ...rosterCallFields, keySeal: t.Optional(sealSchema) }),
                 },
-                async ({ request, sessionToken, params, body }) =>
-                    groups.patchMember(
-                        (await groupWriter(request, sessionToken)).id,
-                        params.id,
-                        params.userId,
-                        body,
-                    ),
+                async ({ user, params, body }) =>
+                    groups.patchMember(user.id, params.id, params.userId, body),
             )
             .post(
                 '/groups/:id/members/:userId/remove',
                 {
+                    groupWrite: true,
                     params: memberParams,
                     body: t.Object({ ...rosterCallFields, endsLapsed: endsLapsedSchema }),
                 },
-                async ({ request, sessionToken, params, body }) =>
-                    groups.removeMember(
-                        (await groupWriter(request, sessionToken)).id,
-                        params.id,
-                        params.userId,
-                        body,
-                    ),
+                async ({ user, params, body }) =>
+                    groups.removeMember(user.id, params.id, params.userId, body),
             )
             .post(
                 '/groups/:id/members/:userId/remove-preview',
                 { params: memberParams, body: t.Object({}) },
-                async ({ request, sessionToken, params }) =>
-                    groups.removalPreview(
-                        (await groupUser(request, sessionToken)).id,
-                        params.id,
-                        params.userId,
-                    ),
+                async ({ user, params }) =>
+                    groups.removalPreview(user.id, params.id, params.userId),
             )
             .post(
                 '/groups/:id/members/:userId/decline',
                 { params: memberParams, body: t.Object({}) },
-                async ({ request, sessionToken, params }) =>
-                    groups.declinePending(
-                        (await groupUser(request, sessionToken)).id,
-                        params.id,
-                        params.userId,
-                    ),
+                async ({ user, params }) =>
+                    groups.declinePending(user.id, params.id, params.userId),
             )
             .post(
                 '/groups/:id/members/:userId/hold',
                 { params: memberParams, body: t.Object({}) },
-                async ({ request, sessionToken, params }) =>
-                    groups.hold(
-                        (await groupUser(request, sessionToken)).id,
-                        params.id,
-                        params.userId,
-                    ),
+                async ({ user, params }) => groups.hold(user.id, params.id, params.userId),
             )
             .post(
                 '/groups/:id/leave',
@@ -318,22 +233,21 @@ export const groupsApi = new Elysia()
                         expect: t.Optional(t.Literal('accepted')),
                     }),
                 },
-                async ({ request, sessionToken, params, body }) =>
-                    groups.leave((await groupUser(request, sessionToken)).id, params.id, body),
+                async ({ user, params, body }) => groups.leave(user.id, params.id, body),
             )
             .post(
                 '/groups/:id/areas',
-                { params: groupParams, body: t.Object({ ...rosterCallFields, area: areaSchema }) },
-                async ({ request, sessionToken, params, body }) =>
-                    groups.createArea(
-                        (await groupWriter(request, sessionToken)).id,
-                        params.id,
-                        body,
-                    ),
+                {
+                    groupWrite: true,
+                    params: groupParams,
+                    body: t.Object({ ...rosterCallFields, area: areaSchema }),
+                },
+                async ({ user, params, body }) => groups.createArea(user.id, params.id, body),
             )
             .post(
                 '/groups/:id/areas/:workspaceId/grants',
                 {
+                    groupWrite: true,
                     params: areaParams,
                     body: t.Object({
                         grants: t.Array(grantSchema, {
@@ -342,78 +256,50 @@ export const groupsApi = new Elysia()
                         }),
                     }),
                 },
-                async ({ request, sessionToken, params, body }) =>
-                    groups.postGrants(
-                        (await groupWriter(request, sessionToken)).id,
-                        params.id,
-                        params.workspaceId,
-                        body,
-                    ),
+                async ({ user, params, body }) =>
+                    groups.postGrants(user.id, params.id, params.workspaceId, body),
             )
             .put(
                 '/groups/:id/areas/:workspaceId/self-grant',
                 { params: areaParams, body: t.Object({ grant: workspaceKeySchema }) },
-                async ({ request, sessionToken, params, body }) =>
-                    groups.putSelfGrant(
-                        (await groupUser(request, sessionToken)).id,
-                        params.id,
-                        params.workspaceId,
-                        body,
-                    ),
+                async ({ user, params, body }) =>
+                    groups.putSelfGrant(user.id, params.id, params.workspaceId, body),
             )
             // Route 28: a holder repairs the root's previous envelope while the area's rotation runs.
             .put(
                 '/groups/:id/areas/:workspaceId/previous-root',
                 {
+                    groupWrite: true,
                     params: areaParams,
                     body: t.Object({
                         rotationId: uuidSchema,
                         previousRootKeyEnvelope: keyEnvelopeSchema,
                     }),
                 },
-                async ({ request, sessionToken, params, body }) =>
-                    groups.putPreviousRoot(
-                        (await groupWriter(request, sessionToken)).id,
-                        params.id,
-                        params.workspaceId,
-                        body,
-                    ),
+                async ({ user, params, body }) =>
+                    groups.putPreviousRoot(user.id, params.id, params.workspaceId, body),
             )
             // Route 29: what a holder's device re-keys when a roster rotates the area.
             .get(
                 '/groups/:id/areas/:workspaceId/root',
                 { params: areaParams },
-                async ({ request, sessionToken, params }) =>
-                    groups.areaRoot(
-                        (await groupUser(request, sessionToken)).id,
-                        params.id,
-                        params.workspaceId,
-                    ),
+                async ({ user, params }) => groups.areaRoot(user.id, params.id, params.workspaceId),
             )
             // Deleting a family folder: its tombstone on the next roster (groups design 2.10).
             .post(
                 '/groups/:id/areas/:workspaceId/delete',
-                { params: areaParams, body: t.Object(rosterCallFields) },
-                async ({ request, sessionToken, params, body }) =>
-                    groups.deleteArea(
-                        (await groupWriter(request, sessionToken)).id,
-                        params.id,
-                        params.workspaceId,
-                        body,
-                    ),
+                { groupWrite: true, params: areaParams, body: t.Object(rosterCallFields) },
+                async ({ user, params, body }) =>
+                    groups.deleteArea(user.id, params.id, params.workspaceId, body),
             )
             .post(
                 '/groups/:id/areas/:workspaceId/rotations',
                 {
+                    groupWrite: true,
                     params: areaParams,
                     body: t.Object({ ...rosterCallFields, rotation: rotationSchema }),
                 },
-                async ({ request, sessionToken, params, body }) =>
-                    groups.rotateArea(
-                        (await groupWriter(request, sessionToken)).id,
-                        params.id,
-                        params.workspaceId,
-                        body,
-                    ),
+                async ({ user, params, body }) =>
+                    groups.rotateArea(user.id, params.id, params.workspaceId, body),
             ),
     );
