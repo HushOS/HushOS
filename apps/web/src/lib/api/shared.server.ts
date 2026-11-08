@@ -40,6 +40,9 @@ export function errorStatus(value: number): ErrorCode {
     return (ERROR_CODES as readonly number[]).includes(value) ? (value as ErrorCode) : 500;
 }
 
+/* Methods that change nothing: every other one is a write. */
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
 export const requestContext = new Elysia({ name: 'hushos-api-context' })
     .derive(({ request }) => ({
         log: useLogger(),
@@ -238,18 +241,6 @@ export function requestCountry(request: Request) {
     return header ? request.headers.get(header) : null;
 }
 
-export async function billingUser(sessionToken: string | null) {
-    const user = await auth.getSessionUser(sessionToken);
-    if (!user) throw new auth.AuthError('Sign in to manage billing.', 401);
-    return user;
-}
-
-/* Browser-originated billing changes carry the app's Origin, like auth mutations. */
-export function billingMutation(request: Request, sessionToken: string | null) {
-    guardAuthMutation(request);
-    return billingUser(sessionToken);
-}
-
 /*
  * Every Drive request names its client; one below the operator's minimum for
  * that client is refused with 426 and told how to update, before any work.
@@ -274,18 +265,6 @@ export function requireClient(
             check.status,
         );
     return check.client;
-}
-
-export async function driveUser(request: Request, sessionToken: string | null) {
-    requireClient(request);
-    const user = await auth.getSessionUser(sessionToken);
-    if (!user) throw new auth.AuthError('Sign in to open Drive.', 401);
-    return user;
-}
-/* Drive writes carry the app's Origin like every other browser-originated mutation. */
-export function driveMutation(request: Request, sessionToken: string | null) {
-    guardAuthMutation(request);
-    return driveUser(request, sessionToken);
 }
 
 export const uuidSchema = t.String({
@@ -676,14 +655,6 @@ export function groupsGate() {
         throw new groups.GroupError('unsupported', 'This server does not offer groups yet.', 501);
 }
 
-/* Every group route: a named client and a session (the edge, group-requests.ts, checked both first). */
-export async function groupUser(request: Request, sessionToken: string | null) {
-    requireClient(request);
-    const user = await auth.getSessionUser(sessionToken);
-    if (!user) throw new auth.AuthError('Sign in to open your groups.', 401);
-    return user;
-}
-
 /*
  * The routes that let people in, change roles or seal family keys
  * (docs/optional-verification.md 7.3): as groupUser, but a client below the
@@ -696,16 +667,70 @@ export const groupWriteFloor = groupWriteMinimums(
     clientMinimums,
     parseMinimums(storageEnv.GROUP_WRITE_CLIENT_MINIMUMS),
 );
-export async function groupWriter(request: Request, sessionToken: string | null) {
-    const client = requireClient(request, groupWriteFloor);
-    if (!followsGroupWrites(client.name, request.headers.get(GROUP_WRITE_HEADER)))
-        throw new drive.DriveError(
-            'unsupported',
-            'This version of HushOS is out of date. Reload the page to update.',
-            426,
-        );
-    return groupUser(request, sessionToken);
-}
+
+/* What a signed-out request to each feature is told. */
+const SIGN_IN = {
+    drive: 'Sign in to open Drive.',
+    billing: 'Sign in to manage billing.',
+    groups: 'Sign in to open your groups.',
+} as const;
+
+/*
+ * Each route's checks, declared once on its feature's guard (Elysia macros), not called in every
+ * handler. Listed in a guard in the order they run: a route can't be reached without them, and a
+ * handler gets what they found (`user`, `operator`, `client`) from its context.
+ *
+ * - groups: the server offers groups (GROUPS_ENABLED), or 501.
+ * - mutation: a write (POST, PUT, PATCH, DELETE) carries this app's Origin and JSON, or 403/400.
+ * - client: a named client at or above the server's minimums, or 426.
+ * - groupWrite: a client at or above the family-change floor (docs/optional-verification.md 7.3),
+ *   or 426, before anything is read or stored.
+ * - session: a signed-in account, as `user`, or 401 in the feature's words.
+ * - admin: an operator, as `operator`: 401 signed out, 404 to anyone else.
+ */
+export const guards = new Elysia({ name: 'hushos-api-guards' }).use(requestContext).macro({
+    groups: {
+        derive: function groupsOffered() {
+            groupsGate();
+            return {};
+        },
+    },
+    mutation: {
+        derive: function sameOrigin({ request }) {
+            if (!SAFE_METHODS.has(request.method)) guardAuthMutation(request);
+            return {};
+        },
+    },
+    client: {
+        derive: function namedClient({ request }) {
+            return { client: requireClient(request) };
+        },
+    },
+    groupWrite: {
+        derive: function familyChangeFloor({ request }) {
+            const client = requireClient(request, groupWriteFloor);
+            if (!followsGroupWrites(client.name, request.headers.get(GROUP_WRITE_HEADER)))
+                throw new drive.DriveError(
+                    'unsupported',
+                    'This version of HushOS is out of date. Reload the page to update.',
+                    426,
+                );
+            return {};
+        },
+    },
+    session: (area: keyof typeof SIGN_IN) => ({
+        derive: async function signedIn({ sessionToken }) {
+            const user = await auth.getSessionUser(sessionToken);
+            if (!user) throw new auth.AuthError(SIGN_IN[area], 401);
+            return { user };
+        },
+    }),
+    admin: {
+        derive: async function operatorOnly({ sessionToken }) {
+            return { operator: await auth.requireAdmin(sessionToken) };
+        },
+    },
+});
 
 /* The second half of the password exchange removing devices asks for (POST /auth/devices/reauth). */
 export const deviceRemovalSchema = t.Object({

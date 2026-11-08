@@ -279,7 +279,9 @@ The workspace turns on:
 - Web pages and layouts live in `apps/web/src/routes/` as directory routes (`app/route.tsx`, `app/index.tsx`).
 - Reusable UI lives in `src/components/`; shared helpers in `src/lib/`.
 - Elysia handlers live in one Elysia instance per feature in `apps/web/src/lib/api/` (`auth`, `billing`, `drive`, `admin`, `groups`, `system`). Shared context, schemas and helpers are in `api/shared.server.ts`.
-- `apps/web/src/lib/api.server.ts` composes them into one app, and `src/routes/api/$.ts` hands `/api` requests to it. A new route goes in its feature's file.
+- `apps/web/src/lib/api.server.ts` composes them into one app, and `src/routes/api/$.ts` hands `/api` requests to it. A new route goes in its feature's file, inside that feature's `.guard(...)`.
+- The guards are Elysia macros in `api/shared.server.ts`: `mutation` (a write carries this app's Origin and JSON), `client` (a named client at the minimums), `groupWrite` (the family-change floor), `session` (a signed-in `user`) and `admin` (an `operator`). A handler takes `user` or `operator` from its context, never from a helper it calls.
+- A route outside every guard is public: add it to `PUBLIC` in `api/guards.test.ts` with why. That test fails for any other route that doesn't run its feature's checks.
 - Extract more modules when reuse or complexity calls for it.
 - `routeTree.gen.ts` is checked in. The dev server and the build regenerate it, and CI fails when the committed copy is stale.
 

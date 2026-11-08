@@ -1,21 +1,14 @@
+// @vitest-environment node
 import { Elysia, t } from 'elysia';
 import { describe, expect, test } from 'vitest';
-// The source, not the module: importing the handlers needs a whole server environment.
+import { loadApi, type ApiRoute } from '@/test/api-app';
 import { intentSchema } from './signup-intent';
-// The API's source: the app in api.server.ts and its feature instances in api/.
-const source = Object.values(
-    import.meta.glob<string>(['./api.server.ts', './api/*.server.ts'], {
-        query: '?raw',
-        import: 'default',
-        eager: true,
-    }),
-).join('\n');
 
 /*
  * The intent sign-up sends with its email (`/auth/register/email`), through Elysia as the server
  * mounts it: a field the schema doesn't name is dropped before the handler sees it, so the
  * currency a family tier was shown in has to be named, or its checkout falls back to the
- * visitor's locale. The server's route is held to this schema by its source.
+ * visitor's locale. The server's route is held to this schema by its route table.
  */
 function registerEmail() {
     const seen: unknown[] = [];
@@ -58,11 +51,12 @@ describe('the sign-up intent at the HTTP boundary', () => {
         }
     });
 
-    test('is the schema the server’s register route takes', () => {
-        expect(source).toMatch(/import \{ intentSchema \} from '@\/lib\/signup-intent';/);
-        expect(source).toMatch(
-            /'\/auth\/register\/email',\s*\{\s*body: t\.Object\(\{\s*email: emailSchema,\s*intent: t\.Optional\(intentSchema\),/,
+    test('is the schema the server’s register route takes', async () => {
+        const routes = (await loadApi()).routes as unknown as ApiRoute[];
+        const route = routes.find(
+            (r) => r.method === 'POST' && r.path === '/api/auth/register/email',
         );
-        expect(source).not.toMatch(/const intentSchema =/);
+        const body = route?.hooks?.body as { properties?: Record<string, unknown> } | undefined;
+        expect(JSON.stringify(body?.properties?.intent)).toBe(JSON.stringify(intentSchema));
     });
 });
