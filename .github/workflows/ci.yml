@@ -181,12 +181,30 @@ jobs:
     # from the root, so on stable like fuzz:diff, not the nightly its fuzz targets pin). Stable,
     # with both builds cached, so a warm run is a minute or two. Only when the core, its
     # bindings, or the TypeScript twin its fixtures come from changed.
+    # The core, and the push relay (crates/hushos-push; docs/push-relay-plan.md), whose store is
+    # tested against a Postgres of its own: the relay's database shares nothing with the app's.
     rust:
         name: Rust core tests
         needs: changes
         if: needs.changes.outputs.rust == 'true'
         runs-on: ubuntu-latest
         timeout-minutes: 20
+        services:
+            postgres:
+                image: postgres:18-alpine
+                env:
+                    POSTGRES_USER: hushos_push
+                    POSTGRES_PASSWORD: ci
+                    POSTGRES_DB: hushos_push
+                ports:
+                    - 5432:5432
+                options: >-
+                    --health-cmd "pg_isready -U hushos_push -d hushos_push"
+                    --health-interval 5s
+                    --health-timeout 5s
+                    --health-retries 10
+        env:
+            PUSH_TEST_DATABASE_URL: postgresql://hushos_push:ci@127.0.0.1:5432/hushos_push
         steps:
             - uses: actions/checkout@v7
             - uses: Swatinem/rust-cache@v2
@@ -196,6 +214,53 @@ jobs:
                       crates/hushos-core/fuzz -> target
             - run: cargo test -p hushos-core --locked
             - run: cargo test --manifest-path crates/hushos-core/fuzz/Cargo.toml --lib --locked
+            - run: cargo test -p hushos-push --locked
+            - run: cargo fmt -p hushos-push --check
+            - run: cargo clippy -p hushos-push --all-targets --locked -- -D warnings
+
+    # The relay's image, on its own: a relay change never waits on the web suites, and a web
+    # change never rebuilds the relay. Pull requests that touch it build it without publishing;
+    # main publishes `sha-<commit>`, which the owner deploys by hand until the deploy job lands
+    # (docs/push-relay-plan.md, "Deploying"). Nothing here moves its `latest`.
+    push-image:
+        name: Image push relay
+        needs: [changes, rust]
+        if: needs.changes.outputs.rust == 'true' && needs.rust.result == 'success'
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+        permissions:
+            contents: read
+            packages: write
+        steps:
+            - uses: actions/checkout@v7
+            # ghcr.io/hushos/hushos-push: names are lowercase, beside the app's hushos-web.
+            - name: Set image name
+              id: image
+              run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}-push" >> "$GITHUB_OUTPUT"
+            - name: Set up Docker Buildx
+              uses: docker/setup-buildx-action@v4
+            - name: Log in to GHCR
+              if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+              uses: docker/login-action@v4
+              with:
+                  registry: ghcr.io
+                  username: ${{ github.actor }}
+                  password: ${{ secrets.GITHUB_TOKEN }}
+            - name: Build (and publish on main)
+              uses: docker/build-push-action@v7
+              with:
+                  context: .
+                  file: crates/hushos-push/Dockerfile
+                  target: relay
+                  platforms: linux/amd64
+                  push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+                  cache-from: type=gha,scope=image-push
+                  cache-to: ${{ github.event_name == 'push' && 'type=gha,mode=max,scope=image-push' || '' }}
+                  tags: ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
+                  labels: |
+                      org.opencontainers.image.source=https://github.com/${{ github.repository }}
+                      org.opencontainers.image.revision=${{ github.sha }}
+                      org.opencontainers.image.licenses=AGPL-3.0-only
 
     # Chromium on Linux, against the production build from the job above, run by `bun run
     # start` (web and jobs worker) as `bun run dev` was before: no first-visit compile, and the
@@ -643,7 +708,7 @@ jobs:
     ci-ok:
         name: CI ok
         if: always()
-        needs: [changes, check, build, rust, e2e, e2e-families, images]
+        needs: [changes, check, build, rust, push-image, e2e, e2e-families, images]
         runs-on: ubuntu-latest
         steps:
             - name: Every job that ran passed

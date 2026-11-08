@@ -7,3 +7,7 @@ opt-level = "s"
 lto = true
 codegen-units = 1
 panic = "abort"
+
+# The workspace profile is tuned for the mobile core; the relay is a server, so it optimises for speed.
+[profile.release.package.hushos-push]
+opt-level = 3
