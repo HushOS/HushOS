@@ -1,0 +1,27 @@
+apps/web/src/lib/api/billing-responses.server.ts
+  s_566b8e0c4467a4::t_4a6d6ee08af06c 158-159,162-170
+apps/web/src/lib/api/billing-responses.test.ts
+  s_566b8e0c4467a4::t_3de9757b1aa422 307-308,499-501,536-541,543-554,556-563,580-596
+apps/web/src/lib/family-billing.test.ts
+  s_566b8e0c4467a4::t_17e0fc9a5bd839 641-645,679-682,687
+packages/billing/src/api.ts
+  s_566b8e0c4467a4::t_5a18c2d2c68a66 76-84
+packages/billing/src/groups.ts
+  s_566b8e0c4467a4::t_e0807b9b11fa5c 3622-3625
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "99665fda5ed9ce434d27e7c55b355bb30ac0a09a",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
