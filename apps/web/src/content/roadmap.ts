@@ -50,7 +50,7 @@ export type RoadmapSection = {
 };
 
 /* The day this file last changed what the page says (YYYY-MM-DD). */
-export const updated = '2026-11-08';
+export const updated = '2026-11-09';
 
 export const sections: RoadmapSection[] = [
     {
@@ -58,6 +58,15 @@ export const sections: RoadmapSection[] = [
         title: 'Shipped',
         summary: 'Live at hushos.com, and in a self-hosted copy that runs the latest code.',
         items: [
+            {
+                id: 'browser-notifications',
+                status: 'shipped',
+                month: 'November 2026',
+                area: 'Platform',
+                title: 'Notifications in your browser',
+                body: 'New sign-ins, removed devices, shares and family invitations, while HushOS is closed. A notification carries only a random event ID, encrypted to your browser; HushOS writes the words on your computer.',
+                links: [{ kind: 'blog', slug: 'notifications', label: 'How they stay private' }],
+            },
             {
                 id: 'app-sign-up',
                 status: 'shipped',
@@ -214,6 +223,13 @@ export const sections: RoadmapSection[] = [
                 title: 'HushOS for companies',
                 body: 'Folders that belong to the company, admins who add and remove people, with policies and an audit log, your own domain and single sign-on, and a choice of where files are kept, including your own storage bucket. Admins of a company plan will be able to open the company’s folders, through a key the company holds.',
                 links: [{ kind: 'page', to: '/teams', label: 'HushOS for teams today' }],
+            },
+            {
+                id: 'phone-notifications',
+                status: 'now',
+                area: 'Apps',
+                title: 'Notifications on your phone',
+                body: 'The same notifications in the iPhone and Android apps, through push.hushos.com, which hands Apple and Google a random event ID and nothing about what happened.',
             },
             {
                 id: 'desktop-apps',
