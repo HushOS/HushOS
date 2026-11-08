@@ -1,0 +1,23 @@
+docs/drive-design.md
+  s_566b8e0c4467a4::t_96e210f05796fa 1455-1456,1458-1460
+packages/db/src/drive.rotations.test.ts
+  s_566b8e0c4467a4::t_09ef5553286cb3 574-666
+packages/db/src/rotations.ts
+  s_566b8e0c4467a4::t_0ce3bd1379e618 343-351,362-363,367,369,381-382
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cc5aad08b35abe597281c63665b08411240bd6fc",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
