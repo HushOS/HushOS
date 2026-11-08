@@ -58,8 +58,7 @@
                 an account, such as a new sign-in or a file shared with you. Apple and Google
                 deliver notifications to an app only from its publisher, so HushOS servers with
                 notifications turned on, hushos.com or one you run yourself, send their wake-ups for
-                phones through here by default. Phone notifications are still being built and aren't
-                switched on yet.
+                phones through here by default.
             </p>
 
             <h2>What a wake-up carries</h2>
@@ -100,10 +99,11 @@
 
             <h2>Running your own HushOS server?</h2>
             <p>
-                With notifications turned on (<code>NOTIFICATIONS_ENABLED</code>), your server sends
-                wake-ups here for phones signed in to it. To send none, set
-                <code>PUSH_RELAY_URL</code> to an empty value: the apps will then show notifications
-                only while they are open. Browsers don't use this service: your server sends to the
+                You can use this service too, with nothing to sign up for. With notifications turned
+                on (<code>NOTIFICATIONS_ENABLED</code>), your server sends wake-ups here for the
+                HushOS apps signed in to it, and each server gets its own limits. To send none, set
+                <code>PUSH_RELAY_URL</code> to an empty value: the apps then show notifications only
+                while they are open. Browsers don't use this service: your server sends to the
                 browser's own push service.
             </p>
 
