@@ -1,0 +1,47 @@
+packages/billing/scripts/experiments/e3-card.ts
+  s_c56e31c87cddde::t_04224ad7ada8cb 21
+packages/billing/scripts/experiments/card.ts
+  s_c56e31c87cddde::t_9255e504ee5cc3 9-16,33-40,62-69
+docs/archive/polar-group-billing-spike.md
+  s_566b8e0c4467a4::t_92eab60218e727 678-712,775-780,784-800,812,814-817,832-835,837,846-849,851,854-856,881-888
+packages/billing/scripts/experiments/after-handover-read.ts
+  s_566b8e0c4467a4::t_d473d3a5936483 1-63
+packages/billing/scripts/experiments/e3-0341-e6-handover.ts
+  s_566b8e0c4467a4::t_966d604659d410 1-141
+packages/billing/scripts/experiments/e3-0341b-e6.ts
+  s_566b8e0c4467a4::t_a17aedd7f3d520 1-118
+packages/billing/scripts/experiments/fast-setup.ts
+  s_566b8e0c4467a4::t_97b06d48891969 1-123
+packages/billing/scripts/experiments/portal-4242.ts
+  s_566b8e0c4467a4::t_c9d51d88aa2f76 1-18
+packages/billing/scripts/experiments/t1-followup.ts
+  s_566b8e0c4467a4::t_0f8c7fd305c088 1-54
+packages/billing/scripts/experiments/t1-pending-coexist.ts
+  s_566b8e0c4467a4::t_275e328f58ee09 1-84
+packages/billing/scripts/experiments/t2-tier-upgrade.ts
+  s_566b8e0c4467a4::t_dd9066aaf9ffa5 1-85
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "60b397b970b433ea2e70883934e7514bca6f4d7c",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
