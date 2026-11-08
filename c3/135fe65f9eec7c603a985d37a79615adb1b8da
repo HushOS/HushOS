@@ -1,0 +1,28 @@
+apps/web/src/lib/api/auth-responses.test.ts
+  s_566b8e0c4467a4::t_fc28d5ff31076a 1-373
+  s_566b8e0c4467a4::t_2511c6f6ebfc0f 374
+apps/web/src/lib/api/auth-responses.server.ts
+  s_566b8e0c4467a4::t_dc7565681026d4 1-184
+apps/web/src/lib/api/auth.server.ts
+  s_566b8e0c4467a4::t_f1deab733430b2 30-41,46-48,88-94,167-173,268-273,279-281,327-334,340,357-359,387-389,401
+apps/web/src/lib/api/response-errors.test.ts
+  s_566b8e0c4467a4::t_25a865e5760942 1-36
+apps/web/src/lib/api/shared.server.ts
+  s_566b8e0c4467a4::t_f02013f9c74af2 55-61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c3135fe65f9eec7c603a985d37a79615adb1b8da",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
