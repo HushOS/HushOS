@@ -24,6 +24,7 @@ How the push design in `docs/devices-design.md` 5 and 7 gets built, in four pull
     - `GET /healthz`.
 
     Bytes are base64url without padding.
+
 - **What a push carries.** The event id and a tag, which is `base64url(SHA-256("hushos-push tag" ‖ 0x00 ‖ handle)[0..16])`. The tag tells an app signed in to several accounts which server to fetch from, without giving Apple or Google the handle itself. On APNs the push is an alert with `mutable-content` and the text "New activity in HushOS", with no sound. On FCM it is a high-priority data message with no `notification` block.
 - **Storage.** One table, `registrations`, with four columns:
     - `SHA-256(handle)`;
@@ -32,6 +33,7 @@ How the push design in `docs/devices-design.md` 5 and 7 gets built, in four pull
     - `SHA-256(deleteSecret)`.
 
     There are no timestamps and no addresses. A leaked database gives no working handles. A token Apple or Google report dead is deleted, along with every handle that uses it.
+
 - **A ping reveals nothing.** The relay answers before it looks the handle up, and the push goes out in the background. A known handle, an unknown one and a dead one get the same answer at the same speed. A spent budget refuses all three alike.
 - **Limits.** These are token buckets, so a burst of the full budget is allowed, then one ping per `3600 / budget` seconds.
     - Per handle: `security` 20 an hour and `other` 60 an hour, in separate buckets.
@@ -51,6 +53,7 @@ How the push design in `docs/devices-design.md` 5 and 7 gets built, in four pull
     - a stop grace of 15 seconds.
 
     It gets its own resource and its own webhook, not a place in the web/worker webhook. A relay deploy never waits on the app's suites, and an app deploy never restarts the relay.
+
 - **Database.** `hushos_push` on the existing Postgres host, owned by its own role `hushos_push`, with no grants on `hushos` and no `hushos_*` role on it. It connects directly on 5432, not through pgbouncer, and keeps a small pool. Migrations run at start. It is in the same backups.
 - **Deploying (a follow-up CI change, once the resource exists).** On a push to `main` that changes `crates/hushos-push/**` or `Cargo.lock`:
     1. a `push-deploy` job, after the relay's tests and image, moves `hushos-push:latest` forward only (the same rule as the app's `latest`);
@@ -58,6 +61,7 @@ How the push design in `docs/devices-design.md` 5 and 7 gets built, in four pull
     3. it waits for `https://push.hushos.com/healthz`.
 
     It is gated on the repository variable `PUSH_DEPLOY_ENABLED`. Until then, the owner deploys a `sha-` tag by hand in Coolify.
+
 - **Self-hosters** never run it. Their servers ping `push.hushos.com`.
 
 ## Owner checklist

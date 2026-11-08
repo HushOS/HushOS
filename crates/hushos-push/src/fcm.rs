@@ -77,7 +77,8 @@ impl FcmPusher {
             "exp": now + 3600,
         });
         let assertion = jsonwebtoken::encode(&Header::new(Algorithm::RS256), &claims, &self.key).ok()?;
-        let body = format!("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion={assertion}");
+        let body =
+            format!("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion={assertion}");
         let response = self
             .client
             .post(&self.token_uri)
@@ -130,7 +131,8 @@ impl Pusher for FcmPusher {
     fn send<'a>(&'a self, token: &'a str, push: &'a Push) -> BoxFuture<'a, Outcome> {
         Box::pin(async move {
             let Some(access) = self.access_token().await else { return Outcome::Failed };
-            let response = self.client.post(&self.send_url).bearer_auth(access).json(&message(token, push)).send().await;
+            let response =
+                self.client.post(&self.send_url).bearer_auth(access).json(&message(token, push)).send().await;
             let Ok(response) = response else { return Outcome::Failed };
             let status = response.status().as_u16();
             if status == 401 {

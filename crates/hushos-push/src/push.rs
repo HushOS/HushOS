@@ -53,7 +53,7 @@ impl Platform {
         match self {
             Platform::Apns | Platform::ApnsSandbox => {
                 let ok = (64..=200).contains(&token.len())
-                    && token.len() % 2 == 0
+                    && token.len().is_multiple_of(2)
                     && token.bytes().all(|b| b.is_ascii_hexdigit());
                 ok.then(|| token.to_ascii_lowercase())
             }

@@ -144,7 +144,13 @@ pub fn relay(
 ) -> (Arc<Relay>, Arc<Deliverer>, mpsc::Receiver<Job>) {
     let (queue, jobs) = mpsc::channel(QUEUE);
     let deliverer = Arc::new(Deliverer { store, pushers, counters: Counters::default() });
-    let relay = Relay { deliverer: deliverer.clone(), limiter: Limiter::new(max_limit_entries), clock, settings, queue };
+    let relay = Relay {
+        deliverer: deliverer.clone(),
+        limiter: Limiter::new(max_limit_entries),
+        clock,
+        settings,
+        queue,
+    };
     (Arc::new(relay), deliverer, jobs)
 }
 
@@ -267,7 +273,8 @@ struct UnregisterBody {
 /// answer, so a server holding a handle cannot learn whether the device still has it.
 async fn unregister(State(relay): State<Arc<Relay>>, Path(handle): Path<String>, body: Bytes) -> Response {
     let Ok(body) = serde_json::from_slice::<UnregisterBody>(&body) else { return bad_request() };
-    let (Some(handle), Some(secret)) = (handle::decode32(&handle), handle::decode32(&body.delete_secret)) else {
+    let (Some(handle), Some(secret)) = (handle::decode32(&handle), handle::decode32(&body.delete_secret))
+    else {
         return bad_request();
     };
     match relay.deliverer.store.delete(&handle::handle_key(&handle), &handle::secret_hash(&secret)).await {

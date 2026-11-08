@@ -34,7 +34,8 @@ async fn run() -> Result<(), String> {
     let mut pushers = Pushers::default();
     if let Some(apns) = config.apns {
         let auth = Arc::new(ApnsAuth::new(&apns.key, apns.key_id, apns.team_id)?);
-        pushers.apns = Some(Arc::new(ApnsPusher::new(apns::PRODUCTION_HOST, apns.topic.clone(), auth.clone())?));
+        pushers.apns =
+            Some(Arc::new(ApnsPusher::new(apns::PRODUCTION_HOST, apns.topic.clone(), auth.clone())?));
         pushers.apns_sandbox = Some(Arc::new(ApnsPusher::new(apns::SANDBOX_HOST, apns.topic, auth)?));
     }
     if let Some(account) = config.fcm_service_account {
@@ -45,8 +46,13 @@ async fn run() -> Result<(), String> {
         .filter_map(|(name, on)| on.then_some(name))
         .collect();
 
-    let (relay, deliverer, jobs) =
-        api::relay(Arc::new(store), pushers, Arc::new(SystemClock::new()), config.settings, api::MAX_LIMIT_ENTRIES);
+    let (relay, deliverer, jobs) = api::relay(
+        Arc::new(store),
+        pushers,
+        Arc::new(SystemClock::new()),
+        config.settings,
+        api::MAX_LIMIT_ENTRIES,
+    );
     let deliveries = tokio::spawn(api::run_deliveries(deliverer.clone(), jobs));
     let counts = deliverer.clone();
     tokio::spawn(async move {
@@ -61,7 +67,11 @@ async fn run() -> Result<(), String> {
     let listener = tokio::net::TcpListener::bind(config.listen)
         .await
         .map_err(|error| format!("listen on {}: {error}", config.listen))?;
-    let platforms = if platforms.is_empty() { "nothing (no APNs or FCM credentials)".to_owned() } else { platforms.join(", ") };
+    let platforms = if platforms.is_empty() {
+        "nothing (no APNs or FCM credentials)".to_owned()
+    } else {
+        platforms.join(", ")
+    };
     eprintln!("hushos-push: listening on {}, sending to {platforms}", config.listen);
     axum::serve(listener, api::router(relay).into_make_service_with_connect_info::<SocketAddr>())
         .with_graceful_shutdown(stopped())

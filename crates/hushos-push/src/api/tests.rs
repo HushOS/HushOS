@@ -64,8 +64,16 @@ impl Harness {
         Harness { router: router(relay), deliverer, jobs, apns, fcm, clock }
     }
 
-    async fn call(&self, method: Method, uri: &str, body: Value, from: &str, headers: &[(&str, &str)]) -> Answer {
-        let mut request = Request::builder().method(method).uri(uri).header("content-type", "application/json");
+    async fn call(
+        &self,
+        method: Method,
+        uri: &str,
+        body: Value,
+        from: &str,
+        headers: &[(&str, &str)],
+    ) -> Answer {
+        let mut request =
+            Request::builder().method(method).uri(uri).header("content-type", "application/json");
         for (name, value) in headers {
             request = request.header(*name, *value);
         }
@@ -74,7 +82,11 @@ impl Harness {
         request.extensions_mut().insert(ConnectInfo(socket));
         let response = self.router.clone().oneshot(request).await.unwrap();
         let (parts, body) = response.into_parts();
-        Answer { status: parts.status, headers: parts.headers, body: body.collect().await.unwrap().to_bytes() }
+        Answer {
+            status: parts.status,
+            headers: parts.headers,
+            body: body.collect().await.unwrap().to_bytes(),
+        }
     }
 
     async fn register(&self, platform: &str, token: &str) -> (String, String) {
@@ -85,12 +97,19 @@ impl Harness {
     }
 
     async fn register_from(&self, platform: &str, token: &str, from: &str) -> Answer {
-        self.call(Method::POST, "/v1/register", json!({ "platform": platform, "token": token }), from, &[]).await
+        self.call(Method::POST, "/v1/register", json!({ "platform": platform, "token": token }), from, &[])
+            .await
     }
 
     async fn ping_from(&self, handle: &str, class: &str, from: &str, headers: &[(&str, &str)]) -> Answer {
-        self.call(Method::POST, "/v1/ping", json!({ "handle": handle, "id": EVENT, "class": class }), from, headers)
-            .await
+        self.call(
+            Method::POST,
+            "/v1/ping",
+            json!({ "handle": handle, "id": EVENT, "class": class }),
+            from,
+            headers,
+        )
+        .await
     }
 
     async fn ping(&self, handle: &str, class: &str) -> StatusCode {
@@ -98,8 +117,14 @@ impl Harness {
     }
 
     async fn unregister(&self, handle: &str, secret: &str) -> Answer {
-        self.call(Method::DELETE, &format!("/v1/register/{handle}"), json!({ "deleteSecret": secret }), SERVER, &[])
-            .await
+        self.call(
+            Method::DELETE,
+            &format!("/v1/register/{handle}"),
+            json!({ "deleteSecret": secret }),
+            SERVER,
+            &[],
+        )
+        .await
     }
 
     /// Delivers every queued ping, as the background loop would.
@@ -250,7 +275,8 @@ async fn the_address_comes_from_the_last_value_of_the_trusted_proxy_header() {
     let second = harness.ping_from(&b, "security", proxy, &[("x-forwarded-for", "203.0.113.2")]).await;
     assert_eq!((first.status, second.status), (StatusCode::ACCEPTED, StatusCode::ACCEPTED));
     // A server cannot pick a fresh address by writing its own first value.
-    let spoofed = harness.ping_from(&b, "security", proxy, &[("x-forwarded-for", "192.0.2.77, 203.0.113.1")]).await;
+    let spoofed =
+        harness.ping_from(&b, "security", proxy, &[("x-forwarded-for", "192.0.2.77, 203.0.113.1")]).await;
     assert_eq!(spoofed.status, StatusCode::TOO_MANY_REQUESTS);
 }
 
@@ -260,7 +286,10 @@ async fn registrations_are_limited_per_address() {
     for n in 0..30 {
         assert_eq!(harness.register_from("apns", &apns_token(n), "192.0.2.50").await.status, StatusCode::OK);
     }
-    assert_eq!(harness.register_from("apns", &apns_token(31), "192.0.2.50").await.status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        harness.register_from("apns", &apns_token(31), "192.0.2.50").await.status,
+        StatusCode::TOO_MANY_REQUESTS
+    );
     assert_eq!(harness.register_from("apns", &apns_token(31), "192.0.2.51").await.status, StatusCode::OK);
 }
 
@@ -299,7 +328,10 @@ async fn deleting_needs_the_handles_own_secret() {
     let wrong = harness.unregister(&handle, &other_secret).await;
     assert_eq!(wrong.status, StatusCode::NOT_FOUND);
     let unknown = harness.unregister(&handle::encode(&handle::random32()), &secret).await;
-    assert_eq!((wrong.status, without_date(&wrong.headers), &wrong.body), (unknown.status, without_date(&unknown.headers), &unknown.body));
+    assert_eq!(
+        (wrong.status, without_date(&wrong.headers), &wrong.body),
+        (unknown.status, without_date(&unknown.headers), &unknown.body)
+    );
     // The handle itself is not its secret.
     assert_eq!(harness.unregister(&handle, &handle).await.status, StatusCode::NOT_FOUND);
 
@@ -343,7 +375,10 @@ async fn tokens_must_look_like_their_platforms() {
         ("fcm", "has spaces and is long enough to be a token otherwise"),
         ("webpush", "anything"),
     ] {
-        assert_eq!(harness.register_from(platform, token, "192.0.2.60").await.status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            harness.register_from(platform, token, "192.0.2.60").await.status,
+            StatusCode::BAD_REQUEST
+        );
     }
     // Sandbox tokens are refused while the relay has no sandbox sender.
     let answer = harness.register_from("apns-sandbox", &apns_token(1), "192.0.2.60").await;
@@ -379,7 +414,10 @@ mod postgres {
             return None;
         };
         let admin = PgPool::connect(&url).await.unwrap();
-        let name = format!("push_test_{}", &handle::encode(&handle::random32())[..12].to_ascii_lowercase().replace(['-', '_'], "x"));
+        let name = format!(
+            "push_test_{}",
+            handle::encode(&handle::random32())[..12].to_ascii_lowercase().replace(['-', '_'], "x")
+        );
         sqlx::query(&format!("create schema {name}")).execute(&admin).await.unwrap();
         let options = PgConnectOptions::from_str(&url).unwrap().options([("search_path", name.as_str())]);
         let store = PgStore::connect_with(options).await.unwrap();
@@ -401,7 +439,10 @@ mod postgres {
         let json = answer.json();
         let handle = json["handle"].as_str().unwrap().to_owned();
         let secret = json["deleteSecret"].as_str().unwrap().to_owned();
-        assert_eq!(harness.ping_from(&handle, "security", "203.0.113.78", &[]).await.status, StatusCode::ACCEPTED);
+        assert_eq!(
+            harness.ping_from(&handle, "security", "203.0.113.78", &[]).await.status,
+            StatusCode::ACCEPTED
+        );
         harness.drain().await;
         assert_eq!(harness.fcm.sent().len(), 1);
 

@@ -60,16 +60,24 @@ fn budget(env: Lookup, name: &str, default: u32) -> Result<Budget, String> {
 impl Config {
     pub fn from_env(env: Lookup) -> Result<Config, String> {
         let listen = env("PUSH_LISTEN").unwrap_or_else(|| "0.0.0.0:8080".to_owned());
-        let listen = listen.parse().map_err(|_| format!("PUSH_LISTEN {listen:?} is not an address and port"))?;
-        let database_url = text(env, "DATABASE_URL")?.ok_or("DATABASE_URL (or DATABASE_URL_FILE) is required")?;
+        let listen =
+            listen.parse().map_err(|_| format!("PUSH_LISTEN {listen:?} is not an address and port"))?;
+        let database_url =
+            text(env, "DATABASE_URL")?.ok_or("DATABASE_URL (or DATABASE_URL_FILE) is required")?;
 
         let apns = match value(env, "APNS_KEY")? {
             None => None,
             Some(key) => Some(ApnsConfig {
                 key,
-                key_id: env("APNS_KEY_ID").filter(|v| !v.is_empty()).ok_or("APNS_KEY_ID is required with APNS_KEY")?,
-                team_id: env("APNS_TEAM_ID").filter(|v| !v.is_empty()).ok_or("APNS_TEAM_ID is required with APNS_KEY")?,
-                topic: env("APNS_TOPIC").filter(|v| !v.is_empty()).unwrap_or_else(|| "com.hushos.app".to_owned()),
+                key_id: env("APNS_KEY_ID")
+                    .filter(|v| !v.is_empty())
+                    .ok_or("APNS_KEY_ID is required with APNS_KEY")?,
+                team_id: env("APNS_TEAM_ID")
+                    .filter(|v| !v.is_empty())
+                    .ok_or("APNS_TEAM_ID is required with APNS_KEY")?,
+                topic: env("APNS_TOPIC")
+                    .filter(|v| !v.is_empty())
+                    .unwrap_or_else(|| "com.hushos.app".to_owned()),
             }),
         };
         let fcm_service_account = value(env, "FCM_SERVICE_ACCOUNT")?;
@@ -86,7 +94,10 @@ impl Config {
             .split(',')
             .map(str::trim)
             .filter(|item| !item.is_empty())
-            .map(|item| item.parse::<IpAddr>().map_err(|_| format!("PUSH_TRUSTED_SENDERS: {item:?} is not an address")))
+            .map(|item| {
+                item.parse::<IpAddr>()
+                    .map_err(|_| format!("PUSH_TRUSTED_SENDERS: {item:?} is not an address"))
+            })
             .collect::<Result<Vec<_>, _>>()?;
         let settings = Settings {
             trusted_proxy_header,
@@ -105,7 +116,8 @@ mod tests {
     use super::*;
 
     fn config(pairs: &[(&str, &str)]) -> Result<Config, String> {
-        let map: HashMap<String, String> = pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let map: HashMap<String, String> =
+            pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
         Config::from_env(&|name| map.get(name).cloned())
     }
 
@@ -133,7 +145,9 @@ mod tests {
         assert_eq!((ok.settings.address_security, ok.settings.address_other), (Budget(1000), Budget(3000)));
         assert!(config(&[base[0], ("APNS_KEY", "key")]).is_err());
         assert!(config(&[base[0], ("APNS_KEY", "key"), ("APNS_KEY_ID", "ABC123")]).is_err());
-        let apns = config(&[base[0], ("APNS_KEY", "key"), ("APNS_KEY_ID", "ABC123"), ("APNS_TEAM_ID", "TEAM")]).unwrap();
+        let apns =
+            config(&[base[0], ("APNS_KEY", "key"), ("APNS_KEY_ID", "ABC123"), ("APNS_TEAM_ID", "TEAM")])
+                .unwrap();
         assert_eq!(apns.apns.unwrap().topic, "com.hushos.app");
         assert!(config(&[base[0], ("PUSH_ADDRESS_SECURITY_PER_HOUR", "0")]).is_err());
         assert!(config(&[base[0], ("PUSH_TRUSTED_SENDERS", "198.51.100.4, hushos.com")]).is_err());
