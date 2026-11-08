@@ -10,7 +10,7 @@ import {
 import * as signed from '../test/signed';
 import { db } from './client';
 import * as drive from './drive';
-import { driveNodes, workspaces } from './schema';
+import { driveNodes, workspaceKeys, workspaces } from './schema';
 
 /*
  * The tree's rules, exercised against a real database: one root, epochs come
@@ -102,6 +102,16 @@ describe('root and epochs', () => {
     });
 
     test('an epoch the workspace never issued is refused', async () => {
+        // A member, holding the workspace key: an editor through a share is held to a cap instead
+        // (allocateGranteeKeyEpochs), so the counter is not told by what a write accepts.
+        await db.insert(workspaceKeys).values({
+            workspaceId: account.workspaceId,
+            userId: account.userId,
+            keyVersion: 1,
+            wrappingSalt: randomBytes(32),
+            wrappingNonce: randomBytes(24),
+            encryptedKey: randomBytes(48),
+        });
         const root = await node(rootId);
         const result = await signed.createFolders({
             workspaceId: account.workspaceId,

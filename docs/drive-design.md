@@ -62,6 +62,7 @@ The code lives in `packages/drive`, `packages/db/src/drive.ts` and `packages/cry
     - A grantee's listing is cut at the share root.
     - Editors' uploads and epochs are drawn in the owner's workspace.
     - An editor's epochs are always 1 to n (`allocateGranteeKeyEpochs`), with the counter raised to at least n, never the counter itself. It climbs with every node and rotation in the owner's drive, so drawing from it would let an editor count the owner's activity by asking.
+    - A node an editor writes is held to that cap (1 to 10,000, `GRANTEE_EPOCH_MAX`), not to the counter, which is raised to cover it in the same transaction. Held to the counter, which writes are accepted would tell an editor where it stands.
     - An editor's writes come back without the owner's `changeSeq`, as reads do (`viewFor`).
     - A move is refused unless both ends lie in the same share.
     - Revocation is live.

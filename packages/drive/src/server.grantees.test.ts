@@ -369,6 +369,33 @@ describe('a grantee', () => {
     });
 
     /*
+     * Held to the counter, a write would say where it stands: accepted at or below it, refused
+     * above it, and an editor could read it exactly with a few rolled-back probes. An editor's
+     * epoch is held to their own cap instead, whatever the owner's counter is.
+     */
+    test('cannot read the owner’s counter from which epochs a write accepts', async () => {
+        const ws = owner.workspaceId;
+        const counter = (await server.allocateEpochs(owner.userId, ws, 1)).to;
+        expect(counter).toBeLessThan(100);
+        // Just above the owner's counter: an editor's write goes, as any epoch to the cap does.
+        const above = await server.createFolders(guest.userId, ws, [
+            await folderAs(guest, project, counter + 1),
+        ]);
+        expect(above.nodes[0]!.keyEpoch).toBe(counter + 1);
+        // Past the cap it is refused, whatever the counter.
+        const past = await server
+            .createFolders(guest.userId, ws, [await folderAs(guest, project, 10_001)])
+            .catch((error: unknown) => error);
+        expect(past).toMatchObject({ status: 409, code: 'stale' });
+        // A member's write is still held to the counter.
+        const counterNow = (await server.allocateEpochs(owner.userId, ws, 1)).to;
+        const owners = await server
+            .createFolders(owner.userId, ws, [await folderAs(owner, project, counterNow + 1)])
+            .catch((error: unknown) => error);
+        expect(owners).toMatchObject({ status: 409, code: 'stale' });
+    });
+
+    /*
      * A rotation's target is drawn above the counter, so a node an editor made at a low epoch is
      * below it and is re-keyed with the rest when the share is stopped, never left under a key
      * the stopped editor holds.
