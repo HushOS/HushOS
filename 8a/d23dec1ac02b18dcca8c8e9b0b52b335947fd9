@@ -1,0 +1,39 @@
+Cargo.lock
+  s_566b8e0c4467a4::t_806cf2ecb4a56b 200,202,314,316,1161,1417,1419,1561,1563,2457,2459,2775,2891,3080,3082,3241,3243-3252,3308,3310,3320,3322,3331,3333,3341,3343,3348,3354,3356,3363,3365,3617,3658,3713
+crates/hushos-push/Cargo.toml
+  s_566b8e0c4467a4::t_2ee224eee9c08b 17-23,25-33
+crates/hushos-push/src/api.rs
+  s_566b8e0c4467a4::t_5e5ec7a6dcc86c 147-153,276-277
+crates/hushos-push/src/api/tests.rs
+  s_566b8e0c4467a4::t_3c0270706e9f18 67-76,85-89,100-101,105-112,120-127,278-279,289-292,331-334,378-381,417-420,442-445
+crates/hushos-push/src/config.rs
+  s_566b8e0c4467a4::t_a8e1dd6aebc1f5 63-66,72-80,97-100,119-120,148-150
+crates/hushos-push/src/fcm.rs
+  s_566b8e0c4467a4::t_6f8888b3bda33b 80-81,134-135
+crates/hushos-push/src/main.rs
+  s_566b8e0c4467a4::t_d4928eace5c7f9 37-38,49-55,70-74
+crates/hushos-push/src/push.rs
+  s_566b8e0c4467a4::t_2140389568a380 56
+crates/hushos-push/src/store.rs
+  s_566b8e0c4467a4::t_27ed8b8ba38ba5 38-41,51-55,97-100,131-135,176-179,190-192,197-201,257-283
+docs/push-relay-plan.md
+  s_566b8e0c4467a4::t_771060199df4e2 27,36,56,64
+.github/workflows/ci.yml
+  s_566b8e0c4467a4::t_cee0145e6967a7 184-185,192-207,217-263,711
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8ad23dec1ac02b18dcca8c8e9b0b52b335947fd9",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
