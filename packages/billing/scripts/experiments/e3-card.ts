@@ -18,7 +18,7 @@ import { show } from './sandbox';
  */
 const only = process.argv.find((arg) => arg.startsWith('--only='))?.slice('--only='.length);
 
-for (const key of ['monthly0341', 'monthly3184'] as const) {
+for (const key of ['monthly0341', 'monthly3184', 'monthly3220'] as const) {
     if (only && only !== key) continue;
     await once(`e3-${key}`, async () => {
         const since = new Date().toISOString();
