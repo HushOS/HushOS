@@ -29,15 +29,34 @@ import {
 } from '@/lib/api/shared.server';
 import {
     accountSetupResponse,
+    authUserResponse,
+    consentStoredResponse,
+    contactResponse,
     contactSuccessionResponse,
+    deviceResponse,
+    devicesRemovedResponse,
     devicesResponse,
+    emailSentResponse,
     enrollmentResponse,
+    forgottenResponse,
     identityHistoryResponse,
     identityResponse,
+    loginChallengeResponse,
+    loginResponse,
+    profileResponse,
     recoveryBackupResponse,
+    recoveryChallengeResponse,
+    registrationChallengeResponse,
+    securityChallengeResponse,
     sessionResponse,
+    settingsKeyStoredResponse,
     settingsResponse,
+    settingsSavedResponse,
+    setupResponse,
     storageResponse,
+    successionResponse,
+    successResponse,
+    verifiedEnrollmentResponse,
 } from '@/lib/api/auth-responses.server';
 
 /* Accounts: registration, sign-in, recovery, devices, identity, contacts and settings (/api/auth). */
@@ -54,6 +73,7 @@ export const authApi = new Elysia()
                 identity: t.Optional(identitySchema),
                 workspace: t.Optional(workspaceSetupSchema),
             }),
+            response: { 200: setupResponse },
         },
         ({ sessionToken, body }) => auth.initializeAccount(sessionToken, body),
     )
@@ -66,6 +86,7 @@ export const authApi = new Elysia()
                 // The phone apps' own sign-up: its link carries ?app=1, which only the apps open.
                 app: t.Optional(t.Boolean()),
             }),
+            response: { 200: emailSentResponse },
         },
         ({ body, request }) =>
             auth.requestRegistrationEmail(
@@ -78,7 +99,7 @@ export const authApi = new Elysia()
     )
     .post(
         '/auth/register/verify',
-        { body: t.Object({ token: tokenSchema }) },
+        { body: t.Object({ token: tokenSchema }), response: { 200: verifiedEnrollmentResponse } },
         async ({ body, set }) => {
             const { enrollment, enrollmentToken } = await auth.verifyEmail(body.token);
             set.headers['set-cookie'] = authCookie('enrollment', enrollmentToken);
@@ -94,7 +115,10 @@ export const authApi = new Elysia()
     )
     .post(
         '/auth/register/start',
-        { body: t.Object({ registrationRequest: opaqueMessage }) },
+        {
+            body: t.Object({ registrationRequest: opaqueMessage }),
+            response: { 200: registrationChallengeResponse },
+        },
         ({ enrollmentToken, body }) =>
             auth.startRegistration(enrollmentToken, body.registrationRequest),
     )
@@ -109,6 +133,7 @@ export const authApi = new Elysia()
                 identity: identitySchema,
                 workspace: workspaceSetupSchema,
             }),
+            response: { 200: authUserResponse },
         },
         async ({ enrollmentToken, body, set }) => {
             const { user } = await auth.finishRegistration(enrollmentToken, body);
@@ -128,7 +153,10 @@ export const authApi = new Elysia()
     )
     .post(
         '/auth/login/start',
-        { body: t.Object({ email: emailSchema, startLoginRequest: opaqueMessage }) },
+        {
+            body: t.Object({ email: emailSchema, startLoginRequest: opaqueMessage }),
+            response: { 200: loginChallengeResponse },
+        },
         ({ body, request }) =>
             auth.startLogin(body.email, body.startLoginRequest, undefined, requestAddress(request)),
     )
@@ -141,6 +169,7 @@ export const authApi = new Elysia()
                 // A device key's proof for this attempt (docs/devices-design.md, step 1).
                 device: t.Optional(t.Object({ id: uuidSchema, signature: signatureSchema })),
             }),
+            response: { 200: loginResponse },
         },
         async ({ sessionToken, body, set, log }) => {
             const {
@@ -161,8 +190,11 @@ export const authApi = new Elysia()
             return { user, envelope, device };
         },
     )
-    .post('/auth/recover/email', { body: t.Object({ email: emailSchema }) }, ({ body, request }) =>
-        auth.requestRegistrationEmail(body.email, 'recover', requestAddress(request)),
+    .post(
+        '/auth/recover/email',
+        { body: t.Object({ email: emailSchema }), response: { 200: emailSentResponse } },
+        ({ body, request }) =>
+            auth.requestRegistrationEmail(body.email, 'recover', requestAddress(request)),
     )
     .get(
         '/auth/recover',
@@ -173,7 +205,10 @@ export const authApi = new Elysia()
     )
     .post(
         '/auth/recover/start',
-        { body: t.Object({ registrationRequest: opaqueMessage }) },
+        {
+            body: t.Object({ registrationRequest: opaqueMessage }),
+            response: { 200: recoveryChallengeResponse },
+        },
         ({ enrollmentToken, body }) =>
             auth.startRecovery(enrollmentToken, body.registrationRequest),
     )
@@ -189,6 +224,7 @@ export const authApi = new Elysia()
                 recovery: recoverySchema,
                 signature: t.String({ minLength: 86, maxLength: 86 }),
             }),
+            response: { 200: authUserResponse },
         },
         async ({ enrollmentToken, body, set }) => {
             const { user } = await auth.finishRecovery(enrollmentToken, body);
@@ -201,12 +237,18 @@ export const authApi = new Elysia()
     )
     .post(
         '/auth/delete/start',
-        { body: t.Object({ startLoginRequest: opaqueMessage }) },
+        {
+            body: t.Object({ startLoginRequest: opaqueMessage }),
+            response: { 200: loginChallengeResponse },
+        },
         ({ sessionToken, body }) => auth.startAccountDeletion(sessionToken, body.startLoginRequest),
     )
     .post(
         '/auth/delete/finish',
-        { body: t.Object({ attemptToken: tokenSchema, finishLoginRequest: opaqueMessage }) },
+        {
+            body: t.Object({ attemptToken: tokenSchema, finishLoginRequest: opaqueMessage }),
+            response: { 200: successResponse },
+        },
         async ({ sessionToken, body, set }) => {
             const result = await auth.finishAccountDeletion(sessionToken, body, async (userId) => {
                 try {
@@ -234,6 +276,7 @@ export const authApi = new Elysia()
                 startLoginRequest: opaqueMessage,
                 registrationRequest: opaqueMessage,
             }),
+            response: { 200: securityChallengeResponse },
         },
         ({ sessionToken, body }) => auth.startSecurityChange(sessionToken, body),
     )
@@ -255,6 +298,7 @@ export const authApi = new Elysia()
                 settingsKey: t.Optional(settingsKeySchema),
                 workspaces: t.Optional(t.Array(workspaceKeySchema, { maxItems: 200 })),
             }),
+            response: { 200: successResponse },
         },
         async ({ sessionToken, body, set }) => {
             const result = await auth.finishSecurityChange(sessionToken, body);
@@ -273,7 +317,10 @@ export const authApi = new Elysia()
     )
     .post(
         '/auth/recovery-key/confirm',
-        { body: t.Object({ recoveryVersion: t.Integer({ minimum: 1, maximum: 2147483646 }) }) },
+        {
+            body: t.Object({ recoveryVersion: t.Integer({ minimum: 1, maximum: 2147483646 }) }),
+            response: { 200: successResponse },
+        },
         ({ sessionToken, body }) => auth.confirmRecoveryBackup(sessionToken, body.recoveryVersion),
     )
     .get('/auth/identity', { response: { 200: identityResponse } }, ({ sessionToken }) =>
@@ -282,7 +329,7 @@ export const authApi = new Elysia()
     // The upgrade to a version 2 identity: the same keys, plus ML-DSA and the keys statement.
     .post(
         '/auth/identity/upgrade',
-        { body: t.Object({ identity: identitySchema }) },
+        { body: t.Object({ identity: identitySchema }), response: { 200: identityResponse } },
         ({ request, sessionToken, body }) => {
             guardAuthMutation(request);
             return auth.upgradeIdentity(sessionToken, body);
@@ -300,6 +347,7 @@ export const authApi = new Elysia()
                     t.String({ minLength: 8995, maxLength: 8995, pattern: '^[A-Za-z0-9_-]+$' }),
                 ),
             }),
+            response: { 200: successionResponse },
         },
         ({ request, sessionToken, body }) => {
             guardAuthMutation(request);
@@ -318,6 +366,7 @@ export const authApi = new Elysia()
                     pattern: '^[A-Za-z0-9_-]+$',
                 }),
             }),
+            response: { 200: consentStoredResponse },
         },
         ({ request, sessionToken, body }) => {
             guardAuthMutation(request);
@@ -350,17 +399,21 @@ export const authApi = new Elysia()
     // A POST so the address is in the body: a query string sits in proxy and access logs.
     .post(
         '/auth/contacts/lookup',
-        { body: t.Object({ email: emailSchema }) },
+        { body: t.Object({ email: emailSchema }), response: { 200: contactResponse } },
         ({ request, sessionToken, body }) =>
             auth.lookupContact(sessionToken, body.email, requestAddress(request)),
     )
     .get('/auth/settings', { response: { 200: settingsResponse } }, ({ sessionToken }) =>
         auth.getSettings(sessionToken),
     )
-    .put('/auth/settings-key', { body: settingsKeySchema }, ({ request, sessionToken, body }) => {
-        guardAuthMutation(request);
-        return auth.putSettingsKey(sessionToken, body);
-    })
+    .put(
+        '/auth/settings-key',
+        { body: settingsKeySchema, response: { 200: settingsKeyStoredResponse } },
+        ({ request, sessionToken, body }) => {
+            guardAuthMutation(request);
+            return auth.putSettingsKey(sessionToken, body);
+        },
+    )
     .put(
         '/auth/settings',
         {
@@ -376,6 +429,7 @@ export const authApi = new Elysia()
                     pattern: '^[A-Za-z0-9_-]+$',
                 }),
             }),
+            response: { 200: settingsSavedResponse },
         },
         ({ request, sessionToken, body }) => {
             guardAuthMutation(request);
@@ -390,7 +444,7 @@ export const authApi = new Elysia()
     // The acknowledgement after that wipe: the cookie goes only if it is still the removed one.
     .post(
         '/auth/session/forget',
-        { body: t.Object({}) },
+        { body: t.Object({}), response: { 200: forgottenResponse } },
         async ({ request, sessionToken, set }) => {
             guardAuthMutation(request);
             const forgotten = await auth.mayForgetSession(sessionToken);
@@ -412,6 +466,7 @@ export const authApi = new Elysia()
                     t.String({ minLength: 43, maxLength: 43, pattern: '^[A-Za-z0-9_-]+$' }),
                 ),
             }),
+            response: { 200: deviceResponse },
         },
         ({ request, sessionToken, body }) => {
             guardAuthMutation(request);
@@ -421,7 +476,10 @@ export const authApi = new Elysia()
     // Removing devices asks for the password again: the first half of that OPAQUE exchange.
     .post(
         '/auth/devices/reauth',
-        { body: t.Object({ startLoginRequest: opaqueMessage }) },
+        {
+            body: t.Object({ startLoginRequest: opaqueMessage }),
+            response: { 200: loginChallengeResponse },
+        },
         ({ request, sessionToken, body }) => {
             guardAuthMutation(request);
             return auth.startDeviceRemoval(sessionToken, body.startLoginRequest);
@@ -430,7 +488,7 @@ export const authApi = new Elysia()
     // Static beside the parameter: Elysia prefers it, and the id's pattern refuses "others" anyway.
     .delete(
         '/auth/devices/others',
-        { body: deviceRemovalSchema },
+        { body: deviceRemovalSchema, response: { 200: devicesRemovedResponse } },
         async ({ request, sessionToken, body, log }) => {
             guardAuthMutation(request);
             const { userId, removed } = await auth.removeOtherDevices(sessionToken, body);
@@ -443,6 +501,7 @@ export const authApi = new Elysia()
         {
             params: t.Object({ id: uuidSchema }),
             body: t.Object({ name: t.String({ minLength: 1, maxLength: 200 }) }),
+            response: { 200: deviceResponse },
         },
         ({ request, sessionToken, params, body }) => {
             guardAuthMutation(request);
@@ -451,7 +510,11 @@ export const authApi = new Elysia()
     )
     .delete(
         '/auth/devices/:id',
-        { params: t.Object({ id: uuidSchema }), body: deviceRemovalSchema },
+        {
+            params: t.Object({ id: uuidSchema }),
+            body: deviceRemovalSchema,
+            response: { 200: devicesRemovedResponse },
+        },
         async ({ request, sessionToken, params, body, log }) => {
             guardAuthMutation(request);
             const { userId, removed } = await auth.removeDevice(sessionToken, params.id, body);
@@ -461,11 +524,18 @@ export const authApi = new Elysia()
     )
     .post(
         '/auth/profile',
-        { body: t.Object({ name: t.String({ minLength: 1, maxLength: 200 }) }) },
+        {
+            body: t.Object({ name: t.String({ minLength: 1, maxLength: 200 }) }),
+            response: { 200: profileResponse },
+        },
         ({ sessionToken, body }) => auth.updateProfile(sessionToken, body),
     )
-    .post('/auth/logout', { body: t.Object({}) }, async ({ sessionToken, set }) => {
-        await auth.logout(sessionToken);
-        set.headers['set-cookie'] = authCookie('session', null);
-        return { success: true };
-    });
+    .post(
+        '/auth/logout',
+        { body: t.Object({}), response: { 200: successResponse } },
+        async ({ sessionToken, set }) => {
+            await auth.logout(sessionToken);
+            set.headers['set-cookie'] = authCookie('session', null);
+            return { success: true };
+        },
+    );
