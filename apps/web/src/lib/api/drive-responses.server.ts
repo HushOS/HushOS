@@ -401,8 +401,9 @@ export const rootResponse = t.Object({ created: t.Boolean(), root: node });
 export const foldersResponse = t.Object({ nodes: t.Array(node), changeSeq: t.Integer() });
 
 /*
- * One node as it is now: rename, move, trash, restore, copy and a version restored. A member's
- * view; an editor through a share is served the member's too (changeSeq set), as the handlers do.
+ * One node as it is now: rename, move, trash, restore, copy and a version restored, in the member's
+ * view. A known gap, not a choice: an editor working through a share is served it too, with the
+ * owner's changeSeq, where every read gives them granteeView without it. To fix in the handlers.
  */
 export const nodeResponse = t.Object({ node });
 
