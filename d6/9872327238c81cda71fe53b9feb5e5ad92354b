@@ -1,0 +1,52 @@
+packages/db/src/notifications.test.ts
+  s_566b8e0c4467a4::t_31ec37552fdb08 1-219
+  s_566b8e0c4467a4::t_ac8a1ba71c138b 220-243
+.env.production.example
+  s_566b8e0c4467a4::t_0ace6cb8294535 114-117
+apps/web/src/lib/api/drive.server.ts
+  s_566b8e0c4467a4::t_6d645d2ac57344 593-597,608-622
+apps/web/src/lib/api/groups.server.ts
+  s_566b8e0c4467a4::t_118c07d26e2710 4,12,188-193,236-243
+apps/web/src/lib/api/notifications.server.ts
+  s_566b8e0c4467a4::t_ccdb6b070cdf48 29,31
+apps/web/src/lib/api/shared.server.ts
+  s_566b8e0c4467a4::t_2b9313c98c9c96 75,122-149
+bun.lock
+  s_566b8e0c4467a4::t_ef31b533988b8c 124
+compose.yaml
+  s_566b8e0c4467a4::t_701f7c1b848ebc 134-135
+docs/devices-design.md
+  s_566b8e0c4467a4::t_6ff9a11d9f04e1 332-334
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_cfef7c36de8648 852,856
+packages/auth/package.json
+  s_566b8e0c4467a4::t_46509439f0221a 26
+packages/auth/src/notifications.ts
+  s_566b8e0c4467a4::t_ee59368eae48c3 4,40-41,43-44,65-70,145-146
+packages/auth/src/server.ts
+  s_566b8e0c4467a4::t_c3c958dfb1b6f5 34,1619-1624
+packages/db/src/auth.ts
+  s_566b8e0c4467a4::t_733221829cdca8 23-29,565-568,722-725
+packages/db/src/notifications.ts
+  s_566b8e0c4467a4::t_0f254d5ebc417e 171-176,285-304
+packages/db/src/schema/notifications.ts
+  s_566b8e0c4467a4::t_c41843080b93c8 53-54
+packages/jobs/src/jobs/cleanup-expired.ts
+  s_566b8e0c4467a4::t_60539a3b4b2e7a 25
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d69872327238c81cda71fe53b9feb5e5ad92354b",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
