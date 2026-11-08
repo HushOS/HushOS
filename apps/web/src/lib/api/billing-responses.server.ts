@@ -155,14 +155,19 @@ const groupBilling = t.Union([
         view: t.Literal('member'),
         hasPlan: t.Boolean(),
         planName: t.Nullable(t.String()),
+        // The subscription ids go only to the member who pays (lapsedGlanceOf): a variant each,
+        // so a plain member's glance can never carry them, even if a later change put them there.
         lapsedPlan: t.Optional(
             t.Nullable(
-                t.Object({
-                    productName: t.String(),
-                    standing,
-                    youPay: t.Boolean(),
-                    ids: t.Optional(t.Array(t.String())),
-                }),
+                t.Union([
+                    t.Object({
+                        productName: t.String(),
+                        standing,
+                        youPay: t.Literal(true),
+                        ids: t.Array(t.String()),
+                    }),
+                    t.Object({ productName: t.String(), standing, youPay: t.Literal(false) }),
+                ]),
             ),
         ),
         storage: pool,

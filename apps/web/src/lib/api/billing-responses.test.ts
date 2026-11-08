@@ -304,6 +304,8 @@ type Case = {
     /* Where the top-level stray goes: the reply, or its first element for a list. */
     top?: (value: any) => Record<string, unknown>;
     stray: (value: any) => Record<string, unknown>;
+    /* The samples a stray can be planted in, when some have nowhere to put one (an empty list). */
+    strayIn?: string[];
     /* Which sample to cut, and the cut. */
     required: [string, (value: any) => void];
 };
@@ -494,7 +496,9 @@ const cases: Record<string, Case> = {
             none: [] satisfies Reply<typeof growth.listAffiliates>,
         },
         top: (v) => v[0] ?? {},
-        stray: (v) => v[1]?.stats ?? {},
+        stray: (v) => v[1].stats,
+        // The empty list has nothing to plant a field in.
+        strayIn: ['two'],
         required: ['two', (v) => delete v[1].pendingEmail],
     },
     'POST /billing/affiliates and PATCH /billing/affiliates/:id': {
@@ -529,31 +533,34 @@ const cases: Record<string, Case> = {
     },
 };
 
-describe.each(Object.entries(cases))('%s', (_route, { schema, samples, top, stray, required }) => {
-    test.each(Object.entries(samples))('goes out unchanged: %s', async (_name, sample) => {
-        expect(await serve(schema, sample)).toEqual({ status: 200, body: sample });
-    });
+describe.each(Object.entries(cases))(
+    '%s',
+    (_route, { schema, samples, top, stray, strayIn, required }) => {
+        test.each(Object.entries(samples))('goes out unchanged: %s', async (_name, sample) => {
+            expect(await serve(schema, sample)).toEqual({ status: 200, body: sample });
+        });
 
-    test.each(Object.entries(samples))(
-        'drops a field the schema does not name: %s',
-        async (_name, sample) => {
-            const planted = clone(sample) as any;
-            (top ?? ((v) => v))(planted).leaked = 'top';
-            stray(planted).customerEmail = 'nested';
-            const { status, body } = await serve(schema, planted);
-            expect(status).toBe(200);
-            expect(body).toEqual(sample);
-            expect(JSON.stringify(body)).not.toMatch(/leaked|customerEmail/);
-        },
-    );
+        test.each(Object.entries(samples).filter(([name]) => !strayIn || strayIn.includes(name)))(
+            'drops a field the schema does not name: %s',
+            async (_name, sample) => {
+                const planted = clone(sample) as any;
+                (top ?? ((v) => v))(planted).leaked = 'top';
+                stray(planted).customerEmail = 'nested';
+                const { status, body } = await serve(schema, planted);
+                expect(status).toBe(200);
+                expect(body).toEqual(sample);
+                expect(JSON.stringify(body)).not.toMatch(/leaked|customerEmail/);
+            },
+        );
 
-    test('fails rather than send a reply missing a required field', async () => {
-        const [name, cut] = required;
-        const short = clone(samples[name]);
-        cut(short);
-        expect((await serve(schema, short)).status).toBe(500);
-    });
-});
+        test('fails rather than send a reply missing a required field', async () => {
+            const [name, cut] = required;
+            const short = clone(samples[name]);
+            cut(short);
+            expect((await serve(schema, short)).status).toBe(500);
+        });
+    },
+);
 
 /* A family member who doesn't manage the plan sees no prices, payer or places, whatever is planted. */
 test("a member's glance never carries the manager's plan", async () => {
@@ -568,6 +575,23 @@ test("a member's glance never carries the manager's plan", async () => {
     const { status, body } = await serve(groupBillingResponse, planted);
     expect(status).toBe(200);
     expect(body).toEqual(memberLive);
+});
+
+/* The subscription ids are the payer's alone: a member who doesn't pay never gets them, even if planted. */
+test("a lapsed plan's ids reach only the member who pays", async () => {
+    const planted = clone(memberLapsed) as any;
+    planted.lapsedPlan.ids = ['sub_a'];
+    const { status, body } = await serve(groupBillingResponse, planted);
+    expect(status).toBe(200);
+    expect(body).toEqual(memberLapsed);
+    // The payer's still carry them, and a payer's glance without them is refused.
+    expect(await serve(groupBillingResponse, memberPaysLapsed)).toEqual({
+        status: 200,
+        body: memberPaysLapsed,
+    });
+    const missing = clone(memberPaysLapsed) as any;
+    delete missing.lapsedPlan.ids;
+    expect((await serve(groupBillingResponse, missing)).status).toBe(500);
 });
 
 /* Prices and earnings are keyed by currency: a field planted inside one is dropped too. */
