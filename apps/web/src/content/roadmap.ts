@@ -81,7 +81,7 @@ export const sections: RoadmapSection[] = [
                 month: 'November 2026',
                 area: 'Apps',
                 title: 'The iPhone app on the App Store',
-                body: 'The same folders, sharing, links, families, files kept on the phone and HushOS in the phone’s Files app as the Android app, with Scan document from version 1.1. For iPhone, on iOS 26 and later.',
+                body: 'The same folders, sharing, links, families, files kept on the phone and HushOS in the phone’s Files app as the Android app, with Scan document. For iPhone, on iOS 26 and later.',
                 links: [
                     { kind: 'store', platform: 'ios', label: 'Get it on the App Store' },
                     { kind: 'blog', slug: 'phone-apps', label: 'Read the announcement' },
