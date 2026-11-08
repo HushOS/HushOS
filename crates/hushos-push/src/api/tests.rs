@@ -305,8 +305,11 @@ async fn a_proxy_header_from_anyone_but_a_listed_proxy_is_ignored() {
         let expected = if n < 2 { StatusCode::ACCEPTED } else { StatusCode::TOO_MANY_REQUESTS };
         assert_eq!(answer.status, expected);
     }
-    // Claiming a victim server's address spent nothing of the victim's budget.
+    // Writing a victim server's address, twice (its whole budget), spends none of it.
     let victim = "203.0.113.5";
+    for handle in handles.iter().take(2) {
+        harness.ping_from(handle, "security", "192.0.2.67", &[("cf-connecting-ip", victim)]).await;
+    }
     let from_victim = harness.ping_from(&handles[3], "security", victim, &[]).await;
     assert_eq!(from_victim.status, StatusCode::ACCEPTED);
     // Through the listed proxy, the header counts, and the trusted sender skips the address budget.
@@ -326,6 +329,39 @@ async fn futures_like_handles(harness: &Harness, n: u8) -> Vec<String> {
 }
 
 /* A trusted sender matches however its IPv4 address arrives, plain or mapped into IPv6. */
+/*
+ * Behind Cloudflare and Coolify the header ends with Cloudflare's edge: with both listed as
+ * proxies, the address is the first hop from the right that is neither, never the edge (which
+ * every server through it would share) and never what a client wrote further left.
+ */
+#[tokio::test]
+async fn the_address_is_the_first_hop_from_the_right_that_is_not_a_proxy() {
+    let settings = Settings {
+        address_security: Budget(1),
+        trusted_proxy_header: Some(HeaderName::from_static("x-forwarded-for")),
+        trusted_proxies: vec![
+            limits::Range::parse("10.0.0.0/24").unwrap(),
+            limits::Range::parse("173.245.48.0/20").unwrap(),
+        ],
+        ..Settings::default()
+    };
+    let harness = Harness::new(settings);
+    let handles = futures_like_handles(&harness, 3).await;
+    let through = |first: &str| format!("{first}, 173.245.48.10");
+    // Two servers through the same edge have a budget each.
+    let a = harness
+        .ping_from(&handles[0], "security", "10.0.0.2", &[("x-forwarded-for", &through("203.0.113.1"))])
+        .await;
+    let b = harness
+        .ping_from(&handles[1], "security", "10.0.0.2", &[("x-forwarded-for", &through("203.0.113.2"))])
+        .await;
+    assert_eq!((a.status, b.status), (StatusCode::ACCEPTED, StatusCode::ACCEPTED));
+    // The first server, writing a fresh address to the left of its own: still itself, and spent.
+    let forged = through("192.0.2.9, 203.0.113.1");
+    let again = harness.ping_from(&handles[2], "security", "10.0.0.2", &[("x-forwarded-for", &forged)]).await;
+    assert_eq!(again.status, StatusCode::TOO_MANY_REQUESTS);
+}
+
 #[tokio::test]
 async fn a_trusted_sender_matches_its_ipv4_address_mapped_into_ipv6() {
     let settings = Settings {

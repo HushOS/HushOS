@@ -135,6 +135,7 @@ pub enum Key {
     Registrations(Sender),
     RegistrationsBlock(Block),
     Deletes(Sender),
+    DeletesBlock(Block),
 }
 
 /// Monotonic time since some fixed start.

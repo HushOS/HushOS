@@ -216,11 +216,26 @@ impl FromRequestParts<Arc<Relay>> for ClientAddress {
         // The header only from a proxy listed as one: from anyone else it is whatever they wrote.
         let from_proxy =
             socket.is_some_and(|ip| relay.settings.trusted_proxies.iter().any(|r| r.contains(ip)));
+        // Right to left, past every hop that is itself a listed proxy (Coolify's, and Cloudflare's
+        // edges when it fronts the relay): the first other address is the one that connected.
+        // Anything a client wrote to the left of it is never reached.
         let from_header =
             relay.settings.trusted_proxy_header.as_ref().filter(|_| from_proxy).and_then(|name| {
-                let value = parts.headers.get(name)?.to_str().ok()?.rsplit(',').next()?.trim();
-                // An address, or an address and port as some proxies write it.
-                value.parse::<IpAddr>().ok().or_else(|| value.parse::<SocketAddr>().ok().map(|s| s.ip()))
+                let value = parts.headers.get(name)?.to_str().ok()?;
+                let mut nearest = None;
+                for hop in value.rsplit(',') {
+                    let hop = hop.trim();
+                    // An address, or an address and port as some proxies write it.
+                    let ip = hop
+                        .parse::<IpAddr>()
+                        .ok()
+                        .or_else(|| hop.parse::<SocketAddr>().ok().map(|s| s.ip()))?;
+                    nearest = Some(ip);
+                    if !relay.settings.trusted_proxies.iter().any(|r| r.contains(ip)) {
+                        break;
+                    }
+                }
+                nearest
             });
         Ok(ClientAddress(from_header.or(socket).map(limits::canonical)))
     }
@@ -307,10 +322,11 @@ async fn unregister(
 ) -> Response {
     let Ok(body) = serde_json::from_slice::<UnregisterBody>(&body) else { return bad_request() };
     // Each delete is a database round trip: bounded per address, so a flood cannot take the pool.
-    if !relay
-        .limiter
-        .take(relay.clock.now(), &[(Key::Deletes(address.sender()), limits::DELETES_PER_ADDRESS)])
-    {
+    let wants = [
+        (Key::Deletes(address.sender()), limits::DELETES_PER_ADDRESS),
+        (Key::DeletesBlock(address.block()), limits::block_budget(limits::DELETES_PER_ADDRESS)),
+    ];
+    if !relay.limiter.take(relay.clock.now(), &wants) {
         return limited();
     }
     let (Some(handle), Some(secret)) = (handle::decode32(&handle), handle::decode32(&body.delete_secret))

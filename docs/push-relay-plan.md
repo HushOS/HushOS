@@ -40,9 +40,9 @@ How the push design in `docs/devices-design.md` 5 and 7 gets built, in four pull
     - Per sending address, for each class: `PUSH_ADDRESS_SECURITY_PER_HOUR` (default 1000) and `PUSH_ADDRESS_OTHER_PER_HOUR` (default 3000). An IPv6 address counts by its /64.
     - Per block (an IPv4 /24 or an IPv6 /48), for each class: four times the per-address budget, so one customer cannot spread a flood over the 65,536 /64s of a /48.
     - Registrations: 30 an hour per address, 120 per block. An FCM token is at most 512 characters.
-    - Deletes: 60 an hour per address.
+    - Deletes: 60 an hour per address, 240 per block.
     - Addresses listed in `PUSH_TRUSTED_SENDERS` (hushos.com's own) skip the per-address and per-block limits, but never the per-handle ones. An IPv4 address matches whether it arrives plain or mapped into IPv6.
-    - The sending address comes from `PUSH_TRUSTED_PROXY_HEADER` only on connections from `PUSH_TRUSTED_PROXIES`; from anyone else the header is ignored, so a client cannot claim a trusted sender's address or spend another server's budget. The relay refuses to start with the header and no proxies.
+    - The sending address comes from `PUSH_TRUSTED_PROXY_HEADER` only on connections from `PUSH_TRUSTED_PROXIES`; from anyone else the header is ignored, so a client cannot claim a trusted sender's address or spend another server's budget. The header is read right to left, past every hop that is a listed proxy, so nothing a client wrote further left is reached. The relay refuses to start with the header and no proxies.
     - When the limit table is full, new keys are refused until a sweep frees room; a sweep runs at most once a second.
     - Limits are kept in memory, so run one instance. A restart refills them.
 - **Logs.** No requests or payloads. One line an hour of counts.
@@ -86,7 +86,8 @@ Nothing here is done by an agent. Credentials go straight from the console into 
 
 **DNS and hosting**
 
-- [ ] Point `push.hushos.com` at the Coolify host. Set `PUSH_TRUSTED_PROXY_HEADER` to the header the nearest proxy sets (Coolify's: `x-forwarded-for`), and `PUSH_TRUSTED_PROXIES` to that proxy's address on the container network (the Coolify proxy's network range). Behind Cloudflare too, the header is still the one Coolify's proxy appends, and the origin should accept only Cloudflare's ranges.
+- [ ] Point `push.hushos.com` at the Coolify host, preferably DNS-only (not through Cloudflare's proxy): the relay then sees each server's own address. Set `PUSH_TRUSTED_PROXY_HEADER=x-forwarded-for` (what Coolify's proxy appends) and `PUSH_TRUSTED_PROXIES` to that proxy's range on the container network.
+    - If it does go through Cloudflare's proxy, add Cloudflare's published ranges (cloudflare.com/ips) to `PUSH_TRUSTED_PROXIES` too. The relay reads the header right to left past every listed proxy; without Cloudflare listed, every server through one Cloudflare location would share one budget, and `PUSH_TRUSTED_SENDERS` would never match.
 - [ ] Make the GHCR package `hushos-push` public after its first publish, as the other images are, or give Coolify a pull token.
 - [ ] Create the Coolify application as above. Add these settings:
     - `DATABASE_URL_FILE`;
