@@ -1,4 +1,5 @@
-import { growthRepository } from '@hushos/db';
+import { createHash } from 'node:crypto';
+import { authRepository, growthRepository } from '@hushos/db';
 import { appEnv } from '@hushos/env/app';
 import type {
     AffiliateInput,
@@ -198,8 +199,17 @@ export async function getOfferLanding(slug: string): Promise<OfferLanding | null
     };
 }
 
+/*
+ * A code someone types is looked up at Polar when it isn't a creator's: twenty tries a person
+ * every ten minutes, so guessing codes can't run through the operator's Polar quota.
+ */
+const COUPON_LIMIT = { count: 20, windowMs: 10 * 60 * 1000 };
+
 /* A signed-in visitor on an offer page: the code is kept for their next checkout. */
 export async function rememberCoupon(userId: string, code: string) {
+    const bucket = createHash('sha256').update(`billing:coupon:${userId}`).digest();
+    if (!(await authRepository.consumeRateLimit(bucket, COUPON_LIMIT.count, COUPON_LIMIT.windowMs)))
+        throw new BillingError('Too many codes just now. Please try again in a few minutes.', 429);
     const resolved = await growthRepository.resolveCode(code);
     if (resolved?.kind === 'affiliate' && resolved.affiliate.providerDiscountId) {
         await growthRepository.rememberCoupon(userId, resolved.affiliate.code);

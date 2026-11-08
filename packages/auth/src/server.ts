@@ -1052,22 +1052,43 @@ export async function putSettings(
  * a link to Shared with me. The server cannot name the item. Mail failures are
  * logged, never surfaced: the share itself already succeeded.
  */
+/*
+ * A share's email: three an hour from one person to another, fifty an hour from one sharer, so
+ * replaying a share (it updates in place) can't flood someone's inbox through this server's mail.
+ * Past either the share still lands; only its email is skipped, and 'limited' says so.
+ */
+const SHARE_NOTICE_LIMITS = { pair: 3, sharer: 50, windowMs: 60 * 60_000 } as const;
+
 export async function notifyShare(
     granterUserId: string,
     granteeUserId: string,
     role: 'viewer' | 'editor',
-) {
+): Promise<'sent' | 'limited' | 'skipped'> {
+    if (
+        !(await authRepository.consumeRateLimit(
+            hash(`share:notice:${granterUserId}:${granteeUserId}`),
+            SHARE_NOTICE_LIMITS.pair,
+            SHARE_NOTICE_LIMITS.windowMs,
+        )) ||
+        !(await authRepository.consumeRateLimit(
+            hash(`share:notice:${granterUserId}`),
+            SHARE_NOTICE_LIMITS.sharer,
+            SHARE_NOTICE_LIMITS.windowMs,
+        ))
+    )
+        return 'limited';
     const [granter, grantee] = await Promise.all([
         authRepository.getUserById(granterUserId),
         authRepository.getUserById(granteeUserId),
     ]);
-    if (!granter || !grantee) return;
+    if (!granter || !grantee) return 'skipped';
     await sendShareEmail(grantee.email, {
         granterName: granter.name,
         granterEmail: granter.email,
         role,
         sharedUrl: new URL('/app/shared', authEnv.APP_ORIGIN).href,
     });
+    return 'sent';
 }
 
 /* ------------------------------------------------------------------------- */

@@ -1584,6 +1584,38 @@ describe('handleWebhook', () => {
     });
 });
 
+describe('coupon lookups', () => {
+    test('twenty a person every ten minutes: the next is refused before Polar is asked', async () => {
+        const visitor = await createTestAccount();
+        for (let n = 0; n < 20; n++)
+            await expect(growth.rememberCoupon(visitor.userId, `GUESS${n}`)).rejects.toThrow(
+                'That code is not valid.',
+            );
+        const asked = polar.calls.length;
+        await expect(growth.rememberCoupon(visitor.userId, 'GUESS99')).rejects.toMatchObject({
+            status: 429,
+        });
+        expect(polar.calls.length).toBe(asked);
+        // Someone else's guesses are their own.
+        const other = await createTestAccount();
+        await expect(growth.rememberCoupon(other.userId, 'GUESS98')).rejects.toThrow(
+            'That code is not valid.',
+        );
+    });
+
+    test('the codes looked up are remembered up to a bound, oldest first out', async () => {
+        const total = billing.DISCOUNT_CACHE_ENTRIES + 50;
+        for (let n = 0; n < total; n++) await billing.findProviderDiscount(`CODE${n}`);
+        expect(billing.discountCacheSize()).toBe(billing.DISCOUNT_CACHE_ENTRIES);
+        // The newest is still remembered (no second call); the oldest was let go (asked again).
+        const asked = polar.calls.length;
+        await billing.findProviderDiscount(`CODE${total - 1}`);
+        expect(polar.calls.length).toBe(asked);
+        await billing.findProviderDiscount('CODE0');
+        expect(polar.calls.length).toBe(asked + 1);
+    });
+});
+
 describe('revokeForDeletion', () => {
     test('revokes active subscriptions and deletes the customer', async () => {
         const { userId } = await createTestAccount();

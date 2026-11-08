@@ -503,6 +503,9 @@ export const driveApi = new Elysia()
                     // The person is told by mail; a mail problem is the operator's, not the sharer's.
                     void auth
                         .notifyShare(user.id, body.granteeUserId, body.role)
+                        .then((notice) => {
+                            if (notice === 'limited') log.set({ share: { notify: 'limited' } });
+                        })
                         .catch((error: unknown) => {
                             // The class and code only: a mail error's message often names the recipient.
                             log.set({

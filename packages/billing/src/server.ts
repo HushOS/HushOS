@@ -403,7 +403,20 @@ export type ProviderDiscount = {
 type PolarDiscount = Awaited<ReturnType<Polar['discounts']['list']>>['items'][number];
 const DISCOUNT_CODE = /^[A-Za-z0-9_-]{3,64}$/;
 const DISCOUNT_CACHE_MS = 60_000;
+/*
+ * At most this many codes are remembered: unknown codes are cached too (each saves a Polar call),
+ * so without a bound anyone guessing codes would grow it for good. The oldest goes first.
+ */
+export const DISCOUNT_CACHE_ENTRIES = 1_000;
 const discountCache = new Map<string, { at: number; value: ProviderDiscount | null }>();
+function rememberDiscount(code: string, value: ProviderDiscount | null) {
+    discountCache.delete(code);
+    discountCache.set(code, { at: Date.now(), value });
+    while (discountCache.size > DISCOUNT_CACHE_ENTRIES)
+        discountCache.delete(discountCache.keys().next().value!);
+}
+/* How many codes are remembered now (for tests). */
+export const discountCacheSize = () => discountCache.size;
 
 /*
  * A discount the operator made at Polar, found by its code, while it can still
@@ -464,7 +477,7 @@ export async function findProviderDiscount(raw: string): Promise<ProviderDiscoun
               productIds: (match.products ?? []).map((product) => product.id),
           }
         : null;
-    discountCache.set(code, { at: Date.now(), value });
+    rememberDiscount(code, value);
     return value;
 }
 
