@@ -1,0 +1,29 @@
+packages/auth/src/server.share-notice.test.ts
+  s_566b8e0c4467a4::t_4954f1fe925a58 1-67
+apps/web/src/lib/api/drive.server.ts
+  s_566b8e0c4467a4::t_78b35832d6c839 506-508
+packages/auth/src/server.ts
+  s_566b8e0c4467a4::t_bdf696766917be 1055-1061,1066-1079,1084,1091
+packages/billing/src/growth.ts
+  s_566b8e0c4467a4::t_98b8df93463ce3 1-2,202-207,210-212
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_9e7961e6c08ca6 1587-1618
+packages/billing/src/server.ts
+  s_566b8e0c4467a4::t_c5d197d1e6023f 406-410,412-419,480
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "30215a0c47bf68f6fc7f25022088f20b219708b1",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
