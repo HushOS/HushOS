@@ -1,0 +1,39 @@
+apps/web/src/routes/_authenticated/app/route.tsx
+  s_566b8e0c4467a4::t_f0cb0d2fc7a373 111-113
+apps/web/public/push-sw.js
+  s_566b8e0c4467a4::t_18c19118b098c4 25-45
+  s_566b8e0c4467a4::t_ca7e482d4c1a20 83-100
+  s_566b8e0c4467a4::t_20a35c619fb176 110-111,113-115,119
+apps/web/src/lib/web-push.ts
+  s_566b8e0c4467a4::t_411b6367958e06 176-180,184-194,201
+  s_566b8e0c4467a4::t_151fcea8cb40d2 144-145,147-151,154-156
+  s_566b8e0c4467a4::t_1f296dc7ed549f 42-47,49-50,52,54,56-61,74-103
+  s_566b8e0c4467a4::t_c0a03d0e9df715 3,5
+  s_566b8e0c4467a4::t_b28b5548a9c2a7 104
+apps/web/src/components/account-notifications.tsx
+  s_566b8e0c4467a4::t_d647bd223394c6 21-22,31-36,61-63,65,67,122-126
+apps/web/src/lib/device-data.ts
+  s_566b8e0c4467a4::t_2652f2e18bcba6 286-290
+packages/auth/src/notifications.ts
+  s_566b8e0c4467a4::t_27d5a633c6ad04 1,8-15,90-94,209-213
+packages/auth/src/webpush.test.ts
+  s_566b8e0c4467a4::t_8266d0b99c799e 2,6,8,20-44,161,170-171,181-286
+packages/auth/src/webpush.ts
+  s_566b8e0c4467a4::t_456bd729a2ae69 134,155-168,184-194
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "86dee43e985128147a15461003bc6032068d5667",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
