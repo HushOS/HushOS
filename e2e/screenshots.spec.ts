@@ -7,6 +7,7 @@ import {
     test,
     type Browser,
     type BrowserContextOptions,
+    type Locator,
     type Page,
 } from '@playwright/test';
 import {
@@ -637,6 +638,26 @@ async function wideShots(p: Page, suffix: string, scale: Scale) {
     await p.keyboard.press('Escape');
     await expect(dialog(p)).toHaveCount(0);
     await p.setViewportSize({ width: 1280, height: 800 });
+
+    // Account › Notifications, for the notifications post: the section alone, with its switches.
+    await p.goto('/app/account', { waitUntil: 'networkidle' });
+    const notifications = p.locator('section', {
+        has: p.getByRole('heading', { name: 'Notifications', exact: true }),
+    });
+    await expect(notifications.getByRole('switch', { name: 'Families' })).toBeVisible({
+        timeout: 60_000,
+    });
+    await notifications.scrollIntoViewIfNeeded();
+    await p.waitForTimeout(400);
+    await shootSection(notifications, `notifications${suffix}`, scale);
+}
+
+/* One part of a page rather than the window, at the same scales as `shoot`. */
+async function shootSection(part: Locator, name: string, scale: Scale) {
+    if (scale === 2) {
+        await part.screenshot({ path: `${OUT}/${name}.png` });
+        await part.screenshot({ path: `${OUT}/${name}@1x.png`, scale: 'css' });
+    } else await part.screenshot({ path: `${OUT}/${name}@1.5x.png` });
 }
 
 async function phoneShots(p: Page, suffix: string, scale: Scale) {

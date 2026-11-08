@@ -122,7 +122,7 @@ export function PhoneShot({
     crop = false,
 }: {
     platform: keyof typeof phones;
-    screen: 'home' | 'folder';
+    screen: 'home' | 'folder' | 'scan';
     /* What the capture shows; the alt adds which phone it is. */
     alt: string;
     sizes?: string;
@@ -151,7 +151,7 @@ export function PhoneShot({
 
 /*
  * The iPhone and Android apps side by side, each a real capture of the same
- * screen. `screen` names the capture (`home` or `folder`); each phone keeps its
+ * screen. `screen` names the capture (`home`, `folder` or `scan`); each phone keeps its
  * own proportions and the pair lines up along the bottom.
  */
 export function Phones({
@@ -162,7 +162,7 @@ export function Phones({
     phoneClassName = 'w-40 sm:w-48',
     priority = false,
 }: {
-    screen: 'home' | 'folder';
+    screen: 'home' | 'folder' | 'scan';
     /* What both captures show, said once; each image adds which phone it is. */
     alt: string;
     sizes?: string;
