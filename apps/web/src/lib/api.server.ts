@@ -9,7 +9,7 @@ import * as billing from '@hushos/billing/server';
 import { authRepository } from '@hushos/db';
 import * as groups from '@hushos/groups/server';
 import { createGroupRequestHandler } from '@/lib/group-requests';
-import { boundBody } from '@/lib/body-caps';
+import { bodyCap, boundBody } from '@/lib/body-caps';
 import { useLogger } from '@/lib/logging.server';
 import { authApi } from '@/lib/api/auth.server';
 import { billingApi } from '@/lib/api/billing.server';
@@ -43,6 +43,46 @@ export const apiApp = new Elysia({ prefix: '/api' })
 
 export type Api = typeof apiApp;
 
+/*
+ * Before a body larger than the default cap is read (body-caps.ts): a signed-in account, within
+ * its own rate limit and its address's, so neither a stranger nor one account can make the server
+ * buffer megabytes at will. Its own buckets, not auth's: a bulk upload completes one upload a file.
+ */
+const LARGE_BODIES = { perAccount: 600, perAddress: 1_200, windowMs: 60_000 } as const;
+// A rotation page may run to tens of megabytes: a rotation sends a few a minute, never hundreds.
+const HUGE_BODIES = { perAccount: 30, perAddress: 60, windowMs: 60_000 } as const;
+async function largeBodyAllowed(request: Request): Promise<Response | null> {
+    const huge = bodyCap(request.method, new URL(request.url).pathname).bytes > 4 * 1024 * 1024;
+    const limits = huge ? HUGE_BODIES : LARGE_BODIES;
+    const user = await auth.getSessionUser(readSessionToken(request));
+    if (!user)
+        return Response.json(
+            { message: 'Sign in to continue.', code: 'forbidden' },
+            { status: 401 },
+        );
+    const bucket = (key: string) =>
+        createHash('sha256')
+            .update(`api:${huge ? 'huge' : 'large'}-body:${key}`)
+            .digest();
+    const allowed =
+        (await authRepository.consumeRateLimit(
+            bucket(`user:${user.id}`),
+            limits.perAccount,
+            limits.windowMs,
+        )) &&
+        (await authRepository.consumeRateLimit(
+            bucket(`address:${requestAddress(request)}`),
+            limits.perAddress,
+            limits.windowMs,
+        ));
+    return allowed
+        ? null
+        : Response.json(
+              { message: 'Too many requests. Wait a minute and try again.', code: 'rate-limited' },
+              { status: 429 },
+          );
+}
+
 // Bound auth bodies before JSON parsing; never log protocol messages or tokens.
 export async function handleApiRequest(request: Request): Promise<Response> {
     if (request.method === 'HEAD') {
@@ -56,9 +96,7 @@ export async function handleApiRequest(request: Request): Promise<Response> {
     if (/^\/api\/(groups|invitations)(\/|$)/.test(pathname)) return handleGroupRequest(request);
     // Every other write is read under its route's cap before anything parses it (lib/body-caps.ts).
     if (!pathname.startsWith('/api/auth/')) {
-        const bounded = await boundBody(request, async () =>
-            Boolean(await auth.getSessionUser(readSessionToken(request))),
-        );
+        const bounded = await boundBody(request, () => largeBodyAllowed(request));
         if (bounded instanceof Response) return bounded;
         request = bounded;
     }

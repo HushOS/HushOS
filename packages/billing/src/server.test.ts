@@ -1575,6 +1575,31 @@ describe('handleWebhook', () => {
         expect(polar.calls).toEqual([]);
     });
 
+    test('a body past the cap is refused without reading it whole, with no length to go by', async () => {
+        // 100 chunks of 64 KiB (6.4 MB), sent chunked: no Content-Length for the cap to refuse.
+        let pulled = 0;
+        const body = new ReadableStream<Uint8Array>({
+            pull(controller) {
+                pulled += 1;
+                if (pulled > 100) controller.close();
+                else controller.enqueue(new Uint8Array(64 * 1024).fill(0x78));
+            },
+        });
+        const response = await billing.handleWebhook(
+            new Request('http://localhost/api/billing/webhook', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body,
+                // @ts-expect-error Node and Bun need this for a streamed request body.
+                duplex: 'half',
+            }),
+        );
+        expect(response.status).toBe(413);
+        // Stopped just past 256 KiB: 5 chunks, not the 100 it was offered.
+        expect(pulled).toBeLessThan(10);
+        expect(polar.calls).toEqual([]);
+    });
+
     test('an unknown event type is acknowledged and ignored', async () => {
         const response = await billing.handleWebhook(
             await signedWebhook({ type: 'something.new', data: {} }),

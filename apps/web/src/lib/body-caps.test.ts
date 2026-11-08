@@ -2,7 +2,6 @@ import { MAX_TRASH_BATCH } from '@hushos/drive/protocol';
 import { describe, expect, test } from 'vitest';
 import {
     boundBody,
-    bodyCap,
     DEFAULT_BODY_BYTES,
     ROTATION_BODY_BYTES,
     TRASH_BATCH_BODY_BYTES,
@@ -22,8 +21,9 @@ const send = (method: string, path: string, body?: string, headers: Record<strin
         headers: { 'content-type': 'application/json', ...headers },
         body,
     });
-const signedIn = async () => true;
-const signedOut = async () => false;
+const signedIn = async () => null;
+const signedOut = async () =>
+    Response.json({ message: 'Sign in to continue.', code: 'forbidden' }, { status: 401 });
 
 async function refused(answer: Request | Response, status: number) {
     expect(answer).toBeInstanceOf(Response);
@@ -112,21 +112,47 @@ describe('every other write', () => {
     });
 });
 
-describe('a rotation batch', () => {
+describe('a cap past the default', () => {
     const path = `/api/drive/nodes/${ID}/rotation/nodes`;
 
-    test('is read only for a signed-in account', async () => {
-        const answer = await boundBody(send('POST', path, '{"nodes":[]}'), signedOut);
-        await refused(answer, 401);
+    test('is read only once signed in: the body is never read for a stranger', async () => {
+        let pulled = 0;
+        const body = new ReadableStream<Uint8Array>({
+            pull(controller) {
+                pulled += 1;
+                controller.enqueue(new Uint8Array(1024));
+            },
+        });
+        const request = new Request(`${ORIGIN}${path}`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body,
+            // @ts-expect-error Node and Bun need this for a streamed request body.
+            duplex: 'half',
+        });
+        await refused(await boundBody(request, signedOut), 401);
+        expect(pulled).toBeLessThan(4);
+        // The same for every larger cap but a report's, which a link holder files with no session.
+        for (const [method, route] of [
+            ['POST', '/api/drive/folders'],
+            ['POST', `/api/drive/uploads/${ID}/complete`],
+            ['PUT', `/api/drive/workspaces/${ID}/documents/tags`],
+            ['POST', `/api/admin/reports/${ID}/keys`],
+        ])
+            await refused(await boundBody(send(method!, route!, '{}'), signedOut), 401);
+        expect(await boundBody(send('POST', '/api/drive/reports', '{}'), signedOut)).toBeInstanceOf(
+            Request,
+        );
     });
 
-    test('takes megabytes when signed in, and stops at its cap', async () => {
-        const big = 'x'.repeat(4 * 1024 * 1024);
+    test('a rotation takes megabytes when signed in, and a declared body past its cap is refused', async () => {
+        const big = 'x'.repeat(8 * 1024 * 1024);
         expect(await boundBody(send('POST', path, big), signedIn)).toBeInstanceOf(Request);
-        expect(bodyCap('POST', path).bytes).toBe(ROTATION_BODY_BYTES);
-        await refused(
-            await boundBody(send('POST', path, 'x'.repeat(ROTATION_BODY_BYTES + 1)), signedIn),
-            413,
-        );
+        const declared = new Request(`${ORIGIN}${path}`, {
+            method: 'POST',
+            headers: { 'content-length': String(ROTATION_BODY_BYTES + 1) },
+            body: '{}',
+        });
+        await refused(await boundBody(declared, signedIn), 413);
     });
 });

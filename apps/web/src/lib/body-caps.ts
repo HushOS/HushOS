@@ -18,8 +18,13 @@ export const DEFAULT_BODY_BYTES = 64 * KiB;
 /* MAX_TRASH_BATCH ids are about 7.8 KB of JSON (`{"nodeIds":[...]}`, 39 bytes an id). */
 export const TRASH_BATCH_BODY_BYTES = 12 * KiB;
 
-/* The rotation cap is read only for a signed-in account, so a stranger can't send megabytes. */
-export const ROTATION_BODY_BYTES = 16 * MiB;
+/*
+ * A rotation work page is sent whole by every client: 200 nodes, about 400 KB typically, but each
+ * hybrid share is about 6 KB, so a page of widely shared files runs to megabytes. Too low a cap
+ * would leave such a rotation failing for good; this one is read only for a signed-in account,
+ * rate limited (`signedIn` below), until clients split pages by size.
+ */
+export const ROTATION_BODY_BYTES = 64 * MiB;
 
 type Cap = { method: string; path: RegExp; bytes: number; signedInFirst?: boolean };
 
@@ -31,14 +36,30 @@ export const BODY_CAPS: readonly Cap[] = [
         bytes: TRASH_BATCH_BODY_BYTES,
     },
     // 64 folders of a folder upload, about 1.2 KB each; the schema allows about 404 KB.
-    { method: 'POST', path: /^\/drive\/folders$/, bytes: 512 * KiB },
-    // One key envelope per operator, up to 500: about 870 KB at most, a few KB in practice.
+    { method: 'POST', path: /^\/drive\/folders$/, bytes: 512 * KiB, signedInFirst: true },
+    // One key envelope per operator, up to 500: about 870 KB at most, a few KB in practice. Filing
+    // a report needs no session (a link holder may), so its cap stays open to anyone.
     { method: 'POST', path: /^\/drive\/reports$/, bytes: 1 * MiB },
-    { method: 'POST', path: /^\/admin\/reports\/[^/]+\/keys$/, bytes: 1 * MiB },
+    {
+        method: 'POST',
+        path: /^\/admin\/reports\/[^/]+\/keys$/,
+        bytes: 1 * MiB,
+        signedInFirst: true,
+    },
     // Every part of an upload in one call: 10,000 parts' ETags, about 670 KB for an 80 GiB file.
-    { method: 'POST', path: /^\/drive\/uploads\/[^/]+\/complete$/, bytes: 2 * MiB },
+    {
+        method: 'POST',
+        path: /^\/drive\/uploads\/[^/]+\/complete$/,
+        bytes: 2 * MiB,
+        signedInFirst: true,
+    },
     // A sealed workspace document may be up to 1 MiB of plaintext: 1.33 MiB in Base64url.
-    { method: 'PUT', path: /^\/drive\/workspaces\/[^/]+\/documents\/[^/]+$/, bytes: 1.5 * MiB },
+    {
+        method: 'PUT',
+        path: /^\/drive\/workspaces\/[^/]+\/documents\/[^/]+$/,
+        bytes: 1.5 * MiB,
+        signedInFirst: true,
+    },
     // A rotation work page, 200 nodes with their versions and shares: about 400 KB typically,
     // megabytes for files with many versions or shares.
     {
@@ -68,12 +89,13 @@ const tooLarge = () =>
 
 /*
  * For a write: the request again, its body read under its route's cap; a 413 when the body runs
- * past it (refused before reading when Content-Length already says so); or a 401 when the route's
- * cap is only for a signed-in account and `signedIn` says there is none. A read goes on as it came.
+ * past it (refused before reading when Content-Length already says so); or, for a cap past the
+ * default that is only for a signed-in account, whatever `signedIn` answers when it refuses (a 401
+ * with no session, a 429 past its rate limit). A read goes on as it came.
  */
 export async function boundBody(
     request: Request,
-    signedIn: () => Promise<boolean>,
+    signedIn: () => Promise<Response | null>,
 ): Promise<Request | Response> {
     if (SAFE_METHODS.has(request.method)) return request;
     const cap = bodyCap(request.method, new URL(request.url).pathname);
@@ -82,12 +104,12 @@ export async function boundBody(
         await request.body?.cancel();
         return tooLarge();
     }
-    if (cap.signedInFirst && !(await signedIn())) {
-        await request.body?.cancel();
-        return Response.json(
-            { message: 'Sign in to open Drive.', code: 'forbidden' },
-            { status: 401 },
-        );
+    if (cap.signedInFirst) {
+        const refusal = await signedIn();
+        if (refusal) {
+            await request.body?.cancel();
+            return refusal;
+        }
     }
     const body = await readCapped(request, cap.bytes);
     if (!body) return tooLarge();

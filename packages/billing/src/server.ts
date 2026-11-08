@@ -95,6 +95,25 @@ export {
 export { quoteTierChange } from './protocol';
 
 const WEBHOOK_MAX_BYTES = 256 * 1024;
+
+/* A body as text, read as a stream and cancelled at the first byte past `limit`: null when too large. */
+async function readTextCapped(request: Request, limit: number) {
+    const reader = request.body?.getReader();
+    if (!reader) return '';
+    const chunks: Uint8Array[] = [];
+    let length = 0;
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        length += value.byteLength;
+        if (length > limit) {
+            await reader.cancel();
+            return null;
+        }
+        chunks.push(value);
+    }
+    return new TextDecoder().decode(Buffer.concat(chunks));
+}
 /* Polar's statuses after which a subscription has ended (with or without `ended_at`). */
 const ENDED_STATUSES = new Set<string>(billingRepository.ENDED_SUBSCRIPTION_STATUSES);
 const USER_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -940,9 +959,9 @@ export async function handleWebhook(request: Request): Promise<Response> {
         return Response.json({ message: 'Billing is not enabled.' }, { status: 404 });
     if (Number(request.headers.get('content-length') ?? 0) > WEBHOOK_MAX_BYTES)
         return Response.json({ message: 'Request is too large.' }, { status: 413 });
-    const body = await request.text();
-    if (body.length > WEBHOOK_MAX_BYTES)
-        return Response.json({ message: 'Request is too large.' }, { status: 413 });
+    // Read as a stream and stopped past the cap: a chunked body has no length to refuse it by.
+    const body = await readTextCapped(request, WEBHOOK_MAX_BYTES);
+    if (body === null) return Response.json({ message: 'Request is too large.' }, { status: 413 });
     const id = request.headers.get('webhook-id') ?? '';
     let event: webhooks.WebhookPayload;
     try {
