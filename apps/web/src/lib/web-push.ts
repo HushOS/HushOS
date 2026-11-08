@@ -32,9 +32,34 @@ function keyBytes(base64url: string) {
     return Uint8Array.from(text, (char) => char.charCodeAt(0));
 }
 
-/* Whether this browser is subscribed now (and the person has not since blocked notifications). */
-export async function webPushOn() {
-    if (!webPushSupported() || Notification.permission !== 'granted') return false;
+/*
+ * Set when this account turned Web Push on in this browser, `hushos.web-push:<userId>`, and
+ * wiped with the rest of the account's data at sign-out (lib/device-data.ts). Only then does an
+ * app start renew the subscription: a subscription left behind never enrols another account.
+ */
+export const WEB_PUSH_PREFIX = 'hushos.web-push:';
+
+function wanted(userId: string) {
+    try {
+        return localStorage.getItem(WEB_PUSH_PREFIX + userId) === 'on';
+    } catch {
+        return false;
+    }
+}
+
+function setWanted(userId: string, on: boolean) {
+    try {
+        if (on) localStorage.setItem(WEB_PUSH_PREFIX + userId, 'on');
+        else localStorage.removeItem(WEB_PUSH_PREFIX + userId);
+    } catch {
+        // Storage refused: the switch still works for this page; it is not renewed later.
+    }
+}
+
+/* Whether this account has notifications on in this browser, and the browser still allows them. */
+export async function webPushOn(userId: string) {
+    if (!webPushSupported() || Notification.permission !== 'granted' || !wanted(userId))
+        return false;
     const found = await navigator.serviceWorker.getRegistration(SW_SCOPE);
     return Boolean(await found?.pushManager.getSubscription());
 }
@@ -53,7 +78,10 @@ async function currentSubscription(sw: ServiceWorkerRegistration) {
     const { publicKey } = await unwrap(apiClient().notifications['web-push-key'].get());
     const key = keyBytes(publicKey);
     const existing = await sw.pushManager.getSubscription();
-    if (existing && sameBytes(existing.options.applicationServerKey, key)) return existing;
+    // Kept when its key is this one, or cannot be read: replacing it on every start would fail
+    // where a browser allows subscribing only from a click.
+    const held = existing?.options?.applicationServerKey;
+    if (existing && (!held || sameBytes(held, key))) return existing;
     await existing?.unsubscribe();
     return sw.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
 }
@@ -76,7 +104,7 @@ async function register(subscription: PushSubscription) {
  * server's key and hands the subscription to the server for this device. When the server does
  * not take it, the subscription goes too, so the switch never reads on with nothing behind it.
  */
-export async function turnOnWebPush() {
+export async function turnOnWebPush(userId: string) {
     const permission = await Notification.requestPermission();
     if (permission !== 'granted')
         throw new Error('Notifications are blocked for HushOS in this browser’s settings.');
@@ -87,22 +115,23 @@ export async function turnOnWebPush() {
         await subscription.unsubscribe().catch(() => {});
         throw error;
     }
+    setWanted(userId, true);
 }
 
 /*
  * Hands the server this browser's subscription again, renewed if the push service or the server's
  * key changed it: on every app start and when the worker says the subscription changed. The
  * server drops a subscription its push service calls gone, so without this one rotation would
- * end notifications here while the switch still read on. Quiet: nothing to do when it is off.
+ * end notifications here while the switch still read on. Only for an account that turned them on
+ * here; a subscription the push service ended without a new one is made again.
  */
-async function refreshWebPush() {
-    if (!webPushSupported() || Notification.permission !== 'granted') return;
-    const found = await navigator.serviceWorker.getRegistration(SW_SCOPE);
-    if (!found || !(await found.pushManager.getSubscription())) return;
-    await register(await currentSubscription(found));
+async function refreshWebPush(userId: string) {
+    if (!webPushSupported() || Notification.permission !== 'granted' || !wanted(userId)) return;
+    await register(await currentSubscription(await registration()));
 }
 
-export async function turnOffWebPush() {
+export async function turnOffWebPush(userId: string) {
+    setWanted(userId, false);
     const found = await navigator.serviceWorker.getRegistration(SW_SCOPE);
     await (await found?.pushManager.getSubscription())?.unsubscribe();
     await unwrap(apiClient().notifications.registration.delete({}));
@@ -172,24 +201,29 @@ async function noticeFor(id: string): Promise<Notice | null> {
     }
 }
 
-let listening = false;
+/* The account this page answers for, and its router; the listener reads them when a message comes. */
+let answering: { userId: string; open: (url: string) => void } | null = null;
 /*
- * Answers the push worker from this tab, once per page: the words for a push, opening what a
- * tapped notice is about (through `open`, the app's router), and renewing the subscription.
+ * Answers the push worker from this tab: the words for a push, opening what a tapped notice is
+ * about (through `open`, the app's router), and renewing the subscription. The listener is added
+ * once per page; a later call only changes whom it answers for.
  */
-export function answerPushes(open: (url: string) => void) {
-    if (listening || !webPushSupported()) return;
-    listening = true;
+export function answerPushes(userId: string, open: (url: string) => void) {
+    if (!webPushSupported()) return;
+    const first = answering === null;
+    answering = { userId, open };
+    void refreshWebPush(userId).catch(() => {});
+    if (!first) return;
     navigator.serviceWorker.addEventListener('message', (event) => {
-        // Only this origin's own worker; a page cannot post here as it.
-        if (event.origin && event.origin !== window.location.origin) return;
+        const now = answering;
+        if (!now) return;
         const data = event.data as { type?: string; id?: string; url?: string } | null;
         if (data?.type === 'push-open') {
-            if (typeof data.url === 'string' && data.url.startsWith('/app')) open(data.url);
+            if (typeof data.url === 'string' && data.url.startsWith('/app')) now.open(data.url);
             return;
         }
         if (data?.type === 'push-resubscribe') {
-            void refreshWebPush().catch(() => {});
+            void refreshWebPush(now.userId).catch(() => {});
             return;
         }
         const port = event.ports[0];
@@ -198,7 +232,6 @@ export function answerPushes(open: (url: string) => void) {
             .catch(() => null)
             .then((notice) => port.postMessage(notice));
     });
-    void refreshWebPush().catch(() => {});
 }
 
 /* The notification settings, or null when this server has notifications off. */

@@ -81,12 +81,22 @@ self.addEventListener('push', (event) => {
 });
 
 /*
- * The push service replaced this browser's subscription. The server's copy is now dead, so tell
- * an open app tab, which hands the new one over its session the next time it starts too.
+ * The push service replaced or ended this browser's subscription, and the server's copy is now
+ * dead. Where the browser made no new one (Firefox, on expiry), subscribe again with the same
+ * server key; then an open app tab hands it over, as every app start does too.
  */
 self.addEventListener('pushsubscriptionchange', (event) => {
     event.waitUntil(
         (async () => {
+            const key = event.oldSubscription?.options?.applicationServerKey;
+            if (
+                !event.newSubscription &&
+                key &&
+                !(await self.registration.pushManager.getSubscription())
+            )
+                await self.registration.pushManager
+                    .subscribe({ userVisibleOnly: true, applicationServerKey: key })
+                    .catch(() => {});
             const windows = await self.clients.matchAll({
                 type: 'window',
                 includeUncontrolled: true,

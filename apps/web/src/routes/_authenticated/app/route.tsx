@@ -110,7 +110,7 @@ function AppLayout() {
     }, [user]);
     // A push to this browser asks an open tab for its words (public/push-sw.js): answer it here,
     // open what a tapped notice is about, and keep the server's copy of the subscription current.
-    useEffect(() => answerPushes((url) => router.history.push(url)), [router]);
+    useEffect(() => answerPushes(user.id, (url) => router.history.push(url)), [router, user.id]);
     useEffect(() => {
         const validated = seenLockRevision.current === lockRevision;
         seenLockRevision.current = lockRevision;

@@ -109,7 +109,7 @@ function AccountPage() {
 
                 <AccountDevices />
 
-                <AccountNotifications />
+                <AccountNotifications userId={user.id} />
 
                 <BrowserSettings />
 

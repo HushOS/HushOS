@@ -17,7 +17,7 @@ type Toggles = { shared: boolean; family: boolean };
  * and the two kinds a person can turn off. Security notices always come. Hidden on a server with
  * notifications off. The browser asks its permission only from the switch, never on its own.
  */
-export function AccountNotifications() {
+export function AccountNotifications({ userId }: { userId: string }) {
     // undefined while loading, null on a server with notifications off.
     const [toggles, setToggles] = useState<Toggles | null | undefined>(undefined);
     const [browser, setBrowser] = useState(false);
@@ -34,13 +34,13 @@ export function AccountNotifications() {
                 setToggles({ shared: true, family: true });
                 setError('Your notification settings couldn’t be read. Please reload the page.');
             });
-        void webPushOn()
+        void webPushOn(userId)
             .then((on) => current && setBrowser(on))
             .catch(() => {});
         return () => {
             current = false;
         };
-    }, []);
+    }, [userId]);
 
     if (!toggles) return null;
 
@@ -48,7 +48,7 @@ export function AccountNotifications() {
         setBusy(true);
         setError(null);
         try {
-            await (on ? turnOnWebPush() : turnOffWebPush());
+            await (on ? turnOnWebPush(userId) : turnOffWebPush(userId));
             setBrowser(on);
         } catch (cause) {
             setError(cause instanceof Error ? cause.message : 'Please try again.');

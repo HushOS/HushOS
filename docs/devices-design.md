@@ -246,8 +246,8 @@ A push carries nothing about what happened. Each event is a row in `notification
 
 **Shared with you** is written from names the device decrypts: "Maya shared Taxes 2025.pdf with you".
 
-- **The sender** is named from the device's own pins: a checked contact by name, anyone else as "Someone you haven't checked".
-- **The file name** is shown only for checked senders by default; from an unchecked sender the text is "Someone you haven't checked shared something with you", so a stranger cannot put words of their choosing on the lock screen.
+- **The sender** is named from the device's own pins: a contact this person checked by name, anyone else (a first-seen pin included, whose name the sender chose) as "Someone".
+- **The file name** is shown only for checked senders by default; from anyone else the text is "Someone shared something with you", so a stranger cannot put words of their choosing on the lock screen.
 - **The file name** is opened with the share's keys, which needs the account key. Whenever the device cannot reach it, the text is "Something was shared with you": the app is locked, iOS has not been unlocked since restart, or Keys need a device is on, since the copy needs user presence (section 3), which the extension cannot ask for.
 - **Decrypted names leave the app** once shown: they go into the operating system's notification store, and on Android to every app the person has given notification access. iOS sets `hiddenPreviewsBodyPlaceholder` to the generic text, so hidden previews show nothing more.
 - **Nothing is decrypted on the server**, and nothing readable reaches Apple, Google or a browser vendor.
