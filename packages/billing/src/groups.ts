@@ -3619,13 +3619,10 @@ async function lapsedGlanceOf(groupId: string, userId: string): Promise<FamilyLa
     const lapsed = await lapsedOf(groupId);
     if (!lapsed) return null;
     const customer = await billingRepository.getGroupCustomer(groupId);
-    const youPay = customer?.payerUserId === userId;
-    return {
-        productName: lapsed.productName,
-        standing: lapsed.standing,
-        youPay,
-        ...(youPay ? { ids: lapsed.ids } : {}),
-    };
+    const base = { productName: lapsed.productName, standing: lapsed.standing };
+    return customer?.payerUserId === userId
+        ? { ...base, youPay: true, ids: lapsed.ids }
+        : { ...base, youPay: false };
 }
 
 export async function getGroupBilling(

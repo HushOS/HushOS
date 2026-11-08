@@ -73,11 +73,15 @@ export type FamilyLapsedPlan = {
 export type FamilyLapsedGlance = {
     productName: string;
     standing: 'payment-failed' | 'paused';
-    /* This person pays for it: it ends at once when they leave. */
-    youPay: boolean;
-    /* Only for the person who pays: every such plan's id, to confirm the leave by. */
-    ids?: string[];
-};
+} & (
+    | {
+          /* This person pays for it: it ends at once when they leave. */
+          youPay: true;
+          /* Every such plan's id, to confirm the leave by: only ever the payer's to see. */
+          ids: string[];
+      }
+    | { youPay: false; ids?: never }
+);
 
 /*
  * A member's view: the plan's name, the storage used and the pool's size,
