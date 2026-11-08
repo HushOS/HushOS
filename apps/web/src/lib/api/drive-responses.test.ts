@@ -883,6 +883,11 @@ const cases: Record<string, Case> = {
                 nodes: [nodes.folder, { ...nodes.folder, id: fileId, parentId: folderId }],
                 changeSeq: 43,
             } satisfies Reply<typeof drive.createFolders>,
+            // Made through a share: grantee nodes, and no sequence of the owner's.
+            'through a share': {
+                nodes: [granteeView(nodes.folder)],
+                changeSeq: null,
+            } satisfies Reply<typeof drive.createFolders>,
         },
         stray: (v) => v.nodes,
         required: ['folders', (v) => delete v.changeSeq],
@@ -891,6 +896,7 @@ const cases: Record<string, Case> = {
         schema: nodeResponse,
         samples: {
             member: { node: nodes.rekeyed } satisfies NodeReply,
+            'an editor through a share': { node: granteeView(nodes.rekeyed) } satisfies NodeReply,
             legacy: { node: nodes.legacyFile } satisfies NodeReply,
             trashed: { node: nodes.dropped } satisfies NodeReply,
         },
@@ -920,6 +926,10 @@ const cases: Record<string, Case> = {
                         message: 'You do not have permission to do that here.',
                     },
                 ],
+            } satisfies Reply<typeof drive.trashNodes>,
+            // An editor through a share: told what moved, never the owner's change count.
+            'an editor through a share': {
+                results: [{ id: folderId, status: 'trashed', trashedAt: iso(11), changeSeq: null }],
             } satisfies Reply<typeof drive.trashNodes>,
         },
         stray: (v) => v.results,

@@ -458,6 +458,10 @@ async function readableVersions(userId: string, workspaceId: string, ids: string
     };
 }
 
+/* How a node goes back to whoever reached it: as a grantee through a share, or as a member. */
+const viewFor = (access: { shareId: string | null }) =>
+    access.shareId ? (row: NodeRow) => granteeView(nodeView(row)) : nodeView;
+
 const notFound = () => new DriveError('not-found', 'This item no longer exists.', 404);
 const rotating = () =>
     new DriveError(
@@ -601,7 +605,7 @@ export async function listChildren(
     });
     if (result.status === 'not-found') throw notFound();
     if (result.status === 'trashed') throw trashed();
-    const view = access.shareId ? (row: NodeRow) => granteeView(nodeView(row)) : nodeView;
+    const view = viewFor(access);
     return {
         folder: view(result.folder),
         ancestors: result.ancestors.map(view),
@@ -619,9 +623,21 @@ export async function createFolders(
         workspaceId,
         folders.map((folder) => ({ kind: 'node', id: folder.id, seed: folder.idSeed })),
     );
-    const batchIds = new Set(folders.map((folder) => folder.id));
-    for (const parentId of new Set(folders.map((folder) => folder.parentId)))
-        if (!batchIds.has(parentId)) await requireAccess(userId, workspaceId, parentId, 'editor');
+    // Every parent is checked unless the batch made it earlier: the repository looks any other id
+    // up as an existing node, so one named later in the batch must not skip the check. Reached
+    // through a share at any parent: the folders, and the drive's sequence, go back as a
+    // grantee's, without the owner's change count.
+    const madeEarlier = new Set<string>();
+    const checked = new Set<string>();
+    let grantee = false;
+    for (const folder of folders) {
+        if (!madeEarlier.has(folder.parentId) && !checked.has(folder.parentId)) {
+            const access = await requireAccess(userId, workspaceId, folder.parentId, 'editor');
+            if (access.shareId !== null) grantee = true;
+            checked.add(folder.parentId);
+        }
+        madeEarlier.add(folder.id);
+    }
     if (folders.length < 1 || folders.length > MAX_FOLDER_BATCH)
         throw new DriveError(
             'invalid',
@@ -638,7 +654,9 @@ export async function createFolders(
     });
     switch (result.status) {
         case 'created':
-            return { nodes: result.nodes.map(nodeView), changeSeq: result.changeSeq };
+            return grantee
+                ? { nodes: result.nodes.map((row) => granteeView(nodeView(row))), changeSeq: null }
+                : { nodes: result.nodes.map(nodeView), changeSeq: result.changeSeq };
         case 'not-found':
             throw notFound();
         case 'rotating':
@@ -671,7 +689,7 @@ export async function renameNode(
         metadataSignature: string;
     },
 ) {
-    await requireAccess(userId, workspaceId, nodeId, 'editor');
+    const view = viewFor(await requireAccess(userId, workspaceId, nodeId, 'editor'));
     const result = await driveRepository.renameNode({
         workspaceId,
         nodeId,
@@ -684,8 +702,8 @@ export async function renameNode(
     if (result.status === 'not-found') throw notFound();
     if (result.status === 'trashed') throw trashed();
     if (result.status === 'bad-signature') throw badSignature();
-    if (result.status === 'stale') throw stale({ node: nodeView(result.node) });
-    return { node: nodeView(result.node) };
+    if (result.status === 'stale') throw stale({ node: view(result.node) });
+    return { node: view(result.node) };
 }
 
 export async function moveNode(
@@ -701,6 +719,7 @@ export async function moveNode(
     // An editor holds no key outside the share: both ends must lie inside the same one.
     if (source.shareId !== destination.shareId)
         throw forbidden('Move it within the shared folder, or ask its owner to move it out.');
+    const view = viewFor(source);
     const result = await driveRepository.moveNode({
         workspaceId,
         nodeId,
@@ -711,7 +730,7 @@ export async function moveNode(
     });
     switch (result.status) {
         case 'ok':
-            return { node: nodeView(result.node) };
+            return { node: view(result.node) };
         case 'not-found':
             throw notFound();
         case 'root':
@@ -727,17 +746,17 @@ export async function moveNode(
         case 'rotating':
             throw rotating();
         case 'stale':
-            throw stale({ node: nodeView(result.node) });
+            throw stale({ node: view(result.node) });
     }
 }
 
 export async function trashNode(userId: string, workspaceId: string, nodeId: string) {
-    await requireAccess(userId, workspaceId, nodeId, 'editor');
+    const view = viewFor(await requireAccess(userId, workspaceId, nodeId, 'editor'));
     const result = await driveRepository.trashNode({ workspaceId, nodeId, writer: userId });
     if (result.status === 'not-found') throw notFound();
     if (result.status === 'root') throw topFolderToTrash();
     if (result.status === 'trashed') throw trashed();
-    return { node: nodeView(result.node) };
+    return { node: view(result.node) };
 }
 
 /*
@@ -809,6 +828,8 @@ async function busyAsConflict<T>(pending: Promise<T>) {
 export async function trashNodes(userId: string, workspaceId: string, nodeIds: string[]) {
     await requireBatch(userId, nodeIds);
     await requireEpochs(userId, workspaceId);
+    // An editor through a share is told what moved, never the owner's change count.
+    const member = await driveRepository.isMember(userId, workspaceId);
     const outcomes = await busyAsConflict(
         driveRepository.trashNodes({ workspaceId, nodeIds, writer: userId }),
     );
@@ -820,7 +841,7 @@ export async function trashNodes(userId: string, workspaceId: string, nodeIds: s
                         id: outcome.id,
                         status: outcome.status,
                         trashedAt: outcome.trashedAt.toISOString(),
-                        changeSeq: outcome.changeSeq,
+                        changeSeq: member ? outcome.changeSeq : null,
                     };
                 case 'covered':
                     return { id: outcome.id, status: outcome.status, by: outcome.by };
@@ -987,7 +1008,7 @@ export async function copyNode(
         { kind: 'version', id: input.versionId, seed: input.versionIdSeed },
     ]);
     await requireAccess(userId, workspaceId, sourceNodeId, 'viewer');
-    await requireAccess(userId, workspaceId, input.node.parentId, 'editor');
+    const view = viewFor(await requireAccess(userId, workspaceId, input.node.parentId, 'editor'));
     const result = await driveRepository.copyFile({
         workspaceId,
         userId,
@@ -1006,7 +1027,7 @@ export async function copyNode(
     });
     switch (result.status) {
         case 'ok':
-            return { node: nodeView(result.node) };
+            return { node: view(result.node) };
         case 'bad-signature':
             throw badSignature();
         case 'invalid':
@@ -1054,11 +1075,11 @@ export async function listVersions(userId: string, workspaceId: string, nodeId: 
 }
 
 export async function restoreVersion(userId: string, workspaceId: string, versionId: string) {
-    await requireVersionAccess(userId, workspaceId, versionId, 'editor');
+    const view = viewFor(await requireVersionAccess(userId, workspaceId, versionId, 'editor'));
     const result = await driveRepository.restoreVersion(workspaceId, versionId, userId);
     switch (result.status) {
         case 'ok':
-            return { node: nodeView(result.node) };
+            return { node: view(result.node) };
         case 'not-found':
             throw new DriveError('not-found', 'This version no longer exists.', 404);
         case 'trashed':
@@ -1608,7 +1629,7 @@ export async function completeUpload(
     uploadId: string,
     parts: { partNumber: number; etag: string }[],
 ) {
-    await requireUploadAccess(userId, workspaceId, uploadId);
+    const view = viewFor(await requireUploadAccess(userId, workspaceId, uploadId));
     const started = await driveRepository.startCompleting(workspaceId, uploadId, userId);
     switch (started.status) {
         case 'not-found':
@@ -1619,7 +1640,7 @@ export async function completeUpload(
             throw new DriveError('expired', 'This upload expired. Start it again.', 409);
         case 'completed': {
             const node = await driveRepository.getNode(workspaceId, started.upload.nodeId);
-            return { status: 'completed' as const, node: node ? nodeView(node.node) : null };
+            return { status: 'completed' as const, node: node ? view(node.node) : null };
         }
         case 'conflicted':
             throw new DriveError('conflict', 'This file changed while it was uploading.', 409, {
@@ -1643,10 +1664,10 @@ export async function completeUpload(
     );
     switch (finished.status) {
         case 'published':
-            return { status: 'completed' as const, node: nodeView(finished.node) };
+            return { status: 'completed' as const, node: view(finished.node) };
         case 'completed': {
             const node = await driveRepository.getNode(workspaceId, finished.upload.nodeId);
-            return { status: 'completed' as const, node: node ? nodeView(node.node) : null };
+            return { status: 'completed' as const, node: node ? view(node.node) : null };
         }
         case 'conflicted':
             throw new DriveError('conflict', 'This file changed while it was uploading.', 409, {
@@ -1698,7 +1719,7 @@ export async function attachUpload(
 ) {
     if (input.mode === 'sibling')
         requireMadeFor(workspaceId, [{ kind: 'node', id: input.node.id, seed: input.node.idSeed }]);
-    await requireUploadAccess(userId, workspaceId, uploadId);
+    const view = viewFor(await requireUploadAccess(userId, workspaceId, uploadId));
     const result = await driveRepository.attachUpload(
         workspaceId,
         uploadId,
@@ -1725,10 +1746,10 @@ export async function attachUpload(
     );
     switch (result.status) {
         case 'published':
-            return { status: 'completed' as const, node: nodeView(result.node) };
+            return { status: 'completed' as const, node: view(result.node) };
         case 'completed': {
             const node = await driveRepository.getNode(workspaceId, result.upload.nodeId);
-            return { status: 'completed' as const, node: node ? nodeView(node.node) : null };
+            return { status: 'completed' as const, node: node ? view(node.node) : null };
         }
         case 'not-found':
             throw new DriveError('not-found', 'This upload no longer exists.', 404);

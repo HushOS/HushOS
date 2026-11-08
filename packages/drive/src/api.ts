@@ -285,7 +285,8 @@ export type TrashListing = {
  */
 export type TrashRefusal = 'not-found' | 'forbidden' | 'root' | 'trashed';
 export type TrashBatchItem =
-    | { id: string; status: 'trashed'; trashedAt: string; changeSeq: number }
+    // `changeSeq` null for an editor through a share: the owner's change count is a member's.
+    | { id: string; status: 'trashed'; trashedAt: string; changeSeq: number | null }
     | { id: string; status: 'covered'; by: string }
     | { id: string; status: 'refused'; reason: TrashRefusal; message: string };
 /*
@@ -563,7 +564,7 @@ export interface DriveApi {
     createFolders(
         workspaceId: string,
         folders: ({ id: string; idSeed: string; parentId: string } & NodeEnvelopes)[],
-    ): Promise<{ nodes: NodeView[]; changeSeq: number }>;
+    ): Promise<{ nodes: NodeView[]; changeSeq: number | null }>;
     rename(
         workspaceId: string,
         nodeId: string,
