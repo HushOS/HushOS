@@ -1,0 +1,54 @@
+crates/hushos-push/src/apns.rs
+  s_566b8e0c4467a4::t_a345a59f360618 1-182
+crates/hushos-push/src/store.rs
+  s_566b8e0c4467a4::t_70559968f1c859 1-234
+crates/hushos-push/src/push.rs
+  s_566b8e0c4467a4::t_dcfed63e58b485 1-121
+crates/hushos-push/src/config.rs
+  s_566b8e0c4467a4::t_add244be0f8883 1-143
+crates/hushos-push/src/api/tests.rs
+  s_566b8e0c4467a4::t_85afd7a24319de 1-446
+crates/hushos-push/src/fcm.rs
+  s_566b8e0c4467a4::t_614d68c8fafd49 1-190
+docs/push-relay-plan.md
+  s_566b8e0c4467a4::t_b02f0d3934a5ab 94-95
+  s_566b8e0c4467a4::t_1179dcf07a285b 1-93,96-103
+crates/hushos-push/src/lib.rs
+  s_566b8e0c4467a4::t_4ac8022f47cf39 1-15
+crates/hushos-push/src/handle.rs
+  s_566b8e0c4467a4::t_2edc6fd200e89e 1-93
+crates/hushos-push/src/main.rs
+  s_566b8e0c4467a4::t_156cbc42739789 1-90
+  s_566b8e0c4467a4::t_3d59a0e8d94c8c 91-112
+crates/hushos-push/src/limits.rs
+  s_566b8e0c4467a4::t_c5feebd9272f09 1-273,277,280-281
+  s_566b8e0c4467a4::t_93a2849ac9dd13 274-276,278-279
+crates/hushos-push/src/api.rs
+  s_566b8e0c4467a4::t_6a5119c6e39434 1-328
+Cargo.lock
+  s_566b8e0c4467a4::t_a4b5cca234cce1 40-45,123-137,144-191,204-209,230-232,261-272,312-321,328-333,345-355,363,455-484,603,617-622,641,667-672,730-738,772-793,824-861,871-941,961,964,974,977-978,1019-1048,1055-1063,1070-1075,1094-1147,1161,1163,1174,1186-1204,1217-1218,1220,1222-1235,1239-1240,1242,1244-1251,1255-1256,1258-1276,1279-1280,1282,1284-1289,1293-1452,1461-1469,1476-1503,1510-1524,1531-1552,1559-1564,1571-1581,1636-1686,1694,1726,1733-1761,1773-1791,1798-1814,1835-1840,1870-1884,1903-1958,1985-1995,2015-2120,2146-2160,2163-2195,2205-2210,2299-2309,2319-2330,2341-2351,2396-2411,2431-2442,2449-2463,2470-2488,2515-2706,2713-2723,2758-2777,2788,2821-2860,2867-2928,2968-3050,3057-3062,3078-3083,3221-3250,3276-3284,3291-3390,3400-3409,3416-3433,3443-3563,3573-3578,3590-3612,3633-3653,3675-3707
+Cargo.toml
+  s_566b8e0c4467a4::t_b4bd1ce830a0ec 10-13
+crates/hushos-push/Cargo.toml
+  s_566b8e0c4467a4::t_4fc650d8917479 1-23
+crates/hushos-push/Dockerfile
+  s_566b8e0c4467a4::t_c907fcc14b1a5b 1-24
+crates/hushos-push/migrations/20261027000000_registrations.sql
+  s_566b8e0c4467a4::t_9bac9e1450f716 1-11
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4c4a52be50082dd8dd53c9e336f1bfab0a800402",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
