@@ -5,6 +5,7 @@ import {
     closeDatabase,
     createTestAccount,
     createTestIdentity,
+    lockObserver,
     resetDatabase,
     signerFor,
 } from '../test/helpers';
@@ -662,6 +663,57 @@ describe('rotation', () => {
             late.id,
         );
         expect(await rotations.finishRotation(ws)).toBe(true);
+    });
+
+    /*
+     * The finish looks for work, then clears every previous key. A batch from a page read earlier
+     * can re-key a fresh folder in between, making the child under it work: the finish must look
+     * again under the workspace's lock, or it clears the folder's previous key, which alone opens
+     * that child. The batch lands while the finish waits for that lock.
+     */
+    test('a finish that a late batch overtakes looks again before it clears previous keys', async () => {
+        const project = await folder(rootId, rootEpoch);
+        const started = await rotations.startRotation({
+            workspaceId: owner.workspaceId,
+            nodeId: project.id,
+            startedBy: owner.userId,
+        });
+        if (started.status !== 'ok') throw new Error(started.status);
+        const ws = {
+            workspaceId: owner.workspaceId,
+            rootId: project.id,
+            targetEpoch: started.rotation.targetEpoch,
+            userId: owner.userId,
+        };
+        await signed.rotateNodes({ ...ws, nodes: [rotated(await current(project.id), rootEpoch)] });
+        const fresh = await folder(project.id, ws.targetEpoch, 1);
+        const child = await folder(fresh.id, fresh.keyEpoch, 1);
+        expect((await rotations.listRotationWork(ws)).nodes).toEqual([]);
+
+        const other = lockObserver();
+        try {
+            await other.query('begin');
+            await other.query('select 1 from workspaces where id = $1 for update', [
+                owner.workspaceId,
+            ]);
+            const finishing = rotations.finishRotation(ws);
+            // The finish has found no work and now waits on the lock; the late batch re-keys
+            // the fresh folder (as rotateNodeIn does: previous key kept, new one current).
+            await expect.poll(() => other.waitingOn('workspaces'), { timeout: 10_000 }).toBe(true);
+            await other.query(
+                `update drive_nodes set prev_key_envelope = key_envelope, prev_key_epoch = key_epoch,
+                 prev_parent_key_epoch = parent_key_epoch, key_epoch = $2 where id = $1`,
+                [fresh.id, ws.targetEpoch],
+            );
+            await other.query('commit');
+            expect(await finishing).toBe(false);
+        } finally {
+            await other.end();
+        }
+        expect((await current(fresh.id)).prevKeyEpoch).toBe(1);
+        expect((await rotations.listRotationWork(ws)).nodes.map((node) => node.id)).toEqual([
+            child.id,
+        ]);
     });
 
     test('a node at the target under an unrotated parent is a rewrap, and a share left unsealed is revoked', async () => {
