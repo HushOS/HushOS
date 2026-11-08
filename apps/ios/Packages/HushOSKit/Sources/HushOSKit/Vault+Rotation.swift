@@ -145,6 +145,34 @@ func deferChildren(_ nodes: [RotationWorkNode]) -> [RotationWorkNode] {
     return nodes.filter { entry in entry.node.parentId.map { !inBatch.contains($0.lowercased()) } ?? true }
 }
 
+/*
+ * The most a rotation request's body may weigh (ROTATION_REQUEST_BYTES on the web). A batch is sent in parts up to
+ * this size, in order, each node whole: a page of widely shared files runs to megabytes (a hybrid share is about
+ * 6 KB) and the server applies each node on its own. A node heavier than this goes alone; the server's cap takes the
+ * heaviest node its schema allows.
+ */
+let rotationRequestBytes = 4 * 1024 * 1024
+
+func rotationParts(workspaceId: String, nodes: [[String: Any]], limit: Int = rotationRequestBytes) throws -> [[[String: Any]]] {
+    let empty = try JSONSerialization.data(withJSONObject: ["workspaceId": workspaceId, "nodes": [Any]()]).count
+    var parts: [[[String: Any]]] = []
+    var part: [[String: Any]] = []
+    var size = empty
+    for node in nodes {
+        let weight = try JSONSerialization.data(withJSONObject: node).count
+        // A node after the first in a part costs its separating comma too.
+        if !part.isEmpty && size + 1 + weight > limit {
+            parts.append(part)
+            part = []
+            size = empty
+        }
+        size += (part.isEmpty ? 0 : 1) + weight
+        part.append(node)
+    }
+    if !part.isEmpty { parts.append(part) }
+    return parts
+}
+
 extension DriveAPI {
     func startRotation(workspaceId: String, nodeId: String) async throws -> RotationView {
         try await performPublic(try mutationPublic("/nodes/\(nodeId)/rotation", body: ["workspaceId": workspaceId]), as: RotationStarted.self).rotation
@@ -404,21 +432,27 @@ extension Vault {
             }
             if !batch.isEmpty {
                 sending = true
-                let results = try await api.rotateNodes(workspaceId: ws, nodeId: rootId, nodes: batch)
-                let kept = Set(results.filter { $0.status == "ok" || $0.status == "already" }.map(\.id))
-                applied = kept.count
-                // A node the server refused (or left out) keeps the key it holds there.
-                unstage(staged.keys.filter { !kept.contains($0) })
-                // What the server applied is committed here at once, so a later batch that stops has only its own
-                // nodes to undo: their rows (still at the old epoch) are read again, and a re-keyed node's previous
-                // key is kept for the children the walk hasn't reached, past this run if it stops.
-                for id in staged.keys where kept.contains(id) {
-                    if let epoch = epochs[id], let prior = previous[id], prior.epoch != epoch {
-                        rotatedKeys[ref(id)] = RotatedKey(root: rootId, epoch: epoch, previousEpoch: prior.epoch, previousKey: prior.key)
+                // Sent in parts by size, in order. Each part is settled as it lands, so a later part that stops undoes
+                // only its own nodes: the server applies each node on its own.
+                for part in try rotationParts(workspaceId: ws, nodes: batch, limit: rotationPartBytes) {
+                    let ids = part.compactMap { $0["id"] as? String }
+                    let results = try await api.rotateNodes(workspaceId: ws, nodeId: rootId, nodes: part)
+                    let kept = Set(results.filter { $0.status == "ok" || $0.status == "already" }.map(\.id))
+                    applied += kept.count
+                    // A node the server refused (or left out) keeps the key it holds there.
+                    unstage(ids.filter { !kept.contains($0) })
+                    // What the server applied is committed here at once, so a later batch that stops has only its own
+                    // nodes to undo: their rows (still at the old epoch) are read again, and a re-keyed node's previous
+                    // key is kept for the children the walk hasn't reached, past this run if it stops.
+                    for id in ids where kept.contains(id) {
+                        if let epoch = epochs[id], let prior = previous[id], prior.epoch != epoch {
+                            rotatedKeys[ref(id)] = RotatedKey(root: rootId, epoch: epoch, previousEpoch: prior.epoch, previousKey: prior.key)
+                        }
+                        opened[ref(id)] = nil
                     }
-                    opened[ref(id)] = nil
+                    for id in ids { staged[id] = nil }
+                    if !kept.isEmpty { catalogueState = .idle }
                 }
-                if !kept.isEmpty { catalogueState = .idle }
             }
             } catch {
                 unstage(staged.keys)

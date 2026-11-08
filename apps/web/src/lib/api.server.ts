@@ -49,8 +49,9 @@ export type Api = typeof apiApp;
  * buffer megabytes at will. Its own buckets, not auth's: a bulk upload completes one upload a file.
  */
 const LARGE_BODIES = { perAccount: 600, perAddress: 1_200, windowMs: 60_000 } as const;
-// A rotation page may run to tens of megabytes: a rotation sends a few a minute, never hundreds.
-const HUGE_BODIES = { perAccount: 30, perAddress: 60, windowMs: 60_000 } as const;
+// A rotation part, up to 8 MiB: a page of widely shared files is sent in a few, so a rotation
+// sends tens a minute at most, never hundreds.
+const HUGE_BODIES = { perAccount: 60, perAddress: 120, windowMs: 60_000 } as const;
 async function largeBodyAllowed(request: Request): Promise<Response | null> {
     const huge = bodyCap(request.method, new URL(request.url).pathname).bytes > 4 * 1024 * 1024;
     const limits = huge ? HUGE_BODIES : LARGE_BODIES;

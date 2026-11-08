@@ -460,4 +460,36 @@ class ContactTrustTest {
         // Finished: no previous key is kept for anything under it.
         assertTrue(vault.rotatedKeys.isEmpty())
     }
+
+    /*
+     * A batch sent in parts (here one node each): the first file's part lands, the second's is lost on the way. What the
+     * server applied stays applied here, its previous key kept beside the folder's, while the lost one goes back to the
+     * key the server holds. The retry finishes only that one, and every node opens.
+     */
+    @Test
+    fun aPartThatLandedStaysAppliedWhenALaterPartOfTheBatchIsLost() {
+        val folder = server.folder(server.root, "Plans")
+        val one = server.file(folder, "one.md", ByteArray(64) { 1 })
+        val two = server.file(folder, "two.md", ByteArray(64) { 2 })
+        vault.listChildren(server.root)
+        vault.listChildren(folder)
+        vault.rotationPartBytes = 1
+        // Send 1 is the folder alone (its children wait for its key); sends 2 and 3 are one file each.
+        server.failRotationSends = setOf(3)
+        assertThrows(Exception::class.java) { vault.rotate(vault.item(folder)!!) }
+        assertEquals(3, server.rotationBatches.size)
+        val landed = server.rotationBatches[1].single()
+        val lost = server.rotationBatches[2].single()
+        assertEquals(setOf(one, two), setOf(landed, lost))
+        val target = server.node(folder).keyEpoch
+        assertEquals(target, server.node(landed).keyEpoch)
+        assertTrue(server.node(lost).keyEpoch < target)
+        // The folder and the part that landed keep their previous keys; the lost part keeps none.
+        assertEquals(setOf(folder, landed), vault.rotatedKeys.keys.map { it.second }.toSet())
+
+        vault.rotate(vault.item(folder) ?: vault.resolve(folder))
+        assertEquals(target, server.node(lost).keyEpoch)
+        assertEquals(listOf("one.md", "two.md"), vault.listChildren(folder).map { it.name }.sorted())
+        assertTrue(vault.rotatedKeys.isEmpty())
+    }
 }

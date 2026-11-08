@@ -46,6 +46,7 @@ import {
     type RekeyView,
 } from './api';
 import { MAX_FOLDER_BATCH, ROOT_NAME } from './protocol';
+import { rotationParts } from './rotation-parts';
 import { holdFolder, takeFolders } from './walk-holds';
 import {
     GranteeRefusedError,
@@ -300,6 +301,8 @@ export type DriveClientOptions = {
      * folder without it. It must throw rather than answer with less.
      */
     rotationTrust?: () => Promise<GroupRotationTrust>;
+    /* The most a rotation request's body weighs (`rotationParts`); tests lower it to send each node alone. */
+    rotationPartBytes?: number;
     /*
      * Opens this account's identity in the worker: every write is signed with
      * it. Called by `open` before anything else.
@@ -1906,8 +1909,10 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                               },
                     });
                 }
-                if (batch.length) {
-                    const { results } = await api.rotateNodes(ws, rootId, batch);
+                // Sent in parts by size, in order: what one part applied is kept even if a later
+                // part fails, since the server applies each node on its own.
+                for (const part of rotationParts(ws, batch, options.rotationPartBytes)) {
+                    const { results } = await api.rotateNodes(ws, rootId, part);
                     for (const r of results)
                         if (r.status === 'ok' || r.status === 'already') kept.add(r.id);
                     applied = kept.size;

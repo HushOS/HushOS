@@ -191,6 +191,8 @@ public actor Vault {
     /* What builds over a filed catalogue found different, until a sync returns it (Vault+Catalogue `takeOwed`). */
     var catalogueOwed: Set<String> = []
     public var catalogueState: CatalogueState = .idle
+    /* The most a rotation request's body weighs here (`rotationParts`); tests lower it to send each node alone. */
+    var rotationPartBytes = rotationRequestBytes
     /* The catalogue holds what the server sent this session, not only what the phone had: a node missing from it is gone. */
     var cataloguePulled = false
     var catalogueChildren: [String: Set<String>] = [:]

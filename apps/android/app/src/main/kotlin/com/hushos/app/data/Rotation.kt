@@ -90,6 +90,36 @@ internal fun Vault.granteeSealer(pins: Settings): (String, ServedIdentity) -> Pa
 }
 
 /*
+ * The most a rotation request's body may weigh (ROTATION_REQUEST_BYTES on the web). A batch is sent in parts up to this
+ * size, in order, each node whole: a page of widely shared files runs to megabytes (a hybrid share is about 6 KB) and
+ * the server applies each node on its own. A node heavier than this goes alone; the server's cap takes the heaviest
+ * node its schema allows.
+ */
+internal const val ROTATION_REQUEST_BYTES = 4 * 1024 * 1024
+
+internal fun rotationParts(workspaceId: String, nodes: JSONArray, limit: Int = ROTATION_REQUEST_BYTES): List<JSONArray> {
+    fun bytes(value: Any) = value.toString().toByteArray(Charsets.UTF_8).size
+    val empty = bytes(JSONObject().put("workspaceId", workspaceId).put("nodes", JSONArray()))
+    val parts = ArrayList<JSONArray>()
+    var part = JSONArray()
+    var size = empty
+    for (i in 0 until nodes.length()) {
+        val node = nodes.get(i)
+        val weight = bytes(node)
+        // A node after the first in a part costs its separating comma too.
+        if (part.length() > 0 && size + 1 + weight > limit) {
+            parts.add(part)
+            part = JSONArray()
+            size = empty
+        }
+        size += (if (part.length() > 0) 1 else 0) + weight
+        part.put(node)
+    }
+    if (part.length() > 0) parts.add(part)
+    return parts
+}
+
+/*
  * The nodes of a batch that may be sealed now: none whose parent is in the same batch (its fresh key would still be
  * pending, so the server could take the child and refuse the parent). Parents come first in the work, so a later batch
  * brings each deferred child once its parent's key is confirmed.
@@ -302,25 +332,31 @@ internal fun Vault.rotateSubtree(item: Opened, progress: (Int) -> Unit): Rotatio
             }
             if (batch.length() > 0) {
                 sending = true
-                val outcomes = api.rotateNodes(ws, rootId, batch)
-                // A signature the server could not verify is a bug here, not a race: trying again would loop until stuck.
-                if (outcomes.any { it.second == "bad-signature" }) throw ApiError(400, "This change was not signed by your keys. Sign in again and retry.")
-                val kept = outcomes.filter { it.second == "ok" || it.second == "already" }.map { it.first }.toSet()
-                applied = kept.size
-                // A node the server refused (or left out) keeps the key it holds there.
-                unstage(staged.keys.filter { it !in kept })
-                // What the server applied is committed here at once, so a later batch that stops has only its own nodes to
-                // undo: their rows (still at the old epoch) are read again, and a re-keyed node's previous key is kept for
-                // the children the walk hasn't reached, past this run if it stops.
-                for (id in staged.keys) {
-                    if (id !in kept) continue
-                    val epoch = epochs[id]
-                    val prior = previous[id]
-                    if (epoch != null && prior != null && prior.first != epoch) rotatedKeys[ws to id] = RotatedKey(rootId, epoch, prior.first, prior.second)
-                    nodes.forget(ws, id)
+                // Sent in parts by size, in order. Each part is settled as it lands, so a later part that stops undoes only
+                // its own nodes: the server applies each node on its own.
+                for (part in rotationParts(ws, batch, rotationPartBytes)) {
+                    val ids = (0 until part.length()).map { part.getJSONObject(it).getString("id") }
+                    val outcomes = api.rotateNodes(ws, rootId, part)
+                    // A signature the server could not verify is a bug here, not a race: trying again would loop until stuck.
+                    if (outcomes.any { it.second == "bad-signature" }) throw ApiError(400, "This change was not signed by your keys. Sign in again and retry.")
+                    val kept = outcomes.filter { it.second == "ok" || it.second == "already" }.map { it.first }.toSet()
+                    applied += kept.size
+                    // A node the server refused (or left out) keeps the key it holds there.
+                    unstage(ids.filter { it !in kept })
+                    // What the server applied is committed here at once, so a later batch that stops has only its own nodes
+                    // to undo: their rows (still at the old epoch) are read again, and a re-keyed node's previous key is kept
+                    // for the children the walk hasn't reached, past this run if it stops.
+                    for (id in ids) {
+                        if (id !in kept) continue
+                        val epoch = epochs[id]
+                        val prior = previous[id]
+                        if (epoch != null && prior != null && prior.first != epoch) rotatedKeys[ws to id] = RotatedKey(rootId, epoch, prior.first, prior.second)
+                        nodes.forget(ws, id)
+                    }
+                    ids.forEach { staged.remove(it) }
+                    if (kept.isNotEmpty()) catalogueState = CatalogueState.IDLE
+                    for ((id, outcome) in outcomes) if (outcome == "ok") sealedIn[id]?.let { seals.record(it) }
                 }
-                if (kept.isNotEmpty()) catalogueState = CatalogueState.IDLE
-                for ((id, outcome) in outcomes) if (outcome == "ok") sealedIn[id]?.let { seals.record(it) }
             }
         } catch (stopped: Exception) {
             unstage(staged.keys.toList())
