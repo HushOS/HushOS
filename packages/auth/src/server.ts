@@ -734,7 +734,8 @@ export async function getIdentityEnvelope(sessionToken: string | null) {
  * (docs/identity-pq-design.md 2): the same keys and key version plus an ML-DSA
  * key and the keys statement, checked here before the repository, under the
  * account's lock, checks the keys are the current ones. A device that lost a
- * race is answered 409 with the identity that won, to open and adopt.
+ * race is answered 409 with a message only; it reads the identity again
+ * (GET /auth/identity) and opens and adopts the one that won.
  */
 export async function upgradeIdentity(
     sessionToken: string | null,
