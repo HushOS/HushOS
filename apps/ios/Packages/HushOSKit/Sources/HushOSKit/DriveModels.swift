@@ -163,6 +163,11 @@ public struct UploadCompleted: Codable, Sendable {
     public let node: NodeView?
 }
 
+/* What aborting an upload answers: `{ aborted: true }`, the same whether or not it had already ended. */
+public struct UploadAborted: Codable, Sendable {
+    public let aborted: Bool
+}
+
 public struct NodeChange: Codable, Sendable {
     public let kind: String
     public let changeSeq: Int
