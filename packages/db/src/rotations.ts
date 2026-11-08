@@ -330,40 +330,76 @@ export async function rootWorkIn(tx: Tx, workspaceId: string) {
  * is wrapped under is. Breadth first, so a batch's parents come before its
  * children; `after` continues past a node the client could not apply yet.
  */
-export async function listRotationWork(input: {
+type RotationWorkInput = {
     workspaceId: string;
     rootId: string;
     targetEpoch: number;
     after?: { depth: number; id: string } | null;
     limit?: number;
-}) {
-    return db.transaction(async (tx) => {
-        const limit = Math.min(input.limit ?? ROTATION_BATCH, ROTATION_BATCH);
-        const after = input.after;
-        const result = await tx.execute<SubtreeRow>(sql`
-            with recursive tree as (
-                select id, 0 as depth from drive_nodes
-                where id = ${input.rootId} and workspace_id = ${input.workspaceId}
-                union all
-                select n.id, t.depth + 1 from drive_nodes n join tree t on n.parent_id = t.id
-                where n.purged_at is null and t.depth < 64
-            )
-            select t.id, t.depth from tree t join drive_nodes n on n.id = t.id
-            where n.purged_at is null
-              and (n.key_epoch < ${input.targetEpoch}
-                   or (t.depth > 0 and n.parent_key_epoch < ${input.targetEpoch}))
-              ${after ? sql`and (t.depth, n.id) > (${after.depth}, ${after.id}::uuid)` : sql``}
-            order by t.depth, n.id
-            limit ${limit + 1}
-        `);
-        const page = result.rows.slice(0, limit);
-        const last = page.at(-1);
-        return {
-            nodes: await workNodes(tx, page),
-            nextCursor:
-                result.rows.length > limit && last ? { depth: last.depth, id: last.id } : null,
-        };
-    });
+};
+export async function listRotationWork(input: RotationWorkInput) {
+    return db.transaction((tx) => rotationWorkIn(tx, input));
+}
+
+async function rotationWorkIn(tx: Tx, input: RotationWorkInput) {
+    const limit = Math.min(input.limit ?? ROTATION_BATCH, ROTATION_BATCH);
+    const after = input.after;
+    // A node made after the rotation began has a fresh key. Wrapped under the current key of a
+    // parent already at the target, or of another such node, it was only ever wrapped under
+    // keys no one the rotation shut out holds, so that whole fresh subtree is left out: else a
+    // writer who kept adding nodes would keep the rotation open. `chain` is the fresh
+    // subtree's ids from its top down to the node; `above` is the parent's. Two exceptions:
+    // - A node wrapped under a key its parent no longer has (the parent re-keyed since) is not
+    //   fresh: it is re-wrapped, or the finish would forget the key that opens it.
+    // - An older node in a fresh subtree (moved there, its own created_at and key kept) that
+    //   still needs its turn makes the whole fresh subtree above it work, parents first.
+    const result = await tx.execute<SubtreeRow>(sql`
+        with recursive started as (
+            select coalesce(
+                (select r.started_at from drive_rotations r
+                 where r.workspace_id = ${input.workspaceId}
+                   and r.node_id = ${input.rootId}
+                   and r.finished_at is null),
+                'infinity'::timestamptz) as at
+        ),
+        tree as (
+            select id, 0 as depth, key_epoch, parent_key_epoch,
+                   array[]::uuid[] as chain, array[]::uuid[] as above
+            from drive_nodes
+            where id = ${input.rootId} and workspace_id = ${input.workspaceId}
+            union all
+            select n.id, t.depth + 1, n.key_epoch, n.parent_key_epoch,
+                   case when n.created_at > (select at from started)
+                             and n.parent_key_epoch = t.key_epoch
+                             and (n.parent_key_epoch >= ${input.targetEpoch}
+                                  or cardinality(t.chain) > 0)
+                        then t.chain || n.id
+                        else array[]::uuid[] end,
+                   t.chain
+            from drive_nodes n join tree t on n.parent_id = t.id
+            where n.purged_at is null and t.depth < 64
+        ),
+        reached as (
+            select distinct t.above[1] as top from tree t
+            where cardinality(t.chain) = 0 and cardinality(t.above) > 0
+              and (t.key_epoch < ${input.targetEpoch}
+                   or t.parent_key_epoch < ${input.targetEpoch})
+        )
+        select t.id, t.depth from tree t join drive_nodes n on n.id = t.id
+        where n.purged_at is null
+          and (n.key_epoch < ${input.targetEpoch}
+               or (t.depth > 0 and n.parent_key_epoch < ${input.targetEpoch}))
+          and (cardinality(t.chain) = 0 or t.chain[1] in (select top from reached))
+          ${after ? sql`and (t.depth, n.id) > (${after.depth}, ${after.id}::uuid)` : sql``}
+        order by t.depth, n.id
+        limit ${limit + 1}
+    `);
+    const page = result.rows.slice(0, limit);
+    const last = page.at(-1);
+    return {
+        nodes: await workNodes(tx, page),
+        nextCursor: result.rows.length > limit && last ? { depth: last.depth, id: last.id } : null,
+    };
 }
 
 /*
@@ -984,6 +1020,10 @@ export async function finishRotation(input: {
         await nextChangeSeq(tx, input.workspaceId);
         const rotation = await activeRotation(tx, input.workspaceId);
         if (!rotation || rotation.nodeId !== input.rootId) return false;
+        // Again under the workspace's lock, which every rotation batch takes: a batch from a page
+        // read earlier may have re-keyed a fresh folder since the check above, making what hangs
+        // under it work, and clearing the previous keys now would lose the key that opens it.
+        if ((await rotationWorkIn(tx, { ...input, limit: 1 })).nodes.length) return false;
         const ids = (await subtree(tx, input.rootId)).map((row) => row.id);
         for (let at = 0; at < ids.length; at += 1000) {
             const slice = ids.slice(at, at + 1000);
