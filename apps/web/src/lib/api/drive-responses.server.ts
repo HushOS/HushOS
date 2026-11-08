@@ -403,13 +403,18 @@ export const epochsResponse = t.Object({ from: t.Integer(), to: t.Integer() });
 /* POST /drive/workspaces/:id/root: false when the root was there already (a retry). */
 export const rootResponse = t.Object({ created: t.Boolean(), root: node });
 
-/* POST /drive/folders: the folders in the order sent, and the last change number they took. */
-export const foldersResponse = t.Object({ nodes: t.Array(node), changeSeq: t.Integer() });
+/*
+ * POST /drive/folders: the folders in the order sent, and the last change number they took; null,
+ * with each folder a grantee's, when they were made through a share.
+ */
+export const foldersResponse = t.Object({
+    nodes: t.Array(node),
+    changeSeq: t.Nullable(t.Integer()),
+});
 
 /*
- * One node as it is now: rename, move, trash, restore, copy and a version restored, in the member's
- * view. A known gap, not a choice: an editor working through a share is served it too, with the
- * owner's changeSeq, where every read gives them granteeView without it. To fix in the handlers.
+ * One node as it is now: rename, move, trash, restore, copy and a version restored. A member gets
+ * the member's view; an editor working through a share the grantee's, without the owner's changeSeq.
  */
 export const nodeResponse = t.Object({ node });
 
@@ -447,7 +452,8 @@ export const trashBatchResponse = t.Object({
                 id: t.String(),
                 status: t.Literal('trashed'),
                 trashedAt: t.String(),
-                changeSeq: t.Integer(),
+                // Null for an editor through a share: the owner's change count is a member's.
+                changeSeq: t.Nullable(t.Integer()),
             }),
             covered,
             t.Object({ ...refusedFields, reason: trashRefusal }),
