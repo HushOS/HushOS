@@ -657,8 +657,8 @@ export function groupsGate() {
 
 /*
  * The routes that let people in, change roles or seal family keys
- * (docs/optional-verification.md 7.3): as groupUser, but a client below the
- * family-change floor is refused with 426 before anything is read or stored,
+ * (docs/optional-verification.md 7.3): a client below the family-change floor
+ * is refused with 426 before the handler reads or stores anything of the group,
  * so a tab still running code from before the family-write rules changed
  * can't change a family. Every other route keeps serving it
  * (lib/group-write-floor.ts).
@@ -677,14 +677,16 @@ const SIGN_IN = {
 
 /*
  * Each route's checks, declared once on its feature's guard (Elysia macros), not called in every
- * handler. Listed in a guard in the order they run: a route can't be reached without them, and a
- * handler gets what they found (`user`, `operator`, `client`) from its context.
+ * handler. A guard's checks run in the order its options list them, after the body is parsed and
+ * validated and before the handler; a route's own options (`groupWrite`) run after its guard's.
+ * A route can't be reached without them, and a handler gets what they found (`user`, `operator`,
+ * `client`) from its context.
  *
  * - groups: the server offers groups (GROUPS_ENABLED), or 501.
  * - mutation: a write (POST, PUT, PATCH, DELETE) carries this app's Origin and JSON, or 403/400.
  * - client: a named client at or above the server's minimums, or 426.
  * - groupWrite: a client at or above the family-change floor (docs/optional-verification.md 7.3),
- *   or 426, before anything is read or stored.
+ *   or 426, before the handler reads or stores anything.
  * - session: a signed-in account, as `user`, or 401 in the feature's words.
  * - admin: an operator, as `operator`: 401 signed out, 404 to anyone else.
  */

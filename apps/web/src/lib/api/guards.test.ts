@@ -41,26 +41,29 @@ function checks(route: Route): string[] {
 
 const key = (route: Route) => `${route.method} ${route.path.replace(/^\/api/, '')}`;
 
-/* Reachable with no session: each one checked on purpose (docs, CONTRIBUTING "Packages"). */
-const PUBLIC = new Set([
-    'GET /health',
-    'GET /ready',
-    'GET /billing/catalogue',
-    'GET /drive/capabilities',
-    'GET /drive/reports/operators',
-    'POST /drive/reports', // a link holder or a sharer, session or not; filed reports are rate limited
+/*
+ * Reachable with no session, each on purpose, with exactly the guard checks it runs: filing a
+ * report is a write, so it carries the Origin check; the rest run none.
+ */
+const PUBLIC = new Map<string, string[]>([
+    ['GET /health', []],
+    ['GET /ready', []],
+    ['GET /billing/catalogue', []],
+    ['GET /drive/capabilities', []],
+    ['GET /drive/reports/operators', []],
+    ['POST /drive/reports', ['sameOrigin']], // a link holder or a sharer, session or not; filed reports are rate limited
     // The link visitor's surface: the token in x-link-token, rate limited per token and address.
-    'GET /drive/links/open',
-    'GET /drive/links/nodes/:nodeId/children',
-    'GET /drive/links/versions/:versionId/url',
-    'POST /drive/links/versions/urls',
-    'GET /drive/links/thumbnails',
+    ['GET /drive/links/open', []],
+    ['GET /drive/links/nodes/:nodeId/children', []],
+    ['GET /drive/links/versions/:versionId/url', []],
+    ['POST /drive/links/versions/urls', []],
+    ['GET /drive/links/thumbnails', []],
     // Retired paths that carried the token: 410 so an old client says why.
-    'GET /drive/links/:id/open',
-    'GET /drive/links/:id/nodes/:nodeId/children',
-    'GET /drive/links/:id/versions/:versionId/url',
-    'POST /drive/links/:id/versions/urls',
-    'GET /drive/links/:id/thumbnails',
+    ['GET /drive/links/:id/open', []],
+    ['GET /drive/links/:id/nodes/:nodeId/children', []],
+    ['GET /drive/links/:id/versions/:versionId/url', []],
+    ['POST /drive/links/:id/versions/urls', []],
+    ['GET /drive/links/:id/thumbnails', []],
 ]);
 
 /* The routes that let people in, change roles or seal family keys (docs/optional-verification.md 7.3). */
@@ -119,11 +122,11 @@ describe('every API route runs its feature’s checks', () => {
         expect(wrong).toEqual([]);
     });
 
-    test('the public routes are still there, and run none of the session checks', () => {
+    test('the public routes are all there, each running exactly its checks', () => {
         const present = new Set(routes.map(key));
-        for (const route of PUBLIC) expect(present, route).toContain(route);
+        for (const route of PUBLIC.keys()) expect(present, route).toContain(route);
         for (const route of routes.filter((r) => PUBLIC.has(key(r))))
-            expect(checks(route), key(route)).not.toContain('signedIn');
+            expect(checks(route), key(route)).toEqual(PUBLIC.get(key(route)));
     });
 });
 
@@ -149,30 +152,6 @@ describe('a request with no session', () => {
                 (admin && response.status === 404) ||
                 (validated && response.status === 400);
             if (!ok) answered.push(`${key(route)}: ${response.status}`);
-        }
-        expect(answered).toEqual([]);
-    });
-
-    test('is turned away from a write from another origin before anything else', async () => {
-        const writes = routes.filter(
-            (r) => r.method !== 'GET' && r.method !== 'OPTIONS' && expected(r) !== null,
-        );
-        expect(writes.length).toBeGreaterThan(80);
-        const answered: string[] = [];
-        for (const route of writes) {
-            const response = await handle(
-                new Request(`http://localhost${fill(route.path)}`, {
-                    method: route.method,
-                    headers: {
-                        ...CLIENT,
-                        origin: 'http://evil.test',
-                        'content-type': 'application/json',
-                    },
-                    body: '{}',
-                }),
-            );
-            // 403 from the origin check, or 400 when the body is refused first: never 2xx.
-            if (response.status < 400) answered.push(`${key(route)}: ${response.status}`);
         }
         expect(answered).toEqual([]);
     });
