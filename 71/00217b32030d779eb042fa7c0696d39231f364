@@ -1,0 +1,19 @@
+apps/web/src/lib/api/auth-responses.test.ts
+  s_566b8e0c4467a4::t_0a9bc04dd4d24b 826-828,834
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7100217b32030d779eb042fa7c0696d39231f364",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
