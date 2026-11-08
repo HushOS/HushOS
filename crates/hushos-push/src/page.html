@@ -1,47 +1,126 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>HushOS push relay</title>
-<meta name="description" content="Wakes HushOS phone apps through Apple and Google, for hushos.com and self-hosted HushOS servers.">
-<style>
-:root { color-scheme: light dark; }
-body { margin: 0; font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; }
-main { max-width: 40rem; margin: 0 auto; padding: 3rem 1rem 4rem; }
-h1 { font-size: 1.75rem; line-height: 1.2; margin: 0 0 1rem; }
-h2 { font-size: 1.125rem; margin: 2rem 0 0.5rem; }
-p, ul { margin: 0 0 1rem; }
-ul { padding-left: 1.25rem; }
-code { font: 0.9em ui-monospace, SFMono-Regular, Menlo, monospace; }
-</style>
-</head>
-<body>
-<main>
-<h1>HushOS push relay</h1>
-<p>This service wakes the HushOS apps on iPhone and Android when something happens in an account, such as a new sign-in or a file shared with you. Apple and Google deliver notifications to an app only from its publisher, so HushOS servers with notifications turned on, hushos.com or one you run yourself, send their wake-ups for phones through here by default. Phone notifications are still being built and aren't switched on yet.</p>
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>HushOS push relay</title>
+        <meta
+            name="description"
+            content="Wakes HushOS phone apps through Apple and Google, for hushos.com and self-hosted HushOS servers."
+        />
+        <style>
+            :root {
+                color-scheme: light dark;
+            }
+            body {
+                margin: 0;
+                font:
+                    16px/1.6 system-ui,
+                    -apple-system,
+                    'Segoe UI',
+                    sans-serif;
+            }
+            main {
+                max-width: 40rem;
+                margin: 0 auto;
+                padding: 3rem 1rem 4rem;
+            }
+            h1 {
+                font-size: 1.75rem;
+                line-height: 1.2;
+                margin: 0 0 1rem;
+            }
+            h2 {
+                font-size: 1.125rem;
+                margin: 2rem 0 0.5rem;
+            }
+            p,
+            ul {
+                margin: 0 0 1rem;
+            }
+            ul {
+                padding-left: 1.25rem;
+            }
+            code {
+                font:
+                    0.9em ui-monospace,
+                    SFMono-Regular,
+                    Menlo,
+                    monospace;
+            }
+        </style>
+    </head>
+    <body>
+        <main>
+            <h1>HushOS push relay</h1>
+            <p>
+                This service wakes the HushOS apps on iPhone and Android when something happens in
+                an account, such as a new sign-in or a file shared with you. Apple and Google
+                deliver notifications to an app only from its publisher, so HushOS servers with
+                notifications turned on, hushos.com or one you run yourself, send their wake-ups for
+                phones through here by default. Phone notifications are still being built and aren't
+                switched on yet.
+            </p>
 
-<h2>What a wake-up carries</h2>
-<p>A random event ID and a short label for the account. Never what happened, who it involves or a file name. The app fetches the event from its own server, over its own connection, and writes the notification itself. On iPhone, Apple shows "New activity in HushOS" if the app can't.</p>
-<p>Apple and Google see that a HushOS app on a device got a wake-up, when, and the label, which stays the same for each account on that device.</p>
+            <h2>What a wake-up carries</h2>
+            <p>
+                A random event ID and a short label for the account. Never what happened, who it
+                involves or a file name. The app fetches the event from its own server, over its own
+                connection, and writes the notification itself. On iPhone, Apple shows "New activity
+                in HushOS" if the app can't.
+            </p>
+            <p>
+                Apple and Google see that a HushOS app on a device got a wake-up, when, and the
+                label, which stays the same for each account on that device.
+            </p>
 
-<h2>What this service keeps</h2>
-<ul>
-<li><strong>On disk:</strong> one entry for each account signed in on each phone. It holds the delivery code Apple or Google gave the phone, which of the two it is, and scrambled (hashed) copies of a random ID and a deletion key the phone was given. No account, email, name, server address or times.</li>
-<li><strong>In memory, to limit abuse:</strong> the addresses of servers and phones that used it and when, kept at most about an hour after their last use. In that hour, the times could link a phone's last wake-up to the server that sent it.</li>
-<li><strong>Logs:</strong> its own logs are hourly counts, and the proxy in front of it keeps none.</li>
-</ul>
-<p>So it learns that a phone got a wake-up, from which server address, when, and whether it was a security notice. When Apple or Google report a phone gone, its entries are deleted; copies in backups go when those backups expire.</p>
+            <h2>What this service keeps</h2>
+            <ul>
+                <li>
+                    <strong>On disk:</strong> one entry for each account signed in on each phone. It
+                    holds the delivery code Apple or Google gave the phone, which of the two it is,
+                    and scrambled (hashed) copies of a random ID and a deletion key the phone was
+                    given. No account, email, name, server address or times.
+                </li>
+                <li>
+                    <strong>In memory, to limit abuse:</strong> the addresses of servers and phones
+                    that used it and when, kept at most about an hour after their last use. In that
+                    hour, the times could link a phone's last wake-up to the server that sent it.
+                </li>
+                <li>
+                    <strong>Logs:</strong> its own logs are hourly counts, and the proxy in front of
+                    it keeps none.
+                </li>
+            </ul>
+            <p>
+                So it learns that a phone got a wake-up, from which server address, when, and
+                whether it was a security notice. When Apple or Google report a phone gone, its
+                entries are deleted; copies in backups go when those backups expire.
+            </p>
 
-<h2>Running your own HushOS server?</h2>
-<p>With notifications turned on (<code>NOTIFICATIONS_ENABLED</code>), your server sends wake-ups here for phones signed in to it. To send none, set <code>PUSH_RELAY_URL</code> to an empty value: the apps will then show notifications only while they are open. Browsers don't use this service: your server sends to the browser's own push service.</p>
+            <h2>Running your own HushOS server?</h2>
+            <p>
+                With notifications turned on (<code>NOTIFICATIONS_ENABLED</code>), your server sends
+                wake-ups here for phones signed in to it. To send none, set
+                <code>PUSH_RELAY_URL</code> to an empty value: the apps will then show notifications
+                only while they are open. Browsers don't use this service: your server sends to the
+                browser's own push service.
+            </p>
 
-<h2>More</h2>
-<ul>
-<li><a href="https://github.com/HushOS/HushOS/tree/main/crates/hushos-push">Source code</a></li>
-<li><a href="https://github.com/HushOS/HushOS/blob/main/docs/self-hosting.md">Self-hosting guide</a></li>
-<li><a href="https://hushos.com/security">How HushOS protects your data</a></li>
-</ul>
-</main>
-</body>
+            <h2>More</h2>
+            <ul>
+                <li>
+                    <a href="https://github.com/HushOS/HushOS/tree/main/crates/hushos-push"
+                        >Source code</a
+                    >
+                </li>
+                <li>
+                    <a href="https://github.com/HushOS/HushOS/blob/main/docs/self-hosting.md"
+                        >Self-hosting guide</a
+                    >
+                </li>
+                <li><a href="https://hushos.com/security">How HushOS protects your data</a></li>
+            </ul>
+        </main>
+    </body>
 </html>
