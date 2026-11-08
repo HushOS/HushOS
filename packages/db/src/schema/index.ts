@@ -7,3 +7,4 @@ export * from './storage';
 export * from './billing';
 export * from './drive';
 export * from './growth';
+export * from './notifications';

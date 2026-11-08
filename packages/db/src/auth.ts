@@ -20,7 +20,13 @@ import { departAllForDeletion } from './groups';
 import { ownStorage, poolName, storageFigures } from './pool';
 import { pgCode } from './readiness';
 import { keyedHash } from './hash-key';
-import { personalWorkspaces, workspaceKeys, workspaceStorage, workspaces } from './schema';
+import {
+    notificationRegistrations,
+    personalWorkspaces,
+    workspaceKeys,
+    workspaceStorage,
+    workspaces,
+} from './schema';
 import {
     deviceSessionStatement,
     keysStatement,
@@ -556,6 +562,10 @@ export async function signOutDevice(tokenHash: Buffer) {
                     and(eq(accountDevices.id, session.deviceId), isNull(accountDevices.revokedAt)),
                 );
             await tx.delete(sessions).where(eq(sessions.deviceId, session.deviceId));
+            // Signed out, the device gets no more pushes.
+            await tx
+                .delete(notificationRegistrations)
+                .where(eq(notificationRegistrations.deviceId, session.deviceId));
         }
         await tx.delete(sessions).where(eq(sessions.tokenHash, tokenHash));
     });
@@ -709,6 +719,10 @@ async function actingDevice(tx: Tx, userId: string, sessionTokenHash: Buffer) {
 /* Ends every session of `deviceIds` and remembers their tokens for a week, so the devices learn why. */
 async function endDeviceSessions(tx: Tx, deviceIds: string[]) {
     if (deviceIds.length === 0) return;
+    // A removed device gets no more pushes (docs/devices-design.md 5).
+    await tx
+        .delete(notificationRegistrations)
+        .where(inArray(notificationRegistrations.deviceId, deviceIds));
     const ended = await tx
         .delete(sessions)
         .where(inArray(sessions.deviceId, deviceIds))

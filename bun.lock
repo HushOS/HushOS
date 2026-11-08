@@ -121,6 +121,7 @@
         "@hushos/db": "workspace:*",
         "@hushos/emails": "workspace:*",
         "@hushos/env": "workspace:*",
+        "@hushos/logging": "workspace:*",
         "zustand": "5.1.0",
       },
       "devDependencies": {

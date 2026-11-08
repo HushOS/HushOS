@@ -1,0 +1,711 @@
+{
+    "type": "diff",
+    "version": "9",
+    "dialect": "postgres",
+    "id": "89202b3b-241c-4f43-b16c-a72f3412c3b4",
+    "prevIds": ["06196844-5470-4ccf-ac38-f7fc28e22503"],
+    "footprints": [
+        {
+            "statementType": "create_table",
+            "statementTarget": ["table", "public", "notification_events"],
+            "writes": [
+                "s|tbl|public.notification_events",
+                "n|tbl|public.notification_events",
+                "e|tbl|public.notification_events",
+                "n|rel|public.notification_events",
+                "n|type|public.notification_events",
+                "n|rel|public.notification_events_pkey",
+                "n|rel|public.notification_events_id_key"
+            ],
+            "reads": ["n|sch|public"]
+        },
+        {
+            "statementType": "create_table",
+            "statementTarget": ["table", "public", "notification_registrations"],
+            "writes": [
+                "s|tbl|public.notification_registrations",
+                "n|tbl|public.notification_registrations",
+                "e|tbl|public.notification_registrations",
+                "n|rel|public.notification_registrations",
+                "n|type|public.notification_registrations",
+                "n|rel|public.notification_registrations_pkey"
+            ],
+            "reads": ["n|sch|public"]
+        },
+        {
+            "statementType": "create_table",
+            "statementTarget": ["table", "public", "notification_settings"],
+            "writes": [
+                "s|tbl|public.notification_settings",
+                "n|tbl|public.notification_settings",
+                "e|tbl|public.notification_settings",
+                "n|rel|public.notification_settings",
+                "n|type|public.notification_settings",
+                "n|rel|public.notification_settings_pkey"
+            ],
+            "reads": ["n|sch|public"]
+        },
+        {
+            "statementType": "create_index",
+            "statementTarget": [
+                "index",
+                "public",
+                "notification_events",
+                "notification_events_user_seq_idx"
+            ],
+            "writes": [
+                "s|idx|public.notification_events_user_seq_idx",
+                "n|idx|public.notification_events_user_seq_idx",
+                "e|idx|public.notification_events_user_seq_idx",
+                "n|rel|public.notification_events_user_seq_idx"
+            ],
+            "reads": [
+                "n|tbl|public.notification_events",
+                "n|sch|public",
+                "n|col|public.notification_events.user_id",
+                "n|col|public.notification_events.seq"
+            ]
+        },
+        {
+            "statementType": "create_index",
+            "statementTarget": [
+                "index",
+                "public",
+                "notification_events",
+                "notification_events_created_idx"
+            ],
+            "writes": [
+                "s|idx|public.notification_events_created_idx",
+                "n|idx|public.notification_events_created_idx",
+                "e|idx|public.notification_events_created_idx",
+                "n|rel|public.notification_events_created_idx"
+            ],
+            "reads": [
+                "n|tbl|public.notification_events",
+                "n|sch|public",
+                "n|col|public.notification_events.created_at"
+            ]
+        },
+        {
+            "statementType": "create_index",
+            "statementTarget": [
+                "index",
+                "public",
+                "notification_registrations",
+                "notification_registrations_user_idx"
+            ],
+            "writes": [
+                "s|idx|public.notification_registrations_user_idx",
+                "n|idx|public.notification_registrations_user_idx",
+                "e|idx|public.notification_registrations_user_idx",
+                "n|rel|public.notification_registrations_user_idx"
+            ],
+            "reads": [
+                "n|tbl|public.notification_registrations",
+                "n|sch|public",
+                "n|col|public.notification_registrations.user_id"
+            ]
+        },
+        {
+            "statementType": "create_fk",
+            "statementTarget": ["table", "public", "notification_events"],
+            "writes": [
+                "s|fk|public.notification_events.notification_events_user_id_users_id_fkey",
+                "n|fk|public.notification_events.notification_events_user_id_users_id_fkey",
+                "e|fk|public.notification_events.notification_events_user_id_users_id_fkey",
+                "n|con|public.notification_events.notification_events_user_id_users_id_fkey"
+            ],
+            "reads": [
+                "n|tbl|public.notification_events",
+                "n|sch|public",
+                "n|tbl|public.users",
+                "n|sch|public",
+                "n|col|public.notification_events.user_id",
+                "n|col|public.users.id",
+                "e|uniqueness|public.users.id"
+            ]
+        },
+        {
+            "statementType": "create_fk",
+            "statementTarget": ["table", "public", "notification_registrations"],
+            "writes": [
+                "s|fk|public.notification_registrations.notification_registrations_device_id_account_devices_id_fkey",
+                "n|fk|public.notification_registrations.notification_registrations_device_id_account_devices_id_fkey",
+                "e|fk|public.notification_registrations.notification_registrations_device_id_account_devices_id_fkey",
+                "n|con|public.notification_registrations.notification_registrations_device_id_account_devices_id_fkey"
+            ],
+            "reads": [
+                "n|tbl|public.notification_registrations",
+                "n|sch|public",
+                "n|tbl|public.account_devices",
+                "n|sch|public",
+                "n|col|public.notification_registrations.device_id",
+                "n|col|public.account_devices.id",
+                "e|uniqueness|public.account_devices.id"
+            ]
+        },
+        {
+            "statementType": "create_fk",
+            "statementTarget": ["table", "public", "notification_registrations"],
+            "writes": [
+                "s|fk|public.notification_registrations.notification_registrations_user_id_users_id_fkey",
+                "n|fk|public.notification_registrations.notification_registrations_user_id_users_id_fkey",
+                "e|fk|public.notification_registrations.notification_registrations_user_id_users_id_fkey",
+                "n|con|public.notification_registrations.notification_registrations_user_id_users_id_fkey"
+            ],
+            "reads": [
+                "n|tbl|public.notification_registrations",
+                "n|sch|public",
+                "n|tbl|public.users",
+                "n|sch|public",
+                "n|col|public.notification_registrations.user_id",
+                "n|col|public.users.id",
+                "e|uniqueness|public.users.id"
+            ]
+        },
+        {
+            "statementType": "create_fk",
+            "statementTarget": ["table", "public", "notification_settings"],
+            "writes": [
+                "s|fk|public.notification_settings.notification_settings_user_id_users_id_fkey",
+                "n|fk|public.notification_settings.notification_settings_user_id_users_id_fkey",
+                "e|fk|public.notification_settings.notification_settings_user_id_users_id_fkey",
+                "n|con|public.notification_settings.notification_settings_user_id_users_id_fkey"
+            ],
+            "reads": [
+                "n|tbl|public.notification_settings",
+                "n|sch|public",
+                "n|tbl|public.users",
+                "n|sch|public",
+                "n|col|public.notification_settings.user_id",
+                "n|col|public.users.id",
+                "e|uniqueness|public.users.id"
+            ]
+        }
+    ],
+    "deltas": [
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "name": "notification_events",
+                "isRlsEnabled": false,
+                "entityType": "tables"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "name": "notification_registrations",
+                "isRlsEnabled": false,
+                "entityType": "tables"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "name": "notification_settings",
+                "isRlsEnabled": false,
+                "entityType": "tables"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_events",
+                "name": "seq",
+                "type": "bigserial",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_events",
+                "name": "id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "gen_random_uuid()",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_events",
+                "name": "user_id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_events",
+                "name": "kind",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_events",
+                "name": "data",
+                "type": "jsonb",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "'{}'",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_events",
+                "name": "created_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "now()",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_registrations",
+                "name": "device_id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_registrations",
+                "name": "user_id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_registrations",
+                "name": "handle",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_registrations",
+                "name": "list_seq",
+                "type": "bigint",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "0",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_registrations",
+                "name": "other_pinged_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_registrations",
+                "name": "other_ping_open",
+                "type": "boolean",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "false",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_registrations",
+                "name": "created_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "now()",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_registrations",
+                "name": "updated_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "now()",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_settings",
+                "name": "user_id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_settings",
+                "name": "shared",
+                "type": "boolean",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "true",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_settings",
+                "name": "family",
+                "type": "boolean",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "true",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_settings",
+                "name": "updated_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "now()",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_events",
+                "name": "notification_events_user_seq_idx",
+                "nameExplicit": true,
+                "columns": [
+                    {
+                        "value": "user_id",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": false,
+                        "opclass": null
+                    },
+                    {
+                        "value": "seq",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": false,
+                        "opclass": null
+                    }
+                ],
+                "isUnique": false,
+                "where": null,
+                "with": "",
+                "method": "btree",
+                "concurrently": false,
+                "entityType": "indexes"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_events",
+                "name": "notification_events_created_idx",
+                "nameExplicit": true,
+                "columns": [
+                    {
+                        "value": "created_at",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": false,
+                        "opclass": null
+                    }
+                ],
+                "isUnique": false,
+                "where": null,
+                "with": "",
+                "method": "btree",
+                "concurrently": false,
+                "entityType": "indexes"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_registrations",
+                "name": "notification_registrations_user_idx",
+                "nameExplicit": true,
+                "columns": [
+                    {
+                        "value": "user_id",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": false,
+                        "opclass": null
+                    }
+                ],
+                "isUnique": false,
+                "where": null,
+                "with": "",
+                "method": "btree",
+                "concurrently": false,
+                "entityType": "indexes"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_events",
+                "name": "notification_events_user_id_users_id_fkey",
+                "nameExplicit": false,
+                "columns": ["user_id"],
+                "schemaTo": "public",
+                "tableTo": "users",
+                "columnsTo": ["id"],
+                "onUpdate": "NO ACTION",
+                "onDelete": "CASCADE",
+                "entityType": "fks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_registrations",
+                "name": "notification_registrations_device_id_account_devices_id_fkey",
+                "nameExplicit": false,
+                "columns": ["device_id"],
+                "schemaTo": "public",
+                "tableTo": "account_devices",
+                "columnsTo": ["id"],
+                "onUpdate": "NO ACTION",
+                "onDelete": "CASCADE",
+                "entityType": "fks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_registrations",
+                "name": "notification_registrations_user_id_users_id_fkey",
+                "nameExplicit": false,
+                "columns": ["user_id"],
+                "schemaTo": "public",
+                "tableTo": "users",
+                "columnsTo": ["id"],
+                "onUpdate": "NO ACTION",
+                "onDelete": "CASCADE",
+                "entityType": "fks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_settings",
+                "name": "notification_settings_user_id_users_id_fkey",
+                "nameExplicit": false,
+                "columns": ["user_id"],
+                "schemaTo": "public",
+                "tableTo": "users",
+                "columnsTo": ["id"],
+                "onUpdate": "NO ACTION",
+                "onDelete": "CASCADE",
+                "entityType": "fks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_events",
+                "name": "notification_events_pkey",
+                "columns": ["seq"],
+                "nameExplicit": false,
+                "entityType": "pks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_registrations",
+                "name": "notification_registrations_pkey",
+                "columns": ["device_id"],
+                "nameExplicit": false,
+                "entityType": "pks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_settings",
+                "name": "notification_settings_pkey",
+                "columns": ["user_id"],
+                "nameExplicit": false,
+                "entityType": "pks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_events",
+                "name": "notification_events_id_key",
+                "nameExplicit": false,
+                "columns": ["id"],
+                "nullsNotDistinct": false,
+                "entityType": "uniques"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_events",
+                "name": "notification_events_kind_valid",
+                "value": "kind in ('new-device', 'device-removed', 'devices-removed', 'password-attempts', 'shared', 'family-invitation', 'family-waiting')",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_registrations",
+                "name": "notification_registrations_handle_valid",
+                "value": "\"handle\" ~ '^[A-Za-z0-9_-]{43}$'",
+                "entityType": "checks"
+            }
+        }
+    ]
+}
