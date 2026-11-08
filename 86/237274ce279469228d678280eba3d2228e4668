@@ -1,0 +1,28 @@
+apps/web/src/lib/api/drive-responses.server.ts
+  s_566b8e0c4467a4::t_3511fb95ffae64 6-10
+  s_566b8e0c4467a4::t_9a3f6e2d2eee33 373-432,434-445,447-454,456-464,466-632
+  s_566b8e0c4467a4::t_6a44d3059a073a 433
+  s_566b8e0c4467a4::t_dd12bec84dd6ef 446
+  s_566b8e0c4467a4::t_83ece65e68a999 455
+  s_566b8e0c4467a4::t_a8b4d644b7de2f 465
+apps/web/src/lib/api/drive-responses.test.ts
+  s_566b8e0c4467a4::t_e4071a7fe95b9c 8-10,12-13,15-20,22,25,27,29-38,41,45-49,57,101,385-442,831-1221,1268-1307,1321-1391,1393-1400,1402-1406
+apps/web/src/lib/api/drive.server.ts
+  s_566b8e0c4467a4::t_7a4969aabea206 41-43,45-46,48-53,55,58,60,62-72,75,79-83,91,129-133,148,164,181-188,215,236,250,282,298,313,323,341,352,362,373,406,415,429,448,479,489,501,515,538,558,568,584,629,639,668,702,712,735,771,797,804,809-813,819-823,833,843,853
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "86237274ce279469228d678280eba3d2228e4668",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
