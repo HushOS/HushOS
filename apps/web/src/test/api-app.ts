@@ -28,3 +28,9 @@ export async function loadApi() {
 }
 
 export type ApiRoute = { method: string; path: string; hooks?: Record<string, unknown> };
+
+/* The API module itself, for tests of its HTTP edge (handleApiRequest) as well as the app. */
+export async function loadApiModule() {
+    await loadApi();
+    return import('@/lib/api.server');
+}
