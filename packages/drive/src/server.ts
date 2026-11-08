@@ -550,11 +550,12 @@ export async function allocateEpochs(userId: string, workspaceId: string, count:
     const writer = await requireEpochs(userId, workspaceId);
     if (!Number.isInteger(count) || count < 1 || count > 10_000)
         throw new DriveError('invalid', 'Invalid epoch count.');
-    // An editor through a share gets epochs that say nothing of the owner's counter.
-    const range =
-        writer === 'member'
-            ? await driveRepository.allocateKeyEpochs(workspaceId, count, userId)
-            : await driveRepository.allocateGranteeKeyEpochs(workspaceId, count);
+    // A personal drive's epochs say nothing of its counter, to its owner or an editor alike.
+    const range = await driveRepository.allocateKeyEpochs(
+        workspaceId,
+        count,
+        writer === 'member' ? userId : undefined,
+    );
     if (!range) throw notFound();
     return range;
 }

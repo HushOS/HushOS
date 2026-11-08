@@ -742,10 +742,10 @@ describe('rotation', () => {
             userId: owner.userId,
         };
         await signed.rotateNodes({ ...ws, nodes: [rotated(project, rootEpoch)] });
-        // A folder created under the rotated root draws an epoch above the target but is
-        // wrapped under... the new key already, so it is not work. Create one under the
-        // unrotated child instead: wrapped under inner's old key, its own epoch above target.
-        const late = await folder(inner.id, inner.keyEpoch);
+        // A folder made after the rotation began, under the unrotated child, at an epoch above the
+        // target (a personal drive takes any to LOW_EPOCH_MAX): wrapped under inner's old key,
+        // but a key that is fresh, so it is re-wrapped, not re-keyed.
+        const late = await folder(inner.id, inner.keyEpoch, ws.targetEpoch + 1);
         expect(late.keyEpoch).toBeGreaterThan(ws.targetEpoch);
         // inner rotates; the share on it is not re-sealed by the client: revoked, not left dead.
         const innerNow = await current(inner.id);

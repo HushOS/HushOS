@@ -346,6 +346,15 @@ export async function setTestAdmin(userId: string) {
     await db.update(users).set({ role: 'admin' }).where(eq(users.id, userId));
 }
 
+/* A workspace's key epoch counter as stored, past every route: what a grantee must not learn. */
+export async function testKeyEpochSeq(workspaceId: string) {
+    const [row] = await db
+        .select({ seq: workspaces.keyEpochSeq })
+        .from(workspaces)
+        .where(eq(workspaces.id, workspaceId));
+    return row!.seq;
+}
+
 /* An account deleted outright, as deleteAccount leaves the rows that point at it. */
 export async function deleteTestAccount(userId: string) {
     await db.delete(users).where(eq(users.id, userId));

@@ -61,8 +61,8 @@ The code lives in `packages/drive`, `packages/db/src/drive.ts` and `packages/cry
     - Authorization moved into the walk on every node-addressed route: member, else the nearest live share's role, else 404. Too low a role is 403.
     - A grantee's listing is cut at the share root.
     - Editors' uploads and epochs are drawn in the owner's workspace.
-    - An editor's epochs are always 1 to n (`allocateGranteeKeyEpochs`), with the counter raised to at least n, never the counter itself. It climbs with every node and rotation in the owner's drive, so drawing from it would let an editor count the owner's activity by asking.
-    - A node an editor writes is held to that cap (1 to 10,000, `GRANTEE_EPOCH_MAX`), not to the counter, which is raised to cover it in the same transaction. Held to the counter, which writes are accepted would tell an editor where it stands.
+    - Epochs in a personal drive, the owner's and an editor's alike, are always 1 to n (`allocateKeyEpochs`), with the counter raised to at least n, never the counter itself. Drawn from it, an editor could count the owner's activity by asking, or from the epochs of the owner's nodes in the share.
+    - A new node there is held to that cap (1 to 10,000, `LOW_EPOCH_MAX`), not to the counter, which is raised to cover it in the same transaction. Held to the counter, which writes are accepted would tell an editor where it stands.
     - An editor's writes come back without the owner's `changeSeq`, as reads do (`viewFor`).
     - A move is refused unless both ends lie in the same share.
     - Revocation is live.
@@ -623,8 +623,8 @@ drive_rotations                   a subtree key rotation in progress; at most on
     - That is because a feed page may end after any row, and the next page asks for what follows it.
 - `key_epoch_seq`, the counter every node key epoch in the workspace is drawn from.
     - So a rotation's target epoch is greater than every epoch any node in the workspace has ever had, whatever earlier rotations did to some subfolder.
-    - A member draws the next values. An editor through a share draws 1 to n: still at or below the counter, so below every later target, and a node made there is re-keyed by the next rotation that covers it. Two nodes may share an epoch, since each node's context binds its own id.
-    - What a grantee can still read from it: the epochs of nodes the owner makes inside the share, and a rotation's target, are values of the counter at that moment. That is coarser than asking at will, and only when the owner writes there or stops a share.
+    - In a family folder a member draws the next values. In a personal drive everyone draws 1 to n: still at or below the counter, so below every later target, and a node made there is re-keyed by the next rotation that covers it. Two nodes may share an epoch, since each node's context binds its own id.
+    - So in a personal drive the counter moves only when a rotation starts, or when a new node's epoch lies above it. What a grantee can still read from it: a rotation's target, which says how many rotations the drive has had since the last one they saw. It cannot be hidden, since every target must lie above every epoch any node has carried.
 
 Every write to the tree begins by locking the workspace row to take the next value, which serialises writes within a workspace. That is deliberate:
 
