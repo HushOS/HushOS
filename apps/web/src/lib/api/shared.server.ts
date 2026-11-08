@@ -55,7 +55,16 @@ export const requestContext = new Elysia({ name: 'hushos-api-context' })
         // A response that fails its own schema is this server's bug, never the caller's: logged,
         // and answered as an outage, not as "check your information". Nothing of it is sent.
         if (error instanceof ValidationError && error.type === 'response') {
-            useLogger().set({ api: { failure: 'response-schema' } });
+            // Where it failed (a JSON pointer such as /identity/kem/signature), never the value.
+            const first = (
+                error.all as Array<{ path?: string; instancePath?: string }> | undefined
+            )?.[0];
+            useLogger().set({
+                api: {
+                    failure: 'response-schema',
+                    at: (first?.instancePath ?? first?.path ?? '').slice(0, 120),
+                },
+            });
             useLogger().error(new Error('A response did not match its schema.'));
             return status(500, { message: 'Something went wrong on our side. Please try again.' });
         }
