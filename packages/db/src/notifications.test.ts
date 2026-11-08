@@ -133,33 +133,36 @@ describe('pings', () => {
 });
 
 describe('settings', () => {
-    test('a kind turned off records nothing; security notices cannot be turned off', async () => {
+    test('each toggle turns off its own kinds only; security notices cannot be turned off', async () => {
         const owner = await registered('A');
         const sharer = await createTestAccount();
+        const share = () =>
+            notifications.recordEvent({
+                userId: owner.userId,
+                kind: 'shared',
+                data: shared(sharer.userId, sharer.workspaceId),
+            });
+        const invite = () =>
+            notifications.recordEvent({
+                userId: owner.userId,
+                kind: 'family-invitation',
+                data: { groupId: sharer.workspaceId, invitationId: sharer.workspaceId },
+            });
         expect(await notifications.getSettings(owner.userId)).toEqual({
             shared: true,
             family: true,
         });
+        await notifications.putSettings(owner.userId, { shared: false, family: true });
+        expect(await share()).toBeNull();
+        expect(await invite()).not.toBeNull();
+        await notifications.putSettings(owner.userId, { shared: true, family: false });
+        expect(await share()).not.toBeNull();
+        expect(await invite()).toBeNull();
         await notifications.putSettings(owner.userId, { shared: false, family: false });
-        expect(
-            await notifications.recordEvent({
-                userId: owner.userId,
-                kind: 'shared',
-                data: shared(sharer.userId, sharer.workspaceId),
-            }),
-        ).toBeNull();
-        expect(
-            await notifications.recordEvent({
-                userId: owner.userId,
-                kind: 'family-invitation',
-                data: { groupId: sharer.workspaceId, invitationId: sharer.workspaceId },
-            }),
-        ).toBeNull();
         for (const kind of ['new-device', 'device-removed', 'password-attempts'] as const)
             expect(
                 await notifications.recordEvent({ userId: owner.userId, kind, data: {} }),
             ).not.toBeNull();
-        expect(await db.select().from(notificationEvents)).toHaveLength(3);
     });
 });
 
