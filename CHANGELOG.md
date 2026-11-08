@@ -1,5 +1,38 @@
 # Changelog
 
+## [1.3.0](https://github.com/HushOS/HushOS/compare/v1.2.0...v1.3.0) (2026-11-08)
+
+
+### Features
+
+* **drive:** send rotation batches in parts by size ([#366](https://github.com/HushOS/HushOS/issues/366)) ([5ba216e](https://github.com/HushOS/HushOS/commit/5ba216e23e8474ff6b537f0b04122b7fd013d018))
+* **web:** declare Drive's key-carrying reads' response schemas ([#358](https://github.com/HushOS/HushOS/issues/358)) ([1f3f55d](https://github.com/HushOS/HushOS/commit/1f3f55d4308ce8d27af4dfd1fdd3ab9a15b2e1fc))
+* **web:** declare every admin and system route's response schema ([#365](https://github.com/HushOS/HushOS/issues/365)) ([2b661bc](https://github.com/HushOS/HushOS/commit/2b661bc711e1857112b452ee89252e4242df79e9))
+* **web:** declare every billing route's response schema ([#362](https://github.com/HushOS/HushOS/issues/362)) ([00fcfa3](https://github.com/HushOS/HushOS/commit/00fcfa3a97881ed5a37e75b854f48c18d87c74d2))
+* **web:** declare every groups and invitations route's response schema ([#363](https://github.com/HushOS/HushOS/issues/363)) ([6b06148](https://github.com/HushOS/HushOS/commit/6b06148c34e52072e3675134f0439dd8f797c6ed))
+* **web:** declare every remaining auth route's response schema ([#364](https://github.com/HushOS/HushOS/issues/364)) ([e986a4f](https://github.com/HushOS/HushOS/commit/e986a4fea5799acf4d7a3bfa495aa44d50858e4f))
+* **web:** declare every remaining Drive route's response schema ([#360](https://github.com/HushOS/HushOS/issues/360)) ([aef3454](https://github.com/HushOS/HushOS/commit/aef34541c7fb6baa66e3dcf7a934a289f5d1051e))
+* **web:** declare the account and session reads' response schemas ([#356](https://github.com/HushOS/HushOS/issues/356)) ([60a4011](https://github.com/HushOS/HushOS/commit/60a4011bcc0b9563d75c4d2aa0924c4130767634))
+* **web:** link the roadmap's phone apps to their store listings ([#332](https://github.com/HushOS/HushOS/issues/332)) ([ba296cb](https://github.com/HushOS/HushOS/commit/ba296cb6b5c354968d19f667c9a733aa966fc686))
+* **web:** put the store badges and the apps page in the footer ([#336](https://github.com/HushOS/HushOS/issues/336)) ([6da4b85](https://github.com/HushOS/HushOS/commit/6da4b854235df16e0dec981ac17b6a36c1ffa4a7))
+
+
+### Bug fixes
+
+* **android:** refresh a family's checked members when trust changes ([#349](https://github.com/HushOS/HushOS/issues/349)) ([e74335f](https://github.com/HushOS/HushOS/commit/e74335fb942b0b31c5d7127234b78a0c32fb1766))
+* **billing:** rate-limit share emails and coupon lookups, and bound the discount cache ([#355](https://github.com/HushOS/HushOS/issues/355)) ([6db11d1](https://github.com/HushOS/HushOS/commit/6db11d1207b544fb31dfde1e13abc40563443690))
+* **drive:** end links a rotation can't carry, on the web as on the phones ([#359](https://github.com/HushOS/HushOS/issues/359)) ([a7ab28b](https://github.com/HushOS/HushOS/commit/a7ab28b57a4788200e7e64d3b7993d871c04e65a))
+* **drive:** give a personal drive's owner low epochs too ([#372](https://github.com/HushOS/HushOS/issues/372)) ([955a536](https://github.com/HushOS/HushOS/commit/955a536a87d4817aebd97c7ad1fe3b4a4d0cf310))
+* **drive:** give editors epochs that say nothing of the owner's counter ([#370](https://github.com/HushOS/HushOS/issues/370)) ([b1d349a](https://github.com/HushOS/HushOS/commit/b1d349ad002a937b36f3f852ff8ac73091987fb4))
+* **drive:** leave nodes made under a re-keyed folder out of a rotation's work ([#371](https://github.com/HushOS/HushOS/issues/371)) ([0737512](https://github.com/HushOS/HushOS/commit/0737512fbce2ea8001a73e46d908b723b96415a2))
+* **drive:** serve editors' writes without the owner's change count ([#369](https://github.com/HushOS/HushOS/issues/369)) ([b27dcc0](https://github.com/HushOS/HushOS/commit/b27dcc01b72ae482703646eb9e71ffa7ea334ee6))
+* **ios:** read an upload abort's reply as an abort, not a completion ([#361](https://github.com/HushOS/HushOS/issues/361)) ([343f32b](https://github.com/HushOS/HushOS/commit/343f32b92d538978b691c642d1ea5e5d58ab34e5))
+* **mobile:** keep the session when the server errors on the session check, as if offline ([#357](https://github.com/HushOS/HushOS/issues/357)) ([0b21d3e](https://github.com/HushOS/HushOS/commit/0b21d3ebc6da5e39869d463c1c8c578f4df19e2d))
+* **web:** make the affiliate form editable and check handles as you type ([#341](https://github.com/HushOS/HushOS/issues/341)) ([ee69c5c](https://github.com/HushOS/HushOS/commit/ee69c5c80efbbd0fe57f49e08c30170bad588a2e))
+* **web:** never let a CDN keep a missing asset's 404 ([#339](https://github.com/HushOS/HushOS/issues/339)) ([7a896b4](https://github.com/HushOS/HushOS/commit/7a896b48e4f936fde3b7f51f5e87141d43a4f439))
+* **web:** put the iPhone first wherever the apps are named ([#337](https://github.com/HushOS/HushOS/issues/337)) ([814f15b](https://github.com/HushOS/HushOS/commit/814f15bb7af5cbda2796c1075b0dda2072bc2110))
+* **web:** read every API write under a size cap before anything parses it ([#354](https://github.com/HushOS/HushOS/issues/354)) ([637e676](https://github.com/HushOS/HushOS/commit/637e67690118626b026091c505b17f0d2f9fbb56))
+
 ## [1.2.0](https://github.com/HushOS/HushOS/compare/v1.1.2...v1.2.0) (2026-11-07)
 
 
