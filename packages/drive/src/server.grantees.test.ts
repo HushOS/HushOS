@@ -386,7 +386,8 @@ describe('a grantee', () => {
         // The owner's real counter, read past every route: what a probe would be after.
         const counter = await testKeyEpochSeq(ws);
         expect(counter).toBeLessThan(100);
-        for (const writer of [guest, owner]) {
+        // The owner first: the counter is still just below, so this fails if an owner is held to it.
+        for (const writer of [owner, guest]) {
             const above = await server.createFolders(writer.userId, ws, [
                 await folderAs(writer, project, counter + 1),
             ]);

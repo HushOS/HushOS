@@ -11,7 +11,7 @@ import {
 import * as signed from '../test/signed';
 import { db } from './client';
 import * as drive from './drive';
-import { driveNodes, workspaces } from './schema';
+import { driveNodes, workspaceKeys, workspaces } from './schema';
 
 /*
  * The tree's rules, exercised against a real database: one root, epochs come
@@ -138,6 +138,36 @@ describe('root and epochs', () => {
         expect(await counter()).toBe(999);
         expect((await make(drive.LOW_EPOCH_MAX + 1)).status).toBe('stale');
         expect((await make(0)).status).toBe('stale');
+    });
+
+    /* A family folder, which takes no shares, still holds a new node to its counter. */
+    test('a family folder refuses an epoch its counter has not reached', async () => {
+        const { areaIds } = await createTestFamily({ organizerId: account.userId });
+        const area = areaIds[0]!;
+        // The organizer holds the area's key, as an active member does.
+        await db.insert(workspaceKeys).values({
+            workspaceId: area,
+            userId: account.userId,
+            keyVersion: 1,
+            wrappingSalt: randomBytes(32),
+            wrappingNonce: randomBytes(24),
+            encryptedKey: randomBytes(48),
+        });
+        const { to } = (await drive.allocateKeyEpochs(area, 1))!;
+        const root = (keyEpoch: number) =>
+            signed.createRoot({
+                workspaceId: area,
+                userId: account.userId,
+                id: randomUUID(),
+                envelopes: {
+                    keyEpoch,
+                    parentKeyEpoch: 1,
+                    keyEnvelope: keyEnvelope(),
+                    metadataEnvelope: metadataEnvelope(),
+                },
+            });
+        expect((await root(to + 1)).status).toBe('stale');
+        expect((await root(to)).status).toBe('created');
     });
 
     test('a personal drive hands out 1 to n, raising its counter; a family folder the next values', async () => {
