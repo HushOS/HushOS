@@ -27,7 +27,7 @@ data class SessionUser(val id: String, val name: String, val email: String, val 
 /* `status` is the HTTP status when the server refused, 0 otherwise: 409 on settings means another device saved first. */
 open class AuthFailure(message: String, val status: Int = 0) : Exception(message)
 
-/* The server answered about itself, not the session (5xx, 408, 429): an IOException, handled as being offline. */
+/* An answer other than 200 to the session check: not about the session (see sessionCheck), handled as being offline. */
 class SessionUnavailable(val status: Int) : java.io.IOException("HushOS answered $status while checking the session.")
 
 /* The account has no recovery words to show (no recovery key on the server): a definite answer, unlike a failure. */
@@ -525,8 +525,9 @@ object Auth {
 
     /*
      * What the server says about `session` (the stored one by default); throws when HushOS is unreachable, and
-     * SessionUnavailable when it answers with an error of its own (5xx, 408, 429), so callers keep the stored
-     * session as if offline: an outage or a deploy never signs anyone out.
+     * SessionUnavailable on any answer but 200. The server answers every session, dead or removed included, with
+     * 200, so anything else came from something in the way (an error on its side, a deploy, a proxy): callers keep
+     * the stored session as if offline, as the web does.
      */
     fun sessionCheck(context: Context, session: Shared.Session? = Shared.session(context)): SessionCheck =
         session?.let { sessionCheckAt(it) } ?: SessionCheck.Ended
@@ -540,13 +541,9 @@ object Auth {
         connection.connectTimeout = 20_000
         connection.readTimeout = 20_000
         val status = connection.responseCode
-        if (status == 200) return SessionCheck.from(JSONObject(connection.inputStream.bufferedReader().use { it.readText() }))
-        if (isTransient(status)) throw SessionUnavailable(status)
-        return SessionCheck.Ended
+        if (status != 200) throw SessionUnavailable(status)
+        return SessionCheck.from(JSONObject(connection.inputStream.bufferedReader().use { it.readText() }))
     }
-
-    /* Whether an answer that isn't 200 says nothing about the session: the server is unwell, not the session over. */
-    fun isTransient(status: Int): Boolean = status >= 500 || status == 408 || status == 429
 
     /* Who the stored session belongs to, null when it is gone; throws when HushOS is unreachable. */
     fun currentUser(context: Context): SessionUser? = (sessionCheck(context) as? SessionCheck.SignedIn)?.user

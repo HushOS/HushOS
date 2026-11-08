@@ -3,13 +3,13 @@ import Testing
 @testable import HushOSKit
 
 /*
- * The session check at launch: an answer about the session (200, or a refusal such as 401)
- * decides it, but an error on the server's own side (5xx, 408, 429) is thrown, as when HushOS
- * can't be reached, so the app keeps the stored session as if offline. Before, any answer but
- * 200 read as `.ended` and signed everyone out during an outage or a deploy.
+ * The session check at launch: the server answers every session with 200, so a 200 decides it
+ * (its body: DevicesTests), and anything else came from something in the way (an outage, a
+ * deploy, a proxy) and is thrown, as when HushOS can't be reached, so the app keeps the stored
+ * session as if offline. Before, any answer but 200 read as `.ended` and signed everyone out.
  */
 @Suite struct SessionCheckTests {
-    /* Answers with the status named in the host (`status-503.test`) and an empty body. (A 200's body: DevicesTests.) */
+    /* Answers with the status named in the host (`status-503.test`) and an empty body. */
     final class Answering: URLProtocol {
         override class func canInit(with request: URLRequest) -> Bool { true }
         override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -32,14 +32,9 @@ import Testing
         )
     }
 
-    @Test func aServerErrorIsNotASignOut() async throws {
-        for status in [500, 502, 503, 504, 408, 429] {
+    @Test func anyAnswerButTwoHundredIsNotASignOut() async throws {
+        for status in [500, 502, 503, 504, 408, 429, 401, 403, 404, 421] {
             await #expect(throws: Auth.SessionUnavailable(status: status)) { try await check(status) }
         }
-    }
-
-    @Test func anAnswerAboutTheSessionStillDecidesIt() async throws {
-        #expect(try await check(401) == .ended)
-        #expect(try await check(403) == .ended)
     }
 }

@@ -237,17 +237,14 @@ public enum Auth {
     }
 
     /*
-     * The server answered, but not about the session: an error on its side (5xx), a timeout (408) or
-     * too many requests (429). Thrown, as when HushOS can't be reached, so callers keep the stored
-     * session and the drive as if offline: an outage or a deploy never signs anyone out.
+     * An answer other than 200. The server answers every session, dead or removed included, with 200
+     * (`user: null` when it's over), so anything else came from something in the way: an error on its
+     * side, a deploy, a proxy or CDN. Thrown, as when HushOS can't be reached, so callers keep the
+     * stored session and the drive as if offline, as the web does: nothing but the server's own
+     * answer signs anyone out.
      */
     public struct SessionUnavailable: Error, Equatable {
         public let status: Int
-    }
-
-    /* Whether an answer that isn't 200 says nothing about the session: the server is unwell, not the session over. */
-    static func isTransient(status: Int) -> Bool {
-        status >= 500 || status == 408 || status == 429
     }
 
     public static func checkSession() async throws -> SessionCheck {
@@ -266,9 +263,8 @@ public enum Auth {
         request.timeoutInterval = 20
         let (data, response) = try await URLSession(configuration: transport ?? testTransport ?? .ephemeral).data(for: request)
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
-        if http.statusCode == 200 { return try SessionCheck(body: data) }
-        if isTransient(status: http.statusCode) { throw SessionUnavailable(status: http.statusCode) }
-        return .ended
+        guard http.statusCode == 200 else { throw SessionUnavailable(status: http.statusCode) }
+        return try SessionCheck(body: data)
     }
 
     /* Who the stored session belongs to, or nil when it is gone. */
