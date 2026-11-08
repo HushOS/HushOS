@@ -157,6 +157,13 @@ pub fn relay(
     (Arc::new(relay), deliverer, jobs)
 }
 
+impl Relay {
+    /// Forgets rate-limit records that have refilled (see `Limiter::forget_idle`).
+    pub fn forget_idle(&self) {
+        self.limiter.forget_idle(self.clock.now());
+    }
+}
+
 pub fn router(relay: Arc<Relay>) -> Router {
     Router::new()
         .route("/v1/register", post(register))
