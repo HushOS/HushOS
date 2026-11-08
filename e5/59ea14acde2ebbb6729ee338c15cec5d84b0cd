@@ -1,0 +1,23 @@
+apps/web/src/lib/api/auth-responses.server.ts
+  s_566b8e0c4467a4::t_604a59625fc803 5,50-63,66,103,128-130,141,145-155,162,167-287,289-296,299-301,303-350
+apps/web/src/lib/api/auth-responses.test.ts
+  s_566b8e0c4467a4::t_708df04cf1f77c 5-6,9-11,13-14,16,18,21-23,25-27,29,31-32,34-36,38,41,45-47,103-150,410-705,735,742-893
+apps/web/src/lib/api/auth.server.ts
+  s_566b8e0c4467a4::t_43a55bc3f00e29 32-34,36-37,39,41,44-46,48-50,52,54-55,57-59,76,89,102,118-121,136,156-159,172,193-197,208-211,227,240-243,248-251,279,301,320-323,332,350,369,402,409-416,432,447,469,479-482,491,504,513-517,527-530,533-541
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e559ea14acde2ebbb6729ee338c15cec5d84b0cd",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
