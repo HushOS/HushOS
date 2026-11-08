@@ -153,6 +153,14 @@ describe('rotation', () => {
             linkId: LINK,
             password: 'open sesame',
         })) as { linkEnvelope: string; secret: string; salt: string; secretEnvelope: string };
+        const OLDER_LINK = 'link-older-kdf';
+        const olderLink = (await owner('driveSealLink', {
+            workspaceId: WS,
+            nodeId: B,
+            keyEpoch: 2,
+            linkId: OLDER_LINK,
+            password: 'open sesame',
+        })) as { secretEnvelope: string };
 
         // Rotate B (the share root) first, at target epoch 9; C waits for the next batch.
         const first = (await owner('driveRotateNodes', {
@@ -194,7 +202,30 @@ describe('rotation', () => {
                             granteeKemPublicKey: guestIdentity.kem!.publicKey,
                         },
                     ],
-                    links: [{ id: LINK, hasPassword: true, secretEnvelope: link.secretEnvelope }],
+                    links: [
+                        {
+                            id: LINK,
+                            hasPassword: true,
+                            secretEnvelope: link.secretEnvelope,
+                            kdfVersion: 2,
+                        },
+                        // A secret that opens, but the row names an older derivation: ended for the
+                        // version alone, since this one is sealed for its own id and would open.
+                        {
+                            id: OLDER_LINK,
+                            hasPassword: true,
+                            secretEnvelope: olderLink.secretEnvelope,
+                            kdfVersion: 1,
+                        },
+                        // A row whose secret no longer opens (damaged, or sealed for another link):
+                        // ended, not a rotation that fails on every retry.
+                        {
+                            id: 'link-damaged',
+                            hasPassword: true,
+                            secretEnvelope: link.secretEnvelope,
+                            kdfVersion: 2,
+                        },
+                    ],
                 },
             ],
         })) as {
@@ -259,6 +290,8 @@ describe('rotation', () => {
         // Re-sealed in suite 3, signed by the owner running the rotation.
         expect(decode(rotatedB.shares[0]!.shareEnvelope)).toHaveLength(4565);
         expect(rotatedB.links[0]!.unsealable).toBeUndefined();
+        expect(rotatedB.links[1]).toEqual({ id: OLDER_LINK, unsealable: true });
+        expect(rotatedB.links[2]).toEqual({ id: 'link-damaged', unsealable: true });
 
         // C, wrapped under B's old key, still opens here: the worker kept B's previous key.
         const openedC = (await owner('driveOpenNodes', {

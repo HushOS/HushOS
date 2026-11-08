@@ -171,7 +171,12 @@ export type RotationWorkNode = NodeRow & {
         granteeKeyVersion: number;
         granteeIdentityVersion: number;
     }[];
-    links: { id: string; hasPassword: boolean; secretEnvelope: Buffer | null }[];
+    links: {
+        id: string;
+        hasPassword: boolean;
+        secretEnvelope: Buffer | null;
+        kdfVersion: number;
+    }[];
 };
 
 /*
@@ -237,6 +242,7 @@ async function workNodes(tx: Tx, page: SubtreeRow[]): Promise<RotationWorkNode[]
                   nodeId: driveLinks.nodeId,
                   hasPassword: driveLinks.hasPassword,
                   secretEnvelope: driveLinks.secretEnvelope,
+                  kdfVersion: driveLinks.kdfVersion,
               })
               .from(driveLinks)
               .where(
@@ -289,6 +295,7 @@ async function workNodes(tx: Tx, page: SubtreeRow[]): Promise<RotationWorkNode[]
                         id: l.id,
                         hasPassword: l.hasPassword,
                         secretEnvelope: l.secretEnvelope,
+                        kdfVersion: l.kdfVersion,
                     })),
             },
         ];

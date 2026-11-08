@@ -345,8 +345,9 @@ const workRow: rotationsRepository.RotationWorkNode = {
         },
     ],
     links: [
-        { id: linkId, hasPassword: true, secretEnvelope: bytes(104) },
-        { id: shareId, hasPassword: false, secretEnvelope: null },
+        { id: linkId, hasPassword: true, secretEnvelope: bytes(104), kdfVersion: 2 },
+        // A link from before the current derivation: its version is sent so the client ends it.
+        { id: shareId, hasPassword: false, secretEnvelope: null, kdfVersion: 1 },
     ],
 };
 

@@ -15,7 +15,7 @@ import {
     wrapOriginKey,
 } from './drive';
 import { decode, encode } from './keys';
-import { openLinkSecret, sealLinkKeyWith, sealLinkSecret } from './links';
+import { LINK_KDF_VERSION, openLinkSecret, sealLinkKeyWith, sealLinkSecret } from './links';
 import { KEM_PUBLIC_KEY_BYTES } from './pq';
 import { SHARED_IN_FAMILY } from './protocol';
 import { rekeyedFor } from './rekeyed-scope';
@@ -83,7 +83,12 @@ export type RotateNodeInput = {
         granteePublicKey: string;
         granteeKemPublicKey: string | null;
     }[];
-    links: { id: string; hasPassword: boolean; secretEnvelope: string | null }[];
+    links: {
+        id: string;
+        hasPassword: boolean;
+        secretEnvelope: string | null;
+        kdfVersion?: number;
+    }[];
 };
 /*
  * A re-keyed record's origin as the server serves it (RekeyView in
@@ -546,17 +551,28 @@ export async function rekeyNode(input: {
     }
     const links: Extract<RotatedNode, { links: unknown }>['links'] = [];
     for (const link of node.links) {
-        if (!link.secretEnvelope) {
+        // No sealed secret, or one made under an older derivation (its secret no longer opens, and
+        // every reader refuses such a link): the link is ended, as the phones do. A server from
+        // before it sent the version: the secret below decides.
+        if (
+            !link.secretEnvelope ||
+            (link.kdfVersion !== undefined && link.kdfVersion !== LINK_KDF_VERSION)
+        ) {
             links.push({ id: link.id, unsealable: true });
             continue;
         }
         const oldCtx = { workspaceId, nodeId, keyEpoch: node.keyEpoch, linkId: link.id };
         const newCtx = { workspaceId, nodeId, keyEpoch: targetEpoch, linkId: link.id };
-        const { secret, token, fromPassword } = await openLinkSecret(
-            decode(link.secretEnvelope),
-            old,
-            oldCtx,
-        );
+        // A secret that no longer opens (an older derivation, a damaged row) is a link to end, not a
+        // rotation to fail on every retry: as the phones do.
+        let opened: Awaited<ReturnType<typeof openLinkSecret>>;
+        try {
+            opened = await openLinkSecret(decode(link.secretEnvelope), old, oldCtx);
+        } catch {
+            links.push({ id: link.id, unsealable: true });
+            continue;
+        }
+        const { secret, token, fromPassword } = opened;
         try {
             // A password link sealed before the password key was kept cannot be re-sealed without the password.
             if (link.hasPassword && !fromPassword) {
