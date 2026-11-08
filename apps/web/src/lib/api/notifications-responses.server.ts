@@ -58,3 +58,7 @@ export const unregisteredResponse = t.Object({ removed: t.Boolean() });
 export const notificationSettingsResponse = t.Object({
     settings: t.Object({ shared: t.Boolean(), family: t.Boolean() }),
 });
+/* The VAPID public key a browser subscribes with: an uncompressed P-256 point, Base64url. */
+export const webPushKeyResponse = t.Object({
+    publicKey: t.String({ pattern: '^[A-Za-z0-9_-]{87}$' }),
+});

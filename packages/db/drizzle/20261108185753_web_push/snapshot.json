@@ -1,0 +1,181 @@
+{
+    "type": "diff",
+    "version": "9",
+    "dialect": "postgres",
+    "id": "64bc19cd-c49e-45fd-8e3b-cf97c711f2a5",
+    "prevIds": ["89202b3b-241c-4f43-b16c-a72f3412c3b4"],
+    "footprints": [
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "notification_registrations", "web_endpoint"],
+            "writes": [
+                "s|col|public.notification_registrations.web_endpoint",
+                "n|col|public.notification_registrations.web_endpoint",
+                "e|col|public.notification_registrations.web_endpoint"
+            ],
+            "reads": ["n|tbl|public.notification_registrations", "n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "notification_registrations", "web_p256dh"],
+            "writes": [
+                "s|col|public.notification_registrations.web_p256dh",
+                "n|col|public.notification_registrations.web_p256dh",
+                "e|col|public.notification_registrations.web_p256dh"
+            ],
+            "reads": ["n|tbl|public.notification_registrations", "n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "notification_registrations", "web_auth"],
+            "writes": [
+                "s|col|public.notification_registrations.web_auth",
+                "n|col|public.notification_registrations.web_auth",
+                "e|col|public.notification_registrations.web_auth"
+            ],
+            "reads": ["n|tbl|public.notification_registrations", "n|sch|public"]
+        },
+        {
+            "statementType": "alter_column",
+            "statementTarget": ["column", "public", "notification_registrations", "handle"],
+            "writes": ["s|colprop|public.notification_registrations.handle.notNull"],
+            "reads": [
+                "n|tbl|public.notification_registrations",
+                "n|sch|public",
+                "n|col|public.notification_registrations.handle"
+            ],
+            "sqlHash": "99a560197310b2fc"
+        },
+        {
+            "statementType": "add_check",
+            "statementTarget": ["table", "public", "notification_registrations"],
+            "writes": [
+                "s|ck|public.notification_registrations.notification_registrations_web_valid",
+                "n|ck|public.notification_registrations.notification_registrations_web_valid",
+                "e|ck|public.notification_registrations.notification_registrations_web_valid",
+                "n|con|public.notification_registrations.notification_registrations_web_valid"
+            ],
+            "reads": [
+                "n|tbl|public.notification_registrations",
+                "n|sch|public",
+                "n|col|public.notification_registrations.web_endpoint",
+                "n|col|public.notification_registrations.web_p256dh",
+                "n|col|public.notification_registrations.web_auth"
+            ]
+        },
+        {
+            "statementType": "add_check",
+            "statementTarget": ["table", "public", "notification_registrations"],
+            "writes": [
+                "s|ck|public.notification_registrations.notification_registrations_one_kind",
+                "n|ck|public.notification_registrations.notification_registrations_one_kind",
+                "e|ck|public.notification_registrations.notification_registrations_one_kind",
+                "n|con|public.notification_registrations.notification_registrations_one_kind"
+            ],
+            "reads": [
+                "n|tbl|public.notification_registrations",
+                "n|sch|public",
+                "n|col|public.notification_registrations.handle",
+                "n|col|public.notification_registrations.web_endpoint"
+            ]
+        },
+        {
+            "statementType": "alter_check",
+            "statementTarget": ["table", "public", "notification_registrations"],
+            "writes": [
+                "s|ck|public.notification_registrations.notification_registrations_handle_valid"
+            ],
+            "reads": [
+                "n|tbl|public.notification_registrations",
+                "n|sch|public",
+                "n|col|public.notification_registrations.handle",
+                "e|col|public.notification_registrations.handle"
+            ],
+            "sqlHash": "0f6376fc2935ed39"
+        }
+    ],
+    "deltas": [
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_registrations",
+                "name": "web_endpoint",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_registrations",
+                "name": "web_p256dh",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_registrations",
+                "name": "web_auth",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_registrations",
+                "name": "notification_registrations_web_valid",
+                "value": "\"web_endpoint\" is null or (\"web_endpoint\" like 'https://%' and length(\"web_endpoint\") <= 1024 and \"web_p256dh\" ~ '^[A-Za-z0-9_-]{87}$' and \"web_auth\" ~ '^[A-Za-z0-9_-]{22}$')",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_registrations",
+                "name": "notification_registrations_one_kind",
+                "value": "(\"handle\" is not null) <> (\"web_endpoint\" is not null)",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "alter",
+            "key": "columns\u0000[\"public\",\"notification_registrations\",\"handle\"]",
+            "set": {
+                "notNull": false
+            }
+        },
+        {
+            "op": "alter",
+            "key": "checks\u0000[\"public\",\"notification_registrations\",\"notification_registrations_handle_valid\"]",
+            "set": {
+                "value": "\"handle\" is null or \"handle\" ~ '^[A-Za-z0-9_-]{43}$'"
+            }
+        }
+    ]
+}

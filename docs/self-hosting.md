@@ -855,7 +855,8 @@ Off by default while the apps that show them are built: `NOTIFICATIONS_ENABLED=t
 - **The phone apps** can only be reached through Apple and Google with HushOS's own credentials, so pings for them go to the relay: `PUSH_RELAY_URL`, `https://push.hushos.com` by default. Set it empty to send none; the apps then show notifications only when they are open.
 - **What the relay learns:** that a handle got a ping, from your server's address, at a time, and its class: `security` (a sign-in, a device removed) or `other`. It holds each device's APNs or FCM token, which identifies the device to Apple or Google, never the account or what happened. Apple and Google learn that a device received a ping at a time.
 - **A ping can locate a device.** Every ping wakes the device to fetch from your server, so your server, or anyone who learns a handle, can make a phone connect and log its address, up to the relay's limits. Every ping shows a notification, so this is seen, not prevented.
-- **What the server keeps:** each device's relay handle, the events for 30 days, and two toggles per account (Shared with you, Families). Security notices cannot be turned off.
+- **Browsers** need no relay: the server pushes to the browser's own push service (Google's, Mozilla's, Apple's or Microsoft's, and no other host), encrypted to the browser and signed with this server's VAPID key, which it makes at first use and keeps in the database (`server_secrets`). The push carries only the event id; an open, unlocked HushOS tab writes the words, and otherwise the browser shows "New activity in HushOS". The push service learns that a browser received an encrypted push at a time.
+- **What the server keeps:** each device's relay handle or browser subscription, the events for 30 days, and two toggles per account (Shared with you, Families). Security notices cannot be turned off.
 
 ## Billing (optional)
 

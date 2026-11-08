@@ -9,6 +9,7 @@ import {
 } from '@/components/account-dialogs';
 import { AccountDevices } from '@/components/account-devices';
 import { AccountFamily } from '@/components/account-family';
+import { AccountNotifications } from '@/components/account-notifications';
 import { CopyValue } from '@/components/copy-value';
 import { openDeviceDialog } from '@/components/device-control';
 import { PageHeader } from '@/components/page-header';
@@ -107,6 +108,8 @@ function AccountPage() {
                 <AccountFamily userId={user.id} />
 
                 <AccountDevices />
+
+                <AccountNotifications />
 
                 <BrowserSettings />
 

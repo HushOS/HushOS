@@ -277,6 +277,17 @@ async function forgetFiles(root: () => Promise<FileRoot>) {
  * with the first failure once all settled, so the caller can say so and try
  * again. Preferences in KEPT stay.
  */
+/*
+ * This browser's push subscription (lib/web-push.ts): the server deletes its registration with
+ * the session, and unregistering the worker drops the subscription with it, so nothing here can
+ * be pushed to for the account any more.
+ */
+async function forgetPush() {
+    if (typeof navigator === 'undefined' || !navigator.serviceWorker) return;
+    const registration = await navigator.serviceWorker.getRegistration('/hushos-push/');
+    await registration?.unregister();
+}
+
 export async function forgetBrowserData(options: { files?: () => Promise<FileRoot> } = {}) {
     const root =
         options.files ??
@@ -297,6 +308,7 @@ export async function forgetBrowserData(options: { files?: () => Promise<FileRoo
         (async () => forgetSessionData())(),
         forgetDatabases(),
         forgetFiles(root),
+        forgetPush(),
     ]);
     const failed = results.find((result) => result.status === 'rejected');
     if (failed) throw failed.reason;

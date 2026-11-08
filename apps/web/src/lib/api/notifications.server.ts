@@ -8,6 +8,7 @@ import {
     notificationsResponse,
     registeredResponse,
     unregisteredResponse,
+    webPushKeyResponse,
 } from '@/lib/api/notifications-responses.server';
 
 /*
@@ -26,21 +27,37 @@ export const notificationsApi = new Elysia()
             .put(
                 '/notifications/registration',
                 {
-                    // The relay's handle; Web Push will add `{ kind: 'webpush', subscription }`.
-                    body: t.Object({
-                        kind: t.Literal('relay'),
-                        handle: t.String({ pattern: auth.RELAY_HANDLE_PATTERN.source }),
-                    }),
+                    // The phone apps' relay handle, or a browser's Web Push subscription.
+                    body: t.Union([
+                        t.Object({
+                            kind: t.Literal('relay'),
+                            handle: t.String({ pattern: auth.RELAY_HANDLE_PATTERN.source }),
+                        }),
+                        t.Object({
+                            kind: t.Literal('webpush'),
+                            subscription: t.Object({
+                                endpoint: t.String({ maxLength: 1024 }),
+                                keys: t.Object({
+                                    p256dh: t.String({ maxLength: 90 }),
+                                    auth: t.String({ maxLength: 26 }),
+                                }),
+                            }),
+                        }),
+                    ]),
                     response: { 200: registeredResponse },
                 },
-                ({ sessionToken, body }) =>
-                    auth.registerForNotifications(sessionToken, body.handle),
+                ({ sessionToken, body }) => auth.registerForNotifications(sessionToken, body),
             )
             .delete(
                 '/notifications/registration',
                 // A JSON body ({}), as every mutation here: the request guard refuses one without.
                 { body: t.Object({}), response: { 200: unregisteredResponse } },
                 ({ sessionToken }) => auth.unregisterForNotifications(sessionToken),
+            )
+            .get(
+                '/notifications/web-push-key',
+                { response: { 200: webPushKeyResponse } },
+                ({ sessionToken }) => auth.getWebPushKey(sessionToken),
             )
             .get(
                 '/notifications/settings',

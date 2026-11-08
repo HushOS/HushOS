@@ -7,6 +7,7 @@ import {
     notificationEvents,
     notificationRegistrations,
     notificationSettings,
+    serverSecrets,
     type NotificationClass,
     type NotificationKind,
     users,
@@ -45,7 +46,25 @@ const liveDevice = and(
  * newest event the account already has, so a device that just asked for pushes is not handed
  * everything from the last 30 days.
  */
-export async function putRegistration(input: { userId: string; deviceId: string; handle: string }) {
+/* Where a device's pushes go: the relay (phone apps) or a browser's push service. */
+export type PushTarget =
+    | { handle: string }
+    | { webPush: { endpoint: string; p256dh: string; auth: string } };
+
+export async function putRegistration(input: {
+    userId: string;
+    deviceId: string;
+    target: PushTarget;
+}) {
+    const columns =
+        'handle' in input.target
+            ? { handle: input.target.handle, webEndpoint: null, webP256dh: null, webAuth: null }
+            : {
+                  handle: null,
+                  webEndpoint: input.target.webPush.endpoint,
+                  webP256dh: input.target.webPush.p256dh,
+                  webAuth: input.target.webPush.auth,
+              };
     return db.transaction(async (tx) => {
         const [newest] = await tx
             .select({ seq: notificationEvents.seq })
@@ -58,13 +77,13 @@ export async function putRegistration(input: { userId: string; deviceId: string;
             .values({
                 deviceId: input.deviceId,
                 userId: input.userId,
-                handle: input.handle,
+                ...columns,
                 listSeq: newest?.seq ?? 0,
             })
             .onConflictDoUpdate({
                 target: notificationRegistrations.deviceId,
-                // A device keeps its own place in the list when its handle changes.
-                set: { handle: input.handle, updatedAt: sql`now()` },
+                // A device keeps its own place in the list when where it is reached changes.
+                set: { ...columns, updatedAt: sql`now()` },
                 where: eq(notificationRegistrations.userId, input.userId),
             });
     });
@@ -109,6 +128,35 @@ function settingOf(kind: NotificationKind): 'shared' | 'family' | null {
     return kind === 'shared' ? 'shared' : 'family';
 }
 
+/* A browser to push to, with its device so a subscription its push service dropped can go. */
+export type WebPushTarget = { deviceId: string; endpoint: string; p256dh: string; auth: string };
+
+function targets(
+    rows: {
+        deviceId: string;
+        handle: string | null;
+        webEndpoint: string | null;
+        webP256dh: string | null;
+        webAuth: string | null;
+    }[],
+) {
+    return {
+        handles: rows.flatMap((row) => (row.handle ? [row.handle] : [])),
+        webPush: rows.flatMap((row) =>
+            row.webEndpoint && row.webP256dh && row.webAuth
+                ? [
+                      {
+                          deviceId: row.deviceId,
+                          endpoint: row.webEndpoint,
+                          p256dh: row.webP256dh,
+                          auth: row.webAuth,
+                      },
+                  ]
+                : [],
+        ),
+    };
+}
+
 /*
  * Records an event for an account and says which handles to ping, or that the person turned this
  * kind off (nothing recorded). Security notices always go to every live registered device. An
@@ -121,7 +169,12 @@ export async function recordEvent(input: {
     kind: NotificationKind;
     data?: Record<string, unknown>;
     now?: Date;
-}): Promise<{ id: string; class: NotificationClass; handles: string[] } | null> {
+}): Promise<{
+    id: string;
+    class: NotificationClass;
+    handles: string[];
+    webPush: WebPushTarget[];
+} | null> {
     const eventClass = NOTIFICATION_KINDS[input.kind];
     const setting = settingOf(input.kind);
     if (setting && !(await getSettings(input.userId))[setting]) return null;
@@ -140,6 +193,9 @@ export async function recordEvent(input: {
             .select({
                 deviceId: notificationRegistrations.deviceId,
                 handle: notificationRegistrations.handle,
+                webEndpoint: notificationRegistrations.webEndpoint,
+                webP256dh: notificationRegistrations.webP256dh,
+                webAuth: notificationRegistrations.webAuth,
                 otherPingedAt: notificationRegistrations.otherPingedAt,
                 otherPingOpen: notificationRegistrations.otherPingOpen,
             })
@@ -148,7 +204,7 @@ export async function recordEvent(input: {
             .where(eq(notificationRegistrations.userId, input.userId))
             .for('update', { of: notificationRegistrations });
         if (eventClass === 'security')
-            return { id: event!.id, class: eventClass, handles: registered.map((r) => r.handle) };
+            return { id: event!.id, class: eventClass, ...targets(registered) };
         const coalesceFrom = now.getTime() - OTHER_PING_COALESCE_MS;
         const due = registered.filter(
             (r) =>
@@ -164,7 +220,7 @@ export async function recordEvent(input: {
                         due.map((r) => r.deviceId),
                     ),
                 );
-        return { id: event!.id, class: eventClass, handles: due.map((r) => r.handle) };
+        return { id: event!.id, class: eventClass, ...targets(due) };
     });
 }
 
@@ -301,4 +357,38 @@ export async function dropRevokedRegistrations() {
         )
         .returning({ deviceId: notificationRegistrations.deviceId });
     return removed.length;
+}
+
+/* A browser's subscription its push service no longer has (404 or 410): no more pushes to it. */
+export async function dropWebSubscription(deviceId: string, endpoint: string) {
+    await db
+        .delete(notificationRegistrations)
+        .where(
+            and(
+                eq(notificationRegistrations.deviceId, deviceId),
+                eq(notificationRegistrations.webEndpoint, endpoint),
+            ),
+        );
+}
+
+/*
+ * This server's VAPID key pair (RFC 8292), made at first use and kept in server_secrets: every
+ * browser subscribes with its public key, so it must not change. `make` creates a pair when none
+ * is stored; two servers starting at once keep whichever wrote first.
+ */
+export async function vapidKeyPair(make: () => { privateKey: string; publicKey: string }) {
+    const read = async () => {
+        const [row] = await db
+            .select({ value: serverSecrets.value })
+            .from(serverSecrets)
+            .where(eq(serverSecrets.name, 'webpush-vapid'));
+        return row ? (JSON.parse(row.value) as { privateKey: string; publicKey: string }) : null;
+    };
+    const stored = await read();
+    if (stored) return stored;
+    await db
+        .insert(serverSecrets)
+        .values({ name: 'webpush-vapid', value: JSON.stringify(make()) })
+        .onConflictDoNothing();
+    return (await read())!;
 }

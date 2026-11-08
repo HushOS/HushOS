@@ -33,7 +33,7 @@ async function registered(letter: string) {
     await notifications.putRegistration({
         userId: account.userId,
         deviceId,
-        handle: handle(letter),
+        target: { handle: handle(letter) },
     });
     return { ...account, deviceId };
 }
@@ -45,7 +45,7 @@ describe('pings', () => {
         await notifications.putRegistration({
             userId: owner.userId,
             deviceId: second,
-            handle: handle('B'),
+            target: { handle: handle('B') },
         });
         await registered('C');
         const sent = await notifications.recordEvent({ userId: owner.userId, kind: 'new-device' });
@@ -59,7 +59,7 @@ describe('pings', () => {
         await notifications.putRegistration({
             userId: owner.userId,
             deviceId: removed,
-            handle: handle('B'),
+            target: { handle: handle('B') },
         });
         await db
             .update(accountDevices)
@@ -185,7 +185,7 @@ describe('fetching', () => {
         await notifications.putRegistration({
             userId: owner.userId,
             deviceId,
-            handle: handle('A'),
+            target: { handle: handle('A') },
         });
         expect((await notifications.listPending(owner.userId, deviceId)).events).toEqual([]);
         await notifications.recordEvent({ userId: owner.userId, kind: 'device-removed' });
@@ -200,7 +200,7 @@ describe('fetching', () => {
         await notifications.putRegistration({
             userId: owner.userId,
             deviceId,
-            handle: handle('B'),
+            target: { handle: handle('B') },
         });
         expect((await notifications.listPending(owner.userId, deviceId)).events).toEqual([]);
     });
@@ -228,7 +228,7 @@ describe('registrations', () => {
         await notifications.putRegistration({
             userId: stranger.userId,
             deviceId: owner.deviceId,
-            handle: handle('Z'),
+            target: { handle: handle('Z') },
         });
         expect(await notifications.deleteRegistration(stranger.userId, owner.deviceId)).toBe(false);
         const sent = await notifications.recordEvent({ userId: owner.userId, kind: 'new-device' });
@@ -240,7 +240,106 @@ describe('registrations', () => {
         const owner = await createTestAccount();
         const deviceId = await device(owner.userId);
         await expect(
-            notifications.putRegistration({ userId: owner.userId, deviceId, handle: 'short' }),
+            notifications.putRegistration({
+                userId: owner.userId,
+                deviceId,
+                target: { handle: 'short' },
+            }),
         ).rejects.toThrow();
+    });
+});
+
+describe('web push', () => {
+    const subscription = {
+        endpoint: 'https://fcm.googleapis.com/fcm/send/abc',
+        p256dh: 'B'.repeat(87),
+        auth: 'C'.repeat(22),
+    };
+
+    test('a browser is pushed to with its subscription; a device switching kinds keeps one', async () => {
+        const owner = await createTestAccount();
+        const deviceId = await device(owner.userId);
+        await notifications.putRegistration({
+            userId: owner.userId,
+            deviceId,
+            target: { webPush: subscription },
+        });
+        const sent = await notifications.recordEvent({ userId: owner.userId, kind: 'new-device' });
+        expect(sent!.handles).toEqual([]);
+        expect(sent!.webPush).toEqual([{ deviceId, ...subscription }]);
+        // Now reached through the relay: the subscription is gone with it.
+        await notifications.putRegistration({
+            userId: owner.userId,
+            deviceId,
+            target: { handle: handle('A') },
+        });
+        const again = await notifications.recordEvent({ userId: owner.userId, kind: 'new-device' });
+        expect(again!.handles).toEqual([handle('A')]);
+        expect(again!.webPush).toEqual([]);
+    });
+
+    test('a subscription its push service dropped is deleted, and only that one', async () => {
+        const owner = await createTestAccount();
+        const deviceId = await device(owner.userId);
+        await notifications.putRegistration({
+            userId: owner.userId,
+            deviceId,
+            target: { webPush: subscription },
+        });
+        await notifications.dropWebSubscription(
+            deviceId,
+            'https://fcm.googleapis.com/fcm/send/other',
+        );
+        expect(
+            (await notifications.recordEvent({ userId: owner.userId, kind: 'new-device' }))!
+                .webPush,
+        ).toHaveLength(1);
+        await notifications.dropWebSubscription(deviceId, subscription.endpoint);
+        expect(
+            (await notifications.recordEvent({ userId: owner.userId, kind: 'new-device' }))!
+                .webPush,
+        ).toEqual([]);
+    });
+
+    test('the table refuses a subscription that is not one, and a row that is both or neither', async () => {
+        const owner = await createTestAccount();
+        const deviceId = await device(owner.userId);
+        for (const bad of [
+            { ...subscription, endpoint: 'http://fcm.googleapis.com/x' },
+            { ...subscription, p256dh: 'short' },
+            { ...subscription, auth: 'C'.repeat(30) },
+        ])
+            await expect(
+                notifications.putRegistration({
+                    userId: owner.userId,
+                    deviceId,
+                    target: { webPush: bad },
+                }),
+            ).rejects.toThrow();
+        await expect(
+            db.insert(notificationRegistrations).values({
+                deviceId,
+                userId: owner.userId,
+                handle: handle('A'),
+                webEndpoint: subscription.endpoint,
+                webP256dh: subscription.p256dh,
+                webAuth: subscription.auth,
+            }),
+        ).rejects.toThrow();
+        await expect(
+            db.insert(notificationRegistrations).values({ deviceId, userId: owner.userId }),
+        ).rejects.toThrow();
+    });
+
+    test('the VAPID pair is made once and never replaced', async () => {
+        let made = 0;
+        const make = () => {
+            made += 1;
+            return { privateKey: `p${made}`, publicKey: `k${made}` };
+        };
+        const first = await notifications.vapidKeyPair(make);
+        const second = await notifications.vapidKeyPair(make);
+        expect(second).toEqual(first);
+        expect(made).toBe(1);
     });
 });

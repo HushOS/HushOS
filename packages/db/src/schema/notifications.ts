@@ -68,7 +68,11 @@ export const notificationRegistrations = pgTable(
         userId: uuid('user_id')
             .notNull()
             .references(() => users.id, { onDelete: 'cascade' }),
-        handle: text().notNull(),
+        // The phone apps' relay handle, or a browser's Web Push subscription: one or the other.
+        handle: text(),
+        webEndpoint: text('web_endpoint'),
+        webP256dh: text('web_p256dh'),
+        webAuth: text('web_auth'),
         listSeq: bigint('list_seq', { mode: 'number' }).notNull().default(0),
         otherPingedAt: timestamp('other_pinged_at', { withTimezone: true }),
         otherPingOpen: boolean('other_ping_open').notNull().default(false),
@@ -80,7 +84,17 @@ export const notificationRegistrations = pgTable(
         // A relay handle: 32 bytes, Base64url without padding.
         check(
             'notification_registrations_handle_valid',
-            sql`${table.handle} ~ '^[A-Za-z0-9_-]{43}$'`,
+            sql`${table.handle} is null or ${table.handle} ~ '^[A-Za-z0-9_-]{43}$'`,
+        ),
+        // A browser's subscription: an HTTPS endpoint, its P-256 key (65 bytes) and auth secret (16).
+        check(
+            'notification_registrations_web_valid',
+            sql`${table.webEndpoint} is null or (${table.webEndpoint} like 'https://%' and length(${table.webEndpoint}) <= 1024 and ${table.webP256dh} ~ '^[A-Za-z0-9_-]{87}$' and ${table.webAuth} ~ '^[A-Za-z0-9_-]{22}$')`,
+        ),
+        // One or the other, never both or neither.
+        check(
+            'notification_registrations_one_kind',
+            sql`(${table.handle} is not null) <> (${table.webEndpoint} is not null)`,
         ),
     ],
 );
