@@ -340,30 +340,46 @@ export async function listRotationWork(input: {
     return db.transaction(async (tx) => {
         const limit = Math.min(input.limit ?? ROTATION_BATCH, ROTATION_BATCH);
         const after = input.after;
+        // A node made after the rotation began has a fresh key. Under a parent already at the
+        // target, or under another such node, it was only ever wrapped under keys no one the
+        // rotation shut out holds, so that whole fresh subtree is left out: else a writer who kept
+        // adding nodes would keep the rotation open. `chain` is the fresh subtree's ids from its
+        // top down to the node; `above` is the parent's. One exception: an older node in it (moved
+        // there, its own created_at and key kept) is work, and is re-keyed under its parent's new
+        // key, so then the whole fresh subtree above it is work too, parents first.
         const result = await tx.execute<SubtreeRow>(sql`
-            with recursive tree as (
-                select id, 0 as depth from drive_nodes
+            with recursive started as (
+                select coalesce(
+                    (select r.started_at from drive_rotations r
+                     where r.workspace_id = ${input.workspaceId}
+                       and r.node_id = ${input.rootId}
+                       and r.finished_at is null),
+                    'infinity'::timestamptz) as at
+            ),
+            tree as (
+                select id, 0 as depth, array[]::uuid[] as chain, array[]::uuid[] as above
+                from drive_nodes
                 where id = ${input.rootId} and workspace_id = ${input.workspaceId}
                 union all
-                select n.id, t.depth + 1 from drive_nodes n join tree t on n.parent_id = t.id
+                select n.id, t.depth + 1,
+                       case when n.created_at > (select at from started)
+                                 and (n.parent_key_epoch >= ${input.targetEpoch}
+                                      or cardinality(t.chain) > 0)
+                            then t.chain || n.id
+                            else array[]::uuid[] end,
+                       t.chain
+                from drive_nodes n join tree t on n.parent_id = t.id
                 where n.purged_at is null and t.depth < 64
+            ),
+            reached as (
+                select distinct t.above[1] as top from tree t
+                where cardinality(t.chain) = 0 and cardinality(t.above) > 0
             )
             select t.id, t.depth from tree t join drive_nodes n on n.id = t.id
             where n.purged_at is null
               and (n.key_epoch < ${input.targetEpoch}
                    or (t.depth > 0 and n.parent_key_epoch < ${input.targetEpoch}))
-              -- Made after this rotation began, under a parent already at the target: its key
-              -- is fresh and was only ever wrapped under the new one, so no one the rotation
-              -- shut out holds it. Left out, so writes during a rotation cannot keep it open.
-              -- A node moved there keeps its own created_at, and its old key, and stays in.
-              and not (t.depth > 0
-                       and n.parent_key_epoch >= ${input.targetEpoch}
-                       and n.created_at > coalesce(
-                           (select r.started_at from drive_rotations r
-                            where r.workspace_id = ${input.workspaceId}
-                              and r.node_id = ${input.rootId}
-                              and r.finished_at is null),
-                           'infinity'::timestamptz))
+              and (cardinality(t.chain) = 0 or t.chain[1] in (select top from reached))
               ${after ? sql`and (t.depth, n.id) > (${after.depth}, ${after.id}::uuid)` : sql``}
             order by t.depth, n.id
             limit ${limit + 1}

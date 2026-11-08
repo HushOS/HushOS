@@ -497,6 +497,80 @@ describe('rotation', () => {
         expect(nextWork.nodes.map((node) => node.id)).toContain(fresh.id);
     });
 
+    /*
+     * A fresh folder and what is made inside it are one fresh subtree: all of it is left out, or
+     * the child (wrapped under the folder's fresh key, below the target) would be work whose parent
+     * is never re-keyed, and the rotation could never finish.
+     */
+    test('a fresh folder and what is made inside it are left out together, and the rotation finishes', async () => {
+        const project = await folder(rootId, rootEpoch);
+        const started = await rotations.startRotation({
+            workspaceId: owner.workspaceId,
+            nodeId: project.id,
+            startedBy: owner.userId,
+        });
+        if (started.status !== 'ok') throw new Error(started.status);
+        const ws = {
+            workspaceId: owner.workspaceId,
+            rootId: project.id,
+            targetEpoch: started.rotation.targetEpoch,
+            userId: owner.userId,
+        };
+        await signed.rotateNodes({ ...ws, nodes: [rotated(await current(project.id), rootEpoch)] });
+        const fresh = await folder(project.id, ws.targetEpoch, 1);
+        const child = await folder(fresh.id, fresh.keyEpoch, 1);
+        await folder(child.id, child.keyEpoch, 1);
+        expect((await rotations.listRotationWork(ws)).nodes).toEqual([]);
+        expect(await rotations.finishRotation(ws)).toBe(true);
+    });
+
+    /*
+     * An older node moved into a fresh folder keeps its old key and is work, re-keyed under the
+     * folder's new key. So the fresh subtree above it is work too, parents first, and what else
+     * hangs under it is re-wrapped: left out, it would stay under a key the finish forgets.
+     */
+    test('an older node in a fresh subtree brings the subtree back as work, and it all finishes', async () => {
+        const project = await folder(rootId, rootEpoch);
+        const older = await folder(project.id, project.keyEpoch);
+        const started = await rotations.startRotation({
+            workspaceId: owner.workspaceId,
+            nodeId: project.id,
+            startedBy: owner.userId,
+        });
+        if (started.status !== 'ok') throw new Error(started.status);
+        const ws = {
+            workspaceId: owner.workspaceId,
+            rootId: project.id,
+            targetEpoch: started.rotation.targetEpoch,
+            userId: owner.userId,
+        };
+        await signed.rotateNodes({ ...ws, nodes: [rotated(await current(project.id), rootEpoch)] });
+        const fresh = await folder(project.id, ws.targetEpoch, 1);
+        const child = await folder(fresh.id, fresh.keyEpoch, 1);
+        // As a move into the fresh folder leaves it: wrapped under its key, its own key kept.
+        await db
+            .update(driveNodes)
+            .set({ parentId: fresh.id, parentKeyEpoch: fresh.keyEpoch })
+            .where(eq(driveNodes.id, older.id));
+        const work = (await rotations.listRotationWork(ws)).nodes.map((node) => node.id);
+        expect(work[0]).toBe(fresh.id);
+        expect(work.slice(1).sort()).toEqual([older.id, child.id].sort());
+
+        await signed.rotateNodes({
+            ...ws,
+            nodes: [rotated(await current(fresh.id), ws.targetEpoch)],
+        });
+        await signed.rotateNodes({
+            ...ws,
+            nodes: [
+                rotated(await current(child.id), ws.targetEpoch),
+                rotated(await current(older.id), ws.targetEpoch),
+            ],
+        });
+        expect((await rotations.listRotationWork(ws)).nodes).toEqual([]);
+        expect(await rotations.finishRotation(ws)).toBe(true);
+    });
+
     test('a node at the target under an unrotated parent is a rewrap, and a share left unsealed is revoked', async () => {
         const project = await folder(rootId, rootEpoch);
         const inner = await folder(project.id, project.keyEpoch);

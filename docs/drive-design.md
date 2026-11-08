@@ -1452,9 +1452,10 @@ The distinction matters because the tree moves while a rotation runs:
     - The server's cap on the route is 8 MiB, above the heaviest node its schema accepts (about 6.8 MiB). `rotation-body.test.ts` holds the two together.
     - What one part applied is kept even if a later part fails. Tests: `a part that landed stays applied when a later part is lost` (web), `aPartThatLandedStaysAppliedWhenALaterPartOfTheBatchIsLost` (iOS `RotationTests`, Android `ContactTrustTest`).
 - The node's `change_seq` as the client read it is the precondition on every row.
-- A node made after the rotation began, under a parent already at the target, is not work (`listRotationWork`).
-    - Why: its key is fresh and only ever wrapped under the new one, so no one the rotation shut out holds it. Counted as work, a writer who kept adding nodes would keep the rotation from finishing.
-    - A node moved there keeps its own `created_at` and its old key, so it is still work.
+- A fresh subtree is not work (`listRotationWork`): nodes made after the rotation began, the top one under a parent already at the target, each one below under another of them.
+    - Why: their keys are fresh and only ever wrapped under the new key or under each other, so no one the rotation shut out holds them. Counted as work, a writer who kept adding nodes would keep the rotation from finishing.
+    - It goes together: a folder and what is made inside it. Left out alone, the folder would never be re-keyed, and its children, below the target under it, could never be.
+    - A node moved there keeps its own `created_at` and its old key, so it is work. Then the whole fresh subtree above it is work too, parents first, so nothing is left wrapped under a key the finish forgets.
     - The next rotation that covers it re-keys it like any other node below its target.
 
 Epochs alone are not enough for that check.
