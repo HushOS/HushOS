@@ -352,6 +352,18 @@ export async function listRotationWork(input: {
             where n.purged_at is null
               and (n.key_epoch < ${input.targetEpoch}
                    or (t.depth > 0 and n.parent_key_epoch < ${input.targetEpoch}))
+              -- Made after this rotation began, under a parent already at the target: its key
+              -- is fresh and was only ever wrapped under the new one, so no one the rotation
+              -- shut out holds it. Left out, so writes during a rotation cannot keep it open.
+              -- A node moved there keeps its own created_at, and its old key, and stays in.
+              and not (t.depth > 0
+                       and n.parent_key_epoch >= ${input.targetEpoch}
+                       and n.created_at > coalesce(
+                           (select r.started_at from drive_rotations r
+                            where r.workspace_id = ${input.workspaceId}
+                              and r.node_id = ${input.rootId}
+                              and r.finished_at is null),
+                           'infinity'::timestamptz))
               ${after ? sql`and (t.depth, n.id) > (${after.depth}, ${after.id}::uuid)` : sql``}
             order by t.depth, n.id
             limit ${limit + 1}
