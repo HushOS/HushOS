@@ -41,8 +41,10 @@ pub const MAX_LIMIT_ENTRIES: usize = 1_000_000;
 #[derive(Clone, Debug)]
 pub struct Settings {
     /// The header the proxy in front of the relay fills with the client's address; its last
-    /// value is the one the nearest proxy appended. Without it the socket's address is used.
+    /// value is the one the nearest proxy appended. It is read only on connections from
+    /// `trusted_proxies`: anyone else could write it. Without it the socket's address is used.
     pub trusted_proxy_header: Option<HeaderName>,
+    pub trusted_proxies: Vec<limits::Range>,
     /// Addresses (hushos.com's own) that skip the per-address limits, never the per-handle ones.
     pub trusted_senders: Vec<IpAddr>,
     pub address_security: Budget,
@@ -53,6 +55,7 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             trusted_proxy_header: None,
+            trusted_proxies: Vec::new(),
             trusted_senders: Vec::new(),
             address_security: Budget(1000),
             address_other: Budget(3000),
@@ -183,7 +186,12 @@ pub async fn run_deliveries(deliverer: Arc<Deliverer>, mut jobs: mpsc::Receiver<
 /// credentials, sends nothing; a token Apple or Google report dead is deleted with every handle
 /// that uses it.
 pub async fn deliver(deliverer: &Deliverer, job: Job) {
-    let Ok(Some((platform, token))) = deliverer.store.token(&job.handle_key).await else { return };
+    let (platform, token) = match deliverer.store.token(&job.handle_key).await {
+        Ok(Some(found)) => found,
+        Ok(None) => return,
+        // The database, not the handle: counted, so an outage shows in the hourly line.
+        Err(_) => return count(&deliverer.counters.failed),
+    };
     let Some(pusher) = deliverer.pushers.get(platform) else { return };
     match pusher.send(&token, &job.push).await {
         Outcome::Delivered => count(&deliverer.counters.delivered),
@@ -204,18 +212,35 @@ impl FromRequestParts<Arc<Relay>> for ClientAddress {
     type Rejection = Infallible;
 
     async fn from_request_parts(parts: &mut Parts, relay: &Arc<Relay>) -> Result<Self, Self::Rejection> {
-        let from_header = relay.settings.trusted_proxy_header.as_ref().and_then(|name| {
-            let value = parts.headers.get(name)?.to_str().ok()?;
-            value.rsplit(',').next()?.trim().parse::<IpAddr>().ok()
-        });
-        let from_socket = || parts.extensions.get::<ConnectInfo<SocketAddr>>().map(|info| info.0.ip());
-        Ok(ClientAddress(from_header.or_else(from_socket)))
+        let socket = parts.extensions.get::<ConnectInfo<SocketAddr>>().map(|info| info.0.ip());
+        // The header only from a proxy listed as one: from anyone else it is whatever they wrote.
+        let from_proxy =
+            socket.is_some_and(|ip| relay.settings.trusted_proxies.iter().any(|r| r.contains(ip)));
+        let from_header =
+            relay.settings.trusted_proxy_header.as_ref().filter(|_| from_proxy).and_then(|name| {
+                let value = parts.headers.get(name)?.to_str().ok()?.rsplit(',').next()?.trim();
+                // An address, or an address and port as some proxies write it.
+                value.parse::<IpAddr>().ok().or_else(|| value.parse::<SocketAddr>().ok().map(|s| s.ip()))
+            });
+        Ok(ClientAddress(from_header.or(socket).map(limits::canonical)))
     }
 }
 
 impl ClientAddress {
+    fn ip(&self) -> IpAddr {
+        self.0.unwrap_or(IpAddr::from([0u8; 16]))
+    }
+
     fn sender(&self) -> Sender {
-        Sender::of(self.0.unwrap_or(IpAddr::from([0u8; 16])))
+        Sender::of(self.ip())
+    }
+
+    fn block(&self) -> limits::Block {
+        limits::Block::of(self.ip())
+    }
+
+    fn trusted(&self, settings: &Settings) -> bool {
+        self.0.is_some_and(|ip| settings.trusted_senders.iter().any(|t| limits::canonical(*t) == ip))
     }
 }
 
@@ -244,7 +269,10 @@ async fn register(State(relay): State<Arc<Relay>>, address: ClientAddress, body:
     if relay.deliverer.pushers.get(platform).is_none() {
         return error(StatusCode::SERVICE_UNAVAILABLE, "platform-unavailable");
     }
-    let wants = [(Key::Registrations(address.sender()), limits::REGISTRATIONS_PER_ADDRESS)];
+    let wants = [
+        (Key::Registrations(address.sender()), limits::REGISTRATIONS_PER_ADDRESS),
+        (Key::RegistrationsBlock(address.block()), limits::block_budget(limits::REGISTRATIONS_PER_ADDRESS)),
+    ];
     if !relay.limiter.take(relay.clock.now(), &wants) {
         return limited();
     }
@@ -271,8 +299,20 @@ struct UnregisterBody {
 
 /// Deletes a registration given its secret. A wrong secret and an unknown handle get the same
 /// answer, so a server holding a handle cannot learn whether the device still has it.
-async fn unregister(State(relay): State<Arc<Relay>>, Path(handle): Path<String>, body: Bytes) -> Response {
+async fn unregister(
+    State(relay): State<Arc<Relay>>,
+    address: ClientAddress,
+    Path(handle): Path<String>,
+    body: Bytes,
+) -> Response {
     let Ok(body) = serde_json::from_slice::<UnregisterBody>(&body) else { return bad_request() };
+    // Each delete is a database round trip: bounded per address, so a flood cannot take the pool.
+    if !relay
+        .limiter
+        .take(relay.clock.now(), &[(Key::Deletes(address.sender()), limits::DELETES_PER_ADDRESS)])
+    {
+        return limited();
+    }
     let (Some(handle), Some(secret)) = (handle::decode32(&handle), handle::decode32(&body.delete_secret))
     else {
         return bad_request();
@@ -303,12 +343,13 @@ async fn ping(State(relay): State<Arc<Relay>>, address: ClientAddress, body: Byt
     let handle_key = handle::handle_key(&handle);
     let class = body.class;
     let mut wants = vec![(Key::Handle(handle_key, class), limits::per_handle(class))];
-    if !address.0.is_some_and(|ip| relay.settings.trusted_senders.contains(&ip)) {
+    if !address.trusted(&relay.settings) {
         let budget = match class {
             Class::Security => relay.settings.address_security,
             Class::Other => relay.settings.address_other,
         };
         wants.push((Key::Address(address.sender(), class), budget));
+        wants.push((Key::AddressBlock(address.block(), class), limits::block_budget(budget)));
     }
     if !relay.limiter.take(relay.clock.now(), &wants) {
         count(&relay.deliverer.counters.limited);

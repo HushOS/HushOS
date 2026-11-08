@@ -58,7 +58,9 @@ impl Platform {
                 ok.then(|| token.to_ascii_lowercase())
             }
             Platform::Fcm => {
-                let ok = (32..=4096).contains(&token.len())
+                // FCM tokens are about 160 characters; 512 leaves room without letting a fake
+                // registration store kilobytes (or pass Postgres's index entry limit).
+                let ok = (32..=512).contains(&token.len())
                     && token.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_:.".contains(&b));
                 ok.then(|| token.to_owned())
             }

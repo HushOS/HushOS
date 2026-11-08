@@ -4,7 +4,7 @@
 create table registrations (
     handle_key bytea primary key check (octet_length(handle_key) = 32),
     platform text not null check (platform in ('apns', 'apns-sandbox', 'fcm')),
-    token text not null check (length(token) between 1 and 4096),
+    token text not null check (length(token) between 1 and 512),
     secret_hash bytea not null check (octet_length(secret_hash) = 32)
 );
 

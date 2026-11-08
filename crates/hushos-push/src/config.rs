@@ -89,6 +89,22 @@ impl Config {
                     .map_err(|_| format!("PUSH_TRUSTED_PROXY_HEADER {name:?} is not a header name"))?,
             ),
         };
+        let trusted_proxies = env("PUSH_TRUSTED_PROXIES")
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(|item| {
+                crate::limits::Range::parse(item)
+                    .ok_or_else(|| format!("PUSH_TRUSTED_PROXIES: {item:?} is not an address or range"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if trusted_proxy_header.is_some() && trusted_proxies.is_empty() {
+            return Err(
+                "PUSH_TRUSTED_PROXY_HEADER needs PUSH_TRUSTED_PROXIES: the addresses of the proxies that set it"
+                    .to_owned(),
+            );
+        }
         let trusted_senders = env("PUSH_TRUSTED_SENDERS")
             .unwrap_or_default()
             .split(',')
@@ -101,6 +117,7 @@ impl Config {
             .collect::<Result<Vec<_>, _>>()?;
         let settings = Settings {
             trusted_proxy_header,
+            trusted_proxies,
             trusted_senders,
             address_security: budget(env, "PUSH_ADDRESS_SECURITY_PER_HOUR", 1000)?,
             address_other: budget(env, "PUSH_ADDRESS_OTHER_PER_HOUR", 3000)?,
@@ -153,5 +170,16 @@ mod tests {
         assert!(config(&[base[0], ("PUSH_TRUSTED_SENDERS", "198.51.100.4, hushos.com")]).is_err());
         let trusted = config(&[base[0], ("PUSH_TRUSTED_SENDERS", "198.51.100.4, 2001:db8::1")]).unwrap();
         assert_eq!(trusted.settings.trusted_senders.len(), 2);
+    }
+
+    #[test]
+    fn a_proxy_header_needs_the_proxies_that_set_it() {
+        let base = [("DATABASE_URL", "postgres://x")];
+        let header = [base[0], ("PUSH_TRUSTED_PROXY_HEADER", "cf-connecting-ip")];
+        assert!(config(&header).err().unwrap().contains("PUSH_TRUSTED_PROXIES"));
+        let both = [header[0], header[1], ("PUSH_TRUSTED_PROXIES", "10.0.0.0/8, 2001:db8::/32")];
+        assert_eq!(config(&both).unwrap().settings.trusted_proxies.len(), 2);
+        let bad = [header[0], header[1], ("PUSH_TRUSTED_PROXIES", "10.0.0.0/40")];
+        assert!(config(&bad).is_err());
     }
 }

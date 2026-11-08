@@ -38,8 +38,12 @@ How the push design in `docs/devices-design.md` 5 and 7 gets built, in four pull
 - **Limits.** These are token buckets, so a burst of the full budget is allowed, then one ping per `3600 / budget` seconds.
     - Per handle: `security` 20 an hour and `other` 60 an hour, in separate buckets.
     - Per sending address, for each class: `PUSH_ADDRESS_SECURITY_PER_HOUR` (default 1000) and `PUSH_ADDRESS_OTHER_PER_HOUR` (default 3000). An IPv6 address counts by its /64.
-    - Registrations: 30 an hour per address.
-    - Addresses listed in `PUSH_TRUSTED_SENDERS` (hushos.com's own) skip the per-address limits, but never the per-handle ones.
+    - Per block (an IPv4 /24 or an IPv6 /48), for each class: four times the per-address budget, so one customer cannot spread a flood over the 65,536 /64s of a /48.
+    - Registrations: 30 an hour per address, 120 per block. An FCM token is at most 512 characters.
+    - Deletes: 60 an hour per address.
+    - Addresses listed in `PUSH_TRUSTED_SENDERS` (hushos.com's own) skip the per-address and per-block limits, but never the per-handle ones. An IPv4 address matches whether it arrives plain or mapped into IPv6.
+    - The sending address comes from `PUSH_TRUSTED_PROXY_HEADER` only on connections from `PUSH_TRUSTED_PROXIES`; from anyone else the header is ignored, so a client cannot claim a trusted sender's address or spend another server's budget. The relay refuses to start with the header and no proxies.
+    - When the limit table is full, new keys are refused until a sweep frees room; a sweep runs at most once a second.
     - Limits are kept in memory, so run one instance. A restart refills them.
 - **Logs.** No requests or payloads. One line an hour of counts.
 
@@ -82,13 +86,13 @@ Nothing here is done by an agent. Credentials go straight from the console into 
 
 **DNS and hosting**
 
-- [ ] Point `push.hushos.com` at the Coolify host. If it goes through Cloudflare's proxy, set `PUSH_TRUSTED_PROXY_HEADER=cf-connecting-ip`. Otherwise use the header Coolify's proxy sets, `x-forwarded-for`.
+- [ ] Point `push.hushos.com` at the Coolify host. Set `PUSH_TRUSTED_PROXY_HEADER` to the header the nearest proxy sets (Coolify's: `x-forwarded-for`), and `PUSH_TRUSTED_PROXIES` to that proxy's address on the container network (the Coolify proxy's network range). Behind Cloudflare too, the header is still the one Coolify's proxy appends, and the origin should accept only Cloudflare's ranges.
 - [ ] Make the GHCR package `hushos-push` public after its first publish, as the other images are, or give Coolify a pull token.
 - [ ] Create the Coolify application as above. Add these settings:
     - `DATABASE_URL_FILE`;
     - `APNS_KEY_FILE` (the `.p8`, mounted as a file), `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_TOPIC=com.hushos.app`;
     - `FCM_SERVICE_ACCOUNT_FILE` (the JSON, mounted as a file);
-    - `PUSH_TRUSTED_PROXY_HEADER`;
+    - `PUSH_TRUSTED_PROXY_HEADER` and `PUSH_TRUSTED_PROXIES`;
     - `PUSH_TRUSTED_SENDERS` (the address hushos.com's web and worker reach `push.hushos.com` from).
 - [ ] Add an uptime check on `https://push.hushos.com/healthz`.
 - [ ] When the deploy job lands: add the GitHub secrets `PUSH_DEPLOY_WEBHOOK_URL` and `PUSH_DEPLOY_WEBHOOK_TOKEN`, and the variable `PUSH_DEPLOY_ENABLED=true`.
@@ -102,6 +106,8 @@ Nothing here is done by an agent. Credentials go straight from the console into 
 ## What PR 1 leaves open
 
 - Limits are per process, so a second instance doubles them. Shared limits would mean keeping sending addresses in the database, which the relay avoids.
+- Many blocks at once (a botnet, or dozens of /48s) can still fill the limit table, so new handles are refused until it frees room. One block cannot.
+- A ping the full delivery queue drops still gets 202, like every other ping; the device fetches what it missed when it next wakes.
 - A failed push is not retried. The device fetches every pending event the next time it wakes, and every security event also goes by email.
 - Registrations never expire on their own. One is removed when the app deletes it, or when Apple or Google report its token dead on a ping.
 - Anyone who learns a handle can spend its budgets, and so hold back that device's security pings for up to an hour. Only the device's own server is given the handle, and the app can register again for a new one.

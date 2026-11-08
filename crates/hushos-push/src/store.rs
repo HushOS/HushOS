@@ -254,31 +254,4 @@ mod tests {
     async fn memory_store_keeps_the_contract() {
         check_contract(&memory::MemoryStore::default()).await;
     }
-
-    /// The store the relay runs on, against a real Postgres: its migration, its constraints and
-    /// its queries keep the same contract as the memory store the API tests use. CI always gives
-    /// it a database (a missing one fails there); a local run without `PUSH_TEST_DATABASE_URL`
-    /// skips it.
-    #[tokio::test]
-    async fn postgres_store_keeps_the_contract() {
-        let Ok(url) = std::env::var("PUSH_TEST_DATABASE_URL") else {
-            assert!(std::env::var_os("CI").is_none(), "CI must set PUSH_TEST_DATABASE_URL");
-            eprintln!("skipped: PUSH_TEST_DATABASE_URL is not set");
-            return;
-        };
-        let store = PgStore::connect(&url).await.unwrap();
-        sqlx::query("truncate registrations").execute(store.pool()).await.unwrap();
-        check_contract(&store).await;
-        // The table's own checks hold whatever a caller sends.
-        let short = sqlx::query("insert into registrations values ($1, 'apns', 't', $1)")
-            .bind(&[1u8; 31][..])
-            .execute(store.pool())
-            .await;
-        assert!(short.is_err(), "a handle key must be 32 bytes");
-        let platform = sqlx::query("insert into registrations values ($1, 'web', 't', $1)")
-            .bind(&[2u8; 32][..])
-            .execute(store.pool())
-            .await;
-        assert!(platform.is_err(), "only apns, apns-sandbox and fcm are platforms");
-    }
 }

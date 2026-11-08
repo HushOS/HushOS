@@ -78,7 +78,7 @@ impl Harness {
             request = request.header(*name, *value);
         }
         let mut request = request.body(Body::from(body.to_string())).unwrap();
-        let socket: SocketAddr = format!("{from}:40000").parse().unwrap();
+        let socket = SocketAddr::new(from.parse().unwrap(), 40000);
         request.extensions_mut().insert(ConnectInfo(socket));
         let response = self.router.clone().oneshot(request).await.unwrap();
         let (parts, body) = response.into_parts();
@@ -264,6 +264,7 @@ async fn the_address_comes_from_the_last_value_of_the_trusted_proxy_header() {
     let settings = Settings {
         address_security: Budget(1),
         trusted_proxy_header: Some(HeaderName::from_static("x-forwarded-for")),
+        trusted_proxies: vec![limits::Range::parse("10.0.0.0/24").unwrap()],
         ..Settings::default()
     };
     let harness = Harness::new(settings);
@@ -278,6 +279,100 @@ async fn the_address_comes_from_the_last_value_of_the_trusted_proxy_header() {
     let spoofed =
         harness.ping_from(&b, "security", proxy, &[("x-forwarded-for", "192.0.2.77, 203.0.113.1")]).await;
     assert_eq!(spoofed.status, StatusCode::TOO_MANY_REQUESTS);
+}
+
+/*
+ * The proxy header is whatever a client writes unless a listed proxy wrote it: from anywhere else
+ * it is ignored, so a client can neither borrow a trusted sender's address to skip the address
+ * limits nor spend another server's budget by writing that server's address.
+ */
+#[tokio::test]
+async fn a_proxy_header_from_anyone_but_a_listed_proxy_is_ignored() {
+    let settings = Settings {
+        address_security: Budget(2),
+        trusted_proxy_header: Some(HeaderName::from_static("cf-connecting-ip")),
+        trusted_proxies: vec![limits::Range::parse("10.0.0.0/24").unwrap()],
+        trusted_senders: vec!["198.51.100.9".parse().unwrap()],
+        ..Settings::default()
+    };
+    let harness = Harness::new(settings);
+    let handles: Vec<String> = futures_like_handles(&harness, 4).await;
+    let attacker = "192.0.2.66";
+    // Claiming the trusted sender's address from outside: counted as the attacker, and limited.
+    for (n, handle) in handles.iter().enumerate().take(3) {
+        let answer =
+            harness.ping_from(handle, "security", attacker, &[("cf-connecting-ip", "198.51.100.9")]).await;
+        let expected = if n < 2 { StatusCode::ACCEPTED } else { StatusCode::TOO_MANY_REQUESTS };
+        assert_eq!(answer.status, expected);
+    }
+    // Claiming a victim server's address spent nothing of the victim's budget.
+    let victim = "203.0.113.5";
+    let from_victim = harness.ping_from(&handles[3], "security", victim, &[]).await;
+    assert_eq!(from_victim.status, StatusCode::ACCEPTED);
+    // Through the listed proxy, the header counts, and the trusted sender skips the address budget.
+    for handle in &handles {
+        let answer =
+            harness.ping_from(handle, "security", "10.0.0.7", &[("cf-connecting-ip", "198.51.100.9")]).await;
+        assert_eq!(answer.status, StatusCode::ACCEPTED);
+    }
+}
+
+async fn futures_like_handles(harness: &Harness, n: u8) -> Vec<String> {
+    let mut handles = Vec::new();
+    for i in 0..n {
+        handles.push(harness.register("apns", &apns_token(100 + i)).await.0);
+    }
+    handles
+}
+
+/* A trusted sender matches however its IPv4 address arrives, plain or mapped into IPv6. */
+#[tokio::test]
+async fn a_trusted_sender_matches_its_ipv4_address_mapped_into_ipv6() {
+    let settings = Settings {
+        address_security: Budget(1),
+        trusted_senders: vec!["198.51.100.9".parse().unwrap()],
+        ..Settings::default()
+    };
+    let harness = Harness::new(settings);
+    let handles = futures_like_handles(&harness, 3).await;
+    for handle in &handles {
+        let answer = harness.ping_from(handle, "security", "::ffff:198.51.100.9", &[]).await;
+        assert_eq!(answer.status, StatusCode::ACCEPTED);
+    }
+}
+
+/*
+ * One customer's /48 holds 65,536 /64s, each with an address budget of its own: the /48 as a
+ * whole gets four addresses' worth, so it cannot flood the relay by moving between them.
+ */
+#[tokio::test]
+async fn a_block_cannot_multiply_its_budget_by_changing_address() {
+    let settings = Settings { address_security: Budget(2), ..Settings::default() };
+    let harness = Harness::new(settings);
+    let handles = futures_like_handles(&harness, 10).await;
+    let mut passed = 0;
+    for (n, handle) in handles.iter().enumerate() {
+        // A new /64 of 2001:db8:1::/48 each time, with its own fresh address budget.
+        let from = format!("2001:db8:1:{n:x}::1");
+        if harness.ping_from(handle, "security", &from, &[]).await.status == StatusCode::ACCEPTED {
+            passed += 1;
+        }
+    }
+    assert_eq!(passed, 8);
+    // Another /48 has its own.
+    let other = harness.ping_from(&handles[9], "security", "2001:db8:2::1", &[]).await;
+    assert_eq!(other.status, StatusCode::ACCEPTED);
+}
+
+/* Deleting is a database round trip each time: an address gets 60 an hour, found or not. */
+#[tokio::test]
+async fn deletes_are_limited_per_address() {
+    let harness = Harness::new(Settings::default());
+    let (handle, _) = harness.register("apns", &apns_token(9)).await;
+    for _ in 0..60 {
+        assert_eq!(harness.unregister(&handle, &handle).await.status, StatusCode::NOT_FOUND);
+    }
+    assert_eq!(harness.unregister(&handle, &handle).await.status, StatusCode::TOO_MANY_REQUESTS);
 }
 
 #[tokio::test]

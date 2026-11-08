@@ -18,6 +18,8 @@ pub const SANDBOX_HOST: &str = "https://api.sandbox.push.apple.com";
 /// Apple refuses a provider token older than an hour, and one replaced more often than every 20
 /// minutes.
 const TOKEN_LIFETIME: Duration = Duration::from_secs(40 * 60);
+/// A provider token is replaced after a refusal only once it is this old.
+const MIN_TOKEN_AGE: Duration = Duration::from_secs(60);
 
 /// How long Apple keeps trying a device that is off: a day.
 const EXPIRY: Duration = Duration::from_secs(24 * 60 * 60);
@@ -53,8 +55,13 @@ impl ApnsAuth {
         Some(token)
     }
 
+    /// Drops a refused provider token, unless it is less than a minute old: with many pushes in
+    /// flight, every 403 making a new token would answer Apple with TooManyProviderTokenUpdates.
     fn forget(&self) {
-        *self.cached.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        let mut cached = self.cached.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if cached.as_ref().is_some_and(|(_, made)| made.elapsed() >= MIN_TOKEN_AGE) {
+            *cached = None;
+        }
     }
 }
 
@@ -102,7 +109,9 @@ pub fn classify(status: u16, body: &[u8]) -> Outcome {
     match (status, reason.as_str()) {
         (200, _) => Outcome::Delivered,
         (410, _) => Outcome::Dead,
-        (400, "BadDeviceToken" | "DeviceTokenNotForTopic") => Outcome::Dead,
+        // Not `DeviceTokenNotForTopic`: with a wrong APNS_TOPIC every token answers it, and
+        // treating it as dead would delete every iOS registration on the first ping each.
+        (400, "BadDeviceToken") => Outcome::Dead,
         _ => Outcome::Failed,
     }
 }
@@ -148,9 +157,10 @@ mod tests {
         assert_eq!(classify(410, &refusal("Unregistered")), Outcome::Dead);
         assert_eq!(classify(410, &refusal("ExpiredToken")), Outcome::Dead);
         assert_eq!(classify(400, &refusal("BadDeviceToken")), Outcome::Dead);
-        assert_eq!(classify(400, &refusal("DeviceTokenNotForTopic")), Outcome::Dead);
-        // The relay's own mistakes, and Apple's: the registrations stay.
+        // The relay's own mistakes, and Apple's: the registrations stay. A wrong APNS_TOPIC makes
+        // every token answer DeviceTokenNotForTopic.
         for (status, reason) in [
+            (400, "DeviceTokenNotForTopic"),
             (400, "BadTopic"),
             (400, "TopicDisallowed"),
             (400, "MissingTopic"),

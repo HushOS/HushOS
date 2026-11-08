@@ -120,7 +120,8 @@ pub fn classify(status: u16, body: &[u8]) -> Outcome {
     let unregistered = body["error"]["details"]
         .as_array()
         .is_some_and(|details| details.iter().any(|detail| detail["errorCode"] == "UNREGISTERED"));
-    if unregistered || (status == 404 && body["error"]["status"] == "NOT_FOUND") {
+    // A bare 404 NOT_FOUND is not enough: a wrong project or URL answers it for every token.
+    if unregistered {
         Outcome::Dead
     } else {
         Outcome::Failed
@@ -160,7 +161,8 @@ mod tests {
     fn only_unregistered_makes_a_token_dead() {
         assert_eq!(classify(200, b"{\"name\":\"projects/p/messages/1\"}"), Outcome::Delivered);
         assert_eq!(classify(404, &error(404, "NOT_FOUND", Some("UNREGISTERED"))), Outcome::Dead);
-        assert_eq!(classify(404, &error(404, "NOT_FOUND", None)), Outcome::Dead);
+        // A wrong project or URL: 404 for every token, and no UNREGISTERED. The registrations stay.
+        assert_eq!(classify(404, &error(404, "NOT_FOUND", None)), Outcome::Failed);
         for (status, name, code) in [
             (400, "INVALID_ARGUMENT", Some("INVALID_ARGUMENT")),
             (403, "PERMISSION_DENIED", Some("SENDER_ID_MISMATCH")),
