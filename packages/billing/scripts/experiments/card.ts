@@ -6,7 +6,14 @@ import { attempt, loadState, polar, show } from './sandbox';
  * which link is for which card, how to find the subscription a link produced, and how to
  * read a subscription's orders and webhook trail.
  */
-export type LinkKey = 'monthly0341' | 'monthly3184' | 'monthly4242' | 'yearly4242' | 'monthlyIndia';
+export type LinkKey =
+    | 'monthly0341'
+    | 'monthly0341b'
+    | 'monthly3184'
+    | 'monthly4242'
+    | 'yearly4242'
+    | 'monthlyIndia'
+    | 'monthly3220';
 export type LinkRecord = { id: string; card: string; email: string; url: string };
 
 export const CARD_LINKS: {
@@ -22,6 +29,14 @@ export const CARD_LINKS: {
         label: 'exp-family-monthly-card-0341',
         product: 'monthly',
         emailPrefix: 'exp-card0341',
+    },
+    {
+        // Made by fast-setup.ts with EXPFIRST preset, so the first period is free and the card is saved.
+        key: 'monthly0341b',
+        card: '4000000000000341',
+        label: 'exp-family-monthly-card-0341b',
+        product: 'monthly',
+        emailPrefix: 'exp-card0341b',
     },
     {
         key: 'monthly3184',
@@ -43,6 +58,14 @@ export const CARD_LINKS: {
         label: 'exp-family-yearly-card-4242',
         product: 'yearly',
         emailPrefix: 'exp-yearly4242',
+    },
+    {
+        // 3D Secure 2 required on every payment: whether Polar's off-session raise then asks for action.
+        key: 'monthly3220',
+        card: '4000000000003220',
+        label: 'exp-family-monthly-card-3220',
+        product: 'monthly',
+        emailPrefix: 'exp-card3220',
     },
     {
         key: 'monthlyIndia',

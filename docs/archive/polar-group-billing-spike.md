@@ -675,6 +675,41 @@ These ran on the `2026-04` API path, as everything above did. Main is moving to 
 
 **Nothing differs.** The E3 free subscription now stands at 10 units with a pending cut to 9.
 
+### Card runs, second round (2026-10-17, 16:39–16:46Z)
+
+The scripts are `fast-setup.ts`, `e3-0341b-e6.ts`, `portal-4242.ts`, `e3-0341-e6-handover.ts` and the read-only `after-handover-read.ts`.
+
+**A free first period does not reach the 0341 card.**
+
+- `EXPFIRST` is 100% off with duration `once`. The 0341b link (`a24d316c-…`) carried it preset.
+- The checkout attached 0341 to customer `c6cd88eb-…`. Subscription `deacb72e-9be6-4251-abf1-30141b5aeee7` became active in INR with a `subscription_create` order of total 0.
+- A raise from 6 to 7 with `invoice` returned 200 and `units` went to 7, but no order was created. `customers.getState` shows 7 units too.
+- The `once` discount still covers the current period, so the proration is 0 and Polar makes no order: the same skip as the free E3 runs. The card is not tried until renewal.
+
+**Clearing a pending cut works.** `subscriptions.update(id, { pending_update: null })` on the free E3 subscription removed the pending cut to 9, and left `units` at 10.
+
+**E3 0341 through a changed default card: the charge succeeded.**
+
+- The owner added 0341 in the portal of the monthly 4242 customer and made it the default. `default_payment_method_id` is the 0341 card `a60620a7-…`; the old 4242 `8a118969-…` stays on file.
+- A raise 8→9 with `invoice` on `90197bd1-…` returned 200, and `units` is 9.
+- It left `subscription_update` order `c5e11674-…`, `paid`, net 196, tax 35, total 231. The line is `(8 members → 9 members)`.
+- 0341 declines every charge, so the charge did not go to the customer's default card. It most likely went to the card the subscription was created with (4242).
+- Neither the order nor the portal order exposes a payment method, and `payments:read` is missing, so the card that paid is inferred, not read.
+- **The 0341 decline was reached the next day** (T2 below), so this charge most likely went to 4242 before the new default took effect.
+
+**E6 handover:**
+
+- **Setup.** `members:write` now works. New payer `exp-newpayer-…` was added as `billing_manager` (member `ed6e7eb9-…`), and a portal session for them works.
+- **Before the raise.** The team customer held two 4242 cards: the old payer's `8d9d8c71-…` from checkout, and the new payer's `5b1b893f-…`, added in the portal at 16:42. The owner reported setting the new card as default, but `default_payment_method_id` still named the old payer's card.
+- **My mistake.** `e3-0341-e6-handover.ts` checked only that a default existed and that two cards were on file, not that the default was the new payer's card. It therefore raised the team subscription 6→7 with `invoice`: order `086ad542-…`, `paid`, 199 + 36 = 235 USD minor units. The script then took the non-default card for the "old" one and deleted **the new payer's card** `5b1b893f-…`, acting as the new payer through the portal API. The delete was allowed.
+- **What this shows:**
+    1. A card added by a `billing_manager` did not become the customer's default, at least as observed here.
+    2. A raise is charged while the old payer's card is the default; which card paid is not exposed.
+    3. A `billing_manager` can delete a non-default card through the portal API.
+- **Current state.** Only the old payer's card is on the team customer. The new payer must add a card again to redo the test.
+- **Still untested:** whether a new default actually moves the subscription's charges, and whether Polar refuses to delete the card backing the subscription. The guard is fixed: `default` is now derived from `default_payment_method_id`. The portal list's declared `is_default` field is not returned.
+- **Not done yet:** the ownership transfer (section 3 step 2, `updateExternal` to `owner`) and removing the old member (step 4).
+
 ### Family tiers, T1 and T2 (2026-10-18)
 
 These runs use the seeded tier products of PR #65:
@@ -737,26 +772,32 @@ HushOS reads a family's paid tier from its newest paid order (groups-design 3.5)
 2. **A 402 is not always a portal case.** The India decline is `PaymentFailed` with no pending order, so the "send the payer to the portal to confirm" route in section 5 does not apply. The admission screen needs a plain "your bank declined this charge" outcome.
 3. **INR groups with large raises.** One raise whose proration crosses ₹15,000 failed outright in the sandbox. With realistic prices, that is a company adding dozens of members at once. HushOS should say so before the attempt for INR payers. Splitting a raise to stay under the RBI limit is not proposed. Families never reach it on the seeded prices: the largest raise is 16 places (four included to the maximum of 20), at most 16 × ₹590 = ₹9,440 a year before tax and ₹11,139.20 with GST; the archived single Family plan's largest, 14 × ₹790, is ₹13,050.80 with GST. A tier's member priced above ₹794 a year would cross it (`packages/billing/src/protocol.ts`).
 4. **Every raise is its own taxed order.** It carries 18% GST in India, and in production Polar's fixed per-order fee. On a ₹2 member, the fee would exceed the charge. This confirms section 4's fee warning for `invoice` raises at INR prices.
-5. **Quote truncated amounts.** Any "you will be charged X now" figure HushOS computes must truncate per currency minor unit, to match Polar's 199 and 1999.
-6. **A pending cut dies on any raise.** This is now seen on a paid subscription too: re-issue the cut after every increase (E3).
+5. **Quote charges as estimates.** Polar truncates units-only proration (199 for 199.99) but rounds product-change lines to the nearest minor unit (2969 for 2968.8, T2). A HushOS "you will be charged about X now" figure can be off by one minor unit per line, so it must say "about" and take the charged amount from the order.
+6. **A pending cut dies on any raise.** This is now seen on a paid subscription too: re-issue the cut after every increase (E3). A cut can also be withdrawn explicitly with `{ pending_update: null }`.
+7. **A new default card does reach the subscription, though perhaps not at once.** A raise 28 seconds after 0341 became the default was paid; a tier change the next day was declined on it (T2). Section 3's completion rule (`default_payment_method_id` names a card created after the handover began) holds, but HushOS should not charge in the same moment the handover completes. A clean E6 run on the new payer's card is still needed to confirm which card pays.
+8. **Tier changes and member changes are separate calls that share one pending slot.** A scheduled downgrade and a scheduled member cut merge into one `pending_update`. An immediate member raise drops only the pending cut (re-issue it); an immediate tier upgrade drops both (re-issue the member cut, and the downgrade is moot). Both cannot go in one request (T1).
+9. **A mid-period tier upgrade with `invoice` keeps the anniversary and charges the prorated difference at once (T2).** It needs the same "charge before granting, 402 means nothing happened" handling as a member raise; the 0341 decline rolled back cleanly.
+10. **A free first period postpones every charge, raises included.** A group started on a `once` 100% offer pays nothing for raises during that period. Polar makes no order, so HushOS must not wait for an `order.paid` before admitting.
 
 ### Still untested; needs a card, wider scopes or the owner
 
-| Item                                                         | Needs                                                                                                 |
-| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
-| E3: 0341 decline on a raise                                  | A 0341 subscription whose first charge was zero (a `once` 100% discount), or 0341 added in the portal |
-| E3: `PaymentActionRequired` and where its pending order goes | A card that actually demands authentication off-session through Polar; 3184 did not                   |
-| E3: webhook order                                            | A webhook endpoint on the sandbox organisation, or `events:read`                                      |
-| E3: deferred `prorate` charge after cancellation             | A card and a period end                                                                               |
-| E4 part 1: 364/365 of the yearly price                       | `e4-card.ts --force` a day or more after 2026-10-17 04:32Z                                            |
-| E8: what the portal offers after the decline                 | The owner, in the portal                                                                              |
-| E8: the 0341 decline reason                                  | `payments:read`                                                                                       |
-| E6: payer handover and card ownership                        | `members:write` and two test users                                                                    |
-| E2: singular "member" and the rendered invoice PDF           | An order at 1 unit, or the owner opening an invoice                                                   |
-| E1: receipt recipients                                       | The owner's mailbox                                                                                   |
-| E7: portal setting ("Enable subscription unit changes" off)  | The owner, in the dashboard                                                                           |
+| Item                                                                                                                       | Needs                                                                                                   |
+| -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| E3: 0341 decline on a units raise specifically (a tier change declined in T2)                                              | A units raise on `90197bd1` now that 0341 is in effect                                                  |
+| E3: `PaymentActionRequired` and where its pending order goes                                                               | A card that actually demands authentication off-session through Polar; 3184 did not                     |
+| E3: webhook order                                                                                                          | A webhook endpoint on the sandbox organisation, or `events:read`                                        |
+| E3: deferred `prorate` charge after cancellation                                                                           | A card and a period end                                                                                 |
+| E4 part 1: 364/365 of the yearly price                                                                                     | `e4-card.ts --force` a day or more after 2026-10-17 04:32Z                                              |
+| E8: what the portal offers after the decline                                                                               | The owner, in the portal                                                                                |
+| E8: the 0341 decline reason                                                                                                | `payments:read`                                                                                         |
+| E6: does the new payer's default card get charged; can the backing card be deleted; ownership transfer; old member removal | The new payer re-adds a card and sets it default, then a clean run. Section 3 steps 2 and 4 not yet run |
+| Which card paid any order                                                                                                  | `payments:read`                                                                                         |
+| What a refunded order looks like (`status`, `paid`)                                                                        | `refunds:write`                                                                                         |
+| E2: singular "member" and the rendered invoice PDF                                                                         | An order at 1 unit, or the owner opening an invoice                                                     |
+| E1: receipt recipients                                                                                                     | The owner's mailbox                                                                                     |
+| E7: portal setting ("Enable subscription unit changes" off)                                                                | The owner, in the dashboard                                                                             |
 
-The production app token will also need `members:write` once handover is built, since section 3's steps call `customers.members.*`.
+The production app token will also need `members:write`, both for handover (section 3's steps call `customers.members.*`) and for #53's lapsed-family takeover, which adds a member and transfers ownership the same way. The sandbox token got `members:write` on 2026-10-17; it still lacks `payments:read`, `refunds:read`, `refunds:write`, `events:read` and `organizations:read`.
 
 ### Sandbox objects created (all `exp-`)
 
@@ -768,9 +809,12 @@ The production app token will also need `members:write` once handover is built, 
 - `b0b3210c-6029-4d4c-93eb-7e7034641fbe` exp-Personal (monthly);
 - `3d82b99f-41e4-48b4-95dd-c2ffe007f3c0` exp-Seat throwaway (monthly).
 
-**Discount:** `745a7270-22d7-4a7d-848e-d4ed5caab47f` exp-free (code `EXPFREE`).
+**Discounts:**
 
-**Checkout links:** the five IDs in the links table above.
+- `745a7270-22d7-4a7d-848e-d4ed5caab47f` exp-free (code `EXPFREE`);
+- `feed0658-65e6-4183-8fff-bc3c69f00faa` exp-first (code `EXPFIRST`, `once`).
+
+**Checkout links:** the five IDs in the links table above, plus 0341b `a24d316c-3a2b-4e99-9faf-b49ce44af08d`.
 
 **Customers:**
 
@@ -785,9 +829,12 @@ The production app token will also need `members:write` once handover is built, 
     - 3184: `66e00a09-1405-4eb0-841b-88da62a188cf`;
     - monthly 4242: `357f3005-3ab9-434e-9876-291eaf64579d`;
     - yearly 4242: `80413f60-c9b3-4772-a167-e40785a7d5ba`;
-    - India: `07f1fb96-20b7-4b6f-a380-38ad5f22ea91`.
+    - India: `07f1fb96-20b7-4b6f-a380-38ad5f22ea91`;
+    - 0341b: `c6cd88eb-8f0d-45ae-bb95-be6a941db064`;
+- T1 teams: `9402b317-127a-4cb1-8a84-2571732e9363`, `01711b00-9881-4735-9f60-a77e4a10dccb`, `89f83e18-b619-4024-af39-0d18a45aee18`;
+- E6 team: `b59334dd-2b59-43a1-9765-66551993457e` (`group:6501a650-e270-4db9-a74d-509de8d0980a`). Its owner is `exp-payer-mvcmf1a7h258`, and its `billing_manager` is `exp-newpayer-mvcmf1a7h258` (member `ed6e7eb9-6ae2-447f-b93f-6aeda6d9da21`).
 
-All five team customers have `external_id` `group:<random uuid>`, an `exp-owner+…@thebinary.dev` owner and metadata `hushos_experiment: true`.
+All nine team customers have `external_id` `group:<random uuid>`, an `exp-owner+…@thebinary.dev` owner and metadata `hushos_experiment: true`.
 
 **Free subscriptions (active):**
 
@@ -796,12 +843,17 @@ All five team customers have `external_id` `group:<random uuid>`, an `exp-owner+
 - E4: `cfc7ce1a-c84c-455f-b416-243c671dc0e0`;
 - E7 units: `31766d2e-5c38-4ab8-968a-825915f9b5f8` (10001 units);
 - E7 seats: `a008b991-ae17-4ba2-9c10-48541c95b825` (1001 seats);
-- E3: `46f1a101-f69f-4eb3-ba8e-d3a8731685b6` (10 units, cut to 9 pending).
+- E3: `46f1a101-f69f-4eb3-ba8e-d3a8731685b6` (10 units, no pending cut);
+- T1 A: `08010bae-f2e6-42b1-9fd8-6e096502fb0c` (Family Pro, 7 units, pending Plus);
+- T1 B: `2e6fccae-2d1e-44a6-bef9-5f7171a520e2` (Family Max, 6 units);
+- T1 C: `b714c233-da82-4a96-abf7-ce94cbf40465` (Family Pro, 6 units).
 
-**Card-paid subscriptions (active, INR, renewing on test cards):**
+**Card-paid subscriptions (active, renewing on test cards; INR unless noted):**
 
 - 3184: `a00b4e37-db36-45ca-8b6f-e371d073b5d6` (7 units);
-- monthly 4242: `90197bd1-98cd-4408-a273-15d4552a1096` (8 units);
+- monthly 4242: `90197bd1-98cd-4408-a273-15d4552a1096` (9 units; default card now 0341, which will fail its renewal if the subscription does use the default);
+- 0341b: `deacb72e-9be6-4251-abf1-30141b5aeee7` (7 units, first period free, renews on 0341 on 2026-11-17);
+- E6 team: `67975e71-229f-438d-b80d-2a5030d46332` (now Family Max, 7 units, USD, the old payer's card only);
 - yearly 4242: `c083ee20-aa47-4bb9-9803-4a00790b210d` (7 units);
 - India: `e1eb5f51-43c7-40e6-b5d7-240f0c9710d8` (7 units).
 
@@ -826,8 +878,11 @@ The open quote-only checkouts expire 24 hours after creation:
 
 **Cleanup:**
 
-1. Revoke the ten subscriptions (six free, four card-paid).
-2. Delete the eleven customers with `anonymize: true`.
-3. Delete the five checkout links.
-4. Archive the five products.
-5. Delete the discount.
+1. Revoke the fifteen subscriptions (nine free, six card-paid).
+2. Delete the sixteen customers with `anonymize: true`.
+3. Remove the three Family tier products from `EXPFREE` (or delete the discount, step 6).
+4. Delete the six checkout links.
+5. Archive the five `exp-` products.
+6. Delete the two discounts.
+
+**2026-10-19, card 3220 (3D Secure 2 required on every payment).** The owner checked out Family monthly (6 units) with 4000 0000 0000 3220 and completed the 3DS challenge. An off-session raise to 7 with `invoice` then returned 200 and a `subscription_update` order `paid` (net 199), with no 402 and no pending order: like 3184, the card was saved with an off-session mandate at checkout, so Polar's later charges need no authentication. `PaymentActionRequired` stays unreproduced with Stripe's test cards in Polar's sandbox; it is expected mainly from Indian cards under RBI e-mandate rules above ₹15,000 per charge, which HushOS's own raises and plan changes don't reach (the largest yearly price is ₹13,800). HushOS already answers it (groups.ts: `confirm`, send the payer to the portal), and treats it as "nothing changed" like a decline.
