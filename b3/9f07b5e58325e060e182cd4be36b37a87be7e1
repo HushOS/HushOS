@@ -1,0 +1,25 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/Auth.kt
+  s_566b8e0c4467a4::t_3296ea68b02828 30,528-530,544-545
+apps/android/app/src/test/kotlin/com/hushos/app/data/SessionCheckTest.kt
+  s_566b8e0c4467a4::t_16f90775c9a2a6 10-13,34-35
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Auth.swift
+  s_566b8e0c4467a4::t_2bf8b3b2d6c729 240-244,266-267
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SessionCheckTests.swift
+  s_566b8e0c4467a4::t_67bf0934c77c3c 6-9,12,35-36
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b39f07b5e58325e060e182cd4be36b37a87be7e1",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
