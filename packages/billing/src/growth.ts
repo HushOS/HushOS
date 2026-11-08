@@ -167,7 +167,11 @@ function affiliateTerms(affiliate: {
     };
 }
 
-export async function getOfferLanding(slug: string): Promise<OfferLanding | null> {
+/*
+ * The public offer page. `caller` names who is asking (their address) for the limit on looking up
+ * unknown codes at Polar; past it the page is simply missing, as for a code that doesn't exist.
+ */
+export async function getOfferLanding(slug: string, caller: string): Promise<OfferLanding | null> {
     if (!OFFER.test(slug)) return null;
     const bySlug = SLUG.test(slug) ? await growthRepository.getAffiliateBySlug(slug) : null;
     const resolved = bySlug ? null : await growthRepository.resolveCode(slug);
@@ -185,7 +189,12 @@ export async function getOfferLanding(slug: string): Promise<OfferLanding | null
     if (affiliate || resolved) return null;
     // A paused creator's slug and code are theirs still: no page, not the provider's code either.
     if (await growthRepository.findAffiliateByHandle(slug)) return null;
-    const discount = await findProviderDiscount(slug);
+    const discount = await findProviderDiscount(slug, `address:${caller}`).catch(
+        (error: unknown) => {
+            if (error instanceof BillingError && error.status === 429) return null;
+            throw error;
+        },
+    );
     if (!discount) return null;
     return {
         kind: 'code',
@@ -209,7 +218,7 @@ export async function rememberCoupon(userId: string, code: string) {
     const discount =
         resolved || (await growthRepository.findAffiliateByHandle(code))
             ? null
-            : await findProviderDiscount(code);
+            : await findProviderDiscount(code, `user:${userId}`);
     if (!discount) throw new BillingError('That code is not valid.', 404);
     await growthRepository.rememberCoupon(userId, discount.code);
     return { code: discount.code };

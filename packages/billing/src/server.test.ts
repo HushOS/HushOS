@@ -1609,6 +1609,66 @@ describe('handleWebhook', () => {
     });
 });
 
+describe('coupon lookups', () => {
+    const { count } = billing.DISCOUNT_LOOKUP_LIMIT;
+
+    test('a person may ask Polar about so many unknown codes; then 429, and Polar isn’t asked', async () => {
+        const visitor = await createTestAccount();
+        for (let n = 0; n < count; n++)
+            await expect(growth.rememberCoupon(visitor.userId, `GUESS${n}`)).rejects.toThrow(
+                'That code is not valid.',
+            );
+        const asked = polar.calls.length;
+        await expect(growth.rememberCoupon(visitor.userId, 'GUESS99')).rejects.toMatchObject({
+            status: 429,
+        });
+        expect(polar.calls.length).toBe(asked);
+        // Someone else's guesses are their own.
+        const other = await createTestAccount();
+        await expect(growth.rememberCoupon(other.userId, 'GUESS98')).rejects.toThrow(
+            'That code is not valid.',
+        );
+    });
+
+    test('a code already remembered costs nothing against the limit', async () => {
+        polar.discounts.push({
+            id: 'disc_spring',
+            code: 'SPRING',
+            duration: 'once',
+            basis_points: 1000,
+        });
+        const visitor = await createTestAccount();
+        for (let n = 0; n < count + 5; n++)
+            expect(await growth.rememberCoupon(visitor.userId, 'spring')).toEqual({
+                code: 'SPRING',
+            });
+        expect(polar.calls.filter((call) => call === 'discounts.list:SPRING')).toHaveLength(1);
+    });
+
+    test('the public offer page is limited by address: past it the page is missing, Polar unasked', async () => {
+        for (let n = 0; n < count; n++)
+            expect(await growth.getOfferLanding(`offer-guess${n}`, '203.0.113.9')).toBeNull();
+        const asked = polar.calls.length;
+        expect(await growth.getOfferLanding('offer-guess-next', '203.0.113.9')).toBeNull();
+        expect(polar.calls.length).toBe(asked);
+        // Another address still reaches Polar. (Codes no earlier test cached: a cached code costs nothing.)
+        await growth.getOfferLanding('offer-guess-other', '198.51.100.4');
+        expect(polar.calls.length).toBe(asked + 1);
+    });
+
+    test('the codes looked up are remembered up to a bound, oldest first out', async () => {
+        const total = billing.DISCOUNT_CACHE_ENTRIES + 50;
+        for (let n = 0; n < total; n++) await billing.findProviderDiscount(`CODE${n}`);
+        expect(billing.discountCacheSize()).toBe(billing.DISCOUNT_CACHE_ENTRIES);
+        // The newest is still remembered (no second call); the oldest was let go (asked again).
+        const asked = polar.calls.length;
+        await billing.findProviderDiscount(`CODE${total - 1}`);
+        expect(polar.calls.length).toBe(asked);
+        await billing.findProviderDiscount('CODE0');
+        expect(polar.calls.length).toBe(asked + 1);
+    });
+});
+
 describe('revokeForDeletion', () => {
     test('revokes active subscriptions and deletes the customer', async () => {
         const { userId } = await createTestAccount();
@@ -2520,12 +2580,12 @@ describe('affiliates', () => {
         ]);
         expect(affiliate.providerDiscountId).toBe('disc_creator25');
         expect(affiliate.url).toBe('http://localhost:5173/go/creator');
-        const landing = await growth.getOfferLanding('creator');
+        const landing = await growth.getOfferLanding('creator', '192.0.2.1');
         expect(landing).toMatchObject({ kind: 'affiliate', name: 'Creator', code: 'CREATOR25' });
         expect(landing?.catalogue.plans.length).toBe(2);
         // The creator's code reaches the same page as their slug.
-        expect((await growth.getOfferLanding('creator25'))?.kind).toBe('affiliate');
-        expect(await growth.getOfferLanding('nobody')).toBeNull();
+        expect((await growth.getOfferLanding('creator25', '192.0.2.1'))?.kind).toBe('affiliate');
+        expect(await growth.getOfferLanding('nobody', '192.0.2.1')).toBeNull();
     });
 
     /* Someone who signed up through `code` with Family Pro chosen, and made a family. */
@@ -2573,10 +2633,10 @@ describe('affiliates', () => {
         const affiliate = await creator();
         await growth.updateAffiliate(affiliate.id, { active: false });
         // Polar still knows the code; the page must not fall back to it.
-        expect(await growth.getOfferLanding('creator')).toBeNull();
-        expect(await growth.getOfferLanding('creator25')).toBeNull();
+        expect(await growth.getOfferLanding('creator', '192.0.2.1')).toBeNull();
+        expect(await growth.getOfferLanding('creator25', '192.0.2.1')).toBeNull();
         await growth.updateAffiliate(affiliate.id, { active: true });
-        expect((await growth.getOfferLanding('creator'))?.kind).toBe('affiliate');
+        expect((await growth.getOfferLanding('creator', '192.0.2.1'))?.kind).toBe('affiliate');
     });
 
     test('editing the code or terms changes the discount at Polar first; a refusal changes nothing here', async () => {
@@ -2601,9 +2661,9 @@ describe('affiliates', () => {
             }),
         ]);
         // The page follows the new slug and code; the old ones are gone.
-        expect((await growth.getOfferLanding('ada'))?.code).toBe('CREATOR30');
-        expect((await growth.getOfferLanding('creator30'))?.kind).toBe('affiliate');
-        expect(await growth.getOfferLanding('creator')).toBeNull();
+        expect((await growth.getOfferLanding('ada', '192.0.2.1'))?.code).toBe('CREATOR30');
+        expect((await growth.getOfferLanding('creator30', '192.0.2.1'))?.kind).toBe('affiliate');
+        expect(await growth.getOfferLanding('creator', '192.0.2.1')).toBeNull();
         // Commission and notes are this site's alone: no call to Polar.
         polar.calls = [];
         await growth.updateAffiliate(affiliate.id, { commissionBps: 1000, notes: 'Paid monthly' });
@@ -3157,8 +3217,8 @@ describe('affiliates', () => {
         expect(polar.discounts).toEqual([]);
         expect(await growth.listAffiliates()).toEqual([]);
         // No page under either handle, and no discount left at Polar for the code to fall back to.
-        expect(await growth.getOfferLanding('creator')).toBeNull();
-        expect(await growth.getOfferLanding('creator25')).toBeNull();
+        expect(await growth.getOfferLanding('creator', '192.0.2.1')).toBeNull();
+        expect(await growth.getOfferLanding('creator25', '192.0.2.1')).toBeNull();
         // The fan keeps their account, no longer attributed to anyone.
         expect(await growthRepository.findAffiliateForCustomer(fan.userId)).toBeNull();
     });
@@ -3426,7 +3486,7 @@ describe('offers made at Polar', () => {
             ends_at: new Date(Date.now() + 7 * DAY).toISOString(),
             products: [{ id: PRO }],
         });
-        const landing = await growth.getOfferLanding('launch20');
+        const landing = await growth.getOfferLanding('launch20', '192.0.2.1');
         expect(landing).toMatchObject({
             kind: 'code',
             name: 'Launch week',
@@ -3481,7 +3541,7 @@ describe('offers made at Polar', () => {
                 starts_at: new Date(Date.now() + DAY).toISOString(),
             },
         );
-        expect((await growth.getOfferLanding('fiver'))?.terms).toEqual({
+        expect((await growth.getOfferLanding('fiver', '192.0.2.1'))?.terms).toEqual({
             type: 'fixed',
             amount: 500,
             currency: 'usd',
@@ -3489,7 +3549,7 @@ describe('offers made at Polar', () => {
             durationMonths: null,
         });
         for (const code of ['OLD10', 'SPENT', 'SOON']) {
-            expect(await growth.getOfferLanding(code)).toBeNull();
+            expect(await growth.getOfferLanding(code, '192.0.2.1')).toBeNull();
             const person = await createTestAccount();
             await expect(growth.rememberCoupon(person.userId, code)).rejects.toThrow(
                 'That code is not valid.',

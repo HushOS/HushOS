@@ -45,7 +45,12 @@ export const getReferralLandingServerFn = createServerFn()
 
 export const getOfferLandingServerFn = createServerFn()
     .validator(word('slug'))
-    .handler(({ data }): Promise<OfferLanding | null> => getOfferLanding(data.slug));
+    .handler(async ({ data }): Promise<OfferLanding | null> => {
+        // Who is asking, for the limit on looking up unknown codes at Polar (server-only imports).
+        const { getRequest } = await import('@tanstack/react-start/server');
+        const { requestAddress } = await import('@/lib/api/shared.server');
+        return getOfferLanding(data.slug, requestAddress(getRequest()));
+    });
 
 /* "20%" or "$5.00": the size of a discount, for a headline. */
 export function discountAmount(input: DiscountTerms | { percentOff: number }) {

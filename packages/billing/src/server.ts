@@ -422,7 +422,20 @@ export type ProviderDiscount = {
 type PolarDiscount = Awaited<ReturnType<Polar['discounts']['list']>>['items'][number];
 const DISCOUNT_CODE = /^[A-Za-z0-9_-]{3,64}$/;
 const DISCOUNT_CACHE_MS = 60_000;
+/*
+ * At most this many codes are remembered: unknown codes are cached too (each saves a Polar call),
+ * so without a bound anyone guessing codes would grow it for good. The oldest goes first.
+ */
+export const DISCOUNT_CACHE_ENTRIES = 1_000;
 const discountCache = new Map<string, { at: number; value: ProviderDiscount | null }>();
+function rememberDiscount(code: string, value: ProviderDiscount | null) {
+    discountCache.delete(code);
+    discountCache.set(code, { at: Date.now(), value });
+    while (discountCache.size > DISCOUNT_CACHE_ENTRIES)
+        discountCache.delete(discountCache.keys().next().value!);
+}
+/* How many codes are remembered now (for tests). */
+export const discountCacheSize = () => discountCache.size;
 
 /*
  * A discount the operator made at Polar, found by its code, while it can still
@@ -430,11 +443,30 @@ const discountCache = new Map<string, { at: number; value: ProviderDiscount | nu
  * are spent. Looked up for a landing page and again at checkout, so answers are
  * kept for a minute; a failure to reach Polar is no discount, never a stale one.
  */
-export async function findProviderDiscount(raw: string): Promise<ProviderDiscount | null> {
+/*
+ * Asking Polar for a code it hasn't been asked about lately: thirty a caller (an account, or an
+ * address on a public offer page) every ten minutes, so guessing codes can't run through the
+ * operator's Polar quota. A code already remembered costs nothing and isn't counted.
+ */
+export const DISCOUNT_LOOKUP_LIMIT = { count: 30, windowMs: 10 * 60 * 1000 };
+
+export async function findProviderDiscount(
+    raw: string,
+    caller?: string,
+): Promise<ProviderDiscount | null> {
     const code = raw.trim().toUpperCase();
     if (!DISCOUNT_CODE.test(code) || !billingEnabled()) return null;
     const cached = discountCache.get(code);
     if (cached && Date.now() - cached.at < DISCOUNT_CACHE_MS) return cached.value;
+    if (caller) {
+        const bucket = createHash('sha256').update(`billing:discount-lookup:${caller}`).digest();
+        const { count, windowMs } = DISCOUNT_LOOKUP_LIMIT;
+        if (!(await authRepository.consumeRateLimit(bucket, count, windowMs)))
+            throw new BillingError(
+                'Too many codes just now. Please try again in a few minutes.',
+                429,
+            );
+    }
     let page: { items: PolarDiscount[] };
     try {
         page = await polar().discounts.list({ query: code, limit: 100 });
@@ -483,7 +515,7 @@ export async function findProviderDiscount(raw: string): Promise<ProviderDiscoun
               productIds: (match.products ?? []).map((product) => product.id),
           }
         : null;
-    discountCache.set(code, { at: Date.now(), value });
+    rememberDiscount(code, value);
     return value;
 }
 
