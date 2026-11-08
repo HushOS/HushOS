@@ -1,0 +1,66 @@
+packages/auth/src/notifications.ts
+  s_566b8e0c4467a4::t_80be075084a873 1-154
+  s_566b8e0c4467a4::t_7caa42be1b0ffc 155-167
+packages/env/src/notifications.ts
+  s_566b8e0c4467a4::t_5a6a63ffde0faf 1-28
+packages/db/src/schema/notifications.ts
+  s_566b8e0c4467a4::t_3d8389ab9b7bcf 1-108
+  s_566b8e0c4467a4::t_d4e9dbfc96afd8 109-122
+packages/db/src/notifications.ts
+  s_566b8e0c4467a4::t_aa1d7ca355f02a 1-253
+  s_566b8e0c4467a4::t_d754f7b3520137 254-295
+.env.example
+  s_566b8e0c4467a4::t_f9faef0e8c8643 89-92
+apps/web/src/lib/api.server.ts
+  s_566b8e0c4467a4::t_84b6ac85e19a32 19,43
+apps/web/src/lib/api/drive.server.ts
+  s_566b8e0c4467a4::t_6bd2c72f0433f2 607-620
+apps/web/src/lib/api/groups.server.ts
+  s_566b8e0c4467a4::t_34cd10d7a6bf48 3,183-186,222-231
+apps/web/src/lib/api/guards.test.ts
+  s_566b8e0c4467a4::t_eb0706d113d89a 95-96
+apps/web/src/lib/api/notifications-responses.server.ts
+  s_566b8e0c4467a4::t_2d42d19bdcdce4 1-60
+apps/web/src/lib/api/notifications.server.ts
+  s_566b8e0c4467a4::t_073934c227c63a 1-61
+apps/web/src/lib/api/shared.server.ts
+  s_566b8e0c4467a4::t_b6c501e1d92c11 692
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_0d0e202475dfd1 850-859
+packages/auth/src/server.ts
+  s_566b8e0c4467a4::t_476224da26eb47 33,1613-1618,2192-2193
+packages/auth/src/tokens.ts
+  s_566b8e0c4467a4::t_5e7d399723092c 25
+packages/db/drizzle/20261108182852_notifications/migration.sql
+  s_566b8e0c4467a4::t_268ccfae8fc56e 1-36
+packages/db/drizzle/20261108182852_notifications/snapshot.json
+  s_566b8e0c4467a4::t_1cd01f0c08e9cc 1-711
+packages/db/src/index.ts
+  s_566b8e0c4467a4::t_5db8ddcfb226b0 15
+packages/db/src/readiness.ts
+  s_566b8e0c4467a4::t_287c9cd548ea3e 14
+packages/db/src/schema/index.ts
+  s_566b8e0c4467a4::t_5b5b4b7bc6b602 10
+packages/env/package.json
+  s_566b8e0c4467a4::t_9c5baba707c3c3 17-18
+packages/jobs/src/jobs/cleanup-expired.ts
+  s_566b8e0c4467a4::t_9432f9891916df 1,11-12,24
+turbo.json
+  s_566b8e0c4467a4::t_24a73fb103c41b 55-56,127-128
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ade2e3096ea8d18a5b1e259366f409c467f6c7c2",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
