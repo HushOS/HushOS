@@ -343,7 +343,8 @@ export const rotationWorkNode = t.Object({
 
 /*
  * GET /drive/nodes/:id/rotation/work: a batch of nodes with everything sealed under their keys.
- * The rotation is served without its id here; links without their derivation version.
+ * The rotation is served without its id here. Each link carries its derivation version (`kdfVersion`),
+ * so a client ends a link of an older one rather than re-sealing it.
  */
 export const rotationWorkResponse = t.Object({
     rotation: t.Object({ nodeId: t.String(), targetEpoch: t.Integer() }),

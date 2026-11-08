@@ -778,6 +778,7 @@ test('each groups and invitations route carries its reply schema', async () => {
         // A status the route answers with but has no schema for goes out unchecked.
         expect(Object.keys(response).sort(), key).toEqual(Object.keys(statuses).sort());
         for (const [status, schema] of Object.entries(statuses))
+            // Elysia keeps a copy of each schema, so equal in structure; the schemas all differ in shape.
             expect(response[Number(status)], `${key} ${status}`).toEqual(schema);
     }
     // A route added later without a schema, or one this list forgot, fails here.
