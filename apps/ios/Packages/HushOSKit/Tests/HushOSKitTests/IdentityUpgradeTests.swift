@@ -263,7 +263,8 @@ final class IdentityServer: @unchecked Sendable {
             let sent = Auth.identityEnvelope(from: json["identity"] as? [String: Any] ?? [:])
             upgrades.append(sent)
             if let winner { stored = winner }
-            guard stored.version == 1 else { return (409, ["message": "Your keys were upgraded on another device.", "identity": Auth.json(stored)]) }
+            // As the server answers a lost race: a message only, so the loser must read the identity again.
+            guard stored.version == 1 else { return (409, ["message": "Your keys were upgraded on another device."]) }
             guard sent.version == 2, sent.keyVersion == stored.keyVersion, sent.encryptionPublicKey == stored.encryptionPublicKey,
                   sent.signingPublicKey == stored.signingPublicKey, sent.kem?.publicKey == stored.kem?.publicKey
             else { return (400, ["message": "Not the same keys."]) }
