@@ -155,6 +155,56 @@ async function copyAs(writer: Account, source: Awaited<ReturnType<typeof file>>)
     });
 }
 
+/* A new folder in `parent` as `writer` signs it, in the shape createFolders takes. */
+async function folderAs(writer: Account, parent: { id: string; keyEpoch: number }) {
+    const node = minted('node', owner.workspaceId);
+    const metadata = paddedMetadata();
+    return {
+        id: node.id,
+        idSeed: node.seed,
+        parentId: parent.id,
+        keyEpoch: await epoch(owner.workspaceId),
+        parentKeyEpoch: parent.keyEpoch,
+        keyEnvelope: b64(randomBytes(72)),
+        metadataEnvelope: b64(metadata),
+        metadataSignature: b64(
+            signerFor(writer.userId).sign(
+                metadataStatement({
+                    workspaceId: owner.workspaceId,
+                    nodeId: node.id,
+                    kind: 'folder',
+                    metadataVersion: 1,
+                    metadataEnvelope: metadata,
+                }),
+            ),
+        ),
+    };
+}
+
+/* A rename of `node` as `writer` signs it: new metadata at the next version. */
+function renameAs(
+    writer: Account,
+    node: { id: string; keyEpoch: number; metadataVersion: number },
+) {
+    const metadata = paddedMetadata();
+    return server.renameNode(writer.userId, owner.workspaceId, node.id, {
+        metadataVersion: node.metadataVersion,
+        keyEpoch: node.keyEpoch,
+        metadataEnvelope: b64(metadata),
+        metadataSignature: b64(
+            signerFor(writer.userId).sign(
+                metadataStatement({
+                    workspaceId: owner.workspaceId,
+                    nodeId: node.id,
+                    kind: 'folder',
+                    metadataVersion: node.metadataVersion + 1,
+                    metadataEnvelope: metadata,
+                }),
+            ),
+        ),
+    });
+}
+
 describe('a write refused for space', () => {
     test('tells a member the bytes left and an editor through a share nothing', async () => {
         const source = await file(owner, project, 2n * MiB);
@@ -222,5 +272,67 @@ describe('a grantee', () => {
                 code: 'invalid',
             });
         expect((await server.shareChanges(guest.userId, shareId, cursor)).changes).toEqual([]);
+    });
+
+    /*
+     * Every write an editor makes through the share answers as reads do: without the owner's
+     * change sequence, which climbs with every change anywhere in the drive. A member's keeps it.
+     */
+    test('is served its own writes without the owner’s change sequence; a member keeps it', async () => {
+        const ws = owner.workspaceId;
+        const made = await server.createFolders(guest.userId, ws, [await folderAs(guest, project)]);
+        expect(made.changeSeq).toBeNull();
+        expect(made.nodes[0]!.changeSeq).toBeNull();
+        const own = await server.createFolders(owner.userId, ws, [await folderAs(owner, project)]);
+        expect(own.changeSeq).toEqual(expect.any(Number));
+        expect(own.nodes[0]!.changeSeq).toEqual(expect.any(Number));
+
+        const renamed = await renameAs(guest, made.nodes[0]!);
+        expect(renamed.node.changeSeq).toBeNull();
+        // A rename from a version the server has moved past: the refusal's node is a grantee's too.
+        const stale = await renameAs(guest, made.nodes[0]!).catch((error: unknown) => error);
+        expect(stale).toMatchObject({ status: 409, code: 'stale' });
+        expect((stale as server.DriveError).data).toMatchObject({ node: { changeSeq: null } });
+        const moved = await server.moveNode(guest.userId, ws, made.nodes[0]!.id, {
+            parentId: own.nodes[0]!.id,
+            parentKeyEpoch: own.nodes[0]!.keyEpoch,
+            keyEnvelope: b64(randomBytes(72)),
+        });
+        expect(moved.node.changeSeq).toBeNull();
+        const source = await file(owner, project, 1024n);
+        const copied = await copyAs(guest, source);
+        expect(copied.node.changeSeq).toBeNull();
+        expect(
+            (await server.trashNode(guest.userId, ws, made.nodes[0]!.id)).node.changeSeq,
+        ).toBeNull();
+        expect((await server.trashNodes(guest.userId, ws, [copied.node.id])).results).toEqual([
+            expect.objectContaining({ status: 'trashed', changeSeq: null }),
+        ]);
+
+        // The owner's own writes keep it.
+        expect((await renameAs(owner, own.nodes[0]!)).node.changeSeq).toEqual(expect.any(Number));
+        expect((await server.trashNodes(owner.userId, ws, [source.id])).results).toEqual([
+            expect.objectContaining({ status: 'trashed', changeSeq: expect.any(Number) }),
+        ]);
+    });
+
+    /*
+     * A batch of folders is checked parent by parent: one inside the share does not carry the
+     * next, outside it, past the check. Else an editor could make folders in the owner's own.
+     */
+    test('cannot make a folder outside the share by naming a parent inside it first', async () => {
+        const secret = await folder(owner, top);
+        const refused = await server
+            .createFolders(guest.userId, owner.workspaceId, [
+                await folderAs(guest, project),
+                await folderAs(guest, secret),
+            ])
+            .catch((error: unknown) => error);
+        expect(refused).toMatchObject({ status: 404, code: 'not-found' });
+        const listed = await server.listChildren(owner.userId, owner.workspaceId, secret.id);
+        expect(listed.children).toEqual([]);
+        expect(
+            (await server.listChildren(owner.userId, owner.workspaceId, project.id)).children,
+        ).toEqual([]);
     });
 });
