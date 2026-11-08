@@ -823,13 +823,15 @@ const allowedByCheck = (name: string) => {
     const check = source.slice(source.indexOf(`'${name}'`));
     const list = /\bin \(([^)]*)\)/.exec(check.slice(0, check.indexOf('),')))?.[1];
     expect(list, name).toBeDefined();
-    return [...list!.matchAll(/'([^']*)'/g)].map((match) => match[1]).sort();
+    return [...list!.matchAll(/'([^']*)'/g)]
+        .map((match) => match[1])
+        .sort((a, b) => a.localeCompare(b));
 };
 const literals = (schema: unknown): string[] =>
     JSON.stringify(schema)
         .match(/"const":"[^"]*"/g)!
         .map((entry) => entry.slice(9, -1))
-        .sort();
+        .sort((a, b) => a.localeCompare(b));
 
 test('role and approval kind allow exactly what the database allows', () => {
     const session = sessionResponse.anyOf[0].properties.user.properties;
