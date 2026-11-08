@@ -570,6 +570,7 @@ Tests are required where a mistake costs money or data: billing, crypto, and tra
 - They run against a throwaway database: `DATABASE_URL`'s name with `_test` appended.
 - `packages/db/test/global-setup.ts` creates and migrates it on each run. Set `TEST_DATABASE_URL` (in the shell or `.env`) to use another.
 - Tables are truncated before every test. The development database is never touched.
+- The web app's database tests are named `*.db.test.ts` and run in its `db` Vitest project (`<name>_test_web`), through the real API routes. Use one where only real rows show the defect, such as raw SQL's types meeting a response schema. A file may truncate once in `beforeAll` and share its rows across its tests.
 - If the test database's migration ledger names a migration this checkout lacks (another branch migrated it), it is dropped and created again.
 
 ### Database tests in a worktree
