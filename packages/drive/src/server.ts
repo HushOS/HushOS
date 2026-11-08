@@ -623,14 +623,21 @@ export async function createFolders(
         workspaceId,
         folders.map((folder) => ({ kind: 'node', id: folder.id, seed: folder.idSeed })),
     );
-    const batchIds = new Set(folders.map((folder) => folder.id));
-    // Reached through a share at any parent: the folders, and the drive's sequence, go back as
-    // a grantee's, without the owner's change count.
+    // Every parent is checked unless the batch made it earlier: the repository looks any other id
+    // up as an existing node, so one named later in the batch must not skip the check. Reached
+    // through a share at any parent: the folders, and the drive's sequence, go back as a
+    // grantee's, without the owner's change count.
+    const madeEarlier = new Set<string>();
+    const checked = new Set<string>();
     let grantee = false;
-    for (const parentId of new Set(folders.map((folder) => folder.parentId)))
-        if (!batchIds.has(parentId))
-            grantee ||=
-                (await requireAccess(userId, workspaceId, parentId, 'editor')).shareId !== null;
+    for (const folder of folders) {
+        if (!madeEarlier.has(folder.parentId) && !checked.has(folder.parentId)) {
+            const access = await requireAccess(userId, workspaceId, folder.parentId, 'editor');
+            if (access.shareId !== null) grantee = true;
+            checked.add(folder.parentId);
+        }
+        madeEarlier.add(folder.id);
+    }
     if (folders.length < 1 || folders.length > MAX_FOLDER_BATCH)
         throw new DriveError(
             'invalid',
