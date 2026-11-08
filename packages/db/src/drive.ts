@@ -443,6 +443,25 @@ export async function allocateKeyEpochs(workspaceId: string, count: number, writ
     });
 }
 
+/*
+ * Epochs for an editor working through a share: always 1 to `count`, with the counter raised to
+ * at least `count` so each is one the workspace has drawn. Never the counter itself, which climbs
+ * with every node and rotation anywhere in the owner's drive, so an editor cannot count the
+ * owner's activity by asking. Sound because an epoch only has to stay at or below every later
+ * rotation's target (drawn above the counter): a node made at a low epoch is re-keyed by the next
+ * rotation that covers it, and its context binds its own id, so two nodes may share an epoch.
+ */
+export async function allocateGranteeKeyEpochs(workspaceId: string, count: number) {
+    if (!Number.isInteger(count) || count < 1 || count > 10_000)
+        throw new Error('Invalid epoch count.');
+    const [row] = await db
+        .update(workspaces)
+        .set({ keyEpochSeq: sql`greatest(${workspaces.keyEpochSeq}, ${count})` })
+        .where(eq(workspaces.id, workspaceId))
+        .returning({ id: workspaces.id });
+    return row ? { from: 1, to: count } : null;
+}
+
 async function epochWasAllocated(tx: Tx, workspaceId: string, keyEpoch: number) {
     const [row] = await tx
         .select({ keyEpochSeq: workspaces.keyEpochSeq })
