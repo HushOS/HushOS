@@ -339,7 +339,8 @@ public final class DriveAPI: Sendable {
     }
 
     public func abortUpload(uploadId: String, workspaceId: String) async {
-        _ = try? await perform(try mutation("/uploads/\(uploadId)/abort", body: ["workspaceId": workspaceId]), as: UploadCompleted.self)
+        // Best effort: the server aborts on receipt; the reply is read as what it is, never as a completion.
+        _ = try? await perform(try mutation("/uploads/\(uploadId)/abort", body: ["workspaceId": workspaceId]), as: UploadAborted.self)
     }
 
     /* PUTs one encrypted part to its presigned URL; the ETag is what completion needs. */
