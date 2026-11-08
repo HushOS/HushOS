@@ -1,0 +1,23 @@
+CONTRIBUTING.md
+  s_566b8e0c4467a4::t_b183066975a27c 573
+apps/web/src/lib/api/admin.db.test.ts
+  s_566b8e0c4467a4::t_09c85fbb0507a3 25-26,161,163-170,180-182
+apps/web/vitest.config.ts
+  s_566b8e0c4467a4::t_b8d4c4b388d598 2,7-8,28,39
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5330b1e09ae0cc4649314958c2d880a94119cfc1",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
