@@ -337,6 +337,7 @@ export const rotationWorkResponse = t.Object({
                     id: t.String(),
                     hasPassword: t.Boolean(),
                     secretEnvelope: t.Nullable(t.String()),
+                    kdfVersion: t.Integer(),
                 }),
             ),
         }),

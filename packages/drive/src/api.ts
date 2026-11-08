@@ -195,7 +195,12 @@ export type RotationWorkNode = NodeView & {
     }[];
     /* Each live share with the grantee's served identity, for the owner's pin check before re-sealing. */
     shares: { id: string; granteeUserId: string; grantee: ServedIdentity }[];
-    links: { id: string; hasPassword: boolean; secretEnvelope: string | null }[];
+    links: {
+        id: string;
+        hasPassword: boolean;
+        secretEnvelope: string | null;
+        kdfVersion: number;
+    }[];
 };
 export type RotationWork = {
     rotation: RotationView;

@@ -2712,6 +2712,9 @@ export function rotationWorkView(row: RotationWorkRow) {
             id: link.id,
             hasPassword: link.hasPassword,
             secretEnvelope: link.secretEnvelope ? b64(link.secretEnvelope) : null,
+            // Which derivation made its password key: a client ends a link of an older one rather
+            // than carry its weaker key into the new epoch.
+            kdfVersion: link.kdfVersion,
         })),
     };
 }

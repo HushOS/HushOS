@@ -15,7 +15,7 @@ import {
     wrapOriginKey,
 } from './drive';
 import { decode, encode } from './keys';
-import { openLinkSecret, sealLinkKeyWith, sealLinkSecret } from './links';
+import { LINK_KDF_VERSION, openLinkSecret, sealLinkKeyWith, sealLinkSecret } from './links';
 import { KEM_PUBLIC_KEY_BYTES } from './pq';
 import { SHARED_IN_FAMILY } from './protocol';
 import { rekeyedFor } from './rekeyed-scope';
@@ -83,7 +83,12 @@ export type RotateNodeInput = {
         granteePublicKey: string;
         granteeKemPublicKey: string | null;
     }[];
-    links: { id: string; hasPassword: boolean; secretEnvelope: string | null }[];
+    links: {
+        id: string;
+        hasPassword: boolean;
+        secretEnvelope: string | null;
+        kdfVersion?: number;
+    }[];
 };
 /*
  * A re-keyed record's origin as the server serves it (RekeyView in
@@ -546,7 +551,13 @@ export async function rekeyNode(input: {
     }
     const links: Extract<RotatedNode, { links: unknown }>['links'] = [];
     for (const link of node.links) {
-        if (!link.secretEnvelope) {
+        // No sealed secret, or a password key from an older derivation: the link is ended rather
+        // than carried, with its weaker key, into the new epoch. (A server from before it sent the
+        // version: the secret below decides, as before.)
+        if (
+            !link.secretEnvelope ||
+            (link.kdfVersion !== undefined && link.kdfVersion !== LINK_KDF_VERSION)
+        ) {
             links.push({ id: link.id, unsealable: true });
             continue;
         }

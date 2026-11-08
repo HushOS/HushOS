@@ -194,7 +194,22 @@ describe('rotation', () => {
                             granteeKemPublicKey: guestIdentity.kem!.publicKey,
                         },
                     ],
-                    links: [{ id: LINK, hasPassword: true, secretEnvelope: link.secretEnvelope }],
+                    links: [
+                        {
+                            id: LINK,
+                            hasPassword: true,
+                            secretEnvelope: link.secretEnvelope,
+                            kdfVersion: 2,
+                        },
+                        // The same secret, but its password key from an older derivation: ended,
+                        // never carried with that weaker key into the new epoch.
+                        {
+                            id: 'link-older-kdf',
+                            hasPassword: true,
+                            secretEnvelope: link.secretEnvelope,
+                            kdfVersion: 1,
+                        },
+                    ],
                 },
             ],
         })) as {
@@ -259,6 +274,7 @@ describe('rotation', () => {
         // Re-sealed in suite 3, signed by the owner running the rotation.
         expect(decode(rotatedB.shares[0]!.shareEnvelope)).toHaveLength(4565);
         expect(rotatedB.links[0]!.unsealable).toBeUndefined();
+        expect(rotatedB.links[1]).toEqual({ id: 'link-older-kdf', unsealable: true });
 
         // C, wrapped under B's old key, still opens here: the worker kept B's previous key.
         const openedC = (await owner('driveOpenNodes', {
