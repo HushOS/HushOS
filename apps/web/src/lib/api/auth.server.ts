@@ -27,11 +27,25 @@ import {
     workspaceKeySchema,
     workspaceSetupSchema,
 } from '@/lib/api/shared.server';
+import {
+    accountSetupResponse,
+    contactSuccessionResponse,
+    devicesResponse,
+    enrollmentResponse,
+    identityHistoryResponse,
+    identityResponse,
+    recoveryBackupResponse,
+    sessionResponse,
+    settingsResponse,
+    storageResponse,
+} from '@/lib/api/auth-responses.server';
 
 /* Accounts: registration, sign-in, recovery, devices, identity, contacts and settings (/api/auth). */
 export const authApi = new Elysia()
     .use(requestContext)
-    .get('/auth/setup', ({ sessionToken }) => auth.getAccountSetup(sessionToken))
+    .get('/auth/setup', { response: { 200: accountSetupResponse } }, ({ sessionToken }) =>
+        auth.getAccountSetup(sessionToken),
+    )
     .post(
         '/auth/setup',
         {
@@ -71,9 +85,13 @@ export const authApi = new Elysia()
             return { enrollment };
         },
     )
-    .get('/auth/register', async ({ enrollmentToken }) => ({
-        enrollment: await auth.getEnrollment(enrollmentToken),
-    }))
+    .get(
+        '/auth/register',
+        { response: { 200: enrollmentResponse } },
+        async ({ enrollmentToken }) => ({
+            enrollment: await auth.getEnrollment(enrollmentToken),
+        }),
+    )
     .post(
         '/auth/register/start',
         { body: t.Object({ registrationRequest: opaqueMessage }) },
@@ -146,9 +164,13 @@ export const authApi = new Elysia()
     .post('/auth/recover/email', { body: t.Object({ email: emailSchema }) }, ({ body, request }) =>
         auth.requestRegistrationEmail(body.email, 'recover', requestAddress(request)),
     )
-    .get('/auth/recover', async ({ enrollmentToken }) => ({
-        enrollment: await auth.getEnrollment(enrollmentToken, 'recover'),
-    }))
+    .get(
+        '/auth/recover',
+        { response: { 200: enrollmentResponse } },
+        async ({ enrollmentToken }) => ({
+            enrollment: await auth.getEnrollment(enrollmentToken, 'recover'),
+        }),
+    )
     .post(
         '/auth/recover/start',
         { body: t.Object({ registrationRequest: opaqueMessage }) },
@@ -243,14 +265,20 @@ export const authApi = new Elysia()
             return result;
         },
     )
-    .get('/auth/storage', ({ sessionToken }) => auth.getStorageAllowance(sessionToken))
-    .get('/auth/recovery-key', ({ sessionToken }) => auth.getRecoveryBackup(sessionToken))
+    .get('/auth/storage', { response: { 200: storageResponse } }, ({ sessionToken }) =>
+        auth.getStorageAllowance(sessionToken),
+    )
+    .get('/auth/recovery-key', { response: { 200: recoveryBackupResponse } }, ({ sessionToken }) =>
+        auth.getRecoveryBackup(sessionToken),
+    )
     .post(
         '/auth/recovery-key/confirm',
         { body: t.Object({ recoveryVersion: t.Integer({ minimum: 1, maximum: 2147483646 }) }) },
         ({ sessionToken, body }) => auth.confirmRecoveryBackup(sessionToken, body.recoveryVersion),
     )
-    .get('/auth/identity', ({ sessionToken }) => auth.getIdentityEnvelope(sessionToken))
+    .get('/auth/identity', { response: { 200: identityResponse } }, ({ sessionToken }) =>
+        auth.getIdentityEnvelope(sessionToken),
+    )
     // The upgrade to a version 2 identity: the same keys, plus ML-DSA and the keys statement.
     .post(
         '/auth/identity/upgrade',
@@ -296,15 +324,20 @@ export const authApi = new Elysia()
             return auth.backfillSuccessionConsent(sessionToken, body);
         },
     )
-    .get('/auth/identity/history', ({ sessionToken, set }) => {
-        set.headers['Cache-Control'] = 'no-store';
-        return auth.getIdentityHistory(sessionToken);
-    })
+    .get(
+        '/auth/identity/history',
+        { response: { 200: identityHistoryResponse } },
+        ({ sessionToken, set }) => {
+            set.headers['Cache-Control'] = 'no-store';
+            return auth.getIdentityHistory(sessionToken);
+        },
+    )
     .get(
         '/auth/contacts/:userId/succession',
         {
             params: t.Object({ userId: uuidSchema }),
             query: t.Object({ from: t.Numeric({ minimum: 1, maximum: 2147483646 }) }),
+            response: { 200: contactSuccessionResponse },
         },
         ({ request, sessionToken, params, query }) =>
             auth.contactSuccession(
@@ -321,7 +354,9 @@ export const authApi = new Elysia()
         ({ request, sessionToken, body }) =>
             auth.lookupContact(sessionToken, body.email, requestAddress(request)),
     )
-    .get('/auth/settings', ({ sessionToken }) => auth.getSettings(sessionToken))
+    .get('/auth/settings', { response: { 200: settingsResponse } }, ({ sessionToken }) =>
+        auth.getSettings(sessionToken),
+    )
     .put('/auth/settings-key', { body: settingsKeySchema }, ({ request, sessionToken, body }) => {
         guardAuthMutation(request);
         return auth.putSettingsKey(sessionToken, body);
@@ -349,7 +384,9 @@ export const authApi = new Elysia()
     )
     // A removed device keeps hearing `removed` until it has cleared what it kept and acknowledges
     // it (POST /auth/session/forget): a wipe cut short is tried again on the next check.
-    .get('/auth/session', ({ sessionToken }) => auth.sessionState(sessionToken))
+    .get('/auth/session', { response: { 200: sessionResponse } }, ({ sessionToken }) =>
+        auth.sessionState(sessionToken),
+    )
     // The acknowledgement after that wipe: the cookie goes only if it is still the removed one.
     .post(
         '/auth/session/forget',
@@ -361,7 +398,7 @@ export const authApi = new Elysia()
             return { forgotten };
         },
     )
-    .get('/auth/devices', ({ sessionToken, set }) => {
+    .get('/auth/devices', { response: { 200: devicesResponse } }, ({ sessionToken, set }) => {
         set.headers['Cache-Control'] = 'no-store';
         return auth.listDevices(sessionToken);
     })

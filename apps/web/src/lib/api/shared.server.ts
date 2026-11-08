@@ -52,6 +52,13 @@ export const requestContext = new Elysia({ name: 'hushos-api-context' })
         enrollmentToken: readEnrollmentToken(request),
     }))
     .onError(({ error, status, request }) => {
+        // A response that fails its own schema is this server's bug, never the caller's: logged,
+        // and answered as an outage, not as "check your information". Nothing of it is sent.
+        if (error instanceof ValidationError && error.type === 'response') {
+            useLogger().set({ api: { failure: 'response-schema' } });
+            useLogger().error(new Error('A response did not match its schema.'));
+            return status(500, { message: 'Something went wrong on our side. Please try again.' });
+        }
         // A route the API does not define is not an outage: nothing is logged as an error. Drive
         // and admin answer 501, never 404: their clients read a 404 as "this item is gone" and drop
         // what they hold, and an unknown route there means a client newer than this server.
