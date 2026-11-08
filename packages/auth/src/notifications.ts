@@ -1,14 +1,24 @@
-import { notificationsRepository } from '@hushos/db';
+import { authRepository, notificationsRepository } from '@hushos/db';
 import type { NotificationData, NotificationKind } from '@hushos/db/schema';
 import { notificationsEnv } from '@hushos/env/notifications';
 import { log as serverLog } from '@hushos/logging';
+import { authEnv } from '@hushos/env/auth';
 import { getSession } from './server';
 import { AuthError } from './tokens';
+import {
+    isPushEndpoint,
+    isSubscriptionKey,
+    makeVapidKeys,
+    sendWebPush,
+    vapidKeys,
+    type VapidKeys,
+} from './webpush';
 
 /*
  * Notifications (docs/devices-design.md 5). Each event is a row; a push only names it, and the
  * device fetches it over its own session. Pings for the apps go to the relay
- * (`PUSH_RELAY_URL`, docs/push-relay-plan.md); Web Push comes later.
+ * (`PUSH_RELAY_URL`, docs/push-relay-plan.md); browsers' go straight to their push service, signed
+ * with this server's VAPID key (webpush.ts).
  *
  * Off by default (NOTIFICATIONS_ENABLED): then nothing is recorded and the routes answer 501.
  */
@@ -61,14 +71,67 @@ export async function notify<K extends NotificationKind>(
     if (!notificationsEnabled()) return null;
     const recorded = await notificationsRepository.recordEvent({ userId, kind, data });
     if (!recorded) return null;
-    const pinged = await pingRelay(recorded.handles, recorded.id, recorded.class);
-    // The counts only: a relay that answers badly is the operator's to see, never the caller's.
-    if (pinged.failed)
+    const [pinged, pushed] = await Promise.all([
+        pingRelay(recorded.handles, recorded.id, recorded.class),
+        pushToBrowsers(recorded.webPush, recorded.id, recorded.class),
+    ]);
+    // The counts only: a relay or push service that answers badly is the operator's to see.
+    if (pinged.failed || pushed.failed)
         serverLog.warn({
             message: 'Some notification pings failed.',
-            notifications: { kind, sent: pinged.sent, failed: pinged.failed },
+            notifications: { kind, relay: pinged, webPush: pushed },
         });
-    return { id: recorded.id, ...pinged };
+    return { id: recorded.id, ...pinged, webPush: pushed };
+}
+
+let vapid: Promise<VapidKeys> | undefined;
+/* This server's VAPID keys, made and stored at first use (docs/devices-design.md 5). */
+function vapidKeysOnce() {
+    vapid ??= authRepository
+        .ensureServerSecret('webpush-vapid', () => JSON.stringify(makeVapidKeys()))
+        .then((stored) =>
+            vapidKeys(JSON.parse(stored) as { privateKey: string; publicKey: string }),
+        )
+        .catch((error: unknown) => {
+            vapid = undefined;
+            throw error;
+        });
+    return vapid;
+}
+
+/* Pushes the event id to each browser; a subscription its push service dropped is deleted. */
+async function pushToBrowsers(
+    targets: notificationsRepository.WebPushTarget[],
+    id: string,
+    eventClass: 'security' | 'other',
+) {
+    if (!targets.length) return { sent: 0, failed: 0, gone: 0 };
+    const keys = await vapidKeysOnce();
+    const outcomes = await Promise.all(
+        targets.map(async (target) => {
+            const outcome = await sendWebPush(
+                keys,
+                authEnv.APP_ORIGIN,
+                target,
+                id,
+                eventClass === 'security' ? 'high' : 'normal',
+            );
+            if (outcome === 'gone')
+                await notificationsRepository.dropWebSubscription(target.deviceId, target.endpoint);
+            return outcome;
+        }),
+    );
+    return {
+        sent: outcomes.filter((o) => o === 'delivered').length,
+        failed: outcomes.filter((o) => o === 'failed').length,
+        gone: outcomes.filter((o) => o === 'gone').length,
+    };
+}
+
+/* GET /api/notifications/web-push-key: the public key a browser subscribes with. */
+export async function getWebPushKey(sessionToken: string | null) {
+    await requireAccount(sessionToken);
+    return { publicKey: (await vapidKeysOnce()).publicKey };
 }
 
 /*
@@ -113,10 +176,48 @@ async function requireDevice(sessionToken: string | null) {
 }
 
 /* PUT /api/notifications/registration: this device's relay handle, replacing any it had. */
-export async function registerForNotifications(sessionToken: string | null, handle: string) {
+export type PushRegistration =
+    | { kind: 'relay'; handle: string }
+    | {
+          kind: 'webpush';
+          subscription: { endpoint: string; keys: { p256dh: string; auth: string } };
+      };
+
+export async function registerForNotifications(
+    sessionToken: string | null,
+    registration: PushRegistration,
+) {
     const { userId, deviceId } = await requireDevice(sessionToken);
-    if (!RELAY_HANDLE_PATTERN.test(handle)) throw new AuthError('That is not a push handle.');
-    await notificationsRepository.putRegistration({ userId, deviceId, handle });
+    if (registration.kind === 'relay') {
+        if (!RELAY_HANDLE_PATTERN.test(registration.handle))
+            throw new AuthError('That is not a push handle.');
+        await notificationsRepository.putRegistration({
+            userId,
+            deviceId,
+            target: { handle: registration.handle },
+        });
+    } else {
+        const { endpoint } = registration.subscription;
+        // Base64url without padding, as some browsers send it padded.
+        const keys = {
+            p256dh: registration.subscription.keys.p256dh.replace(/=+$/, ''),
+            auth: registration.subscription.keys.auth.replace(/=+$/, ''),
+        };
+        // Only the browsers' own push services: else this server would post wherever a client said.
+        if (!isPushEndpoint(endpoint))
+            throw new AuthError('This browser’s push service isn’t one HushOS can reach.');
+        if (
+            !/^[A-Za-z0-9_-]{87}$/.test(keys.p256dh) ||
+            !/^[A-Za-z0-9_-]{22}$/.test(keys.auth) ||
+            !isSubscriptionKey(keys.p256dh, keys.auth)
+        )
+            throw new AuthError('That is not a push subscription.');
+        await notificationsRepository.putRegistration({
+            userId,
+            deviceId,
+            target: { webPush: { endpoint, p256dh: keys.p256dh, auth: keys.auth } },
+        });
+    }
     return { registered: true as const };
 }
 

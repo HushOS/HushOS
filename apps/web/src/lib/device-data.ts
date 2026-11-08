@@ -31,6 +31,8 @@ export const ACCOUNT_DATA = {
             'hushos.settings-seen:',
             'hushos.settings-document-seen:',
             'hushos.identity-seen:',
+            // That this account turned Web Push on in this browser (lib/web-push.ts).
+            'hushos.web-push:',
         ],
     },
     /* This tab's sessionStorage; other tabs clear theirs when they see the sign-out. */
@@ -125,6 +127,7 @@ export const STORAGE_OWNERS: Record<
     'apps/web/src/lib/theme.ts': { cookies: ['hushos-theme', 'hushos-contrast', 'sidebar_state'] },
     'apps/web/src/lib/sounds.ts': { local: ['hushos-sounds'] },
     'apps/web/src/lib/return-to.ts': { local: ['hushos.return'] },
+    'apps/web/src/lib/web-push.ts': { local: ['hushos.web-push:'] },
     'apps/web/src/lib/rollback-marks.ts': {
         // The storage it is given; the keys it finds there by listing them.
         passThrough: ['local'],
@@ -273,6 +276,17 @@ async function forgetFiles(root: () => Promise<FileRoot>) {
 }
 
 /*
+ * This browser's push subscription (lib/web-push.ts): the server deletes its registration with
+ * the session, and unregistering the worker drops the subscription with it, so nothing here can
+ * be pushed to for the account any more.
+ */
+async function forgetPush() {
+    if (typeof navigator === 'undefined' || !navigator.serviceWorker) return;
+    const registration = await navigator.serviceWorker.getRegistration('/hushos-push/');
+    await registration?.unregister();
+}
+
+/*
  * Deletes every registered store, each tried whatever another does; rejects
  * with the first failure once all settled, so the caller can say so and try
  * again. Preferences in KEPT stay.
@@ -297,6 +311,7 @@ export async function forgetBrowserData(options: { files?: () => Promise<FileRoo
         (async () => forgetSessionData())(),
         forgetDatabases(),
         forgetFiles(root),
+        forgetPush(),
     ]);
     const failed = results.find((result) => result.status === 'rejected');
     if (failed) throw failed.reason;

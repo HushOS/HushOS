@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { SearchIcon } from 'lucide-react';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { authClient } from '@/lib/auth-client';
+import { answerPushes } from '@/lib/web-push';
 import { useAuthView, useSigningOut } from '@/lib/auth-view';
 import { createFileRoute, Outlet, useRouter } from '@tanstack/react-router';
 import { AppSidebar } from '@/components/app-sidebar';
@@ -107,6 +108,9 @@ function AppLayout() {
     useEffect(() => {
         latestUser.current = user;
     }, [user]);
+    // A push to this browser asks an open tab for its words (public/push-sw.js): answer it here,
+    // open what a tapped notice is about, and keep the server's copy of the subscription current.
+    useEffect(() => answerPushes(user.id, (url) => router.history.push(url)), [router, user.id]);
     useEffect(() => {
         const validated = seenLockRevision.current === lockRevision;
         seenLockRevision.current = lockRevision;
