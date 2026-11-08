@@ -50,7 +50,8 @@ const kinds = Object.keys(NOTIFICATION_KINDS)
 /*
  * One per device that asked for pushes: the relay handle its app was given (docs/devices-design.md
  * 5, "The relay"), never the APNs or FCM token, which only the relay holds. A device removed or
- * signed out takes its registration with it.
+ * signed out has its registration deleted with its sessions (auth's endDeviceSessions, sign-out),
+ * and one revoked as idle is swept by the cleanup job; pings skip revoked devices meanwhile.
  *
  * - list_seq: the newest event GET /api/notifications has handed this device, so a list returns
  *   only what came after.

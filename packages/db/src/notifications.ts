@@ -168,22 +168,12 @@ export async function recordEvent(input: {
     });
 }
 
-/* A fetch from this device answers its open ping, so the next `other` event pings it again. */
-async function fetched(userId: string, deviceId: string) {
-    await db
-        .update(notificationRegistrations)
-        .set({ otherPingOpen: false })
-        .where(
-            and(
-                eq(notificationRegistrations.deviceId, deviceId),
-                eq(notificationRegistrations.userId, userId),
-                eq(notificationRegistrations.otherPingOpen, true),
-            ),
-        );
-}
-
-/* One of the account's events by the id a push named, or null for any other id or an expired one. */
-export async function getEvent(userId: string, deviceId: string, id: string) {
+/*
+ * One of the account's events by the id a push named, or null for any other id or an expired one.
+ * It does not answer the device's open ping: only a list does, since a device that fetched just
+ * this one has not seen what arrived while its ping was open (the apps list on every wake).
+ */
+export async function getEvent(userId: string, id: string) {
     const [event] = await db
         .select(eventColumns)
         .from(notificationEvents)
@@ -194,7 +184,6 @@ export async function getEvent(userId: string, deviceId: string, id: string) {
                 gt(notificationEvents.createdAt, retentionStart()),
             ),
         );
-    await fetched(userId, deviceId);
     return (event as NotificationEvent | undefined) ?? null;
 }
 
@@ -292,4 +281,24 @@ export async function memberHoldersOf(groupId: string) {
             ),
         );
     return rows.map((row) => row.userId);
+}
+
+/*
+ * Registrations of devices removed some other way (revoked as idle by the cleanup job): the
+ * removal paths that sign a device out delete its registration at once.
+ */
+export async function dropRevokedRegistrations() {
+    const removed = await db
+        .delete(notificationRegistrations)
+        .where(
+            inArray(
+                notificationRegistrations.deviceId,
+                db
+                    .select({ id: accountDevices.id })
+                    .from(accountDevices)
+                    .where(sql`${accountDevices.revokedAt} is not null`),
+            ),
+        )
+        .returning({ deviceId: notificationRegistrations.deviceId });
+    return removed.length;
 }

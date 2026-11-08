@@ -22,6 +22,7 @@ export async function cleanupExpired(job: Job<JobPayloads[typeof queues.cleanupE
             ...(await authRepository.cleanupExpired(options)),
             invitations: await groupsRepository.cleanupInvitations(options),
             notifications: await notificationsRepository.purgeExpiredEvents(options.batchSize),
+            pushRegistrations: await notificationsRepository.dropRevokedRegistrations(),
         };
         event.set({ removed: counts, durationMs: Math.round(performance.now() - started) });
         return counts;

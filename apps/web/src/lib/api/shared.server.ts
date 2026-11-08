@@ -72,7 +72,7 @@ export const requestContext = new Elysia({ name: 'hushos-api-context' })
         // and admin answer 501, never 404: their clients read a 404 as "this item is gone" and drop
         // what they hold, and an unknown route there means a client newer than this server.
         if (error instanceof NotFound)
-            return /^\/api\/(drive|admin|groups|invitations)(\/|$)/.test(
+            return /^\/api\/(drive|admin|groups|invitations|notifications)(\/|$)/.test(
                 new URL(request.url).pathname,
             )
                 ? status(501, {
@@ -117,6 +117,34 @@ export const requestContext = new Elysia({ name: 'hushos-api-context' })
             useLogger().error(new Error('Billing request failed.'));
             return status(503, {
                 message: 'Billing is temporarily unavailable. Please try again.',
+            });
+        }
+        // Notifications: every refusal with a code a client can act on (sign in again, set the
+        // device up, drop a gone event, stop asking on a server with them off).
+        if (/^\/api\/notifications(\/|$)/.test(new URL(request.url).pathname)) {
+            if (error instanceof auth.AuthError) {
+                const code =
+                    error.status === 401
+                        ? ('signed-out' as const)
+                        : error.status === 409
+                          ? ('no-device' as const)
+                          : error.status === 404
+                            ? ('gone' as const)
+                            : error.status === 501
+                              ? ('off' as const)
+                              : ('invalid' as const);
+                return status(error.status, { message: error.message, code });
+            }
+            if (error instanceof ValidationError || error instanceof ParseError)
+                return status(400, {
+                    message: 'Please check your information and try again.',
+                    code: 'invalid' as const,
+                });
+            useLogger().set({ notifications: { failure: describeFailure(error) } });
+            useLogger().error(new Error('Notifications request failed.'));
+            return status(503, {
+                message: 'Notifications are temporarily unavailable. Please try again.',
+                code: 'unavailable' as const,
             });
         }
         if (/^\/api\/(groups|invitations)(\/|$)/.test(new URL(request.url).pathname)) {

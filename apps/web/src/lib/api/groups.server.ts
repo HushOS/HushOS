@@ -1,6 +1,7 @@
 import '@/lib/server-only';
 import { Elysia, t } from 'elysia';
 import * as auth from '@hushos/auth/server';
+import { log as serverLog } from '@hushos/logging';
 import { CLIENT_HEADER, parseClientHeader } from '@hushos/drive/protocol';
 import * as groups from '@hushos/groups/server';
 import { MAX_GRANTS_PER_CALL, MAX_SEALS_PER_CALL } from '@hushos/groups/protocol';
@@ -8,6 +9,7 @@ import {
     areaParams,
     areaSchema,
     b64Schema,
+    describeFailure,
     emailSchema,
     endsLapsedSchema,
     grantSchema,
@@ -183,7 +185,12 @@ export const groupsApi = new Elysia()
                     // An account at that address is told on its devices too; never raised.
                     void auth
                         .notifyFamilyInvitation(body.email, params.id, result.id)
-                        .catch(() => {});
+                        .catch((error: unknown) =>
+                            serverLog.error({
+                                message: 'Invitation push failed.',
+                                notifications: { failure: describeFailure(error) },
+                            }),
+                        );
                     set.status = 201;
                     return result;
                 },
@@ -226,7 +233,14 @@ export const groupsApi = new Elysia()
                         requestAddress(request),
                     );
                     // Whoever can let them in is told someone waits; never raised.
-                    void auth.notifyFamilyWaiting(accepted.groupId, user.id).catch(() => {});
+                    void auth
+                        .notifyFamilyWaiting(accepted.groupId, user.id)
+                        .catch((error: unknown) =>
+                            serverLog.error({
+                                message: 'Waiting-to-join push failed.',
+                                notifications: { failure: describeFailure(error) },
+                            }),
+                        );
                     return accepted;
                 },
             )

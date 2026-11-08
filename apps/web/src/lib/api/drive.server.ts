@@ -590,9 +590,11 @@ export const driveApi = new Elysia()
                         params.id,
                         body,
                     );
-                    // The person is told by mail, within its limits (asked now, while the request's log
-                    // is open); a mail problem is the operator's, not the sharer's.
-                    if (await auth.shareNoticeAllowed(user.id, body.granteeUserId))
+                    // The person is told by mail and on their devices, within the same limits
+                    // (asked now, while the request's log is open), so sharing and unsharing in a
+                    // loop cannot spend their devices' push budget. A mail or push problem is the
+                    // operator's, not the sharer's.
+                    if (await auth.shareNoticeAllowed(user.id, body.granteeUserId)) {
                         void auth
                             .notifyShare(user.id, body.granteeUserId, body.role)
                             .catch((error: unknown) =>
@@ -603,21 +605,21 @@ export const driveApi = new Elysia()
                                     share: { failure: describeFailure(error) },
                                 }),
                             );
-                    else log.set({ share: { notify: 'limited' } });
-                    // And the grantee's devices, which name the sender from their own pins and the
-                    // item from the share's keys. Off with their Shared toggle; never raised.
-                    void auth
-                        .notify(body.granteeUserId, 'shared', {
-                            granterUserId: user.id,
-                            shareId: result.share.id,
-                            role: body.role,
-                        })
-                        .catch((error: unknown) =>
-                            serverLog.error({
-                                message: 'Share push failed.',
-                                share: { failure: describeFailure(error) },
-                            }),
-                        );
+                        // The device names the sender from its own pins and the item from the
+                        // share's keys. Off with the grantee's Shared toggle.
+                        void auth
+                            .notify(body.granteeUserId, 'shared', {
+                                granterUserId: user.id,
+                                shareId: result.share.id,
+                                role: body.role,
+                            })
+                            .catch((error: unknown) =>
+                                serverLog.error({
+                                    message: 'Share push failed.',
+                                    share: { failure: describeFailure(error) },
+                                }),
+                            );
+                    } else log.set({ share: { notify: 'limited' } });
                     return result;
                 },
             )

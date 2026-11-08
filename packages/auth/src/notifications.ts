@@ -1,6 +1,7 @@
 import { notificationsRepository } from '@hushos/db';
 import type { NotificationData, NotificationKind } from '@hushos/db/schema';
 import { notificationsEnv } from '@hushos/env/notifications';
+import { log as serverLog } from '@hushos/logging';
 import { getSession } from './server';
 import { AuthError } from './tokens';
 
@@ -36,7 +37,11 @@ async function pingRelay(handles: string[], id: string, eventClass: 'security' |
                 headers: { 'content-type': 'application/json' },
                 body: JSON.stringify({ handle, id, class: eventClass }),
                 signal: AbortSignal.timeout(PING_TIMEOUT_MS),
+                // The relay never redirects; one that did would be sent the handle again.
+                redirect: 'error',
             });
+            // Nothing to read: release the connection.
+            await response.body?.cancel();
             if (response.status !== 202) throw new Error(`relay ${response.status}`);
         }),
     );
@@ -57,6 +62,12 @@ export async function notify<K extends NotificationKind>(
     const recorded = await notificationsRepository.recordEvent({ userId, kind, data });
     if (!recorded) return null;
     const pinged = await pingRelay(recorded.handles, recorded.id, recorded.class);
+    // The counts only: a relay that answers badly is the operator's to see, never the caller's.
+    if (pinged.failed)
+        serverLog.warn({
+            message: 'Some notification pings failed.',
+            notifications: { kind, sent: pinged.sent, failed: pinged.failed },
+        });
     return { id: recorded.id, ...pinged };
 }
 
@@ -131,8 +142,8 @@ function eventView(event: notificationsRepository.NotificationEvent): Notificati
 
 /* GET /api/notifications/:id: the event a push named. Any other id, or one past 30 days, is 404. */
 export async function getNotification(sessionToken: string | null, id: string) {
-    const { userId, deviceId } = await requireDevice(sessionToken);
-    const event = await notificationsRepository.getEvent(userId, deviceId, id);
+    const { userId } = await requireDevice(sessionToken);
+    const event = await notificationsRepository.getEvent(userId, id);
     if (!event) throw new AuthError('This notification is gone.', 404);
     return { notification: eventView(event) };
 }

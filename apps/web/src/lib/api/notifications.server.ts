@@ -26,7 +26,9 @@ export const notificationsApi = new Elysia()
             .put(
                 '/notifications/registration',
                 {
+                    // The relay's handle; Web Push will add `{ kind: 'webpush', subscription }`.
                     body: t.Object({
+                        kind: t.Literal('relay'),
                         handle: t.String({ pattern: auth.RELAY_HANDLE_PATTERN.source }),
                     }),
                     response: { 200: registeredResponse },
