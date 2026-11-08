@@ -341,6 +341,11 @@ export async function setTestUsedBytes(workspaceId: string, usedBytes: bigint) {
         .where(eq(workspaceStorage.workspaceId, workspaceId));
 }
 
+/* An operator, as the role is granted by hand (bun run admin). */
+export async function setTestAdmin(userId: string) {
+    await db.update(users).set({ role: 'admin' }).where(eq(users.id, userId));
+}
+
 /* An account deleted outright, as deleteAccount leaves the rows that point at it. */
 export async function deleteTestAccount(userId: string) {
     await db.delete(users).where(eq(users.id, userId));
