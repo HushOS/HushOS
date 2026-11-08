@@ -5,7 +5,7 @@ How the push design in `docs/devices-design.md` 5 and 7 gets built, in four pull
 ## Pull requests
 
 1. **The relay** (`crates/hushos-push`). A Rust service on axum, in the existing Cargo workspace, with its own database. It registers APNs and FCM tokens, sends content-free pushes, rate-limits, and drops dead tokens. It is tested with a fake Apple and Google, and CI tests it and builds its image. Nothing calls it yet.
-2. **The server side**, behind `NOTIFICATIONS_ENABLED` (off by default, and off on hushos.com until 4 ships):
+2. **The server side**, behind `NOTIFICATIONS_ENABLED` (off by default, and off on hushos.com until 4 ships). Events exist for what the server does today (a new sign-in, a device removed or several, repeated password attempts, Shared with you, a family invitation, someone waiting to join); approvals and the other security events arrive with the features that make them:
     - the `notification_events` table;
     - `GET /api/notifications/:id` and `GET /api/notifications`;
     - `PUT /api/notifications/registration`;
