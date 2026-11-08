@@ -53,7 +53,7 @@ beforeEach(async () => {
 afterAll(closeDatabase);
 
 /* A new file's begin as `writer` signs it, into the shared folder. */
-async function beginAs(writer: Account, size: bigint) {
+async function beginAs(writer: Account, size: bigint, keyEpoch?: number) {
     const node = minted('node', owner.workspaceId);
     const version = minted('version', owner.workspaceId);
     const object = minted('object', owner.workspaceId);
@@ -67,7 +67,7 @@ async function beginAs(writer: Account, size: bigint) {
             id: nodeId,
             idSeed: node.seed,
             parentId: project.id,
-            keyEpoch: await epoch(owner.workspaceId),
+            keyEpoch: keyEpoch ?? (await epoch(owner.workspaceId)),
             parentKeyEpoch: project.keyEpoch,
             keyEnvelope: b64(randomBytes(72)),
             metadataEnvelope: b64(metadata),
@@ -393,6 +393,28 @@ describe('a grantee', () => {
             .createFolders(owner.userId, ws, [await folderAs(owner, project, counterNow + 1)])
             .catch((error: unknown) => error);
         expect(owners).toMatchObject({ status: 409, code: 'stale' });
+    });
+
+    /*
+     * An editor may write above the counter without asking for epochs, so the write raises it:
+     * else the next rotation could draw a target at or below that node's epoch, count it as
+     * re-keyed already, and only re-wrap it, carrying a key the stopped editor holds into the new
+     * tree. Through a folder and an upload's new file alike.
+     */
+    test('raises the counter past an epoch it writes, so the next rotation re-keys that node', async () => {
+        const ws = owner.workspaceId;
+        const counter = (await server.allocateEpochs(owner.userId, ws, 1)).to;
+        const made = await server.createFolders(guest.userId, ws, [
+            await folderAs(guest, project, counter + 5),
+        ]);
+        const begun = await beginAs(guest, 1024n, counter + 7);
+        expect(begun.upload.status).toBe('open');
+        const { rotation } = await server.startRotation(owner.userId, ws, project.id);
+        expect(rotation.targetEpoch).toBeGreaterThan(counter + 7);
+        const work = await server.rotationWork(owner.userId, ws, project.id, null);
+        expect(work.nodes.map((node) => node.id)).toEqual(
+            expect.arrayContaining([made.nodes[0]!.id, begun.upload.nodeId]),
+        );
     });
 
     /*
