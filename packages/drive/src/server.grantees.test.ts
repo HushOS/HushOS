@@ -7,6 +7,7 @@ import {
     createTestIdentity,
     resetDatabase,
     signerFor,
+    testKeyEpochSeq,
 } from '../../db/test/helpers';
 import { epoch, file, folder, member, minted, root, share, type Account } from '../test/fixtures';
 import * as server from './server';
@@ -341,27 +342,34 @@ describe('a grantee', () => {
     });
 
     /*
-     * The owner's epoch counter climbs with every node and rotation anywhere in their drive. An
-     * editor asking for epochs gets 1 to n whatever the owner has done, epochs the server takes,
-     * and the counter itself never moves for them beyond n.
+     * The counter climbs with every rotation, and once climbed with every node, in the owner's
+     * drive. Epochs in a personal drive are 1 to n for the owner and an editor alike, whatever the
+     * owner has done, so neither asking nor the epochs of the owner's nodes in the share count it.
      */
-    test('draws epochs that say nothing of the owner’s counter, and the server takes them', async () => {
+    test('draws epochs that say nothing of the owner’s activity, the owner’s as well', async () => {
         const ws = owner.workspaceId;
         expect(await server.allocateEpochs(guest.userId, ws, 3)).toEqual({ from: 1, to: 3 });
-        const before = await server.allocateEpochs(owner.userId, ws, 1);
+        expect(await server.allocateEpochs(owner.userId, ws, 3)).toEqual({ from: 1, to: 3 });
         for (let i = 0; i < 3; i++) await folder(owner, top);
         expect(await server.allocateEpochs(guest.userId, ws, 3)).toEqual({ from: 1, to: 3 });
-        // The owner's own draws go on from where theirs were, untouched by the editor's.
-        const after = await server.allocateEpochs(owner.userId, ws, 1);
-        expect(after.from).toBe(before.from + 3 + 1);
-        // Past the counter, an editor's range still holds: the counter is raised to cover it.
-        const wide = await server.allocateEpochs(guest.userId, ws, 5_000);
-        expect(wide).toEqual({ from: 1, to: 5_000 });
+        // A folder the owner makes in the share, as their client does: an epoch it was handed.
+        const { from } = await server.allocateEpochs(owner.userId, ws, 1);
+        const own = await server.createFolders(owner.userId, ws, [
+            await folderAs(owner, project, from),
+        ]);
+        expect(own.nodes[0]!.keyEpoch).toBe(1);
+        const seen = await server.listChildren(guest.userId, ws, project.id);
+        expect(seen.children.find((node) => node.id === own.nodes[0]!.id)?.keyEpoch).toBe(1);
+        // Past the counter, a range still holds: the counter is raised to cover it.
+        expect(await server.allocateEpochs(guest.userId, ws, 5_000)).toEqual({
+            from: 1,
+            to: 5_000,
+        });
         const made = await server.createFolders(guest.userId, ws, [
             await folderAs(guest, project, 5_000),
         ]);
         expect(made.nodes[0]!.keyEpoch).toBe(5_000);
-        // Or another editor's node at the same epoch: each node's context binds its own id.
+        // Two nodes at one epoch: each node's context binds its own id.
         const twin = await server.createFolders(guest.userId, ws, [
             await folderAs(guest, project, 5_000),
         ]);
@@ -370,29 +378,25 @@ describe('a grantee', () => {
 
     /*
      * Held to the counter, a write would say where it stands: accepted at or below it, refused
-     * above it, and an editor could read it exactly with a few rolled-back probes. An editor's
-     * epoch is held to their own cap instead, whatever the owner's counter is.
+     * above it, and a few rolled-back probes would read it exactly. A personal drive holds every
+     * new node to a fixed cap instead, whatever the counter is.
      */
     test('cannot read the owner’s counter from which epochs a write accepts', async () => {
         const ws = owner.workspaceId;
-        const counter = (await server.allocateEpochs(owner.userId, ws, 1)).to;
+        // The owner's real counter, read past every route: what a probe would be after.
+        const counter = await testKeyEpochSeq(ws);
         expect(counter).toBeLessThan(100);
-        // Just above the owner's counter: an editor's write goes, as any epoch to the cap does.
-        const above = await server.createFolders(guest.userId, ws, [
-            await folderAs(guest, project, counter + 1),
-        ]);
-        expect(above.nodes[0]!.keyEpoch).toBe(counter + 1);
-        // Past the cap it is refused, whatever the counter.
-        const past = await server
-            .createFolders(guest.userId, ws, [await folderAs(guest, project, 10_001)])
-            .catch((error: unknown) => error);
-        expect(past).toMatchObject({ status: 409, code: 'stale' });
-        // A member's write is still held to the counter.
-        const counterNow = (await server.allocateEpochs(owner.userId, ws, 1)).to;
-        const owners = await server
-            .createFolders(owner.userId, ws, [await folderAs(owner, project, counterNow + 1)])
-            .catch((error: unknown) => error);
-        expect(owners).toMatchObject({ status: 409, code: 'stale' });
+        // The owner first: the counter is still just below, so this fails if an owner is held to it.
+        for (const writer of [owner, guest]) {
+            const above = await server.createFolders(writer.userId, ws, [
+                await folderAs(writer, project, counter + 1),
+            ]);
+            expect(above.nodes[0]!.keyEpoch).toBe(counter + 1);
+            const past = await server
+                .createFolders(writer.userId, ws, [await folderAs(writer, project, 10_001)])
+                .catch((error: unknown) => error);
+            expect(past).toMatchObject({ status: 409, code: 'stale' });
+        }
     });
 
     /*

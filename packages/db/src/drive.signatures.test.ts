@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import {
     closeDatabase,
@@ -587,7 +587,7 @@ describe('versions', () => {
         // A rotation moved the parent's epoch while the bytes uploaded: begin's node is stale.
         await db
             .update(driveNodes)
-            .set({ keyEpoch: await epoch() })
+            .set({ keyEpoch: sql`${driveNodes.keyEpoch} + 1` })
             .where(eq(driveNodes.id, rootId));
         await drive.startCompleting(owner.workspaceId, result.uploadId);
         expect(

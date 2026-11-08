@@ -4,6 +4,7 @@ import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import {
     closeDatabase,
     createTestAccount,
+    createTestFamily,
     createTestIdentity,
     resetDatabase,
 } from '../test/helpers';
@@ -101,40 +102,87 @@ describe('root and epochs', () => {
         if (again.status === 'exists') expect(again.root.id).toBe(rootId);
     });
 
-    test('an epoch the workspace never issued is refused', async () => {
-        // A member, holding the workspace key: an editor through a share is held to a cap instead
-        // (allocateGranteeKeyEpochs), so the counter is not told by what a write accepts.
+    /*
+     * A personal drive takes any epoch to LOW_EPOCH_MAX and raises its counter to cover it, so a
+     * rotation's target stays above every node; past the cap it is refused. Held to the counter,
+     * which writes were accepted would tell a grantee where it stands.
+     */
+    test('a personal drive takes an epoch to its cap, raises its counter to it, and no further', async () => {
+        const root = await node(rootId);
+        const make = (keyEpoch: number) =>
+            signed.createFolders({
+                workspaceId: account.workspaceId,
+                userId: account.userId,
+                folders: [
+                    {
+                        id: randomUUID(),
+                        parentId: rootId,
+                        envelopes: {
+                            keyEpoch,
+                            parentKeyEpoch: root.keyEpoch,
+                            keyEnvelope: keyEnvelope(),
+                            metadataEnvelope: metadataEnvelope(),
+                        },
+                    },
+                ],
+            });
+        const counter = async () =>
+            (
+                await db
+                    .select({ seq: workspaces.keyEpochSeq })
+                    .from(workspaces)
+                    .where(eq(workspaces.id, account.workspaceId))
+            )[0]!.seq;
+        expect(await counter()).toBeLessThan(999);
+        expect((await make(999)).status).toBe('created');
+        expect(await counter()).toBe(999);
+        expect((await make(drive.LOW_EPOCH_MAX + 1)).status).toBe('stale');
+        expect((await make(0)).status).toBe('stale');
+    });
+
+    /* A family folder, which takes no shares, still holds a new node to its counter. */
+    test('a family folder refuses an epoch its counter has not reached', async () => {
+        const { areaIds } = await createTestFamily({ organizerId: account.userId });
+        const area = areaIds[0]!;
+        // The organizer holds the area's key, as an active member does.
         await db.insert(workspaceKeys).values({
-            workspaceId: account.workspaceId,
+            workspaceId: area,
             userId: account.userId,
             keyVersion: 1,
             wrappingSalt: randomBytes(32),
             wrappingNonce: randomBytes(24),
             encryptedKey: randomBytes(48),
         });
-        const root = await node(rootId);
-        const result = await signed.createFolders({
-            workspaceId: account.workspaceId,
-            userId: account.userId,
-            folders: [
-                {
-                    id: randomUUID(),
-                    parentId: rootId,
-                    envelopes: {
-                        keyEpoch: 999,
-                        parentKeyEpoch: root.keyEpoch,
-                        keyEnvelope: keyEnvelope(),
-                        metadataEnvelope: metadataEnvelope(),
-                    },
+        const { to } = (await drive.allocateKeyEpochs(area, 1))!;
+        const root = (keyEpoch: number) =>
+            signed.createRoot({
+                workspaceId: area,
+                userId: account.userId,
+                id: randomUUID(),
+                envelopes: {
+                    keyEpoch,
+                    parentKeyEpoch: 1,
+                    keyEnvelope: keyEnvelope(),
+                    metadataEnvelope: metadataEnvelope(),
                 },
-            ],
-        });
-        expect(result.status).toBe('stale');
+            });
+        expect((await root(to + 1)).status).toBe('stale');
+        expect((await root(to)).status).toBe('created');
     });
 
-    test('epoch ranges are contiguous and strictly increasing', async () => {
-        const first = await drive.allocateKeyEpochs(account.workspaceId, 3);
-        const second = await drive.allocateKeyEpochs(account.workspaceId, 2);
+    test('a personal drive hands out 1 to n, raising its counter; a family folder the next values', async () => {
+        expect(await drive.allocateKeyEpochs(account.workspaceId, 3)).toEqual({ from: 1, to: 3 });
+        expect(await drive.allocateKeyEpochs(account.workspaceId, 2)).toEqual({ from: 1, to: 2 });
+        const [personal] = await db
+            .select({ seq: workspaces.keyEpochSeq })
+            .from(workspaces)
+            .where(eq(workspaces.id, account.workspaceId));
+        expect(personal!.seq).toBeGreaterThanOrEqual(3);
+
+        const { areaIds } = await createTestFamily({ organizerId: account.userId });
+        const area = areaIds[0]!;
+        const first = await drive.allocateKeyEpochs(area, 3);
+        const second = await drive.allocateKeyEpochs(area, 2);
         expect(first!.to - first!.from).toBe(2);
         expect(second!.from).toBe(first!.to + 1);
     });
