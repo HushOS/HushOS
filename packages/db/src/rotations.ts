@@ -340,13 +340,15 @@ export async function listRotationWork(input: {
     return db.transaction(async (tx) => {
         const limit = Math.min(input.limit ?? ROTATION_BATCH, ROTATION_BATCH);
         const after = input.after;
-        // A node made after the rotation began has a fresh key. Under a parent already at the
-        // target, or under another such node, it was only ever wrapped under keys no one the
-        // rotation shut out holds, so that whole fresh subtree is left out: else a writer who kept
-        // adding nodes would keep the rotation open. `chain` is the fresh subtree's ids from its
-        // top down to the node; `above` is the parent's. One exception: an older node in it (moved
-        // there, its own created_at and key kept) is work, and is re-keyed under its parent's new
-        // key, so then the whole fresh subtree above it is work too, parents first.
+        // A node made after the rotation began has a fresh key. Wrapped under the current key of a
+        // parent already at the target, or of another such node, it was only ever wrapped under
+        // keys no one the rotation shut out holds, so that whole fresh subtree is left out: else a
+        // writer who kept adding nodes would keep the rotation open. `chain` is the fresh
+        // subtree's ids from its top down to the node; `above` is the parent's. Two exceptions:
+        // - A node wrapped under a key its parent no longer has (the parent re-keyed since) is not
+        //   fresh: it is re-wrapped, or the finish would forget the key that opens it.
+        // - An older node in a fresh subtree (moved there, its own created_at and key kept) that
+        //   still needs its turn makes the whole fresh subtree above it work, parents first.
         const result = await tx.execute<SubtreeRow>(sql`
             with recursive started as (
                 select coalesce(
@@ -357,12 +359,14 @@ export async function listRotationWork(input: {
                     'infinity'::timestamptz) as at
             ),
             tree as (
-                select id, 0 as depth, array[]::uuid[] as chain, array[]::uuid[] as above
+                select id, 0 as depth, key_epoch, parent_key_epoch,
+                       array[]::uuid[] as chain, array[]::uuid[] as above
                 from drive_nodes
                 where id = ${input.rootId} and workspace_id = ${input.workspaceId}
                 union all
-                select n.id, t.depth + 1,
+                select n.id, t.depth + 1, n.key_epoch, n.parent_key_epoch,
                        case when n.created_at > (select at from started)
+                                 and n.parent_key_epoch = t.key_epoch
                                  and (n.parent_key_epoch >= ${input.targetEpoch}
                                       or cardinality(t.chain) > 0)
                             then t.chain || n.id
@@ -374,6 +378,8 @@ export async function listRotationWork(input: {
             reached as (
                 select distinct t.above[1] as top from tree t
                 where cardinality(t.chain) = 0 and cardinality(t.above) > 0
+                  and (t.key_epoch < ${input.targetEpoch}
+                       or t.parent_key_epoch < ${input.targetEpoch})
             )
             select t.id, t.depth from tree t join drive_nodes n on n.id = t.id
             where n.purged_at is null
