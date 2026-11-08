@@ -1,9 +1,11 @@
 import react from '@vitejs/plugin-react';
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 
 // Real crypto and Postgres run several times slower on a loaded CI runner than here; a
 // test that takes 1 s locally has hit 5.3 s there. Locally the default still flags slow tests.
 const testTimeout = process.env.CI ? 30_000 : 5_000;
+// Setup that seeds rows and loads the whole API gets the same slack.
+const hookTimeout = process.env.CI ? 30_000 : 10_000;
 
 export default defineConfig({
     resolve: { tsconfigPaths: true },
@@ -23,7 +25,7 @@ export default defineConfig({
                         'src/**/*.spec.{ts,tsx}',
                         'server/**/*.test.ts',
                     ],
-                    exclude: ['src/**/*.db.test.ts'],
+                    exclude: [...configDefaults.exclude, 'src/**/*.db.test.ts'],
                     restoreMocks: true,
                 },
             },
@@ -34,6 +36,7 @@ export default defineConfig({
                 test: {
                     name: 'db',
                     testTimeout,
+                    hookTimeout,
                     environment: 'node',
                     include: ['src/**/*.db.test.ts'],
                     globalSetup: ['./src/test/db-setup.ts'],

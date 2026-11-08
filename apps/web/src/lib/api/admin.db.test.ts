@@ -22,6 +22,8 @@ import { loadApi } from '@/test/api-app';
 
 const DAY = 24 * 60 * 60 * 1000;
 const AUDITED = new Date('2026-11-01T09:30:00.000Z');
+// What iso() makes of a date; Postgres's own text (`2026-11-01 09:30:00+00`) is not this.
+const ISO = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/;
 let api: Awaited<ReturnType<typeof loadApi>>;
 let cookie: string;
 let workspaceId: string;
@@ -156,8 +158,16 @@ test('the overview serves what Postgres holds, every raw count and date as its s
             ],
         }),
     ]);
+    // `why` comes from a raw boolean: a 't' or 'f' would read as a second plan and still pass the schema.
     expect(overview.orphanedPlans).toEqual([
-        expect.objectContaining({ subscriptionId: 'sub_orphan' }),
+        expect.objectContaining({
+            subscriptionId: 'sub_orphan',
+            why: 'deleted-family',
+            revoked: false,
+            refunded: 0,
+            toRefund: 0,
+            since: expect.stringMatching(ISO),
+        }),
     ]);
 });
 
@@ -167,6 +177,7 @@ test('the workspace list serves its raw sizes and counts as its schema says, sor
     const page = await response.json();
     const row = page.workspaces.find((entry: { id: string }) => entry.id === workspaceId);
     expect(row).toMatchObject({ usedBytes: '5000000000', missing: 1 });
-    expect(typeof row.quotaBytes).toBe('string');
-    expect(Date.parse(row.createdAt)).not.toBeNaN();
+    // The registered account's base allowance, 1 GiB, as a decimal string.
+    expect(row.quotaBytes).toBe('1073741824');
+    expect(row.createdAt).toMatch(ISO);
 });
