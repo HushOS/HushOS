@@ -925,6 +925,8 @@ test('a readiness answer under the wrong status fails', async () => {
  * answers 503 through its declared schema rather than a 500 for a reply the schema refused.
  */
 test('the real health and readiness routes answer through their schemas', async () => {
+    // A fresh module graph, so the database pool is made from this URL, not one loaded earlier.
+    vi.resetModules();
     vi.stubEnv('DATABASE_URL', 'postgresql://test:test@127.0.0.1:1/test');
     const app = await loadApi();
     const health = await app.handle(new Request('http://localhost/api/health'));
