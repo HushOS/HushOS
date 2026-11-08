@@ -1,0 +1,56 @@
+packages/auth/src/webpush.ts
+  s_566b8e0c4467a4::t_dafc0313d53fd3 1-190
+  s_566b8e0c4467a4::t_7f23b1141653c2 191-195
+apps/web/src/lib/web-push.ts
+  s_566b8e0c4467a4::t_180fed2249fd27 1-146
+  s_566b8e0c4467a4::t_0e7543fde2afdb 147-162
+apps/web/src/components/account-notifications.tsx
+  s_566b8e0c4467a4::t_48f30f75ef843e 1-122
+  s_566b8e0c4467a4::t_cb70357da9d803 123-124
+apps/web/public/push-sw.js
+  s_566b8e0c4467a4::t_a66d24532f8688 1-89
+  s_566b8e0c4467a4::t_204663d0e9fb0b 90-97
+packages/auth/src/webpush.test.ts
+  s_566b8e0c4467a4::t_e9e6110eaa04cc 1-163
+  s_566b8e0c4467a4::t_b10e52ddfcefb7 164-179
+apps/web/src/lib/api/notifications-responses.server.ts
+  s_566b8e0c4467a4::t_30c848d9dc8cb8 61-64
+apps/web/src/lib/api/notifications.server.ts
+  s_566b8e0c4467a4::t_e6c552d643300c 11,30-46,49,57-61
+apps/web/src/lib/device-data.ts
+  s_566b8e0c4467a4::t_03216df0f4d029 280-290,311
+apps/web/src/routes/_authenticated/app/account.tsx
+  s_566b8e0c4467a4::t_2f90e22a1fc9ac 12,112-113
+apps/web/src/routes/_authenticated/app/route.tsx
+  s_566b8e0c4467a4::t_b4946207e508ae 5,111-112
+packages/auth/src/notifications.ts
+  s_566b8e0c4467a4::t_1685232c8ca51e 5,8,13-14,67-72,75,77-125,170-180,182-207
+packages/db/drizzle/20261108185753_web_push/migration.sql
+  s_566b8e0c4467a4::t_752ad631c9d731 1-7
+packages/db/drizzle/20261108185753_web_push/snapshot.json
+  s_566b8e0c4467a4::t_c7633bf531de0c 1-181
+packages/db/src/notifications.test.ts
+  s_566b8e0c4467a4::t_bf5340a3df6a93 36,48,62,188,203,231,243-330,333-344
+packages/db/src/notifications.ts
+  s_566b8e0c4467a4::t_af3c8b456e4648 10,49-67,80,85-86,131-159,172-177,196-198,207,223,361-394
+packages/db/src/readiness.ts
+  s_566b8e0c4467a4::t_799de8c195ccb7 14
+packages/db/src/schema/notifications.ts
+  s_566b8e0c4467a4::t_9f675a07bd30c2 71-75,87-97
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "31685390e65178d6ddc40ba755ff1ee698cda487",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
