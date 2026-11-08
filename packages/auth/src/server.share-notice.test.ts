@@ -39,9 +39,12 @@ describe('a share’s email', () => {
         const sharer = await createTestAccount();
         const friend = await createTestAccount();
         const answers = [];
-        for (let n = 0; n < 6; n++)
-            answers.push(await auth.notifyShare(sharer.userId, friend.userId, 'viewer'));
-        expect(answers).toEqual(['sent', 'sent', 'sent', 'limited', 'limited', 'limited']);
+        for (let n = 0; n < 6; n++) {
+            const allowed = await auth.shareNoticeAllowed(sharer.userId, friend.userId);
+            answers.push(allowed);
+            if (allowed) await auth.notifyShare(sharer.userId, friend.userId, 'viewer');
+        }
+        expect(answers).toEqual([true, true, true, false, false, false]);
         expect(outbox).toHaveLength(3);
         expect(outbox.every((message) => message.to === friend.email)).toBe(true);
     });
@@ -51,17 +54,16 @@ describe('a share’s email', () => {
         const people = await Promise.all(Array.from({ length: 55 }, () => createTestAccount()));
         const answers = [];
         for (const person of people)
-            answers.push(await auth.notifyShare(sharer.userId, person.userId, 'editor'));
-        expect(answers.filter((answer) => answer === 'sent')).toHaveLength(50);
-        expect(answers.slice(50)).toEqual(Array(5).fill('limited'));
-        expect(outbox).toHaveLength(50);
+            answers.push(await auth.shareNoticeAllowed(sharer.userId, person.userId));
+        expect(answers.filter(Boolean)).toHaveLength(50);
+        expect(answers.slice(50)).toEqual(Array(5).fill(false));
     });
 
     test('one sharer reaching their cap leaves another’s emails alone', async () => {
         const noisy = await createTestAccount();
         const quiet = await createTestAccount();
         const friend = await createTestAccount();
-        for (let n = 0; n < 4; n++) await auth.notifyShare(noisy.userId, friend.userId, 'viewer');
-        expect(await auth.notifyShare(quiet.userId, friend.userId, 'viewer')).toBe('sent');
+        for (let n = 0; n < 4; n++) await auth.shareNoticeAllowed(noisy.userId, friend.userId);
+        expect(await auth.shareNoticeAllowed(quiet.userId, friend.userId)).toBe(true);
     });
 });

@@ -424,11 +424,30 @@ export const discountCacheSize = () => discountCache.size;
  * are spent. Looked up for a landing page and again at checkout, so answers are
  * kept for a minute; a failure to reach Polar is no discount, never a stale one.
  */
-export async function findProviderDiscount(raw: string): Promise<ProviderDiscount | null> {
+/*
+ * Asking Polar for a code it hasn't been asked about lately: thirty a caller (an account, or an
+ * address on a public offer page) every ten minutes, so guessing codes can't run through the
+ * operator's Polar quota. A code already remembered costs nothing and isn't counted.
+ */
+export const DISCOUNT_LOOKUP_LIMIT = { count: 30, windowMs: 10 * 60 * 1000 };
+
+export async function findProviderDiscount(
+    raw: string,
+    caller?: string,
+): Promise<ProviderDiscount | null> {
     const code = raw.trim().toUpperCase();
     if (!DISCOUNT_CODE.test(code) || !billingEnabled()) return null;
     const cached = discountCache.get(code);
     if (cached && Date.now() - cached.at < DISCOUNT_CACHE_MS) return cached.value;
+    if (caller) {
+        const bucket = createHash('sha256').update(`billing:discount-lookup:${caller}`).digest();
+        const { count, windowMs } = DISCOUNT_LOOKUP_LIMIT;
+        if (!(await authRepository.consumeRateLimit(bucket, count, windowMs)))
+            throw new BillingError(
+                'Too many codes just now. Please try again in a few minutes.',
+                429,
+            );
+    }
     let page: { items: PolarDiscount[] };
     try {
         page = await polar().discounts.list({ query: code, limit: 100 });

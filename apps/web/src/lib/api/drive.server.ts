@@ -1,4 +1,5 @@
 import '@/lib/server-only';
+import { log as serverLog } from '@hushos/logging';
 import { Elysia, t } from 'elysia';
 import * as auth from '@hushos/auth/server';
 import { LINK_TOKEN_HEADER } from '@hushos/drive/protocol';
@@ -500,19 +501,20 @@ export const driveApi = new Elysia()
                         params.id,
                         body,
                     );
-                    // The person is told by mail; a mail problem is the operator's, not the sharer's.
-                    void auth
-                        .notifyShare(user.id, body.granteeUserId, body.role)
-                        .then((notice) => {
-                            if (notice === 'limited') log.set({ share: { notify: 'limited' } });
-                        })
-                        .catch((error: unknown) => {
-                            // The class and code only: a mail error's message often names the recipient.
-                            log.set({
-                                share: { notify: 'failed', failure: describeFailure(error) },
-                            });
-                            log.error(new Error('Share notification failed.'));
-                        });
+                    // The person is told by mail, within its limits (asked now, while the request's log
+                    // is open); a mail problem is the operator's, not the sharer's.
+                    if (await auth.shareNoticeAllowed(user.id, body.granteeUserId))
+                        void auth
+                            .notifyShare(user.id, body.granteeUserId, body.role)
+                            .catch((error: unknown) =>
+                                // After the response: the request's log is closed, so the server's.
+                                // The class and code only: a mail error's message often names the recipient.
+                                serverLog.error({
+                                    message: 'Share notification failed.',
+                                    share: { failure: describeFailure(error) },
+                                }),
+                            );
+                    else log.set({ share: { notify: 'limited' } });
                     return result;
                 },
             )
