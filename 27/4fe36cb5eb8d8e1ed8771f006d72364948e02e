@@ -1,0 +1,27 @@
+crates/hushos-push/src/api.rs
+  s_566b8e0c4467a4::t_0a5263a229493f 160-166
+crates/hushos-push/src/limits.rs
+  s_566b8e0c4467a4::t_a8bffbc69d13d2 249-255,379-395
+crates/hushos-push/src/main.rs
+  s_566b8e0c4467a4::t_24a8d77849a10e 57-64
+crates/hushos-push/src/page.html
+  s_566b8e0c4467a4::t_045cf63e5c86a3 22,24-26,30-32,34,37
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_c4541bde2ac2ea 856
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "274fe36cb5eb8d8e1ed8771f006d72364948e02e",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
