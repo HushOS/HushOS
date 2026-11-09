@@ -59,6 +59,30 @@ export const sections: RoadmapSection[] = [
         summary: 'Live at hushos.com, and in a self-hosted copy that runs the latest code.',
         items: [
             {
+                id: 'phone-notifications',
+                status: 'shipped',
+                month: 'November 2026',
+                area: 'Apps',
+                title: 'Notifications on your phone',
+                body: 'The same notifications in the iPhone and Android apps from version 1.4.1. They pass through push.hushos.com, which hands Apple and Google a random event ID and nothing about what happened. Turn them on in Account → Notifications.',
+                links: [{ kind: 'blog', slug: 'notifications', label: 'How they stay private' }],
+            },
+            {
+                id: 'releases',
+                status: 'shipped',
+                month: 'November 2026',
+                area: 'Platform',
+                title: 'Numbered releases',
+                body: 'One version number for the whole of HushOS since 1.0.0, with release notes on GitHub and image tags to match, such as 1.4.1, 1.4 and 1, so a self-hosted server can follow releases instead of every change.',
+                links: [
+                    {
+                        kind: 'docs',
+                        path: 'docs/self-hosting.md',
+                        label: 'Pin a self-hosted server to a release',
+                    },
+                ],
+            },
+            {
                 id: 'browser-notifications',
                 status: 'shipped',
                 month: 'November 2026',
@@ -210,13 +234,6 @@ export const sections: RoadmapSection[] = [
         summary: 'Being built, or built and being finished.',
         items: [
             {
-                id: 'releases',
-                status: 'now',
-                area: 'Platform',
-                title: 'Numbered releases',
-                body: 'One version number for the whole of HushOS, starting at 1.0.0, with a changelog and matching image tags, so a self-hosted server can follow a release instead of the latest build.',
-            },
-            {
                 id: 'companies',
                 status: 'now',
                 area: 'Teams',
@@ -225,18 +242,30 @@ export const sections: RoadmapSection[] = [
                 links: [{ kind: 'page', to: '/teams', label: 'HushOS for teams today' }],
             },
             {
-                id: 'phone-notifications',
+                id: 'two-step-sign-in',
                 status: 'now',
-                area: 'Apps',
-                title: 'Notifications on your phone',
-                body: 'The same notifications in the iPhone and Android apps, through push.hushos.com, which hands Apple and Google a random event ID and nothing about what happened.',
+                area: 'Platform',
+                title: 'Two-step sign-in and device approval',
+                body: 'Sign in with your password and a code from an authenticator app, or a security key, and approve each new device from one you already use. Both are checks the server makes; approval can also be set so your keys reach a new device only from one you already have.',
+                links: [
+                    {
+                        kind: 'docs',
+                        path: 'docs/two-step-design.md',
+                        label: 'Read the two-step design',
+                    },
+                    {
+                        kind: 'docs',
+                        path: 'docs/devices-design.md',
+                        label: 'Read the devices design',
+                    },
+                ],
             },
             {
-                id: 'desktop-apps',
+                id: 'passkeys',
                 status: 'now',
-                area: 'Apps',
-                title: 'Desktop apps',
-                body: 'HushOS in your computer’s file manager, the way it is in the Files app on a phone.',
+                area: 'Platform',
+                title: 'Sign in with a passkey',
+                body: 'No password: a passkey on your phone, computer or security key signs you in and unlocks your account. It needs a browser or security key that supports it, and your recovery phrase stays the way back in if you lose your passkeys.',
             },
         ],
     },
@@ -263,25 +292,6 @@ export const sections: RoadmapSection[] = [
                     { kind: 'docs', path: 'docs/file-tools-design.md', label: 'Read the design' },
                 ],
             },
-            {
-                id: 'two-step-sign-in',
-                status: 'next',
-                area: 'Platform',
-                title: 'Two-step sign-in and device approval',
-                body: 'Sign in with your password and a code from an authenticator app, or a security key, and approve each new device from one you already use. Both are checks the server makes; approval can also be set so your keys reach a new device only from one you already have.',
-                links: [
-                    {
-                        kind: 'docs',
-                        path: 'docs/two-step-design.md',
-                        label: 'Read the two-step design',
-                    },
-                    {
-                        kind: 'docs',
-                        path: 'docs/devices-design.md',
-                        label: 'Read the devices design',
-                    },
-                ],
-            },
         ],
     },
     {
@@ -289,6 +299,13 @@ export const sections: RoadmapSection[] = [
         title: 'Later',
         summary: 'Planned, not promised. What comes first depends on what people need.',
         items: [
+            {
+                id: 'desktop-apps',
+                status: 'later',
+                area: 'Apps',
+                title: 'Desktop apps',
+                body: 'HushOS in your computer’s file manager, the way it is in the Files app on a phone.',
+            },
             {
                 id: 'notes-documents',
                 status: 'later',
@@ -318,13 +335,6 @@ export const sections: RoadmapSection[] = [
                 title: 'Messages',
                 body: 'Messages with the people already in your contacts, locked on your device the way your files are.',
                 links: [{ kind: 'blog', slug: 'hushos-1-0', label: 'Where it fits' }],
-            },
-            {
-                id: 'passkeys',
-                status: 'later',
-                area: 'Platform',
-                title: 'Sign in with a passkey',
-                body: 'No password: a passkey on your phone, computer or security key signs you in and unlocks your account. It needs a browser or security key that supports it, and your recovery phrase stays the way back in if you lose your passkeys.',
             },
         ],
     },
