@@ -181,8 +181,9 @@ final class PhonePush {
     /* Turn on, in the app's own question: as the switch does, for the account it was asked for. */
     func accept(_ offer: Offer?) async {
         self.offer = nil
-        guard let offer, SharedKeychain.session == offer.session else { return }
-        await register(offer.session, relay: offer.relay)
+        // The same account on the same server, whatever its token now (a session renewed under the alert): the record's key.
+        guard let offer, let session = SharedKeychain.session, PushAsk.key(session) == PushAsk.key(offer.session) else { return }
+        await register(session, relay: offer.relay)
     }
 
     private func register(_ session: SharedKeychain.Session, relay: String) async {

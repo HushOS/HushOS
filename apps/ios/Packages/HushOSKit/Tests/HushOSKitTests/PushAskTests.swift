@@ -5,7 +5,7 @@ import Testing
 /*
  * Asking once, the decision and the record: each test fails on a question asked twice, a
  * registration made with no question where the person may have said no (to iOS, or with the
- * Account switch), a retry taken twice, the switch losing a race with the app's own asking, or a
+ * Account switch), a retry claimed twice across starts, the switch losing a race with the app's own asking, or a
  * record that outlives the account or reaches another one.
  */
 @Suite struct PushAskTests {

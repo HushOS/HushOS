@@ -67,7 +67,7 @@ public enum PushAsk {
         }
     }
 
-    static func key(_ session: SharedKeychain.Session) -> String { session.origin + "\n" + session.userId.lowercased() }
+    public static func key(_ session: SharedKeychain.Session) -> String { session.origin + "\n" + session.userId.lowercased() }
 
     /*
      * The record, one file of marks by server and account. Every change is a compare-and-set under
