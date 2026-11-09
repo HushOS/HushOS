@@ -453,6 +453,13 @@ Other entries: `./device-storage`, `./protocol`, `./worker`.
 
 The web app implements `AuthApi` in `apps/web/src/lib/auth-api.ts` with the Eden Treaty client. A route or response change the client does not expect then fails `bun run typecheck` there.
 
+Two-step sign-in (`docs/two-step-design.md`) is split three ways:
+
+- `packages/db/src/two-step.ts` keeps the rows and what must hold whatever calls it: a code, a time step and a step token each used once, the counts that freeze.
+- `packages/auth/src/two-step.ts` checks an answer to the step, keeps the two-step key, the budgets and the notices. `server.ts` has the routes' own logic.
+- A route never spends a step by itself. The step and what it authorises commit in one transaction: `createSteppedSession` at sign-in, `steppedChange` for a change, and `deleteAccount`, which passes the step after the person's groups.
+- Their routes are tested through the real API and database (`apps/web/src/lib/api/two-step*.db.test.ts`, with `src/test/two-step-api.server.ts`).
+
 Error handlers (`onError` in `api/shared.server.ts`) must return literal status codes. A plain `number` erases every inferred response type.
 
 ### Drive: `@hushos/drive`
@@ -489,6 +496,7 @@ See [docs/groups-server.md](docs/groups-server.md).
 - Owns the protocol versions, OPAQUE client operations, HKDF, and the account-key and workspace-grant envelopes.
 - Its crypto session has no React, HTTP or worker dependency.
 - Server OPAQUE primitives are a separate export, `@hushos/crypto/server`.
+- `@hushos/crypto/two-step` is what a device signs to answer the second step with the recovery phrase. `@hushos/crypto/two-step/server` is the server's side (authenticator codes, the seal on their secrets, backup codes): never import it from client code.
 - The phone apps do not use this package. They run its Rust twin, `crates/hushos-core`, through generated Swift and Kotlin bindings. The two are kept in step by shared fixtures and differential fuzzing.
 
 ### Billing: `@hushos/billing`

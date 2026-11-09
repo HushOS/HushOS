@@ -106,13 +106,15 @@ export const shareNotice = ${JSON.stringify(shareRendered, null, 4)} as const;
 console.info('Rendered 2 share notices.');
 
 /*
- * The security notices about devices: when (formatted by the server, in UTC),
- * how many for a removal of every other device, and where to look. Never the
- * device's name, address or browser: none of those is a placeholder.
+ * The security notices about devices and the second step: when (formatted by
+ * the server, in UTC), how many (devices removed, backup codes left), the kind
+ * of method (one of the server's own fixed phrases) and where to look. Never a
+ * device's or a method's name, address or browser: none of those is a placeholder.
  */
 export const SECURITY_PLACEHOLDERS = {
     when: '{{when}}',
     count: '{{count}}',
+    method: '{{method}}',
     accountUrl: '{{accountUrl}}',
     logoUrl: '{{logoUrl}}',
     marker: '{{marker}}',
@@ -122,6 +124,24 @@ const securityKinds: SecurityNoticeKind[] = [
     'device-removed',
     'devices-removed',
     'password-attempts',
+    'two-step-on',
+    'two-step-off',
+    'two-step-method-added',
+    'two-step-method-removed',
+    'backup-codes-new',
+    'backup-code-used',
+    'phrase-used',
+    'two-step-failed',
+    'totp-frozen',
+    'totp-frozen-device',
+];
+/* The kinds that say how many, and the ones that name a kind of method. */
+const securityCounted: SecurityNoticeKind[] = ['devices-removed', 'backup-code-used'];
+const securityMethods: SecurityNoticeKind[] = [
+    'new-device',
+    'two-step-on',
+    'two-step-method-added',
+    'two-step-method-removed',
 ];
 const securityRendered: Record<string, { html: string; text: string }> = {};
 for (const kind of securityKinds) {
@@ -130,6 +150,7 @@ for (const kind of securityKinds) {
             kind={kind}
             when={SECURITY_PLACEHOLDERS.when}
             count={SECURITY_PLACEHOLDERS.count}
+            method={SECURITY_PLACEHOLDERS.method}
             accountUrl={SECURITY_PLACEHOLDERS.accountUrl}
             logoUrl={SECURITY_PLACEHOLDERS.logoUrl}
             marker={SECURITY_PLACEHOLDERS.marker}
@@ -140,10 +161,15 @@ for (const kind of securityKinds) {
         SECURITY_PLACEHOLDERS.accountUrl,
         SECURITY_PLACEHOLDERS.logoUrl,
         SECURITY_PLACEHOLDERS.marker,
-        ...(kind === 'devices-removed' ? [SECURITY_PLACEHOLDERS.count] : []),
+        ...(securityCounted.includes(kind) ? [SECURITY_PLACEHOLDERS.count] : []),
+        ...(securityMethods.includes(kind) ? [SECURITY_PLACEHOLDERS.method] : []),
     ];
     for (const token of needed)
         if (!html.includes(token)) throw new Error(`Rendered ${kind} notice lacks ${token}.`);
+    // A placeholder a kind has no value for would go out as braces.
+    for (const [token] of html.matchAll(/\{\{\w+\}\}/g))
+        if (!needed.includes(token as (typeof needed)[number]))
+            throw new Error(`Rendered ${kind} notice has ${token}, which nothing fills.`);
     securityRendered[kind] = { html, text: plain(html) };
 }
 await Bun.write(

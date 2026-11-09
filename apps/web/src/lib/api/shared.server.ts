@@ -250,8 +250,10 @@ export function notifyDevices(
     userId: string,
     kind: 'new-device' | 'device-removed' | 'devices-removed',
     count?: number,
+    /* What answered the second step at a new device's sign-in (docs/two-step-design.md 7). */
+    method?: auth.StepAnswer['kind'],
 ) {
-    void auth.notifyDevices(userId, kind, count).catch((error: unknown) => {
+    void auth.notifyDevices(userId, kind, count, undefined, method).catch((error: unknown) => {
         log.set({ auth: { failure: describeFailure(error) } });
         log.error(new Error('Security notice failed.'));
     });
@@ -790,3 +792,28 @@ export const securityActionSchema = t.Union([
     t.Literal('master-key'),
     t.Literal('recovery-key'),
 ]);
+
+/*
+ * An answer to the second step (docs/two-step-design.md 4): a step token and one proof. A code
+ * is taken as typed, up to 32 characters. The domain reads it: spaces and hyphens are ignored
+ * (`123 456`, `7kq2m 9xd4p`), and what is still not six digits, or not a backup code's ten
+ * characters, is answered 400 and counted nowhere. A phrase's answer is an Ed25519 signature.
+ * A security key's assertion (`webauthn`) joins the union with security keys; until then it is
+ * refused here, as any unknown kind is.
+ */
+export const stepProofSchema = t.Union([
+    t.Object({ kind: t.Literal('totp'), code: t.String({ minLength: 1, maxLength: 32 }) }),
+    t.Object({ kind: t.Literal('backup'), code: t.String({ minLength: 1, maxLength: 32 }) }),
+    t.Object({ kind: t.Literal('phrase'), signature: signatureSchema }),
+]);
+export const stepSchema = t.Object({ token: tokenSchema, proof: stepProofSchema });
+
+/*
+ * What a change to the second step carries: the second half of the password exchange
+ * (POST /auth/two-step/reauth), and the step itself for an account that has one.
+ */
+export const twoStepChangeSchema = t.Object({
+    attemptToken: tokenSchema,
+    finishLoginRequest: opaqueMessage,
+    twoStep: t.Optional(stepSchema),
+});

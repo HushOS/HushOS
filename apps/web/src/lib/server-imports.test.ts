@@ -7,9 +7,14 @@ import { describe, expect, test } from 'vitest';
  * browser loads. Every module here that is not a server module (`*.server.ts`
  * or `*.server.tsx`, which import '@/lib/server-only') or a test must leave
  * them alone: the server's group acceptance (whose chains no client may
- * trust) and the server's OPAQUE setup.
+ * trust), the server's OPAQUE setup, and its side of two-step sign-in.
  */
-const SERVER_ONLY = ['@hushos/crypto/group-trust/server', '@hushos/crypto/server'];
+const SERVER_ONLY = [
+    '@hushos/crypto/group-trust/server',
+    '@hushos/crypto/server',
+    // Authenticator codes, the seal on their secrets and backup codes: the server's side only.
+    '@hushos/crypto/two-step/server',
+];
 const ROOT = join(import.meta.dirname, '..');
 
 function modules(dir: string): string[] {

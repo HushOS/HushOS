@@ -14,6 +14,7 @@ process.env.OPAQUE_SERVER_SETUP = 'A'.repeat(120);
 process.env.TRUSTED_PROXY_HEADER = 'x-forwarded-for';
 process.env.EMAIL_ADAPTER = 'log';
 process.env.EMAIL_FROM = 'HushOS <hushos@hushos.test>';
+process.env.TWO_STEP_ENABLED = 'true';
 
 // The longest a device name may be (40), in the characters it may use.
 const HOSTILE = 'HushOS Support call 5550100 evil.example';
@@ -50,6 +51,17 @@ vi.mock('@hushos/emails/server', async (importOriginal) => {
     };
 });
 
+// A method named as an intruder would name it, served wherever a method's row is read.
+const factor = () => ({
+    id: '3e8b3a4f-9d7b-4f74-8d76-5e4c7abc2b43',
+    userId: USER.id,
+    kind: 'totp',
+    name: HOSTILE,
+    createdAt: new Date(),
+    confirmedAt: new Date(),
+    lastUsedAt: null,
+});
+
 vi.mock('@hushos/db', () => {
     const row = () => ({
         id: DEVICE_ID,
@@ -63,6 +75,15 @@ vi.mock('@hushos/db', () => {
     return {
         adminRepository: {},
         groupsRepository: {},
+        twoStepRepository: {
+            getTwoStep: async () => ({
+                on: true,
+                factors: [factor()],
+                state: null,
+                backupCodes: [],
+            }),
+            renameFactor: async () => true,
+        },
         authRepository: {
             getSession: async () => ({ user: USER, device: { id: DEVICE_ID } }),
             getUserById: async () => USER,
@@ -78,6 +99,7 @@ vi.mock('@hushos/db', () => {
 });
 
 const auth = await import('./server');
+const twoStep = await import('./two-step');
 
 describe('device security notices', () => {
     test('never carry the name the device gave itself, in the subject, the HTML or the text', async () => {
@@ -103,5 +125,67 @@ describe('device security notices', () => {
                 for (const piece of DISTINCTIVE) expect(part).not.toMatch(word(piece));
             }
         }
+    });
+
+    test('about the second step never carry a method’s name or a device’s, whatever each was called', async () => {
+        sent.length = 0;
+        await auth.registerDevice(TOKEN, { kind: 'web', name: HOSTILE });
+        // The method carries the name too, set through the real rename path.
+        expect(
+            (await auth.renameTwoStepMethod(TOKEN, factor().id, { name: HOSTILE })).method.name,
+        ).toBe(HOSTILE);
+
+        const kinds = [
+            ['two-step-on', { method: 'totp' }, 'An authenticator app'],
+            ['two-step-on', { method: 'webauthn' }, 'A security key'],
+            ['two-step-off', {}, 'Two-step sign-in is off.'],
+            ['two-step-method-added', { method: 'totp' }, 'An authenticator app'],
+            ['two-step-method-added', { method: 'webauthn' }, 'A security key'],
+            ['two-step-method-removed', { method: 'totp' }, 'An authenticator app'],
+            ['two-step-method-removed', { method: 'webauthn' }, 'A security key'],
+            ['backup-codes-new', {}, 'The old codes no longer work.'],
+            ['backup-code-used', { count: 7 }, '7'],
+            ['phrase-used', {}, 'Keep the phrase apart from your password'],
+            ['two-step-failed', {}, 'Change your password.'],
+            ['totp-frozen', {}, 'Devices you already use are not affected.'],
+            ['totp-frozen-device', {}, 'Your other devices are not affected.'],
+        ] as const;
+        for (const [kind, detail] of kinds) twoStep.notifyTwoStep(USER.id, kind, detail);
+        await twoStep.twoStepNoticesSettled();
+        // A new device's sign-in, by each thing that can answer the step.
+        const signedInWith = {
+            totp: 'Your password and an authenticator code',
+            webauthn: 'Your password and a security key',
+            backup: 'Your password and a backup code',
+            phrase: 'Your password and your recovery phrase',
+        } as const;
+        for (const method of Object.keys(signedInWith) as (keyof typeof signedInWith)[])
+            await auth.notifyDevices(USER.id, 'new-device', undefined, new Date(), method);
+        await auth.notifyDevices(USER.id, 'new-device');
+
+        const says = [
+            ...kinds.map(([, , line]) => line),
+            ...Object.values(signedInWith),
+            'Your password',
+        ];
+        expect(sent).toHaveLength(says.length);
+        for (const [index, message] of sent.entries()) {
+            expect(message.subject).toMatch(/· HushOS$/);
+            expect(message.html).toMatch(
+                /https:\/\/hush\.example\/app\/account#(two-step|devices)/,
+            );
+            // What the design says each one says, in both the HTML and the text.
+            expect(message.text, message.subject).toContain(says[index]);
+            expect(message.html, message.subject).toContain(says[index]);
+            for (const part of [message.subject, message.html, message.text]) {
+                expect(part.toLowerCase()).not.toContain(HOSTILE.toLowerCase());
+                for (const piece of DISTINCTIVE)
+                    expect(part, message.subject).not.toMatch(word(piece));
+                // No placeholder left unfilled.
+                expect(part).not.toMatch(/\{\{|\}\}/);
+            }
+        }
+        // The plain new-device notice names the password alone, as it always has.
+        expect(sent.at(-1)!.text).not.toMatch(/Your password and/);
     });
 });
