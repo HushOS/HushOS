@@ -1800,6 +1800,10 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
         );
         for (const name of ['Choose Family Plus', 'Choose Family Pro', 'Choose Family Max'])
             await expect(choose.getByRole('button', { name, exact: true })).toBeEnabled();
+        // Invite sits under the member list: wait for the list, or its absence proves nothing.
+        await expect(
+            maya.page.getByRole('heading', { name: 'Members', exact: true }),
+        ).toBeVisible();
         await expect(maya.page.getByRole('button', { name: 'Invite someone' })).toHaveCount(0);
         await expect(maya.page.locator('[data-family-plan]')).toHaveCount(0);
 
