@@ -30,7 +30,7 @@ import {
     AlertDialogHeader,
     AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
 import {
     afterMembershipChange,
@@ -230,7 +230,7 @@ export function FamilyPage({
 
     return (
         <div className="flex flex-1 flex-col">
-            {/* The family's folders are the sidebar's family item; this page is who is in it. */}
+            {/* Who is in the family; its folders are one click away, here and from the sidebar's family item. */}
             <PageHeader
                 title={family}
                 titleAction={
@@ -240,7 +240,16 @@ export function FamilyPage({
                         </Button>
                     )
                 }
-            />
+            >
+                {/* The family's folders, which the family's item in the sidebar opens too. */}
+                <Link
+                    to="/app/s/$groupId"
+                    params={{ groupId }}
+                    className={buttonVariants({ variant: 'outline' })}
+                >
+                    Family folders
+                </Link>
+            </PageHeader>
 
             {/* One column, as Account's: every section a heading, then rows told apart by spacing. */}
             <div className="flex max-w-3xl flex-col gap-9 px-5 sm:px-8">

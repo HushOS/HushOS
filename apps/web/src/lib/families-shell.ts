@@ -1,4 +1,5 @@
 import { queryOptions, useQuery } from '@tanstack/react-query';
+import { useFamilyWork } from '@/lib/family-work-state';
 import { driveApi } from '@/lib/drive-api';
 import { groupsApi } from '@/lib/groups/api';
 
@@ -141,3 +142,39 @@ export const myInvitationsQueryOptions = (userId: string) =>
         refetchOnWindowFocus: true,
         retry: 1,
     });
+
+/*
+ * How much waits on this person in their family, as the family page counts it (waitingOn):
+ * people to let in, and for those who manage it, members to check. Only someone who manages
+ * the family is asked; the members to check come from the background pass the Drive runs
+ * (lib/family-work-state.ts, nothing loaded for it here), and the family's member list is read
+ * only while that pass names someone.
+ */
+/* Only the sidebar polls (`poll`): a second timer elsewhere would ask twice a minute. */
+export function useWaitingOn(
+    userId: string,
+    groupId: string,
+    manager: boolean,
+    { poll = true }: { poll?: boolean } = {},
+) {
+    const pending = useQuery({
+        ...pendingQueryOptions(userId, groupId),
+        enabled: manager,
+        // Someone who accepts turns up within a minute; the family page asks more often.
+        refetchInterval: poll ? 60_000 : false,
+    });
+    const { needsCheck } = useFamilyWork(groupId);
+    const others = needsCheck.some((id) => id !== userId);
+    const detail = useQuery({
+        ...familyQueryOptions(userId, groupId),
+        enabled: manager && others,
+    });
+    if (!manager) return 0;
+    return waitingOn({
+        userId,
+        manager,
+        pending: pending.data ?? [],
+        members: others ? (detail.data?.members ?? []) : [],
+        needsCheck,
+    });
+}
