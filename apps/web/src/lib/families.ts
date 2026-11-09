@@ -3,7 +3,7 @@ import { queryOptions, useQuery, useQueryClient, type QueryClient } from '@tanst
 import { useEffect, useRef } from 'react';
 import { useAuthView } from '@/lib/auth-view';
 import { familiesSyncAllKey, familySynced } from '@/lib/families-keys';
-import { familyKeys } from '@/lib/families-shell';
+import { canManage, familyKeys } from '@/lib/families-shell';
 import { groupsApi, type GroupDetail, type GroupSummary } from '@/lib/groups/api';
 import { groupContext } from '@/lib/groups/client';
 import type { GroupContext, GroupNotice } from '@/lib/groups/context';
@@ -29,11 +29,15 @@ import { familyWalkEndings, walkPollDelay } from '@/lib/groups/walks';
 /* The shell's part (keys, capabilities, route 2's list), here for the families pages. */
 export {
     activeFamily,
+    canManage,
     capabilitiesQueryOptions,
     familiesQueryOptions,
     familyKeys,
+    familyQueryOptions,
+    pendingQueryOptions,
     rolesLine,
     useGroupsEnabled,
+    waitingOn,
 } from '@/lib/families-shell';
 
 const contexts = new Map<string, GroupContext>();
@@ -47,31 +51,12 @@ export function familyContext(userId: string) {
     return ctx;
 }
 
-/* Route 3: the family, its members (names from the server, with their address), seats and what is due. */
-export const familyQueryOptions = (userId: string, groupId: string) =>
-    queryOptions({
-        queryKey: familyKeys.family(userId, groupId),
-        queryFn: () => groupsApi.group(groupId),
-        staleTime: 10_000,
-        refetchOnWindowFocus: true,
-        retry: 1,
-    });
-
 /* Route 12: open invitations, for those who manage the family. */
 export const invitationsQueryOptions = (userId: string, groupId: string) =>
     queryOptions({
         queryKey: familyKeys.invitations(userId, groupId),
         queryFn: async () => (await groupsApi.invitations(groupId)).invitations,
         staleTime: 10_000,
-        retry: 1,
-    });
-
-/* Route 16: who accepted and waits to be let in, with the identity their words are read from. */
-export const pendingQueryOptions = (userId: string, groupId: string) =>
-    queryOptions({
-        queryKey: familyKeys.pending(userId, groupId),
-        queryFn: async () => (await groupsApi.pending(groupId)).pending,
-        staleTime: 5_000,
         retry: 1,
     });
 
@@ -268,10 +253,6 @@ export function afterMembershipChange(queryClient: QueryClient, userId: string) 
         queryClient.invalidateQueries({ queryKey: ['auth', 'storage'] }),
         queryClient.invalidateQueries({ queryKey: ['billing', 'summary'] }),
     ]);
-}
-
-export function canManage(roles: readonly string[] | undefined) {
-    return Boolean(roles?.includes('members'));
 }
 
 /* Roles with one added or taken away, in the order a roster lists them. */

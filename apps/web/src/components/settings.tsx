@@ -7,7 +7,7 @@ import { segmentOn, segmentTrack } from '@/components/ui/segment';
 
 /*
  * The pieces Account and Plan and storage are built from: a group with its
- * title and a rule beneath, rows with the label left and the action right, a
+ * title and no rule beneath, rows with the label left and the action right, a
  * line that confirms what just happened, a segmented choice, and a labelled
  * field for the dialogs that ask for a password.
  */
@@ -26,7 +26,7 @@ export function SettingsGroup({
     const id = useId();
     return (
         <section aria-labelledby={id} className="flex flex-col">
-            <div className="hang-end flex items-end justify-between gap-4 border-b border-rule pb-3">
+            <div className="hang-end flex items-end justify-between gap-4 pb-1">
                 <div className="flex min-w-0 flex-col gap-0.5">
                     <h2 id={id} className="text-lg font-bold tracking-[-0.01em]">
                         {title}
@@ -41,8 +41,8 @@ export function SettingsGroup({
 }
 
 /*
- * One row: label, what it is now, and the action. On a phone they stack. Rows are told
- * apart by their spacing, not by rules: the group's heading keeps the one rule. The label
+ * One row: label, what it is now, and the action. On a phone they stack. Rows, and groups,
+ * are told apart by their spacing, not by rules. The label
  * column fits the longest fixed label ("Member list version") on one line; a long name wraps.
  */
 export function Setting({

@@ -1,11 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
-import { SearchIcon } from 'lucide-react';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { authClient } from '@/lib/auth-client';
 import { answerPushes } from '@/lib/web-push';
 import { useAuthView, useSigningOut } from '@/lib/auth-view';
 import { createFileRoute, Outlet, useRouter } from '@tanstack/react-router';
 import { AppSidebar } from '@/components/app-sidebar';
+import { SearchButton } from '@/components/search-button';
 import { UserMenu } from '@/components/user-menu';
 import { DeviceControl, openDeviceDialog } from '@/components/device-control';
 import { NavigationBar } from '@/components/navigation-bar';
@@ -21,7 +21,6 @@ import { Button } from '@/components/ui/button';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { billingApi } from '@/lib/billing-api';
 import { usePageRestored } from '@/lib/page-restore';
-import { setPaletteOpen } from '@/lib/palette';
 import {
     billingQueryOptions,
     catalogueQueryOptions,
@@ -204,33 +203,21 @@ function AppLayout() {
              * full-bleed and the window scrolls as usual.
              */}
             <SidebarInset className="min-w-0 bg-panel md:my-2.5 md:mr-2.5 md:h-[calc(100svh-1.25rem)] md:overflow-hidden md:rounded-xl md:border md:border-rule">
-                <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center gap-3 bg-panel px-3 sm:px-5 md:px-8">
+                {/*
+                 * Below a desk the sidebar is a rail or a sheet, so a compact bar keeps the menu,
+                 * search and the account menu in reach. On a desk the sidebar's brand line holds
+                 * search and the account menu, and the page's own header starts the sheet.
+                 */}
+                <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-1 bg-panel px-3 sm:px-5 md:px-8 lg:hidden">
                     {/* The sheet on a phone; on a tablet it opens or folds the rail. A desk has the rail's edge and Mod+B. */}
                     <SidebarTrigger
                         aria-label="Menu"
                         size="icon"
-                        className="text-muted-foreground hover:text-foreground lg:hidden"
+                        className="-ml-2 text-muted-foreground hover:text-foreground"
                     />
-                    {/* Search opens the command palette; it reads as a box so people know where to look. */}
-                    <button
-                        type="button"
-                        onClick={() => setPaletteOpen(true)}
-                        aria-label="Search"
-                        aria-keyshortcuts="/ Meta+K Control+K"
-                        className="flex h-10 min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-md bg-muted px-3.5 text-left text-sm text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring md:max-w-110"
-                    >
-                        <SearchIcon aria-hidden="true" className="size-4 shrink-0" />
-                        <span className="flex-1 truncate">
-                            Search<span className="max-sm:hidden"> your files</span>
-                        </span>
-                        <kbd className="text-xs max-md:hidden">/</kbd>
-                    </button>
-                    <div className="flex-1 max-md:hidden" />
-                    <UserMenu user={user} />
-                    <DeviceControl
-                        user={user}
-                        onUnlocked={() => queryClient.invalidateQueries(storageQueryOptions)}
-                    />
+                    <div className="flex-1" />
+                    <SearchButton />
+                    <UserMenu user={user} className="-mr-0.5" />
                 </header>
                 <div
                     data-scroll-restoration-id="app-sheet"
@@ -275,6 +262,8 @@ function AppLayout() {
                             )}
                         </div>
                     )}
+                    {/* On a desk, with no bar above it, room before the page's own header. */}
+                    <div aria-hidden="true" className="hidden h-7 shrink-0 lg:block" />
                     {checkingOut ? (
                         <div className="flex flex-1 items-center justify-center px-5 py-16">
                             <div className="flex flex-col items-center gap-4 text-center">
@@ -295,6 +284,11 @@ function AppLayout() {
             <StorageFullDialog />
             <CollisionDialog />
             <CommandCenter user={user} />
+            {/* The lock and unlock dialogs; the account menu and the palette open them. */}
+            <DeviceControl
+                user={user}
+                onUnlocked={() => queryClient.invalidateQueries(storageQueryOptions)}
+            />
         </SidebarProvider>
     );
 }

@@ -39,17 +39,24 @@ async function noSidewaysScroll(p: Page) {
     expect(overflow, 'page scrolls sideways').toBeLessThanOrEqual(0);
 }
 
-test('the folder view fits the phone: no sideways scroll, one-line toolbar, whole header label', async () => {
+test('the folder view fits the phone: no sideways scroll, one-line toolbar, a compact top bar', async () => {
     await noSidewaysScroll(page);
-    // The header keeps search and the account menu on one line, the search label whole.
+    // The compact top bar keeps the menu, search and the account menu on one line.
+    const menu = page.getByRole('button', { name: 'Menu', exact: true });
     const search = page.getByRole('button', { name: 'Search' });
-    await expect(search).toBeVisible();
-    const clipped = await search.evaluate((el) => {
-        const label = el.querySelector('span');
-        return label ? label.scrollWidth > label.clientWidth + 1 : true;
-    });
-    expect(clipped, 'search label is clipped').toBe(false);
-    await expect(page.getByRole('button', { name: 'Account menu' })).toBeVisible();
+    const account = page.getByRole('button', { name: 'Account menu' });
+    for (const control of [menu, search, account]) await expect(control).toBeVisible();
+    const middles = await Promise.all(
+        [menu, search, account].map(async (control) => {
+            const box = (await control.boundingBox())!;
+            return box.y + box.height / 2;
+        }),
+    );
+    expect(Math.max(...middles) - Math.min(...middles), 'top bar wrapped').toBeLessThanOrEqual(2);
+    await search.click();
+    await expect(page.getByRole('dialog')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog')).toHaveCount(0);
 
     await row(page, 'pixel.png').locator('button').first().click(grip);
     const toolbar = page.locator('[data-selection-bar]');

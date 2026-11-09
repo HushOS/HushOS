@@ -32,7 +32,7 @@ import {
     TextQuoteIcon,
 } from 'lucide-react';
 import { useState } from 'react';
-import { operator, organise, workspace } from '@/components/app-sidebar';
+import { operator, workspace } from '@/components/app-sidebar';
 import { openDeviceDialog } from '@/components/device-control';
 import { Highlight } from '@/components/drive/highlight';
 import { Kbd } from '@/components/drive/hotkey-hints';
@@ -186,7 +186,6 @@ export function CommandCenter({ user }: { user: { id: string; role: string } }) 
 
     const places = [
         ...workspace,
-        ...organise,
         ...account.filter((item) => !item.billing || billing),
         ...(user.role === 'admin' ? operator.filter((item) => !item.billing || billing) : []),
     ];

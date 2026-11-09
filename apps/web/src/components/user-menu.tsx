@@ -12,6 +12,7 @@ import {
     TextQuoteIcon,
     Volume2Icon,
 } from 'lucide-react';
+import { cn } from 'cn';
 import { useState } from 'react';
 import type { NavItem } from '@/components/app-sidebar';
 import { lockDevice, openDeviceDialog } from '@/components/device-control';
@@ -72,11 +73,21 @@ export const account: NavItem[] = [
 ];
 
 /*
- * The account menu, opened from the avatar at the top right: identity, the
- * account's pages, Help, appearance, sounds, lock and sign out. It is the one
- * place preferences live inside the app.
+ * The account menu, opened from the avatar: on a desk at the end of the brand's line in the
+ * sidebar, below that at the right of the compact top bar. Identity, the account's pages, Help,
+ * appearance, sounds, lock and sign out. It is the one place preferences live inside the app.
  */
-export function UserMenu({ user }: { user: { id: string; name: string; email: string } }) {
+export function UserMenu({
+    user,
+    side = 'bottom',
+    align = 'end',
+    className,
+}: {
+    user: { id: string; name: string; email: string };
+    side?: 'bottom' | 'right';
+    align?: 'start' | 'end';
+    className?: string;
+}) {
     const soundsEnabled = useSoundsEnabled();
     const billing = useBillingEnabled();
     const { data: contact } = useQuery(helpContactQueryOptions);
@@ -90,11 +101,14 @@ export function UserMenu({ user }: { user: { id: string; name: string; email: st
                 <DropdownMenuTrigger
                     aria-label="Account menu"
                     title={user.name}
-                    className="grid size-10 shrink-0 cursor-pointer place-items-center rounded-full transition-colors outline-none hover:bg-muted focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring aria-expanded:bg-muted"
+                    className={cn(
+                        'grid size-9 shrink-0 cursor-pointer place-items-center rounded-full transition-colors outline-none hover:bg-muted focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring aria-expanded:bg-muted pointer-coarse:size-11',
+                        className,
+                    )}
                 >
-                    <PersonAvatar name={user.name} seed={user.id} size={32} />
+                    <PersonAvatar name={user.name} seed={user.id} size={28} />
                 </DropdownMenuTrigger>
-                <DropdownMenuContent side="bottom" align="end" sideOffset={6} className="w-66">
+                <DropdownMenuContent side={side} align={align} sideOffset={6} className="w-66">
                     <DropdownMenuGroup>
                         <DropdownMenuLabel className="flex flex-col gap-0.5 px-2 py-2">
                             <span className="truncate text-sm font-semibold text-foreground">

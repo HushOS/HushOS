@@ -12,6 +12,7 @@ import {
 import {
     addContact,
     e2eDatabase,
+    familyItem,
     grip,
     newContext as baseContext,
     newFolder,
@@ -333,10 +334,10 @@ async function colour(p: Page, name: string, swatch: string) {
     await expect(sheet).toHaveCount(0, { timeout: 30_000 });
     await expect(toasts(p)).toHaveCount(0, { timeout: 30_000 });
 }
-/* Opens one of the family's folders from Family folders under My files, drawn and writable. */
+/* Opens one of the family's folders from its item under My files, drawn and writable. */
 async function familyFolder(p: Page, name: string) {
     await p.goto('/app/drive', { waitUntil: 'networkidle' });
-    await p.getByRole('link', { name: 'Family folders', exact: true }).first().click();
+    await familyItem(p).click();
     await expect(p).toHaveURL(/\/app\/s\/[0-9a-f-]+$/);
     const area = p.locator(`[data-area="${name}"]`);
     await expect(area).toHaveAttribute('data-area-write', 'writable', { timeout: 90_000 });
@@ -405,7 +406,7 @@ async function makeFamily(maya: Page, jonas: Page, jonasEmail: string) {
     const done = maya.getByRole('button', { name: 'Done', exact: true });
     if (await done.count()) await done.click();
 
-    await maya.getByRole('link', { name: 'Family folders', exact: true }).first().click();
+    await familyItem(maya).click();
     await expect(maya).toHaveURL(/\/app\/s\/[0-9a-f-]+$/);
     await maya.getByRole('button', { name: 'New family folder' }).click();
     const folder = maya.getByRole('dialog', { name: 'New family folder' });
@@ -539,8 +540,10 @@ async function wideShots(p: Page, suffix: string, scale: Scale) {
     await settle(p);
     await shoot(p, `drive-wide${suffix}`, scale);
 
-    // The family's page, from its name at the head of the sidebar: who is in it, checked.
-    await p.locator('[data-family-header]').click();
+    // The family's page, from Family settings on its folders: who is in it, checked.
+    await familyItem(p).click();
+    await expect(p).toHaveURL(/\/app\/s\/[0-9a-f-]+$/);
+    await p.getByRole('link', { name: 'Family settings', exact: true }).click();
     await expect(p).toHaveURL(/\/app\/family$/);
     await expect(p.getByRole('heading', { level: 1, name: FAMILY })).toBeVisible({
         timeout: 60_000,
@@ -550,7 +553,7 @@ async function wideShots(p: Page, suffix: string, scale: Scale) {
     });
     await settle(p);
     await shoot(p, `family${suffix}`, scale);
-    await p.getByRole('link', { name: 'Family folders', exact: true }).first().click();
+    await familyItem(p).click();
     await expect(p.locator('[data-area="Household"]')).toHaveAttribute(
         'data-area-write',
         'writable',
