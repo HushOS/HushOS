@@ -51,6 +51,8 @@ function wanted(userId: string) {
 export const WEB_PUSH_CHANGED = 'web-push-changed';
 
 function setWanted(userId: string, on: boolean) {
+    // Turned on or off here, from the offer or Account's switch: the person decided, so the offer goes.
+    dismissWebPushAsk(userId);
     try {
         if (on) localStorage.setItem(WEB_PUSH_PREFIX + userId, 'on');
         else localStorage.removeItem(WEB_PUSH_PREFIX + userId);
@@ -86,12 +88,13 @@ export function dismissWebPushAsk(userId: string) {
 
 /*
  * Whether to offer turning notifications on in this browser: a browser that can, whose permission
- * was never decided, not subscribed for this account, on a server with notifications on, and an
+ * isn't blocked, not subscribed for this account, on a server with notifications on, and an
  * offer this account hasn't closed here. Browsers penalise permission prompts no click asked for,
  * so the offer is a line with a button (components/notifications-ask.tsx), never the prompt itself.
  */
 export async function shouldOfferWebPush(userId: string) {
-    if (!webPushSupported() || Notification.permission !== 'default') return false;
+    // Allowed already (for another account, or before a sign-out) is offered too: the offer only turns on from a click.
+    if (!webPushSupported() || Notification.permission === 'denied') return false;
     if (webPushAskDismissed(userId)) return false;
     if (await webPushOn(userId)) return false;
     return (await notificationSettings()) !== null;

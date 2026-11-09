@@ -50,8 +50,8 @@ export function NotificationsAsk({ userId }: { userId: string }) {
             setShown(false);
         } catch (cause) {
             close();
-            // Blocked in the browser's question: the person's own answer, not a failure to report.
-            if (Notification.permission === 'denied') return;
+            // The browser's question blocked or closed: the person's own answer, not a failure to report.
+            if (Notification.permission !== 'granted') return;
             toast.add({
                 type: 'error',
                 title: 'Notifications didn’t turn on',

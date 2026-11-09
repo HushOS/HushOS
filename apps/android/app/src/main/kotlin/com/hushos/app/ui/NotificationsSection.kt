@@ -108,7 +108,7 @@ fun NotificationsSection() {
         val target = relay ?: return
         if (busy) return
         // The person decided here: asking by itself never turns it back on (PushAsk).
-        scope.launch(Dispatchers.IO) { Shared.session(context)?.let { PushAsk.markAsked(context, it) } }
+        scope.launch(Dispatchers.IO) { Shared.session(context)?.let { PushAsk.Record(context).decided(it) } }
         busy = true
         problem = null
         phone = on
@@ -178,31 +178,42 @@ private fun SwitchRow(title: String, detail: String, checked: Boolean, enabled: 
 /*
  * Asking once for notifications (data/PushAsk.kt), from the main screen: for the account signed in, once this screen has
  * settled and has the focus. A sheet or a dialog is a window of its own that takes the focus, so nothing is asked while
- * the person is using one; the question waits until it closes. On Android 13 and later the system's question; if
- * allowed (or allowed before, or before Android 13), the switch's own turn-on, quietly.
+ * the person is using one. The server's settings are read first, changing nothing; the focus, the account and the mark
+ * are checked again after, and the mark is set right before the question, on the main thread, so a focus lost during
+ * the read (which cancels this) never leaves an account marked with nothing asked. The relay waiting for the answer is
+ * kept across a rotation; an answer that finds none leaves a retry for the next start.
  */
 @Composable
 fun AskForNotifications(userId: String?, focused: Boolean) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var waiting by remember { mutableStateOf<String?>(null) }
+    var waiting by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        val relay = waiting ?: return@rememberLauncherForActivityResult
+        val relay = waiting
         waiting = null
-        if (granted) scope.launch(Dispatchers.IO) { PushAsk.register(context, relay) }
+        if (!granted) return@rememberLauncherForActivityResult
+        scope.launch(Dispatchers.IO) {
+            val session = Shared.session(context) ?: return@launch
+            if (relay != null) PushAsk.register(context, session, relay)
+            // The relay was lost with the screen: the yes is kept, and the next start registers.
+            else PushAsk.Record(context).set(session, PushAsk.Mark.RETRY, PushAsk.Mark.ASKED)
+        }
     }
     LaunchedEffect(userId, focused) {
         if (userId == null || !focused) return@LaunchedEffect
-        // Settled: a moment on screen with the focus; losing it starts the wait again.
+        // Settled: a moment on screen with the focus; losing it cancels this and starts the wait again.
         kotlinx.coroutines.delay(1_500)
-        val decision = withContext(Dispatchers.IO) { runCatching { PushAsk.decide(context) }.getOrNull() } ?: return@LaunchedEffect
-        val relay = decision.relay ?: return@LaunchedEffect
-        when (decision.step) {
+        val reading = withContext(Dispatchers.IO) { runCatching { PushAsk.read(context) }.getOrNull() } ?: return@LaunchedEffect
+        // Back on the main thread with the focus still here (losing it would have cancelled this), for the same account.
+        if (Shared.session(context) != reading.session) return@LaunchedEffect
+        val step = PushAsk.step(available = true, registered = false, mark = reading.mark, relay = reading.relay, permission = PushAsk.permission(context))
+        if (step == PushAsk.Step.NOTHING || !PushAsk.Record(context).set(reading.session, PushAsk.Mark.ASKED, reading.mark)) return@LaunchedEffect
+        when (step) {
             PushAsk.Step.ASK -> {
-                waiting = relay
+                waiting = reading.relay
                 permission.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
-            PushAsk.Step.REGISTER -> withContext(Dispatchers.IO) { PushAsk.register(context, relay) }
+            PushAsk.Step.REGISTER -> scope.launch(Dispatchers.IO) { PushAsk.register(context, reading.session, reading.relay) }
             PushAsk.Step.NOTHING, PushAsk.Step.MARK_ONLY -> {}
         }
     }

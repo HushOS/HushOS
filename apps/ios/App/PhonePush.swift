@@ -24,7 +24,6 @@ final class PhonePush {
     /* Which request a timeout belongs to: an earlier one's never fails a later request. */
     @ObservationIgnored private var round = 0
     @ObservationIgnored private var catchingUp = false
-    @ObservationIgnored private var asking = false
     /* Moves when the asking turned notifications on, so Account's switch reads again. */
     var changed = 0
 
@@ -141,37 +140,54 @@ final class PhonePush {
 
     /*
      * Asks once, on the drive's screen (MainView): right after a sign-in or sign-up, and at the
-     * first signed-in start of a build that asks. Waits until the screen settles and nothing the
-     * person is using (a sheet, a dialog, an alert) is up, and for the app to be in front. Then,
+     * first signed-in start of a build that asks. Waits until the app is in front and nothing the
+     * person is using (a sheet, a dialog, an alert) is up, and checks that again, for the same
+     * account, right before anything is asked: the server's settings are read in between. Then,
      * as PushAsk.step says: iOS's question (registering as the switch does if allowed), a
-     * registration at once (allowed before), or only the record (declined before). Written before
-     * the question, so it is never asked again by itself, whatever the answer.
+     * registration a failed yes left for this start, or only the mark. The mark is set before the
+     * question, and only if nothing (the switch, another run) changed it since it was read.
      */
     func askOnce() async {
-        guard !asking else { return }
-        asking = true
-        defer { asking = false }
         try? await Task.sleep(for: .seconds(1.5))
+        guard await settled(), let session = SharedKeychain.session, PushNotifications.available else { return }
+        let record = PushAsk.Record.shared
+        if PushNotifications.registration?.belongs(to: session) == true { return }
+        let before = record.mark(session)
+        guard before != .asked, before != .decided,
+              let state = try? await PushNotifications.serverState(), let relay = state.relay else { return }
+        guard await settled(), SharedKeychain.session == session else { return }
+        let mark = record.mark(session)
+        let step = PushAsk.step(available: true, registered: PushNotifications.registration?.belongs(to: session) == true,
+                                mark: mark, relay: relay, permission: await Self.permission)
+        guard step != .nothing, record.set(session, to: .asked, ifStill: mark) else { return }
+        guard step == .ask || step == .register else { return }
+        do {
+            // The switch's own turn-on: iOS's question when undecided, the token, the relay, the server.
+            try await turnOn(relay: relay)
+            changed += 1
+        } catch {
+            // A yes whose registration failed is made at the next start; a no stays asked.
+            if await Self.permission == .allowed { record.set(session, to: .retry, ifStill: .asked) }
+        }
+    }
+
+    /* What iOS says now, as far as asking goes. */
+    private static var permission: PushAsk.Permission {
+        get async {
+            switch await UNUserNotificationCenter.current().notificationSettings().authorizationStatus {
+            case .notDetermined: .undecided
+            case .denied: .denied
+            default: .allowed
+            }
+        }
+    }
+
+    /* Waits until the app is in front with nothing presented over it; false once the wait is cancelled. */
+    private func settled() async -> Bool {
         while !Task.isCancelled, UIApplication.shared.applicationState != .active || Self.somethingPresented {
             try? await Task.sleep(for: .seconds(2))
         }
-        guard !Task.isCancelled, let session = SharedKeychain.session else { return }
-        let registered = PushNotifications.registration?.belongs(to: session) == true
-        guard PushNotifications.available, !registered, !PushAsk.asked(session),
-              let state = try? await PushNotifications.serverState(), SharedKeychain.session == session else { return }
-        let permission: PushAsk.Permission
-        switch await UNUserNotificationCenter.current().notificationSettings().authorizationStatus {
-        case .notDetermined: permission = .undecided
-        case .denied: permission = .denied
-        default: permission = .allowed
-        }
-        let step = PushAsk.step(available: true, registered: registered, asked: false, relay: state.relay, permission: permission)
-        guard step != .nothing, let relay = state.relay else { return }
-        PushAsk.markAsked(session)
-        guard step == .ask || step == .register else { return }
-        // The switch's own turn-on: iOS's question when undecided, the token, the relay, the server. A no ends it quietly.
-        guard (try? await turnOn(relay: relay)) != nil else { return }
-        changed += 1
+        return !Task.isCancelled
     }
 
     /* A sheet, dialog or alert over the app's window: the person is using it, so nothing is asked now. */
@@ -227,7 +243,7 @@ final class NotificationSettings {
     func setPhone(_ on: Bool) async {
         guard !busy, let relay else { return }
         // The person decided here: asking by itself never turns it back on (PushAsk).
-        if let session = SharedKeychain.session { PushAsk.markAsked(session) }
+        if let session = SharedKeychain.session { PushAsk.Record.shared.decided(session) }
         busy = true
         problem = nil
         phone = on

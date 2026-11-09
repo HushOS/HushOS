@@ -3,26 +3,38 @@ package com.hushos.app.data
 import android.content.Context
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 
 /*
  * Asking once (docs/devices-design.md 5, Settings): right after a sign-in or sign-up, or at the first signed-in start of
  * a build that asks, on a server with notifications and a relay this app can use, the app asks for POST_NOTIFICATIONS
- * (Android 13 and later; older Android has nothing to ask) and, if allowed, turns "On this phone" on as the switch does.
+ * (Android 13 and later) and, if allowed, turns "On this phone" on as the switch does. Only Android's own question turns
+ * them on: where notifications are allowed already (before Android 13, or allowed for the switch and switched off since),
+ * the app can't tell a yes from an earlier "off", so it registers nothing and Account's switch stays the way.
+ *
  * Once per account on a server: the record is `push-asked.json` in the app's files, wiped with the account's data
- * (AccountStore), and written before the question, so a question the person dismissed, or an app stopped mid-question,
- * is never asked again by itself. The Account switch marks it too, so a person who turned notifications off there never
- * has them turned back on.
+ * (AccountStore), and marked before the question, so a question the person dismissed, or an app stopped mid-question, is
+ * never asked again by itself.
  */
 object PushAsk {
     const val FILE = "push-asked.json"
+
+    /* What the record says of an account on a server. None: nothing was asked yet. */
+    enum class Mark {
+        /* The app asked, or is about to: never again by itself. */
+        ASKED,
+        /* The person allowed it, but the registration didn't go through: made at the next start, with no question. */
+        RETRY,
+        /* The person used Account's switch: the app never asks or registers by itself after that. */
+        DECIDED,
+    }
 
     /* What Android says of HushOS's notifications, as far as asking goes. */
     enum class Permission {
         /* Android 13 and later, not granted: its question is asked (it answers at once, with no screen, when the person said no for good). */
         UNDECIDED,
-        /* Granted, or notifications on before Android 13: registered at once, with no question. */
+        /* Granted, or notifications on before Android 13. */
         ALLOWED,
         /* Before Android 13, notifications turned off for HushOS in Settings: there is no question to ask. */
         DENIED,
@@ -32,60 +44,93 @@ object PushAsk {
 
     /*
      * The one decision. Nothing while this build has no notifications, this phone already has a registration for the
-     * account, it was asked before, or the server has no relay this app can use (asked once it has one: nothing was
-     * asked yet).
+     * account, the server has no relay this app can use (asked once it has one: nothing was asked yet), or the record
+     * says asked or decided.
      */
-    fun step(available: Boolean, registered: Boolean, asked: Boolean, relay: String?, permission: Permission): Step = when {
-        !available || registered || asked || relay == null -> Step.NOTHING
+    fun step(available: Boolean, registered: Boolean, mark: Mark?, relay: String?, permission: Permission): Step = when {
+        !available || registered || relay == null -> Step.NOTHING
+        mark == Mark.ASKED || mark == Mark.DECIDED -> Step.NOTHING
+        mark == Mark.RETRY -> if (permission == Permission.ALLOWED) Step.REGISTER else Step.MARK_ONLY
         permission == Permission.UNDECIDED -> Step.ASK
-        permission == Permission.ALLOWED -> Step.REGISTER
         else -> Step.MARK_ONLY
     }
 
     private fun key(session: Shared.Session) = session.origin + "\n" + session.userId.lowercase()
 
-    @Synchronized
-    fun asked(context: Context, session: Shared.Session): Boolean = key(session) in read(context)
+    /*
+     * The record, one file of marks by server and account. Every change is a compare-and-set under one lock, so the
+     * app's own asking and Account's switch never overwrite each other's answer.
+     */
+    class Record(private val file: File) {
+        constructor(context: Context) : this(File(context.filesDir, FILE))
 
-    @Synchronized
-    fun markAsked(context: Context, session: Shared.Session) {
-        val asked = read(context)
-        if (key(session) in asked) return
-        runCatching { File(context.filesDir, FILE).writeText(JSONArray(asked + key(session)).toString()) }
+        fun mark(session: Shared.Session): Mark? = synchronized(LOCK) { read()[key(session)] }
+
+        /* Sets [mark] only while the account's mark is still [expected]; true when it did. */
+        fun set(session: Shared.Session, mark: Mark, expected: Mark?): Boolean = synchronized(LOCK) {
+            val marks = read()
+            if (marks[key(session)] != expected) return false
+            write(marks + (key(session) to mark))
+            true
+        }
+
+        /* Account's switch, either way: the person decided, so the app does nothing by itself again. */
+        fun decided(session: Shared.Session) = synchronized(LOCK) { write(read() + (key(session) to Mark.DECIDED)) }
+
+        private fun read(): Map<String, Mark> = runCatching {
+            val json = JSONObject(file.readText())
+            json.keys().asSequence().mapNotNull { name -> runCatching { name to Mark.valueOf(json.getString(name)) }.getOrNull() }.toMap()
+        }.getOrDefault(emptyMap())
+
+        private fun write(marks: Map<String, Mark>) {
+            runCatching {
+                file.parentFile?.mkdirs()
+                val temporary = File(file.parentFile, "$FILE.tmp")
+                temporary.writeText(JSONObject(marks.mapValues { it.value.name }).toString())
+                if (!temporary.renameTo(file)) temporary.delete()
+            }
+        }
+
+        private companion object {
+            val LOCK = Any()
+        }
     }
-
-    private fun read(context: Context): List<String> = runCatching {
-        JSONArray(File(context.filesDir, FILE).readText()).let { list -> (0 until list.length()).map { list.getString(it) } }
-    }.getOrDefault(emptyList())
 
     /* Moves when the asking turned notifications on, so Account's switch reads again. */
     private val moved = MutableStateFlow(0)
     val changed: StateFlow<Int> = moved
 
-    data class Decision(val step: Step, val relay: String?)
+    /* What was read before deciding: the account, its mark then, and the server's relay. */
+    data class Reading(val session: Shared.Session, val mark: Mark?, val relay: String)
 
     /*
-     * Decides for the account signed in and, for any step but nothing, marks it asked before anything is asked. Blocking
-     * (it reads the server's settings).
+     * Reads, changing nothing: the account signed in, its mark, and the relay the server names. Null when there is nothing
+     * to do (no notifications in this build, a registration already, asked or decided, no usable relay, the account
+     * changed meanwhile). Blocking (it reads the server's settings).
      */
-    fun decide(context: Context): Decision {
-        val session = Shared.session(context) ?: return Decision(Step.NOTHING, null)
-        val registered = PushNotifications.registration(context)?.belongsTo(session) == true
-        if (!PushTokens.configured || registered || asked(context, session)) return Decision(Step.NOTHING, null)
-        val relay = runCatching { PushNotifications.serverState(context)?.relay }.getOrNull()
-        if (Shared.session(context) != session) return Decision(Step.NOTHING, null)
-        val permission = when {
-            PushTokens.allowed(context) -> Permission.ALLOWED
-            android.os.Build.VERSION.SDK_INT >= 33 -> Permission.UNDECIDED
-            else -> Permission.DENIED
-        }
-        val step = step(available = true, registered = false, asked = false, relay = relay, permission = permission)
-        if (step != Step.NOTHING) markAsked(context, session)
-        return Decision(step, relay)
+    fun read(context: Context): Reading? {
+        val session = Shared.session(context) ?: return null
+        if (!PushTokens.configured || PushNotifications.registration(context)?.belongsTo(session) == true) return null
+        val mark = Record(context).mark(session)
+        if (mark == Mark.ASKED || mark == Mark.DECIDED) return null
+        val relay = runCatching { PushNotifications.serverState(context)?.relay }.getOrNull() ?: return null
+        if (Shared.session(context) != session) return null
+        return Reading(session, mark, relay)
     }
 
-    /* Registers as the switch's turn-on does, quietly: a failure leaves the switch off, to be turned on in Account. Blocking. */
-    fun register(context: Context, relay: String) {
-        runCatching { PushNotifications.register(context, PushTokens.token(context), relay) }.onSuccess { moved.value++ }
+    fun permission(context: Context): Permission = when {
+        PushTokens.allowed(context) -> Permission.ALLOWED
+        android.os.Build.VERSION.SDK_INT >= 33 -> Permission.UNDECIDED
+        else -> Permission.DENIED
+    }
+
+    /*
+     * Registers as the switch's turn-on does, quietly. A failure while notifications are allowed leaves a retry for the
+     * next start, unless the switch decided meanwhile. Blocking.
+     */
+    fun register(context: Context, session: Shared.Session, relay: String) {
+        runCatching { PushNotifications.register(context, PushTokens.token(context), relay) }
+            .onSuccess { moved.value++ }
+            .onFailure { if (PushTokens.allowed(context)) Record(context).set(session, Mark.RETRY, Mark.ASKED) }
     }
 }
