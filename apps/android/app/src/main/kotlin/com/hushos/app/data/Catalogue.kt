@@ -245,7 +245,9 @@ fun Vault.catalogueChildren(folderId: String): List<Opened>? {
     val ws = workspaceId
     // Only this workspace's own folder: an id-only lookup could have found a share's node by the same id.
     nodes.row(ws, folderId) ?: return null
-    return catalogueChildren[folderId].orEmpty().mapNotNull { nodes.row(ws, it) }.filter { it.node.trashedAt == null }
+    // Only what still lives here: an id filed under a folder it has since left is not listed in it.
+    return catalogueChildren[folderId].orEmpty().mapNotNull { nodes.row(ws, it) }
+        .filter { it.node.trashedAt == null && it.node.parentId.equals(folderId, ignoreCase = true) }
         .sortedWith(compareBy<Opened> { !it.isFolder }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.name })
 }
 

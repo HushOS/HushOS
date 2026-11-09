@@ -1256,6 +1256,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
     /* A node whose key this device made or already held (a write), kept under its own workspace. */
     private fun adopt(node: NodeView, key: ByteArray, metadata: NodeMetadata): Opened {
         checkSuite(node.envelopeSuite)
+        // Where the row was before this answer, read before it is replaced: afterwards the row already names the new folder.
+        val previous = nodes.row(node.workspaceId, node.id)?.node?.parentId
         val result = openedRow(node, metadata, key)
         // A write's answer into a folder proven a family's is kept only when the write decided at its entry to write as
         // the family's (its key the ledger's): then as the ledger's own row. One begun on another path is not kept: the
@@ -1280,7 +1282,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
         }
         newer?.let { return it }
         if (!kept) return result
-        fileWritten(node)
+        fileWritten(node, previous)
         node.parentId?.let { rememberParent(node.id, it) }
         return result
     }
@@ -1303,10 +1305,10 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * A write's row filed in this vault's catalogue at once (out of the folder it left, into the one it is in), so a
      * listing asked for right after the write, as Files asks once told, has it before the feed brings it.
      */
-    private fun fileWritten(node: NodeView) {
+    private fun fileWritten(node: NodeView, previous: String?) {
         if (catalogueState != CatalogueState.READY || node.workspaceId != workspace?.workspaceId) return
         val parent = node.parentId ?: return
-        nodes.row(node.workspaceId, node.id)?.node?.parentId?.let { old -> if (old != parent) catalogueChildren[old]?.remove(node.id) }
+        if (previous != null && previous != parent) catalogueChildren[previous]?.remove(node.id)
         catalogueChildren.getOrPut(parent) { ConcurrentHashMap.newKeySet() }.add(node.id)
     }
 
