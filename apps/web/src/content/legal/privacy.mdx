@@ -1,6 +1,6 @@
 ---
 title: Privacy Policy
-updated: 2026-11-06
+updated: 2026-11-09
 summary: HushOS is designed so the Service holds as little about you as it can. This page lists exactly what is stored, what is never stored, and how long it is kept.
 ---
 
@@ -27,6 +27,10 @@ does not receive any data from instances it does not run.
             'Your account key wrapped by your password and by your recovery phrase, plus wrapped identity keys',
         ],
         ['Workspace', 'Your workspace, its storage allowance, and usage counters'],
+        [
+            'Notifications',
+            'If you turn them on for a device: its push relay handle or its browser’s push subscription; each event a notification is about (its kind and the IDs it concerns, such as who shared and which family), kept for 30 days; and whether you want notices about shares and families',
+        ],
         [
             'Drive',
             'The shape of your folder tree (ids, parents, times, and which account wrote each change) and encrypted names and contents the Service cannot read; each upload’s encrypted chunks in object storage. Contents are padded before encryption, so the stored size tells the Service a file’s size only roughly: anything under 256 bytes is stored as 256, and otherwise at most 6.25% is added, which leaves a file’s size known to within about 2 KiB around 50 KB, 32 KiB around 1 MB, 2 MiB around 100 MB and 32 MiB around 1 GB',
@@ -77,7 +81,16 @@ The Service sets a session cookie so you stay signed in, a preference cookie for
 
 The apps keep on your phone what they need to work: your session, the key that unlocks your account on this phone (in the system keychain), a copy of your folder list as the Service sends it, which stays encrypted, files you opened recently, your recent searches, and any files or folders you choose to keep on the phone. Files you open or keep are stored decrypted in the app's private storage, so they open without a connection. All of it is removed when you sign out, delete your account, or another account signs in on the phone.
 
-The apps contain no analytics, advertising, or third-party tracking. They use the camera only when you take a photo, scan a document or scan your recovery kit, and your photo library only when you choose photos to upload or save one. On Android, Scan document opens Google's document scanner, which Google Play services runs on the phone: the pages it captures come back to HushOS as a PDF and are encrypted before they leave the phone, like any upload. The scanner's code in the app would report usage to Google; HushOS switches that off, so the app sends Google nothing. Google Play services itself is Google's software and works under Google's privacy policy. Transfer notifications and the iPhone's Live Activity are made on the phone itself; nothing is sent through a push service. Saving to HushOS from another app's share sheet uploads the file the same way as in the app, locked on your phone first.
+The apps contain no analytics, advertising, or third-party tracking. They use the camera only when you take a photo, scan a document or scan your recovery kit, and your photo library only when you choose photos to upload or save one. On Android, Scan document opens Google's document scanner, which Google Play services runs on the phone: the pages it captures come back to HushOS as a PDF and are encrypted before they leave the phone, like any upload. The scanner's code in the app would report usage to Google; HushOS switches that off, so the app sends Google nothing. Google Play services itself is Google's software and works under Google's privacy policy. Transfer notifications and the iPhone's Live Activity are made on the phone itself. Saving to HushOS from another app's share sheet uploads the file the same way as in the app, locked on your phone first.
+
+### Notifications
+
+Notifications on a phone or in a browser are off until you turn them on in Account, under Notifications. They never say what happened on the way: the Service records each event (a new sign-in, a device removed, something shared with you, a family invitation, someone waiting to join your family) and sends only a random ID, and your device fetches the event from the Service over its own signed-in connection and writes the notification itself. A notice about something shared names the person only if you checked them in your contacts; otherwise it says "Someone".
+
+- **On a phone,** the app gets a push token from Apple (on iPhone) or from Google's Firebase Cloud Messaging (on Android, which also makes a Firebase installation ID), and sends it to HushOS's push relay at push.hushos.com, which gives back a random handle. Only the handle goes to the Service. The relay keeps the token and a scrambled form of the handle, never your account or anything about what happened, until you turn notifications off for that phone, sign out, the phone is removed from your account, or Apple or Google say the token no longer works; if the relay can't be reached then, the app asks again each time it starts. So that a notification can name someone you checked, the iPhone app keeps those contacts' names in the phone's keychain while notifications are on, and removes them when you sign out.
+- **In a browser,** the Service sends the event ID, encrypted to your browser, through your browser's own push service (Google's, Mozilla's, Apple's or Microsoft's).
+- **On an Android lock screen,** a notification shows "New activity in HushOS" in place of its words only when your phone's lock-screen setting hides sensitive content; many phones show the words by default. On an iPhone, the words show only once it is unlocked, unless you changed Show Previews.
+- **Who learns what.** Apple, Google, the browser's push service and the relay learn that your device received a push at a certain time, and not what it was about; Apple and Google also see a code that stays the same for each HushOS account on the phone, so they can tell how many accounts it gets pushes for. Once written, a notification sits in your device's notification history, and on Android any app you have given notification access can read it.
 
 ## 5. Email
 
@@ -113,6 +126,7 @@ Anyone who can see an item through a share or a link can report it. When they do
 - Server logs are rotated on a short schedule set by the Operator.
 - Files you delete go to the trash and are purged after 30 days, or at once if you delete them forever; a replaced version is kept for 30 days. Encrypted bytes named by an open report are kept until it is closed.
 - Stopped shares and links are removed at once; link use counts go with them.
+- Notification events are removed after 30 days. A device’s push registration is removed when you turn notifications off for it, sign out of it, or remove it.
 - Report records are kept while the report is open or on hold, and after that for as long as the Operator's obligations require; evidence copies follow the retention set on the evidence store.
 - A family invitation’s email address is forgotten 30 days after the invitation stops being open (accepted, cancelled, or expired).
 - A family’s signed member lists and key changes are kept with the family, because they are the history every member’s device checks the family against. A family is dissolved when its last member leaves it or deletes their account. 30 days later its folders and everything in them are deleted, and then its member lists, key changes, memberships and invitations. A folder a report still holds waits until the report releases it, and the family’s records wait with it; if the family’s plan is still running, the Service cancels it so that it ends with the period already paid for, without a refund, and the records wait until it has ended. The family’s billing records are kept for accounting.

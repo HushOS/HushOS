@@ -255,7 +255,9 @@ private fun Main(model: DriveViewModel, state: DriveState) {
             // These are taken (and cleared) by the screen they open: the link browser, a folder, By me, Trash.
             request.startsWith("link:") || request.startsWith("shared:") -> tab = Tab.SHARED
             request.startsWith("files:") -> tab = Tab.FILES
-            request == "trash" || request == "words" || request.startsWith("family:") -> tab = Tab.ACCOUNT
+            request == "trash" || request == "words" || request.startsWith("family:") || request == "devices" -> tab = Tab.ACCOUNT
+            // A tapped families notice: Account, where the families are listed.
+            request == "families" -> { tab = Tab.ACCOUNT; model.clearRequest() }
             request.startsWith("node:") -> scope.launch {
                 // A file or a folder, whichever it is: a folder opens, a file opens in its folder.
                 model.clearRequest()

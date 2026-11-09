@@ -160,7 +160,10 @@ async function noticeFor(id: string): Promise<Notice | null> {
         case 'devices-removed':
             return {
                 title: 'Devices removed',
-                body: `${notification.data.count} devices were removed from your account.`,
+                body:
+                    notification.data.count === 1
+                        ? '1 device was removed from your account.'
+                        : `${notification.data.count} devices were removed from your account.`,
                 url: '/app/account#devices',
             };
         case 'password-attempts':

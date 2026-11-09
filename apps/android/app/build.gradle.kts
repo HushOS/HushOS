@@ -46,6 +46,43 @@ val uploadKey: Map<String, String>? = run {
 }
 
 /*
+ * Firebase Cloud Messaging, for phone notifications (docs/push-relay-plan.md, PR 4). The Firebase app's project id,
+ * app id, API key and sender id are configuration, not secrets (Google's own google-services.json carries them in the
+ * clear), but they name HushOS's Firebase project, so they come from Gradle properties rather than the repository:
+ * -Phushos.firebase.projectId=… (or ~/.gradle/gradle.properties, or HUSHOS_FIREBASE_PROJECT_ID and so on). A build
+ * without all four has no phone notifications, and nothing of Firebase runs.
+ */
+fun firebase(name: String, variable: String): String =
+    ((project.findProperty("hushos.firebase.$name") as String?) ?: providers.environmentVariable(variable).orNull ?: "").trim()
+
+val firebaseOptions = mapOf(
+    "FIREBASE_PROJECT_ID" to firebase("projectId", "HUSHOS_FIREBASE_PROJECT_ID"),
+    "FIREBASE_APP_ID" to firebase("appId", "HUSHOS_FIREBASE_APP_ID"),
+    "FIREBASE_API_KEY" to firebase("apiKey", "HUSHOS_FIREBASE_API_KEY"),
+    "FIREBASE_SENDER_ID" to firebase("senderId", "HUSHOS_FIREBASE_SENDER_ID"),
+)
+val firebaseMissing: List<String> = firebaseOptions.filterValues { it.isEmpty() }.keys.map {
+    "hushos.firebase." + it.removePrefix("FIREBASE_").lowercase().split('_')
+        .mapIndexed { i, part -> if (i == 0) part else part.replaceFirstChar(Char::uppercase) }.joinToString("")
+}
+val firebaseRefusal = "A release build needs phone notifications: set ${firebaseMissing.joinToString(", ")} " +
+    "(Gradle properties, or the HUSHOS_FIREBASE_* variables; docs/push-relay-plan.md, owner checklist)."
+
+/*
+ * Release builds go to people, so one without Firebase fails: at configuration when a release task is asked for by name
+ * (before anything compiles), and by `requireFirebase` ahead of the release tasks for any other way in. Debug builds stay
+ * push-less without it.
+ */
+val askedForRelease = gradle.startParameter.taskNames.any { it.substringAfterLast(':') in setOf("assembleRelease", "bundleRelease") }
+if (askedForRelease && firebaseMissing.isNotEmpty()) throw GradleException(firebaseRefusal)
+val requireFirebase = tasks.register("requireFirebase") {
+    val missing = firebaseMissing
+    val refusal = firebaseRefusal
+    doLast { if (missing.isNotEmpty()) throw GradleException(refusal) }
+}
+tasks.matching { it.name == "preReleaseBuild" }.configureEach { dependsOn(requireFirebase) }
+
+/*
  * The build number (versionCode): -PbuildNumber, which scripts/bundle-release.sh takes from
  * scripts/build-number.sh (the commit count on main, which only grows), or the same count here
  * for builds that pass nothing, such as Android Studio's. A checkout without git history says 1.
@@ -70,6 +107,9 @@ android {
         versionCode = buildNumber
         // The product version (the root package.json): the release pull request sets it.
         versionName = "1.3.0" // x-release-please-version
+        for ((field, value) in firebaseOptions) buildConfigField("String", field, "\"${value.replace("\"", "")}\"")
+        // Read by check-bundle.sh: a bundle for Play must carry notifications.
+        manifestPlaceholders["pushConfigured"] = (firebaseMissing.isEmpty()).toString()
     }
 
     signingConfigs {
@@ -156,6 +196,10 @@ dependencies {
     implementation(libs.androidx.camera.view)
     // Scan document: Google's scanner, run by Play services on the phone (edges, cleanup, pages), handing back a PDF.
     implementation(libs.mlkit.document.scanner)
+    // Phone notifications: FCM data messages only, set up from BuildConfig (PushTokens), no Google Services plugin.
+    implementation(libs.firebase.messaging)
+    // getToken's Task, which firebase-messaging needs at run time only.
+    implementation(libs.play.services.tasks)
     // The Markdown viewer: CommonMark and GitHub's tables, task lists, strikethrough and autolinks, as the web parses them.
     implementation(libs.commonmark)
     implementation(libs.commonmark.tables)

@@ -502,6 +502,8 @@ extension Vault {
         let kept = try await marks.raise(userId: session.userId, to: RollbackMarks(settings: reply.version, settingsDocument: document, identity: 0, identityVersion: 0), keys: marksKeys(served: reply.key))
         try SettingsMarks.check(kept, served: reply.version, document: document)
         lastPins = settings.contacts
+        // The names a push's notice may give a sharer, for the Notification Service Extension (PushContactNames).
+        PushContactNames.remember(settings.contacts.values, session: session)
         // The area ledger takes the families' marks from every settings read, as the web's worker does.
         try? useForFamilies(settings)
         return settings

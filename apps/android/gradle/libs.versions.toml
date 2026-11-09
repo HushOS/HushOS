@@ -22,6 +22,8 @@ documentfile = "1.1.0"
 zxing = "3.5.4"
 camerax = "1.6.2"
 mlkitDocumentScanner = "16.0.0"
+firebaseMessaging = "26.0.1"
+playServicesTasks = "18.4.0"
 commonmark = "0.32.0"
 browser = "1.10.0"
 orgJson = "20260814"
@@ -69,6 +71,8 @@ commonmark-tasks = { group = "org.commonmark", name = "commonmark-ext-task-list-
 commonmark-strikethrough = { group = "org.commonmark", name = "commonmark-ext-gfm-strikethrough", version.ref = "commonmark" }
 commonmark-autolink = { group = "org.commonmark", name = "commonmark-ext-autolink", version.ref = "commonmark" }
 mlkit-document-scanner = { group = "com.google.android.gms", name = "play-services-mlkit-document-scanner", version.ref = "mlkitDocumentScanner" }
+firebase-messaging = { group = "com.google.firebase", name = "firebase-messaging", version.ref = "firebaseMessaging" }
+play-services-tasks = { group = "com.google.android.gms", name = "play-services-tasks", version.ref = "playServicesTasks" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

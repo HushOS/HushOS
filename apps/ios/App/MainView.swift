@@ -141,6 +141,16 @@ struct MainView: View {
                     case .phone: tab = .home
                     }
                 }
+                // A tapped notice: Shared for a share, Account for devices (pushed there) and families, else as it was.
+                .onChange(of: PhonePush.shared.opening, initial: true) { _, target in
+                    switch target {
+                    case .shared: PhonePush.shared.opening = nil; store.route = .shared(byMe: false)
+                    case .devices: tab = .account
+                    case .families: PhonePush.shared.opening = nil; tab = .account
+                    case .app: PhonePush.shared.opening = nil
+                    case nil: break
+                    }
+                }
                 // A Home Screen quick action (signed out, it waited for sign-in): Search, or the + menu's
                 // action in the folder last added to, or Files when that folder is gone.
                 .onChange(of: QuickActions.shared.pending, initial: true) { _, action in

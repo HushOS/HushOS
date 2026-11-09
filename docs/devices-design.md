@@ -275,7 +275,7 @@ The relay learns that a handle got a ping from some server address at some time,
 
 **Web Push needs no relay:** browsers' push services accept pushes from any server holding VAPID keys. Each server makes its VAPID key pair at first start (`server_secrets`).
 
-**Self-hosting:** `PUSH_RELAY_URL` (default `https://push.hushos.com`; empty turns app pushes off, leaving notifications for when the app is open). `docs/self-hosting.md` says what the relay sees, and that a server can locate a device by pinging it (section 7).
+**Self-hosting:** `PUSH_RELAY_URL` (default `https://push.hushos.com`; empty turns app pushes off, and the apps then hide their notification settings, since nothing would reach them). `docs/self-hosting.md` says what the relay sees, and that a server can locate a device by pinging it (section 7).
 
 ### Settings
 
@@ -331,7 +331,7 @@ Base64url without padding; ids lowercase UUIDs.
 | `PUT /api/notifications/registration`           | `{ kind: 'relay', handle }` or `{ kind: 'webpush', subscription }`                                              | Per device                                                                                                       |
 | `GET /api/notifications`                        | → `{ notifications: [{ id, kind, createdAt, data }], more }`                                                    | Every event this device has not been handed yet, oldest first, 100 at a time                                     |
 | `GET /api/notifications/:id`                    | → `{ notification: { id, kind, createdAt, data } }`                                                             | Only to the account it is for; `data` holds ids (share, group, invitation) and what the server already knows     |
-| `GET`/`PUT /api/notifications/settings`         | `{ shared, family }`                                                                                            | Security events and guardian activity are not settings                                                           |
+| `GET`/`PUT /api/notifications/settings`         | `{ shared, family }` → `{ settings: { shared, family }, relay }`                                                | Security events and guardian activity are not settings. `relay` is `PUSH_RELAY_URL`, null when empty             |
 | `PATCH /api/groups/:id/policies`                | `{ deviceApproval: { level } }`                                                                                 | Guardians for child accounts; company admins later                                                               |
 
 Under Keys need a device, every route that writes a password envelope (password change, phrase reset, `/auth/security/finish`, conversion) is refused with 409 `keys-need-a-device` if it carries one. Start over with new keys uses the conversion's switch and rotation routes (`docs/groups-design.md` 4) with a full session on an approved device and the password, and no hold.

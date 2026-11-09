@@ -9,6 +9,9 @@ class HushOSApplication : Application() {
         super.onCreate()
         // Whether a HushOS screen is showing: finished transfers are notified only when none is.
         TransferNotices.watch(this)
+        // Phone notifications: Firebase set up from the build's own options (none in a build without them), before
+        // FCM's service can run in this process.
+        com.hushos.app.data.PushTokens.app(this)
         // A recovery the app was stopped in the middle of: a picker's sign-in waits until its new words are confirmed.
         com.hushos.app.data.RecoveryWords.load(this)
         // Every start of the process (the app, a queued job, the Files app's provider): plaintext copies older than a day go.
@@ -24,6 +27,8 @@ class HushOSApplication : Application() {
             // Saves another app closed that weren't kept before the process stopped get their rows (an edit never closed and
             // over a day old is an open nobody holds any more, and goes), and a kept save whose job was never queued gets one.
             runCatching { com.hushos.app.data.TransferQueue.startupSweep(this) }
+            // Relay handles a sign-out or a replaced token left to delete, until the relay confirms.
+            runCatching { com.hushos.app.data.PushNotifications.registrar(this).drain() }
         }, "HushOSSweep").start()
     }
 }

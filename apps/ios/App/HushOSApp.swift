@@ -19,6 +19,8 @@ struct HushOSApp: App {
         FamilyWalkTasks.register()
         // Before launch finishes, so a tap on a transfers notification that launched the app arrives.
         TransferNotices.shared.start()
+        // Relay handles a sign-out or a replaced token left to delete, until the relay confirms.
+        PhonePush.shared.started()
         Theme.configureAppearance()
     }
 
@@ -35,6 +37,8 @@ struct HushOSApp: App {
                 Task {
                     // A sign-in from the Files sheet while the app was away: show that account, not the last one.
                     await model.checkAccount()
+                    // Back on screen, signed in: notices no push showed (the start's own catch-up runs from signedIn).
+                    if model.state == .signedIn { await PhonePush.shared.catchUp() }
                     await BackgroundTransfers.shared.pump()
                 }
             }
@@ -122,6 +126,15 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
      */
     func application(_ application: UIApplication, shouldAllowExtensionPointIdentifier extensionPointIdentifier: UIApplication.ExtensionPointIdentifier) -> Bool {
         extensionPointIdentifier != .keyboard
+    }
+
+    /* The APNs token for notifications on this iPhone (PhonePush), new or the same as before. */
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        MainActor.assumeIsolated { PhonePush.shared.received(deviceToken) }
+    }
+
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        MainActor.assumeIsolated { PhonePush.shared.failed(error) }
     }
 
     func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String, completionHandler: @escaping () -> Void) {

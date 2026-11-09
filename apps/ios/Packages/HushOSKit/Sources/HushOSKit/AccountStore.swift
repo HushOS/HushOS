@@ -149,6 +149,10 @@ public struct AccountStore: Sendable {
             SharedKeychain.delete(SharedKeychain.deviceAccount)
             // The device key belongs to this account's device row; another account makes its own.
             SharedKeychain.delete(SharedKeychain.deviceIdentityAccount)
+            // The push registration was this account's: forgotten here, and deleted at the relay with its secret.
+            PushNotifications.forget()
+            // The verified contacts' names notices could give.
+            SharedKeychain.delete(PushContactNames.account)
             // What an earlier version kept in the defaults: recent searches and the address the sign-in screen offers.
             UserDefaults.standard.removeObject(forKey: "search.recent")
             UserDefaults.standard.removeObject(forKey: "lastEmail")
