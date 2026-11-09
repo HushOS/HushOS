@@ -142,8 +142,14 @@ export const accountDevices = pgTable(
         createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
         lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).defaultNow().notNull(),
         revokedAt: timestamp('revoked_at', { withTimezone: true }),
+        /*
+         * Wrong two-step codes in a row from sign-ins that proved this device
+         * (docs/two-step-design.md 2); a success from it starts the count again.
+         */
+        twoStepFailures: integer('two_step_failures').notNull().default(0),
     },
     (table) => [
+        check('account_devices_two_step_failures_valid', sql`${table.twoStepFailures} >= 0`),
         // Behind the self-reference's on-delete-set-null, so a sweep's deletes don't scan the table.
         index('account_devices_approver_idx')
             .on(table.approvedByDeviceId)
@@ -200,6 +206,13 @@ export const sessions = pgTable(
         createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
         expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
         lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).defaultNow().notNull(),
+        /*
+         * When this session, or the session it replaced at an unlock, passed the
+         * second step (docs/two-step-design.md 4). Null on an account without the
+         * step. The trigger `sessions_two_step_guard` refuses a new session that
+         * leaves it null for an account with a confirmed factor.
+         */
+        twoStepAt: timestamp('two_step_at', { withTimezone: true }),
     },
     (table) => [
         index('sessions_user_idx').on(table.userId),
@@ -244,7 +257,7 @@ export const opaqueLoginAttempts = pgTable(
     (table) => [
         check(
             'opaque_login_attempts_purpose_binding',
-            sql`(${table.purpose} = 'login' and ${table.sessionTokenHash} is null) or (${table.purpose} in ('delete', 'password', 'master-key', 'recovery-key', 'devices') and ${table.sessionTokenHash} is not null and octet_length(${table.sessionTokenHash}) = 32)`,
+            sql`(${table.purpose} = 'login' and ${table.sessionTokenHash} is null) or (${table.purpose} in ('delete', 'password', 'master-key', 'recovery-key', 'devices', 'two-step') and ${table.sessionTokenHash} is not null and octet_length(${table.sessionTokenHash}) = 32)`,
         ),
         index('opaque_login_attempts_user_idx').on(table.userId),
         index('opaque_login_attempts_expiry_idx').on(table.expiresAt),
