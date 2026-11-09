@@ -78,7 +78,7 @@ function FamilySpacePage() {
                 )}
             </PageHeader>
             {waiting > 0 && (
-                <output className="block max-w-3xl px-5 pb-5 sm:px-8" data-family-waiting-notice>
+                <output className="mx-5 mb-3 block sm:mx-8" data-family-waiting-notice>
                     {/* A status note (output), not an alert: it must not cut into what a screen reader is saying. */}
                     <Alert variant="info" role={undefined}>
                         <AlertTitle>
