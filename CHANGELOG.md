@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.5.0](https://github.com/HushOS/HushOS/compare/v1.4.1...v1.5.0) (2026-11-09)
+
+
+### Features
+
+* **apps:** ask for notifications once after sign-in, and offer them once on the web ([#398](https://github.com/HushOS/HushOS/issues/398)) ([ea03bc0](https://github.com/HushOS/HushOS/commit/ea03bc0fae7115b3bc4b2306f6990e865c0c9122))
+* **web:** one sidebar list with the family as a place, and no top bar on desktop ([#395](https://github.com/HushOS/HushOS/issues/395)) ([e5b6eec](https://github.com/HushOS/HushOS/commit/e5b6eec4ee981458bf5646a08d90928489ba3fd9))
+
+
+### Bug fixes
+
+* **apps:** draw destructive menu items in one red on iOS ([#391](https://github.com/HushOS/HushOS/issues/391)) ([916e44c](https://github.com/HushOS/HushOS/commit/916e44c04760247a2c6c286af68a4ef8c1c46039))
+* **apps:** move between your files and family folders in one step on phones ([#393](https://github.com/HushOS/HushOS/issues/393)) ([911a77d](https://github.com/HushOS/HushOS/commit/911a77d9a03044cc58a347ac13027239fe118486))
+* **apps:** stop a moved file showing in the folder it left on Android ([#390](https://github.com/HushOS/HushOS/issues/390)) ([746066e](https://github.com/HushOS/HushOS/commit/746066e1cd143954b97156868ddb04f2c0fd163e))
+* **web:** link the family page and its folders both ways, and say what the count means ([#396](https://github.com/HushOS/HushOS/issues/396)) ([b97d3b9](https://github.com/HushOS/HushOS/commit/b97d3b9a4faea20cc74f0e0fce8a3ed8500aaf94))
+
 ## [1.4.1](https://github.com/HushOS/HushOS/compare/v1.4.0...v1.4.1) (2026-11-09)
 
 
