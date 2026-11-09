@@ -1,0 +1,23 @@
+apps/web/src/components/families/family-page.tsx
+  s_566b8e0c4467a4::t_cecf753bcc8f94 233
+apps/web/src/lib/families-shell.ts
+  s_566b8e0c4467a4::t_2542453cb86452 153-159,164
+apps/web/src/routes/_authenticated/app/_drive/s/$groupId/index.tsx
+  s_566b8e0c4467a4::t_d055d29ed2b35b 50,81-83,89,91
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9c033d7efe92dd86c07775b18e60530dabe0ebbe",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
