@@ -3,15 +3,22 @@ import { ready, server } from '@hushos/crypto/server';
 
 /*
  * A password proved again by a signed-in session (deleting the account, a
- * security change, removing devices): a one-use OPAQUE attempt started by that
- * session for that purpose, then finished with the client's KE3. Everything an
+ * security change, removing devices, changing the second step): a one-use
+ * OPAQUE attempt started by that session for that purpose, then finished with
+ * the client's KE3. Everything an
  * attempt is bound to is checked here, in one place, so no caller can forget a
  * check: the purpose, the account, its credential version, the session that
  * started it, the expiry, the profile, and finally the OPAQUE finish itself.
  * The caller consumes the attempt (a DELETE … RETURNING) before calling this,
  * so a replay finds nothing.
  */
-export type BoundPurpose = 'delete' | 'password' | 'master-key' | 'recovery-key' | 'devices';
+export type BoundPurpose =
+    | 'delete'
+    | 'password'
+    | 'master-key'
+    | 'recovery-key'
+    | 'devices'
+    | 'two-step';
 
 export type StoredAttempt = {
     purpose: string;

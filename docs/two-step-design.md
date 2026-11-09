@@ -2,7 +2,9 @@
 
 This document adds an optional second step to signing in to HushOS: a code from an authenticator app (TOTP), a security key (WebAuthn), or a backup code, asked for after the password and before the server hands over anything. It says what that step protects in an end-to-end encrypted system and what it does not, where it sits in each flow, how a person gets back in without it, and how it ships on the web and the apps. It sits beside `docs/devices-design.md` (Approve new devices, Keys need a device) and changes nothing there; section 1 says how the three fit together.
 
-Written on 21 October 2026, and revised the same day after an independent review: the apps' browser path for security keys, code budgets for known devices, where the two-step key comes from, the phrase's salt and justification, the counter rule, policies, guardians, the security log and the phones' sign-in. Nothing here is built. Section 11 lists the decisions the owner still has to make, each with a recommendation.
+Written on 21 October 2026, and revised the same day after an independent review: the apps' browser path for security keys, code budgets for known devices, where the two-step key comes from, the phrase's salt and justification, the counter rule, policies, guardians, the security log and the phones' sign-in. Section 11 lists the decisions the owner had to make, each with a recommendation; the owner's answers follow it.
+
+Revised on 10 November 2026, when the server's side was built (steps 1 and 2 of the plan in section 10): what the failed-step notice counts, a known device's own freeze, the error codes a client acts on, what `TWO_STEP_ENABLED` leaves in force, and what is still unbuilt. Each change is marked "As built".
 
 The recommendations, in short:
 
@@ -101,6 +103,9 @@ The seal protects against a copy of the database without the two-step key: a bac
 - **Window:** the codes for time steps T−1, T and T+1 are accepted, 90 seconds in all. RFC 6238 5.2 recommends at most one step either way for network delay. No drift is learnt: phones keep network time.
 - **No replay:** a factor keeps `totp_last_step`, and a code is accepted only for a step later than it. The update is conditional (`SET totp_last_step = $step WHERE id = $id AND totp_last_step < $step`), so two requests with the same code race to one success. A code used at sign-in cannot be used again for a password change a minute later, as RFC 6238 5.2 requires.
 - **Codes are compared in constant time,** and the check runs the same way whatever the result.
+- **A code is read as it is typed.** Authenticator apps show `123 456`, so spaces and hyphens are ignored. What is still not six digits (or, for a backup code, not ten characters of its alphabet) is not a guess but a slip: it is answered 400 and counted nowhere, not against the token, the budgets, the notice or the freeze.
+- **A used code is refused before anything is done on its strength.** A code that matches only a time step already taken is a wrong answer at the first check, not only under the lock: a change may act between the two (account deletion stops billing), and a used code must never get that far. The conditional update stays, for two requests carrying one fresh code at once.
+- **A code the server cannot check is an outage, not a wrong code.** If the key a secret or a backup code was made under is no longer set (section 8), the answer is 503 and nothing is counted.
 
 ### Rate limits and lockout
 
@@ -110,15 +115,19 @@ A six-digit code with three steps accepted is a 3 in 10⁶ guess. The password i
 - **Per known device:** a sign-in whose `login/finish` carried a valid device proof (`docs/devices-design.md` 12) comes from one of the account's own devices, and gets its own budget: ten wrong codes in 15 minutes for that device. This is how `limitBoundAttempts` gives each session its own count. Only a device holding its device key can spend it, so someone with the password alone, from any number of addresses, cannot touch it.
 - **Per account, for every other sign-in:** ten wrong codes in 15 minutes across all tokens and addresses, from new devices and from devices without a proof. After that, codes from such sign-ins are refused with 429 for the rest of the window. This bucket bounds guessing, since every guess an attacker can make comes through it.
 - **Only codes count:** both budgets cover only what can be guessed, authenticator and backup codes. A security key and the phrase are never refused for a spent budget.
-- **A consecutive count,** kept for the account's sign-ins without a device proof and for each known device, and reset by a success in the same pool:
-    - at **5**, the account's email and devices get a security notice: "Someone signed in with your password but did not pass the second step." At most one an hour. A correct password followed by a failed step is the clearest signal that the password is known, so this notice matters more than any other here.
-    - at **100** without a device proof, the authenticator app is **frozen for new devices**: TOTP codes from sign-ins without a device proof are refused, with a notice. The account's known devices still take codes. Backup codes are not frozen, though they share the budget above. Security keys and the phrase work everywhere. A success with any method other than the frozen app, from any device, unfreezes it. NIST SP 800-63B caps consecutive failures at 100 for this reason. The chance of a lucky guess before the freeze is about 3 × 10⁻⁴.
+- **A code is refused unchecked** once its budget is spent (429), and so is an authenticator code where the app is frozen (403 `totp-frozen`). Neither refusal says whether the code was right, and neither counts against the token. An answer takes its place in the budget before it is checked and gives it back only when it passes, so requests sent at once cannot guess past ten.
+- **Two counts,** kept for the account's sign-ins without a device proof and for each known device (a change asked from a session counts on that session's device), and reset by a success in the same pool:
+    - **every failed step** after a correct password: wrong codes, wrong backup codes, failed key assertions and failed phrase signatures. At **5**, the account's email gets a security notice: "Someone signed in with your password but did not pass the second step." At most one an hour. A correct password followed by a failed step is the clearest signal that the password is known, so this notice matters more than any other here, and it does not matter which method failed.
+    - **wrong codes in a row,** authenticator and backup. At **100** without a device proof, the authenticator app is **frozen for new devices**: TOTP codes from sign-ins without a device proof are refused, with a notice. The account's known devices still take codes. Backup codes are not frozen, though they share the budget above. Security keys and the phrase work everywhere. A success with any method other than the frozen app, from any device, unfreezes it. NIST SP 800-63B caps consecutive failures at 100 for this reason. The chance of a lucky guess before the freeze is about 3 × 10⁻⁴.
+    - at **100** from one known device, the app is frozen **on that device alone**, with a notice of its own. The same cap, for the same reason: a known device has its own budget, so without a freeze of its own it could guess without end. Every other device, and new ones, still take codes. It thaws as the shared freeze does: a success with anything but the app, from that device or any other.
 - **What someone with the password can still do,** from as many addresses as they like:
     - **New devices:** they can keep the account's shared budget spent and freeze the authenticator app for new devices, indefinitely. A new device of the owner's then needs a security key or the phrase while it lasts. Backup codes share that budget, so they are refused with the codes.
-    - **Known devices:** none of it reaches them. A known device whose session ended signs in with its device proof and its own budget, and the authenticator app still works there.
+    - **Known devices:** none of it reaches them. A known device whose session ended signs in with its device proof and its own budget, and the authenticator app still works there. Freezing the app on a known device takes that device's key, or a live session on it: a change asked from a session counts on that session's device, with no key proof.
     - **Notices:** the owner hears at the fifth failure that the password is known, and should change it, which ends the attack.
 
-    Every lockout scheme gives an attacker who has the first factor some lever. This one is bounded to new devices and two of the methods, and the owner is told.
+    Every lockout scheme gives an attacker who has the first factor some lever. With the password alone, this one is bounded to new devices and two of the methods. Freezing the app on a known device takes that device's key, or a live session on it, and reaches no further than that device. Either way the owner is told.
+
+**As built.** The count of failed steps for the notice is kept in the rate-limit table (`auth_rate_limits`), one bucket for each pool: the fifth failure since the pool's last success sends the notice, a success in the pool empties the bucket, and a count starts again 30 days after its first failure. The counts of wrong codes that freeze the app are columns (`two_step_state.consecutive_failures`, `account_devices.two_step_failures`); a device is frozen while its own stands at 100 or more.
 
 ### Backup codes
 
@@ -217,20 +226,22 @@ Today `login/finish` checks OPAQUE, creates the session and returns the password
 2. `login/finish` checks OPAQUE and consumes the attempt, as today. It also checks the device proof (`docs/devices-design.md` 12) and records which device the session would attach to. Then, if the account has the step on and the sign-in is not exempt (below), it creates **no session and no cookie, and returns no envelope.** It returns:
 
     ```
-    { twoStep: { token, methods: ['webauthn','totp','backup','phrase'], expiresAt, webauthn?: { challenge, allowCredentials }, phrase?: { recoveryVersion, wrappingSalt } } }
+    { twoStep: { token, methods: ['webauthn','totp','backup','phrase'], expiresAt, webauthn?: { challenge, allowCredentials }, phrase?: { userId, recoveryVersion, wrappingSalt } } }
     ```
 
-    `phrase` carries what the device needs to derive the recovery signing key (section 5). The token is 32 random bytes and lasts five minutes. The server keeps only its hash, in `two_step_attempts`, with the user, the credential version, the device the session will attach to and the WebAuthn challenge.
+    `phrase` carries what the device needs to sign with the recovery phrase (section 5): the account's id, which the statement names and which neither `login/start` nor `login/finish` otherwise gives a client, and the recovery envelope's version and salt, which the signing key is derived with. A device that has lost everything but the password and the phrase knows none of the three, and that is the case the phrase is for. The token is 32 random bytes and lasts five minutes. The server keeps only its hash, in `two_step_attempts`, with the user, the credential version, the device the session will attach to, the browser's previous session and the WebAuthn challenge. `methods` lists only what the account has and the server can check: `webauthn` joins it with security keys (release C).
 
 3. `POST /api/auth/login/two-step { token, proof }`, where `proof` is one of `{ kind: 'totp', code }`, `{ kind: 'backup', code }`, `{ kind: 'webauthn', response }`, or `{ kind: 'phrase', signature }` (section 5). The apps' browser path for security keys (section 6) sends the same `webauthn` proof; no token is ever marked passed by anything but this request. On success the server deletes the token and checks again, under the user's lock, that the credential version has not changed. It then creates the session (with `two_step_at` set) and returns exactly what `login/finish` returns today: `{ user, envelope, device }` and the cookie.
-4. A wrong answer counts against the token and the account (section 2). Five wrong answers end the token.
+4. A wrong answer counts against the token and the account (section 2). Five wrong answers end the token. A wrong answer is 401 `two-step` and the token takes another; a token that is gone (five minutes, five wrong answers, a password change since) is 401 `two-step-expired`, and the client goes back to the password. The answer never says why a proof was refused: a code already used, one for another account and one that was never a code read the same.
+5. **The session attaches to the device the token recorded.** By the time the step is passed the OPAQUE attempt is used up, so the device cannot prove its key again. The server takes the device from the token, once it has checked under the account's lock that it is still the account's own, approved, not removed and holding a key. A known device therefore comes back to its own row after the step, with no new-device notice. A browser whose device never got a key keeps its row by the cookie the token recorded.
+6. **The step and the session commit together.** The token, the backup code or time step, the counts and any thaw are spent in the transaction that opens the session. If no session is opened (the account was suspended meanwhile, say), none of them is spent.
 
 **The step comes after OPAQUE, never before.**
 
 - **It cannot be guessed without the password.** Asked first, a code guess would need only an email address.
 - **It reveals nothing to a stranger.** "This account has a second step", and which methods, are told only to someone who has just proved the password. A wrong password fails exactly as today, so the step adds no enumeration.
 
-**Old clients.** `login/finish` gains `twoStep: 1` in its body, sent by every client that can answer a step. When the account has the step on and the client did not send it, the server answers 409 `update-required` ("Update HushOS to sign in. This account asks for a second step.") and creates nothing. A client that cannot ask for the step never gets an envelope it should not have, and the person is told why instead of seeing a broken sign-in.
+**Old clients.** `login/finish` gains `twoStep: 1` in its body, sent by every client that can answer a step. When the account has the step on, the sign-in is not exempt and the client did not send it, the server answers 409 `update-required` ("Update HushOS to sign in. This account asks for a second step.") and creates nothing. A client that cannot ask for the step never gets an envelope it should not have, and the person is told why instead of seeing a broken sign-in. An exempt sign-in (below) asks nothing new of a client, so it is answered as before whatever the client sent.
 
 **With an approval level on** (`docs/devices-design.md` 2), a successful step creates the pending session there, not a full one. The order is always password, then step, then approval. Under Approve new devices the envelope is released when the approval completes; under Keys need a device there is none. Device approval never stands in for the step, and the step never stands in for approval: they answer different questions.
 
@@ -250,6 +261,8 @@ Today `login/finish` checks OPAQUE, creates the session and returns the password
 
 That is the web's unlock after a lock. The new session inherits `two_step_at` and does not extend it. So a device keeps the step for 30 days from when it last passed it, whatever its unlocks in between, as Bitwarden's "remember me" does. A stolen laptop whose session has ended needs the step.
 
+The exemption is decided where the session is made, under the account's lock, from the session row the cookie names. Removing a device takes the same lock and ends its sessions, so a device removed a moment before its unlock lends neither its row nor its step.
+
 **On the phones** there is no exemption, and none is needed. The iPhone and Android apps send no cookie to `login/finish` (`Auth.swift`, `Auth.kt`). They keep their session token and the device's sealed copy of the account key between launches, and unlock from that copy (`unlockAccount` in each app's `Vault`) without signing in again. So a phone runs `login/finish` only when it has no session: the first sign-in, after sign-out or removal, or when the session ended after 7 idle days or 30 in all. Each of those asks for the step. The effect is the same as on the web: at most once in 30 days on a phone that keeps its session.
 
 1Password asks for its second factor only on a new device, and again after sign-out or a password change. Its Secret Key on the device is a factor the server never had, so a known device there already proves something. A HushOS device key proves only that the device was signed in once, which a thief holding the laptop also has.
@@ -268,6 +281,10 @@ That is the web's unlock after a lock. The new session inherits `two_step_at` an
     1. The client asks `POST /api/auth/two-step/challenge { purpose }` for a step token bound to the session and the purpose (with a WebAuthn challenge).
     2. The action's finish request carries `twoStep: { token, proof }`.
     3. The server checks the password proof first, then the step, then commits. A step token made for one purpose or one session is refused for another.
+    4. The step and the change commit together, as at sign-in: a change that does not happen spends no token, code, time step or count.
+    5. Passing the step marks the session that asked as having passed it (`two_step_at`), if it had not. A time already there is kept, so a change never extends the thirty days.
+- **What a client is told:** 403 `two-step` when the step is on and the proof is missing or wrong; 403 `two-step-expired` when the token is gone, and the client asks for a new challenge; 403 `totp-frozen` and 429 as at sign-in.
+- **Account deletion** passes the step last: after the person's departures from their groups, and under the account's lock. Every group write locks the group first and the person second, so a deletion that held the account while it waited for a group could deadlock with one. Any later change that writes a group and asks for the step follows the same order.
 - **Not removing a device.** Removal already needs the password. Its worst case, signing devices out, is something the owner fixes by signing in again. Adding the step there would make the owner's response to an intrusion slower than the intruder's.
 
 What this protects is narrow but real: someone with a live session and the password, such as a shared computer where the owner stayed signed in and the password was watched. They cannot change the password, rotate the phrase, delete the account or remove the step.
@@ -279,7 +296,8 @@ What this protects is narrow but real: someone with a live session and the passw
 - **On:**
     - the first method needs the password;
     - confirming it sets `two_step_at` on the session that enrolled;
-    - the screen offers to sign out the account's other devices, ticked by default, since their sessions never passed the step.
+    - the screen offers to sign out the account's other devices, ticked by default, since their sessions never passed the step. The confirmation carries the choice (`signOutOthers`), and the server removes the other devices in the transaction that turns the step on, with the notice a removal of every other device sends. It asks for no second password exchange: whoever confirms holds the pending method's id and its current code, both from the one reply given to a session that had proved the password at most ten minutes before. It is honoured only when the confirmation turns the step on, never when it replaces an app;
+    - a method started on the password alone and still pending when another method turns the step on is dropped: adding a method to an account that has the step takes the step.
 - **Off,** which is removing the last method, needs the password and the step, so a stolen session cannot remove it. A policy (below) can stop it being turned off.
 - **Notices:** every change sends a security notice (section 7).
 
@@ -324,7 +342,7 @@ The first way back: section 2. A backup code passes one step; it does not remove
 
 **Recommendation: the phrase satisfies the step, at once, with a security notice.**
 
-- **How it works.** The step screen offers "Use your recovery phrase". The step token's response carries the recovery envelope's `wrappingSalt` and `recoveryVersion` (section 4), because the signing key depends on the salt: `seed = derive(secret, wrappingSalt, 'authentication')`, as a phrase reset derives it (`packages/crypto/src/recovery.ts`). The device derives that key and signs:
+- **How it works.** The step screen offers "Use your recovery phrase". The step token's response carries the account's `userId` and the recovery envelope's `wrappingSalt` and `recoveryVersion` (section 4): the statement names the account, and the signing key depends on the salt: `seed = derive(secret, wrappingSalt, 'authentication')`, as a phrase reset derives it (`packages/crypto/src/recovery.ts`). The device derives that key and signs:
 
     ```
     ["hushos/two-step/phrase",1,userId,sha256(stepToken)]
@@ -437,7 +455,9 @@ After the phrase passes the step, the session's settings page opens on Two-step 
 
 ## 7. Notices
 
-Every change to the step is a security notice to the account's email, and to its devices once push exists (`docs/devices-design.md` 5). None of these can be turned off:
+Every change to the step is a security notice to the account's email, and to its devices once push exists (`docs/devices-design.md` 5). None of these can be turned off.
+
+**As built:** these notices go by email. Pushes to the account's devices come with the clients that can show them: each is a new kind of notification event, which the web's service worker and both phone apps have to know before the server may send it.
 
 | Event                                                           | Says                                                                                           |
 | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
@@ -450,6 +470,7 @@ Every change to the step is a security notice to the account's email, and to its
 | The phrase used for the step                                    | That the phrase was used, and to keep it apart from the password                               |
 | A correct password, then a failed step (section 2)              | "Someone signed in with your password but did not pass the second step. Change your password." |
 | The authenticator app frozen for new devices after 100 failures | How to sign in with another method; known devices are not affected                             |
+| The authenticator app frozen on one known device after 100      | How to sign in there with another method; the other devices are not affected                   |
 | A key's counter did not go up                                   | The key may have been copied; remove it                                                        |
 
 **What a notice never contains:**
@@ -479,16 +500,20 @@ Settings › Security gets a list, **Recent security activity**, so a person can
 **Budgets.** Today every device notice shares one budget of ten an hour per account, and notices past it are dropped. A person with the password could fail the step ten times, spend that budget on failure notices, and then a "step turned off" would be dropped. So:
 
 - **failed-step notices** have their own bucket, one an hour;
-- **changes to the step** are never dropped. They need the password and the step, so an attacker cannot flood them.
+- **changes to the step** are never dropped. They need the password and the step, so an attacker cannot flood them;
+- **a backup code or the phrase used** is never dropped either: each needs the password and the code or the phrase;
+- **a freeze** is said once, when it happens.
 
 ## 8. Self-hosting
 
 | Setting                                 | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `TWO_STEP_ENABLED`                      | `true` to let accounts turn the step on. Off, the settings screen and routes answer 501, and existing factors are **still enforced** at sign-in. Default `false` in release A, `true` from release B                                                                                                                                                                                                                                                                                                                                                                                      |
+| `TWO_STEP_ENABLED`                      | `true` to let accounts turn the step on. Off, the settings screen and routes answer 501 (`unsupported`), and existing factors are **still enforced** at sign-in and at every change the step guards; `two-step/challenge` keeps answering, since without it such an account could neither change its password nor delete itself. Default `false` in release A, `true` from release B                                                                                                                                                                                                      |
 | `TWO_STEP_KEY` (or `TWO_STEP_KEY_FILE`) | Optional, 32 bytes, base64url. Seals TOTP secrets and keys the backup-code hash. Unset, the key is derived from the OPAQUE server setup wherever it lives (`serverSetup()` in `packages/auth/src/server.ts`): `HKDF-SHA-256(setup, salt = empty, info = "hushos/two-step/key/v1", 32)`. The `info` differs from the server hash key's (`"hushos/server/hash-key/v1"`), so the two keys are independent. The setup is the same value in the environment or in `server_secrets`, so moving it from the database to the environment, as the self-hosting guide advises, changes nothing here |
 | `TWO_STEP_PREVIOUS_KEY` (or `_FILE`)    | During a rotation of an explicit `TWO_STEP_KEY`: the old key. Each row records its key id (the first 8 bytes of `SHA-256(key)`), and the worker reseals TOTP secrets under the current key. The derived key needs no entry here: it is always available, so setting `TWO_STEP_KEY` for the first time is a rotation like any other. Backup codes cannot be re-keyed (the server never holds them in plain text), so each set keeps verifying under its own key id until the person makes a new one; an old explicit key has to stay until then                                            |
 | `WEBAUTHN_ANDROID_ORIGINS`              | The `android:apk-key-hash:` origins accepted beside `APP_ORIGIN`. hushos.com sets the HushOS app's; self-hosted servers leave it empty and use the browser path (section 6)                                                                                                                                                                                                                                                                                                                                                                                                               |
+
+**As built:** `TWO_STEP_KEY` and `TWO_STEP_PREVIOUS_KEY` are read from the environment; the `_FILE` forms are not built. Rows sealed under an earlier key open under it while it is in the ring (the derived key always is), but the worker does not reseal them yet, so `TWO_STEP_PREVIOUS_KEY` stays set after a change of key. `WEBAUTHN_ANDROID_ORIGINS` comes with security keys.
 
 **What an operator must keep secret:**
 
@@ -548,25 +573,40 @@ WebAuthn public keys are not secret.
 
 Base64url without padding; ids lowercase UUIDs, as elsewhere.
 
-| Route                                                   | Body → response                                                                                       | Notes                                                                                                                                                                             |
-| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /api/auth/login/finish`                           | adds `twoStep: 1` → `{ twoStep: { token, methods, expiresAt, webauthn? } }` or today's response       | 409 `update-required` for a client without `twoStep: 1` on an account with the step on                                                                                            |
-| `POST /api/auth/login/two-step`                         | `{ token, proof }` → `{ user, envelope, device }` and the cookie                                      | 401 for a wrong answer; the token ends after five                                                                                                                                 |
-| `GET /api/auth/two-step`                                | → `{ on, methods: [{ id, kind, name, createdAt, lastUsedAt, synced }], backupCodesLeft, totpFrozen }` | Any session of the account                                                                                                                                                        |
-| `POST /api/auth/two-step/reauth`                        | `{ startLoginRequest }` → `{ attemptToken, loginResponse }`                                           | A bound OPAQUE attempt tagged `two-step`, limited like the others (`limitBoundAttempts`)                                                                                          |
-| `POST /api/auth/two-step/challenge`                     | `{ purpose }` → `{ token, methods, webauthn? }`                                                       | A step token bound to the session and the purpose                                                                                                                                 |
-| `POST /api/auth/two-step/totp`                          | `{ attemptToken, finishLoginRequest, twoStep? }` → `{ id, secret, uri }`                              | A pending factor for ten minutes; `twoStep` once the step is on                                                                                                                   |
-| `POST /api/auth/two-step/totp/:id/confirm`              | `{ code }` → `{ backupCodes? }`                                                                       | Codes only when this turns the step on                                                                                                                                            |
-| `POST /api/auth/two-step/keys/options`                  | `{ attemptToken, finishLoginRequest, twoStep? }` → `{ registrationToken, options }`                   |                                                                                                                                                                                   |
-| `POST /api/auth/two-step/keys`                          | `{ registrationToken, name?, response }` → `{ method, backupCodes? }`                                 | 409 `limit` past ten keys                                                                                                                                                         |
-| `PUT /api/auth/two-step/methods/:id`                    | `{ name }`                                                                                            | PUT, as the device rename is                                                                                                                                                      |
-| `DELETE /api/auth/two-step/methods/:id`                 | `{ attemptToken, finishLoginRequest, twoStep }`                                                       | The last one turns the step off and deletes the codes                                                                                                                             |
-| `POST /api/auth/two-step/backup-codes`                  | `{ attemptToken, finishLoginRequest, twoStep }` → `{ codes }`                                         | Replaces every code                                                                                                                                                               |
-| `GET /two-step/key`                                     | A static page, no API call                                                                            | The apps' browser path for security keys (section 6): runs the assertion from the fragment and returns it to `https://hushos.com/two-step/return` (the custom scheme as fallback) |
-| `GET /two-step/return` (hushos.com)                     | A static page, no API call                                                                            | The verified callback the apps open; in a browser it says to open the HushOS app, and never sends its fragment                                                                    |
-| `GET /api/auth/security-events`                         | → `[{ id, kind, method, deviceId, deviceKind, createdAt }]`                                           | The last 90 days, newest first                                                                                                                                                    |
-| `POST /api/children/:userId/reset`                      | adds `twoStep?: { token, proof }` (the guardian's own)                                                | `DELETE /api/children/:userId/two-step` removes the child's methods, before `adultFrom` only                                                                                      |
-| `POST /api/auth/security/finish`, `/auth/delete/finish` | add `twoStep?: { token, proof }`                                                                      | 403 `two-step` when the step is on and the proof is missing or wrong                                                                                                              |
+| Route                                                   | Body → response                                                                                       | Notes                                                                                                                                                                              |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /api/auth/login/finish`                           | adds `twoStep: 1` → `{ twoStep: { token, methods, expiresAt, webauthn?, phrase? } }` or today's       | 409 `update-required` for a client without `twoStep: 1` on an account with the step on, unless the sign-in is exempt                                                               |
+| `POST /api/auth/login/two-step`                         | `{ token, proof }` → `{ user, envelope, device }` and the cookie                                      | 401 `two-step` for a wrong answer; the token ends after five (401 `two-step-expired`)                                                                                              |
+| `GET /api/auth/two-step`                                | → `{ on, methods: [{ id, kind, name, createdAt, lastUsedAt, synced }], backupCodesLeft, totpFrozen }` | Any session of the account. `createdAt` to the hour, `lastUsedAt` to the day; `totpFrozen` is the freeze for new devices                                                           |
+| `POST /api/auth/two-step/reauth`                        | `{ startLoginRequest }` → `{ attemptToken, loginResponse, profileVersion }`                           | A bound OPAQUE attempt tagged `two-step`, limited like the others (`limitBoundAttempts`); the same reply as `devices/reauth`                                                       |
+| `POST /api/auth/two-step/challenge`                     | `{ purpose }` → `{ token, methods, expiresAt, webauthn?, phrase? }`                                   | A step token bound to the session and the purpose (`password`, `master-key`, `recovery-key`, `delete`, `two-step`). 409 with the step off; thirty a session in 15 minutes          |
+| `POST /api/auth/two-step/totp`                          | `{ attemptToken, finishLoginRequest, twoStep? }` → `{ id, secret, uri }`                              | A pending factor for ten minutes; `twoStep` once the step is on. `secret` is base32                                                                                                |
+| `POST /api/auth/two-step/totp/:id/confirm`              | `{ code, signOutOthers? }` → `{ backupCodes? }`                                                       | Codes only when this turns the step on, and only then are the other devices signed out. 400 for a wrong code, ten in 15 minutes for the account's own pending app; 404 without one |
+| `POST /api/auth/two-step/keys/options`                  | `{ attemptToken, finishLoginRequest, twoStep? }` → `{ registrationToken, options }`                   |                                                                                                                                                                                    |
+| `POST /api/auth/two-step/keys`                          | `{ registrationToken, name?, response }` → `{ method, backupCodes? }`                                 | 409 `limit` past ten keys                                                                                                                                                          |
+| `PUT /api/auth/two-step/methods/:id`                    | `{ name }` → `{ method }`                                                                             | PUT, as the device rename is                                                                                                                                                       |
+| `DELETE /api/auth/two-step/methods/:id`                 | `{ attemptToken, finishLoginRequest, twoStep }` → `{ on }`                                            | The last one turns the step off and deletes the codes; `on` says whether the step is still on                                                                                      |
+| `POST /api/auth/two-step/backup-codes`                  | `{ attemptToken, finishLoginRequest, twoStep }` → `{ codes }`                                         | Replaces every code                                                                                                                                                                |
+| `GET /two-step/key`                                     | A static page, no API call                                                                            | The apps' browser path for security keys (section 6): runs the assertion from the fragment and returns it to `https://hushos.com/two-step/return` (the custom scheme as fallback)  |
+| `GET /two-step/return` (hushos.com)                     | A static page, no API call                                                                            | The verified callback the apps open; in a browser it says to open the HushOS app, and never sends its fragment                                                                     |
+| `GET /api/auth/security-events`                         | → `[{ id, kind, method, deviceId, deviceKind, createdAt }]`                                           | The last 90 days, newest first                                                                                                                                                     |
+| `POST /api/children/:userId/reset`                      | adds `twoStep?: { token, proof }` (the guardian's own)                                                | `DELETE /api/children/:userId/two-step` removes the child's methods, before `adultFrom` only                                                                                       |
+| `POST /api/auth/security/finish`, `/auth/delete/finish` | add `twoStep?: { token, proof }`                                                                      | 403 `two-step` when the step is on and the proof is missing or wrong                                                                                                               |
+
+**Codes a client acts on.** Every refusal carries a message and, where a client must tell cases apart, one of these: `update-required` (409), `two-step` (401 at sign-in, 403 at a change: a wrong or missing answer, and the token takes another), `two-step-expired` (the token is gone: back to the password at sign-in, a new challenge at a change), `totp-frozen` (403: authenticator codes are paused here, another method still answers) and `unsupported` (501: `TWO_STEP_ENABLED` is off). A spent code budget is 429. A wrong password at a change to the step is 403 with no code, as removing a device answers it.
+
+Two answers carry no code and mean the answer was never checked:
+
+- **400** for input that is not a code: not six digits after spaces and hyphens are dropped, or not a backup code's ten characters. The step token is untouched and nothing is counted. At a change the password proof is kept too: the shape is read before the proof is spent, so the corrected answer goes with the same proof.
+- **503** for a key the server no longer has: the authenticator app's secret, or any unused backup code, was made under a key that is not set (section 8). Nothing is counted; the recovery phrase still answers.
+
+**Not built with the server's first release:** the security-key routes (`keys/options`, `keys`, the static pages; release C), `GET /api/auth/security-events` and the log behind it (below), and the guardian routes, which wait for the child reset itself.
+
+**What is unbuilt, and what waits on it:**
+
+- **The security log is a condition for turning `TWO_STEP_ENABLED` on at hushos.com** (release B). Writing `account_security_events` and serving them (`GET /api/auth/security-events`) must be in before the flag is. Until then a notice that went unread, or an inbox someone else controls, leaves no trace in the app.
+- **Push for the step's notices** comes with the clients that show them (steps 3 and 4): the web's service worker and both phone apps must know each new kind before the server sends it.
+- **The key reseal** (the worker re-sealing TOTP secrets after a change of `TWO_STEP_KEY`) and the `_FILE` forms come with the self-hosting step (5). Until then one earlier key is kept, in `TWO_STEP_PREVIOUS_KEY`; a second change of key would strand what the first key made.
 
 ### Migrations
 
@@ -617,7 +657,7 @@ This is authentication, so AGENTS.md's rule for keys applies: repository tests i
     - a phrase signature over another token, or by another account's recovery key, is refused;
     - after a recovery-key rotation the old phrase no longer passes;
     - the statement's bytes match across `packages/crypto` and `crates/hushos-core` (shared fixtures);
-    - the step response carries the recovery envelope's salt, and the key derived with it verifies; a key derived with another salt is refused.
+    - the step response carries the account's id and the recovery envelope's salt, and a device that knows nothing else of the account signs in with the phrase from those; a key derived with another salt is refused.
 - **Changes:**
     - removing a method or making codes without the step is refused;
     - removing the last method turns the step off and deletes the codes;
@@ -652,6 +692,13 @@ One change per pull request, as AGENTS.md asks:
 
 1. **`feat(db)`:** the tables, `sessions.two_step_at`, the session guard trigger and the repository functions (factors, codes, attempts, the conditional `totp_last_step` update, failure counters), with their Postgres tests.
 2. **`feat(auth)`:** the step at `login/finish` and `login/two-step`, `update-required`, step-up for security changes and deletion, TOTP and backup codes, the phrase statement in `packages/crypto`, rate limits and notices. Everything is behind `TWO_STEP_ENABLED`, off.
+
+    Left out of 2, each for a change of its own:
+    - **the security log** (section 7). The table is there; nothing writes or serves it yet. It records sign-ins, password changes, rotations, device removals and guardian actions as well as the step's own events, so it touches every one of those flows and belongs to no step above. It is a condition for step 6;
+    - **pushes** for the step's notices, which need the clients (section 7);
+    - **`TWO_STEP_KEY_FILE`** and the worker's reseal after a change of key (section 8);
+    - **the phrase statement's Rust twin,** which is step 4. The fixture it must match is `crates/hushos-core/fixtures/web-two-step.json`.
+
 3. **`feat(web)`:** settings (enrol, list, rename, remove, codes) and the sign-in step screen, with Playwright tests.
 4. **`feat(ios)` and `feat(android)`:** the step screen for codes, backup codes and the phrase, and `update-required`; the phrase statement in `crates/hushos-core` with the shared fixtures.
 5. **`docs`:** `docs/self-hosting.md` (the settings, the key, the trigger, rollback) and `docs/opaque-auth-design.md`.

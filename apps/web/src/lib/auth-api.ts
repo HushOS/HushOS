@@ -11,7 +11,13 @@ export const authApi: AuthApi = {
     registerStart: (input) => unwrap(api().register.start.post(input)),
     registerFinish: (input) => unwrap(api().register.finish.post(input)),
     loginStart: (input) => unwrap(api().login.start.post(input)),
-    loginFinish: (input) => unwrap(api().login.finish.post(input)),
+    loginFinish: async (input) => {
+        const result = await unwrap(api().login.finish.post(input));
+        // This client does not send `twoStep: 1` yet, so the server never answers with a step
+        // token (it answers 409 `update-required`); the sign-in step screen changes both.
+        if ('twoStep' in result) throw new Error('This sign-in needs a second step.');
+        return result;
+    },
     session: () => unwrap(api().session.get()),
     forgetSession: () => unwrap(api().session.forget.post({})),
     devices: () => unwrap(api().devices.get()),

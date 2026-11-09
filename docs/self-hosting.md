@@ -422,6 +422,8 @@ The startup plugin validates server environment with T3 Env and Zod. An invalid 
 | `APP_STORE_URL`                                                                                             | Optional. The iPhone app's App Store listing. See [phone apps](#phone-app-settings).                                                                |
 | `OPAQUE_SERVER_SETUP`                                                                                       | Optional. The server-side OPAQUE setup every password depends on. Never change it once set. See [above](#the-opaque-server-setup).                  |
 | `OPAQUE_SERVER_SETUP_ID`                                                                                    | Stable identifier for that setup; default `primary`.                                                                                                |
+| `TWO_STEP_ENABLED`                                                                                          | Default `false`. `true` lets accounts turn two-step sign-in on. See [two-step sign-in](#two-step-sign-in).                                          |
+| `TWO_STEP_KEY`, `TWO_STEP_PREVIOUS_KEY`                                                                     | Optional. The key that seals authenticator secrets and keys backup codes, and the one it replaced. See [two-step sign-in](#two-step-sign-in).       |
 | `INITIAL_STORAGE_QUOTA_BYTES`                                                                               | Initial allowance for newly created accounts; default `2147483648` (2 GiB).                                                                         |
 | `REFERRAL_BONUS_BYTES`, `REFERRAL_SIGNUP_CAP_BYTES`, `REFERRAL_PAID_BONUS_BYTES`, `REFERRAL_PAID_CAP_BYTES` | Referrals, paid in storage. `0` turns a reward off. See [Referrals and affiliates](#referrals-and-affiliates).                                      |
 | `TRUSTED_PROXY_HEADER`                                                                                      | Header your proxy sets with the client address, such as `x-forwarded-for`. Required behind a proxy so rate limits key on clients.                   |
@@ -476,6 +478,21 @@ Unset, `OPAQUE_SERVER_SETUP` is made on first start and kept in the database (`s
 - `EMAIL_ADAPTER=log` writes each message to the web service's log instead of sending it.
 - It is the template's default, for a first run. Never use it for an instance other people use.
 - Anyone who can read that log can finish another person's sign-up, so a production instance using it warns at start.
+
+### Two-step sign-in
+
+A second step after the password: a code from an authenticator app, a backup code, or the recovery phrase. The design is `docs/two-step-design.md`. It is a server rule: it stops someone who has a password from signing in to this server, and it changes nothing about how files are encrypted.
+
+- **`TWO_STEP_ENABLED`** is `false` by default, while the apps that can answer the step are built. With it off nobody can turn the step on, and the routes that set it up or change it answer 501.
+- **Turning it off takes nobody's step away.** An account that already has a method is still asked for it at sign-in, and at a password change, a key rotation and account deletion.
+- **The web service alone reads these settings.** The worker only deletes expired step tokens and enrolments nobody finished.
+- **`TWO_STEP_KEY`** is optional: 32 random bytes, base64url without padding (`openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`). It seals authenticator secrets and keys the backup-code hash.
+- **Unset, the key is derived from the OPAQUE server setup** (HKDF-SHA-256 with its own `info`), wherever the setup is kept. Moving the setup from the database to the environment changes nothing here.
+- **Keep the key out of the database.** With the setup in `server_secrets`, the derived key sits beside the secrets it seals and protects nothing against a copy of the database. Set `OPAQUE_SERVER_SETUP` or `TWO_STEP_KEY` in the environment.
+- **Setting `TWO_STEP_KEY` later is safe.** Each row records the key it was made under, and the derived key stays available, so earlier authenticator apps and backup codes keep working.
+- **Changing `TWO_STEP_KEY` to another value** needs the old one in `TWO_STEP_PREVIOUS_KEY`, for as long as any authenticator app or backup code made under it is in use. Rows are not re-sealed under the new key yet, so leave it set. Without it, an authenticator app sealed under the old key and backup codes made under it cannot be checked: the step answers 503 for them and counts nothing. The recovery phrase still works.
+- **Only one earlier key is kept.** Changing `TWO_STEP_KEY` a second time leaves no place for the first key, and everything made under it stops working as above. Until rows can be re-sealed, change the key once at most, or only after every account has set its authenticator app up again and made new backup codes.
+- **Anyone with write access to the database can remove a person's second step**, by deleting their rows in `two_step_factors`. It is a server rule, and whoever runs the server can lift it.
 
 ### Mail in development and production
 
@@ -2334,7 +2351,7 @@ What it adds:
 - `sessions.two_step_at` (nullable, no default) and `account_devices.two_step_failures` (`integer not null default 0`). Only the catalog changes; neither table is rewritten.
 - `two-step` as a purpose in the check on `opaque_login_attempts`.
 - A trigger on `sessions`, `sessions_two_step_guard`, with a function of the same name. It is the first trigger in the schema.
-- Nothing uses any of it yet. No account can turn two-step sign-in on in this release, so the trigger refuses nothing.
+- Nothing uses any of it until `TWO_STEP_ENABLED` is set (see [two-step sign-in](#two-step-sign-in)); it is off by default. Until an account turns its second step on, the trigger refuses nothing.
 
 Locks:
 

@@ -15,8 +15,25 @@ export type TokenKind = 'session' | 'enrollment';
  * A refusal a client may act on by its code rather than its words: `current`
  * (the device asking is the one named; sign out instead), `registered` (the
  * device already described itself). Approval will add `busy` and `policy`.
+ *
+ * Two-step sign-in (docs/two-step-design.md 10):
+ * - `update-required`: the account asks for a second step and this client cannot answer one;
+ * - `two-step`: the second step is needed and was missing or wrong (401 at sign-in, where the
+ *   token takes another answer; 403 at a change);
+ * - `two-step-expired`: the step token is gone (five minutes, five wrong answers, a password
+ *   change): start again, from the password at sign-in or from a new challenge at a change;
+ * - `totp-frozen`: authenticator codes are paused here; another method still answers;
+ * - `unsupported`: this server does not offer two-step sign-in (TWO_STEP_ENABLED).
  */
-export type AuthErrorCode = 'current' | 'registered' | 'key-in-use';
+export type AuthErrorCode =
+    | 'current'
+    | 'registered'
+    | 'key-in-use'
+    | 'update-required'
+    | 'two-step'
+    | 'two-step-expired'
+    | 'totp-frozen'
+    | 'unsupported';
 
 export class AuthError extends Error {
     readonly code?: AuthErrorCode;

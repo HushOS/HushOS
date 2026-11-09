@@ -127,7 +127,8 @@ async function signIn(
               }
             : undefined,
     });
-    if (!result || 'suspended' in result) throw new Error('No session.');
+    if (!result || 'suspended' in result || 'stepRequired' in result)
+        throw new Error('No session.');
     return { token, device: result.device };
 }
 
