@@ -190,6 +190,14 @@ struct MainView: View {
                 } message: {
                     Text("Your session ended, perhaps because your password was changed on another device. Sign in again to carry on.")
                 }
+                // Notifications, in the app's own words, where iOS allows HushOS already (PhonePush.askOnce): once per account.
+                .alert("Turn on notifications?", isPresented: Binding(get: { PhonePush.shared.offer != nil }, set: { if !$0 { PhonePush.shared.offer = nil } })) {
+                    Button("Not now", role: .cancel) { PhonePush.shared.offer = nil }
+                    // Taken now: the alert clears `offer` as it closes, before the task runs.
+                    Button("Turn on") { let offer = PhonePush.shared.offer; Task { await PhonePush.shared.accept(offer) } }
+                } message: {
+                    Text("Get told about new sign-ins, removed devices, things shared with you and family invitations, even while HushOS is closed.")
+                }
                 .alert("That page is only on the web.", isPresented: $webOnly) {
                     Button("OK", role: .cancel) {}
                 }
@@ -207,6 +215,11 @@ struct MainView: View {
         .task { if let start = DebugStart.tab { tab = start } }
         #endif
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        // Notifications, asked once per account once this screen settles (after a sign-in, a sign-up's words, or the
+        // first start of a build that asks), never over a sheet or dialog. Again for each session the screen shows.
+        .task(id: model.vault.map(ObjectIdentifier.init)) { await PhonePush.shared.askOnce() }
+        // Signed out or removed under the question: it never comes back for an account that's gone.
+        .onDisappear { PhonePush.shared.offer = nil }
         // A new vault (a sign-in again after Change password or Rotate account key ended the old session)
         // replaces the store's in place: the old one's session is dead and its keys may be too.
         .task(id: model.vault.map(ObjectIdentifier.init)) {

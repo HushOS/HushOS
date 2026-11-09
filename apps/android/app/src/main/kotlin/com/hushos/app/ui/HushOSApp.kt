@@ -237,6 +237,8 @@ private fun Main(model: DriveViewModel, state: DriveState) {
     // Not enough room for an upload: the three ways out, from the transfers sheet's Make room.
     var makingRoom by rememberSaveable { mutableStateOf(false) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
+    // Notifications, asked once per account once this screen settles, never while a sheet or dialog has the focus.
+    AskForNotifications(state.user?.id, androidx.compose.ui.platform.LocalWindowInfo.current.isWindowFocused)
     LaunchedEffect(state.request) {
         val request = state.request ?: return@LaunchedEffect
         when {
