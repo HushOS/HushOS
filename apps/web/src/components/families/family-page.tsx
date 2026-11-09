@@ -230,7 +230,7 @@ export function FamilyPage({
 
     return (
         <div className="flex flex-1 flex-col">
-            {/* The family's folders are the sidebar's family item; this page is who is in it. */}
+            {/* Who is in the family; its folders are one click away, here and from the sidebar's family item. */}
             <PageHeader
                 title={family}
                 titleAction={

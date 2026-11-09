@@ -47,7 +47,7 @@ function FamilySpacePage() {
     const plan = useFamilyPlanGate(space.userId, space.groupId);
     const canCreate = space.manager && !plan.waiting;
     // What the family item's count in the sidebar stands for, said where that item leads.
-    const waiting = useWaitingOn(space.userId, space.groupId, space.manager);
+    const waiting = useWaitingOn(space.userId, space.groupId, space.manager, { poll: false });
     const [deleting, setDeleting] = useState<{ workspaceId: string; name: string } | null>(null);
     // A folder whose root did not open has no name to show; it is listed by what it is.
     const rows = [...space.areas].sort((a, b) =>
@@ -78,25 +78,17 @@ function FamilySpacePage() {
                 )}
             </PageHeader>
             {waiting > 0 && (
-                <div className="max-w-3xl px-5 pb-5 sm:px-8" data-family-waiting-notice>
-                    <Alert variant="info">
+                <output className="block max-w-3xl px-5 pb-5 sm:px-8" data-family-waiting-notice>
+                    {/* A status note (output), not an alert: it must not cut into what a screen reader is saying. */}
+                    <Alert variant="info" role={undefined}>
                         <AlertTitle>
                             {waiting === 1
                                 ? 'Someone is waiting for you'
                                 : `${waiting} people are waiting for you`}
                         </AlertTitle>
-                        <AlertDescription>
-                            See who in{' '}
-                            <Link
-                                to="/app/family"
-                                className="font-semibold text-primary underline underline-offset-2"
-                            >
-                                Family settings
-                            </Link>
-                            .
-                        </AlertDescription>
+                        <AlertDescription>Open Family settings to see who.</AlertDescription>
                     </Alert>
-                </div>
+                </output>
             )}
             {rows.length === 0 ? (
                 <EmptyState

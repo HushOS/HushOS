@@ -150,12 +150,18 @@ export const myInvitationsQueryOptions = (userId: string) =>
  * (lib/family-work-state.ts, nothing loaded for it here), and the family's member list is read
  * only while that pass names someone.
  */
-export function useWaitingOn(userId: string, groupId: string, manager: boolean) {
+/* Only the sidebar polls (`poll`): a second timer elsewhere would ask twice a minute. */
+export function useWaitingOn(
+    userId: string,
+    groupId: string,
+    manager: boolean,
+    { poll = true }: { poll?: boolean } = {},
+) {
     const pending = useQuery({
         ...pendingQueryOptions(userId, groupId),
         enabled: manager,
         // Someone who accepts turns up within a minute; the family page asks more often.
-        refetchInterval: 60_000,
+        refetchInterval: poll ? 60_000 : false,
     });
     const { needsCheck } = useFamilyWork(groupId);
     const others = needsCheck.some((id) => id !== userId);
