@@ -1,0 +1,39 @@
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/PushAsk.swift
+  s_566b8e0c4467a4::t_604e93d4692e5c 7-13,18-25,32,43,45,51-67,69-113
+apps/android/app/src/test/kotlin/com/hushos/app/data/PushAskTest.kt
+  s_566b8e0c4467a4::t_d27a647d783cfa 3,6,8-10,12-13,16-18,22-57,60-63,67-73,77-84,88-92,96-100,104-108
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/PushAskTests.swift
+  s_566b8e0c4467a4::t_068ca0924e9048 1,6-8,12-13,15-16,19-37,41-74,77-83,86-92,95-103
+apps/android/app/src/main/kotlin/com/hushos/app/data/PushAsk.kt
+  s_566b8e0c4467a4::t_0530812281ee3d 6,12-15,17-18,23-32,37,47-48,50-53,60-65,67-83,85-97,103-104,107-109,111-118,121-134
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_a85e1c8f90cc62 190-192
+apps/android/app/src/main/kotlin/com/hushos/app/ui/NotificationsSection.kt
+  s_566b8e0c4467a4::t_a953ffbddd44fb 111,181-184,190,192,194-200,204,206-211,213,216
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_918ed4d118011e 1094
+apps/ios/App/PhonePush.swift
+  s_566b8e0c4467a4::t_ccac1010a90ade 143-145,147-148,152-186,190,246
+apps/web/src/components/notifications-ask.tsx
+  s_566b8e0c4467a4::t_90ede530e6f522 53-54
+apps/web/src/lib/web-push.ts
+  s_566b8e0c4467a4::t_32f3ee5ae04736 54-55,91,96-97
+docs/devices-design.md
+  s_566b8e0c4467a4::t_6d850d4453c6e9 284-285
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c5b8981455212ef7dce4d11a5e60a121f0b3ed62",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
