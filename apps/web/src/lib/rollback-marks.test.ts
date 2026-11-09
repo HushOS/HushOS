@@ -280,8 +280,12 @@ describe('rollback marks', () => {
         const all = stored();
         expect(Object.keys(all)).toEqual([await slotKey(MAYA)]);
         const text = JSON.stringify(all);
+        // Each as a token of its own, as plaintext JSON would hold it: random base64 or hex can
+        // contain the digits 4217 (it did, in CI), and that says nothing about what is stored.
         for (const needle of [MAYA, '4217', 'settings', 'identity', 'true'])
-            expect(text).not.toContain(needle);
+            expect(text).not.toMatch(
+                new RegExp(`(?<![\\w-])${needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-])`),
+            );
     });
 
     test('a locked browser reads nothing: an error, not "nothing seen"', async () => {
