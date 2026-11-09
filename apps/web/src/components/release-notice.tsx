@@ -17,7 +17,7 @@ export function ReleaseNotice() {
     return (
         <div
             aria-live="polite"
-            className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-rule bg-muted px-5 py-2 text-sm sm:px-6"
+            className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-rule bg-muted px-5 py-2 text-sm sm:px-8"
         >
             <span>
                 HushOS was updated.{' '}

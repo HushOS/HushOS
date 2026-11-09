@@ -47,13 +47,57 @@ function wanted(userId: string) {
     }
 }
 
+/* Sent on this page whenever this browser's notifications are turned on or off, so the offer to turn them on can go. */
+export const WEB_PUSH_CHANGED = 'web-push-changed';
+
 function setWanted(userId: string, on: boolean) {
+    // Turned on or off here, from the offer or Account's switch: the person decided, so the offer goes.
+    dismissWebPushAsk(userId);
     try {
         if (on) localStorage.setItem(WEB_PUSH_PREFIX + userId, 'on');
         else localStorage.removeItem(WEB_PUSH_PREFIX + userId);
     } catch {
         // Storage refused: the switch still works for this page; it is not renewed later.
     }
+    window.dispatchEvent(new Event(WEB_PUSH_CHANGED));
+}
+
+/*
+ * Set when this account closed the app's offer to turn notifications on in this browser, or the
+ * offer's Turn on failed (a browser with no push service): `hushos.web-push-ask:<userId>`, wiped
+ * with the account's data at sign-out (lib/device-data.ts). The offer is then never made again.
+ */
+export const WEB_PUSH_ASK_PREFIX = 'hushos.web-push-ask:';
+
+export function webPushAskDismissed(userId: string) {
+    try {
+        return localStorage.getItem(WEB_PUSH_ASK_PREFIX + userId) === 'dismissed';
+    } catch {
+        // Storage refused: never offered, rather than offered on every page.
+        return true;
+    }
+}
+
+export function dismissWebPushAsk(userId: string) {
+    try {
+        localStorage.setItem(WEB_PUSH_ASK_PREFIX + userId, 'dismissed');
+    } catch {
+        // Storage refused: the offer goes for this page; webPushAskDismissed then says it is.
+    }
+}
+
+/*
+ * Whether to offer turning notifications on in this browser: a browser that can, whose permission
+ * isn't blocked, not subscribed for this account, on a server with notifications on, and an
+ * offer this account hasn't closed here. Browsers penalise permission prompts no click asked for,
+ * so the offer is a line with a button (components/notifications-ask.tsx), never the prompt itself.
+ */
+export async function shouldOfferWebPush(userId: string) {
+    // Allowed already (for another account, or before a sign-out) is offered too: the offer only turns on from a click.
+    if (!webPushSupported() || Notification.permission === 'denied') return false;
+    if (webPushAskDismissed(userId)) return false;
+    if (await webPushOn(userId)) return false;
+    return (await notificationSettings()) !== null;
 }
 
 /* Whether this account has notifications on in this browser, and the browser still allows them. */

@@ -186,7 +186,10 @@ Design: `docs/devices-design.md` 5; as built: `docs/push-relay-plan.md`, PR 4.
     - `catchUp` lists `GET /api/notifications` when the app opens or comes back; event ids shown are in `push-seen.json` (an account file).
     - The words, the tag and which relay may be used are the core's (`notifications.rs`): only `https://push.hushos.com`, or in a debug build `localhost`/`127.0.0.1`, and `10.0.2.2` only on the emulator. A sharer is named by the pin's name only.
 - `PushService` checks the tag, fetches the event and posts within 9 seconds, else the fallback. Channels: Security (high), Shared with you, Families, Other activity (low, the fallback); notices and channels `VISIBILITY_PRIVATE` with a public version reading "New activity in HushOS"; local only. Whether a locked phone shows the private version is the person's lock-screen setting, not the app's.
-- `POST_NOTIFICATIONS` is asked only from the switch (`ui/NotificationsSection.kt`).
+- `POST_NOTIFICATIONS` is asked from the switch (`ui/NotificationsSection.kt`) and once per account by the app itself (`AskForNotifications` over `data/PushAsk.kt`):
+    - from `Main`, once it has settled with the window's focus, so never while a sheet or dialog (each a window of its own) is up. `PushAsk.read` reads the server's settings and changes nothing; losing the focus cancels the effect, and the mark is set on the main thread right before the question;
+    - only on a server with notifications and a usable relay, where notifications are allowed already (before Android 13, switched off since, or a sign-out and back in) the app asks in its own words instead (an `AlertDialog`, "Turn on notifications?", Turn on / Not now), and only Turn on registers;
+    - the record is `push-asked.json` in the app's files (an account file) with the marks `ASKED`, `RETRY` (a yes whose registration failed, made once per start: `PushAsk.retried`) and `DECIDED` (the switch, either way), changed only by compare-and-set. The relay waiting for the answer survives a rotation (`rememberSaveable`). Tests: `PushAskTest`.
 - `AccountStore.of(context)` calls `PushNotifications.forget`: the registration goes, its handle is held for deletion, the push notices are taken down and the FCM token deleted.
 - Taps reach `MainActivity` as `com.hushos.app.push.OPEN:<devices|shared:false|families|app>`.
 

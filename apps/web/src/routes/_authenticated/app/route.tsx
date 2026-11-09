@@ -9,6 +9,7 @@ import { SearchButton } from '@/components/search-button';
 import { UserMenu } from '@/components/user-menu';
 import { DeviceControl, openDeviceDialog } from '@/components/device-control';
 import { NavigationBar } from '@/components/navigation-bar';
+import { NotificationsAsk } from '@/components/notifications-ask';
 import { ReleaseNotice } from '@/components/release-notice';
 import { CollisionDialog } from '@/components/drive/collision-dialog';
 import { DriveRuntime } from '@/components/drive/drive-shell';
@@ -224,6 +225,8 @@ function AppLayout() {
                     className="flex min-h-0 min-w-0 flex-1 flex-col scroll-pb-[var(--selection-room,0px)] md:overflow-x-hidden md:overflow-y-auto"
                 >
                     <ReleaseNotice />
+                    {/* Keyed by account: another account signed in here starts from its own answer. */}
+                    <NotificationsAsk key={user.id} userId={user.id} />
                     {(rememberError || setupError) && (
                         <div className="flex flex-col gap-3 border-b border-rule px-5 py-4 sm:px-6">
                             {/*
