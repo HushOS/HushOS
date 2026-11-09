@@ -1,0 +1,23 @@
+docs/companies-design.md
+  s_1f3a9ec02d29ed::t_045460a20dd581 1016-1017
+  s_1f3a9ec02d29ed::t_0c303321f58b14 1263
+  s_1f3a9ec02d29ed::t_32a78237af00b3 1003-1015,1018-1021
+docs/company-storage-design.md
+  s_1f3a9ec02d29ed::t_043846ce6e07fb 1-1332
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2fda2432cb9989c9ffc4f1e13f2495103f09947a",
+  "prompts": {},
+  "sessions": {
+    "s_1f3a9ec02d29ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aef80487-cabb-455f-b2f1-acb7f8d96c4e",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
