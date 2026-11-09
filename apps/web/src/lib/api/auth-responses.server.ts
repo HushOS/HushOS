@@ -229,8 +229,8 @@ export const registrationChallengeResponse = t.Object({
 export const authUserResponse = t.Object({ user: authUser });
 
 /*
- * The first half of an OPAQUE sign-in (startLogin): POST /auth/login/start, /auth/devices/reauth
- * and /auth/delete/start. At /auth/login/start an unknown address gets a decoy KE2 from the same
+ * The first half of an OPAQUE sign-in (startLogin): POST /auth/login/start, /auth/devices/reauth,
+ * /auth/two-step/reauth and /auth/delete/start. At /auth/login/start an unknown address gets a decoy KE2 from the same
  * call, the same three fields at the same lengths: one shape, nothing optional, so the schema
  * cannot tell the two apart either.
  */
@@ -251,14 +251,81 @@ const accountKeyEnvelope = t.Object({
 });
 
 /*
- * POST /auth/login/finish: the account, its wrapped key, and the session's device: whether a
- * device key's proof brought it back (`attached`) and whether it has described itself.
+ * A finished sign-in (POST /auth/login/two-step, and /auth/login/finish without a step): the
+ * account, its wrapped key, and the session's device: whether a device key's proof brought it
+ * back (`attached`) and whether it has described itself.
  */
 export const loginResponse = t.Object({
     user: authUser,
     envelope: accountKeyEnvelope,
     device: t.Object({ id: t.String(), attached: t.Boolean(), registered: t.Boolean() }),
 });
+
+/* What can answer the second step. `webauthn` is listed once a security key can be checked. */
+const stepMethod = t.Union([
+    t.Literal('webauthn'),
+    t.Literal('totp'),
+    t.Literal('backup'),
+    t.Literal('phrase'),
+]);
+
+/*
+ * A step token and what can answer it (docs/two-step-design.md 4): the methods the account has,
+ * when the token ends, and for the recovery phrase the salt and version its signing key is
+ * derived with. Never a secret, a method's name or anything of the account beyond that.
+ */
+const stepChallenge = t.Object({
+    token: t.String(),
+    methods: t.Array(stepMethod),
+    expiresAt: t.String(),
+    phrase: t.Optional(t.Object({ recoveryVersion: t.Integer(), wrappingSalt: t.String() })),
+});
+
+/*
+ * POST /auth/login/finish: a finished sign-in, or, for an account with a second step, a step
+ * token and nothing else: no user, no envelope, no device. The step comes first in the union: a
+ * union keeps the first variant that matches, and the two share no field.
+ */
+export const loginOrStepResponse = t.Union([t.Object({ twoStep: stepChallenge }), loginResponse]);
+
+/* POST /auth/two-step/challenge: a step token for one change, bound to the session asking. */
+export const stepChallengeResponse = stepChallenge;
+
+/* A method as Settings lists it: never its secret or public key. Dates are ISO strings, rounded. */
+const twoStepMethod = t.Object({
+    id: t.String(),
+    kind: t.Union([t.Literal('totp'), t.Literal('webauthn')]),
+    name: t.String(),
+    createdAt: t.String(),
+    lastUsedAt: t.Nullable(t.String()),
+    synced: t.Boolean(),
+});
+
+/* GET /auth/two-step: whether the step is on, its methods, the backup codes left, the freeze. */
+export const twoStepResponse = t.Object({
+    on: t.Boolean(),
+    methods: t.Array(twoStepMethod),
+    backupCodesLeft: t.Integer(),
+    totpFrozen: t.Boolean(),
+});
+
+/*
+ * POST /auth/two-step/totp: the new authenticator app's id, its secret (base32) and the key URI
+ * the QR code encodes. The one time the secret leaves the server.
+ */
+export const totpSetupResponse = t.Object({ id: t.String(), secret: t.String(), uri: t.String() });
+
+/* POST /auth/two-step/totp/:id/confirm: the ten backup codes, only when this turned the step on. */
+export const totpConfirmedResponse = t.Object({ backupCodes: t.Optional(t.Array(t.String())) });
+
+/* PUT /auth/two-step/methods/:id: the renamed method. */
+export const twoStepMethodResponse = t.Object({ method: twoStepMethod });
+
+/* DELETE /auth/two-step/methods/:id: whether the step is still on. */
+export const twoStepMethodRemovedResponse = t.Object({ on: t.Boolean() });
+
+/* POST /auth/two-step/backup-codes: the new set, once. */
+export const backupCodesResponse = t.Object({ codes: t.Array(t.String()) });
 
 /* POST /auth/recover/start: the OPAQUE registration response and the recovery envelope to open. */
 export const recoveryChallengeResponse = t.Object({

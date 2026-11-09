@@ -8,6 +8,7 @@ import { client, ready, server } from '@hushos/crypto/server';
 import {
     accountSetupResponse,
     authUserResponse,
+    backupCodesResponse,
     consentStoredResponse,
     contactResponse,
     contactSuccessionResponse,
@@ -20,6 +21,7 @@ import {
     identityHistoryResponse,
     identityResponse,
     loginChallengeResponse,
+    loginOrStepResponse,
     loginResponse,
     profileResponse,
     recoveryBackupResponse,
@@ -31,9 +33,15 @@ import {
     settingsResponse,
     settingsSavedResponse,
     setupResponse,
+    stepChallengeResponse,
     storageResponse,
     successionResponse,
     successResponse,
+    totpConfirmedResponse,
+    totpSetupResponse,
+    twoStepMethodRemovedResponse,
+    twoStepMethodResponse,
+    twoStepResponse,
     verifiedEnrollmentResponse,
 } from '@/lib/api/auth-responses.server';
 import { loadApi, type ApiRoute } from '@/test/api-app';
@@ -114,13 +122,31 @@ const recovery: Reply<typeof auth.getRecoveryBackup>['recovery'] = {
     encryptedRecoveryKey: b64(48),
     publicKey: b64(32),
 };
-const accountKey: Reply<typeof auth.finishLogin>['envelope'] = {
+/* The two answers of POST /auth/login/finish: a finished sign-in, or a second step asked for. */
+type SignedIn = Extract<Reply<typeof auth.finishLogin>, { user: unknown }>;
+type StepAsked = Extract<Reply<typeof auth.finishLogin>, { twoStep: unknown }>;
+const accountKey: SignedIn['envelope'] = {
     envelopeVersion: 1,
     keyVersion: 2,
     credentialVersion: 3,
     wrappingSalt: b64(32),
     wrappingNonce: b64(24),
     encryptedKey: b64(48),
+};
+/* A step token as issued: every method, and the phrase's salt and version. */
+const stepToken: StepAsked['twoStep'] = {
+    token: b64(32, 5),
+    methods: ['totp', 'backup', 'phrase'],
+    expiresAt: '2026-11-10T12:05:00.000Z',
+    phrase: { recoveryVersion: 3, wrappingSalt: b64(32) },
+};
+const method: Reply<typeof auth.getTwoStep>['methods'][number] = {
+    id: userId,
+    kind: 'totp',
+    name: 'Authenticator app',
+    createdAt: '2026-11-10T12:00:00.000Z',
+    lastUsedAt: '2026-11-10T00:00:00.000Z',
+    synced: false,
 };
 /* Lengths as serenity-kit makes them: KE2 is 320 bytes, a registration response 64. */
 const loginChallenge: Reply<typeof auth.startLogin> = {
@@ -478,21 +504,123 @@ const cases: Record<string, Case> = {
         required: ['sign-in', (v) => delete v.loginResponse],
     },
     'POST /auth/login/finish': {
-        schema: loginResponse,
+        schema: loginOrStepResponse,
         samples: {
             'a new device': {
                 user: { id: userId, name: 'Ada', email: 'ada@example.com', role: 'member' },
                 envelope: accountKey,
                 device: { id: deviceId, attached: false, registered: false },
-            } satisfies Pick<Reply<typeof auth.finishLogin>, 'user' | 'envelope' | 'device'>,
+            } satisfies Pick<SignedIn, 'user' | 'envelope' | 'device'>,
             'a device its key brought back': {
                 user: { id: userId, name: 'Ada', email: 'ada@example.com', role: 'admin' },
                 envelope: accountKey,
                 device: { id: deviceId, attached: true, registered: true },
-            } satisfies Pick<Reply<typeof auth.finishLogin>, 'user' | 'envelope' | 'device'>,
+            } satisfies Pick<SignedIn, 'user' | 'envelope' | 'device'>,
+            'a second step asked for': { twoStep: stepToken } satisfies StepAsked,
+            'a second step, for an account without a recovery key': {
+                twoStep: { token: b64(32, 9), methods: ['totp'], expiresAt: stepToken.expiresAt },
+            } satisfies StepAsked,
         },
-        stray: (v) => v.envelope,
+        stray: (v) => v.envelope ?? v.twoStep,
         required: ['a new device', (v) => delete v.envelope.encryptedKey],
+    },
+    'POST /auth/login/two-step': {
+        schema: loginResponse,
+        samples: {
+            'a known device, after the step': {
+                user: { id: userId, name: 'Ada', email: 'ada@example.com', role: 'member' },
+                envelope: accountKey,
+                device: { id: deviceId, attached: true, registered: true },
+            } satisfies Pick<Reply<typeof auth.finishTwoStepLogin>, 'user' | 'envelope' | 'device'>,
+        },
+        stray: (v) => v.device,
+        required: ['a known device, after the step', (v) => delete v.envelope],
+    },
+    'POST /auth/two-step/challenge': {
+        schema: stepChallengeResponse,
+        samples: {
+            'every method': stepToken satisfies Reply<typeof auth.challengeTwoStep>,
+            'codes only': {
+                token: b64(32, 9),
+                methods: ['backup'],
+                expiresAt: stepToken.expiresAt,
+            } satisfies Reply<typeof auth.challengeTwoStep>,
+        },
+        stray: (v) => v.phrase ?? v,
+        required: ['every method', (v) => delete v.expiresAt],
+    },
+    'GET /auth/two-step': {
+        schema: twoStepResponse,
+        samples: {
+            on: {
+                on: true,
+                methods: [method, { ...method, id: deviceId, kind: 'webauthn', synced: true }],
+                backupCodesLeft: 8,
+                totpFrozen: true,
+            } satisfies Reply<typeof auth.getTwoStep>,
+            off: {
+                on: false,
+                methods: [],
+                backupCodesLeft: 0,
+                totpFrozen: false,
+            } satisfies Reply<typeof auth.getTwoStep>,
+        },
+        stray: (v) => v.methods[0] ?? v,
+        required: ['on', (v) => delete v.methods[0].lastUsedAt],
+    },
+    'POST /auth/two-step/totp': {
+        schema: totpSetupResponse,
+        samples: {
+            'a new app': {
+                id: userId,
+                secret: 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ',
+                uri: 'otpauth://totp/HushOS:ada%40example.com?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&issuer=HushOS&algorithm=SHA1&digits=6&period=30',
+            } satisfies Reply<typeof auth.startTotp>,
+        },
+        stray: (v) => v,
+        required: ['a new app', (v) => delete v.secret],
+    },
+    'POST /auth/two-step/totp/:id/confirm': {
+        schema: totpConfirmedResponse,
+        samples: {
+            'the first method': {
+                backupCodes: ['7KQ2M-9XD4P', '0AB1C-2DE3F'],
+            } satisfies Reply<typeof auth.confirmTotp>,
+            'a replacement': {} satisfies Reply<typeof auth.confirmTotp>,
+        },
+        stray: (v) => v,
+        // Nothing here is required: a replacement answers with no codes at all.
+        required: ['the first method', (v) => (v.backupCodes = [7])],
+    },
+    'PUT /auth/two-step/methods/:id': {
+        schema: twoStepMethodResponse,
+        samples: {
+            renamed: { method } satisfies Reply<typeof auth.renameTwoStepMethod>,
+            'never used': { method: { ...method, lastUsedAt: null } } satisfies Reply<
+                typeof auth.renameTwoStepMethod
+            >,
+        },
+        stray: (v) => v.method,
+        required: ['renamed', (v) => delete v.method.name],
+    },
+    'DELETE /auth/two-step/methods/:id': {
+        schema: twoStepMethodRemovedResponse,
+        samples: {
+            'one of two': { on: true } satisfies Reply<typeof auth.removeTwoStepMethod>,
+            'the last': { on: false } satisfies Reply<typeof auth.removeTwoStepMethod>,
+        },
+        stray: (v) => v,
+        required: ['the last', (v) => delete v.on],
+    },
+    'POST /auth/two-step/backup-codes': {
+        schema: backupCodesResponse,
+        samples: {
+            'a new set': {
+                codes: ['7KQ2M-9XD4P', '0AB1C-2DE3F'],
+            } satisfies Reply<typeof auth.replaceBackupCodes>,
+        },
+        stray: (v) => v,
+        required: ['a new set', (v) => delete v.codes],
     },
     'POST /auth/recover/start': {
         schema: recoveryChallengeResponse,
@@ -732,6 +860,37 @@ describe.each(Object.entries(cases))('%s', (_route, { schema, samples, stray, re
     });
 });
 
+/*
+ * With a second step on, a correct password must hand over nothing but the step token
+ * (docs/two-step-design.md 4). If a handler ever built a reply holding both, the schema keeps the
+ * step and drops the session's half: the envelope, the user and the device never go out with it.
+ */
+test('a reply that asks for the second step never carries the envelope, the user or the device', async () => {
+    const signedIn = clone(cases['POST /auth/login/finish']!.samples['a new device']) as object;
+    const both = { ...signedIn, twoStep: stepToken };
+    const { status, body } = await serve(loginOrStepResponse, both);
+    expect(status).toBe(200);
+    expect(body).toEqual({ twoStep: stepToken });
+    expect(JSON.stringify(body)).not.toMatch(/envelope|encryptedKey|wrappingNonce|"user"|"device"/);
+});
+
+/* A method outside the set, or a step token cut short, fails rather than going out. */
+test('refuses a step method or a factor kind outside its set, and a step without its token', async () => {
+    const asked = clone(
+        cases['POST /auth/login/finish']!.samples['a second step asked for'],
+    ) as any;
+    asked.twoStep.methods = ['sms'];
+    expect((await serve(loginOrStepResponse, asked)).status).toBe(500);
+    const short = clone(
+        cases['POST /auth/login/finish']!.samples['a second step asked for'],
+    ) as any;
+    delete short.twoStep.token;
+    expect((await serve(loginOrStepResponse, short)).status).toBe(500);
+    const listed = clone(cases['GET /auth/two-step']!.samples.on) as any;
+    listed.methods[0].kind = 'sms';
+    expect((await serve(twoStepResponse, listed)).status).toBe(500);
+});
+
 /* A field typed as one of a set: a value outside it fails rather than going out. */
 test('refuses a role, device kind, security action or identity version outside its set', async () => {
     const user = clone(cases['GET /auth/session']!.samples['signed in']) as any;
@@ -856,7 +1015,8 @@ const expectedSchemas: Record<string, { 200: AnySchema }> = {
     'POST /api/auth/register/start': { 200: registrationChallengeResponse },
     'POST /api/auth/register/finish': { 200: authUserResponse },
     'POST /api/auth/login/start': { 200: loginChallengeResponse },
-    'POST /api/auth/login/finish': { 200: loginResponse },
+    'POST /api/auth/login/finish': { 200: loginOrStepResponse },
+    'POST /api/auth/login/two-step': { 200: loginResponse },
     'POST /api/auth/recover/email': { 200: emailSentResponse },
     'GET /api/auth/recover': { 200: enrollmentResponse },
     'POST /api/auth/recover/start': { 200: recoveryChallengeResponse },
@@ -886,6 +1046,14 @@ const expectedSchemas: Record<string, { 200: AnySchema }> = {
     'DELETE /api/auth/devices/others': { 200: devicesRemovedResponse },
     'PUT /api/auth/devices/:id': { 200: deviceResponse },
     'DELETE /api/auth/devices/:id': { 200: devicesRemovedResponse },
+    'GET /api/auth/two-step': { 200: twoStepResponse },
+    'POST /api/auth/two-step/reauth': { 200: loginChallengeResponse },
+    'POST /api/auth/two-step/challenge': { 200: stepChallengeResponse },
+    'POST /api/auth/two-step/totp': { 200: totpSetupResponse },
+    'POST /api/auth/two-step/totp/:id/confirm': { 200: totpConfirmedResponse },
+    'PUT /api/auth/two-step/methods/:id': { 200: twoStepMethodResponse },
+    'DELETE /api/auth/two-step/methods/:id': { 200: twoStepMethodRemovedResponse },
+    'POST /api/auth/two-step/backup-codes': { 200: backupCodesResponse },
     'POST /api/auth/profile': { 200: profileResponse },
     'POST /api/auth/logout': { 200: successResponse },
 };

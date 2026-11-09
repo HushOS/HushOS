@@ -243,19 +243,67 @@ const securitySubjects: Record<SecurityNoticeKind, (when: string) => string> = {
     'devices-removed': (when) => `Devices were removed from your account · ${when} · HushOS`,
     'password-attempts': (when) =>
         `Someone kept trying to confirm your password · ${when} · HushOS`,
+    'two-step-on': (when) => `Two-step sign-in is on · ${when} · HushOS`,
+    'two-step-off': (when) => `Two-step sign-in is off · ${when} · HushOS`,
+    'two-step-method-added': (when) => `A second step was added to your account · ${when} · HushOS`,
+    'two-step-method-removed': (when) =>
+        `A second step was removed from your account · ${when} · HushOS`,
+    'backup-codes-new': (when) => `New backup codes were made · ${when} · HushOS`,
+    'backup-code-used': (when) => `A backup code was used · ${when} · HushOS`,
+    'phrase-used': (when) => `Your recovery phrase was used for the second step · ${when} · HushOS`,
+    'two-step-failed': (when) =>
+        `Someone signed in with your password but did not pass the second step · ${when} · HushOS`,
+    'totp-frozen': (when) => `Authenticator codes are paused for new devices · ${when} · HushOS`,
+    'totp-frozen-device': (when) =>
+        `Authenticator codes are paused on one of your devices · ${when} · HushOS`,
 };
 
-type SecurityInput = { kind: SecurityNoticeKind; when: string; count?: number; accountUrl: string };
+/* What can answer the second step, by kind: all a notice ever says of a method. */
+export type SecurityNoticeMethod = 'totp' | 'webauthn' | 'backup' | 'phrase';
 
 /*
- * A security notice about the account's devices: when it happened (written by
- * the caller, in UTC), how many devices for a removal of all others, and a link
- * to the device list. It carries nothing the device said about itself.
+ * The only words a notice has for a method: fixed phrases by kind, picked here,
+ * so no caller can put a name someone typed (a key's, a device's) into a
+ * security email. A sign-in names what it was made with; a change names the
+ * kind of method changed.
+ */
+const signedInWith: Record<SecurityNoticeMethod | 'password', string> = {
+    password: 'Your password',
+    totp: 'Your password and an authenticator code',
+    webauthn: 'Your password and a security key',
+    backup: 'Your password and a backup code',
+    phrase: 'Your password and your recovery phrase',
+};
+const methodKind: Partial<Record<SecurityNoticeMethod, string>> = {
+    totp: 'An authenticator app',
+    webauthn: 'A security key',
+};
+
+type SecurityInput = {
+    kind: SecurityNoticeKind;
+    when: string;
+    /* Devices removed, or backup codes left. */
+    count?: number;
+    /* The kind of method: what a new device signed in with, or what was turned on, added or removed. */
+    method?: SecurityNoticeMethod;
+    accountUrl: string;
+};
+
+/*
+ * A security notice about the account's devices or its second step: when it
+ * happened (written by the caller, in UTC), how many (devices removed, backup
+ * codes left), the kind of method, and a link to the account. It carries
+ * nothing a device or a method was named by.
  */
 export function composeSecurityNotice(to: string, input: SecurityInput) {
+    const method =
+        input.kind === 'new-device'
+            ? signedInWith[input.method ?? 'password']
+            : ((input.method && methodKind[input.method]) ?? 'A second step');
     return compose(to, securitySubjects[input.kind](input.when), securityNotice[input.kind], {
         when: input.when,
         count: String(input.count ?? 1),
+        method,
         accountUrl: input.accountUrl,
         logoUrl: logoUrl(input.accountUrl),
     });

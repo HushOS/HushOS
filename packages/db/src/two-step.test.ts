@@ -1,13 +1,21 @@
 import { randomUUID } from 'node:crypto';
-import { eq, isNull } from 'drizzle-orm';
-import { afterAll, beforeEach, describe, expect, test } from 'vitest';
+import { and, eq, isNull, sql } from 'drizzle-orm';
+import { afterAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { bytes, registered, sha256 } from '../test/accounts';
-import { closeDatabase, deleteTestAccount, resetDatabase } from '../test/helpers';
+import {
+    closeDatabase,
+    createTestFamily,
+    deleteTestAccount,
+    lockObserver,
+    resetDatabase,
+    signingKeyFromSeed,
+} from '../test/helpers';
 import * as auth from './auth';
 import { db } from './client';
 import {
     accountDevices,
     accountSecurityEvents,
+    groupMemberships,
     opaqueCredentials,
     sessions,
     twoStepAttempts,
@@ -16,6 +24,7 @@ import {
     twoStepState,
     type TwoStepPurpose,
 } from './schema';
+import { deviceSessionStatement } from './signatures';
 import * as twoStep from './two-step';
 
 /*
@@ -81,9 +90,13 @@ async function session(userId: string, options: { twoStepAt?: Date; keyed?: bool
         tokenHash,
         previousTokenHash: null,
         expiresAt: new Date(Date.now() + HOUR),
-        twoStepAt: options.twoStepAt,
+        // As a sign-in that passed the step from a device that proved no key.
+        twoStep: options.twoStepAt
+            ? { passed: { at: options.twoStepAt, deviceId: null } }
+            : undefined,
     });
-    if (!result || 'suspended' in result) throw new Error('No session.');
+    if (!result || 'suspended' in result || 'stepRequired' in result)
+        throw new Error('No session.');
     if (options.keyed) {
         const device = await auth.registerDevice({
             sessionTokenHash: tokenHash,
@@ -286,11 +299,18 @@ describe('the guard on sessions', () => {
         expect(await refusal(rawSession(user.id, null))).toBeNull();
     });
 
-    test('a sign-in that does not know the step makes no session and no device', async () => {
+    test('a sign-in that has not passed the step is told so, and makes no session and no device', async () => {
         const user = await account();
         await enrolTotp(user.id);
-        // What a container of the release before two-step runs: createSession without twoStepAt.
-        await expect(session(user.id)).rejects.toThrow();
+        expect(
+            await auth.createSession({
+                userId: user.id,
+                credentialVersion: 1,
+                tokenHash: token('session'),
+                previousTokenHash: null,
+                expiresAt: new Date(Date.now() + HOUR),
+            }),
+        ).toEqual({ stepRequired: true, deviceId: null });
         expect(await db.select().from(sessions)).toHaveLength(0);
         expect(await db.select().from(accountDevices)).toHaveLength(0);
 
@@ -1393,15 +1413,18 @@ describe('failure counts and the freeze', () => {
         expect((await stateOf(user.id))?.consecutiveFailures).toBe(2);
     });
 
-    test('only codes count: a wrong key assertion or phrase signature spends the token alone', async () => {
+    test('only codes count: a wrong key assertion or phrase signature spends the token and names its pool, no more', async () => {
         const user = await account();
         await enrolTotp(user.id);
         const binding = await stepToken(user.id);
         for (const method of ['webauthn', 'phrase'] as const)
             expect(await twoStep.failStep({ ...binding, method })).toMatchObject({
                 status: 'counted',
-                pool: null,
+                // The pool is named for the notice, which counts every failed step.
+                pool: 'account',
+                deviceId: null,
                 consecutive: null,
+                froze: false,
             });
         expect((await twoStep.getStepAttempt(binding))?.failures).toBe(2);
         expect((await stateOf(user.id))?.consecutiveFailures).toBe(0);
@@ -1607,26 +1630,140 @@ describe('failure counts and the freeze', () => {
         expect((await stateOf(viaPhrase.user.id))?.totpFrozenAt).toBeNull();
     });
 
-    test('a known device’s count never freezes the app', async () => {
+    test('a known device’s hundredth wrong code in a row freezes the app on that device alone, not its ninety-ninth', async () => {
         const user = await account();
         const laptop = await session(user.id, { keyed: true });
+        const phone = await session(user.id, { keyed: true });
         const { factorId } = await enrolTotp(user.id);
+        const code = (deviceId: string | undefined, step: number) =>
+            stepToken(user.id, { deviceId }).then((binding) =>
+                twoStep.passStep({ ...binding, proof: { method: 'totp', factorId, step } }),
+            );
+        await db
+            .update(accountDevices)
+            .set({ twoStepFailures: 98 })
+            .where(eq(accountDevices.id, laptop.deviceId));
+
+        // Ninety-nine: one below. The laptop's next code still passes (tried in a transaction
+        // that is rolled back, so the count stands).
+        expect(await wrongCodes(user.id, 1, { deviceId: laptop.deviceId })).toMatchObject({
+            pool: 'device',
+            consecutive: 99,
+            froze: false,
+        });
+        const laptopToken = await stepToken(user.id, { deviceId: laptop.deviceId });
+        expect((await twoStep.getStepContext(laptopToken))?.totpFrozen).toBe(false);
+        class Undo extends Error {}
+        await expect(
+            db.transaction(async (tx) => {
+                expect(
+                    await twoStep.passStep(
+                        { ...laptopToken, proof: { method: 'totp', factorId, step: STEP + 1 } },
+                        tx,
+                    ),
+                ).toMatchObject({ status: 'ok' });
+                throw new Undo();
+            }),
+        ).rejects.toBeInstanceOf(Undo);
+        expect(await deviceFailures(laptop.deviceId)).toBe(99);
+
+        // The hundredth freezes it, there.
+        expect(await wrongCodes(user.id, 1, { deviceId: laptop.deviceId })).toMatchObject({
+            pool: 'device',
+            deviceId: laptop.deviceId,
+            consecutive: 100,
+            froze: true,
+        });
+        expect((await twoStep.getStepContext(laptopToken))?.totpFrozen).toBe(true);
+        expect(await code(laptop.deviceId, STEP + 1)).toEqual({ status: 'frozen' });
+        // One above: still frozen, and not frozen a second time.
+        expect(await wrongCodes(user.id, 1, { deviceId: laptop.deviceId })).toMatchObject({
+            consecutive: 101,
+            froze: false,
+        });
+        expect(await code(laptop.deviceId, STEP + 1)).toEqual({ status: 'frozen' });
+
+        // Nowhere else: the account's shared pool and the other known device still take codes.
+        expect((await stateOf(user.id))?.totpFrozenAt).toBeNull();
+        expect((await twoStep.getStepContext(await stepToken(user.id)))?.totpFrozen).toBe(false);
+        expect(await code(undefined, STEP + 1)).toMatchObject({ status: 'ok', unfroze: false });
+        expect(await code(phone.deviceId, STEP + 2)).toMatchObject({ status: 'ok' });
+        // A code passing elsewhere is the app itself: it thaws nothing.
+        expect(await deviceFailures(laptop.deviceId)).toBe(101);
+        expect(await code(laptop.deviceId, STEP + 3)).toEqual({ status: 'frozen' });
+    });
+
+    test('a device’s freeze thaws as the shared one does: by anything but the app, from that device or any other', async () => {
+        const user = await account();
+        const laptop = await session(user.id, { keyed: true });
+        const { factorId, codes: set } = await enrolTotp(user.id);
+        const freeze = () =>
+            db
+                .update(accountDevices)
+                .set({ twoStepFailures: 100 })
+                .where(eq(accountDevices.id, laptop.deviceId));
+        const laptopCode = async (step: number) =>
+            twoStep.passStep({
+                ...(await stepToken(user.id, { deviceId: laptop.deviceId })),
+                proof: { method: 'totp', factorId, step },
+            });
+
+        // A backup code from the frozen device itself.
+        await freeze();
+        expect(await laptopCode(STEP + 1)).toEqual({ status: 'frozen' });
+        expect(
+            await twoStep.passStep({
+                ...(await stepToken(user.id, { deviceId: laptop.deviceId })),
+                proof: { method: 'backup', codeHash: set[0]!.codeHash },
+            }),
+        ).toMatchObject({ status: 'ok', unfroze: true, deviceId: laptop.deviceId });
+        expect(await deviceFailures(laptop.deviceId)).toBe(0);
+        expect(await laptopCode(STEP + 1)).toMatchObject({ status: 'ok' });
+
+        // The phrase from a new device: the laptop takes codes again.
+        await freeze();
+        expect(
+            await twoStep.passStep({ ...(await stepToken(user.id)), proof: { method: 'phrase' } }),
+        ).toMatchObject({ status: 'ok', unfroze: true, deviceId: null });
+        expect(await deviceFailures(laptop.deviceId)).toBe(0);
+        expect(await laptopCode(STEP + 2)).toMatchObject({ status: 'ok' });
+    });
+
+    test('a new app starts unfrozen on every known device too', async () => {
+        const user = await account();
+        const laptop = await session(user.id, { keyed: true });
+        await enrolTotp(user.id);
+        await db
+            .update(accountDevices)
+            .set({ twoStepFailures: 140 })
+            .where(eq(accountDevices.id, laptop.deviceId));
+        const replacement = await pendingTotp(user.id);
+        expect(
+            await twoStep.confirmTotp({ userId: user.id, factorId: replacement, step: STEP + 10 }),
+        ).toMatchObject({ status: 'ok', replaced: true });
+        expect(await deviceFailures(laptop.deviceId)).toBe(0);
+        expect(
+            await twoStep.passStep({
+                ...(await stepToken(user.id, { deviceId: laptop.deviceId })),
+                proof: { method: 'totp', factorId: replacement, step: STEP + 11 },
+            }),
+        ).toMatchObject({ status: 'ok' });
+    });
+
+    test('a device’s count past a hundred freezes nothing while the account has no app', async () => {
+        const user = await account();
+        const laptop = await session(user.id, { keyed: true });
+        await enrolKey(user.id, 'only key');
         await db
             .update(accountDevices)
             .set({ twoStepFailures: 99 })
             .where(eq(accountDevices.id, laptop.deviceId));
-        expect(await wrongCodes(user.id, 2, { deviceId: laptop.deviceId })).toMatchObject({
-            consecutive: 101,
+        const binding = await stepToken(user.id, { deviceId: laptop.deviceId });
+        expect(await twoStep.failStep({ ...binding, method: 'backup' })).toMatchObject({
+            pool: 'device',
+            consecutive: 100,
             froze: false,
         });
-        expect((await stateOf(user.id))?.totpFrozenAt).toBeNull();
-        const fromNew = await stepToken(user.id);
-        expect(
-            await twoStep.passStep({
-                ...fromNew,
-                proof: { method: 'totp', factorId, step: STEP + 1 },
-            }),
-        ).toMatchObject({ status: 'ok' });
     });
 
     test('with keys and backup codes only there is no app to freeze, however many codes are wrong', async () => {
@@ -1916,7 +2053,7 @@ describe('in one transaction with what the step authorises', () => {
                     tokenHash: sessionToken,
                     previousTokenHash: passed.attempt.previousTokenHash,
                     expiresAt: new Date(Date.now() + HOUR),
-                    twoStepAt: passed.at,
+                    twoStep: { passed: { at: passed.at, deviceId: passed.attempt.deviceId } },
                 },
                 tx,
             );
@@ -1949,7 +2086,7 @@ describe('in one transaction with what the step authorises', () => {
                         tokenHash: token('session'),
                         previousTokenHash: null,
                         expiresAt: new Date(Date.now() + HOUR),
-                        twoStepAt: passed.at,
+                        twoStep: { passed: { at: passed.at, deviceId: null } },
                     },
                     tx,
                 );
@@ -2022,27 +2159,639 @@ describe('in one transaction with what the step authorises', () => {
             purpose: 'delete',
             sessionTokenHash: asking.tokenHash,
         });
+        // deleteAccount passes the step itself, after the groups (see its comment).
         const remove = (credentialVersion: number) =>
-            db.transaction(async (tx) => {
-                const passed = await twoStep.passStep(
-                    { ...binding, proof: { method: 'backup', codeHash: set[0]!.codeHash } },
-                    tx,
-                );
-                expect(passed.status).toBe('ok');
-                const deleted = await auth.deleteAccount(
-                    { userId: user.id, credentialVersion, sessionTokenHash: asking.tokenHash },
-                    tx,
-                );
-                if (deleted !== true) throw new Abort();
+            auth.deleteAccount({
+                userId: user.id,
+                credentialVersion,
+                sessionTokenHash: asking.tokenHash,
+                step: {
+                    tokenHash: binding.tokenHash,
+                    proof: { method: 'backup', codeHash: set[0]!.codeHash },
+                },
             });
 
-        await expect(remove(2)).rejects.toBeInstanceOf(Abort);
+        expect(await remove(2)).toBe(false);
         expect(await twoStep.getStepAttempt(binding)).not.toBeNull();
         expect((await twoStep.getTwoStep(user.id)).backupCodes).toHaveLength(10);
         expect(await auth.getUserById(user.id)).not.toBeNull();
 
-        await remove(1);
+        expect(await remove(1)).toBe(true);
         expect(await auth.getUserById(user.id)).toBeNull();
         expect(await db.select().from(twoStepFactors)).toEqual([]);
+    });
+});
+
+/*
+ * The step at sign-in, decided inside createSession under the account's lock
+ * (docs/two-step-design.md 4): who is exempt, what an exempt session inherits,
+ * and which device a session attaches to once the step is passed.
+ */
+describe('a sign-in for an account with the step on', () => {
+    /* A device with a signing key of its own, and what signs its proofs. */
+    async function knownDevice(userId: string, label: string, twoStepAt?: Date) {
+        const signer = signingKeyFromSeed(sha256(`device:${userId}:${label}`));
+        const opened = await session(userId, { twoStepAt });
+        const device = await auth.registerDevice({
+            sessionTokenHash: opened.tokenHash,
+            kind: 'web',
+            name: label,
+            signingPublicKey: signer.publicKey,
+        });
+        if (device.status !== 'ok') throw new Error(`Device ${device.status}.`);
+        return { ...opened, signer };
+    }
+
+    /* The sign-in a browser makes: its cookie, and its device key's proof for this attempt. */
+    function signIn(
+        userId: string,
+        options: {
+            cookie?: Buffer | null;
+            proof?: { deviceId: string; signer: { sign: (message: Buffer) => Buffer } };
+            signedFor?: string;
+        } = {},
+    ) {
+        const attemptDigest = token('attempt');
+        const tokenHash = token('session');
+        return auth
+            .createSession({
+                userId,
+                credentialVersion: 1,
+                tokenHash,
+                previousTokenHash: options.cookie ?? null,
+                expiresAt: new Date(Date.now() + HOUR),
+                device: options.proof && {
+                    id: options.proof.deviceId,
+                    attemptDigest,
+                    signature: options.proof.signer.sign(
+                        deviceSessionStatement({
+                            userId: options.signedFor ?? userId,
+                            deviceId: options.proof.deviceId,
+                            attemptDigest,
+                        }),
+                    ),
+                },
+            })
+            .then((result) => ({ result, tokenHash }));
+    }
+
+    const setSteppedAt = (tokenHash: Buffer, at: Date | null) =>
+        db.update(sessions).set({ twoStepAt: at }).where(eq(sessions.tokenHash, tokenHash));
+
+    test('the unlock on the same device within 30 days passes without the step, and keeps the old time', async () => {
+        const user = await account();
+        const at = new Date(Date.now() - 12 * DAY);
+        const laptop = await knownDevice(user.id, 'Laptop', at);
+        await enrolTotp(user.id);
+        const { result, tokenHash } = await signIn(user.id, {
+            cookie: laptop.tokenHash,
+            proof: { deviceId: laptop.deviceId, signer: laptop.signer },
+        });
+        expect(result).toMatchObject({
+            device: { id: laptop.deviceId, attached: true, created: null },
+        });
+        // Inherited, not extended: thirty days run from when the step was passed.
+        expect((await sessionRow(tokenHash))?.twoStepAt).toEqual(at);
+        // And again from the new session: still the first time.
+        const again = await signIn(user.id, {
+            cookie: tokenHash,
+            proof: { deviceId: laptop.deviceId, signer: laptop.signer },
+        });
+        expect((await sessionRow(again.tokenHash))?.twoStepAt).toEqual(at);
+    });
+
+    test('a browser whose device never got a key is exempt by its cookie alone, on its own device row', async () => {
+        const user = await account();
+        const at = new Date(Date.now() - DAY);
+        const browser = await session(user.id, { twoStepAt: at });
+        await enrolTotp(user.id);
+        const { result, tokenHash } = await signIn(user.id, { cookie: browser.tokenHash });
+        expect(result).toMatchObject({ device: { id: browser.deviceId, created: null } });
+        expect((await sessionRow(tokenHash))?.twoStepAt).toEqual(at);
+        expect(await db.select().from(accountDevices)).toHaveLength(1);
+    });
+
+    test('the thirtieth day is the last: a minute inside it is exempt, a minute past it is asked', async () => {
+        const user = await account();
+        const laptop = await knownDevice(user.id, 'Laptop', new Date());
+        await enrolTotp(user.id);
+        const unlock = () =>
+            signIn(user.id, {
+                cookie: laptop.tokenHash,
+                proof: { deviceId: laptop.deviceId, signer: laptop.signer },
+            });
+        const edge = twoStep.STEP_REMEMBERED_DAYS * DAY;
+
+        await setSteppedAt(laptop.tokenHash, new Date(Date.now() - edge - MINUTE));
+        expect((await unlock()).result).toEqual({ stepRequired: true, deviceId: laptop.deviceId });
+        // Asked, and nothing touched: the session it presented is still there.
+        expect(await sessionRow(laptop.tokenHash)).toBeDefined();
+        expect(await db.select().from(sessions)).toHaveLength(1);
+
+        const inside = new Date(Date.now() - edge + MINUTE);
+        await setSteppedAt(laptop.tokenHash, inside);
+        const exempt = await unlock();
+        expect((await sessionRow(exempt.tokenHash))?.twoStepAt).toEqual(inside);
+    });
+
+    test('a session that never passed the step, or has expired, exempts nothing', async () => {
+        const user = await account();
+        const laptop = await knownDevice(user.id, 'Laptop');
+        await enrolTotp(user.id);
+        const unlock = () =>
+            signIn(user.id, {
+                cookie: laptop.tokenHash,
+                proof: { deviceId: laptop.deviceId, signer: laptop.signer },
+            });
+        expect((await sessionRow(laptop.tokenHash))?.twoStepAt).toBeNull();
+        expect((await unlock()).result).toEqual({ stepRequired: true, deviceId: laptop.deviceId });
+
+        await db
+            .update(sessions)
+            .set({
+                createdAt: new Date(Date.now() - 2 * HOUR),
+                twoStepAt: new Date(Date.now() - HOUR),
+                expiresAt: new Date(Date.now() - MINUTE),
+            })
+            .where(eq(sessions.tokenHash, laptop.tokenHash));
+        expect((await unlock()).result).toEqual({ stepRequired: true, deviceId: laptop.deviceId });
+    });
+
+    test('another device, another account’s session and a removed device are each asked for the step', async () => {
+        const user = await account();
+        const at = new Date(Date.now() - DAY);
+        const laptop = await knownDevice(user.id, 'Laptop', at);
+        const phone = await knownDevice(user.id, 'Phone', at);
+        const stranger = await account();
+        const theirs = await knownDevice(stranger.id, 'Theirs', at);
+        await enrolTotp(user.id);
+        const devices = await db.select().from(accountDevices);
+        const untouched = async () => {
+            expect(await db.select().from(accountDevices)).toEqual(devices);
+            expect(await db.select().from(sessions)).toHaveLength(3);
+        };
+
+        // The laptop's stepped cookie, carried to the phone: the step was the laptop's.
+        expect(
+            (
+                await signIn(user.id, {
+                    cookie: laptop.tokenHash,
+                    proof: { deviceId: phone.deviceId, signer: phone.signer },
+                })
+            ).result,
+        ).toEqual({ stepRequired: true, deviceId: phone.deviceId });
+        // The laptop's cookie with no proof at all: that would be a new device.
+        expect((await signIn(user.id, { cookie: laptop.tokenHash })).result).toEqual({
+            stepRequired: true,
+            deviceId: null,
+        });
+        // Another account's stepped session, and its device's proof.
+        expect(
+            (
+                await signIn(user.id, {
+                    cookie: theirs.tokenHash,
+                    proof: { deviceId: theirs.deviceId, signer: theirs.signer },
+                    signedFor: stranger.id,
+                })
+            ).result,
+        ).toEqual({ stepRequired: true, deviceId: null });
+        // A proof signed by the wrong key names no device for the token either.
+        expect(
+            (
+                await signIn(user.id, {
+                    cookie: laptop.tokenHash,
+                    proof: { deviceId: laptop.deviceId, signer: phone.signer },
+                })
+            ).result,
+        ).toEqual({ stepRequired: true, deviceId: null });
+        await untouched();
+
+        // The laptop removed from the phone: its cookie and its key no longer count.
+        expect(
+            await auth.revokeDevice({
+                userId: user.id,
+                deviceId: laptop.deviceId,
+                sessionTokenHash: phone.tokenHash,
+            }),
+        ).toMatchObject({ status: 'ok' });
+        expect(
+            (
+                await signIn(user.id, {
+                    cookie: laptop.tokenHash,
+                    proof: { deviceId: laptop.deviceId, signer: laptop.signer },
+                })
+            ).result,
+        ).toEqual({ stepRequired: true, deviceId: null });
+    });
+
+    test('a device removed while it unlocks never leaves a stepped session behind, whichever lands first', async () => {
+        for (let round = 0; round < 6; round++) {
+            await resetDatabase();
+            const user = await account();
+            const at = new Date(Date.now() - DAY);
+            const laptop = await knownDevice(user.id, 'Laptop', at);
+            const phone = await knownDevice(user.id, 'Phone', at);
+            await enrolTotp(user.id);
+            const [unlock, removal] = await Promise.all([
+                signIn(user.id, {
+                    cookie: laptop.tokenHash,
+                    proof: { deviceId: laptop.deviceId, signer: laptop.signer },
+                }),
+                auth.revokeDevice({
+                    userId: user.id,
+                    deviceId: laptop.deviceId,
+                    sessionTokenHash: phone.tokenHash,
+                }),
+            ]);
+            expect(removal).toMatchObject({ status: 'ok' });
+            // Either the unlock came first and was ended with the device, or it came second and
+            // was asked for the step. Never a session, and never a new device carrying the step.
+            expect(await sessionRow(unlock.tokenHash)).toBeUndefined();
+            const rows = await db
+                .select({ id: accountDevices.id })
+                .from(accountDevices)
+                .where(eq(accountDevices.userId, user.id));
+            expect(rows.map((row) => row.id).sort()).toEqual(
+                [laptop.deviceId, phone.deviceId].sort(),
+            );
+            const live = await db.select().from(sessions).where(eq(sessions.userId, user.id));
+            expect(live.map((row) => row.deviceId)).toEqual([phone.deviceId]);
+        }
+    });
+
+    test('an account without the step signs in as before, with no step time', async () => {
+        const user = await account();
+        const { result, tokenHash } = await signIn(user.id);
+        expect(result).toMatchObject({ device: { created: 'enrolment' } });
+        expect((await sessionRow(tokenHash))?.twoStepAt).toBeNull();
+    });
+
+    /* The second request of a two-step sign-in: the step, then the session, in one transaction. */
+    async function finish(
+        userId: string,
+        factorId: string,
+        step: number,
+        options: { deviceId?: string; cookie?: Buffer } = {},
+    ) {
+        const binding = {
+            tokenHash: token('step'),
+            purpose: 'login' as const,
+            sessionTokenHash: null,
+        };
+        await twoStep.createStepAttempt({
+            ...binding,
+            userId,
+            credentialVersion: 1,
+            deviceId: options.deviceId,
+            previousTokenHash: options.cookie,
+        });
+        const tokenHash = token('session');
+        const opened = await db.transaction(async (tx) => {
+            const passed = await twoStep.passStep(
+                { ...binding, proof: { method: 'totp', factorId, step } },
+                tx,
+            );
+            if (passed.status !== 'ok') throw new Error(`The step ${passed.status}.`);
+            return auth.createSession(
+                {
+                    userId: passed.attempt.userId,
+                    credentialVersion: passed.attempt.credentialVersion,
+                    tokenHash,
+                    previousTokenHash: passed.attempt.previousTokenHash,
+                    expiresAt: new Date(Date.now() + HOUR),
+                    twoStep: { passed: { at: passed.at, deviceId: passed.attempt.deviceId } },
+                },
+                tx,
+            );
+        });
+        if (!opened || 'suspended' in opened || 'stepRequired' in opened)
+            throw new Error('No session.');
+        return { opened, tokenHash };
+    }
+
+    test('a two-step sign-in from a known device comes back to that device’s row, and makes no new one', async () => {
+        const user = await account();
+        const laptop = await knownDevice(user.id, 'Laptop');
+        const { factorId } = await enrolTotp(user.id);
+        // Its session ended; the device row and its key remain.
+        await db.delete(sessions).where(eq(sessions.tokenHash, laptop.tokenHash));
+
+        const { opened, tokenHash } = await finish(user.id, factorId, STEP + 1, {
+            deviceId: laptop.deviceId,
+        });
+        expect(opened.device).toEqual({
+            id: laptop.deviceId,
+            attached: true,
+            registered: true,
+            created: null,
+        });
+        expect(await db.select().from(accountDevices)).toHaveLength(1);
+        expect((await sessionRow(tokenHash))?.deviceId).toBe(laptop.deviceId);
+        expect((await sessionRow(tokenHash))?.twoStepAt).toBeInstanceOf(Date);
+    });
+
+    test('a token naming a device that is no longer a known one of the account opens a new device', async () => {
+        const user = await account();
+        const laptop = await knownDevice(user.id, 'Laptop');
+        const keyless = await session(user.id);
+        const stranger = await account();
+        const theirs = await knownDevice(stranger.id, 'Theirs');
+        const { factorId } = await enrolTotp(user.id);
+        await db
+            .update(accountDevices)
+            .set({ revokedAt: new Date() })
+            .where(eq(accountDevices.id, laptop.deviceId));
+
+        let step = STEP;
+        for (const deviceId of [laptop.deviceId, keyless.deviceId, theirs.deviceId]) {
+            const { opened } = await finish(user.id, factorId, ++step, { deviceId });
+            expect(opened.device).toMatchObject({ attached: false, created: 'password' });
+            expect(opened.device.id).not.toBe(deviceId);
+        }
+        // The stranger's device is still theirs, with its session.
+        expect((await sessionRow(theirs.tokenHash))?.deviceId).toBe(theirs.deviceId);
+    });
+
+    test('a browser without a device key keeps its row through the step, by the cookie the token recorded', async () => {
+        const user = await account();
+        const browser = await session(user.id);
+        const { factorId } = await enrolTotp(user.id);
+        const { opened } = await finish(user.id, factorId, STEP + 1, {
+            cookie: browser.tokenHash,
+        });
+        expect(opened.device).toMatchObject({ id: browser.deviceId, created: null });
+        expect(await sessionRow(browser.tokenHash)).toBeUndefined();
+    });
+});
+
+/*
+ * A change asked from a session, behind the step (steppedChange): the step and
+ * the change commit together, an account with the step on cannot skip it, and
+ * the session that passed it is marked.
+ */
+describe('a change behind the step', () => {
+    async function stepped(options: { twoStepAt?: Date } = {}) {
+        const user = await account();
+        const asking = await session(user.id, { twoStepAt: options.twoStepAt });
+        const app = await enrolTotp(user.id);
+        // enrolTotp marked no session: `asking` is as it signed in.
+        return { user, asking, app };
+    }
+    const change = (
+        userId: string,
+        sessionTokenHash: Buffer,
+        step: twoStep.ChangeStep | null,
+        run: () => Promise<string | null> = async () => 'changed',
+    ) => twoStep.steppedChange({ userId, purpose: 'two-step', sessionTokenHash, step }, run);
+
+    test('with the step on it is required: no token, no change', async () => {
+        const { user, asking } = await stepped();
+        let ran = false;
+        expect(
+            await change(user.id, asking.tokenHash, null, async () => {
+                ran = true;
+                return 'changed';
+            }),
+        ).toEqual({ status: 'required' });
+        expect(ran).toBe(false);
+    });
+
+    test('an account without the step changes without one', async () => {
+        const user = await account();
+        const asking = await session(user.id);
+        expect(await change(user.id, asking.tokenHash, null)).toEqual({
+            status: 'ok',
+            value: 'changed',
+            passed: null,
+        });
+    });
+
+    test('a token of another purpose, another session or a sign-in authorises nothing', async () => {
+        const { user, asking, app } = await stepped();
+        const other = await session(user.id, { twoStepAt: new Date() });
+        const proof = { method: 'totp' as const, factorId: app.factorId, step: STEP + 1 };
+        const tokens = [
+            await stepToken(user.id, { purpose: 'password', sessionTokenHash: asking.tokenHash }),
+            await stepToken(user.id, { purpose: 'two-step', sessionTokenHash: other.tokenHash }),
+            await stepToken(user.id),
+        ];
+        for (const binding of tokens) {
+            expect(
+                await change(user.id, asking.tokenHash, { tokenHash: binding.tokenHash, proof }),
+            ).toEqual({ status: 'missing' });
+            // Still there for the purpose and session it was issued to.
+            expect(await twoStep.getStepAttempt(binding)).not.toBeNull();
+        }
+        expect((await factorRow(app.factorId))?.totpLastStep).toBe(STEP);
+    });
+
+    test('passing it marks the asking session as stepped when it was not, and never moves a time already there', async () => {
+        const { user, asking, app } = await stepped();
+        expect((await sessionRow(asking.tokenHash))?.twoStepAt).toBeNull();
+        const first = await stepToken(user.id, {
+            purpose: 'two-step',
+            sessionTokenHash: asking.tokenHash,
+        });
+        const done = await change(user.id, asking.tokenHash, {
+            tokenHash: first.tokenHash,
+            proof: { method: 'totp', factorId: app.factorId, step: STEP + 1 },
+        });
+        expect(done).toMatchObject({ status: 'ok', value: 'changed' });
+        const at = (await sessionRow(asking.tokenHash))?.twoStepAt;
+        expect(at).toBeInstanceOf(Date);
+        expect(done.status === 'ok' && done.passed?.at).toEqual(at);
+
+        const second = await stepToken(user.id, {
+            purpose: 'two-step',
+            sessionTokenHash: asking.tokenHash,
+        });
+        expect(
+            await change(user.id, asking.tokenHash, {
+                tokenHash: second.tokenHash,
+                proof: { method: 'totp', factorId: app.factorId, step: STEP + 2 },
+            }),
+        ).toMatchObject({ status: 'ok' });
+        expect((await sessionRow(asking.tokenHash))?.twoStepAt).toEqual(at);
+        // Only the session that asked.
+        const bystander = await session(user.id, { twoStepAt: new Date(Date.now() - DAY) });
+        expect((await db.select().from(sessions).where(isNull(sessions.twoStepAt))).length).toBe(0);
+        expect((await sessionRow(bystander.tokenHash))?.twoStepAt?.getTime()).toBeLessThan(
+            at!.getTime(),
+        );
+    });
+
+    test('a change that refuses gives back the token, the code, the thaw and the session’s mark', async () => {
+        const { user, asking, app } = await stepped();
+        await db
+            .update(twoStepState)
+            .set({ consecutiveFailures: 100, totpFrozenAt: new Date() })
+            .where(eq(twoStepState.userId, user.id));
+        const binding = await stepToken(user.id, {
+            purpose: 'two-step',
+            sessionTokenHash: asking.tokenHash,
+        });
+        expect(
+            await change(
+                user.id,
+                asking.tokenHash,
+                {
+                    tokenHash: binding.tokenHash,
+                    proof: { method: 'backup', codeHash: app.codes[0]!.codeHash },
+                },
+                async () => null,
+            ),
+        ).toEqual({ status: 'unchanged' });
+        expect((await twoStep.getStepAttempt(binding))?.failures).toBe(0);
+        expect((await twoStep.getTwoStep(user.id)).backupCodes).toHaveLength(10);
+        expect((await stateOf(user.id))?.totpFrozenAt).toBeInstanceOf(Date);
+        expect((await sessionRow(asking.tokenHash))?.twoStepAt).toBeNull();
+    });
+
+    test('a proof that is refused runs no change, and leaves the token to be counted', async () => {
+        const { user, asking, app } = await stepped();
+        const binding = await stepToken(user.id, {
+            purpose: 'two-step',
+            sessionTokenHash: asking.tokenHash,
+        });
+        let ran = false;
+        // The step the app was confirmed with: a replay.
+        expect(
+            await change(
+                user.id,
+                asking.tokenHash,
+                {
+                    tokenHash: binding.tokenHash,
+                    proof: { method: 'totp', factorId: app.factorId, step: STEP },
+                },
+                async () => {
+                    ran = true;
+                    return 'changed';
+                },
+            ),
+        ).toEqual({ status: 'refused', reason: 'replayed' });
+        expect(ran).toBe(false);
+        expect(await twoStep.failStep({ ...binding, method: 'totp' })).toMatchObject({
+            status: 'counted',
+            left: 4,
+            pool: 'device',
+            deviceId: asking.deviceId,
+        });
+    });
+});
+
+/*
+ * Deleting an account that has the step on: deleteAccount takes the proof and
+ * passes the step itself, after the person's groups and under the account's
+ * lock, so a deletion and a group write can never wait on each other.
+ */
+describe('deleting an account behind the step', () => {
+    async function inFamily() {
+        const user = await account();
+        const organizer = await account();
+        const family = await createTestFamily({
+            organizerId: organizer.id,
+            members: [{ userId: user.id }],
+        });
+        const asking = await session(user.id);
+        const app = await enrolTotp(user.id);
+        const binding = await stepToken(user.id, {
+            purpose: 'delete',
+            sessionTokenHash: asking.tokenHash,
+        });
+        const member = async () => {
+            const [row] = await db
+                .select({ state: groupMemberships.state })
+                .from(groupMemberships)
+                .where(
+                    and(
+                        eq(groupMemberships.groupId, family.groupId),
+                        eq(groupMemberships.userId, user.id),
+                    ),
+                );
+            return row?.state;
+        };
+        const remove = (step?: { tokenHash: Buffer; proof: twoStep.StepProof }) =>
+            auth.deleteAccount({
+                userId: user.id,
+                credentialVersion: 1,
+                sessionTokenHash: asking.tokenHash,
+                step,
+            });
+        return { user, family, asking, app, binding, member, remove };
+    }
+
+    test('without the step it is refused, and the person is still in their family', async () => {
+        const { user, member, remove } = await inFamily();
+        expect(await remove()).toEqual({ step: 'required' });
+        expect(await auth.getUserById(user.id)).not.toBeNull();
+        expect(await member()).toBe('active');
+    });
+
+    test('a token issued for another purpose, or to another session, deletes nothing', async () => {
+        const { user, asking, app, member, remove } = await inFamily();
+        const other = await session(user.id, { twoStepAt: new Date() });
+        const proof = { method: 'backup' as const, codeHash: app.codes[0]!.codeHash };
+        for (const binding of [
+            await stepToken(user.id, { purpose: 'password', sessionTokenHash: asking.tokenHash }),
+            await stepToken(user.id, { purpose: 'delete', sessionTokenHash: other.tokenHash }),
+            await stepToken(user.id),
+        ]) {
+            expect(await remove({ tokenHash: binding.tokenHash, proof })).toEqual({
+                step: { status: 'missing' },
+            });
+            expect(await twoStep.getStepAttempt(binding)).not.toBeNull();
+        }
+        expect(await auth.getUserById(user.id)).not.toBeNull();
+        expect(await member()).toBe('active');
+        expect((await twoStep.getTwoStep(user.id)).backupCodes).toHaveLength(10);
+    });
+
+    test('a wrong answer takes back the departure with it, and the token is left to be counted', async () => {
+        const { user, app, binding, member, remove } = await inFamily();
+        // The step the app was confirmed with, again.
+        expect(
+            await remove({
+                tokenHash: binding.tokenHash,
+                proof: { method: 'totp', factorId: app.factorId, step: STEP },
+            }),
+        ).toEqual({ step: { status: 'refused', reason: 'replayed' } });
+        expect(await auth.getUserById(user.id)).not.toBeNull();
+        expect(await member()).toBe('active');
+        expect(await twoStep.failStep({ ...binding, method: 'totp' })).toMatchObject({
+            status: 'counted',
+            left: 4,
+        });
+    });
+
+    test('the groups are locked before the account: waiting for a family, it holds nobody’s account row', async () => {
+        const { user, family, app, binding, member, remove } = await inFamily();
+        const observer = lockObserver();
+        try {
+            // A group write under way: it holds the family's row, as every group write does first.
+            await observer.query('begin');
+            await observer.query('select id from groups where id = $1 for update', [
+                family.groupId,
+            ]);
+            const deletion = remove({
+                tokenHash: binding.tokenHash,
+                proof: { method: 'totp', factorId: app.factorId, step: STEP + 1 },
+            });
+            await vi.waitFor(async () => expect(await observer.waitingOn('groups')).toBe(true), {
+                timeout: 4_000,
+            });
+            // What that group write does next is lock the person's row. It gets it at once:
+            // the deletion has not taken the account, nor passed the step, while it waits.
+            await db.transaction((tx) =>
+                tx.execute(sql`select 1 from users where id = ${user.id} for update nowait`),
+            );
+            expect(await twoStep.getStepAttempt(binding)).not.toBeNull();
+            await observer.query('commit');
+            expect(await deletion).toBe(true);
+        } finally {
+            await observer.query('rollback').catch(() => {});
+            await observer.end();
+        }
+        expect(await auth.getUserById(user.id)).toBeNull();
+        expect(await member()).toBeUndefined();
     });
 });

@@ -19,20 +19,42 @@ import {
 } from '@hushos/crypto/recovery';
 import { authEnv } from '@hushos/env/auth';
 import { createHash, randomBytes } from 'node:crypto';
-import { adminRepository, authRepository, billingRepository, groupsRepository } from '@hushos/db';
+import {
+    adminRepository,
+    authRepository,
+    billingRepository,
+    groupsRepository,
+    twoStepRepository,
+} from '@hushos/db';
 import type { SignupIntent } from '@hushos/db/schema';
 import {
     sendAccountNotice,
     sendSecurityNotice,
     sendShareEmail,
     sendVerificationEmail,
-    type SecurityNoticeKind,
+    type SecurityNoticeMethod,
 } from '@hushos/emails/server';
 import { ready, server, client } from '@hushos/crypto/server';
 import { SECURITY_CHANGE_IDENTITY_BYTES, SECURITY_CHANGE_REST_BYTES } from './limits';
 import { notify } from './notifications';
 import { log as serverLog } from '@hushos/logging';
 import { boundAttemptHolds, type BoundPurpose } from './bound-attempt';
+import { noticeWhen } from './notice-when';
+import { serverSetup } from './server-setup';
+import {
+    appSteps,
+    checkStepAnswer,
+    issueStepToken,
+    newBackupCodes,
+    newTotp,
+    notifyTwoStep,
+    requireTwoStepEnabled,
+    stepNotPassed,
+    stepPassed,
+    stepRequired,
+    stepUnused,
+    type StepSubmission,
+} from './two-step';
 
 import {
     ENVELOPE_VERSION,
@@ -51,6 +73,13 @@ import {
 
 export { AuthError, type AuthErrorCode } from './tokens';
 export { SECURITY_CHANGE_IDENTITY_BYTES, SECURITY_CHANGE_REST_BYTES } from './limits';
+export {
+    twoStepEnabled,
+    twoStepNoticesSettled,
+    type StepAnswer,
+    type StepMethod,
+    type StepSubmission,
+} from './two-step';
 
 /*
  * The auth domain. Nothing here reads a request: callers hand in the session or
@@ -64,33 +93,6 @@ function config() {
         origin: authEnv.APP_ORIGIN,
         serverSetupId: authEnv.OPAQUE_SERVER_SETUP_ID,
     };
-}
-
-/*
- * The OPAQUE server setup: from the environment when the operator provides one,
- * otherwise made once on first start and kept in the database under the setup
- * id, so a fresh stack registers accounts without anyone minting a secret by
- * hand. Every password depends on it; the database backup is what keeps it.
- */
-let setup: Promise<string> | undefined;
-function serverSetup() {
-    setup ??= (async () => {
-        if (authEnv.OPAQUE_SERVER_SETUP) return authEnv.OPAQUE_SERVER_SETUP;
-        // Beside the password records, a dump of the database is all an offline guess needs.
-        if (process.env.NODE_ENV === 'production')
-            console.warn(
-                'OPAQUE_SERVER_SETUP is not set, so the server setup lives in the database beside the password records. Move it to the environment (see docs/self-hosting.md).',
-            );
-        await ready;
-        return authRepository.ensureServerSecret(
-            `opaque-setup:${authEnv.OPAQUE_SERVER_SETUP_ID}`,
-            () => server.createSetup(),
-        );
-    })().catch((error: unknown) => {
-        setup = undefined;
-        throw error;
-    });
-    return setup;
 }
 
 function hash(value: string) {
@@ -107,18 +109,6 @@ export function normalizeEmail(email: string) {
         throw new AuthError('Enter a valid email address.');
     return normalized;
 }
-
-const noticeTime = new Intl.DateTimeFormat('en-GB', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-    timeZone: 'UTC',
-});
-/* When something happened, as every notice to an account's email says it. */
-const noticeWhen = (at: Date = new Date()) => `${noticeTime.format(at)} UTC`;
 
 function normalizeName(value: string) {
     const name = value.trim().normalize('NFC');
@@ -472,7 +462,7 @@ export async function startLogin(
     email: string,
     startLoginRequest: string,
     binding?: {
-        purpose: SecurityAction | 'delete' | 'devices';
+        purpose: SecurityAction | 'delete' | 'devices' | 'two-step';
         sessionTokenHash: Buffer;
         userId: string;
     },
@@ -519,6 +509,38 @@ export async function startLogin(
     };
 }
 
+/* What a finished sign-in answers: the account, its wrapped key, the session's device and token. */
+function signedIn(
+    result: Exclude<
+        NonNullable<Awaited<ReturnType<typeof authRepository.createSession>>>,
+        { suspended: true } | { stepRequired: true }
+    >,
+    sessionToken: string,
+) {
+    const { key, user } = result;
+    return {
+        user,
+        envelope: {
+            envelopeVersion: supportedEnvelope(key.envelopeVersion),
+            keyVersion: key.keyVersion,
+            credentialVersion: key.credentialVersion,
+            wrappingSalt: key.wrappingSalt.toString('base64url'),
+            wrappingNonce: key.wrappingNonce.toString('base64url'),
+            encryptedKey: key.encryptedKey.toString('base64url'),
+        },
+        device: {
+            id: result.device.id,
+            attached: result.device.attached,
+            registered: result.device.registered,
+        },
+        newDevice: result.device.created === 'password',
+        sessionToken,
+    };
+}
+
+const suspended = () =>
+    new AuthError('This account is suspended. Contact whoever runs this instance.', 403);
+
 /*
  * Completes a sign-in and opens a session. `previousSessionToken` is the session the
  * browser still holds, if any, so the repository can retire it in the same step.
@@ -526,12 +548,24 @@ export async function startLogin(
  * valid one brings the device back to its own row; anything else makes a new
  * device and never fails the sign-in. `newDevice` says whether that new device
  * came in with the password alone, which is what the sign-in notice is for.
+ *
+ * With the second step on (docs/two-step-design.md 4), a correct password opens
+ * nothing by itself. Unless the sign-in is exempt (the unlock of a session that
+ * passed the step on this device less than 30 days ago, decided by the
+ * repository under the account's lock), no session is made, no envelope is
+ * returned, and the answer is `{ twoStep }`: a step token for
+ * `finishTwoStepLogin`, with the methods that can answer it. `twoStep` says the
+ * client can answer one (it sent `twoStep: 1`); one that cannot is told to
+ * update (409 `update-required`) and gets nothing else. The step comes after
+ * OPAQUE, never before: a wrong password fails exactly as it does without the
+ * step, so nothing here says which accounts have one.
  */
 export async function finishLogin(
     attemptToken: string,
     finishLoginRequest: string,
     previousSessionToken: string | null = null,
     device?: { id: string; signature: string },
+    options: { twoStep?: boolean } = {},
 ) {
     const failure = () => new AuthError('Unable to sign in. Check your email and password.', 401);
     if (!TOKEN_PATTERN.test(attemptToken)) throw failure();
@@ -560,12 +594,13 @@ export async function finishLogin(
         previousSessionToken && TOKEN_PATTERN.test(previousSessionToken)
             ? previousSessionToken
             : null;
+    const previousTokenHash = previousToken ? hash(previousToken) : null;
     const signature = device ? decodeSignature(device.signature) : null;
     const result = await authRepository.createSession({
         userId: attempt.userId,
         credentialVersion: attempt.credentialVersion,
         tokenHash: hash(token),
-        previousTokenHash: previousToken ? hash(previousToken) : null,
+        previousTokenHash,
         expiresAt: new Date(Date.now() + SESSION_IDLE_SECONDS * 1000),
         // The attempt's digest is its stored token hash: the statement names that.
         device:
@@ -574,27 +609,59 @@ export async function finishLogin(
                 : undefined,
     });
     if (!result) throw failure();
-    if ('suspended' in result)
-        throw new AuthError('This account is suspended. Contact whoever runs this instance.', 403);
-    const { key, user } = result;
-    return {
-        user,
-        envelope: {
-            envelopeVersion: supportedEnvelope(key.envelopeVersion),
-            keyVersion: key.keyVersion,
-            credentialVersion: key.credentialVersion,
-            wrappingSalt: key.wrappingSalt.toString('base64url'),
-            wrappingNonce: key.wrappingNonce.toString('base64url'),
-            encryptedKey: key.encryptedKey.toString('base64url'),
-        },
-        device: {
-            id: result.device.id,
-            attached: result.device.attached,
-            registered: result.device.registered,
-        },
-        newDevice: result.device.created === 'password',
-        sessionToken: token,
-    };
+    if ('suspended' in result) throw suspended();
+    if ('stepRequired' in result) {
+        if (!options.twoStep)
+            throw new AuthError(
+                'Update HushOS to sign in. This account asks for a second step.',
+                409,
+                { code: 'update-required' },
+            );
+        return {
+            twoStep: await issueStepToken({
+                userId: attempt.userId,
+                purpose: 'login',
+                sessionTokenHash: null,
+                credentialVersion: attempt.credentialVersion,
+                // The device that proved its key, and the cookie the browser showed: the session
+                // the step opens attaches by these, as this one would have.
+                deviceId: result.deviceId,
+                previousTokenHash,
+            }),
+        };
+    }
+    return signedIn(result, token);
+}
+
+/*
+ * The second request of a two-step sign-in: the step token `finishLogin` gave
+ * and an answer to it. A right answer opens the session, stepped now, and
+ * returns exactly what `finishLogin` returns without the step, with `method`
+ * (what answered) for the new-device notice. The step and the session commit
+ * together or not at all. A wrong answer is counted against the token (five,
+ * then it is gone) and its pool, and answered 401.
+ */
+export async function finishTwoStepLogin(submission: StepSubmission) {
+    const step = await checkStepAnswer(
+        { purpose: 'login', sessionTokenHash: null },
+        submission,
+        'sign-in',
+    );
+    const token = randomToken();
+    const opened = await authRepository.createSteppedSession({
+        stepTokenHash: step.binding.tokenHash,
+        proof: step.proof,
+        tokenHash: hash(token),
+        expiresAt: new Date(Date.now() + SESSION_IDLE_SECONDS * 1000),
+    });
+    if (opened.status === 'suspended') throw suspended();
+    if (opened.status === 'unavailable')
+        throw new AuthError('Unable to sign in. Sign in again.', 401, {
+            code: 'two-step-expired',
+        });
+    if (opened.status !== 'ok') return stepNotPassed(step, opened);
+    await stepPassed(step, opened.passed);
+    return { ...signedIn(opened.session, token), method: step.kind };
 }
 
 /* A device proof's 64 bytes, or null for anything else: a malformed proof is no proof, not a failure. */
@@ -1603,9 +1670,11 @@ export async function removeOtherDevices(sessionToken: string | null, proof: Dev
  */
 export async function notifyDevices(
     userId: string,
-    kind: SecurityNoticeKind,
+    kind: 'new-device' | 'device-removed' | 'devices-removed' | 'password-attempts',
     count?: number,
     at: Date = new Date(),
+    /* What answered the second step at a new device's sign-in: the notice names both. */
+    method?: SecurityNoticeMethod,
 ) {
     if (!(await authRepository.consumeRateLimit(hash(`auth:notice:${userId}`), 10, 60 * 60_000)))
         return;
@@ -1626,6 +1695,7 @@ export async function notifyDevices(
         kind,
         when: noticeWhen(at),
         count,
+        method,
         accountUrl: new URL('/app/account#devices', authEnv.APP_ORIGIN).href,
     });
 }
@@ -1981,7 +2051,7 @@ export async function startAccountDeletion(sessionToken: string | null, startLog
 }
 export async function finishAccountDeletion(
     sessionToken: string | null,
-    input: { attemptToken: string; finishLoginRequest: string },
+    input: { attemptToken: string; finishLoginRequest: string; twoStep?: StepSubmission },
     beforeDelete?: (userId: string) => Promise<void>,
 ) {
     const { user, token } = await requireSession(
@@ -1992,6 +2062,19 @@ export async function finishAccountDeletion(
         new AuthError('Could not delete your account. Check your password and try again.');
     await refuseWhileHoldingGroups(user.id);
     await consumeBoundAttempt('delete', user, token, input, failure);
+    // The password first, then the step (docs/two-step-design.md 4). The answer is checked
+    // here, before billing stops, so a wrong code never costs anyone their plan; it is spent
+    // by the repository, with the deletion, after the person's groups and under the account's lock.
+    const step = (await twoStepRepository.hasTwoStep(user.id))
+        ? input.twoStep
+            ? await checkStepAnswer(
+                  { purpose: 'delete', sessionTokenHash: hash(token) },
+                  input.twoStep,
+                  'change',
+              )
+            : null
+        : undefined;
+    if (step === null) throw stepRequired();
     // Anything billed to the account stops before the account goes; an outage there
     // leaves the account in place rather than a subscription without an owner.
     await beforeDelete?.(user.id);
@@ -1999,10 +2082,26 @@ export async function finishAccountDeletion(
         userId: user.id,
         credentialVersion: user.credentialVersion,
         sessionTokenHash: hash(token),
+        step: step && { tokenHash: step.binding.tokenHash, proof: step.proof },
     });
     // Another holder left between the check above and here (docs/groups-server.md 3). Billing
     // has already stopped; say so rather than pretend nothing happened.
     const stopped = beforeDelete ? 'Your plan was stopped, but your' : 'Your';
+    if (typeof deleted === 'object') {
+        // The step was turned on, or its token or proof went, between the check and the lock.
+        try {
+            if (deleted.step === 'required' || !step) throw stepRequired();
+            await stepNotPassed(step, deleted.step);
+        } catch (error) {
+            if (error instanceof AuthError && beforeDelete)
+                throw new AuthError(
+                    `Your plan was stopped, but your account was not deleted. ${error.message}`,
+                    error.status,
+                    { code: error.code },
+                );
+            throw error;
+        }
+    }
     if (deleted === 'group-holder')
         throw new AuthError(
             `${stopped} account was not deleted: another member just left your family, and it needs someone else as its organizer or to manage it first. Hand that over, then delete your account.`,
@@ -2022,7 +2121,9 @@ export async function finishAccountDeletion(
             `${stopped} account was not deleted: another change to your family’s plan is in progress. Try again in a moment.`,
             409,
         );
-    if (!deleted) throw failure();
+    if (deleted !== true) throw failure();
+    // The account is gone, and its notices' address with it: only the budget is settled.
+    if (step) await stepUnused(step);
     return { success: true };
 }
 
@@ -2124,6 +2225,8 @@ export type ServerSecurityChallenge = SecurityChallenge & {
 export type ServerSecurityUpdate = SecurityUpdate & {
     identityHistory?: IdentityEnvelope[];
     settingsKey?: SettingsKeyEnvelope;
+    /* The second step, for an account that has it on: a token for this action and an answer. */
+    twoStep?: StepSubmission;
 };
 
 export async function finishSecurityChange(
@@ -2164,7 +2267,7 @@ export async function finishSecurityChange(
             (input.identityHistory !== undefined || input.settingsKey !== undefined))
     )
         throw failure();
-    const changed = await authRepository.changeAccountSecurity({
+    const change = {
         userId: user.id,
         action: input.action,
         sessionTokenHash: hash(token),
@@ -2191,9 +2294,332 @@ export async function finishSecurityChange(
         workspaces: input.workspaces?.map((grant) =>
             decodeWorkspaceGrant({ id: grant.workspaceId, grant }, keyVersion),
         ),
-    });
-    if (!changed) throw failure();
+    };
+    // The password first (above), then the step, then the change, which commits with it.
+    await changeBehindStep(
+        user,
+        token,
+        input.action,
+        input.twoStep,
+        async (tx) => ((await authRepository.changeAccountSecurity(change, tx)) ? true : null),
+        failure,
+    );
     return { success: true };
+}
+
+/* ------------------------------------------------------------------------- */
+/* Two-step sign-in                                                           */
+/* ------------------------------------------------------------------------- */
+
+/*
+ * A change asked from a session, behind the second step (docs/two-step-design.md
+ * 4): an account that has the step on must answer it with a token issued to
+ * this session for this purpose (`challengeTwoStep`), and the change commits
+ * with the step or not at all. The caller has checked the password first.
+ * `change` runs in the step's transaction and answers null to refuse, which
+ * `unchanged` reports; nothing of the step is spent then. An account without
+ * the step runs `change` as it is. A missing or wrong step is 403 `two-step`.
+ */
+async function changeBehindStep<T>(
+    user: { id: string },
+    sessionToken: string,
+    purpose: Parameters<typeof twoStepRepository.steppedChange>[0]['purpose'],
+    submission: StepSubmission | undefined,
+    change: (tx: twoStepRepository.SteppedTx) => Promise<T | null>,
+    unchanged: () => AuthError,
+): Promise<T> {
+    const sessionTokenHash = hash(sessionToken);
+    // Read without a lock, only to know whether there is an answer to check; whether the step is
+    // required is decided again by the repository, under the account's lock.
+    const step =
+        submission && (await twoStepRepository.hasTwoStep(user.id))
+            ? await checkStepAnswer({ purpose, sessionTokenHash }, submission, 'change')
+            : null;
+    const result = await twoStepRepository.steppedChange(
+        {
+            userId: user.id,
+            purpose,
+            sessionTokenHash,
+            step: step && { tokenHash: step.binding.tokenHash, proof: step.proof },
+        },
+        (tx) => change(tx),
+    );
+    switch (result.status) {
+        case 'ok':
+            if (step) await (result.passed ? stepPassed(step, result.passed) : stepUnused(step));
+            return result.value;
+        case 'required':
+            throw stepRequired();
+        case 'unchanged':
+            if (step) await stepUnused(step);
+            throw unchanged();
+        default:
+            if (!step) throw stepRequired();
+            return stepNotPassed(step, result);
+    }
+}
+
+async function requireTwoStepSession(sessionToken: string | null) {
+    const session = await getSession(sessionToken);
+    if (!sessionToken || !session) throw new AuthError('Sign in to manage two-step sign-in.', 401);
+    return { ...session, token: sessionToken };
+}
+
+const wrongPassword = () =>
+    new AuthError('That password isn’t right. Check it and try again.', 403);
+
+/* When a method was last used, to the day: every session of the account reads this list. */
+const toDay = (date: Date) => `${date.toISOString().slice(0, 10)}T00:00:00.000Z`;
+
+function encodeMethod(factor: twoStepRepository.TwoStepFactor) {
+    return {
+        id: factor.id,
+        kind: factor.kind,
+        name: factor.name,
+        createdAt: toHour(factor.createdAt),
+        lastUsedAt: factor.lastUsedAt ? toDay(factor.lastUsedAt) : null,
+        // A passkey a password manager syncs; an authenticator app is never one.
+        synced: factor.kind === 'webauthn' && factor.backupState === true,
+    };
+}
+
+/*
+ * The account's second step, as Settings shows it to any of its sessions:
+ * whether it is on, its methods (never their secrets), how many backup codes
+ * are left, and whether authenticator codes are paused for new devices.
+ */
+export async function getTwoStep(sessionToken: string | null) {
+    requireTwoStepEnabled();
+    const { user } = await requireTwoStepSession(sessionToken);
+    const two = await twoStepRepository.getTwoStep(user.id);
+    return {
+        on: two.on,
+        methods: two.factors.map(encodeMethod),
+        backupCodesLeft: two.backupCodes.length,
+        totpFrozen: two.state?.totpFrozenAt != null,
+    };
+}
+
+/*
+ * Changing the second step asks for the password again: the first half of a
+ * one-use OPAQUE exchange bound to this session and tagged `two-step`, limited
+ * as the other password proofs of a signed-in session are (limitBoundAttempts).
+ */
+export async function startTwoStepChange(sessionToken: string | null, startLoginRequest: string) {
+    requireTwoStepEnabled();
+    const { user, token } = await requireTwoStepSession(sessionToken);
+    return startLogin(user.email, startLoginRequest, {
+        purpose: 'two-step',
+        sessionTokenHash: hash(token),
+        userId: user.id,
+    });
+}
+
+/* The purposes a session may ask a step token for: each change the step guards today. */
+export const STEP_CHALLENGE_PURPOSES = [
+    'password',
+    'master-key',
+    'recovery-key',
+    'delete',
+    'two-step',
+] as const;
+export type StepChallengePurpose = (typeof STEP_CHALLENGE_PURPOSES)[number];
+
+/*
+ * A step token for one change, bound to the session asking and to the purpose:
+ * the finish request of that change carries it with an answer. Not behind
+ * TWO_STEP_ENABLED: an account that has the step is held to it at every change
+ * it guards whatever the flag says, so it must be able to answer.
+ */
+export async function challengeTwoStep(sessionToken: string | null, purpose: StepChallengePurpose) {
+    const { user, token } = await requireTwoStepSession(sessionToken);
+    if (!(await twoStepRepository.hasTwoStep(user.id)))
+        throw new AuthError('Two-step sign-in is not on for this account.', 409);
+    // Each challenge is a row for five minutes: a session gets thirty in fifteen.
+    if (
+        !(await authRepository.consumeRateLimit(
+            hash(`two-step:challenge:${hash(token).toString('hex')}`),
+            30,
+            15 * 60_000,
+        ))
+    )
+        throw new AuthError('Too many attempts. Please try again in 15 minutes.', 429);
+    return issueStepToken({
+        userId: user.id,
+        purpose,
+        sessionTokenHash: hash(token),
+        credentialVersion: user.credentialVersion,
+    });
+}
+
+/* The password proof, and the step for an account that has one, that a change to the step carries. */
+export type TwoStepChangeProof = {
+    attemptToken: string;
+    finishLoginRequest: string;
+    twoStep?: StepSubmission;
+};
+
+/*
+ * Starts enrolling an authenticator app: after the password (and the step, if
+ * one is on), a pending factor holding the sealed secret for ten minutes. The
+ * secret and its key URI are returned once, here, and never again. Nothing
+ * changes until a code confirms it (`confirmTotp`).
+ */
+export async function startTotp(sessionToken: string | null, input: TwoStepChangeProof) {
+    requireTwoStepEnabled();
+    const { user, token } = await requireTwoStepSession(sessionToken);
+    await consumeBoundAttempt('two-step', user, token, input, wrongPassword);
+    const app = await newTotp(user);
+    await changeBehindStep(
+        user,
+        token,
+        'two-step',
+        input.twoStep,
+        (tx) => twoStepRepository.createPendingTotp(app.row, tx),
+        () => new AuthError('The authenticator app could not be set up. Try again.', 409),
+    );
+    return app.shown;
+}
+
+/*
+ * Confirms a pending authenticator app with its current code. The time step
+ * of that code becomes the app's last used one, so the same code cannot sign
+ * in afterwards. If this is the account's first method the step is now on:
+ * this session is marked as having passed it, and the ten backup codes are
+ * returned, once. Otherwise the new app replaces the old one.
+ */
+export async function confirmTotp(
+    sessionToken: string | null,
+    factorId: string,
+    input: { code: string },
+) {
+    requireTwoStepEnabled();
+    const { user, token } = await requireTwoStepSession(sessionToken);
+    // A guess at the new app's code is a guess: ten wrong in 15 minutes, across the account.
+    const guesses = hash(`two-step:confirm:${user.id}`);
+    if (!(await authRepository.consumeRateLimit(guesses, 10, 15 * 60_000)))
+        throw new AuthError('Too many wrong codes. Try again in 15 minutes.', 429);
+    const gone = () => new AuthError('This setup has expired. Start again.', 404);
+    const pending = await twoStepRepository.getPendingTotp({ userId: user.id, factorId });
+    if (!pending) throw gone();
+    const step = (await appSteps(pending, input.code)).at(-1);
+    if (step === undefined)
+        throw new AuthError('That code didn’t work. Codes change every 30 seconds.', 400);
+    const confirm = (backupCodes?: twoStepRepository.BackupCodeInput[]) =>
+        twoStepRepository.confirmTotp({
+            userId: user.id,
+            factorId,
+            step,
+            backupCodes,
+            sessionTokenHash: hash(token),
+        });
+    // Codes are made only for a first method; hashing ten of them is slow, so not on a guess.
+    let codes = (await twoStepRepository.hasTwoStep(user.id))
+        ? null
+        : await newBackupCodes(user.id);
+    let confirmed = await confirm(codes?.stored);
+    if (confirmed.status === 'codes') {
+        // The step went off between the read and the lock: this turns it on after all.
+        codes = await newBackupCodes(user.id);
+        confirmed = await confirm(codes?.stored);
+    }
+    if (confirmed.status !== 'ok') throw gone();
+    await authRepository.releaseRateLimit(guesses);
+    notifyTwoStep(user.id, confirmed.turnedOn ? 'two-step-on' : 'two-step-method-added', {
+        method: 'totp',
+    });
+    return confirmed.turnedOn && codes ? { backupCodes: codes.shown } : {};
+}
+
+async function limitMethodNames(userId: string) {
+    if (!(await authRepository.consumeRateLimit(hash(`two-step:name:${userId}`), 20, 60 * 60_000)))
+        throw new AuthError('Too many changes to names. Try again later.', 429);
+}
+
+const noSuchMethod = () => new AuthError('This method isn’t on your account.', 404);
+
+/* Renames one of the account's methods, from any of its sessions. The name is not encrypted. */
+export async function renameTwoStepMethod(
+    sessionToken: string | null,
+    factorId: string,
+    input: { name: string },
+) {
+    requireTwoStepEnabled();
+    const { user } = await requireTwoStepSession(sessionToken);
+    await limitMethodNames(user.id);
+    const renamed = await twoStepRepository.renameFactor({
+        userId: user.id,
+        factorId,
+        name: normalizeDeviceName(input.name),
+    });
+    const method = renamed
+        ? (await twoStepRepository.getTwoStep(user.id)).factors.find((f) => f.id === factorId)
+        : undefined;
+    // Another account's method, a pending one and one that never existed are the same answer.
+    if (!method) throw noSuchMethod();
+    return { method: encodeMethod(method) };
+}
+
+/*
+ * Removes one of the account's methods, after the password and the step (by
+ * any method, the one being removed included). Removing the last one turns
+ * the step off and deletes the backup codes; `on` says which it was.
+ */
+export async function removeTwoStepMethod(
+    sessionToken: string | null,
+    factorId: string,
+    input: TwoStepChangeProof,
+) {
+    requireTwoStepEnabled();
+    const { user, token } = await requireTwoStepSession(sessionToken);
+    await consumeBoundAttempt('two-step', user, token, input, wrongPassword);
+    const removed = await changeBehindStep(
+        user,
+        token,
+        'two-step',
+        input.twoStep,
+        async (tx) => {
+            const result = await twoStepRepository.removeFactor({ userId: user.id, factorId }, tx);
+            return result.status === 'ok' ? result : null;
+        },
+        noSuchMethod,
+    );
+    if (removed.turnedOff) notifyTwoStep(user.id, 'two-step-off');
+    else notifyTwoStep(user.id, 'two-step-method-removed', { method: removed.kind });
+    return { on: !removed.turnedOff };
+}
+
+/*
+ * Makes a new set of ten backup codes, after the password and the step. Every
+ * old code, used or not, stops working in the same transaction. The codes are
+ * returned once, here.
+ */
+export async function replaceBackupCodes(sessionToken: string | null, input: TwoStepChangeProof) {
+    requireTwoStepEnabled();
+    const { user, token } = await requireTwoStepSession(sessionToken);
+    await consumeBoundAttempt('two-step', user, token, input, wrongPassword);
+    const off = () => new AuthError('Turn on two-step sign-in first.', 409);
+    if (!(await twoStepRepository.hasTwoStep(user.id))) throw off();
+    // An account with the step on never gets here without an answer to it.
+    if (!input.twoStep) throw stepRequired();
+    const codes = await newBackupCodes(user.id);
+    if (!codes) throw off();
+    await changeBehindStep(
+        user,
+        token,
+        'two-step',
+        input.twoStep,
+        async (tx) =>
+            (await twoStepRepository.replaceBackupCodes(
+                { userId: user.id, codes: codes.stored },
+                tx,
+            ))
+                ? true
+                : null,
+        off,
+    );
+    notifyTwoStep(user.id, 'backup-codes-new');
+    return { codes: codes.shown };
 }
 
 export * from './notifications';

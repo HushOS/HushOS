@@ -164,9 +164,8 @@ export async function readRecoveryPhrase(
         secret?.fill(0);
     }
 }
-export async function openRecovery(phrase: string, userId: string, envelope: RecoveryEnvelope) {
-    checkEnvelope(envelope);
-    await sodium.ready;
+/* The 32 bytes a recovery phrase stands for, or a CryptoError that says what is wrong with it. */
+function phraseSecret(phrase: string) {
     let secret: Uint8Array<ArrayBuffer>;
     try {
         secret = new Uint8Array(
@@ -181,6 +180,31 @@ export async function openRecovery(phrase: string, userId: string, envelope: Rec
         secret.fill(0);
         throw new CryptoError('Enter your 24-word recovery phrase.');
     }
+    return secret;
+}
+/*
+ * The Ed25519 key a recovery phrase signs with, from the phrase and the recovery
+ * envelope's salt alone: what a phrase reset signs with (openRecovery), and what
+ * answers the second step at sign-in (two-step.ts), where the device is handed
+ * the salt and not the envelope. The caller checks the public key against the
+ * one it expects, when it has one, and wipes the private key when done.
+ */
+export async function recoverySigningKey(phrase: string, wrappingSalt: string) {
+    await sodium.ready;
+    const secret = phraseSecret(phrase);
+    const seed = await derive(secret, decode(wrappingSalt, 32), 'authentication');
+    try {
+        const pair = sodium.crypto_sign_seed_keypair(seed);
+        return { privateKey: new Uint8Array(pair.privateKey), publicKey: encode(pair.publicKey) };
+    } finally {
+        secret.fill(0);
+        seed.fill(0);
+    }
+}
+export async function openRecovery(phrase: string, userId: string, envelope: RecoveryEnvelope) {
+    checkEnvelope(envelope);
+    await sodium.ready;
+    const secret = phraseSecret(phrase);
     const salt = decode(envelope.wrappingSalt, 32);
     const key = await derive(secret, salt, 'account-wrap');
     const seed = await derive(secret, salt, 'authentication');

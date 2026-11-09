@@ -20,7 +20,15 @@ import { departAllForDeletion } from './groups';
 import { ownStorage, poolName, storageFigures } from './pool';
 import { pgCode } from './readiness';
 import { keyedHash } from './hash-key';
-import { PENDING_FACTOR_SECONDS, SECURITY_EVENT_DAYS } from './two-step';
+import {
+    PENDING_FACTOR_SECONDS,
+    SECURITY_EVENT_DAYS,
+    STEP_REMEMBERED_DAYS,
+    hasTwoStep,
+    passStep,
+    type StepPass,
+    type StepProof,
+} from './two-step';
 import {
     notificationRegistrations,
     personalWorkspaces,
@@ -306,37 +314,39 @@ export type CreatedDevice = 'enrolment' | 'password';
  * A bad or revoked proof never fails the sign-in; it just makes a new device.
  * The device's other session, if any, ends: one live session per device.
  *
- * `twoStepAt` is when this sign-in passed the second step: the `at` that
- * passStep returned (docs/two-step-design.md 4). For an account with a
- * confirmed factor the database refuses a session without it (the trigger
- * `sessions_two_step_guard`), and this throws: a caller that does not know the
- * step never signs such an account in on the password alone.
+ * The second step (docs/two-step-design.md 4) is decided in here, under the
+ * account's lock, for an account that has it on (a confirmed factor):
+ * - `twoStep.passed` says the step was passed in this transaction: `at` and the
+ *   token's `deviceId` are what passStep returned (`at`, `attempt.deviceId`).
+ *   The session is stepped at `at`. The device the token recorded proved its
+ *   key at `login/finish`; that OPAQUE attempt is used up by now, so the proof
+ *   cannot be shown again, and the row is taken on the token's word once it is
+ *   checked here: the account's own, approved, not revoked and holding a
+ *   signing key. Anything else falls through to the cases above, so a device
+ *   removed between the password and the step comes in as a new one.
+ * - without it, the sign-in is exempt only when the browser's previous session
+ *   (`previousTokenHash`) is this account's, live, on the current credential,
+ *   on the very device this session would attach to, and stepped less than 30
+ *   days ago. The new session inherits that time and does not extend it. The
+ *   row is read here, after the lock and after the device is settled, and
+ *   before it is deleted below: revokeDevice takes the same lock and ends the
+ *   device's sessions, so a device removed a moment earlier lends neither its
+ *   row nor its step.
+ * - otherwise nothing is written (no device, no session, the previous session
+ *   stays) and the answer is `{ stepRequired: true }`, with the device that
+ *   proved its key, if one did, for the step token to record.
+ * For an account with the step on the database also refuses a session without
+ * `two_step_at` (the trigger `sessions_two_step_guard`): the last line, for
+ * code that does not come through here.
  *
  * `executor` is the caller's transaction, when it has one: the transaction
  * passStep ran in, so the step token and its proof are spent only if the
  * session is made. This then runs as a savepoint inside it. When it answers
- * anything but a session (null, `suspended`), or throws, the caller rolls its
- * transaction back; otherwise the step stays spent on nothing. The account's
- * row is locked first here, as passStep locks it, so the two never wait on
- * each other. Without an executor it opens its own transaction, as before.
- *
- * Not built yet: the exemption for an unlock (the same account's live session
- * on the same device, stepped less than 30 days ago, whose time the new
- * session inherits without extending it). It has to be decided in here: read
- * from the row `previousTokenHash` names, under the account's lock, before
- * that session is deleted below. A route that reads the previous session
- * first and passes its time in as a bare `twoStepAt` races revokeDevice: a
- * device removed between that read and this insert no longer lends its row,
- * so a new device would get a session carrying a step it never passed.
- *
- * Also not built yet: a way to attach the session to the device the step token
- * recorded. A device proof here is a signature over the OPAQUE attempt, and by
- * the time the step is passed that attempt is used up, so a two-step sign-in
- * from a known device would get a new `password` device every time (a second
- * row in the device list, a new-device notice, and `key-in-use` when the
- * device registers its key). The sign-in route needs an input for the token's
- * `device_id`, checked in here under the account's lock: the account's own,
- * approved, not revoked and holding a signing key.
+ * anything but a session (null, `suspended`, `stepRequired`), or throws, the
+ * caller rolls its transaction back; otherwise the step stays spent on
+ * nothing. The account's row is locked first here, as passStep locks it, so
+ * the two never wait on each other. Without an executor it opens its own
+ * transaction, as before.
  */
 export async function createSession(
     input: {
@@ -346,7 +356,7 @@ export async function createSession(
         previousTokenHash: Buffer | null;
         expiresAt: Date;
         device?: { id: string; signature: Buffer; attemptDigest: Buffer };
-        twoStepAt?: Date | null;
+        twoStep?: { passed: { at: Date; deviceId: string | null } };
     },
     executor: Executor = db,
 ) {
@@ -379,20 +389,32 @@ export async function createSession(
 
         const now = new Date();
         let device: { id: string; registered: boolean } | null = null;
+        // Whether the device proved its key: by a signature here, or at `login/finish` for a token.
+        let proven = false;
         let created: CreatedDevice | null = null;
-        if (input.device && UUID_PATTERN.test(input.device.id)) {
+        const known = (id: string) =>
+            and(
+                eq(accountDevices.id, id),
+                eq(accountDevices.userId, user.id),
+                isNull(accountDevices.revokedAt),
+                isNotNull(accountDevices.approvedAt),
+                isNotNull(accountDevices.signingPublicKey),
+            );
+        if (input.twoStep?.passed.deviceId) {
+            const [row] = await tx
+                .select({ id: accountDevices.id })
+                .from(accountDevices)
+                .where(known(input.twoStep.passed.deviceId))
+                .for('update');
+            if (row) {
+                device = { id: row.id, registered: true };
+                proven = true;
+            }
+        } else if (input.device && UUID_PATTERN.test(input.device.id)) {
             const [row] = await tx
                 .select({ id: accountDevices.id, key: accountDevices.signingPublicKey })
                 .from(accountDevices)
-                .where(
-                    and(
-                        eq(accountDevices.id, input.device.id),
-                        eq(accountDevices.userId, user.id),
-                        isNull(accountDevices.revokedAt),
-                        isNotNull(accountDevices.approvedAt),
-                        isNotNull(accountDevices.signingPublicKey),
-                    ),
-                )
+                .where(known(input.device.id))
                 .for('update');
             if (
                 row?.key &&
@@ -405,8 +427,10 @@ export async function createSession(
                     }),
                     input.device.signature,
                 )
-            )
+            ) {
                 device = { id: row.id, registered: true };
+                proven = true;
+            }
         }
         if (!device && input.previousTokenHash) {
             const [previous] = await tx
@@ -425,6 +449,38 @@ export async function createSession(
                 .for('update', { of: accountDevices });
             if (previous) device = { id: previous.id, registered: previous.kind !== null };
         }
+
+        let twoStepAt: Date | null = input.twoStep?.passed.at ?? null;
+        if (!input.twoStep && (await hasTwoStep(user.id, tx))) {
+            // The unlock after a lock: the same account's live, stepped session on this very device.
+            const [previous] =
+                device && input.previousTokenHash
+                    ? await tx
+                          .select({ twoStepAt: sessions.twoStepAt })
+                          .from(sessions)
+                          .where(
+                              and(
+                                  eq(sessions.tokenHash, input.previousTokenHash),
+                                  eq(sessions.userId, user.id),
+                                  eq(sessions.credentialVersion, input.credentialVersion),
+                                  eq(sessions.deviceId, device.id),
+                                  gt(sessions.expiresAt, now),
+                                  gt(
+                                      sessions.twoStepAt,
+                                      new Date(now.getTime() - STEP_REMEMBERED_DAYS * DAY_MS),
+                                  ),
+                              ),
+                          )
+                    : [];
+            if (!previous?.twoStepAt)
+                return {
+                    stepRequired: true as const,
+                    deviceId: device && proven ? device.id : null,
+                };
+            // Inherited, never extended: thirty days from when the step was last passed.
+            twoStepAt = previous.twoStepAt;
+        }
+
         const attached = device !== null;
         if (!device) {
             const [existing] = await tx
@@ -464,7 +520,7 @@ export async function createSession(
             deviceId: device.id,
             expiresAt: input.expiresAt,
             lastSeenAt: now,
-            twoStepAt: input.twoStepAt ?? null,
+            twoStepAt,
         });
         const { suspendedAt: _suspendedAt, createdAt: _createdAt, ...plain } = user;
         return {
@@ -476,6 +532,80 @@ export async function createSession(
 }
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+export type SteppedSession =
+    | {
+          status: 'ok';
+          session: Exclude<
+              NonNullable<Awaited<ReturnType<typeof createSession>>>,
+              { suspended: true } | { stepRequired: true }
+          >;
+          passed: Extract<StepPass, { status: 'ok' }>;
+      }
+    /* The step passed, but the account is suspended, or gone, or its password changed. */
+    | { status: 'suspended' }
+    | { status: 'unavailable' }
+    | Exclude<StepPass, { status: 'ok' }>;
+
+/* Thrown, never returned, so the step a session was not opened for rolls back with it. */
+class NoSession extends Error {
+    constructor(readonly status: 'suspended' | 'unavailable') {
+        super(status);
+    }
+}
+
+/*
+ * The second request of a two-step sign-in (docs/two-step-design.md 4): the
+ * step and the session, in one transaction. The sign-in's token and the proof
+ * the caller checked are passed (passStep), and the session is opened from
+ * what the token recorded at `login/finish`: the account, its credential
+ * version, the device that proved its key and the browser's previous session.
+ * Anything but a session rolls the whole thing back, so the token, the backup
+ * code or time step, the counts and any thaw are never spent on a sign-in
+ * that did not happen. A step that does not pass comes back as passStep
+ * answered it, and after `refused` the caller counts the wrong answer
+ * (failStep).
+ */
+export async function createSteppedSession(input: {
+    stepTokenHash: Buffer;
+    proof: StepProof;
+    tokenHash: Buffer;
+    expiresAt: Date;
+}): Promise<SteppedSession> {
+    try {
+        return await db.transaction(async (tx): Promise<SteppedSession> => {
+            const passed = await passStep(
+                {
+                    tokenHash: input.stepTokenHash,
+                    purpose: 'login',
+                    sessionTokenHash: null,
+                    proof: input.proof,
+                },
+                tx,
+            );
+            // Nothing is spent: passStep put its own writes back.
+            if (passed.status !== 'ok') return passed;
+            const session = await createSession(
+                {
+                    userId: passed.attempt.userId,
+                    credentialVersion: passed.attempt.credentialVersion,
+                    tokenHash: input.tokenHash,
+                    previousTokenHash: passed.attempt.previousTokenHash,
+                    expiresAt: input.expiresAt,
+                    twoStep: { passed: { at: passed.at, deviceId: passed.attempt.deviceId } },
+                },
+                tx,
+            );
+            if (!session || 'stepRequired' in session) throw new NoSession('unavailable');
+            if ('suspended' in session) throw new NoSession('suspended');
+            return { status: 'ok', session, passed };
+        });
+    } catch (error) {
+        if (error instanceof NoSession) return { status: error.status };
+        throw error;
+    }
+}
 
 /*
  * The session behind a token, with its device, or null. Only a session on a
@@ -911,6 +1041,11 @@ export async function releaseRateLimit(bucket: Buffer) {
     });
 }
 
+/* Empties a bucket: for a count that starts again when the thing it counts succeeds. */
+export async function clearRateLimit(bucket: Buffer) {
+    await db.delete(authRateLimits).where(eq(authRateLimits.keyHash, keyedHash(bucket)));
+}
+
 /*
  * Removes expired rows in bounded batches so a large backlog never holds a lock or
  * a connection for long. Runs from the background worker, never inside a request.
@@ -1177,35 +1312,47 @@ export async function getStorageAllowance(userId: string) {
  * active, cannot be deleted until they hand over (`group-holder`), and
  * nothing is changed.
  *
- * `executor` is the caller's transaction, when it has one (the one passStep ran
- * in). This then runs as a savepoint inside it, and on anything but `true` the
- * caller rolls its transaction back, so the step token and its proof come back.
+ * The second step (docs/two-step-design.md 4): an account that has it on is
+ * deleted only with `step`, the token and the proof the caller checked, and
+ * `{ step: 'required' }` comes back without it. The step is passed in here,
+ * after the departures, where deleteAccountRow has locked the account. That is
+ * the only order that cannot deadlock: every group write locks the group first
+ * and the person's row second, and so does this (groups, then the account,
+ * then the step, which locks only the account's own rows). A caller that
+ * passed the step first and then came here would hold the account's row while
+ * the departures wait for a group, and a group write holding that group and
+ * waiting for the person's row would wait on it in turn. Any other change
+ * that writes a group and asks for the step follows the same rule: the group
+ * first, the step after.
  *
- * The order of locks is then not the one above, and it can deadlock. passStep
- * locks the account's row; the departures here lock the person's groups after
- * it; every group write locks the group first and the person's row second. So
- * for an account in a family, a group write that holds the group and waits for
- * the person's row (letting them in, their own grant) and this wait on each
- * other. Postgres aborts one of the two after a second. When it is this one,
- * `unavailable` comes back: the caller rolls back, which returns the token and
- * the proof, and the person tries again. When it is the group write, that
- * request fails instead.
+ * The step and the deletion commit together. A step that does not pass
+ * (`{ step: … }` with passStep's answer) rolls everything back, the
+ * departures included; so does a deletion refused after the step passed, and
+ * the token, the code or time step, the counts and any thaw then come back.
+ * After `refused` the caller counts the wrong answer (failStep).
  *
- * The order a caller with only an executor must use is therefore: passStep,
- * then this, in one transaction, and roll back on anything but `true`. The
- * order that cannot deadlock is groups, then the account, then the step, which
- * needs the step passed in here and run after the departures, where
- * deleteAccountRow locks the account. That is for the change that brings the
- * step to deletion to add; this function's own order stays as it is.
+ * `executor` is the caller's transaction, when it has one. This then runs as a
+ * savepoint inside it, and on anything but `true` the caller rolls its
+ * transaction back.
  */
+export type DeleteAccountResult =
+    | boolean
+    | 'group-holder'
+    | 'busy'
+    | 'pays'
+    | 'unavailable'
+    | { step: 'required' | Exclude<StepPass, { status: 'ok' }> };
+
 export async function deleteAccount(
     input: {
         userId: string;
         credentialVersion: number;
         sessionTokenHash: Buffer;
+        /* The `delete` step token of the session asking, and the proof the caller checked. */
+        step?: { tokenHash: Buffer; proof: StepProof } | null;
     },
     executor: Executor = db,
-): Promise<boolean | 'group-holder' | 'busy' | 'pays' | 'unavailable'> {
+): Promise<DeleteAccountResult> {
     class Holder extends Error {}
     // They pay for a family's plan: a change to it holds its claim, or it renews (payerHold).
     class Busy extends Error {}
@@ -1227,6 +1374,7 @@ export async function deleteAccount(
         if (error instanceof Busy) return 'busy';
         if (error instanceof Pays) return 'pays';
         if (error instanceof Refused) return false;
+        if (error instanceof StepNotPassed) return { step: error.step };
         // It locks groups, areas and the account: a deadlock with a group write is retried.
         const code = pgCode(error);
         if (code === '40P01' || code === '40001') return 'unavailable';
@@ -1234,9 +1382,21 @@ export async function deleteAccount(
     }
 }
 
+/* Thrown, never returned, so everything the deletion did before the step rolls back with it. */
+class StepNotPassed extends Error {
+    constructor(readonly step: 'required' | Exclude<StepPass, { status: 'ok' }>) {
+        super('step');
+    }
+}
+
 async function deleteAccountRow(
     tx: Tx,
-    input: { userId: string; credentialVersion: number; sessionTokenHash: Buffer },
+    input: {
+        userId: string;
+        credentialVersion: number;
+        sessionTokenHash: Buffer;
+        step?: { tokenHash: Buffer; proof: StepProof } | null;
+    },
 ) {
     const [user] = await tx
         .select(userFieldsWithEmailKey)
@@ -1263,6 +1423,23 @@ async function deleteAccountRow(
             ),
         );
     if (!session) return false;
+    // The step, last: the groups are behind us and the account's row is ours.
+    if (await hasTwoStep(user.id, tx)) {
+        if (!input.step) throw new StepNotPassed('required');
+        // Only a `delete` token of the session asking: one issued for another purpose, session
+        // or account is `missing` to passStep. That session was just read as this account's.
+        const passed = await passStep(
+            {
+                tokenHash: input.step.tokenHash,
+                purpose: 'delete',
+                sessionTokenHash: input.sessionTokenHash,
+                proof: input.step.proof,
+            },
+            tx,
+        );
+        if (passed.status !== 'ok') throw new StepNotPassed(passed);
+        if (passed.attempt.userId !== user.id) throw new StepNotPassed({ status: 'missing' });
+    }
     const [personal] = await tx
         .select()
         .from(personalWorkspaces)

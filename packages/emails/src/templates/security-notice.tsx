@@ -15,11 +15,16 @@ import {
 } from 'react-email';
 
 /*
- * A security notice about the account's devices: a new sign-in with the
- * password, a device removed, or every other device removed. Always sent; it
- * cannot be turned off. It never names the device: a device's name is what the
- * device said about itself, so whoever signed in would choose the words. Nor the
- * address or browser. When, and where to look.
+ * A security notice about the account's devices or its second step: a new
+ * sign-in with the password, a device removed, or every other device removed;
+ * two-step sign-in turned on or off, a method added or removed, backup codes
+ * made or used, the recovery phrase used for the step, a failed step after a
+ * correct password, and authenticator codes paused (docs/two-step-design.md 7).
+ * Always sent; it cannot be turned off. It never names a device or a method: a
+ * name is what whoever added it typed, so an intruder would choose the words.
+ * Nor the address or browser. When, the kind of method, and where to look:
+ * `{{method}}` is one of a few fixed phrases the server picks, never text a
+ * person wrote.
  *
  * The same sheet as the share notice: the cool ground, one white card, the
  * facts as ruled rows, one blue button.
@@ -28,7 +33,17 @@ export type SecurityNoticeKind =
     | 'new-device'
     | 'device-removed'
     | 'devices-removed'
-    | 'password-attempts';
+    | 'password-attempts'
+    | 'two-step-on'
+    | 'two-step-off'
+    | 'two-step-method-added'
+    | 'two-step-method-removed'
+    | 'backup-codes-new'
+    | 'backup-code-used'
+    | 'phrase-used'
+    | 'two-step-failed'
+    | 'totp-frozen'
+    | 'totp-frozen-device';
 
 /* Hidden everywhere, Outlook included; a variable, since React's types lack mso-hide. */
 const hidden = { display: 'none', msoHide: 'all' };
@@ -43,7 +58,15 @@ const label = {
 
 const copy: Record<
     SecurityNoticeKind,
-    { preview: string; heading: string; body: string; facts: [string, string][]; foot: string }
+    {
+        preview: string;
+        heading: string;
+        body: string;
+        facts: [string, string][];
+        foot: string;
+        /* What the button says; the device notices' own when left out. */
+        button?: string;
+    }
 > = {
     'new-device': {
         preview: 'Your HushOS account was signed in to on a new device.',
@@ -51,7 +74,7 @@ const copy: Record<
         body: 'Someone signed in with your email and password on a device HushOS hadn’t seen before. It now appears in your list of devices.',
         facts: [
             ['When', '{{when}}'],
-            ['Signed in with', 'Your password'],
+            ['Signed in with', '{{method}}'],
         ],
         foot: 'If this was you, there’s nothing to do. If it wasn’t, remove the device from your account and change your password.',
     },
@@ -79,12 +102,106 @@ const copy: Record<
         ],
         foot: 'If you didn’t do this, someone else may be signed in to your account. Check your devices and change your password.',
     },
+    'two-step-on': {
+        preview: 'Two-step sign-in was turned on for your HushOS account.',
+        heading: 'Two-step sign-in is on.',
+        body: 'Signing in to your account now asks for a second step after your password. Keep your backup codes somewhere safe, apart from your password.',
+        facts: [
+            ['When', '{{when}}'],
+            ['Second step', '{{method}}'],
+        ],
+        foot: 'If you didn’t do this, someone else is signed in to your account. Remove any device you don’t recognise and change your password.',
+        button: 'Open your account',
+    },
+    'two-step-off': {
+        preview: 'Two-step sign-in was turned off for your HushOS account.',
+        heading: 'Two-step sign-in is off.',
+        body: 'The last second step was removed from your account. Signing in now asks for your password alone, and your backup codes no longer work.',
+        facts: [['When', '{{when}}']],
+        foot: 'If you didn’t do this, sign in and turn two-step sign-in on again, then change your password.',
+        button: 'Open your account',
+    },
+    'two-step-method-added': {
+        preview: 'A second step was added to your HushOS account.',
+        heading: 'A second step was added to your account.',
+        body: 'It can now be used as the second step when you sign in. An account has one authenticator app at a time, so an app you set up earlier no longer works.',
+        facts: [
+            ['When', '{{when}}'],
+            ['Added', '{{method}}'],
+        ],
+        foot: 'If you didn’t do this, someone else is signed in to your account. Remove what was added and any device you don’t recognise, and change your password.',
+        button: 'Open your account',
+    },
+    'two-step-method-removed': {
+        preview: 'A second step was removed from your HushOS account.',
+        heading: 'A second step was removed from your account.',
+        body: 'It can no longer be used when you sign in. Two-step sign-in is still on, with your other methods.',
+        facts: [
+            ['When', '{{when}}'],
+            ['Removed', '{{method}}'],
+        ],
+        foot: 'If you didn’t do this, someone else is signed in to your account. Remove any device you don’t recognise and change your password.',
+        button: 'Open your account',
+    },
+    'backup-codes-new': {
+        preview: 'New backup codes were made for your HushOS account.',
+        heading: 'New backup codes were made.',
+        body: 'A new set of backup codes was made for your account. The old codes no longer work.',
+        facts: [['When', '{{when}}']],
+        foot: 'If you didn’t do this, someone else is signed in to your account. Make a new set, remove any device you don’t recognise and change your password.',
+        button: 'Open your account',
+    },
+    'backup-code-used': {
+        preview: 'A backup code was used on your HushOS account.',
+        heading: 'A backup code was used.',
+        body: 'One of your backup codes was used as the second step on your account. Each code works once.',
+        facts: [
+            ['When', '{{when}}'],
+            ['Codes left', '{{count}}'],
+        ],
+        foot: 'If this wasn’t you, change your password and make new backup codes. If you’re running low, make a new set from your account.',
+        button: 'Open your account',
+    },
+    'phrase-used': {
+        preview: 'Your recovery phrase was used as the second step on your HushOS account.',
+        heading: 'Your recovery phrase was used for the second step.',
+        body: 'Your recovery phrase was used in place of your second step. If you have lost your authenticator app or your backup codes, remove them from your account and set them up again.',
+        facts: [['When', '{{when}}']],
+        foot: 'Keep the phrase apart from your password: whoever has both can sign in. If this wasn’t you, change your password and make a new recovery phrase.',
+        button: 'Open your account',
+    },
+    'two-step-failed': {
+        preview:
+            'Someone signed in to your HushOS account with your password but did not pass the second step.',
+        heading: 'Someone signed in with your password but did not pass the second step.',
+        body: 'Your password was entered correctly, and the second step then failed several times. They did not get in.',
+        facts: [['When', '{{when}}']],
+        foot: 'If this wasn’t you, someone else knows your password. Change your password.',
+        button: 'Open your account',
+    },
+    'totp-frozen': {
+        preview: 'Authenticator codes are paused for new devices on your HushOS account.',
+        heading: 'Authenticator codes are paused for new devices.',
+        body: 'After 100 wrong codes in a row, HushOS stopped taking authenticator codes from devices that have not signed in to your account before. Devices you already use are not affected.',
+        facts: [['When', '{{when}}']],
+        foot: 'To sign in on a new device, use a backup code or your recovery phrase; either one switches authenticator codes back on. If it wasn’t you entering codes, change your password.',
+        button: 'Open your account',
+    },
+    'totp-frozen-device': {
+        preview: 'Authenticator codes are paused on one of your devices.',
+        heading: 'Authenticator codes are paused on one of your devices.',
+        body: 'After 100 wrong codes in a row from one of your devices, HushOS stopped taking authenticator codes from that device. Your other devices are not affected.',
+        facts: [['When', '{{when}}']],
+        foot: 'On that device, use a backup code or your recovery phrase; either one switches authenticator codes back on. If it wasn’t you entering codes, remove the device and change your password.',
+        button: 'Open your account',
+    },
 };
 
 export default function SecurityNotice({
     kind = 'new-device',
     when = 'Today, 14:02 UTC',
     count = '2',
+    method = 'Your password',
     accountUrl = 'http://localhost:5173/app/account#devices',
     logoUrl = '/static/hushos-logo-square.png',
     marker = 'preview',
@@ -92,13 +209,16 @@ export default function SecurityNotice({
     kind?: SecurityNoticeKind;
     when?: string;
     count?: string;
+    /** A fixed phrase the server picks for the kind of method; never text a person wrote. */
+    method?: string;
     accountUrl?: string;
     logoUrl?: string;
     /** Different in every message; see the end of the body. */
     marker?: string;
 }) {
     const text = copy[kind];
-    const fill = (value: string) => value.replace('{{when}}', when).replace('{{count}}', count);
+    const fill = (value: string) =>
+        value.replace('{{when}}', when).replace('{{count}}', count).replace('{{method}}', method);
     return (
         <Html lang="en">
             <Head>
@@ -235,7 +355,7 @@ export default function SecurityNotice({
                                 textDecoration: 'none',
                             }}
                         >
-                            Review your devices
+                            {text.button ?? 'Review your devices'}
                         </Button>
                     </Section>
                     <Section className="email-pad" style={{ padding: '0 28px 28px' }}>

@@ -1,0 +1,13 @@
+{
+    "generatedBy": "packages/crypto/scripts/two-step-fixtures.ts",
+    "phrase": {
+        "userId": "0B7F1C2E-3D4A-4B5C-8D6E-7F8091A2B3C4",
+        "phrase": "inform shine rhythm banner vocal diary loan runway awake real call exhibit tennis army void illness put pond march member poverty fork hire delay",
+        "wrappingSalt": "ncPpEDZcg6nQ9hxDaY-23AMpT3acwukPNlyCqc_1HEI",
+        "stepToken": "q9H4HkVskrngBi1TeqHH7hU7Yoiv1vwjSnCXveQLMVg",
+        "stepTokenDigest": "dTQMPWxmqijvvbpoURBgker5Lmn6CIaniqbQW-1U7gE",
+        "publicKey": "EsCilsou1vNM1CeIad2eabzcXtDzRmmpTukGjtjAyvo",
+        "statement": "WyJodXNob3MvdHdvLXN0ZXAvcGhyYXNlIiwxLCIwYjdmMWMyZS0zZDRhLTRiNWMtOGQ2ZS03ZjgwOTFhMmIzYzQiLCJkVFFNUFd4bXFpanZ2YnBvVVJCZ2tlcjVMbW42Q0lhbmlxYlFXLTFVN2dFIl0",
+        "signature": "bpP2BLeUzF-SCxl0bOOhhaioh-tvYhlDZm9o9TcFQJSpXV9fF9wP5MFncQshfeqh2BZ3YuN6FFAIXUt-w50lBQ"
+    }
+}
