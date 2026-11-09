@@ -1,0 +1,53 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_9468587d6e10d3 189-192
+apps/android/app/src/main/kotlin/com/hushos/app/data/AccountStore.kt
+  s_566b8e0c4467a4::t_f52f660d7f18d3 74
+apps/android/app/src/main/kotlin/com/hushos/app/data/PushAsk.kt
+  s_566b8e0c4467a4::t_2250bde49dbd63 1-91
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HushOSApp.kt
+  s_566b8e0c4467a4::t_d75efdebd8bca1 240-241
+apps/android/app/src/main/kotlin/com/hushos/app/ui/NotificationsSection.kt
+  s_566b8e0c4467a4::t_45405c423064bf 25-26,43-44,72-74,110-111,177-209
+apps/android/app/src/test/kotlin/com/hushos/app/data/PushAskTest.kt
+  s_566b8e0c4467a4::t_fe91203b6ffdc0 1-46
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_9852aa3227d3c4 1094
+apps/ios/App/AccountView.swift
+  s_566b8e0c4467a4::t_19fa28220db608 150-151
+apps/ios/App/MainView.swift
+  s_566b8e0c4467a4::t_ef80fa38a80e24 210-212
+apps/ios/App/PhonePush.swift
+  s_566b8e0c4467a4::t_5d9c1018d5616e 11-12,27-29,142-183,229-230
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/PushAsk.swift
+  s_566b8e0c4467a4::t_80887151620bc1 1-62
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/PushAskTests.swift
+  s_566b8e0c4467a4::t_75fe0fcdde4d4b 1-37
+apps/web/src/components/notifications-ask.tsx
+  s_566b8e0c4467a4::t_19bebcd4e40cb7 1-89
+apps/web/src/lib/device-data.ts
+  s_566b8e0c4467a4::t_744d76107ffe3f 36-37,132
+apps/web/src/lib/web-push.ts
+  s_566b8e0c4467a4::t_6bbceaf6497da5 50-52,60-97
+apps/web/src/routes/_authenticated/app/route.tsx
+  s_566b8e0c4467a4::t_d0fbed2e99dc7b 12,228-229
+docs/devices-design.md
+  s_566b8e0c4467a4::t_50739d920af03e 282-286
+docs/push-relay-plan.md
+  s_566b8e0c4467a4::t_8384e77a9103cb 18-19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "498ab6dff2c800c9db001cb64c9d2cd591ade19b",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
