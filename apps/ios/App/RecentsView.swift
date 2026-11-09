@@ -289,7 +289,7 @@ struct TrashView: View {
                                 Text(restoreDetail(entry.item, parentTrashed: entry.parentTrashed) ?? "")
                             } icon: { Image(systemName: "arrow.uturn.backward") }
                         }
-                        Button("Delete forever", systemImage: "trash.slash", role: .destructive) { deleting = entry.item }.tint(Alpine.danger)
+                        Button("Delete forever", systemImage: "trash.slash", role: .destructive) { deleting = entry.item }
                     }
                     .itemRow()
                 }
@@ -635,7 +635,7 @@ struct OnThisPhoneView: View {
                             }
                             .buttonStyle(.plain)
                             .contextMenu {
-                                Button("Remove from this phone", systemImage: "iphone.slash", role: .destructive) { removeFolder(folder) }.tint(Alpine.danger)
+                                Button("Remove from this phone", systemImage: "iphone.slash", role: .destructive) { removeFolder(folder) }
                             }
                             .swipeActions { Button("Remove", role: .destructive) { removeFolder(folder) } }
                             .itemRow()
@@ -658,7 +658,7 @@ struct OnThisPhoneView: View {
                                     NodeMenu(item: item, action: $action)
                                 } else {
                                     // Kept from a share this session hasn't opened: dropping the copy is all it can do.
-                                    Button("Remove from this phone", systemImage: "iphone.slash", role: .destructive) { remove(entry) }.tint(Alpine.danger)
+                                    Button("Remove from this phone", systemImage: "iphone.slash", role: .destructive) { remove(entry) }
                                 }
                             }
                             .swipeActions { Button("Remove", role: .destructive) { remove(entry) } }

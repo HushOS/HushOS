@@ -345,7 +345,6 @@ struct SharedView: View {
             if let item = row.item, !item.isFolder { Button("Send a copy", systemImage: "square.and.arrow.up") { action = .sendCopy(item) } }
             Divider()
             Button(row.link != nil ? "Turn off link" : "Stop sharing", systemImage: row.link != nil ? "minus.circle" : "person.badge.minus", role: .destructive) { stopping = row }
-                .tint(Alpine.danger)
                 .disabled(row.item == nil)
         }
         .itemRow()

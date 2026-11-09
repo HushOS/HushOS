@@ -320,7 +320,7 @@ struct TransfersSheet: View {
                                 // Out of room, retrying can't work until there is room.
                                 if row.canRetry, !row.noRoom { Button("Retry", systemImage: "arrow.clockwise") { retry(row) } }
                                 if row.cancellable {
-                                    Button("Cancel", systemImage: "xmark", role: .destructive) { confirming = [row] }.tint(Alpine.danger)
+                                    Button("Cancel", systemImage: "xmark", role: .destructive) { confirming = [row] }
                                 } else if row.status == .done || row.status == .failed {
                                     Button("Remove from list", systemImage: "xmark") { remove(row) }
                                 }
