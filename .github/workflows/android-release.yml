@@ -116,8 +116,8 @@ jobs:
                   [[ "$HAS_PASSWORD" == true ]] || missing+=("secret ANDROID_UPLOAD_STORE_PASSWORD")
                   if (( ${#missing[@]} )); then
                       list=$(printf '%s, ' "${missing[@]}")
-                      echo "::notice title=Google Play is not set up::The play environment lacks ${list%, }; nothing was built or sent. See docs/release/google-play-ci.md."
-                      echo "configured=false" >> "$GITHUB_OUTPUT"
+                      echo "::error title=Google Play is not set up::The play environment lacks ${list%, }; nothing was built or sent. See docs/release/google-play-ci.md."
+                      exit 1
                   else
                       echo "configured=true" >> "$GITHUB_OUTPUT"
                   fi
@@ -309,8 +309,8 @@ jobs:
                   SERVICE_ACCOUNT: ${{ vars.PLAY_SERVICE_ACCOUNT }}
               run: |
                   if [[ -z "$WIF_PROVIDER" || -z "$SERVICE_ACCOUNT" ]]; then
-                      echo "::notice title=Google Play is not set up::The play environment lacks PLAY_WIF_PROVIDER or PLAY_SERVICE_ACCOUNT; nothing was promoted. See docs/release/google-play-ci.md."
-                      echo "configured=false" >> "$GITHUB_OUTPUT"
+                      echo "::error title=Google Play is not set up::The play environment lacks PLAY_WIF_PROVIDER or PLAY_SERVICE_ACCOUNT; nothing was promoted. See docs/release/google-play-ci.md."
+                      exit 1
                   else
                       echo "configured=true" >> "$GITHUB_OUTPUT"
                   fi

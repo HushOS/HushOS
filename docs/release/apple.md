@@ -141,7 +141,7 @@ The App Store jobs run in the **app-store** environment, which only `v*` tags ma
 
     then delete the downloaded file. Until all three are set the app-store job says what is missing and uploads nothing; the IPA is attached either way.
 
-The build jobs need the Xcode `project.yml` names (`options.xcodeVersion`, by major version): the app uses that SDK's APIs. GitHub's macOS images trail Xcode releases, and a new major Xcode has come with the next macOS image, so for a while after one ships the runner may not have it. Then the ipa and app-store jobs say so and build nothing, and both are done on a Mac as before (`bun run ios:release-ipa vX.Y.Z`; `git checkout vX.Y.Z` and `bun run ios:archive`); submit needs no Xcode and works either way. When an image with it appears, move `runs-on` in ios-release.yml to it.
+The build jobs need the Xcode `project.yml` names (`options.xcodeVersion`, by major version): the app uses that SDK's APIs. GitHub's macOS images trail Xcode releases, and a new major Xcode has come with the next macOS image, so for a while after one ships the runner may not have it. Then the ipa and app-store jobs fail with an error saying so (a release that built nothing must not read as done: 1.3.0 did, and missed the App Store unnoticed), and both are done on a Mac as before (`bun run ios:release-ipa vX.Y.Z`; `git checkout vX.Y.Z` and `bun run ios:archive`); submit needs no Xcode and works either way. When an image with it appears, move `runs-on` in ios-release.yml to it.
 
 ## 8. Encryption and export compliance: decide before the first upload
 

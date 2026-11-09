@@ -100,7 +100,7 @@ gh secret set ANDROID_UPLOAD_KEY_ALIAS --env play --body upload
 
 ### 4. The first run: a dry run
 
-The first release cut after the workflow landed would upload straight away. To see it work first, leave `PLAY_SERVICE_ACCOUNT` unset until that release is tagged (its run then skips with a notice), set it, and run:
+The first release cut after the workflow landed would upload straight away. To see it work first, leave `PLAY_SERVICE_ACCOUNT` unset until that release is tagged (its run then fails, saying what is missing), set it, and run:
 
 ```sh
 gh workflow run android-release.yml --ref vX.Y.Z -f action=dry-run
