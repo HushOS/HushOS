@@ -1,0 +1,25 @@
+packages/db/src/two-step.ts
+  s_1f3a9ec02d29ed::t_aca86467b56181 33-36
+  s_1f3a9ec02d29ed::t_da1e9f1bcf529e 875-880
+packages/db/src/auth.ts
+  s_1f3a9ec02d29ed::t_b8ec161c425b06 331-339
+docs/self-hosting.md
+  s_1f3a9ec02d29ed::t_69a19f2eb5a572 2343
+  s_1f3a9ec02d29ed::t_15352628b86f32 2351
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "feec80c5bb2acaeb3d34b76aa8ce04be0c45f048",
+  "prompts": {},
+  "sessions": {
+    "s_1f3a9ec02d29ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aef80487-cabb-455f-b2f1-acb7f8d96c4e",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
