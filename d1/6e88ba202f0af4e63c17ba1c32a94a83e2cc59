@@ -1,0 +1,25 @@
+.github/workflows/android-release.yml
+  s_566b8e0c4467a4::t_eaeb2a65448f07 119-120,312-313
+.github/workflows/ios-release.yml
+  s_566b8e0c4467a4::t_0a7e5cba87ffd8 118-123,158-159,171-176
+docs/release/apple.md
+  s_566b8e0c4467a4::t_6f87f0af56b195 144
+docs/release/google-play-ci.md
+  s_566b8e0c4467a4::t_39b4535e59430a 103
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d16e88ba202f0af4e63c17ba1c32a94a83e2cc59",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
