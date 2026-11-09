@@ -139,11 +139,6 @@ fun NotificationsSection() {
     SwitchRow("On this phone", "Notices here while HushOS is closed", phone, enabled = !busy) { setPhone(it) }
     SwitchRow("Shared with you", "When someone shares something with you", shown.shared) { setToggle(shown.copy(shared = it)) }
     SwitchRow("Families", "Invitations, and people waiting to join your family", shown.family) { setToggle(shown.copy(family = it)) }
-    Text(
-        "New sign-ins and removed devices always come. Pushes never say what happened; this phone reads that from HushOS.",
-        style = MaterialTheme.typography.bodySmall, color = alpine.inkMuted,
-        modifier = Modifier.padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2),
-    )
     problem?.let {
         Text(it, style = MaterialTheme.typography.bodySmall, color = alpine.danger, modifier = Modifier.padding(horizontal = AlpineSpace.S4))
     }
