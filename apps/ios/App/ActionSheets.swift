@@ -22,8 +22,10 @@ extension DriveStore {
 
 /*
  * One folder browser, starting where the item is. Crumbs go back; the top level lists
- * Files and the folders others shared with this account that it can edit, so a move into
- * someone's folder (copied across, the original to the Trash) needs no Cut and Paste.
+ * Files and the family folders this account can write in (a move between them is one server
+ * step per file, `Vault.relocate`). A folder someone shared is offered only to items already in
+ * it, and items in a share never leave it: across drives the server moves nothing into or out of
+ * a share, so Copy is the route there (the web's Move dialog).
  */
 struct MovePicker: View {
     @Environment(DriveStore.self) private var store
@@ -39,10 +41,52 @@ struct MovePicker: View {
         return (store.folders[at] ?? []).filter { $0.isFolder && !moving.contains($0.id) }.sorted(by: Opened.byName)
     }
 
-    /* Shared folders this account may write into, at the top level beside Files. */
-    private var sharedFolders: [ShareMount] {
-        store.mounts.filter { $0.share.role == "editor" && $0.root?.isFolder == true }
+    /* The drive the items are in now: one's own, a family folder's, or a share's. */
+    private var source: String? { items.first?.node.workspaceId.lowercased() }
+
+    /* One's own files or a family folder: the places a move may cross between (the vault decides again when the own drive isn't known yet). */
+    private func ownPlace(_ workspace: String) -> Bool {
+        guard let mine = store.myWorkspace else { return true }
+        return workspace.lowercased() == mine.lowercased() || store.familyAreaGroups[workspace.lowercased()] != nil
     }
+
+    /* Items in someone's share: they move within it only. */
+    private var inShare: Bool { source.map { !ownPlace($0) } ?? false }
+
+    /* The share the items are in: the mount whose top folder is above them (two shares of one person's drive are two places). */
+    private var itemsMount: String? {
+        guard inShare, let first = items.first else { return nil }
+        let roots = Set(store.mounts.compactMap { $0.root?.id })
+        var cursor: String? = first.id
+        var steps = 0
+        while let id = cursor, steps < 256 {
+            if roots.contains(id) { return id }
+            cursor = store.known(id)?.node.parentId
+            steps += 1
+        }
+        return nil
+    }
+
+    /* Shared folders this account may write into, offered only to items already in that share. */
+    private var sharedFolders: [ShareMount] {
+        guard let itemsMount else { return [] }
+        return store.mounts.filter { $0.share.role == "editor" && $0.root?.isFolder == true && $0.root?.id == itemsMount }
+    }
+
+    /* The drive of the folder shown. */
+    private var destination: String? {
+        guard let at else { return nil }
+        if at == store.rootId { return store.myWorkspace }
+        return store.workspace(ofFolder: at)
+    }
+
+    /* A move to another drive: between one's own files and a family folder only. */
+    private var across: Bool {
+        guard let destination, let source else { return false }
+        return destination.lowercased() != source
+    }
+
+    private var refused: Bool { across && (inShare || destination.map { !ownPlace($0) } ?? false) }
 
     /* From the top down to `at`: the folders a crumb can go back to. */
     private var trail: [(id: String, name: String)] {
@@ -58,9 +102,9 @@ struct MovePicker: View {
                 break
             }
             if let mount = store.mounts.first(where: { $0.root?.id == id }), let root = mount.root {
-                // A shared folder is reached from the top level, beside Files: going back lands there.
+                // A shared folder is reached from the top level, beside Files: going back lands there. Items in it stay in it.
                 chain.append((id, root.name))
-                if let top = store.rootId { chain.append((top, "Files")) }
+                if !inShare, let top = store.rootId { chain.append((top, "Files")) }
                 break
             }
             guard let node = store.known(id) else { break }
@@ -120,7 +164,7 @@ struct MovePicker: View {
                         SectionTitle("Shared with you")
                     }
                 }
-                if at == store.rootId, !store.writableFamilyRoots.isEmpty {
+                if at == store.rootId, !inShare, !store.writableFamilyRoots.isEmpty {
                     Section {
                         ForEach(store.writableFamilyRoots, id: \.id) { root in
                             Button { at = root.id } label: { familyRow(root.name, detail: root.family) }
@@ -140,8 +184,15 @@ struct MovePicker: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
             .safeAreaInset(edge: .bottom) {
                 VStack(spacing: Alpine.Space.s2) {
-                    if let audience, !alreadyHere {
+                    if refused {
+                        Text(Vault.shareMoveRefused).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted).multilineTextAlignment(.center)
+                    } else if let audience, !alreadyHere {
                         Text(audience).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted).multilineTextAlignment(.center)
+                    }
+                    if across, !refused {
+                        // What a move to another drive leaves behind, said before it starts (the web's Move dialog).
+                        Text("Only the current version of each file moves.").font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
+                            .multilineTextAlignment(.center)
                     }
                     Button {
                         guard let at else { return }
@@ -153,8 +204,8 @@ struct MovePicker: View {
                         Text(alreadyHere ? "Already here" : "Move here").frame(maxWidth: .infinity)
                     }
                     .buttonStyle(PrimaryCapsuleStyle())
-                    .disabled(alreadyHere || at == nil)
-                    .opacity(alreadyHere ? 0.45 : 1)
+                    .disabled(alreadyHere || at == nil || refused)
+                    .opacity(alreadyHere || refused ? 0.45 : 1)
                 }
                 .padding(.horizontal, Alpine.Space.s4).padding(.top, Alpine.Space.s3).padding(.bottom, Alpine.Space.s2)
                 .background(Alpine.ground)

@@ -1781,14 +1781,21 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         for ((index, item) in items.withIndex()) {
             val sameDrive = item.node.workspaceId == targetWorkspace
             if (cut && sameDrive) { move(item, folder).join(); continue }
+            // A cut into or out of someone's share is refused before anything is read: Copy is the route there.
+            if (cut && io({}) { it.mayMove(item.id, folder, item.node.workspaceId) } == false) { notify(com.hushos.app.data.SHARE_MOVE_REFUSED); continue }
             val ticket = begin("copy", item.name)
             var reason: String? = null
             if (sameDrive) finish(ticket, failed = !write(folder, { reason = it }) { it.copy(item.id, folder) }, message = reason)
-            else {
-                // Across drives (into a shared folder) the object is fetched and uploaded again; a cut then trashes the original.
+            else if (cut) {
+                // Between one's own files and a family folder: one server step per file (`moveOf`), never a copy then a trash.
+                val ok = write(folder, { reason = it }) { vault -> vault.moveAcross(item.id, folder, item.node.workspaceId) { fraction -> progress(ticket, fraction) } }
+                finish(ticket, failed = !ok, message = reason)
+                if (ok) _state.update { s -> s.copy(recents = s.recents.filter { it.id != item.id }, latest = s.latest.filter { it.id != item.id }) }
+                item.node.parentId?.let { refresh(it) }
+            } else {
+                // Across drives (into a shared folder) the object is fetched and uploaded again.
                 val ok = write(folder, { reason = it }) { vault -> vault.copyAcross(item.id, folder) { fraction -> progress(ticket, fraction) } }
                 finish(ticket, failed = !ok, message = reason)
-                if (ok && cut) trash(item).join()
             }
         }
     }
@@ -1910,9 +1917,10 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
 
     /*
      * Move to…: within a drive the item's key is wrapped again under its new folder.
-     * Into (or out of) a folder someone shared, the server keeps objects per drive,
-     * so it is copied across (fetched and uploaded again, as Paste does) and the
-     * original then goes to the Trash: what Cut and Paste did, through the picker.
+     * Between one's own files and a family folder (either way) each file is uploaded
+     * under the destination's keys and the server deletes the original as it lands
+     * (Vault.moveAcross), so nothing goes to the Trash. Into or out of someone's share
+     * nothing moves across drives: the picker doesn't offer it, and Copy is the route.
      */
     fun moveAll(items: List<Opened>, folder: String, folderName: String) = viewModelScope.launch {
         val moving = items.filter { it.node.parentId != folder && it.id != folder }
@@ -1925,11 +1933,14 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
                 if (write(item.node.parentId) { it.move(item.id, folder) }) item.node.parentId?.let { back.add(item to it) } else failed++
                 continue
             }
+            if (io({}) { it.mayMove(item.id, folder, item.node.workspaceId) } == false) { notify(com.hushos.app.data.SHARE_MOVE_REFUSED); failed++; continue }
             val ticket = begin("copy", item.name)
             var reason: String? = null
-            val ok = write(folder, { reason = it }) { vault -> vault.copyAcross(item.id, folder) { fraction -> progress(ticket, fraction) } }
+            val ok = write(folder, { reason = it }) { vault -> vault.moveAcross(item.id, folder, item.node.workspaceId) { fraction -> progress(ticket, fraction) } }
             finish(ticket, failed = !ok, message = reason)
-            if (ok) trashOne(item) else failed++
+            if (ok) _state.update { s -> s.copy(recents = s.recents.filter { it.id != item.id }, latest = s.latest.filter { it.id != item.id }) } else failed++
+            // Listed again even after a failure: a folder that stopped partway left some of its files at the destination.
+            item.node.parentId?.let { refresh(it) }
         }
         refresh(folder)
         val moved = moving.size - failed

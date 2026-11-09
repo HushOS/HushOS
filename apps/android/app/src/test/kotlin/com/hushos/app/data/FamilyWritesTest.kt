@@ -302,6 +302,66 @@ class FamilyWritesTest {
     }
 
     /*
+     * Sam's file moved from the family folder into this account's own files: one upload under the account's keys naming
+     * the file at the version read (`moveOf`), and the server deletes the original as it completes. Nothing is trashed, the
+     * bytes open in the account's own drive, and the family row leaves this phone. Fails if the move is a copy then a trash
+     * (both or neither when the trash fails), leaves `moveOf` out, or keeps the row of a file the server deleted.
+     */
+    @Test
+    fun aMoveToOwnFilesIsOneUploadThatNamesItsSourceAndTrashesNothing() {
+        val phone = opened()
+        val vault = phone.vault
+        val version = server.node(family.fileId).version!!.id
+        val sent = server.requests.size
+        val moved = vault.moveAcross(family.fileId, server.root, family.workspaceId)!!
+        val source = server.begins.last().getJSONObject("moveOf")
+        assertEquals(family.workspaceId, source.getString("workspaceId"))
+        assertEquals(family.fileId, source.getString("nodeId"))
+        assertEquals(version, source.getString("versionId"))
+        assertNull("the server kept a moved file", runCatching { server.node(family.fileId) }.getOrNull())
+        assertTrue(sentSince(sent).none { it.contains("/trash") })
+        assertNull(vault.item(family.workspaceId, family.fileId))
+        assertEquals(server.root, server.node(moved.id).parentId)
+        assertEquals("marker-family", read(vault, moved))
+    }
+
+    /*
+     * A folder of this account's own files moved into the family folder: the folder is made there through the ledger, its
+     * file moved with `moveOf`, and the source folder, left holding nothing, goes to the Trash (never deleted for good).
+     * When the file changed on another device meanwhile the server fails the move `stale`: the move says so, the file stays
+     * where it was and the folder stays with it. Fails if a folder is trashed while a file in it didn't move, if a file is
+     * trashed rather than moved, or if a stale move is taken for done.
+     */
+    @Test
+    fun aFolderMovedIntoTheFamilyGoesToTheTrashOnlyOnceEveryFileInItMoved() {
+        for (changed in listOf(false, true)) {
+            val phone = opened()
+            val vault = phone.vault
+            val trips = vault.createFolder(server.root, "Trips $changed")
+            val plan = vault.upload(local("Plan.txt", "day one"), "Plan.txt", "text/plain", trips.id, null)
+            server.moveSourceChangesAfterBegin = changed
+            val sent = server.requests.size
+            if (changed) {
+                val refused = assertThrows(Refused::class.java) { vault.moveAcross(trips.id, family.rootId) }
+                assertEquals(movedMeanwhile("Plan.txt"), refused.message)
+                assertEquals(trips.id, server.node(plan.id).parentId)
+                assertNull(server.node(trips.id).trashedAt)
+            } else {
+                val made = vault.moveAcross(trips.id, family.rootId)!!
+                assertTrue(vault.nodes.viaLedger(family.workspaceId, made.id))
+                val inside = vault.listChildren(made.id, family.workspaceId).single()
+                assertEquals("day one", read(vault, inside))
+                assertNull(runCatching { server.node(plan.id) }.getOrNull())
+                assertTrue(server.node(trips.id).trashedAt != null)
+            }
+            assertEquals(plan.id, server.begins.last().getJSONObject("moveOf").getString("nodeId"))
+            assertTrue(sentSince(sent).none { it.endsWith("/${plan.id}/trash") || it.contains("/purge") || it.contains("/empty") })
+            server.moveSourceChangesAfterBegin = false
+            vault.close()
+        }
+    }
+
+    /*
      * #243's last rule: a write's judgement of a record it signs again goes by the pins as this phone's guard allows them.
      * This phone's guard holds Sam first-seen at other keys; the settings (another device, or a server's copy) say Sam is
      * verified at the keys Sam's file is signed with. The rename's form is re-sealed, never ordinary. Fails if the write

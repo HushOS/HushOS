@@ -407,39 +407,61 @@ fun RenameDialog(model: DriveViewModel, state: DriveState, item: Opened, dismiss
     )
 }
 
-/* A place the picker can move into: this account's folders, and folders others let it edit. */
+/* A place the picker can move into: this account's folders, its family's, and the share the items are in. */
 private data class Place(val id: String?, val name: String, val workspaceId: String?)
 
 /*
- * Move: a full sheet that walks folders from the top, with a trail back up. The
- * top level offers Files and every folder someone shared with edit rights, so a
- * move into (or out of) a shared folder is one path, as Cut and Paste were.
- * Moving into a shared folder says first who will be able to open it there.
+ * Move: a full sheet that walks folders from the top, with a trail back up. All places
+ * lists Files and the family folders this account can write in: a move between them is
+ * one server step per file (Vault.moveAcross). A folder someone shared is offered only to
+ * items already in it, and items in a share never leave it: across drives the server
+ * moves nothing into or out of a share, so Copy is the route there (the web's Move dialog).
+ * Moving somewhere others can open says first who will be able to open it there.
  */
 @Composable
 fun MovePicker(model: DriveViewModel, state: DriveState, items: List<Opened>, dismiss: () -> Unit) {
     val alpine = Alpine.colors
     val first = items.first()
     val excluded = items.map { it.id }.toSet()
-    // A family folder's items move within that family's folder only: its top folder is where the picker starts and ends.
+    val source = first.node.workspaceId
+    val own = state.rootId?.let { model.item(it) }?.node?.workspaceId
+    // One's own files or a family folder: the places a move may cross between (the vault decides again when the own drive
+    // isn't known yet).
+    fun ownPlace(workspaceId: String) = own == null || workspaceId.equals(own, ignoreCase = true) || model.families.isFamilyWorkspace(workspaceId)
+    val inShare = !ownPlace(source)
+    val files = Place(state.rootId, "Files", own)
+    // A family folder's items start at their family folder's top, a share's at the share's.
     val familyTop = first.takeIf { model.families.isFamilyItem(it) }?.let { model.families.topFolder(it.node.workspaceId) }
-    // null: the top, where Files and the shared folders sit side by side.
+    // The share the items are in: the mount whose top folder is above them (two shares of one person's drive are two places).
+    val itemsMount = if (inShare) receivedVia(model, state, first) else null
+    val shareTop = itemsMount?.root
+    // null: the top, where the places sit side by side.
     var trail by retain {
-        mutableStateOf(listOf(familyTop?.let { Place(it.id, it.name, it.node.workspaceId) } ?: Place(state.rootId, "Files", state.rootId?.let { model.item(it) }?.node?.workspaceId)))
+        mutableStateOf(listOf((familyTop ?: shareTop)?.let { Place(it.id, it.name, it.node.workspaceId) } ?: files))
     }
     val here = trail.lastOrNull()
     val folderId = here?.id
     LaunchedEffect(Unit) { if (state.shares == null) model.refreshShares() }
+    // The shares loaded after the sheet opened: a share's items start in their share, not in Files they can't move to.
+    LaunchedEffect(shareTop?.id) { if (shareTop != null && trail == listOf(files)) trail = listOf(Place(shareTop.id, shareTop.name, shareTop.node.workspaceId)) }
     LaunchedEffect(folderId) { folderId?.let { if (!state.folders.containsKey(it)) model.refresh(it) } }
-    val editable = if (familyTop != null) emptyList() else state.shares.orEmpty().filter { it.share.role == "editor" && it.root?.isFolder == true }
+    val families = if (inShare) emptyList() else model.families.writableTops()
+    val editable = state.shares.orEmpty().filter { it.share.role == "editor" && it.root?.isFolder == true && itemsMount != null && it.root.id == itemsMount.root?.id }
+    val placeCount = (if (inShare) 0 else 1) + families.size + editable.size
     val folders = if (here == null) emptyList() else (folderId?.let { state.folders[it] }?.filter { it.isFolder && it.id !in excluded } ?: emptyList())
     val already = folderId != null && items.all { it.node.parentId == folderId }
+    val destination = here?.workspaceId
+    val across = destination != null && !destination.equals(source, ignoreCase = true)
+    // Into or out of someone's share nothing moves across drives.
+    val refused = across && (inShare || destination?.let { !ownPlace(it) } == true)
     // Who will be able to open it there: this account's people on a shared folder of its own, or the one who shared it.
     val note = folderId?.let { id ->
         val access = state.access
         val target = model.item(id)
         val received = target?.let { receivedVia(model, state, it) }
+        val family = destination?.takeIf { across }?.let { model.families.familyNameOf(it) }
         when {
+            family != null -> "Everyone in $family will be able to open ${if (items.size == 1) "it" else "them"} there."
             received != null -> "${received.share.granterName.ifEmpty { received.share.granterEmail }} and the people they share it with will be able to open it there."
             target != null && access != null -> sharedAbove(model, access, target, self = true)?.second
                 ?.takeIf { who -> items.none { access[it.id]?.shared == true } }
@@ -460,7 +482,7 @@ fun MovePicker(model: DriveViewModel, state: DriveState, items: List<Opened>, di
             }
             // Where you are, as a trail of places to go back to.
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S1), verticalAlignment = Alignment.CenterVertically) {
-                if (editable.isNotEmpty()) {
+                if (placeCount > 1) {
                     TrailChip("All places", current = here == null) { trail = emptyList() }
                     Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = alpine.inkMuted, modifier = Modifier.size(16.dp))
                 }
@@ -471,7 +493,10 @@ fun MovePicker(model: DriveViewModel, state: DriveState, items: List<Opened>, di
             }
             Column(Modifier.weight(1f, fill = false).heightIn(max = 520.dp).verticalScroll(rememberScrollState())) {
                 if (here == null) {
-                    PlaceRow("Files", "Your own files") { trail = listOf(Place(state.rootId, "Files", state.rootId?.let { model.item(it) }?.node?.workspaceId)) }
+                    if (!inShare) PlaceRow("Files", "Your own files") { trail = listOf(files) }
+                    for ((top, family) in families) {
+                        PlaceRow(top.name, family) { trail = listOf(Place(top.id, top.name, top.node.workspaceId)) }
+                    }
                     for (mount in editable) {
                         val root = mount.root ?: continue
                         PlaceRow(root.name, "From ${mount.share.granterName.ifEmpty { mount.share.granterEmail }.split(' ').first()} · can edit") {
@@ -489,9 +514,13 @@ fun MovePicker(model: DriveViewModel, state: DriveState, items: List<Opened>, di
             }
             HorizontalDivider(color = alpine.divider)
             Column(Modifier.fillMaxWidth().padding(AlpineSpace.S6), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3)) {
-                if (note != null && !already) Text(note, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                if (refused) Text(com.hushos.app.data.SHARE_MOVE_REFUSED, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                else if (note != null && !already) Text(note, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                // What a move to another drive leaves behind, said before it starts (the web's Move dialog).
+                if (across && !refused) Text("Only the current version of each file moves.", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted,
+                    textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
                 Button(
-                    enabled = folderId != null && !already,
+                    enabled = folderId != null && !already && !refused,
                     onClick = { folderId?.let { model.moveAll(items, it, here.name) }; dismiss() },
                     modifier = Modifier.fillMaxWidth().height(56.dp),
                 ) { Text(if (already) "Already here" else "Move here") }

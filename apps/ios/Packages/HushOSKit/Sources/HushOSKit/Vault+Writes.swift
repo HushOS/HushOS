@@ -165,36 +165,173 @@ extension Vault {
     }
 
     /*
-     * Move, wherever it goes: within one space the item is re-parented (one key re-wrapped, through
-     * the ledger in a family folder); across spaces (a family folder and one's own files, either
-     * way, or someone's share) the server can't move it, since it copies and moves within one
-     * workspace only, so it is uploaded again under the destination's keys and the original goes
-     * to the Trash. Older versions, and the original's writer signature, stay behind
-     * (docs/families-shared-pool.md 3.8; the server's pool-neutral `moveOf` isn't built yet).
+     * A file a move upload names in another of this person's workspaces (begin's `moveOf`): the
+     * server deletes it in the transaction that completes the upload, at the version read, or fails
+     * the move `stale` and keeps it.
      */
-    public func relocate(_ nodeId: String, to parentId: String, progress: @Sendable (Double) -> Void = { _ in }) async throws -> (item: Opened, across: Bool) {
+    public struct MoveSource: Sendable, Equatable {
+        public let workspaceId: String
+        public let nodeId: String
+        public let versionId: String
+        public init(workspaceId: String, nodeId: String, versionId: String) {
+            self.workspaceId = workspaceId
+            self.nodeId = nodeId
+            self.versionId = versionId
+        }
+    }
+
+    /* Said when a move would cross into or out of a folder someone shared: the server takes `moveOf` only between one's own places. */
+    public static let shareMoveRefused = "Items can’t move into or out of a folder shared with you. Copy them instead."
+
+    /* Said when the server failed a move `stale`: the file changed after it was read, and stayed where it was. */
+    public static func movedMeanwhile(_ name: String) -> String {
+        "“\(name)” changed while it was being moved, so it stayed where it was."
+    }
+
+    /* This person's own files, or a family folder of theirs: the places a move may cross between. Never a share. */
+    func ownPlace(_ workspaceId: String) async throws -> Bool {
+        if isFamilyWorkspace(workspaceId) { return true }
+        return workspaceId.lowercased() == (try await loadWorkspace()).workspaceId.lowercased()
+    }
+
+    /*
+     * Whether Move may take `nodeId` under `parentId`: within one drive always; across drives only
+     * between this person's own files and their family's folders. Into or out of someone's share it
+     * is a Copy.
+     */
+    public func mayMove(_ nodeId: String, to parentId: String) async throws -> Bool {
+        let item = try await resolve(nodeId)
+        let parent = try await resolve(parentId)
+        if item.node.workspaceId.lowercased() == parent.node.workspaceId.lowercased() { return true }
+        guard try await ownPlace(item.node.workspaceId) else { return false }
+        return try await ownPlace(parent.node.workspaceId)
+    }
+
+    /*
+     * Move, wherever it goes. Within one drive the item is re-parented (one key re-wrapped, through
+     * the ledger in a family folder). Between this person's own files and their family's folders
+     * (either way) the server can't re-parent, since each is a workspace with keys of its own: each
+     * file is read here and uploaded under the destination's keys naming its source (`moveOf`), and
+     * the server deletes the source in the transaction that completes the upload, or fails it
+     * `stale` and keeps it. Never both, never neither, and nothing goes to the Trash. A folder is
+     * made at the destination, its files moved one by one, and the source folder goes to the Trash
+     * once it holds only folders (the web's lib/move-across.ts). Into or out of someone's share
+     * nothing moves: the server refuses `moveOf` there. Older versions stay behind and are deleted
+     * with the source (docs/families-shared-pool.md 3.8). `item` is nil for a file that landed but
+     * whose row doesn't open here.
+     */
+    public func relocate(_ nodeId: String, to parentId: String, progress: @Sendable (Double) -> Void = { _ in }) async throws -> (item: Opened?, across: Bool) {
         return try await writing {
             guard try await movesAcross(nodeId, to: parentId) else { return (try await move(nodeId, to: parentId), false) }
-            // A family folder that may not be written now gives nothing up: checked before anything is copied out of it.
             let source = try await resolve(nodeId)
-            _ = try familyTarget(source.node.workspaceId)
-            let copied = try await copyAcross(nodeId, to: parentId, progress: progress)
-            do {
-                try await trash(nodeId)
-            } catch {
-                // The copy landed: said as such, never as a move that failed and changed nothing.
-                let why = ErrorWords.say(error, otherwise: "Try again.") ?? "Try again."
-                throw DriveAPIError.server(409, "Copied, but the original couldn’t be moved to the Trash. \(why)")
+            let parent = try await resolve(parentId)
+            guard try await ownPlace(source.node.workspaceId), try await ownPlace(parent.node.workspaceId) else {
+                throw DriveAPIError.server(400, Self.shareMoveRefused)
             }
-            return (copied, true)
+            // A family folder that may not be written now gives nothing up: checked before anything is read out of it.
+            _ = try familyTarget(source.node.workspaceId)
+            // Under a name free where it lands (the web's nextName): two "Trips" side by side can't be told apart.
+            let taken = try await listChildren(of: parent.id, in: parent.node.workspaceId).children.compactMap { opened[$0.ref]?.name }
+            let name = UploadNames.freeName(source.name, among: taken)
+            return (try await moveAcross(source, into: parent.id, name: name, progress: progress), true)
         }
+    }
+
+    /* Said when a moved folder stayed because something in it didn't move (a file that failed, or one added meanwhile). */
+    public static func folderStayed(_ name: String, count: Int) -> String {
+        count == 1 ? "One item in “\(name)” didn’t move, so the folder stayed where it was with it."
+            : "\(count) items in “\(name)” didn’t move, so the folder stayed where it was with them."
+    }
+
+    private func moveAcross(_ source: Opened, into parentId: String, name: String? = nil, progress: @Sendable (Double) -> Void) async throws -> Opened? {
+        // Signed by each record's verdict, as a copy is: out of a family folder as its member list judges it (a former
+        // member's file is re-sealed as the mover's), out of one's own files by the trust set. Without either, nothing moves.
+        let family = isFamilyWorkspace(source.node.workspaceId)
+        let trusted: TrustedSigners? = family ? nil : try await copySigners()
+        let metadata: Signing
+        if let trusted {
+            metadata = .copy(trusted.metadata(of: source.node))
+        } else {
+            metadata = .copy(try await familyPrior(FamilySync.metadataRecord(of: source.node), in: source.node.workspaceId, copying: true))
+        }
+        if source.isFolder {
+            let made = try await createFolder(in: parentId, name: name ?? source.name, signing: metadata, attributes: source.metadata.attributes)
+            // What the server lists in it now, never the catalogue, which may not have a file another device added yet.
+            let listed = try await listChildren(of: source.id, in: source.node.workspaceId).children
+            // Every item is tried, as the web does: one that fails stays, with the folder, and the rest still move. Only no
+            // answer, a signed-out session or a cancel stops the walk: every other item would fail the same way.
+            var failures: [Error] = []
+            for row in listed {
+                do {
+                    guard let child = opened[row.ref] else { throw DriveAPIError.server(500, "Node not opened") }
+                    _ = try await moveAcross(child, into: made.id, progress: progress)
+                } catch {
+                    if error is CancellationError { throw error }
+                    if case DriveAPIError.transport = error { throw error }
+                    if case DriveAPIError.notAuthenticated = error { throw error }
+                    failures.append(error)
+                }
+            }
+            if failures.count == 1 { throw failures[0] }
+            if !failures.isEmpty { throw DriveAPIError.server(409, Self.folderStayed(source.name, count: failures.count)) }
+            guard try await onlyFolders(source) else { throw DriveAPIError.server(409, Self.folderStayed(source.name, count: 1)) }
+            // Everything moved: the emptied folder goes to the Trash. Refused now (no answer, a key change), it only stays
+            // empty where it was; the move itself happened, and is never reported as failed.
+            try? await trash(source.id)
+            return made
+        }
+        // A file without a version has nothing to move; one whose version changes from here on fails the move `stale`.
+        guard let current = source.node.currentVersion else { throw DriveAPIError.notFound("“\(source.name)” has no content yet, so it can’t move.") }
+        let version: Signing
+        if let trusted {
+            version = .copy(trusted.version(current, of: source.node))
+        } else {
+            version = .copy(try await familyPrior(FamilySync.versionRecord(current, of: source.node), in: source.node.workspaceId, copying: true))
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("move-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent(source.name)
+        // The bytes of the version named in `moveOf`, never a newer one a listing learned meanwhile.
+        try await download(source.id, ref: source.ref, expectedVersionId: current.id, to: file) { progress($0 / 2) }
+        let thumbnail = try? await self.thumbnail(source.id)
+        let from = MoveSource(workspaceId: source.node.workspaceId, nodeId: source.id, versionId: current.id)
+        do {
+            let moved = try await upload(fileURL: file, name: name ?? source.name, mime: source.metadata.mime, in: parentId, replacing: nil, thumbnail: thumbnail,
+                                         signing: (metadata, version), attributes: source.metadata.attributes, moveOf: from) { progress(0.5 + $0 / 2) }
+            remove(source.id, in: source.node.workspaceId)
+            return moved
+        } catch is UploadLanded {
+            // Completed: the server deleted the source with it, whatever this process can open of the new row.
+            remove(source.id, in: source.node.workspaceId)
+            return nil
+        } catch DriveAPIError.stale {
+            // At begin or at completion: the source changed after it was read (a new version, trashed, moved), so it stays.
+            throw DriveAPIError.stale(Self.movedMeanwhile(source.name))
+        }
+    }
+
+    /*
+     * Whether nothing is listed in a moved folder, at any depth, but folders: then it goes to the Trash.
+     * Only to the Trash: a listing leaves out what was trashed inside it, and someone may add a file
+     * between the look and the trash, so deleting it for good could take files nobody moved.
+     */
+    private func onlyFolders(_ folder: Opened) async throws -> Bool {
+        var stack = [folder.id]
+        while let id = stack.popLast() {
+            for child in try await listChildren(of: id, in: folder.node.workspaceId).children {
+                if !child.isFolder { return false }
+                stack.append(child.id)
+            }
+        }
+        return true
     }
 
     public func move(_ nodeId: String, to parentId: String) async throws -> Opened {
         return try await writing {
             let item = try await resolve(nodeId)
             let parent = try await resolve(parentId)
-            // Within one family folder through the ledger (see `rewrap`); across spaces the store copies and trashes instead.
+            // Within one family folder through the ledger (see `rewrap`); across spaces `relocate` moves through uploads instead.
             _ = try familyTarget(item.node.workspaceId)
             _ = try familyTarget(parent.node.workspaceId)
             guard let key = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
@@ -497,7 +634,8 @@ extension Vault {
     }
 
     private func begin(fileURL: URL, name: String, mime: String?, parentId: String, replacing given: Opened?, thumbnailBytes: UInt32,
-                       signing: (metadata: Signing, version: Signing), attributes: [String: String] = [:], waited: Bool = false) async throws -> Begun {
+                       signing: (metadata: Signing, version: Signing), attributes: [String: String] = [:], waited: Bool = false,
+                       moveOf: MoveSource? = nil) async throws -> Begun {
         _ = try await loadWorkspace()
         var replacing = given
         // The drive the parent (or the file replaced) lives in: a shared folder's is the granter's.
@@ -583,12 +721,15 @@ extension Vault {
         let versionSignature = try await signVersion(workspaceId: workspace.workspaceId, nodeId: nodeId, versionId: versionId, objectId: objectId,
                                                      suite: suite, envelope: version.envelope, signing: signing.version)
         try sendingIntoFamily(workspace.workspaceId)
-        let begun = try await api.beginUpload(workspaceId: workspace.workspaceId, body: [
+        var body: [String: Any] = [
             "node": nodeInput, "versionId": versionId, "versionIdSeed": madeVersion.seed, "objectId": objectId, "objectIdSeed": madeObject.seed,
             "contentKeyEnvelope": base64urlEncode(bytes: version.envelope), "versionSignature": versionSignature,
             "contentNonce": base64urlEncode(bytes: contentNonce),
             "contentSuite": Int(suite), "chunkCount": Int(layout.chunkCount), "ciphertextSize": String(layout.ciphertextSize),
-        ])
+        ]
+        // A move: the server deletes the source when this completes, in the same transaction (packages/db `moveSourceAtBegin`).
+        if let moveOf { body["moveOf"] = ["workspaceId": moveOf.workspaceId, "nodeId": moveOf.nodeId, "versionId": moveOf.versionId] }
+        let begun = try await api.beginUpload(workspaceId: workspace.workspaceId, body: body)
         begunHere = true
         var urls: [Int: PartUrl] = [:]
         for part in begun.parts { urls[part.partNumber] = part }
@@ -653,7 +794,11 @@ extension Vault {
                 throw UploadLanded(published: Published(metadataVersion: node.metadataVersion, versionId: node.currentVersion?.id))
             }
         }
-        if let knownKey { return try adopt(node, nodeKey: knownKey, metadata: final, in: workspaceId) }
+        // The file is on the server from here: a row this process won't keep now (its family let go of meanwhile) is an upload
+        // that landed, never one that failed (for a move, its source is already deleted).
+        if let knownKey {
+            do { return try adopt(node, nodeKey: knownKey, metadata: final, in: workspaceId) } catch { throw UploadLanded() }
+        }
         // Finished by another launch: the node key comes from the parent's, which the tree opens. The upload has landed
         // either way: a row that doesn't open here now is not an upload to fail, retry or abort.
         do {
@@ -668,15 +813,17 @@ extension Vault {
      * `signing` is `.own` for what this person uploads; a copy that travels as an upload (into
      * another drive, or saved from a link or a share) passes the verdicts it is signed by, and its
      * source's `attributes`. A new version keeps the replaced file's attributes whatever is passed.
+     * `moveOf`: the file this upload moves here from another of this person's workspaces, which the
+     * server deletes as the upload completes (see `relocate`).
      */
     public func upload(
         fileURL: URL, name: String, mime: String?, in parentId: String, replacing: Opened?,
         thumbnail: Data? = nil, signing: (metadata: Signing, version: Signing) = (.own, .own), attributes: [String: String] = [:],
-        progress: @Sendable (Double) -> Void = { _ in }
+        moveOf: MoveSource? = nil, progress: @Sendable (Double) -> Void = { _ in }
     ) async throws -> Opened {
         return try await writing {
             let begun = try await begin(fileURL: fileURL, name: name, mime: mime, parentId: parentId, replacing: replacing,
-                                        thumbnailBytes: UInt32(thumbnail?.count ?? 0), signing: signing, attributes: attributes)
+                                        thumbnailBytes: UInt32(thumbnail?.count ?? 0), signing: signing, attributes: attributes, moveOf: moveOf)
             var urls = begun.urls
             let handle = try FileHandle(forReadingFrom: fileURL)
             defer { try? handle.close() }
@@ -710,8 +857,19 @@ extension Vault {
                 throw error
             }
             do {
-                return try await complete(uploadId: begun.uploadId, workspaceId: begun.workspaceId, nodeId: begun.nodeId, parentId: begun.parentId,
-                                          replacing: begun.replacing, final: begun.final, nodeKey: begun.nodeKey, etags: etags, landing: begun.landing)
+                // A move's completion is asked again when no answer came: the server may have deleted the source already, and a
+                // repeated completion is answered with the node as it landed. Taken for a failure, the move would say it failed.
+                var attempt = 0
+                while true {
+                    do {
+                        return try await complete(uploadId: begun.uploadId, workspaceId: begun.workspaceId, nodeId: begun.nodeId, parentId: begun.parentId,
+                                                  replacing: begun.replacing, final: begun.final, nodeKey: begun.nodeKey, etags: etags, landing: begun.landing)
+                    } catch DriveAPIError.transport(let why) {
+                        attempt += 1
+                        guard moveOf != nil, attempt < 4 else { throw DriveAPIError.transport(why) }
+                        try await Task.sleep(for: .seconds(attempt))
+                    }
+                }
             } catch let landed as UploadLanded {
                 // Here and now there is no queue to come back: the name is repaired once if it can be, and the item is
                 // answered as the server holds it (a caller such as Files must never take a landed version for a failure and
