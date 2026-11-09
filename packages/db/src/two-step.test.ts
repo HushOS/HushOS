@@ -418,6 +418,35 @@ describe('enrolling an authenticator app', () => {
         expect(await twoStep.hasTwoStep(user.id)).toBe(false);
     });
 
+    test('an app started on the password alone cannot be confirmed once another method has turned the step on', async () => {
+        const user = await account();
+        const started = await pendingTotp(user.id);
+        const stranger = await account();
+        const theirs = await pendingTotp(stranger.id);
+        // A key turns the step on first.
+        await enrolKey(user.id, 'key');
+        expect(await twoStep.getPendingTotp({ userId: user.id, factorId: started })).toBeNull();
+        expect(
+            await twoStep.confirmTotp({ userId: user.id, factorId: started, step: STEP }),
+        ).toEqual({ status: 'missing' });
+        expect((await twoStep.getTwoStep(user.id)).factors.map((f) => f.kind)).toEqual([
+            'webauthn',
+        ]);
+        // Nobody else's enrolment is touched, and the app that turns a step on is not its own victim.
+        expect(
+            await twoStep.getPendingTotp({ userId: stranger.id, factorId: theirs }),
+        ).not.toBeNull();
+        expect(
+            await twoStep.confirmTotp({
+                userId: stranger.id,
+                factorId: theirs,
+                step: STEP,
+                backupCodes: codes('stranger'),
+            }),
+        ).toMatchObject({ status: 'ok', turnedOn: true });
+        expect((await twoStep.getTwoStep(stranger.id)).factors.map((f) => f.id)).toEqual([theirs]);
+    });
+
     test('another account can neither read nor confirm a pending factor', async () => {
         const user = await account();
         const stranger = await account();
@@ -2566,6 +2595,20 @@ describe('a change behind the step', () => {
         });
     });
 
+    test('for an account deleted meanwhile it is the change that fails, not the step', async () => {
+        const user = await account();
+        const asking = await session(user.id);
+        await deleteTestAccount(user.id);
+        let ran = false;
+        expect(
+            await change(user.id, asking.tokenHash, null, async () => {
+                ran = true;
+                return 'changed';
+            }),
+        ).toEqual({ status: 'unchanged' });
+        expect(ran).toBe(false);
+    });
+
     test('a token of another purpose, another session or a sign-in authorises nothing', async () => {
         const { user, asking, app } = await stepped();
         const other = await session(user.id, { twoStepAt: new Date() });
@@ -2793,5 +2836,95 @@ describe('deleting an account behind the step', () => {
         }
         expect(await auth.getUserById(user.id)).toBeNull();
         expect(await member()).toBeUndefined();
+    });
+});
+
+/*
+ * Turning the step on can sign the account's other devices out in the same
+ * transaction (docs/two-step-design.md 4): their sessions never passed the step.
+ */
+describe('confirming the first method and signing the other devices out', () => {
+    async function enrolling() {
+        const user = await account();
+        const here = await session(user.id);
+        const laptop = await session(user.id, { keyed: true });
+        const phone = await session(user.id);
+        const factorId = await pendingTotp(user.id);
+        const confirm = (signOutOthers: boolean, sessionTokenHash = here.tokenHash) =>
+            auth.confirmTotpSigningOut({
+                userId: user.id,
+                factorId,
+                step: STEP,
+                backupCodes: codes(user.id),
+                sessionTokenHash,
+                signOutOthers,
+            });
+        return { user, here, laptop, phone, factorId, confirm };
+    }
+    const revoked = async (deviceId: string) => {
+        const [row] = await db
+            .select({ revokedAt: accountDevices.revokedAt })
+            .from(accountDevices)
+            .where(eq(accountDevices.id, deviceId));
+        return row?.revokedAt != null;
+    };
+
+    test('ends every other device’s session and keeps the one that enrolled, now stepped', async () => {
+        const { user, here, laptop, phone, confirm } = await enrolling();
+        const stranger = await account();
+        const theirs = await session(stranger.id);
+        expect(await confirm(true)).toEqual({
+            status: 'ok',
+            turnedOn: true,
+            replaced: false,
+            removed: 2,
+        });
+        expect(await sessionRow(laptop.tokenHash)).toBeUndefined();
+        expect(await sessionRow(phone.tokenHash)).toBeUndefined();
+        expect(await revoked(laptop.deviceId)).toBe(true);
+        expect(await revoked(phone.deviceId)).toBe(true);
+        expect((await sessionRow(here.tokenHash))?.twoStepAt).toBeInstanceOf(Date);
+        expect(await revoked(here.deviceId)).toBe(false);
+        // The removed devices learn why, as any removed device does.
+        expect(await auth.wasRemoved(laptop.tokenHash)).toBe(true);
+        expect(await auth.wasRemoved(here.tokenHash)).toBe(false);
+        // Another account's devices are not this account's others.
+        expect(await sessionRow(theirs.tokenHash)).toBeDefined();
+        expect((await twoStep.getTwoStep(user.id)).on).toBe(true);
+    });
+
+    test('without the flag the other devices stay signed in', async () => {
+        const { laptop, phone, confirm } = await enrolling();
+        expect(await confirm(false)).toMatchObject({ status: 'ok', turnedOn: true, removed: 0 });
+        expect(await sessionRow(laptop.tokenHash)).toBeDefined();
+        expect(await sessionRow(phone.tokenHash)).toBeDefined();
+    });
+
+    test('a confirmation that replaces an app removes nobody, whatever the flag says', async () => {
+        const user = await account();
+        const here = await session(user.id);
+        await enrolTotp(user.id, { sessionTokenHash: here.tokenHash });
+        const other = await session(user.id, { twoStepAt: new Date() });
+        const replacement = await pendingTotp(user.id);
+        expect(
+            await auth.confirmTotpSigningOut({
+                userId: user.id,
+                factorId: replacement,
+                step: STEP + 5,
+                sessionTokenHash: here.tokenHash,
+                signOutOthers: true,
+            }),
+        ).toEqual({ status: 'ok', turnedOn: false, replaced: true, removed: 0 });
+        expect(await sessionRow(other.tokenHash)).toBeDefined();
+        expect(await revoked(other.deviceId)).toBe(false);
+    });
+
+    test('both or neither: if the session asking has ended, nothing is confirmed and nobody is removed', async () => {
+        const { user, laptop, factorId, confirm } = await enrolling();
+        expect(await confirm(true, token('no such session'))).toEqual({ status: 'session' });
+        expect((await twoStep.getTwoStep(user.id)).on).toBe(false);
+        expect(await twoStep.getPendingTotp({ userId: user.id, factorId })).not.toBeNull();
+        expect(await db.select().from(twoStepBackupCodes)).toEqual([]);
+        expect(await sessionRow(laptop.tokenHash)).toBeDefined();
     });
 });

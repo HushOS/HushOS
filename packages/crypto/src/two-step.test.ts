@@ -136,6 +136,13 @@ describe('a phrase signature', () => {
         expect(await verifyTwoStepPhrase(input, signature, rotated.recovery.publicKey)).toBe(false);
     });
 
+    it('is not made with a salt that is not a salt, whatever the phrase', async () => {
+        for (const salt of ['', 'short', `${fixture.wrappingSalt}A`, 'not base64!'])
+            await expect(
+                signTwoStepPhrase(fixture.phrase, { ...fixture, wrappingSalt: salt }),
+            ).rejects.toThrow('Invalid key encoding.');
+    });
+
     it('is not made from words that are not a phrase', async () => {
         await expect(
             signTwoStepPhrase('twelve words are not a recovery phrase at all', fixture),

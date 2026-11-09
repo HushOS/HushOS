@@ -89,6 +89,17 @@ export async function totpCode(secret: Uint8Array, step: number, digits = TOTP_D
     return String(binary % 10 ** digits).padStart(digits, '0');
 }
 
+/*
+ * What a person typed, as the six digits it stands for: authenticator apps show
+ * a code as `123 456`, and people type it that way, so spaces and hyphens are
+ * ignored. Null when that is not six digits: not a code at all, which is a
+ * mistyped field and never a guess.
+ */
+export function normalizeTotpCode(input: string) {
+    const code = input.replace(/[\s-]/g, '');
+    return /^[0-9]{6}$/.test(code) ? code : null;
+}
+
 /* Equal or not, in time that depends on the length alone. */
 function sameText(a: string, b: string) {
     if (a.length !== b.length) return false;

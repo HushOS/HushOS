@@ -282,10 +282,16 @@ export async function startApi(env: Record<string, string> = {}) {
      * Turns the step on for an account without the enrolment routes: an authenticator app whose
      * secret the test holds, confirmed at a step well in the past, and ten backup codes. Sealed
      * and hashed as the design says, under the key the server derives, so the routes must open
-     * and check exactly that.
+     * and check exactly that. `under` is another key instead: one this server does not have,
+     * as after an operator changed TWO_STEP_KEY and dropped the old one.
      */
-    async function enrol(userId: string, options: { sessionToken?: string } = {}) {
-        const { key, id: keyId } = await twoStepKey();
+    async function enrol(
+        userId: string,
+        options: { sessionToken?: string; under?: Uint8Array } = {},
+    ) {
+        const { key, id: keyId } = options.under
+            ? { key: options.under, id: Buffer.from(await twoStepKeyId(options.under)) }
+            : await twoStepKey();
         const secret = new Uint8Array(randomBytes(20));
         const factorId = randomUUID();
         const { nonce, sealed } = await sealTotpSecret(secret, key, { userId, factorId, keyId });
@@ -361,5 +367,6 @@ export async function startApi(env: Record<string, string> = {}) {
         resetDatabase: helpers.resetDatabase,
         closeDatabase: helpers.closeDatabase,
         createTestFamily: helpers.createTestFamily,
+        lockObserver: helpers.lockObserver,
     };
 }

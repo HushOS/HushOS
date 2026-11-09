@@ -46,6 +46,15 @@ export async function setSharedFailures(userId: string, count: number) {
         .where(eq(twoStepState.userId, userId));
 }
 
+/* Wrong codes in a row from sign-ins that proved no device, as counted so far. */
+export async function sharedFailures(userId: string) {
+    const [row] = await db
+        .select({ count: twoStepState.consecutiveFailures })
+        .from(twoStepState)
+        .where(eq(twoStepState.userId, userId));
+    return row?.count;
+}
+
 /* Wrong codes in a row from one known device, without sending them. */
 export async function setDeviceFailures(deviceId: string, count: number) {
     await db

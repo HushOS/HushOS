@@ -48,6 +48,7 @@ import {
     newBackupCodes,
     newTotp,
     notifyTwoStep,
+    readTotpCode,
     requireTwoStepEnabled,
     stepNotPassed,
     stepPassed,
@@ -2354,7 +2355,8 @@ async function changeBehindStep<T>(
             if (step) await stepUnused(step);
             throw unchanged();
         default:
-            if (!step) throw stepRequired();
+            // Only a step that was sent can fail to pass.
+            if (!step) throw unchanged();
             return stepNotPassed(step, result);
     }
 }
@@ -2487,31 +2489,52 @@ export async function startTotp(sessionToken: string | null, input: TwoStepChang
  * in afterwards. If this is the account's first method the step is now on:
  * this session is marked as having passed it, and the ten backup codes are
  * returned, once. Otherwise the new app replaces the old one.
+ *
+ * `signOutOthers` removes the account's other devices in the same transaction
+ * when, and only when, this confirmation turns the step on (owner decision 6):
+ * their sessions never passed the step. It asks for no second password
+ * exchange. Whoever confirms knows the pending app's id and its current code,
+ * and both come from one reply (`startTotp`), given to a session that had just
+ * proved the password, at most ten minutes ago; the id is listed nowhere, and
+ * the code cannot be made without the secret. `removed` is how many devices
+ * went, for the caller's notice.
  */
 export async function confirmTotp(
     sessionToken: string | null,
     factorId: string,
-    input: { code: string },
+    input: { code: string; signOutOthers?: boolean },
 ) {
     requireTwoStepEnabled();
     const { user, token } = await requireTwoStepSession(sessionToken);
-    // A guess at the new app's code is a guess: ten wrong in 15 minutes, across the account.
-    const guesses = hash(`two-step:confirm:${user.id}`);
-    if (!(await authRepository.consumeRateLimit(guesses, 10, 15 * 60_000)))
-        throw new AuthError('Too many wrong codes. Try again in 15 minutes.', 429);
+    const code = readTotpCode(input.code);
     const gone = () => new AuthError('This setup has expired. Start again.', 404);
     const pending = await twoStepRepository.getPendingTotp({ userId: user.id, factorId });
     if (!pending) throw gone();
-    const step = (await appSteps(pending, input.code)).at(-1);
+    // A guess at the new app's code is a guess: ten wrong in 15 minutes, across the account.
+    // Charged only once there is an app of this account to guess at, so a session with none
+    // to confirm cannot use the budget up and keep the owner from enrolling.
+    const guesses = hash(`two-step:confirm:${user.id}`);
+    if (!(await authRepository.consumeRateLimit(guesses, 10, 15 * 60_000)))
+        throw new AuthError('Too many wrong codes. Try again in 15 minutes.', 429);
+    let step: number | undefined;
+    try {
+        step = (await appSteps(pending, code)).at(-1);
+    } catch (error) {
+        // Not checked (a key the operator removed), so not a guess.
+        await authRepository.releaseRateLimit(guesses);
+        throw error;
+    }
     if (step === undefined)
         throw new AuthError('That code didn’t work. Codes change every 30 seconds.', 400);
+    const confirmedAt = step;
     const confirm = (backupCodes?: twoStepRepository.BackupCodeInput[]) =>
-        twoStepRepository.confirmTotp({
+        authRepository.confirmTotpSigningOut({
             userId: user.id,
             factorId,
-            step,
+            step: confirmedAt,
             backupCodes,
             sessionTokenHash: hash(token),
+            signOutOthers: input.signOutOthers === true,
         });
     // Codes are made only for a first method; hashing ten of them is slow, so not on a guess.
     let codes = (await twoStepRepository.hasTwoStep(user.id))
@@ -2523,12 +2546,18 @@ export async function confirmTotp(
         codes = await newBackupCodes(user.id);
         confirmed = await confirm(codes?.stored);
     }
+    if (confirmed.status === 'session')
+        throw new AuthError('Sign in to manage two-step sign-in.', 401);
     if (confirmed.status !== 'ok') throw gone();
     await authRepository.releaseRateLimit(guesses);
     notifyTwoStep(user.id, confirmed.turnedOn ? 'two-step-on' : 'two-step-method-added', {
         method: 'totp',
     });
-    return confirmed.turnedOn && codes ? { backupCodes: codes.shown } : {};
+    return {
+        ...(confirmed.turnedOn && codes ? { backupCodes: codes.shown } : {}),
+        userId: user.id,
+        removed: confirmed.removed,
+    };
 }
 
 async function limitMethodNames(userId: string) {

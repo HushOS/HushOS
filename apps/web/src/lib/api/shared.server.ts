@@ -795,9 +795,11 @@ export const securityActionSchema = t.Union([
 
 /*
  * An answer to the second step (docs/two-step-design.md 4): a step token and one proof. A code
- * is taken as typed, with room for spaces and a hyphen; the domain reads it. A phrase's answer
- * is an Ed25519 signature. A security key's assertion (`webauthn`) joins the union with security
- * keys; until then it is refused here, as any unknown kind is.
+ * is taken as typed, up to 32 characters. The domain reads it: spaces and hyphens are ignored
+ * (`123 456`, `7kq2m 9xd4p`), and what is still not six digits, or not a backup code's ten
+ * characters, is answered 400 and counted nowhere. A phrase's answer is an Ed25519 signature.
+ * A security key's assertion (`webauthn`) joins the union with security keys; until then it is
+ * refused here, as any unknown kind is.
  */
 export const stepProofSchema = t.Union([
     t.Object({ kind: t.Literal('totp'), code: t.String({ minLength: 1, maxLength: 32 }) }),

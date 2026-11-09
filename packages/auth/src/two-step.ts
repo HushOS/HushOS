@@ -9,6 +9,7 @@ import {
     hashBackupCode,
     matchTotp,
     normalizeBackupCode,
+    normalizeTotpCode,
     openTotpSecret,
     sameHash,
     sealTotpSecret,
@@ -114,19 +115,23 @@ export function twoStepKeys() {
     return ring;
 }
 
-/* The key a row names, or a 503: the operator took away a key that rows still need. */
+/*
+ * A row names a key this server does not have: the operator took away a key that rows still
+ * need. An outage to fix (503), never a wrong answer: nothing is counted for it.
+ */
+function keyMissing() {
+    return new AuthError('Two-step sign-in is unavailable. Please try again later.', 503, {
+        cause: Object.assign(new Error('A two-step key that rows were made under is not set.'), {
+            name: 'ConfigurationError',
+            code: 'TWO_STEP_KEY_MISSING',
+        }),
+    });
+}
+
+/* The key a row names, or a 503. */
 async function keyNamed(id: Buffer) {
     const key = (await twoStepKeys()).keys.find((entry) => entry.id.equals(id));
-    if (!key)
-        throw new AuthError('Two-step sign-in is unavailable. Please try again later.', 503, {
-            cause: Object.assign(
-                new Error('A two-step key that rows were made under is not set.'),
-                {
-                    name: 'ConfigurationError',
-                    code: 'TWO_STEP_KEY_MISSING',
-                },
-            ),
-        });
+    if (!key) throw keyMissing();
     return key;
 }
 
@@ -151,7 +156,10 @@ async function openApp(row: TotpRow) {
     });
 }
 
-/* The time steps `code` answers for this app's secret, oldest first: none for a wrong code. */
+/*
+ * The time steps `code` (six digits, as `readTotpCode` reads them) answers for this app's
+ * secret, oldest first: none for a wrong code.
+ */
 export async function appSteps(row: TotpRow, code: string) {
     const secret = await openApp(row);
     try {
@@ -233,11 +241,14 @@ export type StepMethod = 'webauthn' | 'totp' | 'backup' | 'phrase';
 
 /*
  * What can answer the step for this account now, in the order a client offers
- * them, and what the phrase needs: the recovery envelope's salt and version,
- * since the signing key depends on the salt. The salt is not secret (the server
- * serves it with the recovery envelope at `/auth/recover/start`), and here it
- * goes only to someone who has just proved the password. A security key is
- * listed once its assertion can be checked here.
+ * them, and what the phrase needs to sign its statement: the account's id,
+ * which the statement names, and the recovery envelope's salt and version,
+ * since the signing key depends on the salt. A device that has lost everything
+ * but the password and the phrase knows none of them, and that is the case the
+ * phrase is for. None is secret (the server serves the id and the salt with
+ * the recovery envelope at `/auth/recover/start`), and here they go only to
+ * someone who has just proved the password. A security key is listed once its
+ * assertion can be checked here.
  */
 async function stepOffer(userId: string) {
     const two = await twoStepRepository.getTwoStep(userId);
@@ -251,6 +262,7 @@ async function stepOffer(userId: string) {
         ...(recovery
             ? {
                   phrase: {
+                      userId,
                       recoveryVersion: recovery.recoveryVersion,
                       wrappingSalt: recovery.wrappingSalt.toString('base64url'),
                   },
@@ -330,6 +342,26 @@ function wrong(where: Where, kind: StepAnswer['kind'], left: number) {
 /* The account has the step on and the request carried no answer to it. */
 export function stepRequired() {
     return new AuthError('Confirm it’s you with your second step.', 403, { code: 'two-step' });
+}
+
+/*
+ * A code as the person typed it, read: an authenticator code with its spaces
+ * and hyphens ignored, a backup code normalised. What is still not six digits,
+ * or not a backup code's ten characters, is a slip of the hand or the wrong
+ * field, never a guess: it is answered 400 and counted nowhere, not against
+ * the token, the budgets, the notice or the freeze.
+ */
+export function readTotpCode(typed: string) {
+    const code = normalizeTotpCode(typed);
+    if (!code) throw new AuthError('Enter the six digits your authenticator app shows.', 400);
+    return code;
+}
+
+function readBackupCode(typed: string) {
+    const code = normalizeBackupCode(typed);
+    if (!code)
+        throw new AuthError('Enter a backup code as it was shown: ten letters and numbers.', 400);
+    return code;
 }
 
 function frozen() {
@@ -427,27 +459,34 @@ async function stepFailed(step: Omit<CheckedStep, 'proof'>): Promise<never> {
     throw wrong(step.where, step.kind, failure.left);
 }
 
+/*
+ * A code is a proof only for a time step the app has not taken yet. One that
+ * matches a step already taken is a replay and is no proof here, before
+ * anything is done on its strength: a caller may act between this check and
+ * the lock (deletion stops billing), and a used code must never get that far.
+ * The repository refuses a replay again under the account's lock, for two
+ * requests that carry one fresh code at the same moment.
+ */
 async function totpProof(userId: string, code: string): Promise<StepProof | null> {
     const { factors } = await twoStepRepository.getTwoStep(userId);
     const app = factors.find((factor) => factor.kind === 'totp');
     if (!app) return null;
     const steps = await appSteps(app, code);
-    if (steps.length === 0) return null;
-    // The first step the app has not taken yet; a code for one it has is a replay, which the
-    // repository refuses under the account's lock.
-    const step = steps.find((candidate) => candidate > (app.totpLastStep ?? 0)) ?? steps[0]!;
-    return { method: 'totp', factorId: app.id, step };
+    const step = steps.find((candidate) => candidate > (app.totpLastStep ?? 0));
+    return step === undefined ? null : { method: 'totp', factorId: app.id, step };
 }
 
 /*
  * The input is hashed once for each key the account's unused codes were made
  * under (one, unless the operator changed the key since) and compared with
- * every one of them, so a wrong code costs the server one slow hash.
+ * every one of them, so a wrong code costs the server one slow hash. Codes
+ * made under a key this server no longer has cannot be checked at all: unless
+ * the input matched under a key it does have, that is an outage (503), as it
+ * is for an authenticator app, and not a wrong code.
  */
-async function backupProof(userId: string, typed: string): Promise<StepProof | null> {
-    const code = normalizeBackupCode(typed);
+async function backupProof(userId: string, code: string): Promise<StepProof | null> {
     const two = await twoStepRepository.getTwoStep(userId);
-    if (!code || !two.state || two.backupCodes.length === 0) return null;
+    if (!two.state || two.backupCodes.length === 0) return null;
     const { keys } = await twoStepKeys();
     let found: Buffer | null = null;
     for (const key of keys) {
@@ -456,7 +495,10 @@ async function backupProof(userId: string, typed: string): Promise<StepProof | n
         const hashed = Buffer.from(await hashBackupCode(code, key.key, two.state.backupCodeSalt));
         for (const stored of under) if (await sameHash(stored.codeHash, hashed)) found = hashed;
     }
-    return found ? { method: 'backup', codeHash: found } : null;
+    if (found) return { method: 'backup', codeHash: found };
+    if (two.backupCodes.some((stored) => !keys.some((key) => key.id.equals(stored.keyId))))
+        throw keyMissing();
+    return null;
 }
 
 async function phraseProof(
@@ -484,29 +526,47 @@ async function phraseProof(
  *
  * A code for an app that is frozen in this pool is refused before it is
  * checked, and so is any code once the pool's budget is spent, so neither
- * refusal says whether the code was right.
+ * refusal says whether the code was right. Input that is not a code at all is
+ * a 400 before anything is read or counted (readTotpCode), and an answer the
+ * server cannot check (a key the operator removed) gives its place in the
+ * budget back and counts nothing.
  */
 export async function checkStepAnswer(
     bound: Pick<StepBinding, 'purpose' | 'sessionTokenHash'>,
     submission: StepSubmission,
     where: Where,
 ): Promise<CheckedStep> {
+    const answer = submission.proof;
+    // Before the token is looked at: what is not a code is not an answer.
+    const code =
+        answer.kind === 'totp'
+            ? readTotpCode(answer.code)
+            : answer.kind === 'backup'
+              ? readBackupCode(answer.code)
+              : null;
     if (!TOKEN_PATTERN.test(submission.token)) throw expired(where);
     const binding: StepBinding = { ...bound, tokenHash: hash(submission.token) };
     const context = await twoStepRepository.getStepContext(binding);
     if (!context) throw expired(where);
     const userId = context.attempt.userId;
-    const answer = submission.proof;
     let budget: Buffer | null = null;
     let proof: StepProof | null;
-    if (answer.kind === 'totp') {
-        if (context.totpFrozen) throw frozen();
+    if (answer.kind === 'phrase')
+        proof = await phraseProof(userId, submission.token, answer.signature);
+    else {
+        if (answer.kind === 'totp' && context.totpFrozen) throw frozen();
         budget = await chargeCodeBudget(userId, context.deviceId);
-        proof = await totpProof(userId, answer.code);
-    } else if (answer.kind === 'backup') {
-        budget = await chargeCodeBudget(userId, context.deviceId);
-        proof = await backupProof(userId, answer.code);
-    } else proof = await phraseProof(userId, submission.token, answer.signature);
+        try {
+            proof =
+                answer.kind === 'totp'
+                    ? await totpProof(userId, code!)
+                    : await backupProof(userId, code!);
+        } catch (error) {
+            // Not checked, so not a guess: the place it took goes back.
+            await authRepository.releaseRateLimit(budget);
+            throw error;
+        }
+    }
     const step = { binding, kind: answer.kind, userId, where, budget };
     if (!proof) return stepFailed(step);
     return { ...step, proof };

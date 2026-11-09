@@ -271,14 +271,17 @@ const stepMethod = t.Union([
 
 /*
  * A step token and what can answer it (docs/two-step-design.md 4): the methods the account has,
- * when the token ends, and for the recovery phrase the salt and version its signing key is
- * derived with. Never a secret, a method's name or anything of the account beyond that.
+ * when the token ends, and for the recovery phrase what its statement and signing key need: the
+ * account's id, which a device that kept nothing does not know, and the recovery envelope's
+ * salt and version. Never a secret, a method's name or anything of the account beyond that.
  */
 const stepChallenge = t.Object({
     token: t.String(),
     methods: t.Array(stepMethod),
     expiresAt: t.String(),
-    phrase: t.Optional(t.Object({ recoveryVersion: t.Integer(), wrappingSalt: t.String() })),
+    phrase: t.Optional(
+        t.Object({ userId: t.String(), recoveryVersion: t.Integer(), wrappingSalt: t.String() }),
+    ),
 });
 
 /*

@@ -191,14 +191,20 @@ function phraseSecret(phrase: string) {
  */
 export async function recoverySigningKey(phrase: string, wrappingSalt: string) {
     await sodium.ready;
+    // Before the phrase is read: a malformed salt must not leave the phrase's secret behind.
+    const salt = decode(wrappingSalt, 32);
     const secret = phraseSecret(phrase);
-    const seed = await derive(secret, decode(wrappingSalt, 32), 'authentication');
+    let seed: Uint8Array | undefined;
+    let pair: { privateKey: Uint8Array; publicKey: Uint8Array } | undefined;
     try {
-        const pair = sodium.crypto_sign_seed_keypair(seed);
+        seed = await derive(secret, salt, 'authentication');
+        pair = sodium.crypto_sign_seed_keypair(seed);
+        // A copy for the caller, who wipes it; libsodium's own goes below.
         return { privateKey: new Uint8Array(pair.privateKey), publicKey: encode(pair.publicKey) };
     } finally {
         secret.fill(0);
-        seed.fill(0);
+        seed?.fill(0);
+        pair?.privateKey.fill(0);
     }
 }
 export async function openRecovery(phrase: string, userId: string, envelope: RecoveryEnvelope) {

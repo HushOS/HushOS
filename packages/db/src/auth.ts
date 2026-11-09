@@ -24,8 +24,10 @@ import {
     PENDING_FACTOR_SECONDS,
     SECURITY_EVENT_DAYS,
     STEP_REMEMBERED_DAYS,
+    confirmTotp,
     hasTwoStep,
     passStep,
+    type ConfirmTotpResult,
     type StepPass,
     type StepProof,
 } from './two-step';
@@ -947,39 +949,74 @@ export async function revokeOtherDevices(input: {
     userId: string;
     sessionTokenHash: Buffer;
 }): Promise<RevokeResult> {
-    return db.transaction(async (tx) => {
-        const acting = await actingDevice(tx, input.userId, input.sessionTokenHash);
-        if (!acting) return { status: 'session' };
-        const revoked = await tx
-            .update(accountDevices)
-            .set({ revokedAt: new Date() })
-            .where(
-                and(
-                    eq(accountDevices.userId, input.userId),
-                    ne(accountDevices.id, acting),
-                    isNull(accountDevices.revokedAt),
-                ),
-            )
-            .returning({ id: accountDevices.id });
-        await endDeviceSessions(
-            tx,
-            revoked.map((row) => row.id),
-        );
-        // Sessions a container of the previous release opened during a rolling update have no
-        // device, and that release still accepts them: they end here too, and are told why.
-        const deviceless = await tx
-            .delete(sessions)
-            .where(and(eq(sessions.userId, input.userId), isNull(sessions.deviceId)))
-            .returning({ tokenHash: sessions.tokenHash });
-        if (deviceless.length > 0) {
-            const expiresAt = new Date(Date.now() + REMOVED_TOKEN_SECONDS * 1000);
-            await tx
-                .insert(removedSessionTokens)
-                .values(deviceless.map(({ tokenHash }) => ({ tokenHash, expiresAt })))
-                .onConflictDoNothing();
-        }
-        return { status: 'ok', removed: revoked.length };
-    });
+    return db.transaction((tx) => revokeOthersWithin(tx, input));
+}
+
+/*
+ * Confirms a pending authenticator app (confirmTotp) and, if that turned the
+ * step on and `signOutOthers` says so, removes the account's other devices in
+ * the same transaction (docs/two-step-design.md 4, "Turning the step on"):
+ * their sessions never passed the step, and a person turning it on may be
+ * reacting to an intrusion. Both or neither: if the session asking has ended
+ * meanwhile (`session`), nothing is confirmed either. A confirmation that
+ * replaces an app, on an account that already had the step, removes nobody.
+ */
+export async function confirmTotpSigningOut(
+    input: Parameters<typeof confirmTotp>[0] & { sessionTokenHash: Buffer; signOutOthers: boolean },
+): Promise<(ConfirmTotpResult & { removed: number }) | { status: 'session' }> {
+    class SessionEnded extends Error {}
+    try {
+        return await db.transaction(async (tx) => {
+            const confirmed = await confirmTotp(input, tx);
+            if (confirmed.status !== 'ok' || !confirmed.turnedOn || !input.signOutOthers)
+                return { ...confirmed, removed: 0 };
+            const others = await revokeOthersWithin(tx, input);
+            // Thrown, so the confirmation rolls back with it.
+            if (others.status !== 'ok') throw new SessionEnded();
+            return { ...confirmed, removed: others.removed };
+        });
+    } catch (error) {
+        if (error instanceof SessionEnded) return { status: 'session' };
+        throw error;
+    }
+}
+
+/* revokeOtherDevices, inside a transaction the caller holds. */
+async function revokeOthersWithin(
+    tx: Tx,
+    input: { userId: string; sessionTokenHash: Buffer },
+): Promise<RevokeResult> {
+    const acting = await actingDevice(tx, input.userId, input.sessionTokenHash);
+    if (!acting) return { status: 'session' };
+    const revoked = await tx
+        .update(accountDevices)
+        .set({ revokedAt: new Date() })
+        .where(
+            and(
+                eq(accountDevices.userId, input.userId),
+                ne(accountDevices.id, acting),
+                isNull(accountDevices.revokedAt),
+            ),
+        )
+        .returning({ id: accountDevices.id });
+    await endDeviceSessions(
+        tx,
+        revoked.map((row) => row.id),
+    );
+    // Sessions a container of the previous release opened during a rolling update have no
+    // device, and that release still accepts them: they end here too, and are told why.
+    const deviceless = await tx
+        .delete(sessions)
+        .where(and(eq(sessions.userId, input.userId), isNull(sessions.deviceId)))
+        .returning({ tokenHash: sessions.tokenHash });
+    if (deviceless.length > 0) {
+        const expiresAt = new Date(Date.now() + REMOVED_TOKEN_SECONDS * 1000);
+        await tx
+            .insert(removedSessionTokens)
+            .values(deviceless.map(({ tokenHash }) => ({ tokenHash, expiresAt })))
+            .onConflictDoNothing();
+    }
+    return { status: 'ok', removed: revoked.length };
 }
 
 /*

@@ -9,6 +9,7 @@ import {
     hashBackupCode,
     matchTotp,
     normalizeBackupCode,
+    normalizeTotpCode,
     openTotpSecret,
     sameHash,
     sealTotpSecret,
@@ -78,6 +79,15 @@ describe('authenticator codes', () => {
         expect(await matchTotp(fill(20, 3), right, at)).toEqual([]);
         for (const typed of ['', right.slice(1), `${right}0`, ` ${right.slice(1)}`, 'abcdef'])
             expect(await matchTotp(RFC_SECRET, typed, at)).toEqual([]);
+    });
+
+    it('are read as typed: spaces and hyphens ignored, and anything but six digits is no code', () => {
+        expect(normalizeTotpCode('123 456')).toBe('123456');
+        expect(normalizeTotpCode(' 123-456\n')).toBe('123456');
+        expect(normalizeTotpCode('1 2 3 4 5 6')).toBe('123456');
+        expect(normalizeTotpCode('000000')).toBe('000000');
+        for (const typed of ['', '12345', '1234567', '12345a', 'abcdef', '123.456', '１２３４５６'])
+            expect(normalizeTotpCode(typed), typed).toBeNull();
     });
 
     it('come from a 20-byte secret, shown as base32 in a key URI an authenticator app reads', () => {

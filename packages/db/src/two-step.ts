@@ -232,7 +232,7 @@ export async function getPendingTotp(
 
 /*
  * Sets the step on for an account that had no factor, under the account's lock: its codes, the
- * end of its enrol tokens, and the session that enrolled.
+ * end of its enrol tokens and of any enrolment still pending, and the session that enrolled.
  */
 async function turnOn(
     tx: Tx,
@@ -248,6 +248,12 @@ async function turnOn(
             createdAt: now,
         })),
     );
+    // An authenticator app started while the step was off was started on the password alone.
+    // The step is on now, so adding a method takes the step: such an enrolment starts again.
+    // (The factor that just turned the step on is confirmed already, and stays.)
+    await tx
+        .delete(twoStepFactors)
+        .where(and(eq(twoStepFactors.userId, input.userId), isNull(twoStepFactors.confirmedAt)));
     // An enrol token stood in for the step while the account had none. It has one now: a second
     // token minted for the same sign-in must not enrol or replace a method without it.
     await tx
@@ -1125,7 +1131,10 @@ export type SteppedChange<T> =
     | { status: 'ok'; value: T; passed: Extract<StepPass, { status: 'ok' }> | null }
     /* The account has the step on and the request carried none. Nothing was changed. */
     | { status: 'required' }
-    /* The step passed and `change` then refused: everything was put back, the step included. */
+    /*
+     * `change` refused, or the account is gone: nothing was changed, and a step that had passed
+     * was put back with everything else.
+     */
     | { status: 'unchanged' }
     | Exclude<StepPass, { status: 'ok' }>;
 
@@ -1156,7 +1165,8 @@ export async function steppedChange<T>(
 ): Promise<SteppedChange<T>> {
     try {
         return await db.transaction(async (tx): Promise<SteppedChange<T>> => {
-            if (!(await lockAccount(tx, input.userId))) return { status: 'missing' };
+            // An account deleted meanwhile has no step to ask for: the change simply cannot happen.
+            if (!(await lockAccount(tx, input.userId))) return { status: 'unchanged' };
             let passed: Extract<StepPass, { status: 'ok' }> | null = null;
             if (await hasTwoStep(input.userId, tx)) {
                 if (!input.step) return { status: 'required' };

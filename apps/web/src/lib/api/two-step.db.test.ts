@@ -75,7 +75,7 @@ async function asked(who: Account, options: Parameters<Harness['signIn']>[1] = {
         token: string;
         methods: string[];
         expiresAt: string;
-        phrase: { recoveryVersion: number; wrappingSalt: string };
+        phrase: { userId: string; recoveryVersion: number; wrappingSalt: string };
     };
 }
 const answer = (token: string, proof: unknown, options: { address?: string } = {}) =>
@@ -102,7 +102,7 @@ async function stepped() {
 async function challenge(cookie: string, purpose: string) {
     const reply = await api.call('POST', '/two-step/challenge', { purpose }, { cookie });
     expect(reply.status, JSON.stringify(reply.body)).toBe(200);
-    return reply.body as { token: string; phrase: { wrappingSalt: string } };
+    return reply.body as { token: string; phrase: { userId: string; wrappingSalt: string } };
 }
 
 /* The password proved again by a session, for a change to the step. */
@@ -187,7 +187,11 @@ describe('a correct password with the step on', () => {
             token: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
             methods: ['totp', 'backup', 'phrase'],
             expiresAt: new Date(Date.now() + 5 * MINUTE).toISOString(),
-            phrase: { recoveryVersion: 1, wrappingSalt: who.recovery.wrappingSalt },
+            phrase: {
+                userId: who.id,
+                recoveryVersion: 1,
+                wrappingSalt: who.recovery.wrappingSalt,
+            },
         });
         expect(JSON.stringify(reply.body)).not.toMatch(/envelope|encryptedKey|"user"|"device"/);
         expect(reply.cookie).toBeNull();
@@ -302,6 +306,55 @@ describe('an authenticator code', () => {
             ).toBe(200);
     });
 
+    test('is read as an app shows it and a person types it: “123 456”, or with a hyphen', async () => {
+        const { who, app } = await stepped();
+        const spaced = (code: string) => `${code.slice(0, 3)} ${code.slice(3)}`;
+        expect(
+            (await answer((await asked(who)).token, totp(spaced(await app.code())))).status,
+        ).toBe(200);
+        const next = await nextCode(app);
+        expect(
+            (await answer((await asked(who)).token, totp(` ${next.slice(0, 3)}-${next.slice(3)} `)))
+                .status,
+        ).toBe(200);
+    });
+
+    test('that is not six digits, or a backup code that is not one, is a 400 and counts nowhere', async () => {
+        const { who, app } = await stepped();
+        // One wrong code away from the freeze, so a single count would show.
+        await api.rows.setSharedFailures(who.id, 99);
+        const offer = await asked(who);
+        const malformed = [
+            totp('12345'),
+            totp('1234567'),
+            totp('12345a'),
+            totp('abc def'),
+            totp('12.34.56'),
+            backup('7KQ2M-9XD4'),
+            backup('7KQ2M-9XD4PP'),
+            backup('7KQ2M-9XD4U'),
+            backup('123456'),
+        ];
+        // More of them than a token, a budget or the notice would take.
+        for (const proof of [...malformed, ...malformed]) {
+            const reply = await answer(offer.token, proof);
+            expect(reply.status, JSON.stringify(proof)).toBe(400);
+            expect(reply.body.code).toBeUndefined();
+        }
+        expect((await answer(offer.token, totp('12345'))).body.message).toBe(
+            'Enter the six digits your authenticator app shows.',
+        );
+        expect((await answer(offer.token, backup('nope'))).body.message).toBe(
+            'Enter a backup code as it was shown: ten letters and numbers.',
+        );
+        // Not against the token, the freeze or the notice…
+        expect((await attemptRows()).map((row) => row.failures)).toEqual([0]);
+        expect(await api.rows.sharedFailures(who.id)).toBe(99);
+        expect(await subjects()).toEqual([]);
+        // …nor the budget: the same token still takes the right code.
+        expect((await answer(offer.token, totp(await app.code()))).status).toBe(200);
+    });
+
     test('of two sign-ins sending the same code at once, exactly one gets in', async () => {
         const { who, app } = await stepped();
         const [first, second] = [await asked(who), await asked(who)];
@@ -378,6 +431,69 @@ describe('the recovery phrase', () => {
         expect(await subjects()).toContainEqual(
             expect.stringMatching(/^Your recovery phrase was used for the second step · /),
         );
+    });
+
+    test('signs in a device that kept nothing: the email, the password, the phrase, and what the replies gave', async () => {
+        const { email, password, phrase } = (await stepped()).who;
+        // From here on, nothing of the account but those three. The OPAQUE exchange first.
+        const start = client.startLogin({ password });
+        const challenge = await api.call('POST', '/login/start', {
+            email,
+            startLoginRequest: start.startLoginRequest,
+        });
+        // Nothing before the password is proved says who the account is.
+        expect(Object.keys(challenge.body).sort()).toEqual([
+            'attemptToken',
+            'loginResponse',
+            'profileVersion',
+        ]);
+        const finish = client.finishLogin({
+            clientLoginState: start.clientLoginState,
+            loginResponse: challenge.body.loginResponse,
+            password,
+            identifiers: OPAQUE_IDENTIFIERS,
+        });
+        const asked = await api.call('POST', '/login/finish', {
+            attemptToken: challenge.body.attemptToken,
+            finishLoginRequest: finish!.finishLoginRequest,
+            twoStep: 1,
+        });
+        const offer = asked.body.twoStep;
+        // The statement names the account, so the offer must: the device knows no id of its own.
+        const signature = await signTwoStepPhrase(phrase, {
+            userId: offer.phrase.userId,
+            stepToken: offer.token,
+            wrappingSalt: offer.phrase.wrappingSalt,
+        });
+        const done = await api.call('POST', '/login/two-step', {
+            token: offer.token,
+            proof: { kind: 'phrase', signature },
+        });
+        expect(done.status, JSON.stringify(done.body)).toBe(200);
+        expect(done.body.envelope).toBeDefined();
+        expect(done.body.user).toMatchObject({ id: offer.phrase.userId, email });
+    });
+
+    test('answers a change the same way, from what the challenge gave', async () => {
+        const { who, app } = await stepped();
+        const { cookie } = await signedIn(who, app);
+        const offer = await challenge(cookie, 'two-step');
+        expect(offer.phrase.userId).toBe(who.id);
+        const signature = await signTwoStepPhrase(who.phrase, {
+            userId: offer.phrase.userId,
+            stepToken: offer.token,
+            wrappingSalt: offer.phrase.wrappingSalt,
+        });
+        const made = await api.call(
+            'POST',
+            '/two-step/backup-codes',
+            {
+                ...(await reauth(who, cookie)),
+                twoStep: { token: offer.token, proof: { kind: 'phrase', signature } },
+            },
+            { cookie },
+        );
+        expect(made.status).toBe(200);
     });
 
     test('signs one step token: its signature passes no other, and no second time', async () => {
@@ -578,6 +694,26 @@ describe('the budget for wrong codes', () => {
         expect((await answer((await asked(who)).token, totp(await app.code()))).status).toBe(200);
     });
 
+    test('thirty wrong codes sent at once get ten of them checked, and no more', async () => {
+        const { who, app } = await stepped();
+        const bad = await wrongCode(app);
+        const tokens: string[] = [];
+        for (let index = 0; index < 6; index++) tokens.push((await asked(who)).token);
+        // Five on each of six tokens, all at the same moment: room for thirty, were it not
+        // for the budget. An answer takes its place before it is checked, so ten get in.
+        const replies = await Promise.all(
+            tokens.flatMap((token) => Array.from({ length: 5 }, () => answer(token, totp(bad)))),
+        );
+        const statuses = replies.map((reply) => reply.status);
+        expect(statuses.filter((status) => status === 401)).toHaveLength(10);
+        expect(statuses.filter((status) => status === 429)).toHaveLength(20);
+        // Ten were counted as wrong codes, in the pool and on the tokens together.
+        expect(await api.rows.sharedFailures(who.id)).toBe(10);
+        const counted = (await attemptRows()).reduce((sum, row) => sum + row.failures, 0);
+        const ended = tokens.length - (await attemptRows()).length;
+        expect(counted + ended * 5).toBe(10);
+    });
+
     test('is for wrong codes only: a dozen right ones in a row all pass', async () => {
         const { who, app } = await stepped();
         for (let index = 0; index < 12; index++)
@@ -744,6 +880,29 @@ describe('the hundredth wrong code in a row', () => {
     });
 });
 
+describe('a code made under a key this server no longer has', () => {
+    test('is an outage, not a wrong code: 503, and nothing is counted', async () => {
+        const who = await api.account();
+        // As after the operator replaced TWO_STEP_KEY and did not keep the old one.
+        const app = await api.enrol(who.id, { under: randomBytes(32) });
+        await api.rows.setSharedFailures(who.id, 99);
+        const offer = await asked(who);
+        // More than a token or a budget would take, were they counted.
+        for (let round = 0; round < 6; round++)
+            for (const proof of [totp(await app.code()), backup(app.backupCodes[0]!)]) {
+                const reply = await answer(offer.token, proof);
+                expect(reply.status, proof.kind).toBe(503);
+                expect(reply.body.code).toBeUndefined();
+            }
+        expect((await attemptRows()).map((row) => row.failures)).toEqual([0]);
+        expect(await api.rows.sharedFailures(who.id)).toBe(99);
+        expect(await subjects()).toEqual([]);
+        expect((await api.twoStepRepository.getTwoStep(who.id)).backupCodes).toHaveLength(10);
+        // The phrase needs no key of the server's, and still answers on the same token.
+        expect((await answer(offer.token, await api.phraseProof(who, offer))).status).toBe(200);
+    });
+});
+
 describe('“someone signed in with your password but did not pass the second step”', () => {
     const failedNotices = async () =>
         (await api.notices()).filter((message) =>
@@ -901,6 +1060,7 @@ describe('a change the step guards', () => {
         // The step now offers the new recovery key's version and salt.
         const offer = await asked(who);
         expect(offer.phrase).toEqual({
+            userId: who.id,
             recoveryVersion: 2,
             wrappingSalt: rotated!.envelope.wrappingSalt,
         });
@@ -924,9 +1084,8 @@ describe('a change the step guards', () => {
         expect(done.status).toBe(200);
     });
 
-    test('a master-key rotation without the step is refused', async () => {
-        const { who, app } = await stepped();
-        const { cookie } = await signedIn(who, app);
+    /* A master-key rotation as a client sends it: everything the root wraps, wrapped again. */
+    async function rotateMasterKey(who: Account, cookie: string, twoStep?: unknown) {
         const registration = client.startRegistration({ password: who.password });
         const proof = await api.prove(who, '/security/start', {
             cookie,
@@ -941,7 +1100,7 @@ describe('a change the step guards', () => {
         const { envelope, recovery, identity, workspaces } = proof.challenge;
         const keyVersion = envelope.keyVersion + 1;
         const next = await api.recoveryKey(who.id, recovery.recoveryVersion + 1);
-        const reply = await api.call(
+        return api.call(
             'POST',
             '/security/finish',
             {
@@ -958,6 +1117,7 @@ describe('a change the step guards', () => {
                     encryptedKey: b64(48),
                 },
                 recovery: { ...next.envelope, keyVersion },
+                // The same public keys, wrapped under the new root.
                 identity: { ...identity, kem: undefined },
                 workspaces: workspaces.map((grant: Record<string, unknown>) => ({
                     version: 1,
@@ -968,13 +1128,49 @@ describe('a change the step guards', () => {
                     wrappingNonce: grant.wrappingNonce,
                     encryptedKey: grant.encryptedKey,
                 })),
+                ...(twoStep ? { twoStep } : {}),
             },
             { cookie },
         );
-        expect(refusedStep(reply)).toEqual({ status: 403, code: 'two-step' });
+    }
+
+    test('a master-key rotation is refused without the step and with another change’s token, and goes through with its own', async () => {
+        const { who, app } = await stepped();
+        const { cookie } = await signedIn(who, app);
+        const keyVersion = async () => (await api.authRepository.getAccountKeyVersion(who.id)) ?? 0;
+        const before = await keyVersion();
+
+        expect(refusedStep(await rotateMasterKey(who, cookie))).toEqual({
+            status: 403,
+            code: 'two-step',
+        });
+        // A token asked for a password change, with a right code: the same body, refused by
+        // the step and nothing else.
+        const other = await challenge(cookie, 'password');
+        expect(
+            refusedStep(
+                await rotateMasterKey(who, cookie, {
+                    token: other.token,
+                    proof: totp(await nextCode(app)),
+                }),
+            ),
+        ).toEqual({ status: 403, code: 'two-step-expired' });
+        expect(await keyVersion()).toBe(before);
         expect((await api.call('GET', '/session', undefined, { cookie })).body.user?.id).toBe(
             who.id,
         );
+
+        // That very body with a token for this change: the rotation happens.
+        const token = await challenge(cookie, 'master-key');
+        const rotated = await rotateMasterKey(who, cookie, {
+            token: token.token,
+            proof: totp(await nextCode(app)),
+        });
+        expect(rotated.status, JSON.stringify(rotated.body)).toBe(200);
+        expect(await keyVersion()).toBe(before + 1);
+        expect(await sessionRows()).toEqual([]);
+        // The step is still on afterwards, with the new recovery key on offer.
+        expect((await asked(who)).phrase.recoveryVersion).toBe(2);
     });
 
     test('deleting the account without the step is refused; with it, the account goes', async () => {
@@ -1103,7 +1299,45 @@ describe('the step and what it authorises commit together', () => {
         expect(removed.body).toEqual({ on: false });
     });
 
-    test('a deletion whose step is refused takes back the person’s leaving their family, and counts the answer', async () => {
+    test('a code that was already used never gets as far as stopping billing', async () => {
+        const { who, app } = await stepped();
+        const offer = await asked(who);
+        const used = await app.code();
+        const { cookie } = await answer(offer.token, totp(used));
+        const token = await challenge(cookie!, 'delete');
+        // What the route mounts before the account goes: the plan is stopped here.
+        const billing: string[] = [];
+        const beforeDelete = async (userId: string) => {
+            billing.push(userId);
+        };
+        const finish = async (code: string) => {
+            const proof = await api.prove(who, '/delete/start', { cookie });
+            return api.auth.finishAccountDeletion(
+                cookie!,
+                {
+                    attemptToken: proof.attemptToken,
+                    finishLoginRequest: proof.finishLoginRequest,
+                    twoStep: { token: token.token, proof: totp(code) },
+                },
+                beforeDelete,
+            );
+        };
+
+        await expect(finish(used)).rejects.toMatchObject({ status: 403, code: 'two-step' });
+        expect(billing).toEqual([]);
+        expect(await api.authRepository.getUserById(who.id)).not.toBeNull();
+        // Counted as the wrong answer it is.
+        expect((await attemptRows()).map((row) => [row.purpose, row.failures])).toEqual([
+            ['delete', 1],
+        ]);
+
+        // A fresh code: billing is stopped, once, and then the account goes.
+        expect(await finish(await nextCode(app))).toEqual({ success: true });
+        expect(billing).toEqual([who.id]);
+        expect(await api.authRepository.getUserById(who.id)).toBeNull();
+    });
+
+    test('a deletion whose code is taken by another request while it waits takes back the person’s leaving their family', async () => {
         const { who, app } = await stepped();
         const organizer = await api.account();
         const family = await api.createTestFamily({
@@ -1111,23 +1345,42 @@ describe('the step and what it authorises commit together', () => {
             members: [{ userId: who.id }],
         });
         const membership = () => api.rows.membershipState(family.groupId, who.id);
-        // Signed in with this very code: right, but already used.
-        const offer = await asked(who);
-        const code = await app.code();
-        const { cookie } = await answer(offer.token, totp(code));
-        const token = await challenge(cookie!, 'delete');
-        const refused = await deleteAccount(who, cookie!, {
-            token: token.token,
-            proof: totp(code),
-        });
+        const { cookie } = await signedIn(who, app);
+        const token = await challenge(cookie, 'delete');
+        // Fresh, and right, when the deletion checks it.
+        const code = await nextCode(app);
+        const observer = api.lockObserver();
+        let refused: Reply;
+        try {
+            // A group write under way holds the family's row, so the deletion waits for it:
+            // after its answer was checked, before the step is passed under the lock.
+            await observer.query('begin');
+            await observer.query('select id from groups where id = $1 for update', [
+                family.groupId,
+            ]);
+            const deletion = deleteAccount(who, cookie, { token: token.token, proof: totp(code) });
+            await vi.waitFor(async () => expect(await observer.waitingOn('groups')).toBe(true), {
+                timeout: 4_000,
+            });
+            // Meanwhile the same code signs in somewhere else, and takes the time step.
+            expect((await answer((await asked(who)).token, totp(code))).status).toBe(200);
+            await observer.query('commit');
+            refused = await deletion;
+        } finally {
+            await observer.query('rollback').catch(() => {});
+            await observer.end();
+        }
+        // Refused under the lock, as a wrong answer, and everything put back.
         expect(refusedStep(refused)).toEqual({ status: 403, code: 'two-step' });
         expect(await api.authRepository.getUserById(who.id)).not.toBeNull();
         expect(await membership()).toBe('active');
-        expect((await attemptRows()).map((row) => [row.purpose, row.failures])).toEqual([
-            ['delete', 1],
-        ]);
+        expect(
+            (await attemptRows())
+                .filter((row) => row.purpose === 'delete')
+                .map((row) => row.failures),
+        ).toEqual([1]);
 
-        const gone = await deleteAccount(who, cookie!, {
+        const gone = await deleteAccount(who, cookie, {
             token: token.token,
             proof: totp(await nextCode(app)),
         });
@@ -1310,8 +1563,19 @@ describe('setting the step up', () => {
             code: (offset = 0) => totpCode(secret, totpStep() + offset),
         };
     }
-    const confirm = (cookie: string, id: string, code: string) =>
-        api.call('POST', `/two-step/totp/${id}/confirm`, { code }, { cookie });
+    const confirm = (cookie: string, id: string, code: string, signOutOthers?: boolean) =>
+        api.call(
+            'POST',
+            `/two-step/totp/${id}/confirm`,
+            signOutOthers === undefined ? { code } : { code, signOutOthers },
+            { cookie },
+        );
+    const signedInAs = async (cookie: string) =>
+        (await api.call('GET', '/session', undefined, { cookie })).body;
+    const removalNotices = async () =>
+        (await api.notices()).filter((message) =>
+            message.subject.startsWith('Devices were removed from your account'),
+        );
 
     test('an authenticator app is confirmed by its code, turns the step on and shows the backup codes once', async () => {
         const who = await api.account();
@@ -1383,6 +1647,108 @@ describe('setting the step up', () => {
         expect((await answer(offer.token, backup(confirmed.body.backupCodes[0]))).status).toBe(200);
         // Confirming again answers nothing: the codes are shown once.
         expect((await confirm(cookie!, app.id, await app.code(1))).status).toBe(404);
+    });
+
+    test('turning the step on can sign the other devices out with it, and keeps the one that enrolled', async () => {
+        const who = await api.account();
+        const [here, laptop, phone] = [
+            await api.signIn(who),
+            await api.signIn(who),
+            await api.signIn(who),
+        ];
+        const app = await startApp(who, here.cookie!);
+        const confirmed = await confirm(here.cookie!, app.id, await app.code(), true);
+        expect(confirmed.status).toBe(200);
+        // The reply is the codes and nothing else.
+        expect(Object.keys(confirmed.body)).toEqual(['backupCodes']);
+        expect(confirmed.body.backupCodes).toHaveLength(10);
+
+        // The other two are signed out, and told their device was removed.
+        for (const other of [laptop, phone])
+            expect(await signedInAs(other.cookie!)).toEqual({
+                user: null,
+                device: null,
+                removed: true,
+            });
+        expect((await signedInAs(here.cookie!)).user?.id).toBe(who.id);
+        expect((await sessionRows()).map((row) => row.tokenHash)).toEqual([
+            api.sha256(here.cookie!),
+        ]);
+        expect((await sessionOf(here.cookie!))?.twoStepAt).toBeInstanceOf(Date);
+        // Their cookies exempt nothing afterwards: the password alone no longer signs in.
+        expect(Object.keys((await api.signIn(who, { cookie: laptop.cookie })).body)).toEqual([
+            'twoStep',
+        ]);
+        // The account hears both: the step is on, and devices were removed.
+        expect(await subjects()).toContainEqual(
+            expect.stringMatching(/^Two-step sign-in is on · /),
+        );
+        await vi.waitFor(async () => expect(await removalNotices()).toHaveLength(1));
+        expect((await removalNotices())[0]!.text).toMatch(/Devices removed\s+2/);
+    });
+
+    test('left unticked, or left out, the other devices stay signed in', async () => {
+        for (const flag of [false, undefined]) {
+            const who = await api.account();
+            const [here, laptop] = [await api.signIn(who), await api.signIn(who)];
+            const app = await startApp(who, here.cookie!);
+            expect((await confirm(here.cookie!, app.id, await app.code(), flag)).status).toBe(200);
+            expect((await signedInAs(laptop.cookie!)).user?.id).toBe(who.id);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(await removalNotices()).toEqual([]);
+    });
+
+    test('confirming a replacement signs nobody out, whatever it asks', async () => {
+        const { who, app: old } = await stepped();
+        const here = await signedIn(who, old);
+        const laptop = await signedIn(who, old);
+        const token = await challenge(here.cookie, 'two-step');
+        const app = await startApp(who, here.cookie, {
+            token: token.token,
+            proof: totp(await nextCode(old)),
+        });
+        const confirmed = await confirm(here.cookie, app.id, await app.code(), true);
+        expect(confirmed.status).toBe(200);
+        expect(confirmed.body).toEqual({});
+        expect((await signedInAs(laptop.cookie)).user?.id).toBe(who.id);
+        expect(await sessionRows()).toHaveLength(2);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(await removalNotices()).toEqual([]);
+    });
+
+    test('a code typed “123 456” confirms the app, and one that is not six digits counts as no guess', async () => {
+        const who = await api.account();
+        const { cookie } = await api.signIn(who);
+        const app = await startApp(who, cookie!);
+        // More than the ten guesses a quarter of an hour allows, none of them a guess.
+        for (let index = 0; index < 12; index++) {
+            const reply = await confirm(cookie!, app.id, index % 2 ? 'abc def' : '12345');
+            expect(reply.status).toBe(400);
+            expect(reply.body.message).toBe('Enter the six digits your authenticator app shows.');
+        }
+        const code = await app.code();
+        const confirmed = await confirm(cookie!, app.id, `${code.slice(0, 3)} ${code.slice(3)}`);
+        expect(confirmed.status).toBe(200);
+        expect(confirmed.body.backupCodes).toHaveLength(10);
+    });
+
+    test('nobody can use up the guesses for an app that is not theirs to confirm', async () => {
+        const who = await api.account();
+        const { cookie } = await api.signIn(who);
+        const app = await startApp(who, cookie!);
+        const other = await api.signIn(who);
+        const stranger = await api.account();
+        const theirs = await api.signIn(stranger);
+        const bad = await wrongCode(app);
+        // Another session of the account, at ids that are no pending app of it; and another
+        // account, at this one's id. Eleven each: one more than the budget.
+        for (let index = 0; index < 11; index++) {
+            expect((await confirm(other.cookie!, randomUUID(), bad)).status).toBe(404);
+            expect((await confirm(theirs.cookie!, app.id, bad)).status).toBe(404);
+        }
+        // The owner's own confirmation is not kept waiting.
+        expect((await confirm(cookie!, app.id, await app.code())).status).toBe(200);
     });
 
     test('an enrolment nobody confirms lasts ten minutes, and never answers the step', async () => {
@@ -1551,7 +1917,11 @@ describe('setting the step up', () => {
             token: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
             methods: ['totp', 'backup', 'phrase'],
             expiresAt: new Date(Date.now() + 5 * MINUTE).toISOString(),
-            phrase: { recoveryVersion: 1, wrappingSalt: who.recovery.wrappingSalt },
+            phrase: {
+                userId: who.id,
+                recoveryVersion: 1,
+                wrappingSalt: who.recovery.wrappingSalt,
+            },
         });
         const [row] = (await attemptRows()).filter((attempt) => attempt.purpose === 'delete');
         expect(row!.sessionTokenHash).toEqual(api.sha256(cookie));

@@ -138,7 +138,7 @@ const stepToken: StepAsked['twoStep'] = {
     token: b64(32, 5),
     methods: ['totp', 'backup', 'phrase'],
     expiresAt: '2026-11-10T12:05:00.000Z',
-    phrase: { recoveryVersion: 3, wrappingSalt: b64(32) },
+    phrase: { userId, recoveryVersion: 3, wrappingSalt: b64(32) },
 };
 const method: Reply<typeof auth.getTwoStep>['methods'][number] = {
     id: userId,
@@ -583,10 +583,12 @@ const cases: Record<string, Case> = {
     'POST /auth/two-step/totp/:id/confirm': {
         schema: totpConfirmedResponse,
         samples: {
+            // The handler picks the codes: the account id and the count of devices signed out,
+            // which the domain returns for the notice, never go out.
             'the first method': {
                 backupCodes: ['7KQ2M-9XD4P', '0AB1C-2DE3F'],
-            } satisfies Reply<typeof auth.confirmTotp>,
-            'a replacement': {} satisfies Reply<typeof auth.confirmTotp>,
+            } satisfies Pick<Reply<typeof auth.confirmTotp>, 'backupCodes'>,
+            'a replacement': {} satisfies Pick<Reply<typeof auth.confirmTotp>, 'backupCodes'>,
         },
         stray: (v) => v,
         // Nothing here is required: a replacement answers with no codes at all.
@@ -886,6 +888,12 @@ test('refuses a step method or a factor kind outside its set, and a step without
     ) as any;
     delete short.twoStep.token;
     expect((await serve(loginOrStepResponse, short)).status).toBe(500);
+    // The phrase's statement names the account: an offer without its id could not be signed.
+    const nameless = clone(
+        cases['POST /auth/login/finish']!.samples['a second step asked for'],
+    ) as any;
+    delete nameless.twoStep.phrase.userId;
+    expect((await serve(loginOrStepResponse, nameless)).status).toBe(500);
     const listed = clone(cases['GET /auth/two-step']!.samples.on) as any;
     listed.methods[0].kind = 'sms';
     expect((await serve(twoStepResponse, listed)).status).toBe(500);

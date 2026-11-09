@@ -603,12 +603,24 @@ export const authApi = new Elysia()
         '/auth/two-step/totp/:id/confirm',
         {
             params: t.Object({ id: uuidSchema }),
-            body: t.Object({ code: t.String({ minLength: 1, maxLength: 32 }) }),
+            body: t.Object({
+                code: t.String({ minLength: 1, maxLength: 32 }),
+                // Honoured only when this confirmation turns the step on: the account's other
+                // devices, whose sessions never passed the step, are removed with it.
+                signOutOthers: t.Optional(t.Boolean()),
+            }),
             response: { 200: totpConfirmedResponse },
         },
-        ({ request, sessionToken, params, body }) => {
+        async ({ request, sessionToken, params, body, log }) => {
             guardAuthMutation(request);
-            return auth.confirmTotp(sessionToken, params.id, body);
+            const { userId, removed, backupCodes } = await auth.confirmTotp(
+                sessionToken,
+                params.id,
+                body,
+            );
+            // As removing every other device says it, whichever screen asked.
+            if (removed > 0) notifyDevices(log, userId, 'devices-removed', removed);
+            return backupCodes ? { backupCodes } : {};
         },
     )
     .put(
