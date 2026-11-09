@@ -24,7 +24,13 @@ import {
  * step, code hash or counter it proved.
  *
  * Every write takes an executor, so a caller can run it inside the transaction
- * that opens the session or commits the change the step authorises.
+ * that opens the session or commits the change the step authorises
+ * (createSession, changeAccountSecurity and deleteAccount take the same one).
+ * Each locks the account's row first.
+ *
+ * `enrol` tokens (a first method enrolled at sign-in, under a policy) can be
+ * issued and read here, but nothing consumes one until the policy change is
+ * built: passStep refuses them, and turning the step on deletes them.
  */
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -46,10 +52,21 @@ export type TwoStepFactor = typeof twoStepFactors.$inferSelect;
 export type StepAttempt = typeof twoStepAttempts.$inferSelect;
 export type BackupCodeInput = { codeHash: Buffer; keyId: Buffer };
 
+/*
+ * Why a proof was refused:
+ * - `replayed`: a time step not later than the last one taken, or a backup code already used;
+ * - `counter`: the key's signature counter did not go up;
+ * - `unknown`: not a confirmed factor, or not a backup code, of this account: another
+ *   account's, a removed or pending one, or none at all.
+ */
+export type StepRefusal = 'replayed' | 'counter' | 'unknown';
+
 /* Thrown, never returned, so what a refused pass already wrote (the spent token) rolls back with it. */
 class Refused extends Error {
-    constructor(readonly status: 'frozen' | 'refused') {
-        super(status);
+    constructor(
+        readonly result: { status: 'frozen' } | { status: 'refused'; reason: StepRefusal },
+    ) {
+        super(result.status);
     }
 }
 
@@ -203,7 +220,10 @@ export async function getPendingTotp(
     return factor ?? null;
 }
 
-/* Sets the step on for an account that had no factor: its codes, and the session that enrolled. */
+/*
+ * Sets the step on for an account that had no factor, under the account's lock: its codes, the
+ * end of its enrol tokens, and the session that enrolled.
+ */
 async function turnOn(
     tx: Tx,
     input: { userId: string; backupCodes: BackupCodeInput[]; sessionTokenHash?: Buffer },
@@ -218,6 +238,11 @@ async function turnOn(
             createdAt: now,
         })),
     );
+    // An enrol token stood in for the step while the account had none. It has one now: a second
+    // token minted for the same sign-in must not enrol or replace a method without it.
+    await tx
+        .delete(twoStepAttempts)
+        .where(and(eq(twoStepAttempts.userId, input.userId), eq(twoStepAttempts.purpose, 'enrol')));
     // Enrolling with the password is this session's step; the account's others never passed one.
     if (input.sessionTokenHash)
         await tx
@@ -464,6 +489,12 @@ export async function removeFactor(
             .returning({ kind: twoStepFactors.kind });
         if (!removed) return { status: 'missing' as const };
         const turnedOff = !(await hasTwoStep(input.userId, tx));
+        // The freeze is the app's: with the app gone there is nothing frozen.
+        if (removed.kind === 'totp')
+            await tx
+                .update(twoStepState)
+                .set({ totpFrozenAt: null })
+                .where(eq(twoStepState.userId, input.userId));
         if (turnedOff) {
             await tx.delete(twoStepBackupCodes).where(eq(twoStepBackupCodes.userId, input.userId));
             await tx.delete(twoStepAttempts).where(eq(twoStepAttempts.userId, input.userId));
@@ -619,12 +650,24 @@ export async function getStepAttempt(binding: StepBinding, executor: Executor = 
     return attempt ?? null;
 }
 
+/* Whether the account's credential is still the version the token was issued under. */
+async function issuedUnderCurrentPassword(tx: Tx, attempt: StepAttempt) {
+    const [credential] = await tx
+        .select({ version: opaqueCredentials.version })
+        .from(opaqueCredentials)
+        .where(eq(opaqueCredentials.userId, attempt.userId));
+    return credential?.version === attempt.credentialVersion;
+}
+
 /*
  * Which count a token's answers fall under: the device that proved its key at
  * sign-in, the device of the session a change is asked from, or (a null device)
  * the account's shared count for sign-ins that proved no device. A device
  * counts as known only while it is this account's own, approved and not
  * removed; anything else is a sign-in from a new device, whatever the token says.
+ * At sign-in it must also hold a signing key, as createSession asks before it
+ * takes a proof: a device without one cannot have proved anything. A change is
+ * asked from a session, and holding that session is what makes its device known.
  * `live` is false when the session a change was asked from has ended.
  */
 async function poolOf(tx: Tx, attempt: StepAttempt, now: Date) {
@@ -654,6 +697,9 @@ async function poolOf(tx: Tx, attempt: StepAttempt, now: Date) {
                 eq(accountDevices.userId, attempt.userId),
                 isNull(accountDevices.revokedAt),
                 isNotNull(accountDevices.approvedAt),
+                attempt.purpose === 'login'
+                    ? isNotNull(accountDevices.signingPublicKey)
+                    : undefined,
             ),
         );
     return { live: true, deviceId: device?.id ?? null };
@@ -680,7 +726,12 @@ export type StepFailure =
  * deleted. A wrong code (authenticator or backup) also adds to the consecutive
  * count of its pool: the device that proved its key, or the account's count
  * for sign-ins that proved none, where the hundredth freezes the authenticator
- * app for such sign-ins. The caller sends the notice at five.
+ * app for such sign-ins, if the account has one: with keys and backup codes
+ * only there is nothing to freeze, and the count just goes on. The caller
+ * sends the notice at five.
+ *
+ * A token issued under a password that has since changed can never pass, so it
+ * counts nothing either: it is deleted, and the answer is `missing`.
  */
 export async function failStep(
     input: StepBinding & { method: 'totp' | 'backup' | 'webauthn' | 'phrase' },
@@ -692,6 +743,10 @@ export async function failStep(
     return executor.transaction(async (tx) => {
         // The account's lock first, as passStep takes it, so the two never wait on each other.
         if (!(await lockAccount(tx, known.userId))) return { status: 'missing' as const };
+        if (!(await issuedUnderCurrentPassword(tx, known))) {
+            await tx.delete(twoStepAttempts).where(eq(twoStepAttempts.tokenHash, known.tokenHash));
+            return { status: 'missing' as const };
+        }
         const now = new Date();
         const [attempt] = await tx
             .update(twoStepAttempts)
@@ -728,6 +783,11 @@ export async function failStep(
                 froze: false,
             };
         }
+        const [app] = await tx
+            .select({ id: twoStepFactors.id })
+            .from(twoStepFactors)
+            .where(and(confirmedOf(attempt.userId), eq(twoStepFactors.kind, 'totp')))
+            .limit(1);
         // The state row is made with the first factor; made here too, so a count is never lost.
         const [state] = await tx
             .insert(twoStepState)
@@ -741,7 +801,12 @@ export async function failStep(
                 target: twoStepState.userId,
                 set: {
                     consecutiveFailures: sql`${twoStepState.consecutiveFailures} + 1`,
-                    totpFrozenAt: sql`case when ${twoStepState.totpFrozenAt} is null and ${twoStepState.consecutiveFailures} + 1 >= ${TOTP_FREEZE_FAILURES} then ${now} else ${twoStepState.totpFrozenAt} end`,
+                    // Only an app can be frozen; under the account's lock, none is confirmed meanwhile.
+                    ...(app
+                        ? {
+                              totpFrozenAt: sql`case when ${twoStepState.totpFrozenAt} is null and ${twoStepState.consecutiveFailures} + 1 >= ${TOTP_FREEZE_FAILURES} then ${now} else ${twoStepState.totpFrozenAt} end`,
+                          }
+                        : {}),
                 },
             })
             .returning({
@@ -782,11 +847,11 @@ export type StepPass =
      * or the session it was bound to is over).
      * `stale`: the password changed since the token was issued; the token is gone.
      * `frozen`: an authenticator code from a sign-in that proved no device, while the app is frozen.
-     * `refused`: the proof cannot be used: a time step not later than the last, a backup code that is
-     * not an unused code of this account, a key counter that did not go up, or a factor that is not a
-     * confirmed one of this account. Nothing is spent, and the token is still there: count it (failStep).
+     * `refused`: the proof cannot be used, for `reason`. Nothing is spent, and the token is still
+     * there: count it (failStep).
      */
-    | { status: 'missing' | 'stale' | 'frozen' | 'refused' };
+    | { status: 'missing' | 'stale' | 'frozen' }
+    | { status: 'refused'; reason: StepRefusal };
 
 /*
  * Passes the step: spends the token and the proof together, or neither. Under
@@ -799,8 +864,12 @@ export type StepPass =
  * - the pool's consecutive count starts again, and a success by anything but
  *   the authenticator app unfreezes it.
  * Run inside the transaction that creates the session (with `at` as its
- * two_step_at) or commits the change, by passing that transaction as the
- * executor: then a failure there puts the token, code and counter back.
+ * two_step_at) or commits the change: open one, pass it here as the executor,
+ * then pass it to createSession, changeAccountSecurity or deleteAccount, and
+ * roll it back unless that succeeds. The token, the code or step, the counts
+ * and any thaw then come back. Before createSession and changeAccountSecurity
+ * the order of locks is theirs, the account's row first; before deleteAccount
+ * it is not (see there).
  * An `enrol` token is never passed here: only confirming a first method answers it.
  */
 export async function passStep(
@@ -814,9 +883,26 @@ export async function passStep(
     try {
         return await executor.transaction((tx) => pass(tx, known.userId, input));
     } catch (error) {
-        if (error instanceof Refused) return { status: error.status };
+        if (error instanceof Refused) return error.result;
         throw error;
     }
+}
+
+const refused = (reason: StepRefusal) => new Refused({ status: 'refused', reason });
+
+/* Whether `factorId` is a confirmed factor of that kind on this account: what tells a replay from a stranger's. */
+async function ownFactor(tx: Tx, userId: string, factorId: string, kind: TwoStepFactorKind) {
+    const [factor] = await tx
+        .select({ id: twoStepFactors.id })
+        .from(twoStepFactors)
+        .where(
+            and(
+                eq(twoStepFactors.id, factorId),
+                confirmedOf(userId),
+                eq(twoStepFactors.kind, kind),
+            ),
+        );
+    return factor !== undefined;
 }
 
 /* passStep's transaction: a Refused thrown here puts the token back. */
@@ -829,11 +915,7 @@ async function pass(
     const now = new Date();
     const [attempt] = await tx.delete(twoStepAttempts).where(live(input, now)).returning();
     if (!attempt) return { status: 'missing' as const };
-    const [credential] = await tx
-        .select({ version: opaqueCredentials.version })
-        .from(opaqueCredentials)
-        .where(eq(opaqueCredentials.userId, attempt.userId));
-    if (credential?.version !== attempt.credentialVersion) return { status: 'stale' as const };
+    if (!(await issuedUnderCurrentPassword(tx, attempt))) return { status: 'stale' as const };
     const pool = await poolOf(tx, attempt, now);
     if (!pool.live) return { status: 'missing' as const };
     const [state] = await tx
@@ -846,18 +928,34 @@ async function pass(
     const { proof } = input;
     let backupCodesLeft: number | null = null;
     if (proof.method === 'totp') {
-        if (frozen && !pool.deviceId) throw new Refused('frozen');
+        if (frozen && !pool.deviceId) throw new Refused({ status: 'frozen' });
         const taken = await takeTotpStep(
             { userId: attempt.userId, factorId: proof.factorId, step: proof.step },
             tx,
         );
-        if (!taken) throw new Refused('refused');
+        if (!taken)
+            throw refused(
+                (await ownFactor(tx, attempt.userId, proof.factorId, 'totp'))
+                    ? 'replayed'
+                    : 'unknown',
+            );
     } else if (proof.method === 'backup') {
         backupCodesLeft = await spendBackupCode(
             { userId: attempt.userId, codeHash: proof.codeHash },
             tx,
         );
-        if (backupCodesLeft === null) throw new Refused('refused');
+        if (backupCodesLeft === null) {
+            const [used] = await tx
+                .select({ usedAt: twoStepBackupCodes.usedAt })
+                .from(twoStepBackupCodes)
+                .where(
+                    and(
+                        eq(twoStepBackupCodes.userId, attempt.userId),
+                        eq(twoStepBackupCodes.codeHash, proof.codeHash),
+                    ),
+                );
+            throw refused(used ? 'replayed' : 'unknown');
+        }
     } else if (proof.method === 'webauthn') {
         const taken = await takeKeyCounter(
             {
@@ -868,7 +966,12 @@ async function pass(
             },
             tx,
         );
-        if (!taken) throw new Refused('refused');
+        if (!taken)
+            throw refused(
+                (await ownFactor(tx, attempt.userId, proof.factorId, 'webauthn'))
+                    ? 'counter'
+                    : 'unknown',
+            );
     }
 
     const unfroze = frozen && proof.method !== 'totp';

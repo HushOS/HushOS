@@ -306,22 +306,42 @@ export type CreatedDevice = 'enrolment' | 'password';
  * A bad or revoked proof never fails the sign-in; it just makes a new device.
  * The device's other session, if any, ends: one live session per device.
  *
- * `twoStepAt` is when this sign-in passed the second step, or the time the
- * session it replaces at an unlock did (docs/two-step-design.md 4). For an
- * account with a confirmed factor the database refuses a session without it
- * (the trigger `sessions_two_step_guard`), and this throws: a caller that does
- * not know the step never signs such an account in on the password alone.
+ * `twoStepAt` is when this sign-in passed the second step: the `at` that
+ * passStep returned (docs/two-step-design.md 4). For an account with a
+ * confirmed factor the database refuses a session without it (the trigger
+ * `sessions_two_step_guard`), and this throws: a caller that does not know the
+ * step never signs such an account in on the password alone.
+ *
+ * `executor` is the caller's transaction, when it has one: the transaction
+ * passStep ran in, so the step token and its proof are spent only if the
+ * session is made. This then runs as a savepoint inside it. When it answers
+ * anything but a session (null, `suspended`), or throws, the caller rolls its
+ * transaction back; otherwise the step stays spent on nothing. The account's
+ * row is locked first here, as passStep locks it, so the two never wait on
+ * each other. Without an executor it opens its own transaction, as before.
+ *
+ * Not built yet: the exemption for an unlock (the same account's live session
+ * on the same device, stepped less than 30 days ago, whose time the new
+ * session inherits without extending it). It has to be decided in here: read
+ * from the row `previousTokenHash` names, under the account's lock, before
+ * that session is deleted below. A route that reads the previous session
+ * first and passes its time in as a bare `twoStepAt` races revokeDevice: a
+ * device removed between that read and this insert no longer lends its row,
+ * so a new device would get a session carrying a step it never passed.
  */
-export async function createSession(input: {
-    userId: string;
-    credentialVersion: number;
-    tokenHash: Buffer;
-    previousTokenHash: Buffer | null;
-    expiresAt: Date;
-    device?: { id: string; signature: Buffer; attemptDigest: Buffer };
-    twoStepAt?: Date | null;
-}) {
-    return db.transaction(async (tx) => {
+export async function createSession(
+    input: {
+        userId: string;
+        credentialVersion: number;
+        tokenHash: Buffer;
+        previousTokenHash: Buffer | null;
+        expiresAt: Date;
+        device?: { id: string; signature: Buffer; attemptDigest: Buffer };
+        twoStepAt?: Date | null;
+    },
+    executor: Executor = db,
+) {
+    return executor.transaction(async (tx) => {
         const [user] = await tx
             .select({ ...userFields, suspendedAt: users.suspendedAt, createdAt: users.createdAt })
             .from(users)
@@ -1078,6 +1098,8 @@ export async function resetAccountPassword(input: {
             .where(eq(accountRecoveryKeys.userId, user.id));
         await tx.delete(sessions).where(eq(sessions.userId, user.id));
         await tx.delete(opaqueLoginAttempts).where(eq(opaqueLoginAttempts.userId, user.id));
+        // Step tokens were issued under the old password; none of them answers the new one.
+        await tx.delete(twoStepAttempts).where(eq(twoStepAttempts.userId, user.id));
         await tx.delete(accountRecoveryAttempts).where(eq(accountRecoveryAttempts.userId, user.id));
         await tx
             .delete(accountEnrollments)
@@ -1145,12 +1167,36 @@ export async function getStorageAllowance(userId: string) {
  * `billing` holder, or the last `members` holder of a group with others
  * active, cannot be deleted until they hand over (`group-holder`), and
  * nothing is changed.
+ *
+ * `executor` is the caller's transaction, when it has one (the one passStep ran
+ * in). This then runs as a savepoint inside it, and on anything but `true` the
+ * caller rolls its transaction back, so the step token and its proof come back.
+ *
+ * The order of locks is then not the one above, and it can deadlock. passStep
+ * locks the account's row; the departures here lock the person's groups after
+ * it; every group write locks the group first and the person's row second. So
+ * for an account in a family, a group write that holds the group and waits for
+ * the person's row (letting them in, their own grant) and this wait on each
+ * other. Postgres aborts one of the two after a second. When it is this one,
+ * `unavailable` comes back: the caller rolls back, which returns the token and
+ * the proof, and the person tries again. When it is the group write, that
+ * request fails instead.
+ *
+ * The order a caller with only an executor must use is therefore: passStep,
+ * then this, in one transaction, and roll back on anything but `true`. The
+ * order that cannot deadlock is groups, then the account, then the step, which
+ * needs the step passed in here and run after the departures, where
+ * deleteAccountRow locks the account. That is for the change that brings the
+ * step to deletion to add; this function's own order stays as it is.
  */
-export async function deleteAccount(input: {
-    userId: string;
-    credentialVersion: number;
-    sessionTokenHash: Buffer;
-}): Promise<boolean | 'group-holder' | 'busy' | 'pays' | 'unavailable'> {
+export async function deleteAccount(
+    input: {
+        userId: string;
+        credentialVersion: number;
+        sessionTokenHash: Buffer;
+    },
+    executor: Executor = db,
+): Promise<boolean | 'group-holder' | 'busy' | 'pays' | 'unavailable'> {
     class Holder extends Error {}
     // They pay for a family's plan: a change to it holds its claim, or it renews (payerHold).
     class Busy extends Error {}
@@ -1158,7 +1204,7 @@ export async function deleteAccount(input: {
     // Thrown, never returned, so the departures above roll back with it.
     class Refused extends Error {}
     try {
-        return await db.transaction(async (tx) => {
+        return await executor.transaction(async (tx) => {
             if (!(await sessionIsCurrent(tx, input))) return false;
             const departed = await departAllForDeletion(tx, input.userId);
             if (departed.status === 'busy') throw new Busy();
@@ -1251,6 +1297,8 @@ export async function getAccountSetup(userId: string) {
 }
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+/* The pool, or a caller's transaction to run inside as a savepoint. */
+type Executor = Tx | typeof db;
 
 /* Whether the session is live and on the account's current credential: a rotation since ends it. */
 async function sessionIsCurrent(
@@ -1435,25 +1483,36 @@ export type WorkspaceGrantInput = {
     grant: Omit<typeof workspaceKeys.$inferInsert, 'userId' | 'workspaceId'>;
 };
 
-export async function changeAccountSecurity(input: {
-    userId: string;
-    action: 'password' | 'master-key' | 'recovery-key';
-    sessionTokenHash: Buffer;
-    credentialVersion: number;
-    registrationRecord: string;
-    envelope: Pick<
-        typeof accountKeys.$inferInsert,
-        'keyVersion' | 'wrappingSalt' | 'wrappingNonce' | 'encryptedKey'
-    >;
-    recovery?: Omit<typeof accountRecoveryKeys.$inferInsert, 'userId'>;
-    identity?: Omit<typeof accountIdentities.$inferInsert, 'userId'>;
-    /* Every earlier identity, re-wrapped under the new root at its own key version. */
-    identityHistory?: IdentityWrap[];
-    /* The settings key re-wrapped under the new root, whenever the account has one. */
-    settingsKey?: SettingsKeyInput;
-    workspaces?: WorkspaceGrantInput[];
-}) {
-    return db.transaction(async (tx) => {
+/*
+ * Changes the password, or rotates the master key or the recovery key, from a
+ * live session on the account's current credential. `executor` is the caller's
+ * transaction, when it has one: the one passStep ran in, so the step token and
+ * its proof are spent only if the change commits. This then runs as a savepoint
+ * inside it, and on `false` the caller rolls its transaction back. The
+ * account's row is locked first here, as passStep locks it.
+ */
+export async function changeAccountSecurity(
+    input: {
+        userId: string;
+        action: 'password' | 'master-key' | 'recovery-key';
+        sessionTokenHash: Buffer;
+        credentialVersion: number;
+        registrationRecord: string;
+        envelope: Pick<
+            typeof accountKeys.$inferInsert,
+            'keyVersion' | 'wrappingSalt' | 'wrappingNonce' | 'encryptedKey'
+        >;
+        recovery?: Omit<typeof accountRecoveryKeys.$inferInsert, 'userId'>;
+        identity?: Omit<typeof accountIdentities.$inferInsert, 'userId'>;
+        /* Every earlier identity, re-wrapped under the new root at its own key version. */
+        identityHistory?: IdentityWrap[];
+        /* The settings key re-wrapped under the new root, whenever the account has one. */
+        settingsKey?: SettingsKeyInput;
+        workspaces?: WorkspaceGrantInput[];
+    },
+    executor: Executor = db,
+) {
+    return executor.transaction(async (tx) => {
         const [user] = await tx
             .select(userFieldsWithEmailKey)
             .from(users)
@@ -1644,6 +1703,8 @@ export async function changeAccountSecurity(input: {
                 );
         await tx.delete(sessions).where(eq(sessions.userId, user.id));
         await tx.delete(opaqueLoginAttempts).where(eq(opaqueLoginAttempts.userId, user.id));
+        // Step tokens were issued under the old password; none of them answers the new one.
+        await tx.delete(twoStepAttempts).where(eq(twoStepAttempts.userId, user.id));
         await tx.delete(accountRecoveryAttempts).where(eq(accountRecoveryAttempts.userId, user.id));
         await tx
             .delete(accountEnrollments)
