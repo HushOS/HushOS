@@ -264,10 +264,21 @@ async function requireAccount(sessionToken: string | null) {
     return session.user.id;
 }
 
-/* GET and PUT /api/notifications/settings: the toggles; security notices are not among them. */
+/*
+ * The relay this server pings (`PUSH_RELAY_URL`), or null when it sends the apps none: a phone
+ * registers with it, and hides "On this phone" when there is none, since nothing would arrive.
+ */
+function relayUrl() {
+    return notificationsEnv.PUSH_RELAY_URL;
+}
+
+/*
+ * GET and PUT /api/notifications/settings: the toggles (security notices are not among them),
+ * and the relay the phone apps register with.
+ */
 export async function getNotificationSettings(sessionToken: string | null) {
     const userId = await requireAccount(sessionToken);
-    return { settings: await notificationsRepository.getSettings(userId) };
+    return { settings: await notificationsRepository.getSettings(userId), relay: relayUrl() };
 }
 
 export async function putNotificationSettings(
@@ -275,5 +286,8 @@ export async function putNotificationSettings(
     settings: { shared: boolean; family: boolean },
 ) {
     const userId = await requireAccount(sessionToken);
-    return { settings: await notificationsRepository.putSettings(userId, settings) };
+    return {
+        settings: await notificationsRepository.putSettings(userId, settings),
+        relay: relayUrl(),
+    };
 }

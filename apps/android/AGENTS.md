@@ -171,6 +171,25 @@ The same four tabs as iOS: Home, Files, Shared and Account.
 - The library's own usage logging to Google is cut off by removing Datatransport's `cct` backend in `AndroidManifest.xml`.
     - Logcat confirms it as `TransportRuntime: Transport backend 'cct' is not registered`.
 
+### Notifications
+
+Design: `docs/devices-design.md` 5; as built: `docs/push-relay-plan.md`, PR 4.
+
+- FCM only, without the Google Services plugin or `google-services.json`: `data/PushTokens.kt` sets Firebase up from `BuildConfig.FIREBASE_*`, which come from the Gradle properties `hushos.firebase.projectId`, `appId`, `apiKey`, `senderId` (or `HUSHOS_FIREBASE_*`).
+    - A debug build without all four has no notifications, and Account hides the section.
+    - A release build without them fails (`assembleRelease`, `bundleRelease`), and `check-bundle.sh` refuses a bundle whose manifest says `com.hushos.push.configured` false.
+- `FirebaseInitProvider` is removed, FCM auto-init is off and `firebase_data_collection_default_enabled` is false in the manifest, so nothing reaches Google until "On this phone" is turned on. Datatransport's `cct` backend (see Scan document) also drops FCM's delivery metrics.
+- Token steps (the token, its deletion) run on one serial executor (`PushTokens.steps`), so a quick off-then-on never registers a token about to be deleted.
+- `data/PushNotifications.kt`:
+    - `PushRegistrar`: register, turn off and settle hold `turn`; `forget` (the wipe) moves a generation under `state`, and every write of the registration happens under `state` only while its session is still signed in and the generation hasn't moved. Tests: `PushRegistrarTest`.
+    - The registration (handle and `deleteSecret`) is in `Shared`'s encrypted preferences; a write that isn't committed deletes the new handle at the relay. Retired handles wait in `push-pending-deletions` (not account data) until their relay answers 204 or 404, retried at every start.
+    - `catchUp` lists `GET /api/notifications` when the app opens or comes back; event ids shown are in `push-seen.json` (an account file).
+    - The words, the tag and which relay may be used are the core's (`notifications.rs`): only `https://push.hushos.com`, or in a debug build `localhost`/`127.0.0.1`, and `10.0.2.2` only on the emulator. A sharer is named by the pin's name only.
+- `PushService` checks the tag, fetches the event and posts within 9 seconds, else the fallback. Channels: Security (high), Shared with you, Families, Other activity (low, the fallback); notices and channels `VISIBILITY_PRIVATE` with a public version reading "New activity in HushOS"; local only. Whether a locked phone shows the private version is the person's lock-screen setting, not the app's.
+- `POST_NOTIFICATIONS` is asked only from the switch (`ui/NotificationsSection.kt`).
+- `AccountStore.of(context)` calls `PushNotifications.forget`: the registration goes, its handle is held for deletion, the push notices are taken down and the FCM token deleted.
+- Taps reach `MainActivity` as `com.hushos.app.push.OPEN:<devices|shared:false|families|app>`.
+
 ### Account and plan
 
 - Account shows name, plan and storage, read only, with no way to buy.

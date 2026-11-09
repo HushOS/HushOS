@@ -25,6 +25,9 @@ struct AccountView: View {
     @State private var showingWords = false
     @State private var signingOut = false
     @State private var showingTrash = false
+    @State private var showingDevices = false
+    @State private var notifications = NotificationSettings()
+    @Environment(\.scenePhase) private var scenePhase
     /* Account has finished appearing: a link may push onto its stack. */
     @State private var onScreen = false
 
@@ -40,6 +43,13 @@ struct AccountView: View {
         guard onScreen, let groupId else { return }
         store.familyToOpen = nil
         path.append(FamilyRoute.family(groupId))
+    }
+
+    /* A tapped security notice: Devices, pushed once Account is on screen. */
+    private func openDevices(_ target: PhonePush.Target?) {
+        guard onScreen, target == .devices else { return }
+        PhonePush.shared.opening = nil
+        showingDevices = true
     }
 
     private func openTrash(_ link: AppLink?) {
@@ -68,6 +78,7 @@ struct AccountView: View {
                     SectionTitle("Plan and storage")
                 }
                 FamiliesSection()
+                NotificationsSection(model: notifications)
                 Section {
                     Button { changingPassword = true } label: { row("key", "Change password", nil, chevron: true) }.alpineRow()
                     Button { showingPhrase = true } label: { row("scroll", "Recovery phrase", "Gets you back in if you forget your password", chevron: true) }.alpineRow()
@@ -107,6 +118,7 @@ struct AccountView: View {
             .navigationTitle("Account")
             .screenChrome(title: "Account", root: true)
             .navigationDestination(isPresented: $showingTrash) { TrashView().environment(store) }
+            .navigationDestination(isPresented: $showingDevices) { DevicesView().environment(store) }
             // Families, a family folder and its subfolders, all pushed by value and declared at the stack's root (FamilyRoute).
             .navigationDestination(for: FamilyRoute.self) { route in
                 switch route {
@@ -133,7 +145,10 @@ struct AccountView: View {
             // A link to the Trash pushes it once Account has finished appearing, as a tap would (Appeared.swift).
             .onFinishedAppearing { onScreen = true }
             .onChange(of: store.route, initial: true) { _, link in openTrash(link) }
-            .onChange(of: onScreen) { _, _ in openTrash(store.route); openFamily(store.familyToOpen) }
+            .onChange(of: onScreen) { _, _ in openTrash(store.route); openFamily(store.familyToOpen); openDevices(PhonePush.shared.opening) }
+            .onChange(of: PhonePush.shared.opening, initial: true) { _, target in openDevices(target) }
+            // Notifications: read on appearing and whenever HushOS comes back (from Settings, the switch follows what iOS allows).
+            .task(id: scenePhase) { if scenePhase == .active { await notifications.load() } }
             .onChange(of: store.familyToOpen, initial: true) { _, groupId in openFamily(groupId) }
             .refreshable {
                 await load()

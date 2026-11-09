@@ -4,13 +4,14 @@ SwiftUI app for iOS 26 and later, on the App Store (Android is on Google Play). 
 
 ## Targets and packages
 
-| Folder     | Target          | Bundle id                | Role                                                                  |
-| ---------- | --------------- | ------------------------ | --------------------------------------------------------------------- |
-| `App/`     | `HushOS`        | `com.hushos.app`         | The app                                                               |
-| `Files/`   | `HushOSFiles`   | `com.hushos.app.files`   | File Provider extension                                               |
-| `FilesUI/` | `HushOSFilesUI` | `com.hushos.app.filesui` | Sign-in action extension (OPAQUE sign-in inside Files)                |
-| `Share/`   | `HushOSShare`   | `com.hushos.app.share`   | Save to HushOS share extension                                        |
-| `Widgets/` | `HushOSWidgets` | `com.hushos.app.widgets` | Live Activity for uploads and downloads (Dynamic Island, Lock Screen) |
+| Folder           | Target                | Bundle id                      | Role                                                                  |
+| ---------------- | --------------------- | ------------------------------ | --------------------------------------------------------------------- |
+| `App/`           | `HushOS`              | `com.hushos.app`               | The app                                                               |
+| `Files/`         | `HushOSFiles`         | `com.hushos.app.files`         | File Provider extension                                               |
+| `FilesUI/`       | `HushOSFilesUI`       | `com.hushos.app.filesui`       | Sign-in action extension (OPAQUE sign-in inside Files)                |
+| `Share/`         | `HushOSShare`         | `com.hushos.app.share`         | Save to HushOS share extension                                        |
+| `Widgets/`       | `HushOSWidgets`       | `com.hushos.app.widgets`       | Live Activity for uploads and downloads (Dynamic Island, Lock Screen) |
+| `Notifications/` | `HushOSNotifications` | `com.hushos.app.notifications` | Notification Service Extension: writes a push's notice                |
 
 - Everything the targets share is the Swift package `Packages/HushOSKit`: keychain, Drive API, the vault that opens keys, OPAQUE sign-in.
 - HushOSKit sits over `Packages/HushOSCore`, the UniFFI bindings of `crates/hushos-core`.
@@ -1072,6 +1073,24 @@ Files: `FamilyFiles.swift`, `Files/FamilyFileProvider.swift`. The PR (#282) list
 - One the listing names that doesn't open here (an id clash) is deleted.
 - A listing that fails on some row asks the changed node's own envelope (`open`). One that can't be pinned on it fails the batch.
 - Tests: `FamilyDomainsTests`, `FamilyFilesSourceTests`.
+
+## Notifications
+
+Design: `docs/devices-design.md` 5; as built: `docs/push-relay-plan.md`, PR 4.
+
+- `HushOSKit/PushNotifications.swift`:
+    - `PushRegistrar`: register, turn off, settle (a server whose relay changed) and forget, one at a time (`PushTurns`). `forget()` is synchronous (the wipe calls it) and moves a generation; a registration is written or put back only while its session is still signed in and the generation hasn't moved. Tests: `PushRegistrarTests`.
+    - The registration (handle and `deleteSecret`) is the keychain's `push-registration`. Retired handles wait in `push-pending-deletions` (not account data) until their relay answers 204 or 404, retried at every start (`PushNotifications.retryDeletions`).
+    - `catchUp()` lists `GET /api/notifications` when the app opens or comes back, signed in with notifications on; event ids shown go in `state/push-seen.json`.
+    - `PushContactNames`: verified, not family-trusted contacts' names in the keychain's `push-contacts` (`ThisDeviceOnly`), written from `Vault.loadSettings` while notifications are on, deleted on every wipe. The extension names a sharer only from it.
+- The words, the tag and which relay may be used are the core's (`notifications.rs`). Only `https://push.hushos.com`, or in a debug build `localhost`/`127.0.0.1`.
+- `apns-sandbox` on the simulator and when the profile's `aps-environment` is development; `apns` otherwise. A profile without `aps-environment` (a sideloaded build) hides the section (`PushNotifications.available`).
+- Every request refuses redirects (`RefuseRedirects`).
+- `HushOSKit/PushContent.swift`: a notice into notification content, the same for the extension and the catch-up.
+- `App/PhonePush.swift`: the token (from `AppDelegate`, 30-second timeout), permission asked only from the switch, a renewal at every signed-in start, the catch-up, taps (`opening`), and Account's section (`NotificationSettings`, loaded by Account: a section that draws nothing never runs its own task).
+- `Notifications/NotificationService.swift`: writes the fallback first, then the notice; quiet fallback, written notices sound. The `push` category's hidden-preview placeholder is the fallback text (`TransferNotices.start`, which is also the delegate that routes taps and shows pushes in the foreground).
+- Testing: the simulator gets a real sandbox APNs token. `xcrun simctl push` delivers a payload but does not run the service extension (seen 2026-11-09 on iOS 27), so the extension's own path is only proven on a device.
+- In the simulator, a Toggle often ignores a plain injected tap; a tap with a short duration (0.15 s) works.
 
 ## Testing
 

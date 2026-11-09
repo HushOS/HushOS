@@ -7,7 +7,7 @@
 # package.json, which the release pull request also writes into project.yml's MARKETING_VERSION
 # (bun run check:versions holds them together). The build number (CFBundleVersion) is
 # scripts/build-number.sh, the commit count on main, passed to xcodebuild for the app and its
-# four extensions alike; nothing is edited or committed. Archive from main, best at a release
+# five extensions alike; nothing is edited or committed. Archive from main, best at a release
 # tag (git checkout v1.2.3). Needs Xcode signed in (Settings > Accounts) to the Apple Account
 # that is Account Holder or Admin on the team; signing is automatic.
 # UPLOAD=0 stops after the archive and export, leaving the .ipa in apps/ios/build/export.

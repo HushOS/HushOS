@@ -55,8 +55,13 @@ export const notificationsResponse = t.Object({
 });
 export const registeredResponse = t.Object({ registered: t.Literal(true) });
 export const unregisteredResponse = t.Object({ removed: t.Boolean() });
+/*
+ * The toggles, and the push relay this server pings (`PUSH_RELAY_URL`): the phone apps register
+ * there, and null means this server sends them no pushes.
+ */
 export const notificationSettingsResponse = t.Object({
     settings: t.Object({ shared: t.Boolean(), family: t.Boolean() }),
+    relay: t.Union([t.String(), t.Null()]),
 });
 /* The VAPID public key a browser subscribes with: an uncompressed P-256 point, Base64url. */
 export const webPushKeyResponse = t.Object({

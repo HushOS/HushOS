@@ -46,13 +46,17 @@ final class TransferNotices: NSObject, UNUserNotificationCenterDelegate {
     @ObservationIgnored private var outcomes: [Outcome] = []
     private static let failedCategory = "transfers-failed"
     private static let retryAction = "retry"
+    private nonisolated static let pushCategory = "push"
 
     /* Before launch finishes, so a tap that launched the app is delivered. */
     func start() {
         let center = UNUserNotificationCenter.current()
         center.delegate = self
         let retry = UNNotificationAction(identifier: Self.retryAction, title: "Retry", options: [])
-        center.setNotificationCategories([UNNotificationCategory(identifier: Self.failedCategory, actions: [retry], intentIdentifiers: [])])
+        // Pushes (the Notification Service Extension's notices): with previews hidden, only the fallback text shows.
+        let push = UNNotificationCategory(identifier: PushNotifications.category, actions: [], intentIdentifiers: [],
+                                          hiddenPreviewsBodyPlaceholder: pushFallbackText(), options: [])
+        center.setNotificationCategories([UNNotificationCategory(identifier: Self.failedCategory, actions: [retry], intentIdentifiers: []), push])
     }
 
     /* A transfer ended. Only what ends off screen counts: on screen, the list says it. */
@@ -158,6 +162,12 @@ final class TransferNotices: NSObject, UNUserNotificationCenterDelegate {
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
         let info = response.notification.request.content.userInfo
         let action = response.actionIdentifier
+        // A push's notice (the extension wrote where it goes); one the extension never reached opens the app as it was.
+        if response.notification.request.content.categoryIdentifier == Self.pushCategory || info["aps"] != nil {
+            let open = info["push"] as? String ?? "app"
+            if action == UNNotificationDefaultActionIdentifier { await MainActor.run { PhonePush.shared.tapped(open) } }
+            return
+        }
         let target = info["target"] as? String
         let retry = (info["retry"] as? [String] ?? []).compactMap(UUID.init(uuidString:))
         await MainActor.run {
@@ -169,7 +179,14 @@ final class TransferNotices: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
-    /* On screen the list already shows it; nothing is posted then anyway, so show nothing. */
+    /*
+     * Transfers: on screen the list already shows it; nothing is posted then anyway, so show nothing.
+     * A push is shown on screen too: every ping is seen (docs/devices-design.md 5).
+     */
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async
-        -> UNNotificationPresentationOptions { [] }
+        -> UNNotificationPresentationOptions {
+        let content = notification.request.content
+        guard content.categoryIdentifier == Self.pushCategory || content.userInfo["aps"] != nil else { return [] }
+        return content.sound == nil ? [.banner, .list] : [.banner, .list, .sound]
+    }
 }

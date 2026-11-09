@@ -50,6 +50,19 @@ public enum AppGroup {
         return groups.filter { !$0.isEmpty }
     }
 
+    /*
+     * The `aps-environment` a provisioning profile grants ("development" or "production"), read the
+     * same way: which APNs a development or ad hoc build's push token belongs to (PushNotifications).
+     */
+    public static func apsEnvironment(inProfile data: Data) -> String? {
+        guard let start = data.range(of: Data("<?xml".utf8)),
+            let end = data.range(of: Data("</plist>".utf8), in: start.lowerBound..<data.endIndex),
+            let plist = try? PropertyListSerialization.propertyList(from: data[start.lowerBound..<end.upperBound], format: nil) as? [String: Any],
+            let entitlements = plist["Entitlements"] as? [String: Any]
+        else { return nil }
+        return entitlements["aps-environment"] as? String
+    }
+
     /* The bundle's embedded.mobileprovision; an extension without one of its own reads its app's. */
     static func embeddedProfile(of bundle: URL) -> Data? {
         if let own = try? Data(contentsOf: bundle.appendingPathComponent("embedded.mobileprovision")) { return own }

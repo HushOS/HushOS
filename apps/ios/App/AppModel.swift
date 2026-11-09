@@ -172,6 +172,11 @@ final class AppModel {
         wordsWaiting = WordsWaiting.isWaiting(for: user.id)
         state = .signedIn
         if let owner { Task { await FilesDomain.register(for: owner) } }
+        // Notifications this account turned on here: the token again, in case iOS replaced it, then what no push showed.
+        Task {
+            await PhonePush.shared.refresh()
+            await PhonePush.shared.catchUp()
+        }
     }
 
     /*

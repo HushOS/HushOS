@@ -6,8 +6,9 @@ import { z } from 'zod';
  * clients that show them are built: with NOTIFICATIONS_ENABLED=false the notification routes
  * answer 501 and no event is recorded.
  *
- * PUSH_RELAY_URL is where pings for the apps go, `https://push.hushos.com` by default. Set it
- * empty to send none: the apps then see notifications only when they are open. The relay learns
+ * PUSH_RELAY_URL is where pings for the apps go, `https://push.hushos.com` by default, and the
+ * relay the apps register with (they take only that one). Set it empty to send none: the apps
+ * then hide their notification settings. The relay learns
  * that a handle got a ping from this server's address, and nothing about the account or what
  * happened (docs/self-hosting.md, Notifications).
  */

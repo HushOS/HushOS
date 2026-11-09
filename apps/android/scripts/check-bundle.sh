@@ -6,6 +6,7 @@
 #   apps/android/scripts/check-bundle.sh <app-release.aab> <X.Y.Z> <versionCode> [<previous release's APK>]
 #
 # - Signed with the upload key (the certificate below, as in release-apk.sh) and nothing else.
+# - Built with the Firebase options phone notifications need (the manifest's com.hushos.push.configured).
 # - Package com.hushos.app, the given versionName and versionCode.
 # - Device compatibility: minSdk, native ABIs, required and implied hardware features, screen
 #   and library requirements, read from the bundle's base module with aapt2 the way Play reads
@@ -57,6 +58,16 @@ if [[ "$badging" != "$wanted"* ]]; then
     exit 1
 fi
 echo "$wanted"
+
+# Phone notifications: the build carried all four Firebase options (app/build.gradle.kts fails a release without them;
+# this catches a bundle built some other way).
+manifest=$("$AAPT2" dump xmltree --file AndroidManifest.xml "$WORK/binary.apk")
+# aapt2 prints the value typed (=true) or as text (="true"), depending on how the placeholder was read.
+if ! grep -A1 'com.hushos.push.configured' <<< "$manifest" | grep -Eq ':value\([^)]*\)=("true"|true)( |$)'; then
+    echo "The bundle was built without the Firebase options, so it has no phone notifications (hushos.firebase.* in docs/push-relay-plan.md)" >&2
+    exit 1
+fi
+echo "Phone notifications: Firebase options present"
 
 # What Play filters devices on; features sit indented under feature-group. uses-*-not-required
 # lines filter nothing and are left out.

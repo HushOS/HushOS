@@ -279,6 +279,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
      * opened the account meanwhile, and this screen would still offer sign-in. A session on the phone is checked again.
      */
     fun resumed() {
+        // Back on screen, signed in: notices no push showed (a start's own catch-up runs from signedIn).
+        if (state.value.gate == Gate.SIGNED_IN) viewModelScope.launch(Dispatchers.IO) { runCatching { com.hushos.app.data.PushTokens.catchUp(context) } }
         if (state.value.gate != Gate.SIGNED_OUT || state.value.signedOutNotice) return
         viewModelScope.launch {
             if (withContext(Dispatchers.IO) { Shared.session(context) } != null && state.value.gate == Gate.SIGNED_OUT) checkSession()
@@ -346,6 +348,12 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         filesAppChanged()
         refreshOffline()
         _state.update { it.copy(gate = Gate.SIGNED_IN, user = user, linkWaiting = false) }
+        // Notifications this account turned on here: the token again, in case Google replaced it.
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { com.hushos.app.data.PushTokens.refresh(context) }
+            // Then what no push showed while the app was closed.
+            runCatching { com.hushos.app.data.PushTokens.catchUp(context) }
+        }
         loadSearches()
         watchQueue()
         pendingLink?.let { link -> pendingLink = null; route(link) }

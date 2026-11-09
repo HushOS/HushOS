@@ -87,7 +87,7 @@ check() {
     [[ ! -e "$bundle/embedded.mobileprovision" ]] || { echo "$bundle carries a provisioning profile" >&2; exit 1; }
 }
 EXTENSIONS=("$APP"/PlugIns/*.appex)
-[[ ${#EXTENSIONS[@]} -eq 4 ]] || { echo "Expected the four extensions in PlugIns, found ${#EXTENSIONS[@]}" >&2; exit 1; }
+[[ ${#EXTENSIONS[@]} -eq 5 ]] || { echo "Expected the five extensions in PlugIns, found ${#EXTENSIONS[@]}" >&2; exit 1; }
 for bundle in "$APP" "${EXTENSIONS[@]}"; do check "$bundle"; done
 
 # The entitlements a sideloading tool asks for, from each target's file with the build's values.
@@ -98,6 +98,8 @@ entitlements() {
     out=$WORK/$(basename "$1")
     sed -e "s/\$(APP_GROUP_ID)/$GROUP/g" -e "s/\$(HUSHOS_LINK_HOST)/$LINK_HOST/g" "$IOS/$1" > "$out"
     plutil -remove keychain-access-groups "$out" 2> /dev/null || true
+    # Pushes reach only the App Store's bundle id (the relay's APNs topic), so a sideloaded build asks for none.
+    plutil -remove aps-environment "$out" 2> /dev/null || true
     # shellcheck disable=SC2016 # a literal $( left over is an unfilled build setting
     ! grep -q '$(' "$out" || { echo "$1 has a build setting this script doesn't fill in" >&2; exit 1; }
 }
@@ -105,14 +107,17 @@ entitlements App/HushOS.entitlements
 entitlements Files/HushOSFiles.entitlements
 entitlements FilesUI/HushOSFilesUI.entitlements
 entitlements Share/HushOSShare.entitlements
+entitlements Notifications/HushOSNotifications.entitlements
 sign() { codesign --force --sign - --timestamp=none --generate-entitlement-der ${2:+--entitlements "$2"} "$1" 2> /dev/null; }
 for framework in "$APP"/Frameworks/*; do if [[ -e "$framework" ]]; then sign "$framework"; fi; done
 sign "$APP/PlugIns/HushOSFiles.appex" "$WORK/HushOSFiles.entitlements"
 sign "$APP/PlugIns/HushOSFilesUI.appex" "$WORK/HushOSFilesUI.entitlements"
 sign "$APP/PlugIns/HushOSShare.appex" "$WORK/HushOSShare.entitlements"
+sign "$APP/PlugIns/HushOSNotifications.appex" "$WORK/HushOSNotifications.entitlements"
 sign "$APP/PlugIns/HushOSWidgets.appex"
 sign "$APP" "$WORK/HushOS.entitlements"
-for bundle in "$APP" "$APP/PlugIns/HushOSFiles.appex" "$APP/PlugIns/HushOSFilesUI.appex" "$APP/PlugIns/HushOSShare.appex"; do
+for bundle in "$APP" "$APP/PlugIns/HushOSFiles.appex" "$APP/PlugIns/HushOSFilesUI.appex" "$APP/PlugIns/HushOSShare.appex" \
+    "$APP/PlugIns/HushOSNotifications.appex"; do
     codesign -d --entitlements - --xml "$bundle" 2> /dev/null | grep -q "<string>$GROUP</string>" || { echo "$bundle does not carry the app group" >&2; exit 1; }
 done
 if codesign -d --entitlements - --xml "$APP" 2> /dev/null | grep -q fileprovider.testing-mode; then

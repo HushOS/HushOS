@@ -10,6 +10,7 @@ import com.hushos.core.base64urlDecode
 import com.hushos.core.base64urlEncode
 import com.hushos.core.rememberedDeviceFromJson
 import com.hushos.core.rememberedDeviceToJson
+import org.json.JSONArray
 import org.json.JSONObject
 
 /*
@@ -24,6 +25,8 @@ object Shared {
     private const val DEVICE = "device"
     private const val CONFIG = "config"
     private const val DEVICE_IDENTITY = "device-identity"
+    private const val PUSH = "push-registration"
+    private const val PUSH_PENDING = "push-pending-deletions"
 
     /* `email`: for the Files app's root, which names the account; empty for a session saved before it was kept. */
     data class Session(val origin: String, val token: String, val userId: String, val email: String = "")
@@ -109,6 +112,31 @@ object Shared {
     fun clearDeviceIdentity(context: Context) {
         runCatching { prefs(context).edit().remove(DEVICE_IDENTITY).apply() }
     }
+
+    /*
+     * This phone's registration with the push relay (PushNotifications.Registration): the handle and the secret that
+     * deletes it. Account data, beside the session under the same Keystore key; forgotten on every wipe.
+     */
+    fun pushRegistration(context: Context): JSONObject? = read(context, PUSH)
+
+    /* Committed, not applied: a stop right after must still find the handle the server was about to be given. False when it wasn't written. */
+    fun writePushRegistration(context: Context, registration: JSONObject): Boolean =
+        runCatching { prefs(context).edit().putString(PUSH, registration.toString()).commit() }.getOrDefault(false)
+
+    fun clearPushRegistration(context: Context) {
+        runCatching { prefs(context).edit().remove(PUSH).commit() }
+    }
+
+    /*
+     * Relay handles waiting to be deleted, with their secrets: not account data, so no wipe removes them; each goes once
+     * its relay confirms (PushRegistrar.drain).
+     */
+    fun pushPending(context: Context): JSONArray? =
+        runCatching { prefs(context).getString(PUSH_PENDING, null) }.getOrNull()?.let { runCatching { JSONArray(it) }.getOrNull() }
+
+    fun writePushPending(context: Context, list: JSONArray?): Boolean = runCatching {
+        prefs(context).edit().apply { if (list == null) remove(PUSH_PENDING) else putString(PUSH_PENDING, list.toString()) }.commit()
+    }.getOrDefault(false)
 
     fun origin(context: Context): String? = read(context, CONFIG)?.optString("origin")?.takeIf { it.isNotEmpty() }
 

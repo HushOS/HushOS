@@ -128,6 +128,8 @@ fun AccountScreen(model: DriveViewModel, state: DriveState) {
             "trash" -> { page = Page.TRASH; model.clearRequest() }
             // A file picker's "Save your recovery words": the words and, while unconfirmed, their check.
             "words" -> { page = Page.PHRASE; model.clearRequest() }
+            // A tapped security notice: who is signed in where.
+            "devices" -> { page = Page.DEVICES; model.clearRequest() }
         }
     }
     LaunchedEffect(Unit) { model.refreshStorage(); model.refreshAccount(); model.refreshUser() }
@@ -171,6 +173,7 @@ fun AccountScreen(model: DriveViewModel, state: DriveState) {
             PlanCard(state) { page = Page.PLAN }
             // As the web's sidebar row and iOS's section: one row per family, absent on a server without families.
             FamiliesSection(model) { familyRoute = FamilyRoute.Page(it).save() }
+            NotificationsSection()
             Subheader("Sign-in and recovery")
             AccountRow("Change password", "The password you sign in with", Icons.Outlined.Password) { page = Page.PASSWORD }
             AccountRow("Recovery phrase", "Gets you back in if you forget your password", Icons.Outlined.Key) { page = Page.PHRASE }

@@ -148,6 +148,12 @@ jobs:
               env:
                   HUSHOS_UPLOAD_STORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_STORE_PASSWORD }}
                   HUSHOS_UPLOAD_KEY_ALIAS: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS || 'upload' }}
+                  # Phone notifications: the Firebase app's options (configuration, not secrets; docs/push-relay-plan.md).
+                  # A release build without all four fails (app/build.gradle.kts).
+                  HUSHOS_FIREBASE_PROJECT_ID: ${{ vars.HUSHOS_FIREBASE_PROJECT_ID }}
+                  HUSHOS_FIREBASE_APP_ID: ${{ vars.HUSHOS_FIREBASE_APP_ID }}
+                  HUSHOS_FIREBASE_API_KEY: ${{ vars.HUSHOS_FIREBASE_API_KEY }}
+                  HUSHOS_FIREBASE_SENDER_ID: ${{ vars.HUSHOS_FIREBASE_SENDER_ID }}
               run: |
                   apps/android/scripts/bundle-release.sh
                   echo "code=$(scripts/build-number.sh --store)" >> "$GITHUB_OUTPUT"
@@ -269,6 +275,12 @@ jobs:
                   TAG: ${{ needs.release.outputs.tag }}
                   HUSHOS_UPLOAD_STORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_STORE_PASSWORD }}
                   HUSHOS_UPLOAD_KEY_ALIAS: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS || 'upload' }}
+                  # Phone notifications: the Firebase app's options (configuration, not secrets; docs/push-relay-plan.md).
+                  # A release build without all four fails (app/build.gradle.kts).
+                  HUSHOS_FIREBASE_PROJECT_ID: ${{ vars.HUSHOS_FIREBASE_PROJECT_ID }}
+                  HUSHOS_FIREBASE_APP_ID: ${{ vars.HUSHOS_FIREBASE_APP_ID }}
+                  HUSHOS_FIREBASE_API_KEY: ${{ vars.HUSHOS_FIREBASE_API_KEY }}
+                  HUSHOS_FIREBASE_SENDER_ID: ${{ vars.HUSHOS_FIREBASE_SENDER_ID }}
               run: apps/android/scripts/release-apk.sh "$TAG"
 
     # Production: the release of this tag that internal testing holds, to every user once
