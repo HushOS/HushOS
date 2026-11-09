@@ -22,6 +22,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import com.hushos.app.data.PushAsk
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -38,8 +40,8 @@ import kotlinx.coroutines.withContext
 /*
  * Account → Notifications, the web's AccountNotifications: whether this phone gets them, and the two kinds a person can
  * turn off. Security notices always come. Hidden on a server with notifications off, one whose pushes can't reach this
- * app (no relay, or not HushOS's), and in a build without Firebase. Android asks for POST_NOTIFICATIONS only from the
- * switch, never on its own.
+ * app (no relay, or not HushOS's), and in a build without Firebase. POST_NOTIFICATIONS is asked from the switch, and once
+ * per account by the app itself after a sign-in (AskForNotifications); turning the switch either way counts as that once.
  */
 @Composable
 fun NotificationsSection() {
@@ -67,7 +69,9 @@ fun NotificationsSection() {
         return PushNotifications.registration(context)?.belongsTo(session) == true && PushTokens.allowed(context)
     }
 
-    LaunchedEffect(resumed) {
+    // The app's own ask turned notifications on: the switch reads again.
+    val asked by PushAsk.changed.collectAsState()
+    LaunchedEffect(resumed, asked) {
         if (!PushTokens.configured) return@LaunchedEffect
         val read = withContext(Dispatchers.IO) { runCatching { PushNotifications.serverState(context) to phoneOn() } }
         // A read that fails keeps what was shown; a first one leaves the section out, as on a server without them.
@@ -103,6 +107,8 @@ fun NotificationsSection() {
     fun setPhone(on: Boolean) {
         val target = relay ?: return
         if (busy) return
+        // The person decided here: asking by itself never turns it back on (PushAsk).
+        scope.launch(Dispatchers.IO) { Shared.session(context)?.let { PushAsk.markAsked(context, it) } }
         busy = true
         problem = null
         phone = on
@@ -166,5 +172,38 @@ private fun SwitchRow(title: String, detail: String, checked: Boolean, enabled: 
         }
         // The row takes the tap; the switch only shows the state.
         Switch(checked = checked, onCheckedChange = null, enabled = enabled)
+    }
+}
+
+/*
+ * Asking once for notifications (data/PushAsk.kt), from the main screen: for the account signed in, once this screen has
+ * settled and has the focus. A sheet or a dialog is a window of its own that takes the focus, so nothing is asked while
+ * the person is using one; the question waits until it closes. On Android 13 and later the system's question; if
+ * allowed (or allowed before, or before Android 13), the switch's own turn-on, quietly.
+ */
+@Composable
+fun AskForNotifications(userId: String?, focused: Boolean) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var waiting by remember { mutableStateOf<String?>(null) }
+    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        val relay = waiting ?: return@rememberLauncherForActivityResult
+        waiting = null
+        if (granted) scope.launch(Dispatchers.IO) { PushAsk.register(context, relay) }
+    }
+    LaunchedEffect(userId, focused) {
+        if (userId == null || !focused) return@LaunchedEffect
+        // Settled: a moment on screen with the focus; losing it starts the wait again.
+        kotlinx.coroutines.delay(1_500)
+        val decision = withContext(Dispatchers.IO) { runCatching { PushAsk.decide(context) }.getOrNull() } ?: return@LaunchedEffect
+        val relay = decision.relay ?: return@LaunchedEffect
+        when (decision.step) {
+            PushAsk.Step.ASK -> {
+                waiting = relay
+                permission.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+            PushAsk.Step.REGISTER -> withContext(Dispatchers.IO) { PushAsk.register(context, relay) }
+            PushAsk.Step.NOTHING, PushAsk.Step.MARK_ONLY -> {}
+        }
     }
 }

@@ -33,6 +33,8 @@ export const ACCOUNT_DATA = {
             'hushos.identity-seen:',
             // That this account turned Web Push on in this browser (lib/web-push.ts).
             'hushos.web-push:',
+            // That this account closed the offer to turn notifications on here (lib/web-push.ts).
+            'hushos.web-push-ask:',
         ],
     },
     /* This tab's sessionStorage; other tabs clear theirs when they see the sign-out. */
@@ -127,7 +129,7 @@ export const STORAGE_OWNERS: Record<
     'apps/web/src/lib/theme.ts': { cookies: ['hushos-theme', 'hushos-contrast', 'sidebar_state'] },
     'apps/web/src/lib/sounds.ts': { local: ['hushos-sounds'] },
     'apps/web/src/lib/return-to.ts': { local: ['hushos.return'] },
-    'apps/web/src/lib/web-push.ts': { local: ['hushos.web-push:'] },
+    'apps/web/src/lib/web-push.ts': { local: ['hushos.web-push:', 'hushos.web-push-ask:'] },
     'apps/web/src/lib/rollback-marks.ts': {
         // The storage it is given; the keys it finds there by listing them.
         passThrough: ['local'],

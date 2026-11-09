@@ -147,6 +147,8 @@ struct AccountView: View {
             .onChange(of: PhonePush.shared.opening, initial: true) { _, target in openDevices(target) }
             // Notifications: read on appearing and whenever HushOS comes back (from Settings, the switch follows what iOS allows).
             .task(id: scenePhase) { if scenePhase == .active { await notifications.load() } }
+            // The app's own ask turned notifications on: the switch reads again.
+            .onChange(of: PhonePush.shared.changed) { _, _ in Task { await notifications.load() } }
             .onChange(of: store.familyToOpen, initial: true) { _, groupId in openFamily(groupId) }
             .refreshable {
                 await load()

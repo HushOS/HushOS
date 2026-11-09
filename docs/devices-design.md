@@ -279,7 +279,11 @@ The relay learns that a handle got a ping from some server address at some time,
 
 ### Settings
 
-Notification settings list the toggles above per account; security events, and guardian activity on child accounts, are shown greyed out as always on. The apps and browsers ask the system for permission the first time the person turns on approvals or opens Shared, never at sign-up.
+Notification settings list the toggles above per account; security events, and guardian activity on child accounts, are shown greyed out as always on. Notifications are on by default where they can be, asked for once:
+
+- **The phone apps** ask the system once per account on a server, on the main screen right after a sign-in or sign-up (after a new account's words), or at the first signed-in start of a build that asks, and only on a server with notifications and a relay the app can use. Never over a sheet or dialog the person is using. Allowed, the app turns "On this phone" on as the switch does; declined or dismissed, the switch stays off and the app never asks again by itself. The record is the app's own, wiped with the account's data, and the Account switch counts as the asking, so a person who turned it off is never turned back on. On Android before 13 there is no question: notifications allowed, the app registers.
+- **Browsers** penalise permission prompts no click asked for, so the web shows a one-time line in the app instead: "Get notified about new sign-ins and things shared with you", with Turn on (the switch's own flow, the browser's prompt from the click) and a close button. Only on a server with notifications on, in a browser that supports Web Push, whose permission was never decided and that isn't subscribed. Closing it, or a Turn on that fails (declined, or a browser with no push service), puts it away for that account on that browser.
+- **The switches** in Account turn notifications on and off at any time.
 
 ## 6. Child accounts
 

@@ -8,7 +8,8 @@ import UserNotifications
  * Notifications on this iPhone, the app's side (PushNotifications in HushOSKit holds the rest):
  * asking iOS for the APNs token, handing it on when Account's "On this phone" is turned on and at
  * every signed-in start (a token iOS replaced is registered again), and where a tapped notice goes.
- * iOS asks the person's permission only from that switch, never on its own.
+ * iOS's permission is asked once per account by itself, on the drive's screen once it settles
+ * after a sign-in or sign-up (`askOnce`, PushAsk), and otherwise only from that switch.
  */
 @MainActor
 @Observable
@@ -23,6 +24,9 @@ final class PhonePush {
     /* Which request a timeout belongs to: an earlier one's never fails a later request. */
     @ObservationIgnored private var round = 0
     @ObservationIgnored private var catchingUp = false
+    @ObservationIgnored private var asking = false
+    /* Moves when the asking turned notifications on, so Account's switch reads again. */
+    var changed = 0
 
     struct RegistrationFailed: Error {}
 
@@ -135,6 +139,48 @@ final class PhonePush {
         }
     }
 
+    /*
+     * Asks once, on the drive's screen (MainView): right after a sign-in or sign-up, and at the
+     * first signed-in start of a build that asks. Waits until the screen settles and nothing the
+     * person is using (a sheet, a dialog, an alert) is up, and for the app to be in front. Then,
+     * as PushAsk.step says: iOS's question (registering as the switch does if allowed), a
+     * registration at once (allowed before), or only the record (declined before). Written before
+     * the question, so it is never asked again by itself, whatever the answer.
+     */
+    func askOnce() async {
+        guard !asking else { return }
+        asking = true
+        defer { asking = false }
+        try? await Task.sleep(for: .seconds(1.5))
+        while !Task.isCancelled, UIApplication.shared.applicationState != .active || Self.somethingPresented {
+            try? await Task.sleep(for: .seconds(2))
+        }
+        guard !Task.isCancelled, let session = SharedKeychain.session else { return }
+        let registered = PushNotifications.registration?.belongs(to: session) == true
+        guard PushNotifications.available, !registered, !PushAsk.asked(session),
+              let state = try? await PushNotifications.serverState(), SharedKeychain.session == session else { return }
+        let permission: PushAsk.Permission
+        switch await UNUserNotificationCenter.current().notificationSettings().authorizationStatus {
+        case .notDetermined: permission = .undecided
+        case .denied: permission = .denied
+        default: permission = .allowed
+        }
+        let step = PushAsk.step(available: true, registered: registered, asked: false, relay: state.relay, permission: permission)
+        guard step != .nothing, let relay = state.relay else { return }
+        PushAsk.markAsked(session)
+        guard step == .ask || step == .register else { return }
+        // The switch's own turn-on: iOS's question when undecided, the token, the relay, the server. A no ends it quietly.
+        guard (try? await turnOn(relay: relay)) != nil else { return }
+        changed += 1
+    }
+
+    /* A sheet, dialog or alert over the app's window: the person is using it, so nothing is asked now. */
+    private static var somethingPresented: Bool {
+        UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.contains { scene in
+            scene.windows.contains { $0.isKeyWindow && $0.rootViewController?.presentedViewController != nil }
+        }
+    }
+
     /* A tapped notice, from the notification centre's delegate. */
     func tapped(_ open: String) {
         opening = Target(rawValue: open) ?? .app
@@ -180,6 +226,8 @@ final class NotificationSettings {
 
     func setPhone(_ on: Bool) async {
         guard !busy, let relay else { return }
+        // The person decided here: asking by itself never turns it back on (PushAsk).
+        if let session = SharedKeychain.session { PushAsk.markAsked(session) }
         busy = true
         problem = nil
         phone = on

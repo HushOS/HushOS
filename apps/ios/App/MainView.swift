@@ -207,6 +207,9 @@ struct MainView: View {
         .task { if let start = DebugStart.tab { tab = start } }
         #endif
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        // Notifications, asked once per account once this screen settles (after a sign-in, a sign-up's words, or the
+        // first start of a build that asks), never over a sheet or dialog. Again for each session the screen shows.
+        .task(id: model.vault.map(ObjectIdentifier.init)) { await PhonePush.shared.askOnce() }
         // A new vault (a sign-in again after Change password or Rotate account key ended the old session)
         // replaces the store's in place: the old one's session is dead and its keys may be too.
         .task(id: model.vault.map(ObjectIdentifier.init)) {
