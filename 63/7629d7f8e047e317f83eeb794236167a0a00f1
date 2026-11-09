@@ -1,0 +1,112 @@
+apps/web/src/lib/api/two-step.db.test.ts
+  s_1f3a9ec02d29ed::t_e69eebeabc323f 1-1652,1654-1655,1657
+  s_1f3a9ec02d29ed::t_b38b82724fa8f1 1653,1656,1658-1714
+.env.example
+  s_1f3a9ec02d29ed::t_aa0e40b23400b2 93-99
+.env.production.example
+  s_1f3a9ec02d29ed::t_517da7ca96ae2e 118-124
+CONTRIBUTING.md
+  s_1f3a9ec02d29ed::t_6d3052ea0829c7 456-462,499
+apps/web/src/lib/api/auth-responses.server.ts
+  s_1f3a9ec02d29ed::t_3820101e78bf6e 232-233,254-256,264-329
+apps/web/src/lib/api/auth-responses.test.ts
+  s_1f3a9ec02d29ed::t_a8181b8bf996fc 11,24,36,40-44,125-128,136-150,507,513,518-522,524,527-624,863-893,1018-1019,1049-1056
+apps/web/src/lib/api/auth.server.ts
+  s_1f3a9ec02d29ed::t_c5f951916dbe99 25,27,35,48,60,64-68,181-182,184,187,192,194-196,203-221,278-283,334-335,561-645
+apps/web/src/lib/api/shared.server.ts
+  s_1f3a9ec02d29ed::t_5c6145e89ed670 253-254,256,795-817
+apps/web/src/lib/api/two-step.key.db.test.ts
+  s_1f3a9ec02d29ed::t_f90591e1ee9d68 1-97
+apps/web/src/lib/api/two-step.off.db.test.ts
+  s_1f3a9ec02d29ed::t_43723e7c8a32ef 1-183
+apps/web/src/lib/auth-api.ts
+  s_1f3a9ec02d29ed::t_28ce32ad0c5031 14-20
+apps/web/src/lib/server-imports.test.ts
+  s_1f3a9ec02d29ed::t_0b9f9259425f4c 10,12-17
+apps/web/src/test/two-step-api.server.ts
+  s_1f3a9ec02d29ed::t_20fe4f349dc5e2 1-365
+compose.yaml
+  s_1f3a9ec02d29ed::t_a98d7938308940 135-137
+crates/hushos-core/fixtures/web-two-step.json
+  s_1f3a9ec02d29ed::t_c83b4ef22c6998 1-13
+docs/self-hosting.md
+  s_1f3a9ec02d29ed::t_6c037a41279ce4 425-426,482-495,2353
+docs/two-step-design.md
+  s_1f3a9ec02d29ed::t_930f4f21b39ea0 5-7,115-119,122,125-126,229,232-234,241,261-262,281-284,454-456,469,499-501,507,512-513,574-580,583-584,592-595,680-686
+packages/auth/src/bound-attempt.ts
+  s_1f3a9ec02d29ed::t_857e926d5466f1 6-8,15-21
+packages/auth/src/notice-when.ts
+  s_1f3a9ec02d29ed::t_75faa4815bd47a 1-12
+packages/auth/src/server-setup.ts
+  s_1f3a9ec02d29ed::t_201fe217f4406a 1-32
+packages/auth/src/server.notices.test.ts
+  s_1f3a9ec02d29ed::t_ad47cf16df40f4 17,54-64,78-86,102,129-190
+packages/auth/src/server.ts
+  s_1f3a9ec02d29ed::t_6a617530a51c0b 22-28,35,42-57,76-82,465,512-543,551-561,568,597,603,612-664,1673,1676-1677,1698,2054,2065-2077,2085,2090-2104,2124-2126,2228-2229,2270,2297-2306,2310-2624
+packages/auth/src/tokens.ts
+  s_1f3a9ec02d29ed::t_a6906cfe01f26c 18-26,28-36
+packages/auth/src/two-step.keys.test.ts
+  s_1f3a9ec02d29ed::t_c0d1514622ab89 1-172
+packages/auth/src/two-step.ts
+  s_1f3a9ec02d29ed::t_2d9e5be11de34b 1-614
+packages/crypto/package.json
+  s_1f3a9ec02d29ed::t_3b6d13e4aaa795 14-15,41-42
+packages/crypto/scripts/two-step-fixtures.ts
+  s_1f3a9ec02d29ed::t_924e281aea2020 1-49
+packages/crypto/src/recovery.ts
+  s_1f3a9ec02d29ed::t_2da30bbe6e3345 167-168,183-207
+packages/crypto/src/two-step-server.test.ts
+  s_1f3a9ec02d29ed::t_7b33437a86b55e 1-228
+packages/crypto/src/two-step-server.ts
+  s_1f3a9ec02d29ed::t_eb12960be1bb19 1-248
+packages/crypto/src/two-step.test.ts
+  s_1f3a9ec02d29ed::t_8ccc10f2e8ec29 1-144
+packages/crypto/src/two-step.ts
+  s_1f3a9ec02d29ed::t_17e1a77cecc4dd 1-85
+packages/db/src/auth.devices.test.ts
+  s_1f3a9ec02d29ed::t_d399a601878cc1 130-131
+packages/db/src/auth.ts
+  s_1f3a9ec02d29ed::t_ecf0763d89ea03 23-31,317-340,345-349,359,392-393,395-413,417,430,432-433,452-483,523,535-608,1044-1048,1315-1326,1328-1332,1334-1336,1338-1345,1351-1352,1355,1377,1385-1391,1394-1399,1426-1442
+packages/db/src/two-step.test.ts
+  s_1f3a9ec02d29ed::t_4b36073f063740 2-3,5-12,18,27,93-96,98-99,302,305-313,1416,1423-1425,1427,1633,1636,1638-1641,1644,1646-1680,1684-1686,1688-1713,1716-1748,1753-1768,2056,2089,2162,2164-2171,2174,2179,2184-2797
+packages/db/src/two-step.ts
+  s_1f3a9ec02d29ed::t_519bc66e4d98b9 2,28-31,49-52,54-55,284-285,325-330,732-735,738-741,743,751-756,793-802,813,816-817,846,854-898,911-912,917,924-925,941-956,1005-1008,1013,1059,1070-1088,1090,1095,1098-1185,1187-1188
+packages/db/test/two-step.ts
+  s_1f3a9ec02d29ed::t_eb79b748314b67 1-63
+packages/emails/scripts/render.tsx
+  s_1f3a9ec02d29ed::t_e9ca6c98151875 109-112,117,127-144,153,164-165,169-172
+packages/emails/src/rendered/security-notice.ts
+  s_1f3a9ec02d29ed::t_089e75d7e5e32c 4-5,18-57
+packages/emails/src/service.ts
+  s_1f3a9ec02d29ed::t_147580329f580c 246-258,261-262,265-296,299-302,306
+packages/emails/src/templates/security-notice.tsx
+  s_1f3a9ec02d29ed::t_4825cc9618aba5 18-27,36-46,61-69,77,105-197,204,212-213,220-221,358
+packages/env/package.json
+  s_1f3a9ec02d29ed::t_bf35a8ffc95e42 18-19
+packages/env/src/server.ts
+  s_1f3a9ec02d29ed::t_90743a33f6050f 7,12-21
+packages/env/src/two-step.test.ts
+  s_1f3a9ec02d29ed::t_01ca123bb872b9 1-57
+packages/env/src/two-step.ts
+  s_1f3a9ec02d29ed::t_f15d444e91c676 1-33
+packages/logging/src/privacy.ts
+  s_1f3a9ec02d29ed::t_c24cc01d7f7329 94,124-130,236-237,241-243
+turbo.json
+  s_1f3a9ec02d29ed::t_cee877a727ba10 56-58,131-133
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "637629d7f8e047e317f83eeb794236167a0a00f1",
+  "prompts": {},
+  "sessions": {
+    "s_1f3a9ec02d29ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aef80487-cabb-455f-b2f1-acb7f8d96c4e",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
