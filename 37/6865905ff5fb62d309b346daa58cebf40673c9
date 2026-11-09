@@ -1,0 +1,43 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_83f0e20748f990 338,807-811,828,893
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_566b8e0c4467a4::t_d5d7eb8d5db962 868-1012,1667,1671-1673,2010-2013,2015-2016,2024,2027-2029,2102-2103,2121,2131,2186-2188,2236-2253
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_531b21b4971640 1784-1785,1789-1796,1920-1923,1936,1939,1941-1943
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamiliesModel.kt
+  s_566b8e0c4467a4::t_3f5c8f2df6f358 838-851
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ItemActions.kt
+  s_566b8e0c4467a4::t_b22e9c98fb1dd7 410,414-419,426-433,435-438,440,445-446,448-450,453-456,462,464,485,496-499,517-521,523
+apps/android/app/src/test/kotlin/com/hushos/app/data/FakeDrive.kt
+  s_566b8e0c4467a4::t_bf28e21a73fa9a 136-143,774-785,809-815,832
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyWritesTest.kt
+  s_566b8e0c4467a4::t_97cc6ed320fa91 304-363
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_1b80b88b148af4 680-684,686
+apps/ios/App/ActionSheets.swift
+  s_566b8e0c4467a4::t_01ea39e1cc3a11 25-28,44-70,72-73,76-90,105,107,167,187-189,192-196,207-208
+apps/ios/App/DriveStore.swift
+  s_566b8e0c4467a4::t_4f9e92ccb19b46 1119-1123,1133-1134,1137-1145,1624-1627,1637-1641,1651-1655
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Writes.swift
+  s_566b8e0c4467a4::t_7a1a7255e71a5b 168-170,172-223,227-231,233-273,275-281,283-327,334,637-638,724,729-732,797-801,816-817,822,826,860-872
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilySyncTests.swift
+  s_566b8e0c4467a4::t_52e37a906e0df1 1253-1257,1596-1612,1636-1643,1651
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyWriteTests.swift
+  s_566b8e0c4467a4::t_4b89ead713f0f7 1248-1252,1254,1279-1282,1307-1385
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "376865905ff5fb62d309b346daa58cebf40673c9",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
