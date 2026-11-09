@@ -1250,6 +1250,11 @@ final class FamilyServer: @unchecked Sendable {
     /* Upload begins answered 409 `rotating` (a key change the server knows of), then 409 `stale`, before one is taken. */
     var rotatingBegins = 0
     var staleBegins = 0
+    /*
+     * A move's source changed on another device right after its begin was taken (a new version): its
+     * completion is then `stale`, as packages/db `moveStillHolds` answers it, and the source stays.
+     */
+    var moveSourceChangesAfterBegin = false
     /* What the phone sent: each upload begin's body, by upload id, and each part it PUT, by upload and part. */
     private(set) var begins: [(id: String, body: [String: Any])] = []
     private(set) var parts: [String: [Int: Data]] = [:]
@@ -1588,6 +1593,23 @@ final class FamilyServer: @unchecked Sendable {
                     return (409, ["code": "stale", "message": "This item changed since you last saw it. Refresh and try again."])
                 }
                 if !beginAnswers.isEmpty { return beginAnswers.removeFirst() }
+                // A move's source as packages/db `moveSourceAtBegin` holds it: another workspace's file, live, at the version read.
+                if let move = sent["moveOf"] as? [String: Any] {
+                    guard let source = tree[move["nodeId"] as? String ?? ""], source.workspaceId == move["workspaceId"] as? String,
+                          source.workspaceId != sent["workspaceId"] as? String, !source.isFolder else {
+                        return (404, ["code": "not-found", "message": "This item no longer exists."])
+                    }
+                    if underTrash(source.id) || source.currentVersion?.id != move["versionId"] as? String {
+                        return (409, ["code": "stale", "message": "This item changed since you last saw it. Refresh and try again."])
+                    }
+                    if moveSourceChangesAfterBegin, let version = source.currentVersion {
+                        tree[source.id] = source.with(version: .some(VersionView(id: UUID().uuidString.lowercased(), objectId: version.objectId,
+                                                                                 contentKeyEnvelope: version.contentKeyEnvelope, status: "ready",
+                                                                                 contentSuite: version.contentSuite, chunkCount: version.chunkCount,
+                                                                                 contentNonce: version.contentNonce, plaintextSize: nil,
+                                                                                 ciphertextSize: version.ciphertextSize, readyAt: version.readyAt)))
+                    }
+                }
                 let id = UUID().uuidString.lowercased()
                 begins.append((id, sent))
                 let count = (sent["chunkCount"] as? NSNumber)?.intValue ?? 1
@@ -1611,6 +1633,14 @@ final class FamilyServer: @unchecked Sendable {
                     moved = tree[node["parentId"] as? String ?? ""]?.keyEpoch != (node["parentKeyEpoch"] as? NSNumber)?.uint64Value
                 }
                 if moved { return (409, ["code": "conflict", "message": "This file changed while it was uploading.", "data": ["conflicted": true]]) }
+                // A move deletes its source in the completion's transaction, or keeps it and releases the copy (packages/db finishCompleting).
+                let move = begun["moveOf"] as? [String: Any]
+                if let move {
+                    let source = tree[move["nodeId"] as? String ?? ""]
+                    if source == nil || source?.currentVersion?.id != move["versionId"] as? String || underTrash(source!.id) {
+                        return (409, ["code": "stale", "message": "This file changed while it was being moved, so it stayed where it was. Nothing was copied."])
+                    }
+                }
                 let version = VersionView(id: begun["versionId"] as? String ?? "", objectId: begun["objectId"] as? String ?? "",
                                           contentKeyEnvelope: begun["contentKeyEnvelope"] as? String ?? "", status: "ready",
                                           contentSuite: UInt32((begun["contentSuite"] as? NSNumber)?.intValue ?? 3), chunkCount: (begun["chunkCount"] as? NSNumber)?.intValue ?? 1,
@@ -1618,6 +1648,7 @@ final class FamilyServer: @unchecked Sendable {
                                           readyAt: "2026-10-19T10:00:00.000Z")
                 var landed = existing ? tree[id]!.with(version: version) : made(node, workspaceId: begun["workspaceId"] as? String ?? "", kind: "file", version: version)
                 tree[landed.id] = landed
+                if let source = move?["nodeId"] as? String { tree[source] = nil }
                 completed.insert(rest[1])
                 if loseCompletions > 0 {
                     loseCompletions -= 1

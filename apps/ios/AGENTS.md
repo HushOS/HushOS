@@ -677,9 +677,13 @@ Plan: `docs/groups-mobile-plan.md` (groups 1d). The web's counterparts are named
 - FamilySync registers itself as the vault's weak `familyJudge` on every sync.
 - Share, links, report, keep, versions and `rotate` still call `refuseFamilyWrite` (`FamilyWriteError.unavailable`, "This isn’t available in family folders.").
 - Any other write that meets a key change says "HushOS is finishing a key change for this folder. Try again in a moment." (`FamilyWords.core`).
-- Moves and pastes across spaces (`Vault.relocate`, `movesAcross`) upload again under the destination's keys and trash the original.
+- A move between one's own files and a family folder (either way: `Vault.relocate`, `movesAcross`) is the web's `lib/move-across.ts`.
+    - Each file is downloaded at the version read and uploaded under the destination's keys with `moveOf` on begin.
+    - The server deletes the source in the transaction that completes the upload. Nothing goes to the Trash; a source that changed fails `stale` and stays (`Vault.movedMeanwhile`).
+    - A folder is made at the destination, its files moved one by one, and the source folder goes to the Trash once it holds only folders. Never purged.
+- Into or out of someone's share nothing moves across drives (`Vault.mayMove`, `shareMoveRefused`): the server refuses `moveOf` there, so Copy is the route. Within one share a move is a plain move.
 - The server's in-workspace move and copy are used only within one workspace.
-- The move picker reaches writable family folders from Files' top level, and Files from a family folder.
+- The move picker reaches writable family folders from Files' top level, and Files from a family folder. It offers a share only to items already in it, and never leaves a share for Files.
 
 ### Family uploads
 

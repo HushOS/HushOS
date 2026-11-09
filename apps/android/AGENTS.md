@@ -335,7 +335,7 @@ Design: `docs/devices-design.md` 5; as built: `docs/push-relay-plan.md`, PR 4.
 - The UI lives in `ui/LinksUi.kt`: share sheet with People and Links, link browser, report dialog, contacts sheet, phrase grid.
 - Shared folders open through `BrowseScreen(start = root)`.
     - So they get search, select, the paste bar and the add button, in the granter's workspace.
-    - Pasting across drives re-uploads (`copyAcross`).
+    - Pasting a copy across drives re-uploads (`copyAcross`). A cut never moves into or out of a share across drives (`Vault.mayMove`, `SHARE_MOVE_REFUSED`): the server refuses `moveOf` there, so Copy is the route.
 
 ### Rotation on revoke
 
@@ -804,7 +804,11 @@ Plan: `docs/groups-mobile-plan.md` ("Android 1 to 6"). The Android code is the t
 
 ### Writes in family folders
 
-- Family folders allow a new folder, an upload, a rename, a move within the folder, Move to Trash and its Undo (back in place only), and a new version (an upload's Replace).
+- Family folders allow a new folder, an upload, a rename, a move within the folder, a move to or from one's own files, Move to Trash and its Undo (back in place only), and a new version (an upload's Replace).
+- A move between one's own files and a family folder, either way, is `Vault.moveAcross` (the web's `lib/move-across.ts`):
+    - each file is downloaded at the version read and uploaded under the destination's keys with `moveOf` on begin (`MoveOf`, signed as a copy by `movePrior`);
+    - the server deletes the source in the transaction that completes the upload. Nothing goes to the Trash; a source that changed fails `stale` and stays (`movedMeanwhile`);
+    - a folder is made at the destination (`createFolder(moving = true)`), its files moved one by one, and the source folder goes to the Trash once the server lists only folders in it. Never purged.
 - Each Vault write runs in `writing {}` (`writingSuspend` for the batches).
 - It decides at its entry, per workspace, whether it writes as a family's (`familyTarget`). `WriteIntent` records it. A family write needs:
     - the folder proven by route 25;
@@ -821,7 +825,7 @@ Plan: `docs/groups-mobile-plan.md` ("Android 1 to 6"). The Android code is the t
 - A write's answer is kept as the ledger's row (`viaLedger`).
 - What family folders don't offer is refused by `refuseFamilyWrite` (`FamilyUnavailable`, iOS's words):
     - sharing, links, reports, keeping, versions;
-    - copies in or out, a walk;
+    - copies in or out (a move in or out is `moveAcross`), a walk;
     - a restore under the account's top folder.
 
 ### The final write gate
@@ -886,7 +890,7 @@ Plan: `docs/groups-mobile-plan.md` ("Android 1 to 6"). The Android code is the t
 - `ui/FamilyJoin.kt` (`InvitationSheet`, `JoinContent`) and `ui/FamilyCheck.kt` (`MemberCheckSheet`).
 - A family item is `Owner.EDIT` while `FamiliesModel.writable`: accepted, openable, `AreaWrite.WRITABLE`.
     - Its menu is Send a copy, Rename, Move, Info and Move to Trash.
-    - Move starts at the family's top folder, with no other places.
+    - Move starts at the family's top folder. All places lists Files and every writable family folder (`FamiliesModel.writableTops`); a share is offered only to items already in it, and items in a share never leave it.
     - No paste, Copy or Save a copy there.
 - Test: `FamilyWritesTest`.
 

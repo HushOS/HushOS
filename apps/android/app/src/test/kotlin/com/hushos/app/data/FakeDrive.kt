@@ -133,6 +133,14 @@ class FakeDrive : AutoCloseable {
     /* The node changes again (a write elsewhere): the feed has it after any cursor up to now. */
     fun touch(id: String) = synchronized(lock) { bump(node(id)) }
 
+    /*
+     * A move's source gets a new version on another device right after its begin is taken: its completion is then `stale`,
+     * as packages/db `moveStillHolds` answers it, and the source stays.
+     */
+    @Volatile var moveSourceChangesAfterBegin = false
+    /* Every upload begin's body, in order. */
+    val begins = ArrayList<JSONObject>()
+
     /* `id` goes to the Trash, as the server keeps it: its parent's listing leaves it out, the trash listing has it. */
     fun trash(id: String) = synchronized(lock) { node(id).trashedAt = "2026-10-30T00:00:00Z"; bump(node(id)) }
     /* `id` purged by another device: gone from the server, its feed included. */
@@ -763,6 +771,18 @@ class FakeDrive : AutoCloseable {
                     if (nodes[n.getString("id")]?.keyEpoch != n.getLong("keyEpoch"))
                         return 409 to JSONObject().put("code", "stale").put("message", "This item changed since you last saw it.")
                 }
+                // A move's source as packages/db `moveSourceAtBegin` holds it: another workspace's file, live, at the version read.
+                body.optJSONObject("moveOf")?.let { move ->
+                    val source = nodes[move.getString("nodeId")]
+                    if (source == null || source.workspaceId != move.getString("workspaceId") || source.workspaceId == body.getString("workspaceId") || source.kind != "file")
+                        return 404 to JSONObject().put("code", "not-found").put("message", "This item no longer exists.")
+                    if (source.trashedAt != null || above(source).any { it.trashedAt != null } || source.version?.id != move.getString("versionId"))
+                        return 409 to JSONObject().put("code", "stale").put("message", "This item changed since you last saw it. Refresh and try again.")
+                    if (moveSourceChangesAfterBegin) source.version = source.version!!.let { v ->
+                        Version(UUID.randomUUID().toString(), v.objectId, v.contentKeyEnvelope, v.suite, v.chunkCount, v.contentNonce, v.signer, v.signature)
+                    }
+                }
+                begins.add(JSONObject(body.toString()))
                 val id = UUID.randomUUID().toString()
                 uploads[id] = Upload(body.getString("workspaceId"), body)
                 val count = minOf(body.getLong("chunkCount"), 64L).toInt()
@@ -786,6 +806,13 @@ class FakeDrive : AutoCloseable {
                 val upload = uploads.remove(segments[2]) ?: return 404 to JSONObject().put("message", "This upload no longer exists.")
                 val b = upload.body
                 val n = b.getJSONObject("node")
+                // A move deletes its source in the completion's transaction, or keeps it and releases the copy (packages/db finishCompleting).
+                val move = b.optJSONObject("moveOf")
+                if (move != null) {
+                    val source = nodes[move.getString("nodeId")]
+                    if (source == null || source.version?.id != move.getString("versionId") || source.trashedAt != null || above(source).any { it.trashedAt != null })
+                        return 409 to JSONObject().put("code", "stale").put("message", "This file changed while it was being moved, so it stayed where it was. Nothing was copied.")
+                }
                 val listed = body.getJSONArray("parts")
                 val bytes = ByteArrayOutputStream()
                 for (i in 0 until listed.length()) bytes.write(upload.parts.getValue(listed.getJSONObject(i).getInt("partNumber")))
@@ -802,6 +829,7 @@ class FakeDrive : AutoCloseable {
                     n.getString("keyEnvelope"), 1L, n.getString("metadataEnvelope"), userId, n.getString("metadataSignature"), changeSeq = changeSeq++)
                 node.version = version
                 nodes[node.id] = node
+                move?.let { nodes.remove(it.getString("nodeId")) }
                 completedUploads[segments[2]] = node.id
                 ok(JSONObject().put("node", node.json()))
             }

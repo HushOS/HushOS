@@ -1245,11 +1245,13 @@ extension OnFakeDrive {
         /*
          * Within the family folder a move is one server move, the key re-wrapped by the ledger under
          * the destination's key. Into the member's own files it is uploaded again under their own
-         * keys (the bytes open there to the photo) and the original goes to the family folder's
-         * Trash: the server's in-workspace move and copy are never asked. Fails if a cross-space move
-         * calls either, or uploads anything but the photo.
+         * keys (the bytes open there to the photo), naming the photo at the version read (`moveOf`),
+         * and the server deletes the photo as the upload completes: nothing is trashed, and the row
+         * leaves this phone. Fails if a cross-space move calls the server's in-workspace move or copy,
+         * uploads anything but the photo, leaves `moveOf` out, or trashes the original (the move a
+         * copy and a trash used to be, which left both or neither when the trash failed).
          */
-        @Test func aMoveAcrossSpacesUploadsAgainAndNeverCallsTheServersMove() async throws {
+        @Test func aMoveAcrossSpacesIsOneUploadThatNamesItsSourceAndTrashesNothing() async throws {
             let family = try FamilyFixture()
             let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
             server.put(family.photo, family.docs)
@@ -1274,6 +1276,10 @@ extension OnFakeDrive {
             #expect(!server.requested("/api/drive/nodes/\(family.photo.id)/copy", method: "POST"))
             let begin = try #require(server.allBegins.last)
             #expect(begin.body["workspaceId"] as? String == family.personal)
+            let source = try #require(begin.body["moveOf"] as? [String: Any])
+            #expect(source["workspaceId"] as? String == family.workspaceId)
+            #expect(source["nodeId"] as? String == family.photo.id)
+            #expect(source["versionId"] as? String == family.photo.currentVersion?.id)
             let node = try #require(begin.body["node"] as? [String: Any])
             let nodeId = try #require(node["id"] as? String)
             let key = try nodeOpen(ctx: NodeKeyContext(workspaceId: family.personal, nodeId: nodeId, parentId: family.personalRoot.id, parentKeyEpoch: 1,
@@ -1298,7 +1304,85 @@ extension OnFakeDrive {
                 plaintext.append(try chunkDecrypt(content: content, index: UInt64(part - 1), ciphertext: sealed))
             }
             #expect(plaintext == family.photoBytes)
-            #expect(server.node(family.photo.id)?.trashedAt != nil)
+            // The server deleted the photo with the completion; nothing was sent to the Trash, and the row left this phone.
+            #expect(server.node(family.photo.id) == nil)
+            #expect(!server.writes.contains { $0.hasSuffix("/trash") || $0.hasSuffix("/trash-batch") })
+            #expect(await vault.item(NodeRef(workspaceId: family.workspaceId, nodeId: family.photo.id)) == nil)
+            #expect(await vault.item(NodeRef(workspaceId: family.personal, nodeId: nodeId)) != nil)
+        }
+
+        /*
+         * The photo gets a new version on another device after the move's begin: the server fails the
+         * completion `stale` and keeps the photo. The move says so in plain words and the photo stays
+         * where it was, live and untrashed, on the server and on this phone. Fails if a stale move is
+         * taken for done (the row dropped here), or if the phone trashes or deletes the source itself.
+         */
+        @Test func aMoveWhoseSourceChangedMeanwhileKeepsTheSourceAndSaysSo() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            server.put(family.photo)
+            server.objects[try #require(family.photo.currentVersion).id] = family.photoObject
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            let vault = phone.vault
+            _ = try await vault.children(of: family.rootId)
+            server.moveSourceChangesAfterBegin = true
+            server.clearRequests()
+
+            do {
+                _ = try await vault.relocate(family.photo.id, to: family.personalRoot.id)
+                Issue.record("a move whose source changed was taken for done")
+            } catch {
+                #expect(error.localizedDescription == Vault.movedMeanwhile("Beach.jpg"))
+            }
+            let kept = try #require(server.node(family.photo.id))
+            #expect(kept.trashedAt == nil)
+            #expect(!server.writes.contains { $0.hasSuffix("/trash") || $0.hasSuffix("/trash-batch") })
+            #expect(await vault.item(NodeRef(workspaceId: family.workspaceId, nodeId: family.photo.id)) != nil)
+        }
+
+        /*
+         * A family folder moved into the member's own files: the folder is made there, its file moved
+         * with `moveOf`, and the source folder, left holding nothing, goes to the Trash (never deleted
+         * for good). When its file's move fails `stale`, the source folder stays with the file in it.
+         * Fails if a folder is trashed while it still holds a file that didn't move, if the file is
+         * trashed rather than moved, or if the folder is purged.
+         */
+        @Test(arguments: [false, true]) func aFolderMovedAcrossGoesToTheTrashOnlyOnceEveryFileInItMoved(changed: Bool) async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            // The photo inside Docs, its key wrapped under Docs'.
+            let wrapped = try nodeWrap(ctx: NodeKeyContext(workspaceId: family.workspaceId, nodeId: family.photo.id, parentId: family.docs.id, parentKeyEpoch: 2, keyEpoch: 3),
+                                       parentKey: family.docsKey, nodeKey: family.photoKey)
+            let photo = family.photo.with(parentId: .some(family.docs.id), parentKeyEpoch: 2, keyEnvelope: base64urlEncode(bytes: wrapped))
+            server.put(family.docs, photo)
+            server.objects[try #require(family.photo.currentVersion).id] = family.photoObject
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            let vault = phone.vault
+            _ = try await vault.children(of: family.rootId)
+            _ = try await vault.children(of: family.docs.id, in: family.workspaceId)
+            server.moveSourceChangesAfterBegin = changed
+            server.clearRequests()
+
+            let moved = try? await vault.relocate(family.docs.id, to: family.personalRoot.id)
+            #expect((moved != nil) == !changed)
+            let made = try #require(server.sent("/api/drive/folders").first?["folders"] as? [[String: Any]])
+            #expect(made.count == 1)
+            let begin = try #require(server.allBegins.last)
+            #expect((begin.body["moveOf"] as? [String: Any])?["nodeId"] as? String == family.photo.id)
+            #expect(!server.requested("/api/drive/nodes/\(family.photo.id)/trash", method: "POST"))
+            #expect(!server.writes.contains { $0.contains("/purge") || $0.contains("/empty") })
+            if changed {
+                #expect(server.node(family.photo.id)?.parentId == family.docs.id)
+                #expect(server.node(family.docs.id)?.trashedAt == nil)
+                #expect(!server.requested("/api/drive/nodes/\(family.docs.id)/trash", method: "POST"))
+            } else {
+                #expect(server.node(family.photo.id) == nil)
+                #expect(server.node(family.docs.id)?.trashedAt != nil)
+            }
         }
     }
 }

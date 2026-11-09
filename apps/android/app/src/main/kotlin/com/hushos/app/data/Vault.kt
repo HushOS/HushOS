@@ -865,6 +865,151 @@ class Vault(internal val context: Context, val api: DriveApi) {
         }
     }
 
+    /* This person's own files, or a family folder of theirs: the places a move may cross between. Never a share. */
+    private fun ownPlace(workspaceId: String): Boolean = isFamilyWorkspace(workspaceId) || workspaceId.equals(this.workspaceId, ignoreCase = true)
+
+    /*
+     * Whether Move may take `id` under `parentId`: within one drive always; across drives only between this person's own
+     * files and their family's folders. Into or out of someone's share it is a Copy (the server refuses `moveOf` there).
+     */
+    fun mayMove(id: String, parentId: String, workspaceId: String? = null): Boolean {
+        val item = workspaceId?.let { item(it, id) } ?: resolve(id)
+        val parent = resolve(parentId)
+        if (item.node.workspaceId.equals(parent.node.workspaceId, ignoreCase = true)) return true
+        return ownPlace(item.node.workspaceId) && ownPlace(parent.node.workspaceId)
+    }
+
+    /*
+     * A move between this person's own files and their family's folders, either way (the web's lib/move-across.ts). Each is
+     * a workspace with keys of its own, so the server can't re-parent across them: each file is read here at its current
+     * version and uploaded under the destination's keys naming its source (`moveOf`), and the server deletes the source in
+     * the transaction that completes the upload, or fails it `stale` and keeps it. Never both, never neither, and nothing
+     * goes to the Trash. A folder is made at the destination, its files moved one by one, and the source folder goes to the
+     * Trash once it holds only folders (never purged). Into or out of someone's share nothing moves. Older versions stay
+     * behind and are deleted with the source (docs/families-shared-pool.md 3.8). Null for a file that landed but whose row
+     * doesn't open here.
+     */
+    fun moveAcross(id: String, parentId: String, workspaceId: String? = null, progress: (Float) -> Unit = {}): Opened? = writing {
+        val source = workspaceId?.let { item(it, id) } ?: resolve(id)
+        val parent = resolve(parentId)
+        if (source.node.workspaceId.equals(parent.node.workspaceId, ignoreCase = true)) throw ApiError(400, "Move it within one drive.")
+        if (!ownPlace(source.node.workspaceId) || !ownPlace(parent.node.workspaceId)) throw Refused(MOVE_REFUSED_TITLE, SHARE_MOVE_REFUSED)
+        // A family folder that may not be written now gives nothing up: checked before anything is read out of it.
+        familyTarget(source.node.workspaceId)
+        // Under a name free where it lands (the web's nextName): two "Trips" side by side can't be told apart.
+        val taken = listedNow(parent.id, parent.node.workspaceId).map { it.name.lowercase() }.toSet()
+        moveTree(source, parent.id, UploadNames.freeName(source.name, taken), progress)
+    }
+
+    /* A folder's children as the server lists them now, never the catalogue, which may not have what another device added. */
+    private fun listedNow(folderId: String, workspaceId: String): List<Opened> {
+        val rows = ArrayList<NodeView>()
+        var after: String? = null
+        do {
+            val page = api.children(folderId, workspaceId, after)
+            rows.addAll(page.children.filter { it.trashedAt == null && it.workspaceId.equals(workspaceId, ignoreCase = true) })
+            after = page.nextCursor
+        } while (after != null)
+        // Opened through the vault's own listing, which keeps every key along the way (and the ledger's rows in a family folder).
+        val opened = listChildren(folderId, workspaceId).associateBy { it.id }
+        return rows.map { row -> opened[row.id] ?: openAnywhere(row) ?: throw ApiError(500, "Node not opened") }
+    }
+
+    private fun moveTree(source: Opened, parentId: String, name: String, progress: (Float) -> Unit): Opened? {
+        val prior = movePrior(source)
+        if (source.isFolder) {
+            val made = createFolder(parentId, name, prior, source.metadata.attributes, moving = true)
+            // Every item is tried, as the web does: one that fails stays, with the folder, and the rest still move. Only no
+            // answer or a signed-out session stops the walk: every other item would fail the same way.
+            val failures = ArrayList<Exception>()
+            for (child in listedNow(source.id, source.node.workspaceId)) {
+                try {
+                    moveTree(child, made.id, child.name, progress)
+                } catch (error: Exception) {
+                    if (error is Unreachable || error is NotAuthenticated || error is java.io.IOException || error is SessionEnded) throw error
+                    error.rethrowIfCancelled()
+                    failures.add(error)
+                }
+            }
+            if (failures.size == 1) throw failures[0]
+            if (failures.isNotEmpty()) throw Refused(MOVE_REFUSED_TITLE, folderStayed(source.name, failures.size))
+            if (!onlyFolders(source)) throw Refused(MOVE_REFUSED_TITLE, folderStayed(source.name, 1))
+            // Everything moved: the emptied folder goes to the Trash. Refused now (no answer, a key change), it only stays empty
+            // where it was; the move itself happened, and is never reported as failed.
+            runCatching { trash(source.id) }
+            return made
+        }
+        // A file without a version has nothing to move; one whose version changes from here on fails the move `stale`.
+        val current = source.node.currentVersion ?: throw Refused(MOVE_REFUSED_TITLE, "“${source.name}” has no content yet, so it can’t move.")
+        val directory = File(context.cacheDir, "move-" + UUID.randomUUID())
+        try {
+            val file = File(directory, source.name)
+            // The bytes of the version named in `moveOf`, never a newer one a listing learned meanwhile.
+            download(source.id, file, expectedVersionId = current.id, workspaceId = source.node.workspaceId) { progress(it / 2f) }
+            val thumb = runCatching { thumbnail(source.id, source.node.workspaceId) }.getOrNull()
+            val from = MoveOf(source.node.workspaceId, source.id, current.id)
+            val moved = try {
+                upload(file, name, source.metadata.mime, parentId, null, thumb, prior, source.metadata.attributes, moveOf = from) { progress(0.5f + it / 2f) }
+            } catch (error: ApiError) {
+                // At begin or at completion: the source changed after it was read (a new version, trashed, moved), so it stays.
+                if (error.status == 409 && error.code == "stale") throw Refused(MOVE_REFUSED_TITLE, movedMeanwhile(source.name))
+                throw error
+            }
+            sourceMoved(source)
+            return moved
+        } catch (landed: Reservations.Landed) {
+            // Completed: the server deleted the source with it, whatever this process can open of the new row.
+            sourceMoved(source)
+            return null
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    /* The source a move's completion deleted: out of this phone's rows and its folder's listing at once. */
+    private fun sourceMoved(source: Opened) {
+        remove(source.node.workspaceId, source.id)
+        source.node.parentId?.let { catalogueChildren[it]?.remove(source.id) }
+        foldersChanged(listOf(source.node.parentId))
+    }
+
+    /*
+     * How a moved record is signed, as a copy is: out of a family folder as its member list judges it (a former member's file
+     * is re-sealed as the mover's), out of one's own files by the trust set. Without either, nothing moves.
+     */
+    private fun movePrior(source: Opened): Prior {
+        val ws = source.node.workspaceId
+        if (!isFamilyWorkspace(ws)) return Prior.of(source.node, trustForWrite())
+        val metadata = familyPrior(FamilySync.metadataRecord(source.node), ws)
+        val version = if (source.node.currentVersion != null) familyPrior(FamilySync.versionRecord(source.node), ws) else Integrity.UNCHECKED
+        return Prior(metadata, version)
+    }
+
+    /*
+     * Whether nothing is listed in a moved folder, at any depth, but folders: then it goes to the Trash. Only to the Trash:
+     * a listing leaves out what was trashed inside it, and someone may add a file between the look and the trash, so
+     * deleting it for good could take files nobody moved. Listed from the server, never the catalogue, which still holds
+     * what just moved.
+     */
+    private fun onlyFolders(folder: Opened): Boolean {
+        val ws = folder.node.workspaceId
+        val pending = ArrayDeque(listOf(folder.id))
+        while (pending.isNotEmpty()) {
+            val id = pending.removeFirst()
+            var after: String? = null
+            do {
+                val page = api.children(id, ws, after)
+                for (child in page.children) {
+                    if (child.trashedAt != null) continue
+                    if (!child.isFolder) return false
+                    pending.add(child.id)
+                }
+                after = page.nextCursor
+            } while (after != null)
+        }
+        return true
+    }
+
     /* Opens a node of this workspace by listing the folder it sits in, which opens the whole chain above. */
     private fun openAnywhere(node: NodeView): Opened? {
         nodes.row(node.workspaceId, node.id)?.let { return it }
@@ -1519,12 +1664,13 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * `copy`: set when the name comes from a record that existed before (a copy, a save from a link); see Prior.
      * `attributes`: a copied folder's source's, carried whole (keys this app doesn't know included); none for a new one.
      */
-    fun createFolder(parentId: String, name: String, copy: Prior? = null, attributes: Map<String, String> = emptyMap()): Opened = writing {
+    fun createFolder(parentId: String, name: String, copy: Prior? = null, attributes: Map<String, String> = emptyMap(), moving: Boolean = false): Opened = writing {
         // Shared folders belong to the granter's workspace; an editor writes there, and the id is minted there.
         val parent = resolve(parentId)
         val ws = parent.node.workspaceId
-        // A family folder takes a new folder through its ledger; a copy into one isn't offered.
-        val family = if (copy != null) { refuseFamilyWrite(ws); false } else familyTarget(ws)
+        // A family folder takes a new folder through its ledger, and a moved folder's copy (moveAcross); a plain copy into one
+        // isn't offered.
+        val family = if (copy != null && !moving) { refuseFamilyWrite(ws); false } else familyTarget(ws)
         if (!family) nodes.key(parent) ?: throw ApiError(500, "Open the containing folder first.")
         val epoch = api.allocateEpoch(ws)
         val made = IdField.NODE.mint(ws)
@@ -1861,9 +2007,13 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * Every reservation goes through Reservations: on record from `begin` until definitely settled. `job`: the queued
      * job this upload runs in ("" outside one); it never reserves while an older record of that job is unsettled.
      */
+    /*
+     * `moveOf`: the file this upload moves here from another of this person's workspaces (their own files, their family's
+     * folders), which the server deletes in the transaction that completes the upload (see moveAcross).
+     */
     fun upload(file: File, name: String, mime: String?, parentId: String, replacing: Opened?, thumbnail: ByteArray? = null, copy: Prior? = null,
-               attributes: Map<String, String> = emptyMap(), job: String = "", progress: (Float) -> Unit = {}): Opened = writing {
-        uploadInside(file, name, mime, parentId, replacing, thumbnail, copy, attributes, job, progress)
+               attributes: Map<String, String> = emptyMap(), job: String = "", moveOf: MoveOf? = null, progress: (Float) -> Unit = {}): Opened = writing {
+        uploadInside(file, name, mime, parentId, replacing, thumbnail, copy, attributes, job, moveOf, progress)
     }
 
     /* An abort of this vault's reservation, applied to the ledger: its record goes only when the answer settled it (true). */
@@ -1871,11 +2021,12 @@ class Vault(internal val context: Context, val api: DriveApi) {
         Reservations.aborted(context, uploadId, api.abortUpload(uploadId, workspaceId))
 
     private fun uploadInside(file: File, name: String, mime: String?, parentId: String, replacing: Opened?, thumbnail: ByteArray?, copy: Prior?,
-                             attributes: Map<String, String>, job: String, progress: (Float) -> Unit): Opened {
+                             attributes: Map<String, String>, job: String, moveOf: MoveOf?, progress: (Float) -> Unit): Opened {
         // The workspace written to: the replaced file's, or the folder's (a share's subtree is the granter's).
         val ws = replacing?.node?.workspaceId ?: resolve(parentId).node.workspaceId
-        // A family folder takes a file or a new version through its ledger; a copy into one isn't offered.
-        val family = if (copy != null) { refuseFamilyWrite(ws); false } else familyTarget(ws)
+        // A family folder takes a file or a new version through its ledger, and a move's copy (moveAcross); a plain copy into
+        // one isn't offered.
+        val family = if (copy != null && moveOf == null) { refuseFamilyWrite(ws); false } else familyTarget(ws)
         // A new version carries the old name over into metadata signed again: checked before any byte goes up, so an
         // unverified name is re-sealed rather than vouched for, and nothing is uploaded when the check can't run. In a
         // family folder as its member list judges it.
@@ -1948,6 +2099,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
             .put("contentKeyEnvelope", base64urlEncode(version.envelope)).put("contentNonce", base64urlEncode(contentNonce))
             .put("versionSignature", versionSignature)
             .put("contentSuite", suite.toInt()).put("chunkCount", layout.chunkCount.toLong()).put("ciphertextSize", layout.ciphertextSize.toString())
+            // A move: the server deletes the source when this completes, in the same transaction (packages/db moveSourceAtBegin).
+            .also { body -> moveOf?.let { body.put("moveOf", JSONObject().put("workspaceId", it.workspaceId).put("nodeId", it.nodeId).put("versionId", it.versionId)) } }
             .also { sendingIntoFamily(ws) })
         } catch (error: Exception) {
             madeKey?.let { areaLedger.forgetNodeKey(ws, it) }
@@ -1965,7 +2118,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
         }
         try {
             return uploadReserved(file, mime, ws, nodeId, nodeKey, metadata, replacing, keptName, madeKey, begun, layout, content, thumbnail, thumbnailBytes, size, modified,
-                family, job, progress)
+                family, job, moveOf != null, progress)
         } finally {
             Reservations.idle(begun.uploadId)
         }
@@ -1975,7 +2128,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
     private fun uploadReserved(file: File, mime: String?, ws: String, nodeId: String, nodeKey: ByteArray, metadata: NodeMetadata, replacing: Opened?,
                                keptName: Integrity?, madeKey: String?, begun: UploadBegun, layout: com.hushos.core.ContentLayout, content: Content,
                                thumbnail: ByteArray?, thumbnailBytes: UInt, size: ULong, modified: String, family: Boolean, job: String,
-                               progress: (Float) -> Unit): Opened {
+                               moved: Boolean, progress: (Float) -> Unit): Opened {
         val urls = HashMap<Int, String>()
         for (part in begun.parts) urls[part.partNumber] = part.url
         val etags = JSONArray()
@@ -2030,7 +2183,9 @@ class Vault(internal val context: Context, val api: DriveApi) {
         // Completed: the reservation became the file (a queued job's record its landed row). From here nothing sends the
         // file again: in a queued job, whatever fails after this point is Landed, never a reason to upload it again.
         Reservations.completed(context, begun.uploadId)
-        if (job.isEmpty()) return finishLanded(node, ws, nodeId, nodeKey, metadata, replacing, keptName, mime, size, modified)
+        // A move's completion deleted its source with it: whatever fails after it (its row not kept, the family let go of
+        // meanwhile) is a move that happened, never one to report as failed.
+        if (job.isEmpty() && !moved) return finishLanded(node, ws, nodeId, nodeKey, metadata, replacing, keptName, mime, size, modified)
         try {
             return finishLanded(node, ws, nodeId, nodeKey, metadata, replacing, keptName, mime, size, modified)
         } catch (error: Exception) {
@@ -2077,6 +2232,24 @@ class Vault(internal val context: Context, val api: DriveApi) {
         return adoptWritten(node, nodeKey, final, ws, nodeId).also { foldersChanged(listOf(it.node.parentId)) }
     }
 }
+
+/*
+ * A file a move upload names in another of this person's workspaces (begin's `moveOf`): the server deletes it in the
+ * transaction that completes the upload, at the version read, or fails the move `stale` and keeps it.
+ */
+data class MoveOf(val workspaceId: String, val nodeId: String, val versionId: String)
+
+/* What a move that didn't happen is titled, and why it didn't when it would cross into or out of someone's share. */
+const val MOVE_REFUSED_TITLE = "Nothing was moved"
+const val SHARE_MOVE_REFUSED = "Items can’t move into or out of a folder shared with you. Copy them instead."
+
+/* Said when the server failed a move `stale`: the file changed after it was read, and stayed where it was. */
+fun movedMeanwhile(name: String) = "“$name” changed while it was being moved, so it stayed where it was."
+
+/* Said when a moved folder stayed because something in it didn't move (a file that failed, or one added meanwhile). */
+fun folderStayed(name: String, count: Int) =
+    if (count == 1) "One item in “$name” didn’t move, so the folder stayed where it was with it."
+    else "$count items in “$name” didn’t move, so the folder stayed where it was with them."
 
 /* A download whose session ended while it ran: nothing more of it is written. */
 class SessionEnded : java.io.IOException("You signed out.")

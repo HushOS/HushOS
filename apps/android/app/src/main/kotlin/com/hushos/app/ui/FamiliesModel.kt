@@ -835,6 +835,20 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
 
     fun writable(item: Opened): Boolean = isFamilyItem(item) && writable(item.node.workspaceId)
 
+    /* Whether `workspaceId` is a family folder this session knows of: a place a move may cross to from one's own files. */
+    fun isFamilyWorkspace(workspaceId: String): Boolean =
+        folders.groupOfWorkspace(workspaceId) != null || model.currentVault?.familyAreas?.containsKey(workspaceId.lowercase()) == true
+
+    /*
+     * The family folders this device may write in, each top folder with its family's name: the move picker's places beside
+     * Files (iOS's writableFamilyRoots). A folder whose top didn't open here is left out: nothing could be moved into it.
+     */
+    fun familyNameOf(workspaceId: String): String? = folders.groupOfWorkspace(workspaceId)?.let(::name)
+
+    fun writableTops(): List<Pair<Opened, String>> = shown.flatMap { (groupId, view) ->
+        view.areas.filter { writable(it.workspaceId) }.mapNotNull { area -> topFolder(area.workspaceId)?.let { it to name(groupId) } }
+    }.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.first.name })
+
     /* A family folder's top folder, as the family page opened it (the move picker starts there): null when it didn't open. */
     fun topFolder(workspaceId: String): Opened? {
         val groupId = folders.groupOfWorkspace(workspaceId) ?: return null

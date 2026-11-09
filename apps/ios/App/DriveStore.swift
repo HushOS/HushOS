@@ -1116,6 +1116,11 @@ final class DriveStore {
         let items = clip.items.filter { $0.node.parentId != folder }
         for item in items {
             let across = (try? await vault.movesAcross(item.id, to: folder)) ?? false
+            // A cut into or out of someone's share is refused before anything is read: Copy is the route there.
+            if cut, across, !((try? await vault.mayMove(item.id, to: folder)) ?? true) {
+                notify(Vault.shareMoveRefused)
+                continue
+            }
             if cut && !across {
                 await move(item, to: folder)
             } else {
@@ -1125,12 +1130,19 @@ final class DriveStore {
                     let ok = await perform(in: folder, failed: { why = $0 }) { _ = try await vault.copy(item.id, to: folder) }
                     finish(ticket, failed: !ok, message: why)
                 } else if cut {
-                    // Across spaces (a family folder, someone's share, one's own files) the object is fetched and uploaded again,
-                    // then the original goes to the Trash; the server moves and copies within one workspace only.
+                    // Between one's own files and a family folder: uploaded under the destination's keys, the server deleting the
+                    // original as it lands (`Vault.relocate`). Into or out of someone's share the server moves nothing across drives.
                     let ok = await perform(in: folder, failed: { why = $0 }) { _ = try await vault.relocate(item.id, to: folder) { fraction in Task { @MainActor in self.progress(ticket, fraction) } } }
                     finish(ticket, failed: !ok, message: why)
-                    recents.removeAll { $0.id == item.id }
-                    latest.removeAll { $0.id == item.id }
+                    if ok {
+                        recents.removeAll { $0.id == item.id }
+                        latest.removeAll { $0.id == item.id }
+                    }
+                    // Refreshed even after a failure: a folder that stopped partway left some of its files at the destination.
+                    if let from = item.node.parentId {
+                        await refresh(folder: from)
+                        signalFiles(folder: from)
+                    }
                 } else {
                     // Signed by what the original verified as: someone's share is vouched for only from a checked contact, a family
                     // folder's file only as its member list judges it.
@@ -1609,9 +1621,10 @@ final class DriveStore {
 
     /*
      * Move, from the folder picker: within one drive the item is re-parented (one key rewrapped);
-     * into or out of someone else's folder it is copied across and the original goes to the Trash,
-     * which is what Cut and Paste did before Move replaced them. Says where things went, with Undo
-     * when every move stayed inside one drive.
+     * between one's own files and a family folder each file is uploaded under the destination's
+     * keys and the server deletes the original as it lands (`Vault.relocate`), so nothing goes to the
+     * Trash. Into or out of someone's share nothing moves across drives (the picker doesn't offer it).
+     * Says where things went, with Undo when every move stayed inside one drive.
      */
     func move(_ items: [Opened], to folder: String, named folderName: String) async {
         var moved: [Opened] = []
@@ -1621,7 +1634,11 @@ final class DriveStore {
                 let ok = await perform(in: item.node.parentId) { _ = try await vault.move(item.id, to: folder) }
                 if ok { moved.append(item) }
             } else {
-                // Across spaces (a family folder and one's own files, either way, or someone's share): uploaded again, original trashed.
+                // Between one's own files and a family folder, either way: one server step per file (`moveOf`).
+                guard (try? await vault.mayMove(item.id, to: folder)) ?? true else {
+                    notify(Vault.shareMoveRefused)
+                    continue
+                }
                 across = true
                 let ticket = begin(.copy, item.name)
                 var why: String?
@@ -1631,7 +1648,11 @@ final class DriveStore {
                     moved.append(item)
                     recents.removeAll { $0.id == item.id }
                     latest.removeAll { $0.id == item.id }
-                    if let from = item.node.parentId { await refresh(folder: from) }
+                }
+                // Refreshed even after a failure: a folder that stopped partway left some of its files at the destination.
+                if let from = item.node.parentId {
+                    await refresh(folder: from)
+                    signalFiles(folder: from)
                 }
             }
         }
