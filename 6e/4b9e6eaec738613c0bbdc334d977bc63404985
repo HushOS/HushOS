@@ -1,0 +1,27 @@
+apps/android/app/src/test/kotlin/com/hushos/app/data/PushAskTest.kt
+  s_566b8e0c4467a4::t_f6710d75ea2fcf 17
+apps/ios/App/MainView.swift
+  s_566b8e0c4467a4::t_d93c9545cd37b0 221-222
+apps/ios/App/PhonePush.swift
+  s_566b8e0c4467a4::t_ededdf3f334ff7 184-186
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/PushAsk.swift
+  s_566b8e0c4467a4::t_2a4b35e91629aa 70
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/PushAskTests.swift
+  s_566b8e0c4467a4::t_932e53ed0c3426 8
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6e4b9e6eaec738613c0bbdc334d977bc63404985",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
