@@ -68,21 +68,6 @@ export const sections: RoadmapSection[] = [
                 links: [{ kind: 'blog', slug: 'notifications', label: 'How they stay private' }],
             },
             {
-                id: 'releases',
-                status: 'shipped',
-                month: 'November 2026',
-                area: 'Platform',
-                title: 'Numbered releases',
-                body: 'One version number for the whole of HushOS since 1.0.0, with release notes on GitHub and image tags to match, such as 1.4.1, 1.4 and 1, so a self-hosted server can follow releases instead of every change.',
-                links: [
-                    {
-                        kind: 'docs',
-                        path: 'docs/self-hosting.md',
-                        label: 'Pin a self-hosted server to a release',
-                    },
-                ],
-            },
-            {
                 id: 'browser-notifications',
                 status: 'shipped',
                 month: 'November 2026',
@@ -128,6 +113,21 @@ export const sections: RoadmapSection[] = [
                 title: 'Family plans',
                 body: 'One plan’s storage for up to 20 people, covering everyone’s own files and the family folders. Someone who manages the family lets each newcomer in, and anyone in it can check the others with twelve words. On the web and in the iPhone and Android apps.',
                 links: [{ kind: 'blog', slug: 'family-plans', label: 'Read the announcement' }],
+            },
+            {
+                id: 'releases',
+                status: 'shipped',
+                month: 'October 2026',
+                area: 'Platform',
+                title: 'Numbered releases',
+                body: 'One version number for the whole of HushOS since its first release, 0.9.0, with release notes on GitHub and image tags to match, such as 1.4.1, 1.4 and 1, so a self-hosted server can follow releases instead of every change.',
+                links: [
+                    {
+                        kind: 'docs',
+                        path: 'docs/self-hosting.md',
+                        label: 'Pin a self-hosted server to a release',
+                    },
+                ],
             },
             {
                 id: 'android-app',
