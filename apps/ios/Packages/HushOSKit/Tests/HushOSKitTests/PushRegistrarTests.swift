@@ -54,6 +54,7 @@ final class PushMemory: @unchecked Sendable {
     var session: SharedKeychain.Session?
     var registration: PushRegistration?
     var pending: [PushPendingDeletion] = []
+    var contacts: PushContactNames?
 
     init(session: SharedKeychain.Session?, registration: PushRegistration? = nil) {
         self.session = session
@@ -69,7 +70,9 @@ final class PushMemory: @unchecked Sendable {
             write: { [self] next in lock.withLock { registration = next }; return true },
             delete: { [self] in lock.withLock { registration = nil } },
             pending: { [self] in lock.withLock { pending } },
-            setPending: { [self] list in lock.withLock { pending = list }; return true }
+            setPending: { [self] list in lock.withLock { pending = list }; return true },
+            contacts: { [self] in lock.withLock { contacts } },
+            setContacts: { [self] names in lock.withLock { contacts = names } }
         )
     }
 }
@@ -115,6 +118,8 @@ final class PushMemory: @unchecked Sendable {
                     return (put, put == 200 ? #"{"registered":true}"# : #"{"message":"No"}"#)
                 case ("DELETE", _) where url.hasPrefix(Self.relay + "/v1/register/"):
                     return (204, "")
+                case ("DELETE", Self.server + "/api/notifications/registration"):
+                    return (200, #"{"removed":true}"#)
                 default:
                     return (500, "{}")
                 }
@@ -127,6 +132,37 @@ final class PushMemory: @unchecked Sendable {
     func deletions() -> [String: String] {
         Dictionary(seen.filter { $0.method == "DELETE" }.map { ($0.url.replacingOccurrences(of: Self.relay + "/v1/register/", with: ""), $0.body["deleteSecret"] ?? "") },
                    uniquingKeysWith: { first, _ in first })
+    }
+
+    func names(_ session: SharedKeychain.Session) -> PushContactNames {
+        PushContactNames(origin: session.origin, userId: session.userId, names: ["u-jonas": "Jonas Berg"])
+    }
+
+    @Test func checkedNamesAreKeptOnlyWhileThisPhoneHasNotificationsOn() async throws {
+        let memory = PushMemory(session: maya, registration: previous())
+        answering(put: 200)
+        let registrar = registrar(memory)
+        registrar.remember(names(maya), session: maya)
+        #expect(memory.keep.contacts() == names(maya))
+        try await registrar.turnOff()
+        await registrar.drain()
+        #expect(memory.keep.contacts() == nil, "contacts' names outlived turning notifications off")
+        registrar.remember(names(maya), session: maya)
+        #expect(memory.keep.contacts() == nil, "names were written with notifications off")
+    }
+
+    @Test func aSettingsReadFinishingAfterASignOutWritesNoNamesBack() async throws {
+        let memory = PushMemory(session: maya, registration: previous())
+        answering(put: 200)
+        let registrar = registrar(memory)
+        registrar.remember(names(maya), session: maya)
+        registrar.forget()
+        memory.set { $0.session = nil }
+        #expect(memory.keep.contacts() == nil, "the wipe left contacts' names")
+        // A settings read that began before the sign-out lands now.
+        registrar.remember(names(maya), session: maya)
+        #expect(memory.keep.contacts() == nil, "contacts' names came back after the sign-out")
+        await registrar.drain()
     }
 
     @Test func aServerThatRefusesTheHandlePutsBackWhatWasKeptAndDeletesTheNewOne() async throws {

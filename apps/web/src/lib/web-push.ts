@@ -83,7 +83,17 @@ async function currentSubscription(sw: ServiceWorkerRegistration) {
     const held = existing?.options?.applicationServerKey;
     if (existing && (!held || sameBytes(held, key))) return existing;
     await existing?.unsubscribe();
-    return sw.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+    try {
+        return await sw.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+    } catch (error) {
+        // The browser's push service refused or doesn't exist (Chromium says "Registration failed -
+        // push service error"; browsers built without Google's services have none): say so plainly.
+        if (error instanceof DOMException && error.name === 'AbortError')
+            throw new Error(
+                'This browser has no push service, so it can’t show notifications while HushOS is closed.',
+            );
+        throw error;
+    }
 }
 
 async function register(subscription: PushSubscription) {

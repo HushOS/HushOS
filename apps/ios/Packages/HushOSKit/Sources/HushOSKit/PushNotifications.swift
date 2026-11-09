@@ -83,10 +83,7 @@ public struct PushContactNames: Codable, Sendable, Equatable {
 
     /* Kept for the session signed in, while this phone has notifications on for it; written only when it changed. */
     static func remember(_ pins: some Sequence<ContactPin>, session: SharedKeychain.Session) {
-        guard SharedKeychain.session == session, PushNotifications.registration?.belongs(to: session) == true else { return }
-        let next = of(pins, session: session)
-        guard SharedKeychain.read(account, as: PushContactNames.self) != next else { return }
-        try? SharedKeychain.write(account, next)
+        PushRegistrar.shared.remember(of(pins, session: session), session: session)
     }
 
     static func name(of userId: String, session: SharedKeychain.Session) -> String? {
@@ -106,6 +103,9 @@ public struct PushKeep: Sendable {
     public var delete: @Sendable () -> Void
     public var pending: @Sendable () -> [PushPendingDeletion]
     public var setPending: @Sendable ([PushPendingDeletion]) -> Bool
+    /* The checked contacts' names the extension reads (`PushContactNames`); nil deletes them. */
+    public var contacts: @Sendable () -> PushContactNames?
+    public var setContacts: @Sendable (PushContactNames?) -> Void
 
     static let registrationAccount = "push-registration"
     static let pendingAccount = "push-pending-deletions"
@@ -122,6 +122,10 @@ public struct PushKeep: Sendable {
                 return true
             }
             return (try? SharedKeychain.write(pendingAccount, list)) != nil
+        },
+        contacts: { SharedKeychain.read(PushContactNames.account, as: PushContactNames.self) },
+        setContacts: { names in
+            if let names { try? SharedKeychain.write(PushContactNames.account, names) } else { SharedKeychain.delete(PushContactNames.account) }
         }
     )
 }
@@ -342,6 +346,7 @@ final class PushRegistrar: @unchecked Sendable {
             let kept = lock.withLock { () -> PushRegistration? in
                 guard keep.session() == session, let kept = keep.read(), kept.belongs(to: session) else { return nil }
                 keep.delete()
+                keep.setContacts(nil)
                 return kept
             }
             if let kept { await retire(kept) }
@@ -359,9 +364,22 @@ final class PushRegistrar: @unchecked Sendable {
             let gone = lock.withLock { () -> Bool in
                 guard keep.session() == session, keep.read() == kept else { return false }
                 keep.delete()
+                keep.setContacts(nil)
                 return true
             }
             if gone { await retire(kept) }
+        }
+    }
+
+    /*
+     * The checked contacts' names for the extension: written under the same lock as the registration,
+     * only while this session is signed in with notifications on here, so no settings read finishing
+     * after a sign-out or a turn-off can write them back.
+     */
+    func remember(_ names: PushContactNames, session: SharedKeychain.Session) {
+        lock.withLock {
+            guard keep.session() == session, keep.read()?.belongs(to: session) == true, keep.contacts() != names else { return }
+            keep.setContacts(names)
         }
     }
 
@@ -371,6 +389,7 @@ final class PushRegistrar: @unchecked Sendable {
             generation &+= 1
             let kept = keep.read()
             keep.delete()
+            keep.setContacts(nil)
             if let kept { addPending(kept) }
             return kept
         }
