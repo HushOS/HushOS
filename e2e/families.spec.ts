@@ -15,6 +15,7 @@ import {
 import { SQL } from 'bun';
 import {
     e2eDatabase,
+    familyItem,
     hydrated,
     newContext,
     PASSWORD,
@@ -106,10 +107,10 @@ const fileRow = (page: Page, name: string) =>
     page.locator('[data-node-id]').filter({ has: page.getByText(name, { exact: true }) });
 const mark = (page: Page, name: string) => fileRow(page, name).locator('[data-integrity]');
 
-/* Family folders, under My files in the sidebar, then one of them, open and drawn. */
+/* The family's item, under My files in the sidebar, then one of its folders, open and drawn. */
 async function openFamilyFolder(who: Person, _family: string, folder: string) {
     await who.page.goto('/app/drive');
-    await who.page.getByRole('link', { name: 'Family folders', exact: true }).first().click();
+    await familyItem(who.page).click();
     await expect(who.page).toHaveURL(/\/app\/s\/[0-9a-f-]+$/);
     const row = who.page.locator(`[data-area="${folder}"]`);
     // Writable once the family is checked here, the folder's key opened and its top folder listed.
@@ -301,7 +302,7 @@ test.describe.serial('two people', () => {
             });
         }
         await expect(maya.page.getByRole('button', { name: 'Create a family' })).toHaveCount(0);
-        await expect(maya.page.locator('[data-family-header]')).toContainText(family);
+        await expect(familyItem(maya.page)).toContainText(family);
         await invite(maya, sam.email);
     });
 
@@ -577,7 +578,7 @@ test.describe.serial('two people', () => {
 
     test('a manager makes a second family folder, and the newcomer opens it and adds to it', async () => {
         test.setTimeout(240_000);
-        await maya.page.getByRole('link', { name: 'Family folders', exact: true }).first().click();
+        await familyItem(maya.page).click();
         await expect(maya.page).toHaveURL(/\/app\/s\/[0-9a-f-]+$/);
         await maya.page.getByRole('button', { name: 'New family folder' }).click();
         const dialog = maya.page.getByRole('dialog', { name: 'New family folder' });
@@ -593,7 +594,7 @@ test.describe.serial('two people', () => {
         // Sam doesn't manage the family: no button, but the folder is his to open and add to.
         await openFamilyFolder(sam, family, 'Photos');
         await upload(sam, 'beach.txt', 'Sand\n');
-        await sam.page.getByRole('link', { name: 'Family folders', exact: true }).last().click();
+        await familyItem(sam.page).click();
         await expect(sam.page).toHaveURL(/\/app\/s\/[0-9a-f-]+$/);
         await expect(sam.page.locator('[data-area="Photos"]')).toBeVisible({ timeout: 60_000 });
         await expect(sam.page.getByRole('button', { name: 'New family folder' })).toHaveCount(0);
@@ -778,10 +779,7 @@ test.describe.serial('removal, leaving and key changes', () => {
         test.setTimeout(480_000);
         await createFamily(maya, family);
         groupPath = new URL(maya.page.url()).pathname;
-        spacePath = (await maya.page
-            .getByRole('link', { name: 'Family folders', exact: true })
-            .first()
-            .getAttribute('href'))!;
+        spacePath = (await familyItem(maya.page).getAttribute('href'))!;
         for (const newcomer of [sam, ana]) {
             await invite(maya, newcomer.email);
             await accept(newcomer, family);
@@ -1392,7 +1390,7 @@ test.describe.serial('a member’s account changes', () => {
             });
         });
         // Opening the family and its folders still works: reads and Drive are served.
-        await maya.page.getByRole('link', { name: 'Family folders', exact: true }).first().click();
+        await familyItem(maya.page).click();
         await expect(maya.page).toHaveURL(/\/app\/s\/[0-9a-f-]+$/);
         await expect(maya.page.locator('[data-area="Family"]')).toBeVisible({ timeout: 90_000 });
         // A family change (a new family folder): refused, said plainly, and nothing made.
@@ -1667,11 +1665,8 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
         test.setTimeout(300_000);
         maya = await person(browser, 'Maya Ekström');
         await createFamily(maya, family);
-        // The family's id, from Family folders in the sidebar (its page is /app/family).
-        const folders = await maya.page
-            .getByRole('link', { name: 'Family folders', exact: true })
-            .first()
-            .getAttribute('href');
+        // The family's id, from its item in the sidebar (its page is /app/family).
+        const folders = await familyItem(maya.page).getAttribute('href');
         groupId = folders!.split('/').at(-1)!;
         await maya.page.route(
             (url) => url.pathname === `/api/billing/groups/${groupId}`,
@@ -2540,7 +2535,7 @@ test.describe.serial('Family in the sidebar', () => {
             .locator('[data-family-place]')
             .getByRole('link', { name: 'Family', exact: true });
         await expect(place).toBeVisible({ timeout: 60_000 });
-        await expect(nia.page.locator('[data-family-header]')).toHaveCount(0);
+        await expect(nia.page.locator('[data-family-item]')).toHaveCount(0);
         await place.click();
         await expect(nia.page).toHaveURL(/\/app\/family$/);
         await expect(
@@ -2549,17 +2544,21 @@ test.describe.serial('Family in the sidebar', () => {
 
         await createFamily(nia, family);
         await nia.page.goto('/app/drive');
-        const header = nia.page
-            .locator('[data-family-header]')
-            .getByRole('link', { name: family, exact: true });
-        await expect(header).toBeVisible({ timeout: 60_000 });
+        const item = familyItem(nia.page);
+        await expect(item).toHaveAccessibleName(family, { timeout: 60_000 });
         // One way to the family, never a second Family beside its name.
         await expect(nia.page.locator('[data-family-place]')).toHaveCount(0);
-        await header.click();
+        // It opens the family's folders, and stays the active place on the family's own page,
+        // which Family settings there leads to.
+        await item.click();
+        await expect(nia.page).toHaveURL(/\/app\/s\/[0-9a-f-]+$/);
+        await expect(item).toHaveAttribute('data-active', '');
+        await nia.page.getByRole('link', { name: 'Family settings', exact: true }).click();
         await expect(nia.page).toHaveURL(/\/app\/family$/);
         await expect(nia.page.getByRole('heading', { level: 1, name: family })).toBeVisible({
             timeout: 60_000,
         });
+        await expect(item).toHaveAttribute('data-active', '');
         await nia.page.context().close();
     });
 });
@@ -2878,7 +2877,7 @@ test.describe.serial('deleting a family folder', () => {
         await letThemIn(ida, leo, family);
 
         // A second folder, which Leo opens and adds to.
-        await ida.page.getByRole('link', { name: 'Family folders', exact: true }).first().click();
+        await familyItem(ida.page).click();
         await expect(ida.page).toHaveURL(/\/app\/s\/[0-9a-f-]+$/);
         const spacePath = new URL(ida.page.url()).pathname;
         await ida.page.getByRole('button', { name: 'New family folder' }).click();
@@ -3094,12 +3093,7 @@ test.describe.serial('moving between My files and a family folder', () => {
         // The family's plan goes live as billing writes it, until next month, with a pool of
         // 1 GB: her file fills it (each part counts in whole GB), so the move must go as one,
         // charged nothing. A copy charged in full would be refused for room.
-        const groupId = (await ada.page
-            .getByRole('link', { name: 'Family folders', exact: true })
-            .first()
-            .getAttribute('href'))!
-            .split('/')
-            .at(-1)!;
+        const groupId = (await familyItem(ada.page).getAttribute('href'))!.split('/').at(-1)!;
         const database = new SQL(e2eDatabase().url);
         try {
             await database`
@@ -3166,12 +3160,9 @@ async function sellsPlans(request: APIRequestContext) {
     return catalogue.enabled === true;
 }
 
-/* The family's id, from Family folders in the sidebar (its page is /app/family). */
+/* The family's id, from its item in the sidebar, which opens its folders (its page is /app/family). */
 async function familyIdOf(who: Person) {
-    const href = await who.page
-        .getByRole('link', { name: 'Family folders', exact: true })
-        .first()
-        .getAttribute('href');
+    const href = await familyItem(who.page).getAttribute('href');
     return href!.split('/').at(-1)!;
 }
 
@@ -3267,8 +3258,7 @@ test.describe.serial('one view for a family member, with one pool', () => {
         await expect(rosa.page.getByRole('link', { name: 'My files' }).first()).toBeVisible({
             timeout: 60_000,
         });
-        await expect(rosa.page.locator('[data-family-header]')).toHaveCount(0);
-        await expect(rosa.page.getByRole('link', { name: 'Family folders' })).toHaveCount(0);
+        await expect(rosa.page.locator('[data-family-item]')).toHaveCount(0);
         const meter = rosa.page.locator('[data-storage-meter="own"]');
         await expect(meter).toContainText(/ of .+ used/);
         // Not labelled: there is no family's storage it could be mistaken for.
@@ -3323,16 +3313,19 @@ test.describe.serial('one view for a family member, with one pool', () => {
         await expect.poll(async () => (await storageOf(rosa)).pool?.name).toBe(family);
         await rosa.page.goto('/app/drive');
         const meter = rosa.page.locator('[data-storage-meter="pool"]');
-        await expect(meter).toContainText(family, { timeout: 60_000 });
+        // Named the family's for assistive tech; the family item above shows the name.
+        const pool = meter.getByRole('progressbar', { name: `Storage used, ${family}` });
+        await expect(pool).toBeVisible({ timeout: 60_000 });
+        await expect(meter).not.toContainText(family);
         const quota = (await storageOf(rosa)).quotaBytes;
         expect(quota).toBe(plus.quotaBytes);
         await expect(meter).toContainText(/ of .+ used/);
         await expect(meter).toContainText(/\d \S+ free/);
         await expect(meter).not.toContainText('The family’s storage is full');
         // The same pool in the family folders: one meter for both.
-        await rosa.page.getByRole('link', { name: 'Family folders', exact: true }).first().click();
+        await familyItem(rosa.page).click();
         await expect(rosa.page).toHaveURL(/\/app\/s\/[0-9a-f-]+$/);
-        await expect(meter).toContainText(family);
+        await expect(pool).toBeVisible();
 
         // Plans: her storage comes from the family's plan, and no personal plan is offered.
         await rosa.page.goto('/app/billing');
@@ -3413,7 +3406,11 @@ test.describe.serial('one view for a family member, with one pool', () => {
             foldersBytes: String(1024 ** 3),
             members: null,
         });
-        await expect(theo.page.locator('[data-storage-meter="pool"]')).toContainText(family);
+        await expect(
+            theo.page
+                .locator('[data-storage-meter="pool"]')
+                .getByRole('progressbar', { name: `Storage used, ${family}` }),
+        ).toBeVisible();
 
         // Leaving says what it does to his files: back on his own allowance, which they fit.
         await openTechnical(theo.page);
@@ -4090,7 +4087,7 @@ test.describe.serial('families off', () => {
         });
         await expect(page.locator('[data-your-family]')).toHaveCount(0);
         await expect(page.getByRole('heading', { level: 2, name: 'Family' })).toHaveCount(0);
-        await expect(page.locator('[data-family-header]')).toHaveCount(0);
+        await expect(page.locator('[data-family-item]')).toHaveCount(0);
         await expect(page.locator('[data-family-place]')).toHaveCount(0);
         await page.goto('/app/families');
         await expect(page.getByText('Families aren’t available here')).toBeVisible({

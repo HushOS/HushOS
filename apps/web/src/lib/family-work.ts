@@ -1,8 +1,10 @@
-import { useSyncExternalStore } from 'react';
 import { familyContext } from '@/lib/families';
 import { runDue } from '@/lib/groups/removal';
 import type { SyncResult } from '@/lib/groups/sync';
 import { walkPending } from '@/lib/spaces';
+import { setFamilyWork } from '@/lib/family-work-state';
+
+export { useFamilyWork, type FamilyWork } from '@/lib/family-work-state';
 
 /*
  * What a family page does on its own after each sync (1c step 7): what route
@@ -13,40 +15,9 @@ import { walkPending } from '@/lib/spaces';
  * came while one ran starts the next. Loaded with the family pages only.
  */
 
-export type FamilyWork = {
-    /* A pass is running. */
-    running: boolean;
-    /* Why the last pass stopped; it runs again at the next sync. */
-    error: string | null;
-    /* Members whose words need comparing again before their new keys are taken in. */
-    needsCheck: string[];
-};
-
-const IDLE: FamilyWork = { running: false, error: null, needsCheck: [] };
 const passes = new Map<string, Promise<void>>();
 /* A sync that came while a pass ran: the next pass starts from it once this one ends. */
 const queued = new Map<string, () => void>();
-const states = new Map<string, FamilyWork>();
-const listeners = new Set<() => void>();
-
-function set(groupId: string, next: Partial<FamilyWork>) {
-    states.set(groupId, { ...(states.get(groupId) ?? IDLE), ...next });
-    for (const listener of listeners) listener();
-}
-function subscribe(listener: () => void) {
-    listeners.add(listener);
-    return () => {
-        listeners.delete(listener);
-    };
-}
-
-export function useFamilyWork(groupId: string): FamilyWork {
-    return useSyncExternalStore(
-        subscribe,
-        () => states.get(groupId) ?? IDLE,
-        () => IDLE,
-    );
-}
 
 /*
  * After a sync of the family: what is due, then the walks. `onChanged` runs
@@ -65,17 +36,17 @@ export function startFamilyWork(
         return;
     }
     const ctx = familyContext(userId);
-    set(groupId, { running: true });
+    setFamilyWork(groupId, { running: true });
     const pass = (async () => {
         try {
             const report = await runDue(ctx, groupId, {
                 manager: options.manager,
                 areas: result.areas,
             });
-            set(groupId, { error: null, needsCheck: report.needsCheck });
+            setFamilyWork(groupId, { error: null, needsCheck: report.needsCheck });
             if (report.done.length > 0) options.onChanged();
         } catch (error) {
-            set(groupId, {
+            setFamilyWork(groupId, {
                 error: error instanceof Error ? error.message : 'Please try again.',
             });
         }
@@ -84,7 +55,7 @@ export function startFamilyWork(
         walkPending(userId, groupId, result.areas);
     })().finally(() => {
         passes.delete(groupId);
-        set(groupId, { running: false });
+        setFamilyWork(groupId, { running: false });
         const next = queued.get(groupId);
         queued.delete(groupId);
         next?.();
