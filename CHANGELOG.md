@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.4.0](https://github.com/HushOS/HushOS/compare/v1.3.0...v1.4.0) (2026-11-09)
+
+
+### Features
+
+* **apps:** notify phones through the push relay ([#384](https://github.com/HushOS/HushOS/issues/384)) ([2e2ea7d](https://github.com/HushOS/HushOS/commit/2e2ea7d5963b01ae6a8f2cf5c3ac51f6c1812d2e))
+* **push:** add the push relay ([#374](https://github.com/HushOS/HushOS/issues/374)) ([4f58a19](https://github.com/HushOS/HushOS/commit/4f58a191025c999af70da344238390e73f12bfa2))
+* **push:** serve a page that says what the relay is and keeps ([#378](https://github.com/HushOS/HushOS/issues/378)) ([e27bdff](https://github.com/HushOS/HushOS/commit/e27bdff61c4ecbedb4ab2ee6fc3e8a7dd7e624d9))
+* **web:** record notification events and ping devices through the relay, behind a flag ([#375](https://github.com/HushOS/HushOS/issues/375)) ([1f20cbe](https://github.com/HushOS/HushOS/commit/1f20cbeffd531cde17fe9a177d54fede15348b4d))
+* **web:** send notifications to browsers with Web Push ([#377](https://github.com/HushOS/HushOS/issues/377)) ([09fccf1](https://github.com/HushOS/HushOS/commit/09fccf1b9cd74f47a359acd1e8048e723276a1a6))
+
+
+### Bug fixes
+
+* **push:** say plainly that self-hosted servers can use the relay ([#381](https://github.com/HushOS/HushOS/issues/381)) ([95a35d5](https://github.com/HushOS/HushOS/commit/95a35d51091936474e64c25d18faeb475362f006))
+* **web:** drop the hint that repeated the password field's label ([#386](https://github.com/HushOS/HushOS/issues/386)) ([4571b88](https://github.com/HushOS/HushOS/commit/4571b88cf49739ed90404ee40be368f710c8314c))
+
 ## [1.3.0](https://github.com/HushOS/HushOS/compare/v1.2.0...v1.3.0) (2026-11-08)
 
 
