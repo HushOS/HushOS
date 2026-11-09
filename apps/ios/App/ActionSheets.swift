@@ -342,7 +342,7 @@ struct VersionsSheet: View {
                                 Button("Restore", systemImage: "arrow.uturn.backward") { restore(version) }
                                 Button("Send a copy", systemImage: "square.and.arrow.up") { sending = version }
                                 Divider()
-                                Button("Delete earlier version", systemImage: "trash", role: .destructive) { deleting = version }.tint(Alpine.danger)
+                                Button("Delete earlier version", systemImage: "trash", role: .destructive) { deleting = version }
                             } label: {
                                 versionRow(version, note: restoring == version.id ? "Restoring…" : earlierNote(version), menu: restoring == nil)
                             }

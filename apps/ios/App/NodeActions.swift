@@ -247,7 +247,7 @@ struct NodeMenu: View {
         }
         if canEdit {
             Section {
-                Button("Move to Trash", systemImage: "trash", role: .destructive) { Task { await store.trash(item) } }.tint(Alpine.danger)
+                Button("Move to Trash", systemImage: "trash", role: .destructive) { Task { await store.trash(item) } }
             }
         }
     }

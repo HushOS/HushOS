@@ -508,7 +508,7 @@ private struct LinkCard: View {
                     Button(qr ? "Hide QR code" : "Show as QR code", systemImage: "qrcode") { qr.toggle() }.disabled(url == nil)
                     if let url { Button("Send the link", systemImage: "square.and.arrow.up") { LinkShare.present(url) } }
                     Divider()
-                    Button("Turn off link", systemImage: "minus.circle", role: .destructive) { confirmOff = true }.tint(Alpine.danger)
+                    Button("Turn off link", systemImage: "minus.circle", role: .destructive) { confirmOff = true }
                 } label: {
                     Image(systemName: "ellipsis").font(.body.weight(.semibold)).foregroundStyle(Alpine.primary).frame(width: 36, height: 36)
                 }
@@ -993,7 +993,7 @@ struct PeopleView: View {
                 step = .check(email: pin.email, name: pin.name)
             }
             Divider()
-            Button("Remove", systemImage: "person.badge.minus", role: .destructive) { removing = pin }.tint(Alpine.danger)
+            Button("Remove", systemImage: "person.badge.minus", role: .destructive) { removing = pin }
         } label: {
             HStack(spacing: Alpine.Space.s3) {
                 PersonAvatar(name: pin.name, seed: pin.userId)
