@@ -96,8 +96,6 @@ struct AccountView: View {
                         row("gearshape.2", "Advanced", "Keys, server, delete account", muted: true)
                     }
                     .alpineRow()
-                } footer: {
-                    Text("HushOS is also a location in the Files app, for opening and saving files from other apps.")
                 }
                 Section {
                     Button { open(Auth.privacyURL(origin: model.origin)) } label: { row("hand.raised", "Privacy policy", nil, external: true) }.alpineRow()

@@ -232,10 +232,7 @@ struct NotificationsSection: View {
             } header: {
                 SectionTitle("Notifications")
             } footer: {
-                VStack(alignment: .leading, spacing: Alpine.Space.s2) {
-                    Text("New sign-ins and removed devices always come. Pushes never say what happened; this iPhone reads that from HushOS.")
-                    if let problem = model.problem { Text(problem).foregroundStyle(Alpine.danger) }
-                }
+                if let problem = model.problem { Text(problem).foregroundStyle(Alpine.danger) }
             }
         }
     }

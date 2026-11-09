@@ -70,10 +70,7 @@ export function AccountNotifications({ userId }: { userId: string }) {
     }
 
     return (
-        <SettingsGroup
-            title="Notifications"
-            description="New sign-ins and removed devices always come. Pushes never say what happened; this browser reads that from HushOS."
-        >
+        <SettingsGroup title="Notifications">
             {webPushSupported() && (
                 <Setting
                     label={<label htmlFor="notifications-browser">On this browser</label>}
