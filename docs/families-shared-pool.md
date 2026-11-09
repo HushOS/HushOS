@@ -247,16 +247,15 @@ Company plans are later; this records where their rules attach so nothing here h
 
 Not in a family:
 
-- Home, My files, Shared, Trash; Tags, Contacts and **Family**, which opens Account → Family (Create a family, the families they wait to join, invitations). Until 2026-10-27 there was none (`organise` lost the old Families item); the owner added it back so a newcomer finds families without going through Account. It goes once they're in a family, whose name then heads the sidebar.
+- Home, My files, **Family**, Shared, Tags, Contacts, Trash: one list, one size. Family opens Account → Family (Create a family, the families they wait to join, invitations). Until 2026-10-27 there was none (`organise` lost the old Families item); the owner added it back so a newcomer finds families without going through Account. It goes once they're in a family, whose own item then takes its place.
 
 In a family:
 
-- **The family's name and avatar at the top of the sidebar,** under the brand, linking to Account → Family. That slot is where the switcher goes later, so nothing moves when companies arrive.
-- Home, **My files**, **Family folders** (opens `/app/s/<groupId>`, the family's folders), Shared, Trash.
+- Home, **My files**, **the family** (its avatar and name, opening `/app/s/<groupId>`, the family's folders, and active there and on Account → Family, which Family settings on the folders' page opens; a small still count while people wait to be let in or members wait to be checked, for those who manage it), Shared, Tags, Contacts, Trash. Until 2026-11-09 the family's name headed the sidebar under the brand, linking to Account → Family, with Family folders as a second item; the owner merged them. The family's item is where the switcher goes later.
 - **Trash** shows My files' Trash and the family folders' Trash (today `/app/s/$groupId/trash`) as two sections of one page.
-- **The storage meter** shows the pool everywhere, not only inside the family folders: "Lindqvist family · 312 GB of 800 GB used", and "The family's storage is full" when it is. With no live plan it shows the person's own allowance, labelled My files, as today.
+- **The storage meter** shows the pool everywhere, not only inside the family folders: "312 GB of 800 GB used" (the family's name in its accessible name only, since 2026-11-09: the family's item names it), and "The family's storage is full" when it is. With no live plan it shows the person's own allowance, labelled My files, as today.
 
-With companies, later: the top slot becomes a switcher with "You" (the family's name as its second line, or nothing for a personal account) and each company, grouped under "Companies" when there are several. Choosing a company replaces the nav with that company's. "You" is everything above.
+With companies, later: the family's item becomes a switcher with "You" (the family's name as its second line, or nothing for a personal account) and each company, grouped under "Companies" when there are several. Choosing a company replaces the nav with that company's. "You" is everything above.
 
 ### 7.2 Account → Family
 

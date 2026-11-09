@@ -128,6 +128,14 @@ export async function waitForRotation(page: Page, before: number, timeout = 120_
 }
 
 /*
+ * The sidebar's family item, named after the family (with "N waiting for you" while anyone
+ * waits on this person): it opens the family's folders, /app/s/<family>.
+ */
+export function familyItem(page: Page) {
+    return page.locator('[data-family-item]').getByRole('link');
+}
+
+/*
  * Opens a folder from the list and waits until it is the one on screen. The URL changes
  * before the folder draws, and until then the page, file inputs included, still belongs
  * to the folder left behind: a file picked at that moment lands there.

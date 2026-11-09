@@ -84,11 +84,20 @@ import { RemoveDialog } from './remove-dialog';
  * this person checked (3.6): unchecked, the change asks for the check first.
  */
 
-/* A list on the family page, in the page's one section pattern (SettingsGroup). */
-function Section({ title, children }: { title: string; children: ReactNode }) {
+/* A list on the family page, in the page's one section pattern (SettingsGroup); `footer` ends it. */
+function Section({
+    title,
+    footer,
+    children,
+}: {
+    title: string;
+    footer?: ReactNode;
+    children: ReactNode;
+}) {
     return (
         <SettingsGroup title={title}>
             <ul className="flex flex-col">{children}</ul>
+            {footer}
         </SettingsGroup>
     );
 }
@@ -97,7 +106,8 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
  * At least 56px, growing with what wraps: a long address truncates on its own
  * line, so it never hides the roles, which sit as small badges beside the
  * name (wrapping under it on a phone), or a note on a line of its own. What
- * sits at the right wraps under the name when the row runs out of room.
+ * sits at the right wraps under the name when the row runs out of room. Rows
+ * are told apart by their spacing, never a rule between them.
  */
 function Row({
     name,
@@ -131,7 +141,7 @@ function Row({
     children?: ReactNode;
 }) {
     return (
-        <li {...data} className="flex flex-col gap-2 border-b border-rule py-2 last:border-0">
+        <li {...data} className="flex flex-col gap-2 py-2">
             <div
                 className={`flex min-h-10 items-center gap-x-3 gap-y-2 ${wrap ? 'flex-wrap' : ''}`}
             >
@@ -626,11 +636,14 @@ export function MemberList({
     names,
     needsCheck = [],
     checking = false,
+    footer,
 }: {
     userId: string;
     groupId: string;
     family: string;
     members: FamilyMember[];
+    /* What ends the list: Invite someone, for those who manage the family, and the places taken. */
+    footer?: ReactNode;
     view: GroupView | null;
     manager: boolean;
     names: Record<string, string>;
@@ -960,7 +973,7 @@ export function MemberList({
     }
 
     return (
-        <Section title="Members">
+        <Section title="Members" footer={footer}>
             {active.map((member) => {
                 const roles = rolesOf(member);
                 const self = member.userId === userId;

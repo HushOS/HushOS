@@ -40,11 +40,23 @@ import {
     TagIcon,
     Trash2Icon,
     ContactIcon,
-    FoldersIcon,
     UsersIcon,
 } from 'lucide-react';
 import { useEffect } from 'react';
-import { activeFamily, familiesQueryOptions, useGroupsEnabled } from '@/lib/families-shell';
+import {
+    activeFamily,
+    canManage,
+    familiesQueryOptions,
+    familyItemActive,
+    familyQueryOptions,
+    pendingQueryOptions,
+    useGroupsEnabled,
+    waitingOn,
+} from '@/lib/families-shell';
+import { useFamilyWork } from '@/lib/family-work-state';
+import { SearchButton } from '@/components/search-button';
+import { UserMenu } from '@/components/user-menu';
+import { Badge } from '@/components/ui/badge';
 
 export type NavItem = {
     to:
@@ -68,6 +80,10 @@ export type NavItem = {
 };
 const under = (prefix: string) => (pathname: string) =>
     pathname === prefix || pathname.startsWith(`${prefix}/`);
+/*
+ * The places, in the sidebar's order: one list, one size. The family (or Family, for someone in
+ * none) goes in after My files (FAMILY_SLOT), where the sidebar draws it.
+ */
 export const workspace: NavItem[] = [
     // Home is where the app opens; My files is the top folder and every folder page.
     { to: '/app', label: 'Home', icon: HouseIcon, active: (p) => p === '/app' || p === '/app/' },
@@ -83,10 +99,6 @@ export const workspace: NavItem[] = [
         icon: Share2Icon,
         active: under('/app/shared'),
     },
-    { to: '/app/trash', label: 'Trash', icon: Trash2Icon, active: under('/app/trash') },
-];
-/* Still one click away, but quieter than the main places. */
-export const organise: NavItem[] = [
     { to: '/app/tags', label: 'Tags', icon: TagIcon, active: under('/app/tags') },
     {
         to: '/app/contacts',
@@ -94,7 +106,9 @@ export const organise: NavItem[] = [
         icon: ContactIcon,
         active: under('/app/contacts'),
     },
+    { to: '/app/trash', label: 'Trash', icon: Trash2Icon, active: under('/app/trash') },
 ];
+const FAMILY_SLOT = 2;
 export const operator: NavItem[] = [
     {
         to: '/app/admin',
@@ -138,8 +152,9 @@ function CatalogueStatus() {
 
 /*
  * The storage at the foot of the sidebar (docs/families-shared-pool.md 7.1). While the person's
- * files draw from their family's pool, it is the pool, named after the family, on every page:
- * My files and the family folders spend the same storage. Otherwise it is their own space,
+ * files draw from their family's pool, it is the pool on every page (named after the family for
+ * assistive tech and in the rail's tooltip; the family item above shows the name): My files and
+ * the family folders spend the same storage. Otherwise it is their own space,
  * labelled My files when they are in a family (a family without a live plan, or a server that
  * sells none), so it never reads as the family's.
  */
@@ -178,8 +193,8 @@ function PoolMeter({
                 nearlyFull={nearlyFull}
                 line={`${family}: ${usedLine}, ${line}`}
             />
+            {/* The family item above names the family; the bar's name still says whose pool it is. */}
             <div className="flex flex-col gap-2 px-3 rail:hidden" data-storage-meter="pool">
-                <span className="truncate text-[13px] text-foreground">{family}</span>
                 <Progress
                     value={Math.round(used * 100)}
                     aria-label={`Storage used, ${family}`}
@@ -336,51 +351,31 @@ function CollapsedMeter({
  * link's name for a screen reader (sr-only, not hidden); the tooltip shows it on hover or focus.
  */
 const collapsed = 'rail:size-10! rail:justify-center rail:p-0! rail:[&>span:last-child]:sr-only';
+/* Every place is one size: a 40px row, 15px label, 18px icon. */
 /* The active place is tinted, semibold and its icon heavier: never tint alone. */
-/* The quieter rows draw 16px icons in the 18px column (1px each side), so every label starts in one line. */
 const item =
     'h-10 gap-3 rounded-md px-3 text-[15px] font-normal text-foreground hover:bg-muted hover:text-foreground data-active:bg-accent data-active:font-semibold data-active:text-accent-foreground data-active:hover:bg-accent [&_svg]:size-[18px] [&_svg]:stroke-[1.9] data-active:[&_svg]:stroke-[2.3]';
-const quiet =
-    'h-9 gap-3 rounded-md px-3 text-sm font-normal text-foreground hover:bg-muted hover:text-foreground data-active:bg-accent data-active:font-semibold data-active:text-accent-foreground data-active:hover:bg-accent [&_svg]:mx-px [&_svg]:size-4 [&_svg]:stroke-[1.9] data-active:[&_svg]:stroke-[2.3]';
 const group = 'p-0';
 
-function NavGroup({
-    items,
-    pathname,
-    small = false,
-    className,
-}: {
-    items: NavItem[];
-    pathname: string;
-    small?: boolean;
-    className?: string;
-}) {
-    return (
-        <SidebarGroupContent className={className}>
-            <SidebarMenu className="gap-0.5">
-                {items.map((entry) => (
-                    <SidebarMenuItem key={entry.to}>
-                        <SidebarMenuButton
-                            render={<Link to={entry.to} />}
-                            isActive={entry.active(pathname)}
-                            tooltip={entry.label}
-                            className={cn(small ? quiet : item, collapsed)}
-                        >
-                            <entry.icon aria-hidden="true" />
-                            <span>{entry.label}</span>
-                        </SidebarMenuButton>
-                    </SidebarMenuItem>
-                ))}
-            </SidebarMenu>
-        </SidebarGroupContent>
-    );
+function NavItems({ items, pathname }: { items: NavItem[]; pathname: string }) {
+    return items.map((entry) => (
+        <SidebarMenuItem key={entry.to}>
+            <SidebarMenuButton
+                render={<Link to={entry.to} />}
+                isActive={entry.active(pathname)}
+                tooltip={entry.label}
+                className={cn(item, collapsed)}
+            >
+                <entry.icon aria-hidden="true" />
+                <span>{entry.label}</span>
+            </SidebarMenuButton>
+        </SidebarMenuItem>
+    ));
 }
 
 /*
- * The account's family (one at most, docs/families-shared-pool.md 7.1): its
- * name and avatar head the sidebar, under the brand, leading to Account →
- * Family (/app/family); that slot is where the switcher goes when companies
- * arrive. Someone in no family, or only waiting to join, has none.
+ * The account's family (one at most, docs/families-shared-pool.md 7.1). Someone in no family,
+ * or only waiting to join, has none.
  */
 function useYourFamily(userId: string) {
     const enabled = useGroupsEnabled();
@@ -388,77 +383,102 @@ function useYourFamily(userId: string) {
     return enabled ? activeFamily(data) : undefined;
 }
 
-function FamilyHeader({ userId, pathname }: { userId: string; pathname: string }) {
-    const family = useYourFamily(userId);
-    if (!family) return null;
-    return (
-        <SidebarMenu data-family-header>
-            <SidebarMenuItem>
-                <SidebarMenuButton
-                    render={<Link to="/app/family" />}
-                    isActive={pathname === '/app/family' || pathname === '/app/family/'}
-                    tooltip={family.name}
-                    className={cn(item, collapsed)}
-                >
-                    {/* Collapsed, the avatar stays and the name goes (the last span). */}
-                    <PersonAvatar
-                        name={family.name}
-                        seed={family.id}
-                        size={20}
-                        className="-mx-px"
-                    />
-                    <span className="truncate font-semibold">{family.name}</span>
-                </SidebarMenuButton>
-            </SidebarMenuItem>
-        </SidebarMenu>
-    );
+/*
+ * How much waits on this person in their family, as the family page counts it (waitingOn):
+ * people to let in, and for those who manage it, members to check. Only someone who manages
+ * the family is asked; the members to check come from the background pass the Drive runs
+ * (lib/family-work-state.ts, nothing loaded for it here), and the family's member list is read
+ * only while that pass names someone.
+ */
+function useWaitingOn(userId: string, family: { id: string; roles: string[] } | undefined) {
+    const manager = family !== undefined && canManage(family.roles);
+    const groupId = family?.id ?? '';
+    const pending = useQuery({
+        ...pendingQueryOptions(userId, groupId),
+        enabled: manager,
+        // Someone who accepts turns up within a minute; the family page asks more often.
+        refetchInterval: 60_000,
+    });
+    const { needsCheck } = useFamilyWork(groupId);
+    const others = needsCheck.some((id) => id !== userId);
+    const detail = useQuery({
+        ...familyQueryOptions(userId, groupId),
+        enabled: manager && others,
+    });
+    if (!manager) return 0;
+    return waitingOn({
+        userId,
+        manager,
+        pending: pending.data ?? [],
+        members: others ? (detail.data?.members ?? []) : [],
+        needsCheck,
+    });
 }
 
-/* Family folders, beside My files (which stays private to you): the family's space. */
-function FamilyFolders({ userId, pathname }: { userId: string; pathname: string }) {
+/* Collapsed, the avatar stays and the name goes; a count stays too, at the square's corner. */
+const familyCollapsed =
+    'rail:size-10! rail:justify-center rail:p-0! rail:[&>[data-family-name]]:sr-only';
+
+/*
+ * The family, one place after My files: its avatar and name, opening the family's folders
+ * (/app/s/<family>), and active there and on the family's own page (/app/family), which the
+ * folders' Family settings and Account → Family lead to. A count shows while people wait to be
+ * let in or members wait to be checked; it is still, never pulsing. This slot is where the
+ * switcher goes when companies arrive.
+ */
+function FamilyItem({ userId, pathname }: { userId: string; pathname: string }) {
     const family = useYourFamily(userId);
+    const waiting = useWaitingOn(userId, family);
     if (!family) return null;
-    const space = `/app/s/${family.id}`;
+    const name = waiting > 0 ? `${family.name}, ${waiting} waiting for you` : family.name;
     return (
-        <SidebarMenu className="mt-0.5 gap-0.5">
-            <SidebarMenuItem>
-                <SidebarMenuButton
-                    render={<Link to="/app/s/$groupId" params={{ groupId: family.id }} />}
-                    isActive={pathname === space || pathname.startsWith(`${space}/`)}
-                    tooltip="Family folders"
-                    className={cn(item, collapsed)}
-                >
-                    <FoldersIcon aria-hidden="true" />
-                    <span className="truncate">Family folders</span>
-                </SidebarMenuButton>
-            </SidebarMenuItem>
-        </SidebarMenu>
+        <SidebarMenuItem data-family-item>
+            <SidebarMenuButton
+                render={<Link to="/app/s/$groupId" params={{ groupId: family.id }} />}
+                isActive={familyItemActive(pathname, family.id)}
+                tooltip={name}
+                aria-label={waiting > 0 ? name : undefined}
+                className={cn(item, familyCollapsed, 'relative')}
+            >
+                <PersonAvatar name={family.name} seed={family.id} size={20} className="-mx-px" />
+                <span data-family-name className="truncate">
+                    {family.name}
+                </span>
+                {waiting > 0 && (
+                    <Badge
+                        aria-hidden="true"
+                        data-family-waiting={waiting}
+                        className="ml-auto h-5 min-w-5 rounded-full bg-secondary px-1.5 text-secondary-foreground tabular-nums rail:absolute rail:top-0.5 rail:right-0.5 rail:ml-0 rail:h-4 rail:min-w-4 rail:px-1 rail:text-[10px]"
+                    >
+                        {waiting}
+                    </Badge>
+                )}
+            </SidebarMenuButton>
+        </SidebarMenuItem>
     );
 }
 
 /*
  * Family for someone in no family, or only waiting to join one, where families are served: it
  * opens Account → Family (/app/family), where they create one or finish joining. In a family,
- * the family's name heads the sidebar instead (FamilyHeader).
+ * the family's own item stands there instead (FamilyItem).
  */
 function FamilyPlace({ userId, pathname }: { userId: string; pathname: string }) {
     const enabled = useGroupsEnabled();
     const families = useQuery({ ...familiesQueryOptions(userId), enabled });
     if (!enabled || families.isPending || activeFamily(families.data)) return null;
     return (
-        <SidebarMenu className="mt-0.5" data-family-place>
-            <SidebarMenuItem>
-                <SidebarMenuButton
-                    render={<Link to="/app/family" />}
-                    isActive={under('/app/family')(pathname)}
-                    tooltip="Family"
-                    className={cn(quiet, collapsed)}
-                >
-                    <UsersIcon aria-hidden="true" />
-                    <span>Family</span>
-                </SidebarMenuButton>
-            </SidebarMenuItem>
-        </SidebarMenu>
+        <SidebarMenuItem data-family-place>
+            <SidebarMenuButton
+                render={<Link to="/app/family" />}
+                isActive={under('/app/family')(pathname)}
+                tooltip="Family"
+                className={cn(item, collapsed)}
+            >
+                <UsersIcon aria-hidden="true" />
+                <span>Family</span>
+            </SidebarMenuButton>
+        </SidebarMenuItem>
     );
 }
 
@@ -468,7 +488,8 @@ export function AppSidebar({
     user: { id: string; name: string; email: string; role?: 'member' | 'admin' };
 }) {
     const pathname = useLocation({ select: (location) => location.pathname });
-    const { state, setOpenMobile } = useSidebar();
+    const { state, isMobile, setOpenMobile } = useSidebar();
+    const rail = state === 'collapsed' && !isMobile;
     const router = useRouter();
     const billing = useBillingEnabled();
     useEffect(
@@ -477,7 +498,12 @@ export function AppSidebar({
     );
     return (
         <Sidebar collapsible="icon" className="group-data-[side=left]:border-r-0">
-            <SidebarHeader className="px-4 pt-4 pb-0 rail:px-2">
+            {/*
+             * The brand's line: on a desk the page has no top bar, so search and the account menu
+             * sit here, at the right; collapsed they stack under the logo as 40px squares. Below a
+             * desk the page's compact top bar holds them (app/route.tsx), so they are not here.
+             */}
+            <SidebarHeader className="flex-row items-center gap-1 px-4 pt-4 pb-0 rail:flex-col rail:gap-2 rail:px-2">
                 {/*
                  * The column's text edge is the places' icons, 28px in (DESIGN.md: align the text, not
                  * the box); their tinted rows hang 12px outside it. The logo's square starts on that
@@ -486,29 +512,42 @@ export function AppSidebar({
                 <Brand
                     to="/app"
                     compact={state === 'collapsed'}
-                    className="h-9 self-start rounded-md border-r-0 pr-1 pl-3 rail:size-10 rail:justify-center rail:px-0 rail:[&_[data-wordmark-name]]:sr-only [&>span]:gap-1.5"
+                    className="mr-auto h-9 rounded-md border-r-0 pr-1 pl-3 rail:mr-0 rail:size-10 rail:justify-center rail:px-0 rail:[&_[data-wordmark-name]]:sr-only [&>span]:gap-1.5"
+                />
+                <SearchButton
+                    side={rail ? 'right' : 'bottom'}
+                    className="max-lg:hidden rail:size-10"
+                />
+                <UserMenu
+                    user={user}
+                    side={rail ? 'right' : 'bottom'}
+                    align="start"
+                    className="max-lg:hidden rail:size-10"
                 />
             </SidebarHeader>
             <SidebarContent className="gap-5 px-4 pt-5 rail:px-2">
-                <FamilyHeader userId={user.id} pathname={pathname} />
                 <SidebarGroup className={group}>
-                    <NavGroup items={workspace.slice(0, 2)} pathname={pathname} />
-                    <FamilyFolders userId={user.id} pathname={pathname} />
-                    <NavGroup items={workspace.slice(2)} pathname={pathname} className="mt-0.5" />
-                </SidebarGroup>
-                <SidebarGroup className={group}>
-                    <NavGroup items={organise} pathname={pathname} small />
-                    <FamilyPlace userId={user.id} pathname={pathname} />
+                    <SidebarGroupContent>
+                        <SidebarMenu className="gap-0.5">
+                            <NavItems items={workspace.slice(0, FAMILY_SLOT)} pathname={pathname} />
+                            <FamilyItem userId={user.id} pathname={pathname} />
+                            <FamilyPlace userId={user.id} pathname={pathname} />
+                            <NavItems items={workspace.slice(FAMILY_SLOT)} pathname={pathname} />
+                        </SidebarMenu>
+                    </SidebarGroupContent>
                 </SidebarGroup>
                 {user.role === 'admin' && (
                     // The rule sets the operator's pages apart; the name is for assistive tech only.
                     <SidebarGroup className="border-t border-rule p-0 pt-4">
                         <SidebarGroupLabel className="sr-only">Operator</SidebarGroupLabel>
-                        <NavGroup
-                            items={operator.filter((entry) => !entry.billing || billing)}
-                            pathname={pathname}
-                            small
-                        />
+                        <SidebarGroupContent>
+                            <SidebarMenu className="gap-0.5">
+                                <NavItems
+                                    items={operator.filter((entry) => !entry.billing || billing)}
+                                    pathname={pathname}
+                                />
+                            </SidebarMenu>
+                        </SidebarGroupContent>
                     </SidebarGroup>
                 )}
             </SidebarContent>

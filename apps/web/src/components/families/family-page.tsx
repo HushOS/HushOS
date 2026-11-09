@@ -30,7 +30,7 @@ import {
     AlertDialogHeader,
     AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Button, buttonVariants } from '@/components/ui/button';
+import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
 import {
     afterMembershipChange,
@@ -45,6 +45,7 @@ import {
     invitationsQueryOptions,
     pendingQueryOptions,
     useFamilySync,
+    waitingOn,
 } from '@/lib/families';
 import { GroupApiError, groupsApi, lapsedPlansIn } from '@/lib/groups/api';
 import { familySynced } from '@/lib/families-keys';
@@ -103,7 +104,7 @@ const KEY_CHANGE_POLL_MS = 15_000;
  * and leaving.
  * The member list is synced on this device first (after the outbox), and a
  * list shown differently is the hard warning. The family's folders are its
- * space (/app/s/<family>), which Family folders in the sidebar opens. It is
+ * space (/app/s/<family>), which the family's item in the sidebar opens. It is
  * /app/family (Account → Family) for the family the account is in: the
  * route picks the family; `appNotices` are the app-wide pass's notices, shown
  * here too, since that pass empties the outbox before this page syncs.
@@ -213,18 +214,23 @@ export function FamilyPage({
     const cantLeave = detail.data ? leaveBlocker(userId, detail.data.members) : null;
     // One blue button on the page (6.1): Let them in, or a changed member's Continue, while either
     // waits; Invite someone otherwise.
+    // The sidebar's family item counts the same (waitingOn).
     const waiting =
-        (pending.data ?? []).some((person) => !person.inFamily) ||
-        (manager &&
-            (detail.data?.members ?? []).some(
-                (member) =>
-                    member.state === 'active' &&
-                    member.userId !== userId &&
-                    work.needsCheck.includes(member.userId),
-            ));
+        waitingOn({
+            userId,
+            manager,
+            pending: pending.data ?? [],
+            members: detail.data?.members ?? [],
+            needsCheck: work.needsCheck,
+        }) > 0;
+    // Under Members, the list's last step: Invite someone, with the places taken beside it. One
+    // source with Billing (placesOf); without a plan, "Choose a plan" says it and nobody is invited.
+    const invite = manager && !plan.waiting;
+    const places = seats && !plan.waiting ? `${seats.used} of ${seats.limit} places taken.` : null;
 
     return (
         <div className="flex flex-1 flex-col">
+            {/* The family's folders are the sidebar's family item; this page is who is in it. */}
             <PageHeader
                 title={family}
                 titleAction={
@@ -234,33 +240,9 @@ export function FamilyPage({
                         </Button>
                     )
                 }
-                description={
-                    // One source with Billing (placesOf); without a plan, "Choose a plan" says it.
-                    seats && !plan.waiting
-                        ? `${seats.used} of ${seats.limit} places taken.`
-                        : undefined
-                }
-            >
-                <Link
-                    to="/app/s/$groupId"
-                    params={{ groupId }}
-                    className={buttonVariants({ variant: 'outline' })}
-                >
-                    Family folders
-                </Link>
-                {manager && !plan.waiting && (
-                    <Button
-                        // Outline while you must fix a failed payment (Billing's button is the blue
-                        // one), or while someone waits to be let in or back in.
-                        variant={paymentNeedsYou(plan.summary) || waiting ? 'outline' : 'default'}
-                        onClick={() => setInviting(true)}
-                    >
-                        Invite someone
-                    </Button>
-                )}
-            </PageHeader>
+            />
 
-            {/* One column, as Account's: every section a heading with its rule, then rows. */}
+            {/* One column, as Account's: every section a heading, then rows told apart by spacing. */}
             <div className="flex max-w-3xl flex-col gap-9 px-5 sm:px-8">
                 <div className="flex flex-col gap-2 empty:hidden">
                     {sync.isPlaceholderData && result?.status === 'accepted' && (
@@ -404,6 +386,32 @@ export function FamilyPage({
                         names={names}
                         needsCheck={work.needsCheck}
                         checking={sync.isPlaceholderData}
+                        footer={
+                            (invite || places) && (
+                                <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pt-3">
+                                    {invite && (
+                                        <Button
+                                            // Outline while you must fix a failed payment (Billing's
+                                            // button is the blue one), or while someone waits to be
+                                            // let in or back in.
+                                            variant={
+                                                paymentNeedsYou(plan.summary) || waiting
+                                                    ? 'outline'
+                                                    : 'default'
+                                            }
+                                            onClick={() => setInviting(true)}
+                                        >
+                                            Invite someone
+                                        </Button>
+                                    )}
+                                    {places && (
+                                        <p className="text-sm text-muted-foreground" data-places>
+                                            {places}
+                                        </p>
+                                    )}
+                                </div>
+                            )
+                        }
                     />
                 )}
                 {detail.data && <FamilyApps />}

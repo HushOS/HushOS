@@ -48,6 +48,74 @@ export const familiesQueryOptions = (userId: string) =>
         retry: 1,
     });
 
+/* Route 3: the family, its members (names from the server, with their address), seats and what is due. */
+export const familyQueryOptions = (userId: string, groupId: string) =>
+    queryOptions({
+        queryKey: familyKeys.family(userId, groupId),
+        queryFn: () => groupsApi.group(groupId),
+        staleTime: 10_000,
+        refetchOnWindowFocus: true,
+        retry: 1,
+    });
+
+/* Route 16: who accepted and waits to be let in, with the identity their words are read from. */
+export const pendingQueryOptions = (userId: string, groupId: string) =>
+    queryOptions({
+        queryKey: familyKeys.pending(userId, groupId),
+        queryFn: async () => (await groupsApi.pending(groupId)).pending,
+        staleTime: 5_000,
+        retry: 1,
+    });
+
+export function canManage(roles: readonly string[] | undefined) {
+    return Boolean(roles?.includes('members'));
+}
+
+/*
+ * What waits on someone who manages the family: each person waiting to be let in (or back in),
+ * and each other member whose changed account needs checking before they get their keys again.
+ * The family page's one blue button (Let them in or Continue, while any waits) and the count on
+ * the sidebar's family item read it alike.
+ */
+export function waitingOn({
+    userId,
+    manager,
+    pending,
+    members,
+    needsCheck,
+}: {
+    userId: string;
+    manager: boolean;
+    pending: readonly { inFamily: boolean }[];
+    members: readonly { userId: string; state: string }[];
+    needsCheck: readonly string[];
+}) {
+    const toLetIn = pending.filter((person) => !person.inFamily).length;
+    const toCheck = manager
+        ? members.filter(
+              (member) =>
+                  member.state === 'active' &&
+                  member.userId !== userId &&
+                  needsCheck.includes(member.userId),
+          ).length
+        : 0;
+    return toLetIn + toCheck;
+}
+
+/*
+ * The sidebar's family item opens the family's folders (/app/s/<family>) and stands for the
+ * family's own page too (/app/family), so it is the active place on either.
+ */
+export function familyItemActive(pathname: string, groupId: string) {
+    const space = `/app/s/${groupId}`;
+    return (
+        pathname === space ||
+        pathname.startsWith(`${space}/`) ||
+        pathname === '/app/family' ||
+        pathname.startsWith('/app/family/')
+    );
+}
+
 /*
  * How a member reads in a list: the roles in words, never colour alone. An organizer reads
  * "Organizer" alone: "Manages the family" beside it only said again what organizer says.

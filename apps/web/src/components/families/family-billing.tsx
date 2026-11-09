@@ -739,7 +739,7 @@ function ChoosePlan({
             data-choose-plan
             className="flex scroll-mt-4 flex-col gap-4"
         >
-            <div className="flex min-w-0 flex-col gap-0.5 border-b border-rule pb-3">
+            <div className="flex min-w-0 flex-col gap-0.5 pb-1">
                 <h2 id={`${groupId}-choose`} className="text-lg font-bold tracking-[-0.01em]">
                     Choose a plan
                 </h2>

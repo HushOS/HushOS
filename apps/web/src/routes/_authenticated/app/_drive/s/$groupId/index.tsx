@@ -35,7 +35,7 @@ function areaLine(area: AreaState) {
 /*
  * The family's folders, as folder rows: each opens as its own Drive. Those
  * who manage the family make new ones and delete them (each row's menu); who
- * is in it is on the family's page.
+ * is in it is on the family's page, Family settings, one click from here.
  */
 function FamilySpacePage() {
     const space = useFamilySpace();
@@ -55,8 +55,9 @@ function FamilySpacePage() {
                 title={space.family}
                 description="Family folders. Everyone in the family can open what’s in them."
             >
+                {/* The family's own page: who is in it, inviting, its plan, and leaving. */}
                 <Link to="/app/family" className={buttonVariants({ variant: 'outline' })}>
-                    Members
+                    Family settings
                 </Link>
                 <Link
                     to="/app/trash"
