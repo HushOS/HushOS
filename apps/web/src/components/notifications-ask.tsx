@@ -50,6 +50,8 @@ export function NotificationsAsk({ userId }: { userId: string }) {
             setShown(false);
         } catch (cause) {
             close();
+            // Blocked in the browser's question: the person's own answer, not a failure to report.
+            if (Notification.permission === 'denied') return;
             toast.add({
                 type: 'error',
                 title: 'Notifications didn’t turn on',
@@ -62,8 +64,8 @@ export function NotificationsAsk({ userId }: { userId: string }) {
 
     return (
         <section
-            aria-label="Notifications"
-            className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-rule bg-muted py-2 ps-5 pe-2 text-sm sm:ps-6"
+            aria-label="Turn on notifications"
+            className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-rule bg-muted py-2 ps-5 pe-2 text-sm sm:ps-8 sm:pe-6"
         >
             <span className="min-w-0 flex-1">
                 Get notified about new sign-ins and things shared with you
