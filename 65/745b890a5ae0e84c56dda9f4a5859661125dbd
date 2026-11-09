@@ -1,0 +1,27 @@
+apps/web/src/lib/api/two-step.db.test.ts
+  s_1f3a9ec02d29ed::t_398bb3abc1f127 116-120,142-153,155-178,921-946,1067-1124
+docs/two-step-design.md
+  s_1f3a9ec02d29ed::t_ae8d3921d5dd94 125,128,598-602
+packages/auth/src/server.ts
+  s_1f3a9ec02d29ed::t_bd5a2321ae2304 51,2065-2066,2246-2247,2478-2479,2611-2612,2638-2639
+packages/auth/src/two-step.ts
+  s_1f3a9ec02d29ed::t_1d3ccc11292cc9 367-380,496-505,511-512,520
+packages/db/test/two-step.ts
+  s_1f3a9ec02d29ed::t_72eeb37945748c 1,66-88
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "65745b890a5ae0e84c56dda9f4a5859661125dbd",
+  "prompts": {},
+  "sessions": {
+    "s_1f3a9ec02d29ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aef80487-cabb-455f-b2f1-acb7f8d96c4e",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
