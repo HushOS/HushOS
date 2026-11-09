@@ -1,0 +1,1799 @@
+{
+    "type": "diff",
+    "version": "9",
+    "dialect": "postgres",
+    "id": "e167c5ca-98d3-40ad-a6a3-08b9e58f4e9b",
+    "prevIds": ["64bc19cd-c49e-45fd-8e3b-cf97c711f2a5"],
+    "footprints": [
+        {
+            "statementType": "create_table",
+            "statementTarget": ["table", "public", "account_security_events"],
+            "writes": [
+                "s|tbl|public.account_security_events",
+                "n|tbl|public.account_security_events",
+                "e|tbl|public.account_security_events",
+                "n|rel|public.account_security_events",
+                "n|type|public.account_security_events",
+                "n|rel|public.account_security_events_pkey"
+            ],
+            "reads": ["n|sch|public"]
+        },
+        {
+            "statementType": "create_table",
+            "statementTarget": ["table", "public", "two_step_attempts"],
+            "writes": [
+                "s|tbl|public.two_step_attempts",
+                "n|tbl|public.two_step_attempts",
+                "e|tbl|public.two_step_attempts",
+                "n|rel|public.two_step_attempts",
+                "n|type|public.two_step_attempts",
+                "n|rel|public.two_step_attempts_pkey"
+            ],
+            "reads": ["n|sch|public"]
+        },
+        {
+            "statementType": "create_table",
+            "statementTarget": ["table", "public", "two_step_backup_codes"],
+            "writes": [
+                "s|tbl|public.two_step_backup_codes",
+                "n|tbl|public.two_step_backup_codes",
+                "e|tbl|public.two_step_backup_codes",
+                "n|rel|public.two_step_backup_codes",
+                "n|type|public.two_step_backup_codes",
+                "n|rel|public.two_step_backup_codes_pkey"
+            ],
+            "reads": ["n|sch|public"]
+        },
+        {
+            "statementType": "create_table",
+            "statementTarget": ["table", "public", "two_step_factors"],
+            "writes": [
+                "s|tbl|public.two_step_factors",
+                "n|tbl|public.two_step_factors",
+                "e|tbl|public.two_step_factors",
+                "n|rel|public.two_step_factors",
+                "n|type|public.two_step_factors",
+                "n|rel|public.two_step_factors_pkey"
+            ],
+            "reads": ["n|sch|public"]
+        },
+        {
+            "statementType": "create_table",
+            "statementTarget": ["table", "public", "two_step_state"],
+            "writes": [
+                "s|tbl|public.two_step_state",
+                "n|tbl|public.two_step_state",
+                "e|tbl|public.two_step_state",
+                "n|rel|public.two_step_state",
+                "n|type|public.two_step_state",
+                "n|rel|public.two_step_state_pkey",
+                "n|rel|public.two_step_state_webauthn_user_handle_key"
+            ],
+            "reads": ["n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "account_devices", "two_step_failures"],
+            "writes": [
+                "s|col|public.account_devices.two_step_failures",
+                "n|col|public.account_devices.two_step_failures",
+                "e|col|public.account_devices.two_step_failures"
+            ],
+            "reads": ["n|tbl|public.account_devices", "n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "sessions", "two_step_at"],
+            "writes": [
+                "s|col|public.sessions.two_step_at",
+                "n|col|public.sessions.two_step_at",
+                "e|col|public.sessions.two_step_at"
+            ],
+            "reads": ["n|tbl|public.sessions", "n|sch|public"]
+        },
+        {
+            "statementType": "create_index",
+            "statementTarget": [
+                "index",
+                "public",
+                "account_security_events",
+                "account_security_events_user_idx"
+            ],
+            "writes": [
+                "s|idx|public.account_security_events_user_idx",
+                "n|idx|public.account_security_events_user_idx",
+                "e|idx|public.account_security_events_user_idx",
+                "n|rel|public.account_security_events_user_idx"
+            ],
+            "reads": [
+                "n|tbl|public.account_security_events",
+                "n|sch|public",
+                "n|col|public.account_security_events.user_id",
+                "n|col|public.account_security_events.created_at"
+            ]
+        },
+        {
+            "statementType": "create_index",
+            "statementTarget": [
+                "index",
+                "public",
+                "account_security_events",
+                "account_security_events_created_idx"
+            ],
+            "writes": [
+                "s|idx|public.account_security_events_created_idx",
+                "n|idx|public.account_security_events_created_idx",
+                "e|idx|public.account_security_events_created_idx",
+                "n|rel|public.account_security_events_created_idx"
+            ],
+            "reads": [
+                "n|tbl|public.account_security_events",
+                "n|sch|public",
+                "n|col|public.account_security_events.created_at"
+            ]
+        },
+        {
+            "statementType": "create_index",
+            "statementTarget": [
+                "index",
+                "public",
+                "account_security_events",
+                "account_security_events_device_idx"
+            ],
+            "writes": [
+                "s|idx|public.account_security_events_device_idx",
+                "n|idx|public.account_security_events_device_idx",
+                "e|idx|public.account_security_events_device_idx",
+                "n|rel|public.account_security_events_device_idx"
+            ],
+            "reads": [
+                "n|tbl|public.account_security_events",
+                "n|sch|public",
+                "n|col|public.account_security_events.device_id"
+            ]
+        },
+        {
+            "statementType": "create_index",
+            "statementTarget": [
+                "index",
+                "public",
+                "two_step_attempts",
+                "two_step_attempts_user_idx"
+            ],
+            "writes": [
+                "s|idx|public.two_step_attempts_user_idx",
+                "n|idx|public.two_step_attempts_user_idx",
+                "e|idx|public.two_step_attempts_user_idx",
+                "n|rel|public.two_step_attempts_user_idx"
+            ],
+            "reads": [
+                "n|tbl|public.two_step_attempts",
+                "n|sch|public",
+                "n|col|public.two_step_attempts.user_id"
+            ]
+        },
+        {
+            "statementType": "create_index",
+            "statementTarget": [
+                "index",
+                "public",
+                "two_step_attempts",
+                "two_step_attempts_expiry_idx"
+            ],
+            "writes": [
+                "s|idx|public.two_step_attempts_expiry_idx",
+                "n|idx|public.two_step_attempts_expiry_idx",
+                "e|idx|public.two_step_attempts_expiry_idx",
+                "n|rel|public.two_step_attempts_expiry_idx"
+            ],
+            "reads": [
+                "n|tbl|public.two_step_attempts",
+                "n|sch|public",
+                "n|col|public.two_step_attempts.expires_at"
+            ]
+        },
+        {
+            "statementType": "create_index",
+            "statementTarget": [
+                "index",
+                "public",
+                "two_step_attempts",
+                "two_step_attempts_device_idx"
+            ],
+            "writes": [
+                "s|idx|public.two_step_attempts_device_idx",
+                "n|idx|public.two_step_attempts_device_idx",
+                "e|idx|public.two_step_attempts_device_idx",
+                "n|rel|public.two_step_attempts_device_idx"
+            ],
+            "reads": [
+                "n|tbl|public.two_step_attempts",
+                "n|sch|public",
+                "n|col|public.two_step_attempts.device_id"
+            ]
+        },
+        {
+            "statementType": "create_index",
+            "statementTarget": [
+                "index",
+                "public",
+                "two_step_factors",
+                "two_step_factors_credential_idx"
+            ],
+            "writes": [
+                "s|idx|public.two_step_factors_credential_idx",
+                "n|idx|public.two_step_factors_credential_idx",
+                "e|idx|public.two_step_factors_credential_idx",
+                "n|rel|public.two_step_factors_credential_idx"
+            ],
+            "reads": [
+                "n|tbl|public.two_step_factors",
+                "n|sch|public",
+                "n|col|public.two_step_factors.user_id",
+                "n|col|public.two_step_factors.credential_id"
+            ]
+        },
+        {
+            "statementType": "create_index",
+            "statementTarget": ["index", "public", "two_step_factors", "two_step_factors_totp_idx"],
+            "writes": [
+                "s|idx|public.two_step_factors_totp_idx",
+                "n|idx|public.two_step_factors_totp_idx",
+                "e|idx|public.two_step_factors_totp_idx",
+                "n|rel|public.two_step_factors_totp_idx"
+            ],
+            "reads": [
+                "n|tbl|public.two_step_factors",
+                "n|sch|public",
+                "n|col|public.two_step_factors.user_id"
+            ]
+        },
+        {
+            "statementType": "create_index",
+            "statementTarget": [
+                "index",
+                "public",
+                "two_step_factors",
+                "two_step_factors_pending_idx"
+            ],
+            "writes": [
+                "s|idx|public.two_step_factors_pending_idx",
+                "n|idx|public.two_step_factors_pending_idx",
+                "e|idx|public.two_step_factors_pending_idx",
+                "n|rel|public.two_step_factors_pending_idx"
+            ],
+            "reads": [
+                "n|tbl|public.two_step_factors",
+                "n|sch|public",
+                "n|col|public.two_step_factors.created_at"
+            ]
+        },
+        {
+            "statementType": "create_fk",
+            "statementTarget": ["table", "public", "account_security_events"],
+            "writes": [
+                "s|fk|public.account_security_events.account_security_events_user_id_users_id_fkey",
+                "n|fk|public.account_security_events.account_security_events_user_id_users_id_fkey",
+                "e|fk|public.account_security_events.account_security_events_user_id_users_id_fkey",
+                "n|con|public.account_security_events.account_security_events_user_id_users_id_fkey"
+            ],
+            "reads": [
+                "n|tbl|public.account_security_events",
+                "n|sch|public",
+                "n|tbl|public.users",
+                "n|sch|public",
+                "n|col|public.account_security_events.user_id",
+                "n|col|public.users.id",
+                "e|uniqueness|public.users.id"
+            ]
+        },
+        {
+            "statementType": "create_fk",
+            "statementTarget": ["table", "public", "account_security_events"],
+            "writes": [
+                "s|fk|public.account_security_events.account_security_events_device_id_account_devices_id_fkey",
+                "n|fk|public.account_security_events.account_security_events_device_id_account_devices_id_fkey",
+                "e|fk|public.account_security_events.account_security_events_device_id_account_devices_id_fkey",
+                "n|con|public.account_security_events.account_security_events_device_id_account_devices_id_fkey"
+            ],
+            "reads": [
+                "n|tbl|public.account_security_events",
+                "n|sch|public",
+                "n|tbl|public.account_devices",
+                "n|sch|public",
+                "n|col|public.account_security_events.device_id",
+                "n|col|public.account_devices.id",
+                "e|uniqueness|public.account_devices.id"
+            ]
+        },
+        {
+            "statementType": "create_fk",
+            "statementTarget": ["table", "public", "two_step_attempts"],
+            "writes": [
+                "s|fk|public.two_step_attempts.two_step_attempts_user_id_users_id_fkey",
+                "n|fk|public.two_step_attempts.two_step_attempts_user_id_users_id_fkey",
+                "e|fk|public.two_step_attempts.two_step_attempts_user_id_users_id_fkey",
+                "n|con|public.two_step_attempts.two_step_attempts_user_id_users_id_fkey"
+            ],
+            "reads": [
+                "n|tbl|public.two_step_attempts",
+                "n|sch|public",
+                "n|tbl|public.users",
+                "n|sch|public",
+                "n|col|public.two_step_attempts.user_id",
+                "n|col|public.users.id",
+                "e|uniqueness|public.users.id"
+            ]
+        },
+        {
+            "statementType": "create_fk",
+            "statementTarget": ["table", "public", "two_step_attempts"],
+            "writes": [
+                "s|fk|public.two_step_attempts.two_step_attempts_device_id_account_devices_id_fkey",
+                "n|fk|public.two_step_attempts.two_step_attempts_device_id_account_devices_id_fkey",
+                "e|fk|public.two_step_attempts.two_step_attempts_device_id_account_devices_id_fkey",
+                "n|con|public.two_step_attempts.two_step_attempts_device_id_account_devices_id_fkey"
+            ],
+            "reads": [
+                "n|tbl|public.two_step_attempts",
+                "n|sch|public",
+                "n|tbl|public.account_devices",
+                "n|sch|public",
+                "n|col|public.two_step_attempts.device_id",
+                "n|col|public.account_devices.id",
+                "e|uniqueness|public.account_devices.id"
+            ]
+        },
+        {
+            "statementType": "create_fk",
+            "statementTarget": ["table", "public", "two_step_backup_codes"],
+            "writes": [
+                "s|fk|public.two_step_backup_codes.two_step_backup_codes_user_id_users_id_fkey",
+                "n|fk|public.two_step_backup_codes.two_step_backup_codes_user_id_users_id_fkey",
+                "e|fk|public.two_step_backup_codes.two_step_backup_codes_user_id_users_id_fkey",
+                "n|con|public.two_step_backup_codes.two_step_backup_codes_user_id_users_id_fkey"
+            ],
+            "reads": [
+                "n|tbl|public.two_step_backup_codes",
+                "n|sch|public",
+                "n|tbl|public.users",
+                "n|sch|public",
+                "n|col|public.two_step_backup_codes.user_id",
+                "n|col|public.users.id",
+                "e|uniqueness|public.users.id"
+            ]
+        },
+        {
+            "statementType": "create_fk",
+            "statementTarget": ["table", "public", "two_step_factors"],
+            "writes": [
+                "s|fk|public.two_step_factors.two_step_factors_user_id_users_id_fkey",
+                "n|fk|public.two_step_factors.two_step_factors_user_id_users_id_fkey",
+                "e|fk|public.two_step_factors.two_step_factors_user_id_users_id_fkey",
+                "n|con|public.two_step_factors.two_step_factors_user_id_users_id_fkey"
+            ],
+            "reads": [
+                "n|tbl|public.two_step_factors",
+                "n|sch|public",
+                "n|tbl|public.users",
+                "n|sch|public",
+                "n|col|public.two_step_factors.user_id",
+                "n|col|public.users.id",
+                "e|uniqueness|public.users.id"
+            ]
+        },
+        {
+            "statementType": "create_fk",
+            "statementTarget": ["table", "public", "two_step_state"],
+            "writes": [
+                "s|fk|public.two_step_state.two_step_state_user_id_users_id_fkey",
+                "n|fk|public.two_step_state.two_step_state_user_id_users_id_fkey",
+                "e|fk|public.two_step_state.two_step_state_user_id_users_id_fkey",
+                "n|con|public.two_step_state.two_step_state_user_id_users_id_fkey"
+            ],
+            "reads": [
+                "n|tbl|public.two_step_state",
+                "n|sch|public",
+                "n|tbl|public.users",
+                "n|sch|public",
+                "n|col|public.two_step_state.user_id",
+                "n|col|public.users.id",
+                "e|uniqueness|public.users.id"
+            ]
+        },
+        {
+            "statementType": "add_check",
+            "statementTarget": ["table", "public", "account_devices"],
+            "writes": [
+                "s|ck|public.account_devices.account_devices_two_step_failures_valid",
+                "n|ck|public.account_devices.account_devices_two_step_failures_valid",
+                "e|ck|public.account_devices.account_devices_two_step_failures_valid",
+                "n|con|public.account_devices.account_devices_two_step_failures_valid"
+            ],
+            "reads": [
+                "n|tbl|public.account_devices",
+                "n|sch|public",
+                "n|col|public.account_devices.two_step_failures"
+            ]
+        },
+        {
+            "statementType": "alter_check",
+            "statementTarget": ["table", "public", "opaque_login_attempts"],
+            "writes": ["s|ck|public.opaque_login_attempts.opaque_login_attempts_purpose_binding"],
+            "reads": [
+                "n|tbl|public.opaque_login_attempts",
+                "n|sch|public",
+                "n|col|public.opaque_login_attempts.purpose",
+                "n|col|public.opaque_login_attempts.session_token_hash",
+                "e|col|public.opaque_login_attempts.purpose",
+                "e|col|public.opaque_login_attempts.session_token_hash"
+            ],
+            "sqlHash": "d4600aa2be4c40ee"
+        }
+    ],
+    "deltas": [
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "name": "account_security_events",
+                "isRlsEnabled": false,
+                "entityType": "tables"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "name": "two_step_attempts",
+                "isRlsEnabled": false,
+                "entityType": "tables"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "name": "two_step_backup_codes",
+                "isRlsEnabled": false,
+                "entityType": "tables"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "name": "two_step_factors",
+                "isRlsEnabled": false,
+                "entityType": "tables"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "name": "two_step_state",
+                "isRlsEnabled": false,
+                "entityType": "tables"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "account_devices",
+                "name": "two_step_failures",
+                "type": "integer",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "0",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "account_security_events",
+                "name": "id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "gen_random_uuid()",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "account_security_events",
+                "name": "user_id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "account_security_events",
+                "name": "kind",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "account_security_events",
+                "name": "method",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "account_security_events",
+                "name": "device_id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "account_security_events",
+                "name": "device_kind",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "account_security_events",
+                "name": "created_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "now()",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "sessions",
+                "name": "two_step_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_attempts",
+                "name": "token_hash",
+                "type": "bytea",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_attempts",
+                "name": "user_id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_attempts",
+                "name": "purpose",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_attempts",
+                "name": "session_token_hash",
+                "type": "bytea",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_attempts",
+                "name": "credential_version",
+                "type": "integer",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_attempts",
+                "name": "device_id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_attempts",
+                "name": "previous_token_hash",
+                "type": "bytea",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_attempts",
+                "name": "webauthn_challenge",
+                "type": "bytea",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_attempts",
+                "name": "failures",
+                "type": "smallint",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "0",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_attempts",
+                "name": "created_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "now()",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_attempts",
+                "name": "expires_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_backup_codes",
+                "name": "user_id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_backup_codes",
+                "name": "code_hash",
+                "type": "bytea",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_backup_codes",
+                "name": "key_id",
+                "type": "bytea",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_backup_codes",
+                "name": "created_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "now()",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_backup_codes",
+                "name": "used_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_factors",
+                "name": "id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "gen_random_uuid()",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_factors",
+                "name": "user_id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_factors",
+                "name": "kind",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_factors",
+                "name": "name",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_factors",
+                "name": "created_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "now()",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_factors",
+                "name": "confirmed_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_factors",
+                "name": "last_used_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_factors",
+                "name": "totp_key_id",
+                "type": "bytea",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_factors",
+                "name": "totp_nonce",
+                "type": "bytea",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_factors",
+                "name": "totp_secret",
+                "type": "bytea",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_factors",
+                "name": "totp_last_step",
+                "type": "bigint",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_factors",
+                "name": "credential_id",
+                "type": "bytea",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_factors",
+                "name": "public_key",
+                "type": "bytea",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_factors",
+                "name": "sign_count",
+                "type": "bigint",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_factors",
+                "name": "transports",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 1,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_factors",
+                "name": "backup_eligible",
+                "type": "boolean",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_factors",
+                "name": "backup_state",
+                "type": "boolean",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_state",
+                "name": "user_id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_state",
+                "name": "webauthn_user_handle",
+                "type": "bytea",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_state",
+                "name": "backup_code_salt",
+                "type": "bytea",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_state",
+                "name": "consecutive_failures",
+                "type": "integer",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "0",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_state",
+                "name": "totp_frozen_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "account_security_events",
+                "name": "account_security_events_user_idx",
+                "nameExplicit": true,
+                "columns": [
+                    {
+                        "value": "user_id",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": false,
+                        "opclass": null
+                    },
+                    {
+                        "value": "created_at",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": false,
+                        "opclass": null
+                    }
+                ],
+                "isUnique": false,
+                "where": null,
+                "with": "",
+                "method": "btree",
+                "concurrently": false,
+                "entityType": "indexes"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "account_security_events",
+                "name": "account_security_events_created_idx",
+                "nameExplicit": true,
+                "columns": [
+                    {
+                        "value": "created_at",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": false,
+                        "opclass": null
+                    }
+                ],
+                "isUnique": false,
+                "where": null,
+                "with": "",
+                "method": "btree",
+                "concurrently": false,
+                "entityType": "indexes"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "account_security_events",
+                "name": "account_security_events_device_idx",
+                "nameExplicit": true,
+                "columns": [
+                    {
+                        "value": "device_id",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": false,
+                        "opclass": null
+                    }
+                ],
+                "isUnique": false,
+                "where": "\"device_id\" is not null",
+                "with": "",
+                "method": "btree",
+                "concurrently": false,
+                "entityType": "indexes"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_attempts",
+                "name": "two_step_attempts_user_idx",
+                "nameExplicit": true,
+                "columns": [
+                    {
+                        "value": "user_id",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": false,
+                        "opclass": null
+                    }
+                ],
+                "isUnique": false,
+                "where": null,
+                "with": "",
+                "method": "btree",
+                "concurrently": false,
+                "entityType": "indexes"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_attempts",
+                "name": "two_step_attempts_expiry_idx",
+                "nameExplicit": true,
+                "columns": [
+                    {
+                        "value": "expires_at",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": false,
+                        "opclass": null
+                    }
+                ],
+                "isUnique": false,
+                "where": null,
+                "with": "",
+                "method": "btree",
+                "concurrently": false,
+                "entityType": "indexes"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_attempts",
+                "name": "two_step_attempts_device_idx",
+                "nameExplicit": true,
+                "columns": [
+                    {
+                        "value": "device_id",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": false,
+                        "opclass": null
+                    }
+                ],
+                "isUnique": false,
+                "where": "\"device_id\" is not null",
+                "with": "",
+                "method": "btree",
+                "concurrently": false,
+                "entityType": "indexes"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_factors",
+                "name": "two_step_factors_credential_idx",
+                "nameExplicit": true,
+                "columns": [
+                    {
+                        "value": "user_id",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": false,
+                        "opclass": null
+                    },
+                    {
+                        "value": "credential_id",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": false,
+                        "opclass": null
+                    }
+                ],
+                "isUnique": true,
+                "where": null,
+                "with": "",
+                "method": "btree",
+                "concurrently": false,
+                "entityType": "indexes"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_factors",
+                "name": "two_step_factors_totp_idx",
+                "nameExplicit": true,
+                "columns": [
+                    {
+                        "value": "user_id",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": false,
+                        "opclass": null
+                    }
+                ],
+                "isUnique": true,
+                "where": "\"kind\" = 'totp' and \"confirmed_at\" is not null",
+                "with": "",
+                "method": "btree",
+                "concurrently": false,
+                "entityType": "indexes"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_factors",
+                "name": "two_step_factors_pending_idx",
+                "nameExplicit": true,
+                "columns": [
+                    {
+                        "value": "created_at",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": false,
+                        "opclass": null
+                    }
+                ],
+                "isUnique": false,
+                "where": "\"confirmed_at\" is null",
+                "with": "",
+                "method": "btree",
+                "concurrently": false,
+                "entityType": "indexes"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "account_security_events",
+                "name": "account_security_events_user_id_users_id_fkey",
+                "nameExplicit": false,
+                "columns": ["user_id"],
+                "schemaTo": "public",
+                "tableTo": "users",
+                "columnsTo": ["id"],
+                "onUpdate": "NO ACTION",
+                "onDelete": "CASCADE",
+                "entityType": "fks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "account_security_events",
+                "name": "account_security_events_device_id_account_devices_id_fkey",
+                "nameExplicit": false,
+                "columns": ["device_id"],
+                "schemaTo": "public",
+                "tableTo": "account_devices",
+                "columnsTo": ["id"],
+                "onUpdate": "NO ACTION",
+                "onDelete": "SET NULL",
+                "entityType": "fks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_attempts",
+                "name": "two_step_attempts_user_id_users_id_fkey",
+                "nameExplicit": false,
+                "columns": ["user_id"],
+                "schemaTo": "public",
+                "tableTo": "users",
+                "columnsTo": ["id"],
+                "onUpdate": "NO ACTION",
+                "onDelete": "CASCADE",
+                "entityType": "fks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_attempts",
+                "name": "two_step_attempts_device_id_account_devices_id_fkey",
+                "nameExplicit": false,
+                "columns": ["device_id"],
+                "schemaTo": "public",
+                "tableTo": "account_devices",
+                "columnsTo": ["id"],
+                "onUpdate": "NO ACTION",
+                "onDelete": "CASCADE",
+                "entityType": "fks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_backup_codes",
+                "name": "two_step_backup_codes_user_id_users_id_fkey",
+                "nameExplicit": false,
+                "columns": ["user_id"],
+                "schemaTo": "public",
+                "tableTo": "users",
+                "columnsTo": ["id"],
+                "onUpdate": "NO ACTION",
+                "onDelete": "CASCADE",
+                "entityType": "fks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_factors",
+                "name": "two_step_factors_user_id_users_id_fkey",
+                "nameExplicit": false,
+                "columns": ["user_id"],
+                "schemaTo": "public",
+                "tableTo": "users",
+                "columnsTo": ["id"],
+                "onUpdate": "NO ACTION",
+                "onDelete": "CASCADE",
+                "entityType": "fks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_state",
+                "name": "two_step_state_user_id_users_id_fkey",
+                "nameExplicit": false,
+                "columns": ["user_id"],
+                "schemaTo": "public",
+                "tableTo": "users",
+                "columnsTo": ["id"],
+                "onUpdate": "NO ACTION",
+                "onDelete": "CASCADE",
+                "entityType": "fks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_backup_codes",
+                "name": "two_step_backup_codes_pkey",
+                "columns": ["user_id", "code_hash"],
+                "nameExplicit": false,
+                "entityType": "pks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "account_security_events",
+                "name": "account_security_events_pkey",
+                "columns": ["id"],
+                "nameExplicit": false,
+                "entityType": "pks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_attempts",
+                "name": "two_step_attempts_pkey",
+                "columns": ["token_hash"],
+                "nameExplicit": false,
+                "entityType": "pks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_factors",
+                "name": "two_step_factors_pkey",
+                "columns": ["id"],
+                "nameExplicit": false,
+                "entityType": "pks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_state",
+                "name": "two_step_state_pkey",
+                "columns": ["user_id"],
+                "nameExplicit": false,
+                "entityType": "pks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_state",
+                "name": "two_step_state_webauthn_user_handle_key",
+                "nameExplicit": false,
+                "columns": ["webauthn_user_handle"],
+                "nullsNotDistinct": false,
+                "entityType": "uniques"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "account_devices",
+                "name": "account_devices_two_step_failures_valid",
+                "value": "\"two_step_failures\" >= 0",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "account_security_events",
+                "name": "account_security_events_kind_length",
+                "value": "char_length(\"kind\") between 1 and 40",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "account_security_events",
+                "name": "account_security_events_method_valid",
+                "value": "\"method\" is null or \"method\" in ('totp', 'webauthn', 'backup', 'phrase')",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "account_security_events",
+                "name": "account_security_events_device_kind_valid",
+                "value": "\"device_kind\" is null or \"device_kind\" in ('web', 'ios', 'android')",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_attempts",
+                "name": "two_step_attempts_purpose_valid",
+                "value": "\"purpose\" in ('login', 'password', 'master-key', 'recovery-key', 'delete', 'two-step', 'device-approval', 'child-reset', 'enrol')",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_attempts",
+                "name": "two_step_attempts_session_binding",
+                "value": "(\"purpose\" in ('login', 'enrol')) = (\"session_token_hash\" is null) and (\"session_token_hash\" is null or octet_length(\"session_token_hash\") = 32)",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_attempts",
+                "name": "two_step_attempts_login_only",
+                "value": "\"purpose\" = 'login' or (\"device_id\" is null and \"previous_token_hash\" is null)",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_attempts",
+                "name": "two_step_attempts_lengths_valid",
+                "value": "octet_length(\"token_hash\") = 32 and (\"previous_token_hash\" is null or octet_length(\"previous_token_hash\") = 32) and (\"webauthn_challenge\" is null or octet_length(\"webauthn_challenge\") = 32)",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_attempts",
+                "name": "two_step_attempts_valid",
+                "value": "\"credential_version\" > 0 and \"failures\" between 0 and 5 and \"expires_at\" > \"created_at\"",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_backup_codes",
+                "name": "two_step_backup_codes_lengths_valid",
+                "value": "octet_length(\"code_hash\") = 32 and octet_length(\"key_id\") = 8",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_factors",
+                "name": "two_step_factors_kind_valid",
+                "value": "\"kind\" in ('totp', 'webauthn')",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_factors",
+                "name": "two_step_factors_name_length",
+                "value": "char_length(\"name\") between 1 and 40",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_factors",
+                "name": "two_step_factors_last_used_hour",
+                "value": "\"last_used_at\" is null or mod(extract(epoch from \"last_used_at\"), 3600) = 0",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_factors",
+                "name": "two_step_factors_kind_columns",
+                "value": "(\"kind\" = 'totp' and \"totp_key_id\" is not null and octet_length(\"totp_key_id\") = 8 and \"totp_nonce\" is not null and octet_length(\"totp_nonce\") = 24 and \"totp_secret\" is not null and octet_length(\"totp_secret\") = 36 and \"totp_last_step\" is not null and \"totp_last_step\" >= 0 and \"credential_id\" is null and \"public_key\" is null and \"sign_count\" is null and \"transports\" is null and \"backup_eligible\" is null and \"backup_state\" is null) or (\"kind\" = 'webauthn' and \"totp_key_id\" is null and \"totp_nonce\" is null and \"totp_secret\" is null and \"totp_last_step\" is null and \"credential_id\" is not null and octet_length(\"credential_id\") between 1 and 1023 and \"public_key\" is not null and octet_length(\"public_key\") >= 1 and \"sign_count\" is not null and \"sign_count\" between 0 and 4294967295 and \"transports\" is not null and \"backup_eligible\" is not null and \"backup_state\" is not null)",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_state",
+                "name": "two_step_state_valid",
+                "value": "octet_length(\"webauthn_user_handle\") = 32 and octet_length(\"backup_code_salt\") = 16 and \"consecutive_failures\" >= 0",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "alter",
+            "key": "checks\u0000[\"public\",\"opaque_login_attempts\",\"opaque_login_attempts_purpose_binding\"]",
+            "set": {
+                "value": "(\"purpose\" = 'login' and \"session_token_hash\" is null) or (\"purpose\" in ('delete', 'password', 'master-key', 'recovery-key', 'devices', 'two-step') and \"session_token_hash\" is not null and octet_length(\"session_token_hash\") = 32)"
+            }
+        }
+    ]
+}

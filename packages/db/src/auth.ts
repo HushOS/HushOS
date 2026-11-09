@@ -20,6 +20,7 @@ import { departAllForDeletion } from './groups';
 import { ownStorage, poolName, storageFigures } from './pool';
 import { pgCode } from './readiness';
 import { keyedHash } from './hash-key';
+import { PENDING_FACTOR_SECONDS, SECURITY_EVENT_DAYS } from './two-step';
 import {
     notificationRegistrations,
     personalWorkspaces,
@@ -45,12 +46,15 @@ import {
     accountSettingsKeys,
     accountRecoveryAttempts,
     accountKeys,
+    accountSecurityEvents,
     authRateLimits,
     opaqueCredentials,
     opaqueLoginAttempts,
     removedSessionTokens,
     serverSecrets,
     sessions,
+    twoStepAttempts,
+    twoStepFactors,
     userSettings,
     users,
     type DeviceKind,
@@ -301,6 +305,12 @@ export type CreatedDevice = 'enrolment' | 'password';
  *   `password` in every other case.
  * A bad or revoked proof never fails the sign-in; it just makes a new device.
  * The device's other session, if any, ends: one live session per device.
+ *
+ * `twoStepAt` is when this sign-in passed the second step, or the time the
+ * session it replaces at an unlock did (docs/two-step-design.md 4). For an
+ * account with a confirmed factor the database refuses a session without it
+ * (the trigger `sessions_two_step_guard`), and this throws: a caller that does
+ * not know the step never signs such an account in on the password alone.
  */
 export async function createSession(input: {
     userId: string;
@@ -309,6 +319,7 @@ export async function createSession(input: {
     previousTokenHash: Buffer | null;
     expiresAt: Date;
     device?: { id: string; signature: Buffer; attemptDigest: Buffer };
+    twoStepAt?: Date | null;
 }) {
     return db.transaction(async (tx) => {
         const [user] = await tx
@@ -424,6 +435,7 @@ export async function createSession(input: {
             deviceId: device.id,
             expiresAt: input.expiresAt,
             lastSeenAt: now,
+            twoStepAt: input.twoStepAt ?? null,
         });
         const { suspendedAt: _suspendedAt, createdAt: _createdAt, ...plain } = user;
         return {
@@ -904,6 +916,8 @@ export async function cleanupExpired(options: { batchSize?: number; signal?: Abo
     const idleCutoff = new Date(now.getTime() - DEVICE_IDLE_DAYS * 24 * 60 * 60 * 1000);
     const revokedCutoff = new Date(now.getTime() - DEVICE_REVOKED_DAYS * 24 * 60 * 60 * 1000);
     const noSession = sql`not exists (select 1 from ${sessions} where ${sessions.deviceId} = ${accountDevices.id})`;
+    const pendingCutoff = new Date(now.getTime() - PENDING_FACTOR_SECONDS * 1000);
+    const eventCutoff = new Date(now.getTime() - SECURITY_EVENT_DAYS * 24 * 60 * 60 * 1000);
     return {
         enrollments: await sweep(
             accountEnrollments,
@@ -944,6 +958,23 @@ export async function cleanupExpired(options: { batchSize?: number; signal?: Abo
         revokedDevices: await repeat(() =>
             db.execute(
                 sql`delete from ${accountDevices} where ${accountDevices.id} in (select ${accountDevices.id} from ${accountDevices} where ${accountDevices.revokedAt} < ${revokedCutoff} limit ${batch})`,
+            ),
+        ),
+        twoStepAttempts: await sweep(
+            twoStepAttempts,
+            twoStepAttempts.tokenHash,
+            twoStepAttempts.expiresAt,
+        ),
+        // An authenticator app nobody finished enrolling, with the sealed secret it held.
+        pendingFactors: await repeat(() =>
+            db.execute(
+                sql`delete from ${twoStepFactors} where ${twoStepFactors.id} in (select ${twoStepFactors.id} from ${twoStepFactors} where ${twoStepFactors.confirmedAt} is null and ${twoStepFactors.createdAt} < ${pendingCutoff} limit ${batch})`,
+            ),
+        ),
+        // The security log keeps 90 days.
+        securityEvents: await repeat(() =>
+            db.execute(
+                sql`delete from ${accountSecurityEvents} where ${accountSecurityEvents.id} in (select ${accountSecurityEvents.id} from ${accountSecurityEvents} where ${accountSecurityEvents.createdAt} < ${eventCutoff} limit ${batch})`,
             ),
         ),
     };

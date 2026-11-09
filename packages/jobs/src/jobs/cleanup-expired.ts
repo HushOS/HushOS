@@ -7,11 +7,13 @@ import type { JobPayloads, queues } from '../client';
  * Deletes expired auth rows (enrollments, login and recovery attempts, sessions,
  * rate-limit buckets, removed devices' tokens) and devices that can never come
  * back, revokes keyed devices idle for 90 days, and deletes revoked devices 90
- * days on; closes expired group invitations and forgets the address on any
- * no longer open for 30 days; deletes notification events past their 30 days;
- * in bounded batches until each table is clean. Runs on a
- * schedule and once at worker start, so a backlog after downtime never lands on
- * a user's request. Each run is one wide event.
+ * days on; deletes expired two-step tokens, authenticator apps nobody finished
+ * enrolling within ten minutes, and security-log lines past their 90 days;
+ * closes expired group invitations and forgets the address on any no longer
+ * open for 30 days; deletes notification events past their 30 days; in bounded
+ * batches until each table is clean. Runs on a schedule and once at worker
+ * start, so a backlog after downtime never lands on a user's request. Each run
+ * is one wide event.
  */
 export async function cleanupExpired(job: Job<JobPayloads[typeof queues.cleanupExpired]>) {
     const event = createLogger({ job: { id: job.id, queue: job.name } });
