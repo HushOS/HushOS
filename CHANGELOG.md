@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.1](https://github.com/HushOS/HushOS/compare/v1.4.0...v1.4.1) (2026-11-09)
+
+
+### Bug fixes
+
+* **apps:** drop the explanation under Notifications and the Files line ([#387](https://github.com/HushOS/HushOS/issues/387)) ([ffecd7a](https://github.com/HushOS/HushOS/commit/ffecd7ac523ee56adaa6a6400de7fefb6dffcd7a))
+
 ## [1.4.0](https://github.com/HushOS/HushOS/compare/v1.3.0...v1.4.0) (2026-11-09)
 
 
