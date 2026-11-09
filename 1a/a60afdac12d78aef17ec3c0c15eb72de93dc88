@@ -1,0 +1,53 @@
+apps/web/src/lib/api/auth-responses.server.ts
+  s_1f3a9ec02d29ed::t_e95cc74dc1312c 274-276,282-284
+apps/web/src/lib/api/auth-responses.test.ts
+  s_1f3a9ec02d29ed::t_fe6833e9da6685 141,586-587,590-591,891-896
+apps/web/src/lib/api/auth.server.ts
+  s_1f3a9ec02d29ed::t_6ff7117f9d496c 606-611,614,616-623
+apps/web/src/lib/api/shared.server.ts
+  s_1f3a9ec02d29ed::t_b99b41fc780822 798-802
+apps/web/src/lib/api/two-step.db.test.ts
+  s_1f3a9ec02d29ed::t_faeb5e9c520ca2 78,105,190-194,309-357,436-498,697-716,883-905,1063,1087-1088,1103,1120,1131,1135-1158,1162-1173,1302-1340,1348-1373,1377-1381,1383,1566-1578,1652-1753,1920-1924
+apps/web/src/test/two-step-api.server.ts
+  s_1f3a9ec02d29ed::t_367bd716c67f39 285-286,288-294,370
+docs/self-hosting.md
+  s_1f3a9ec02d29ed::t_7da4a7f052f817 493-494
+docs/two-step-design.md
+  s_1f3a9ec02d29ed::t_f5125b2cc0de97 106-108,128,130,229,232,299-300,345,576-594,600-605,655,692
+packages/auth/src/server.ts
+  s_1f3a9ec02d29ed::t_41b827a980e12b 51,2358-2359,2492-2500,2505,2509-2512,2514-2515,2519-2526,2529,2531,2534,2537,2549-2550,2556-2560
+packages/auth/src/two-step.ts
+  s_1f3a9ec02d29ed::t_832f494a05fbfe 12,118-131,134,159-162,244-251,265,347-366,462-469,475-476,482-485,487,489,498-501,529-532,539-546,554-557,559-569
+packages/crypto/src/recovery.ts
+  s_1f3a9ec02d29ed::t_9abc99197b5a9d 194-195,197-198,200-202,206-207
+packages/crypto/src/two-step-server.test.ts
+  s_1f3a9ec02d29ed::t_793e1f2d174070 12,84-92
+packages/crypto/src/two-step-server.ts
+  s_1f3a9ec02d29ed::t_0bac0cd47099af 92-102
+packages/crypto/src/two-step.test.ts
+  s_1f3a9ec02d29ed::t_fe363fb11af591 139-145
+packages/db/src/auth.ts
+  s_1f3a9ec02d29ed::t_af356300cf9cbb 27,30,952-1019
+packages/db/src/two-step.test.ts
+  s_1f3a9ec02d29ed::t_dcfd0a5d2486fe 421-449,2598-2611,2841-2930
+packages/db/src/two-step.ts
+  s_1f3a9ec02d29ed::t_fbaa2655bb945a 235,251-256,1134-1137,1168-1169
+packages/db/test/two-step.ts
+  s_1f3a9ec02d29ed::t_8dfce3225d3d50 49-57
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1aa60afdac12d78aef17ec3c0c15eb72de93dc88",
+  "prompts": {},
+  "sessions": {
+    "s_1f3a9ec02d29ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aef80487-cabb-455f-b2f1-acb7f8d96c4e",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
