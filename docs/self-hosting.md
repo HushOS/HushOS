@@ -2325,3 +2325,41 @@ Behaviour:
 - A family dissolved by a container of the previous release during the rollout owes no email, and closes nothing pending.
 - One dissolved by this release before its worker runs waits for it (a week at most).
 - Nothing is written with `GROUPS_ENABLED=false`.
+
+#### Two-step sign-in tables release (`20261109200048_two_step` and `20261109200059_two_step_session_guard`)
+
+What it adds:
+
+- Five empty tables: `two_step_factors`, `two_step_backup_codes`, `two_step_attempts`, `two_step_state` and `account_security_events`.
+- `sessions.two_step_at` (nullable, no default) and `account_devices.two_step_failures` (`integer not null default 0`). Only the catalog changes; neither table is rewritten.
+- `two-step` as a purpose in the check on `opaque_login_attempts`.
+- A trigger on `sessions`, `sessions_two_step_guard`, with a function of the same name. It is the first trigger in the schema.
+- Nothing uses any of it yet. No account can turn two-step sign-in on in this release, so the trigger refuses nothing.
+
+Locks:
+
+- Adding the columns locks `sessions` and `account_devices` against reads and writes until drizzle's single transaction commits. Every signed-in request touches `sessions`. That is milliseconds; five-second lock timeout.
+- The new tables' foreign keys briefly lock `users` and `account_devices` against writes until the same commit.
+- Two checks are checked again over `account_devices` and `opaque_login_attempts`, both small. Replacing the one on `opaque_login_attempts` locks that table against reads and writes until the commit, so a sign-in in flight waits for it.
+
+The trigger:
+
+- Before a session is inserted, it looks for a confirmed row of that account in `two_step_factors`. If there is one and the session has no `two_step_at`, the insert fails.
+- A container of a release from before two-step sign-in never sets that column. Without the trigger it would sign such an account in on the password alone, without a word. With it, that sign-in fails.
+- It covers sign-in only. An older container still skips the second step at a password change, a key rotation and account deletion, from a session that already exists.
+- The function runs as the role that inserts the session, which is the application's role. With a split-role setup made from the grants under [One role per process](#one-role-per-process), the default privileges cover `two_step_factors`.
+- If you grant tables to the application role one by one instead, grant it `SELECT` on `two_step_factors` as soon as the migration has run, or set a default privilege for the application role beforehand so there is no gap. The trigger is live from the moment the migration commits, and containers of the previous release insert sessions through it too. Without the grant every sign-in fails, on both releases and for accounts with and without a second step, because the function reads that table for each new session.
+
+Restoring a backup:
+
+- A full restore (schema and data) needs nothing: `pg_restore` creates triggers after it loads the data.
+- A data-only restore of `sessions` into a database that already has the trigger needs `--disable-triggers`, as a superuser. A session opened before its account turned the second step on has no `two_step_at`, and the trigger refuses it when it is inserted again.
+- Or leave `sessions` out of the restore. Everyone then signs in again.
+
+Rolling back:
+
+- Rolling the containers back to an earlier release leaves the trigger and its function in the database. That is what it is for: the older code then fails to sign in accounts that have a second step, where it would otherwise skip it.
+- To remove it by hand: `drop trigger sessions_two_step_guard on sessions;` then `drop function sessions_two_step_guard();`.
+- Once it is removed, older containers sign those accounts in with the password alone. Remove it only if no account has a second step, or you accept that.
+
+Containers of the previous release neither read nor write the new tables. A device they insert gets `two_step_failures = 0`, and a session they open has no `two_step_at`.
