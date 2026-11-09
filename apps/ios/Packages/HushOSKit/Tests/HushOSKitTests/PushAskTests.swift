@@ -3,9 +3,10 @@ import Testing
 @testable import HushOSKit
 
 /*
- * Asking once: each test fails on a question asked twice, a registration made where the person
- * may have said no (to iOS, or with the Account switch), a yes lost to one failed registration,
- * or a record that outlives the account or reaches another one.
+ * Asking once, the decision and the record: each test fails on a question asked twice, a
+ * registration made with no question where the person may have said no (to iOS, or with the
+ * Account switch), a retry taken twice, the switch losing a race with the app's own asking, or a
+ * record that outlives the account or reaches another one.
  */
 @Suite struct PushAskTests {
     let relay = "https://push.hushos.com"
@@ -24,9 +25,9 @@ import Testing
         #expect(step(nil, .undecided) == .ask)
     }
 
-    @Test func iOSAllowingAlreadyNeverTurnsThemOnByItself() {
-        // Allowed for the switch, then switched off, or allowed for background uploads: no way to tell, so nothing registers.
-        #expect(step(nil, .allowed) == .markOnly)
+    @Test func iOSAllowingAlreadyIsOfferedNeverTurnedOnWithoutATap() {
+        // Allowed for the switch then switched off, for background uploads, or before a sign-out: no way to tell, so the app asks.
+        #expect(step(nil, .allowed) == .offer)
         #expect(step(nil, .denied) == .markOnly)
     }
 

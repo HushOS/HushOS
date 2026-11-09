@@ -190,6 +190,14 @@ struct MainView: View {
                 } message: {
                     Text("Your session ended, perhaps because your password was changed on another device. Sign in again to carry on.")
                 }
+                // Notifications, in the app's own words, where iOS allows HushOS already (PhonePush.askOnce): once per account.
+                .alert("Turn on notifications?", isPresented: Binding(get: { PhonePush.shared.offer != nil }, set: { if !$0 { PhonePush.shared.offer = nil } })) {
+                    Button("Not now", role: .cancel) { PhonePush.shared.offer = nil }
+                    // Taken now: the alert clears `offer` as it closes, before the task runs.
+                    Button("Turn on") { let offer = PhonePush.shared.offer; Task { await PhonePush.shared.accept(offer) } }
+                } message: {
+                    Text("Get told about new sign-ins, removed devices, things shared with you and family invitations, even while HushOS is closed.")
+                }
                 .alert("That page is only on the web.", isPresented: $webOnly) {
                     Button("OK", role: .cancel) {}
                 }

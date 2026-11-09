@@ -143,8 +143,9 @@ final class PhonePush {
      * first signed-in start of a build that asks. Waits until the app is in front and nothing the
      * person is using (a sheet, a dialog, an alert) is up, and checks that again, for the same
      * account, right before anything is asked: the server's settings are read in between. Then,
-     * as PushAsk.step says: iOS's question (registering as the switch does if allowed), a
-     * registration a failed yes left for this start, or only the mark. The mark is set before the
+     * as PushAsk.step says: iOS's question (registering as the switch does if allowed), the app's
+     * own question where iOS allows HushOS already (`offer`), a registration a failed yes left for
+     * this start, or only the mark. The mark is set before the
      * question, and only if nothing (the switch, another run) changed it since it was read.
      */
     func askOnce() async {
@@ -160,7 +161,32 @@ final class PhonePush {
         let step = PushAsk.step(available: true, registered: PushNotifications.registration?.belongs(to: session) == true,
                                 mark: mark, relay: relay, permission: await Self.permission)
         guard step != .nothing, record.set(session, to: .asked, ifStill: mark) else { return }
+        if step == .offer {
+            // iOS allows HushOS already: the app's own question (MainView's alert), answered by accept or Not now.
+            offer = Offer(session: session, relay: relay)
+            return
+        }
         guard step == .ask || step == .register else { return }
+        await register(session, relay: relay)
+    }
+
+    /* The app's own question, while it is up: for this account, on this relay. */
+    struct Offer: Equatable {
+        let session: SharedKeychain.Session
+        let relay: String
+    }
+
+    var offer: Offer?
+
+    /* Turn on, in the app's own question: as the switch does, for the account it was asked for. */
+    func accept(_ offer: Offer?) async {
+        self.offer = nil
+        guard let offer, SharedKeychain.session == offer.session else { return }
+        await register(offer.session, relay: offer.relay)
+    }
+
+    private func register(_ session: SharedKeychain.Session, relay: String) async {
+        let record = PushAsk.Record.shared
         do {
             // The switch's own turn-on: iOS's question when undecided, the token, the relay, the server.
             try await turnOn(relay: relay)

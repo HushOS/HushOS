@@ -9,9 +9,9 @@ import java.io.File
 /*
  * Asking once (docs/devices-design.md 5, Settings): right after a sign-in or sign-up, or at the first signed-in start of
  * a build that asks, on a server with notifications and a relay this app can use, the app asks for POST_NOTIFICATIONS
- * (Android 13 and later) and, if allowed, turns "On this phone" on as the switch does. Only Android's own question turns
- * them on: where notifications are allowed already (before Android 13, or allowed for the switch and switched off since),
- * the app can't tell a yes from an earlier "off", so it registers nothing and Account's switch stays the way.
+ * (Android 13 and later) and, if allowed, turns "On this phone" on as the switch does. Where notifications are allowed
+ * already (before Android 13, allowed for the switch and switched off since, or before signing out and back in), the app
+ * can't tell a yes from an earlier "off", so it asks in its own words instead, once, and only a tap on Turn on registers.
  *
  * Once per account on a server: the record is `push-asked.json` in the app's files, wiped with the account's data
  * (AccountStore), and marked before the question, so a question the person dismissed, or an app stopped mid-question, is
@@ -40,7 +40,8 @@ object PushAsk {
         DENIED,
     }
 
-    enum class Step { NOTHING, ASK, REGISTER, MARK_ONLY }
+    /* ASK: Android's question. OFFER: the app's own (allowed already), registering on Turn on. REGISTER: a retry. */
+    enum class Step { NOTHING, ASK, OFFER, REGISTER, MARK_ONLY }
 
     /*
      * The one decision. Nothing while this build has no notifications, this phone already has a registration for the
@@ -52,6 +53,7 @@ object PushAsk {
         mark == Mark.ASKED || mark == Mark.DECIDED -> Step.NOTHING
         mark == Mark.RETRY -> if (permission == Permission.ALLOWED) Step.REGISTER else Step.MARK_ONLY
         permission == Permission.UNDECIDED -> Step.ASK
+        permission == Permission.ALLOWED -> Step.OFFER
         else -> Step.MARK_ONLY
     }
 
@@ -96,6 +98,10 @@ object PushAsk {
         }
     }
 
+    /* Whether this start has already taken a retry. */
+    @Volatile
+    var retried = false
+
     /* Moves when the asking turned notifications on, so Account's switch reads again. */
     private val moved = MutableStateFlow(0)
     val changed: StateFlow<Int> = moved
@@ -113,6 +119,8 @@ object PushAsk {
         if (!PushTokens.configured || PushNotifications.registration(context)?.belongsTo(session) == true) return null
         val mark = Record(context).mark(session)
         if (mark == Mark.ASKED || mark == Mark.DECIDED) return null
+        // A retry once per start: this runs whenever the screen gets the focus back.
+        if (mark == Mark.RETRY && retried) return null
         val relay = runCatching { PushNotifications.serverState(context)?.relay }.getOrNull() ?: return null
         if (Shared.session(context) != session) return null
         return Reading(session, mark, relay)

@@ -188,6 +188,22 @@ fun AskForNotifications(userId: String?, focused: Boolean) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var waiting by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
+    // The app's own question, while it is up (allowed already): the relay to register with on Turn on.
+    var offering by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
+    offering?.let { relay ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { offering = null },
+            title = { Text("Turn on notifications?") },
+            text = { Text("Get told about new sign-ins, removed devices, things shared with you and family invitations, even while HushOS is closed.") },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    offering = null
+                    scope.launch(Dispatchers.IO) { Shared.session(context)?.let { PushAsk.register(context, it, relay) } }
+                }) { Text("Turn on") }
+            },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = { offering = null }) { Text("Not now") } },
+        )
+    }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         val relay = waiting
         waiting = null
@@ -213,7 +229,11 @@ fun AskForNotifications(userId: String?, focused: Boolean) {
                 waiting = reading.relay
                 permission.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
-            PushAsk.Step.REGISTER -> scope.launch(Dispatchers.IO) { PushAsk.register(context, reading.session, reading.relay) }
+            PushAsk.Step.OFFER -> offering = reading.relay
+            PushAsk.Step.REGISTER -> {
+                PushAsk.retried = true
+                scope.launch(Dispatchers.IO) { PushAsk.register(context, reading.session, reading.relay) }
+            }
             PushAsk.Step.NOTHING, PushAsk.Step.MARK_ONLY -> {}
         }
     }

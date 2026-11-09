@@ -13,9 +13,9 @@ import java.io.File
 import java.nio.file.Files
 
 /*
- * Asking once: each test fails on a question asked twice, a registration made where the person may have said no (to
- * Android, or with the Account switch), a yes lost to one failed registration, or a record that outlives the account or
- * reaches another one.
+ * Asking once, the decision and the record: each test fails on a question asked twice, a registration made with no
+ * question where the person may have said no (to Android, or with the Account switch), a retry taken twice, the switch
+ * losing a race with the app's own asking, or a record that outlives the account or reaches another one.
  */
 class PushAskTest {
     private val relay = "https://push.hushos.com"
@@ -37,9 +37,9 @@ class PushAskTest {
     }
 
     @Test
-    fun notificationsAllowedAlreadyAreNeverTurnedOnByTheAppItself() {
-        // Allowed for the switch then switched off, or Android before 13: no way to tell, so nothing registers.
-        assertEquals(Step.MARK_ONLY, step(null, Permission.ALLOWED))
+    fun notificationsAllowedAlreadyAreOfferedNeverTurnedOnWithoutATap() {
+        // Allowed for the switch then switched off, before a sign-out, or Android before 13: no way to tell, so the app asks.
+        assertEquals(Step.OFFER, step(null, Permission.ALLOWED))
         assertEquals(Step.MARK_ONLY, step(null, Permission.DENIED))
     }
 

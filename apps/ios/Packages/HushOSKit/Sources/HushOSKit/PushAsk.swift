@@ -4,9 +4,9 @@ import Foundation
  * Asking once (docs/devices-design.md 5, Settings): right after a sign-in or sign-up, or at the
  * first signed-in start of a build that asks, on a server with notifications and a relay this app
  * can use, the app asks iOS for permission and, if allowed, turns "On this phone" on as the switch
- * does. Only iOS's own question turns them on: where iOS already allows HushOS (the person allowed
- * it for the switch, or for background uploads), the app can't tell a yes from an earlier "off",
- * so it registers nothing and Account's switch stays the way.
+ * does. Where iOS already allows HushOS (the person allowed it for the switch and switched it off
+ * since, for background uploads, or before signing out and back in), the app can't tell a yes from
+ * an earlier "off", so it asks in its own words instead, once, and only a tap on Turn on registers.
  *
  * Once per account on a server: the record is in `state/` (`push-asked.json`), wiped with the
  * account's data, and marked before the question, so a question the person dismissed, or an app
@@ -42,6 +42,8 @@ public enum PushAsk {
         case ask
         /* Register as the switch does, with no question: a yes from before whose registration failed. */
         case register
+        /* Mark it asked, then ask in the app's own words (iOS allows HushOS already); register on Turn on. */
+        case offer
         /* Mark it asked and go no further. */
         case markOnly
     }
@@ -56,7 +58,12 @@ public enum PushAsk {
         switch mark {
         case .asked?, .decided?: return .nothing
         case .retry?: return permission == .allowed ? .register : .markOnly
-        case nil: return permission == .undecided ? .ask : .markOnly
+        case nil:
+            switch permission {
+            case .undecided: return .ask
+            case .allowed: return .offer
+            case .denied: return .markOnly
+            }
         }
     }
 
