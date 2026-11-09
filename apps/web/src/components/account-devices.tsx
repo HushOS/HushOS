@@ -379,7 +379,6 @@ function RemoveDialog({
                         value={password}
                         disabled={removing}
                         error={error}
-                        hint="Removing a device asks for your password."
                         onChange={(event) => setPassword(event.target.value)}
                     />
                     <AlertDialogFooter>
