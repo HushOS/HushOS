@@ -2340,7 +2340,7 @@ Locks:
 
 - Adding the columns locks `sessions` and `account_devices` against reads and writes until drizzle's single transaction commits. Every signed-in request touches `sessions`. That is milliseconds; five-second lock timeout.
 - The new tables' foreign keys briefly lock `users` and `account_devices` against writes until the same commit.
-- Two checks are checked again over `account_devices` and `opaque_login_attempts`, both small.
+- Two checks are checked again over `account_devices` and `opaque_login_attempts`, both small. Replacing the one on `opaque_login_attempts` locks that table against reads and writes until the commit, so a sign-in in flight waits for it.
 
 The trigger:
 
@@ -2348,7 +2348,7 @@ The trigger:
 - A container of a release from before two-step sign-in never sets that column. Without the trigger it would sign such an account in on the password alone, without a word. With it, that sign-in fails.
 - It covers sign-in only. An older container still skips the second step at a password change, a key rotation and account deletion, from a session that already exists.
 - The function runs as the role that inserts the session, which is the application's role. With a split-role setup made from the grants under [One role per process](#one-role-per-process), the default privileges cover `two_step_factors`.
-- If you grant tables to the application role one by one instead, grant it `SELECT` on `two_step_factors` before the new containers start. Without it every sign-in fails, for accounts with and without a second step, because the function reads that table for each new session.
+- If you grant tables to the application role one by one instead, grant it `SELECT` on `two_step_factors` as soon as the migration has run, or set a default privilege for the application role beforehand so there is no gap. The trigger is live from the moment the migration commits, and containers of the previous release insert sessions through it too. Without the grant every sign-in fails, on both releases and for accounts with and without a second step, because the function reads that table for each new session.
 
 Restoring a backup:
 

@@ -328,6 +328,15 @@ export type CreatedDevice = 'enrolment' | 'password';
  * first and passes its time in as a bare `twoStepAt` races revokeDevice: a
  * device removed between that read and this insert no longer lends its row,
  * so a new device would get a session carrying a step it never passed.
+ *
+ * Also not built yet: a way to attach the session to the device the step token
+ * recorded. A device proof here is a signature over the OPAQUE attempt, and by
+ * the time the step is passed that attempt is used up, so a two-step sign-in
+ * from a known device would get a new `password` device every time (a second
+ * row in the device list, a new-device notice, and `key-in-use` when the
+ * device registers its key). The sign-in route needs an input for the token's
+ * `device_id`, checked in here under the account's lock: the account's own,
+ * approved, not revoked and holding a signing key.
  */
 export async function createSession(
     input: {

@@ -30,7 +30,10 @@ import {
  *
  * `enrol` tokens (a first method enrolled at sign-in, under a policy) can be
  * issued and read here, but nothing consumes one until the policy change is
- * built: passStep refuses them, and turning the step on deletes them.
+ * built: passStep refuses them, and turning the step on deletes them. Issuing
+ * one takes no lock and checks nothing, so one can still be written just after
+ * the step was turned on. Whatever comes to consume them must check, under the
+ * account's lock, that the token is live and the account has no method yet.
  */
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -869,7 +872,12 @@ export type StepPass =
  * roll it back unless that succeeds. The token, the code or step, the counts
  * and any thaw then come back. Before createSession and changeAccountSecurity
  * the order of locks is theirs, the account's row first; before deleteAccount
- * it is not (see there).
+ * it is not (see there). The rule is general: this locks the account's row,
+ * and every group write locks the group first and the person's row second, so
+ * anything that locks a group after this has run in the same transaction can
+ * deadlock with a group write. deleteAccount is the only such caller today.
+ * After `unavailable` the transaction still holds the account's row: roll it
+ * back, never retry inside it.
  * An `enrol` token is never passed here: only confirming a first method answers it.
  */
 export async function passStep(
