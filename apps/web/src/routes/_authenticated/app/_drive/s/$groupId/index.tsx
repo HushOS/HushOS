@@ -9,6 +9,7 @@ import { NewFamilyFolderDialog } from '@/components/families/new-folder-dialog';
 import { ServerKnowsLine } from '@/components/families/server-knows';
 import { FolderMark } from '@/components/folder-mark';
 import { PageHeader } from '@/components/page-header';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button, buttonVariants } from '@/components/ui/button';
 import {
     DropdownMenu,
@@ -17,6 +18,7 @@ import {
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import type { AreaState } from '@/lib/groups/sync';
+import { useWaitingOn } from '@/lib/families-shell';
 import { useFamilySpace } from '@/lib/spaces';
 
 export const Route = createFileRoute('/_authenticated/app/_drive/s/$groupId/')({
@@ -44,6 +46,8 @@ function FamilySpacePage() {
     // Deleting adds no storage, so it never waits: a family whose plan lapsed frees space with it.
     const plan = useFamilyPlanGate(space.userId, space.groupId);
     const canCreate = space.manager && !plan.waiting;
+    // What the family item's count in the sidebar stands for, said where that item leads.
+    const waiting = useWaitingOn(space.userId, space.groupId, space.manager);
     const [deleting, setDeleting] = useState<{ workspaceId: string; name: string } | null>(null);
     // A folder whose root did not open has no name to show; it is listed by what it is.
     const rows = [...space.areas].sort((a, b) =>
@@ -73,6 +77,27 @@ function FamilySpacePage() {
                     </Button>
                 )}
             </PageHeader>
+            {waiting > 0 && (
+                <div className="max-w-3xl px-5 pb-5 sm:px-8" data-family-waiting-notice>
+                    <Alert variant="info">
+                        <AlertTitle>
+                            {waiting === 1
+                                ? 'Someone is waiting for you'
+                                : `${waiting} people are waiting for you`}
+                        </AlertTitle>
+                        <AlertDescription>
+                            See who in{' '}
+                            <Link
+                                to="/app/family"
+                                className="font-semibold text-primary underline underline-offset-2"
+                            >
+                                Family settings
+                            </Link>
+                            .
+                        </AlertDescription>
+                    </Alert>
+                </div>
+            )}
             {rows.length === 0 ? (
                 <EmptyState
                     title="No family folders yet"

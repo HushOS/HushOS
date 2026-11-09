@@ -46,14 +46,11 @@ import { useEffect } from 'react';
 import {
     activeFamily,
     canManage,
+    useWaitingOn,
     familiesQueryOptions,
     familyItemActive,
-    familyQueryOptions,
-    pendingQueryOptions,
     useGroupsEnabled,
-    waitingOn,
 } from '@/lib/families-shell';
-import { useFamilyWork } from '@/lib/family-work-state';
 import { SearchButton } from '@/components/search-button';
 import { UserMenu } from '@/components/user-menu';
 import { Badge } from '@/components/ui/badge';
@@ -383,38 +380,6 @@ function useYourFamily(userId: string) {
     return enabled ? activeFamily(data) : undefined;
 }
 
-/*
- * How much waits on this person in their family, as the family page counts it (waitingOn):
- * people to let in, and for those who manage it, members to check. Only someone who manages
- * the family is asked; the members to check come from the background pass the Drive runs
- * (lib/family-work-state.ts, nothing loaded for it here), and the family's member list is read
- * only while that pass names someone.
- */
-function useWaitingOn(userId: string, family: { id: string; roles: string[] } | undefined) {
-    const manager = family !== undefined && canManage(family.roles);
-    const groupId = family?.id ?? '';
-    const pending = useQuery({
-        ...pendingQueryOptions(userId, groupId),
-        enabled: manager,
-        // Someone who accepts turns up within a minute; the family page asks more often.
-        refetchInterval: 60_000,
-    });
-    const { needsCheck } = useFamilyWork(groupId);
-    const others = needsCheck.some((id) => id !== userId);
-    const detail = useQuery({
-        ...familyQueryOptions(userId, groupId),
-        enabled: manager && others,
-    });
-    if (!manager) return 0;
-    return waitingOn({
-        userId,
-        manager,
-        pending: pending.data ?? [],
-        members: others ? (detail.data?.members ?? []) : [],
-        needsCheck,
-    });
-}
-
 /* Collapsed, the avatar stays and the name goes; a count stays too, at the square's corner. */
 const familyCollapsed =
     'rail:size-10! rail:justify-center rail:p-0! rail:[&>[data-family-name]]:sr-only';
@@ -428,7 +393,11 @@ const familyCollapsed =
  */
 function FamilyItem({ userId, pathname }: { userId: string; pathname: string }) {
     const family = useYourFamily(userId);
-    const waiting = useWaitingOn(userId, family);
+    const waiting = useWaitingOn(
+        userId,
+        family?.id ?? '',
+        family !== undefined && canManage(family.roles),
+    );
     if (!family) return null;
     const name = waiting > 0 ? `${family.name}, ${waiting} waiting for you` : family.name;
     return (
