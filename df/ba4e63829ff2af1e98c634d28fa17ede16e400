@@ -1,0 +1,59 @@
+apps/web/src/lib/families-shell.test.ts
+  s_566b8e0c4467a4::t_23ef3382f08942 1-83
+apps/web/src/components/search-button.tsx
+  s_566b8e0c4467a4::t_d2060082b67975 1-42
+DESIGN.md
+  s_566b8e0c4467a4::t_3e7f6062ae7a33 325,690,693,730
+apps/web/src/components/app-sidebar.tsx
+  s_566b8e0c4467a4::t_a5a76a6fac072e 46-59,83-86,109,111,155-157,196,354,360-373,377-378,386-415,418-429,431,433,435-457,464,471-481,491-492,501-506,515-525,530-537,543-550
+apps/web/src/components/drive/command-palette.tsx
+  s_566b8e0c4467a4::t_208cb57a8cb017 35
+apps/web/src/components/families/family-billing.tsx
+  s_566b8e0c4467a4::t_02a1fccbb3ba55 742
+apps/web/src/components/families/family-page.tsx
+  s_566b8e0c4467a4::t_ab196ce1ef69a5 33,48,107,217,219-229,233,243,245,389-414
+apps/web/src/components/families/members.tsx
+  s_566b8e0c4467a4::t_d358cd765b7037 87-96,100,109-110,144,639,645-646,976
+apps/web/src/components/settings.tsx
+  s_566b8e0c4467a4::t_0abf8c22abf245 10,29,44-45
+apps/web/src/components/user-menu.tsx
+  s_566b8e0c4467a4::t_569864ebf9fb4d 15,76-78,80-90,104-107,109,111
+apps/web/src/lib/families-shell.ts
+  s_566b8e0c4467a4::t_9f7fca942c471e 51-118
+apps/web/src/lib/families.ts
+  s_566b8e0c4467a4::t_f1a2f5fb953997 6,32,36-37,40
+apps/web/src/lib/family-work-state.ts
+  s_566b8e0c4467a4::t_9dfdcb38c24aa0 1-40
+apps/web/src/lib/family-work.ts
+  s_566b8e0c4467a4::t_8e3874be4adedc 5-7,39,46,49,58
+apps/web/src/routes/_authenticated/app/_drive/s/$groupId/index.tsx
+  s_566b8e0c4467a4::t_2ae3745ca25153 38,58,60
+apps/web/src/routes/_authenticated/app/route.tsx
+  s_566b8e0c4467a4::t_fd7e64ba291449 8,206-211,216,218-220,265-266,287-291
+docs/families-shared-pool.md
+  s_566b8e0c4467a4::t_1dd97694176acb 250,254,256,258
+e2e/families.spec.ts
+  s_566b8e0c4467a4::t_99710116fa819a 18,110,113,305,581,597,782,1393,1668-1669,2538,2547-2548,2551-2556,2561,2880,3096,3163,3165,3261,3316-3319,3326,3328,3409-3413,4090
+e2e/helpers.ts
+  s_566b8e0c4467a4::t_f076c6843c0769 130-137
+e2e/mobile.spec.ts
+  s_566b8e0c4467a4::t_50cc47e2f85d7c 42,44-45,47-59
+e2e/screenshots.spec.ts
+  s_566b8e0c4467a4::t_1efbe1abb49480 15,337,340,409,543-546,556
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "dfba4e63829ff2af1e98c634d28fa17ede16e400",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
