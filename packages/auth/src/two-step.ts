@@ -364,6 +364,20 @@ function readBackupCode(typed: string) {
     return code;
 }
 
+/*
+ * The shape of an answer, before anything is spent on the request that carries
+ * it: a change checks the password first, and that proof is one use. A code
+ * that is not a code is refused here (400), so the password proof, the step
+ * token and every count are still whole for the corrected answer. Nothing is
+ * read from the database, and nothing here says whether an answer is right.
+ */
+export function readStepAnswer(submission: StepSubmission | undefined) {
+    if (!submission) return;
+    const { proof } = submission;
+    if (proof.kind === 'totp') readTotpCode(proof.code);
+    else if (proof.kind === 'backup') readBackupCode(proof.code);
+}
+
 function frozen() {
     return new AuthError(
         'Authenticator codes are paused here after too many wrong ones. Use a backup code or your recovery phrase.',
@@ -479,15 +493,23 @@ async function totpProof(userId: string, code: string): Promise<StepProof | null
 /*
  * The input is hashed once for each key the account's unused codes were made
  * under (one, unless the operator changed the key since) and compared with
- * every one of them, so a wrong code costs the server one slow hash. Codes
- * made under a key this server no longer has cannot be checked at all: unless
- * the input matched under a key it does have, that is an outage (503), as it
- * is for an authenticator app, and not a wrong code.
+ * every one of them, so a wrong code costs the server one slow hash.
+ *
+ * A code made under a key this server no longer has cannot be checked at all.
+ * If any unused code names such a key, the answer is an outage (503), as it is
+ * for an authenticator app, decided before anything is hashed. "No match among
+ * the codes that can be checked" would not mean "wrong" then: the input might
+ * be the very code that cannot be checked, and calling it wrong would count a
+ * right answer against its owner. Today a set is always written whole under
+ * one key, so either every code can be checked or none can; this does not
+ * lean on that.
  */
 async function backupProof(userId: string, code: string): Promise<StepProof | null> {
     const two = await twoStepRepository.getTwoStep(userId);
     if (!two.state || two.backupCodes.length === 0) return null;
     const { keys } = await twoStepKeys();
+    if (two.backupCodes.some((stored) => !keys.some((key) => key.id.equals(stored.keyId))))
+        throw keyMissing();
     let found: Buffer | null = null;
     for (const key of keys) {
         const under = two.backupCodes.filter((stored) => stored.keyId.equals(key.id));
@@ -495,10 +517,7 @@ async function backupProof(userId: string, code: string): Promise<StepProof | nu
         const hashed = Buffer.from(await hashBackupCode(code, key.key, two.state.backupCodeSalt));
         for (const stored of under) if (await sameHash(stored.codeHash, hashed)) found = hashed;
     }
-    if (found) return { method: 'backup', codeHash: found };
-    if (two.backupCodes.some((stored) => !keys.some((key) => key.id.equals(stored.keyId))))
-        throw keyMissing();
-    return null;
+    return found ? { method: 'backup', codeHash: found } : null;
 }
 
 async function phraseProof(

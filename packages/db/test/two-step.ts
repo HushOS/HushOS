@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { db } from '../src/client';
 import {
     accountDevices,
@@ -61,6 +61,29 @@ export async function setDeviceFailures(deviceId: string, count: number) {
         .update(accountDevices)
         .set({ twoStepFailures: count })
         .where(eq(accountDevices.id, deviceId));
+}
+
+/*
+ * One of the account's unused backup codes, as if it had been made under a key nobody has: the
+ * rest of the set stays as it was. No request leaves a set like this today (a set is written
+ * whole, under one key); the check must not depend on that.
+ */
+export async function strandOneBackupCode(userId: string) {
+    const [code] = await db
+        .select({ codeHash: twoStepBackupCodes.codeHash })
+        .from(twoStepBackupCodes)
+        .where(and(eq(twoStepBackupCodes.userId, userId), isNull(twoStepBackupCodes.usedAt)))
+        .limit(1);
+    if (!code) throw new Error('No unused backup code.');
+    await db
+        .update(twoStepBackupCodes)
+        .set({ keyId: Buffer.alloc(8, 0xee) })
+        .where(
+            and(
+                eq(twoStepBackupCodes.userId, userId),
+                eq(twoStepBackupCodes.codeHash, code.codeHash),
+            ),
+        );
 }
 
 export async function membershipState(groupId: string, userId: string) {

@@ -122,10 +122,10 @@ A six-digit code with three steps accepted is a 3 in 10⁶ guess. The password i
     - at **100** from one known device, the app is frozen **on that device alone**, with a notice of its own. The same cap, for the same reason: a known device has its own budget, so without a freeze of its own it could guess without end. Every other device, and new ones, still take codes. It thaws as the shared freeze does: a success with anything but the app, from that device or any other.
 - **What someone with the password can still do,** from as many addresses as they like:
     - **New devices:** they can keep the account's shared budget spent and freeze the authenticator app for new devices, indefinitely. A new device of the owner's then needs a security key or the phrase while it lasts. Backup codes share that budget, so they are refused with the codes.
-    - **Known devices:** none of it reaches them. A known device whose session ended signs in with its device proof and its own budget, and the authenticator app still works there. Freezing the app on a known device takes that device's own key.
+    - **Known devices:** none of it reaches them. A known device whose session ended signs in with its device proof and its own budget, and the authenticator app still works there. Freezing the app on a known device takes that device's key, or a live session on it: a change asked from a session counts on that session's device, with no key proof.
     - **Notices:** the owner hears at the fifth failure that the password is known, and should change it, which ends the attack.
 
-    Every lockout scheme gives an attacker who has the first factor some lever. With the password alone, this one is bounded to new devices and two of the methods. Freezing the app on a known device takes that device itself, with its key, and reaches no further than that device. Either way the owner is told.
+    Every lockout scheme gives an attacker who has the first factor some lever. With the password alone, this one is bounded to new devices and two of the methods. Freezing the app on a known device takes that device's key, or a live session on it, and reaches no further than that device. Either way the owner is told.
 
 **As built.** The count of failed steps for the notice is kept in the rate-limit table (`auth_rate_limits`), one bucket for each pool: the fifth failure since the pool's last success sends the notice, a success in the pool empties the bucket, and a count starts again 30 days after its first failure. The counts of wrong codes that freeze the app are columns (`two_step_state.consecutive_failures`, `account_devices.two_step_failures`); a device is frozen while its own stands at 100 or more.
 
@@ -594,6 +594,11 @@ Base64url without padding; ids lowercase UUIDs, as elsewhere.
 | `POST /api/auth/security/finish`, `/auth/delete/finish` | add `twoStep?: { token, proof }`                                                                      | 403 `two-step` when the step is on and the proof is missing or wrong                                                                                                               |
 
 **Codes a client acts on.** Every refusal carries a message and, where a client must tell cases apart, one of these: `update-required` (409), `two-step` (401 at sign-in, 403 at a change: a wrong or missing answer, and the token takes another), `two-step-expired` (the token is gone: back to the password at sign-in, a new challenge at a change), `totp-frozen` (403: authenticator codes are paused here, another method still answers) and `unsupported` (501: `TWO_STEP_ENABLED` is off). A spent code budget is 429. A wrong password at a change to the step is 403 with no code, as removing a device answers it.
+
+Two answers carry no code and mean the answer was never checked:
+
+- **400** for input that is not a code: not six digits after spaces and hyphens are dropped, or not a backup code's ten characters. The step token is untouched and nothing is counted. At a change the password proof is kept too: the shape is read before the proof is spent, so the corrected answer goes with the same proof.
+- **503** for a key the server no longer has: the authenticator app's secret, or any unused backup code, was made under a key that is not set (section 8). Nothing is counted; the recovery phrase still answers.
 
 **Not built with the server's first release:** the security-key routes (`keys/options`, `keys`, the static pages; release C), `GET /api/auth/security-events` and the log behind it (below), and the guardian routes, which wait for the child reset itself.
 

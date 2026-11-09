@@ -48,6 +48,7 @@ import {
     newBackupCodes,
     newTotp,
     notifyTwoStep,
+    readStepAnswer,
     readTotpCode,
     requireTwoStepEnabled,
     stepNotPassed,
@@ -2061,6 +2062,8 @@ export async function finishAccountDeletion(
     );
     const failure = () =>
         new AuthError('Could not delete your account. Check your password and try again.');
+    // An answer that is not a code at all is refused before the password proof is spent.
+    readStepAnswer(input.twoStep);
     await refuseWhileHoldingGroups(user.id);
     await consumeBoundAttempt('delete', user, token, input, failure);
     // The password first, then the step (docs/two-step-design.md 4). The answer is checked
@@ -2240,6 +2243,8 @@ export async function finishSecurityChange(
     );
     const failure = () =>
         new AuthError('Account security could not be changed. Sign in again and retry.', 409);
+    // An answer that is not a code at all is refused before the password proof is spent.
+    readStepAnswer(input.twoStep);
     await consumeBoundAttempt(input.action, user, token, input, failure);
     // The replacement registration record must parse before anything is stored.
     try {
@@ -2470,6 +2475,8 @@ export type TwoStepChangeProof = {
 export async function startTotp(sessionToken: string | null, input: TwoStepChangeProof) {
     requireTwoStepEnabled();
     const { user, token } = await requireTwoStepSession(sessionToken);
+    // An answer that is not a code at all is refused before the password proof is spent.
+    readStepAnswer(input.twoStep);
     await consumeBoundAttempt('two-step', user, token, input, wrongPassword);
     const app = await newTotp(user);
     await changeBehindStep(
@@ -2601,6 +2608,8 @@ export async function removeTwoStepMethod(
 ) {
     requireTwoStepEnabled();
     const { user, token } = await requireTwoStepSession(sessionToken);
+    // An answer that is not a code at all is refused before the password proof is spent.
+    readStepAnswer(input.twoStep);
     await consumeBoundAttempt('two-step', user, token, input, wrongPassword);
     const removed = await changeBehindStep(
         user,
@@ -2626,6 +2635,8 @@ export async function removeTwoStepMethod(
 export async function replaceBackupCodes(sessionToken: string | null, input: TwoStepChangeProof) {
     requireTwoStepEnabled();
     const { user, token } = await requireTwoStepSession(sessionToken);
+    // An answer that is not a code at all is refused before the password proof is spent.
+    readStepAnswer(input.twoStep);
     await consumeBoundAttempt('two-step', user, token, input, wrongPassword);
     const off = () => new AuthError('Turn on two-step sign-in first.', 409);
     if (!(await twoStepRepository.hasTwoStep(user.id))) throw off();

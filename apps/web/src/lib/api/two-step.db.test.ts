@@ -113,12 +113,14 @@ async function reauth(who: Account, cookie: string) {
     return { attemptToken, finishLoginRequest };
 }
 
-/* A password change as a client sends it: the proof, a real new record, a re-wrapped envelope. */
-async function changePassword(
+/*
+ * A password change made ready: the password proved once, and `send` to finish it with a
+ * given answer to the step. Sending twice sends the same proof twice.
+ */
+async function passwordChange(
     who: Account,
     cookie: string,
     newPassword: string,
-    twoStep?: unknown,
     action: 'password' | 'recovery-key' = 'password',
 ) {
     const registration = client.startRegistration({ password: newPassword });
@@ -137,28 +139,43 @@ async function changePassword(
         action === 'recovery-key'
             ? await api.recoveryKey(who.id, proof.challenge.recovery.recoveryVersion + 1)
             : null;
-    const reply = await api.call(
-        'POST',
-        '/security/finish',
-        {
-            action,
-            attemptToken: proof.attemptToken,
-            finishLoginRequest: proof.finishLoginRequest,
-            registrationRecord,
-            envelope: {
-                envelopeVersion: 1,
-                keyVersion: current.keyVersion,
-                credentialVersion: current.credentialVersion + 1,
-                wrappingSalt: b64(32),
-                wrappingNonce: b64(24),
-                encryptedKey: b64(48),
-            },
-            ...(rotated ? { recovery: rotated.envelope } : {}),
-            ...(twoStep ? { twoStep } : {}),
+    const body = {
+        action,
+        attemptToken: proof.attemptToken,
+        finishLoginRequest: proof.finishLoginRequest,
+        registrationRecord,
+        envelope: {
+            envelopeVersion: 1,
+            keyVersion: current.keyVersion,
+            credentialVersion: current.credentialVersion + 1,
+            wrappingSalt: b64(32),
+            wrappingNonce: b64(24),
+            encryptedKey: b64(48),
         },
-        { cookie },
-    );
-    return { reply, rotated };
+        ...(rotated ? { recovery: rotated.envelope } : {}),
+    };
+    const send = (twoStep?: unknown) =>
+        api.call(
+            'POST',
+            '/security/finish',
+            { ...body, ...(twoStep ? { twoStep } : {}) },
+            {
+                cookie,
+            },
+        );
+    return { send, rotated };
+}
+
+/* A password change as a client sends it: the proof, a real new record, a re-wrapped envelope. */
+async function changePassword(
+    who: Account,
+    cookie: string,
+    newPassword: string,
+    twoStep?: unknown,
+    action: 'password' | 'recovery-key' = 'password',
+) {
+    const change = await passwordChange(who, cookie, newPassword, action);
+    return { reply: await change.send(twoStep), rotated: change.rotated };
 }
 
 async function deleteAccount(who: Account, cookie: string, twoStep?: unknown) {
@@ -901,6 +918,32 @@ describe('a code made under a key this server no longer has', () => {
         // The phrase needs no key of the server's, and still answers on the same token.
         expect((await answer(offer.token, await api.phraseProof(who, offer))).status).toBe(200);
     });
+
+    test('one backup code under a missing key makes every backup code an outage: no guess is called wrong, none is matched', async () => {
+        const { who, app } = await stepped();
+        // Nine codes under the server's key, one under a key nobody has.
+        await api.rows.strandOneBackupCode(who.id);
+        await api.rows.setSharedFailures(who.id, 99);
+        const offer = await asked(who);
+        // A wrong guess is not "wrong": it might be the code that cannot be checked. More of
+        // them than a token or the budget would take, were they counted.
+        for (let index = 0; index < 12; index++) {
+            const reply = await answer(offer.token, backup('00000-00000'));
+            expect(reply.status).toBe(503);
+            expect(reply.body.code).toBeUndefined();
+        }
+        // Nothing is compared with the codes that could be checked either: each of the ten
+        // codes that were shown gets the same 503, and none is spent.
+        for (const code of app.backupCodes)
+            expect((await answer(offer.token, backup(code))).status).toBe(503);
+        expect((await api.twoStepRepository.getTwoStep(who.id)).backupCodes).toHaveLength(10);
+        expect((await attemptRows()).map((row) => row.failures)).toEqual([0]);
+        expect(await api.rows.sharedFailures(who.id)).toBe(99);
+        expect(await subjects()).toEqual([]);
+        expect(await sessionRows()).toEqual([]);
+        // The authenticator app is under a key the server has, and answers on the same token.
+        expect((await answer(offer.token, totp(await app.code()))).status).toBe(200);
+    });
 });
 
 describe('“someone signed in with your password but did not pass the second step”', () => {
@@ -1019,6 +1062,64 @@ describe('a change the step guards', () => {
         // The new password signs in, and is asked for the step as before.
         const renewed = { ...who, password: 'a new password' };
         expect((await asked(renewed)).methods).toContain('totp');
+    });
+
+    test('an answer that is not a code costs nothing at a change: the same password proof finishes it once corrected', async () => {
+        const { who, app } = await stepped();
+        const { cookie } = await signedIn(who, app);
+
+        // A password change: one proof of the password, sent with a slip and then with the code.
+        const change = await passwordChange(who, cookie, 'a new password');
+        const forPassword = await challenge(cookie, 'password');
+        for (const proof of [totp('12345'), backup('7KQ2M-9XD4')]) {
+            const slip = await change.send({ token: forPassword.token, proof });
+            expect(slip.status).toBe(400);
+            expect(slip.body.code).toBeUndefined();
+        }
+        expect((await attemptRows()).map((row) => row.failures)).toEqual([0]);
+        // New backup codes, the same way: the proof made for it survives the slip.
+        const password = await reauth(who, cookie);
+        const forCodes = await challenge(cookie, 'two-step');
+        const codes = (proof: unknown) =>
+            api.call(
+                'POST',
+                '/two-step/backup-codes',
+                { ...password, twoStep: { token: forCodes.token, proof } },
+                { cookie },
+            );
+        expect((await codes(totp('abc def'))).status).toBe(400);
+        expect((await codes(totp(await nextCode(app)))).status).toBe(200);
+        // And the password change, with the proof it started with.
+        const changed = await change.send({
+            token: forPassword.token,
+            proof: totp(await nextCode(app)),
+        });
+        expect(changed.status, JSON.stringify(changed.body)).toBe(200);
+        expect(await sessionRows()).toEqual([]);
+    });
+
+    test('nor at deletion: a mistyped code leaves the password proof for the right one', async () => {
+        const { who, app } = await stepped();
+        const { cookie } = await signedIn(who, app);
+        const proof = await api.prove(who, '/delete/start', { cookie });
+        const token = await challenge(cookie, 'delete');
+        const finish = (answer: unknown) =>
+            api.call(
+                'POST',
+                '/delete/finish',
+                {
+                    attemptToken: proof.attemptToken,
+                    finishLoginRequest: proof.finishLoginRequest,
+                    twoStep: { token: token.token, proof: answer },
+                },
+                { cookie },
+            );
+        expect((await finish(totp('1234567'))).status).toBe(400);
+        expect((await finish(backup('nope'))).status).toBe(400);
+        expect(await api.authRepository.getUserById(who.id)).not.toBeNull();
+        const gone = await finish(totp(await nextCode(app)));
+        expect(gone.status, JSON.stringify(gone.body)).toBe(200);
+        expect(await api.authRepository.getUserById(who.id)).toBeNull();
     });
 
     test('a code used to sign in is refused for a change in the same 30 seconds', async () => {
