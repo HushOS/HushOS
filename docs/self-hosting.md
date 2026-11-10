@@ -299,6 +299,23 @@ How the web image uses it:
 
 The image runs the same `bun run db:migrate` command, Drizzle Kit configuration, and SQL as local development and the separate migration image.
 
+### After the migration
+
+`bun run db:migrate` does two things in a row: it applies the pending migrations, in one transaction, and then runs the steps that cannot be part of that transaction (`packages/db/src/after-migrate.ts`):
+
+- **Validating constraints** that a migration added `NOT VALID`. Each `VALIDATE CONSTRAINT` is a transaction of its own. It reads the whole table under a `SHARE UPDATE EXCLUSIVE` lock, which blocks no read and no write, only other schema changes and `VACUUM` on that table. For a foreign key it also takes `ROW SHARE` on the table it points at.
+- **Building indexes on large tables** with `CREATE INDEX CONCURRENTLY`, which blocks no read and no write either, and waits for transactions that were open when it began.
+
+What to know:
+
+- Every step does nothing once it is done, so running `db:migrate` again is always safe.
+- A validation waits five seconds for its lock, three times. An index build waits up to a minute for older transactions to end.
+- **A step that fails does not fail the command.** The migration has committed by then, and nothing in these steps is needed for HushOS to be correct: an unvalidated constraint still binds every row written since it was added, and a missing index costs speed. The step is printed with its SQLSTATE and tried again by the next `db:migrate`.
+- **The worker names what is still pending every time it starts** ("Schema steps that run after the migration are still pending", with the names). Nothing pending means nothing logged.
+- `23514` or `23503` on a validation means rows from before the constraint break it. Find them with the constraint's own expression (`select pg_get_constraintdef(oid) from pg_constraint where conname = '<name>'`), put them right, and run `bun run db:migrate` again.
+- An index build that was interrupted leaves an invalid index behind. The next run drops it and builds it again.
+- The steps run as the migration's role. The runtime roles need no new privilege.
+
 ### Rolling out safely
 
 - Serialize deployments so only one migration process runs at a time.
@@ -1576,6 +1593,7 @@ The database holds a row for the bucket the `STORAGE_*` variables describe and o
 - The rows hold no endpoint, bucket or key. Each process still reads those from its own environment, so changing a variable and restarting works as it always did.
 - The worker records at start whether its environment describes the replica. The web service holds no replica settings and cannot reach it, as before.
 - The evidence bucket is not a row.
+- The replica is the backup of the bucket the `STORAGE_*` variables describe, and of nothing else. An object's row says where its backup copy is (`drive_objects.backup_store_id`), or that it has none.
 - There is nothing to configure, and no page for it yet.
 
 #### Client minimums
@@ -1648,9 +1666,31 @@ Objects the restored database no longer knows about must not be deleted before t
 
 Cleanup is the application's job. Nothing at the bucket should expire objects on its own.
 
-- The worker aborts abandoned multipart uploads and deletes objects through an outbox.
+- The worker aborts abandoned multipart uploads and deletes objects through an outbox (`drive_object_deletions`): one row for each copy to remove, naming the object and the store that copy is in.
 - With a replica configured, a published object's primary copy is deleted only once the replica holds it. The replica copy goes 30 days later, which is the window for undoing a bad purge.
+- An object that an open or held report names is not deleted, from the bucket or from the replica, until the report lets go.
+- Deleting an account queues every file of its own space in the same outbox, replica copies included.
+- A finished row is kept for 30 days and then removed.
+- **One copy that cannot be deleted does not hold up the rest.** A row whose store is down, or cannot be opened by this worker, is counted in the job's event (`failed`, with the class of each failure under `failures`), goes to the back of the line, and is tried again every five minutes. The same holds for the replica copy job, the audits and the orphan sweep.
+- The orphan sweep walks every region's bucket (today the one the `STORAGE_*` variables describe), never the replica. It deletes a key older than 7 days that nothing accounts for in that bucket: no object's row says it is there, and no unfinished outbox row is for it.
 - A lifecycle rule that aborts incomplete multipart uploads after 3 days is the second layer. `garage-init` sets it on the bundled Garage. On R2, B2 and S3, add it in the provider's console.
+
+What to look for in the worker's events:
+
+| Event                  | Field                           | Means                                                                                                                              |
+| ---------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `drive.delete-objects` | `waiting`                       | Purged files whose only copy has not reached the replica yet                                                                       |
+| `drive.delete-objects` | `held`                          | Copies a report keeps                                                                                                              |
+| `drive.delete-objects` | `failed`, `failures`            | Rows that threw this run, by class (`StoreUnavailableError`, an S3 error code, a network code). Never an address or a store's body |
+| `drive.delete-objects` | `left`                          | Replica copies recorded as left in place, because this worker has no replica configured any more                                   |
+| `drive.replicate`      | `skipped`                       | Objects whose copy to the replica has failed ten times in a row and is no longer tried. Their `drive_objects.copy_failures` is 10  |
+| `drive.orphan-sweep`   | `stores`, `deleted`, `failures` | How many buckets were walked, what was removed, and which could not be opened or listed                                            |
+
+To have the copy job try an object again after it gave up, once the cause is fixed:
+
+```sql
+update drive_objects set copy_failures = 0 where copy_failures >= 10;
+```
 
 ## Groups
 
@@ -2432,3 +2472,75 @@ Rolling back:
 
 - Containers of an earlier release run against this schema as they did during the update. Leave the tables and columns in place.
 - An upload row a container of this release left without a multipart id is expired by the older worker after 24 hours.
+
+#### Outbox release (`20261110025847_storage_outbox`)
+
+**Before you take it:** no web or worker container older than the stores release (the first release whose notes list `20261110000425_storage_stores`) may still be running when this migration runs.
+
+- This migration drops the three `store_id` column defaults that release added for such containers. From then on a container that names no store fails every upload it begins and every deletion it queues, with a `NOT NULL` error. Nothing is lost and nothing is written wrongly: the request fails whole.
+- How to know:
+    - Each web container answers with its release: `curl -sI https://<your host>/api/ready | grep -i x-hushos` prints `x-hushos-version` and `x-hushos-release`. Ask each container, not only the proxy.
+    - `docker compose images` (or your platform's list) shows the image tag of every running container, the worker included.
+    - The database says whether the stores release was ever applied: `select 1 from drizzle.__drizzle_migrations where name = '20261110000425_storage_stores'`.
+- If you are coming from a release older than the stores release, do one of these:
+    - take the stores release first and let its rollout finish; or
+    - stop the web and worker containers, run the migration, and start the new ones. That is a short outage instead of failed requests.
+- A default Compose update (`docker compose up -d`) runs the migration while the old web container is still serving. Coming from the stores release, that is fine. Coming from an older one, use `docker compose stop web worker` first.
+
+What it changes:
+
+- **The deletion outbox is keyed by the object and the store.** `drive_object_deletions` gets `(object_id, store_id)` as its primary key in place of `(object_id)`, and the columns `reason` (default `purged`), `backup_store_id`, `export_store_id`, `export_last_seq`, `held_by_move`, `not_before`, `backup_left`, `attention`, `failures` and `failed_at`. One row is one copy to remove. Nothing behaves differently for a deployment with one bucket.
+- `drive_objects` gets `backup_store_id` (where an object's backup copy is; null for none) and `copy_failures`.
+- The three `store_id` defaults go, as above.
+- The orphan sweep's saved position (`drive_sweeps`) is renamed from `orphans` to `orphans/00000000-0000-4000-8000-000000000001`: each bucket now has its own.
+- After the migration ([After the migration](#after-the-migration)): the four constraints of the stores release, the five this migration adds, and the twelve that earlier releases left unvalidated (`workspace_owners`, `rekeyed_origins`, `origin_drop_evidence`, `group_area_deletion`, `drive_moves`) are validated, and the index `drive_objects_store_idx` is built on `drive_objects (store_id)`.
+
+What changes in behaviour:
+
+- Deleting an account now queues that account's files for deletion, and their replica copies with them. Before, the files were left for the orphan sweep a week later, and their replica copies were never removed.
+- A purged file that the audit had marked `missing` now has its replica copy removed 30 days later. Before, that copy was never removed.
+- Finished outbox rows are removed after 30 days. The first runs of the new worker clear the backlog, 5,000 rows every five minutes.
+- The worker's Drive jobs no longer stop at the first object or bucket that fails. See [Cleanup at the store](#cleanup-at-the-store) for what their events now say.
+- With no replica configured any more, a replica copy whose 30 days are up is recorded as left in place (`backup_left`) instead of being silently forgotten.
+
+Locks:
+
+- The migration takes `ACCESS EXCLUSIVE` on `drive_objects`, `drive_uploads` and `drive_object_deletions`, in that order, until drizzle's single transaction commits.
+- On `drive_objects` and `drive_uploads` every statement is a catalog change (a nullable column, a column with a constant default, a dropped default, a foreign key added `NOT VALID`): milliseconds, whatever their size.
+- **`drive_object_deletions` is read twice under its lock**, once to build the new primary key and once for a partial index on `object_key`. It holds one row for every object ever deleted, since finished rows were never removed until now. Rebuilding both took a third of a second per million rows on a laptop; allow a second per million. Meanwhile purges, the worker's deletion and sweep jobs and a report's evidence copy wait; uploads and downloads do not touch that table.
+- Each statement waits at most five seconds for its lock (`lock_timeout`) and fails rather than queue Drive requests behind it. Run it again.
+- The steps after the migration take no lock that blocks a read or a write. The validations read `workspaces`, `drive_nodes`, `file_versions`, `drive_origin_drops`, `drive_uploads`, `drive_objects` and `drive_object_deletions` once each; the index build reads `drive_objects` twice. Expect I/O, not waiting.
+- Do not run another schema change, or a manual `VACUUM FULL`, on those tables at the same time: they would wait on each other.
+
+Validating the twelve older constraints:
+
+- They were checked against a copy of a database with months of use (about 14,000 nodes, 7,800 versions, 3,300 workspaces): every one validated.
+- One of them can fail on a database that skipped a check its own release note asked for: `drive_nodes_signature_valid` and `file_versions_signature_valid` refuse a signer without a signature (see the re-keyed records release above for the query that finds such rows). A failure is reported and changes nothing; see [After the migration](#after-the-migration).
+
+During a rolling update, with containers of the stores release still running:
+
+- **Their web containers** keep working. Every row they insert names its store. An outbox row they queue has no `reason` and gets `purged`, which is what it is.
+- **Their worker** keeps working on the new outbox: it finds rows by the object alone, and until a move exists an object has one row. It marks a replicated object without naming the replica; the new code reads that as the replica, and the new worker rewrites those rows to name it each time it starts.
+- It does not remove finished rows, and it still copies and sweeps as before. Run one worker of each release side by side only for as long as the rollout takes.
+- An account deleted through an old web container is deleted the old way: its files wait for the orphan sweep, and their replica copies stay.
+- Roll the web service and the worker in either order.
+
+With one role per process:
+
+- No new table, so no new grant. The steps after the migration run as the migration's role.
+
+Restoring a backup:
+
+- A full restore needs nothing. A database restored from before this release is migrated again.
+- A data-only restore of `drive_objects`, `drive_uploads` or `drive_object_deletions` taken before this release must name the columns it loads, as `pg_dump --column-inserts` or a `COPY` with a column list does. Rows from before the stores release carry no `store_id`: add `'00000000-0000-4000-8000-000000000001'` for them.
+
+Rolling back:
+
+- Containers of the stores release run against this schema as they did during the update. Leave the tables and columns in place.
+- Containers older than the stores release do not. To run them again, put the defaults back first:
+
+```sql
+alter table drive_objects alter column store_id set default '00000000-0000-4000-8000-000000000001';
+alter table drive_uploads alter column store_id set default '00000000-0000-4000-8000-000000000001';
+alter table drive_object_deletions alter column store_id set default '00000000-0000-4000-8000-000000000001';
+```

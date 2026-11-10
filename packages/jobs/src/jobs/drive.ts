@@ -9,7 +9,9 @@ import {
     replicateObjects,
     sweepOrphans,
     tierObjects,
+    type Stores,
 } from '@hushos/drive/jobs';
+import { ENVIRONMENT_PRIMARY_STORE_ID, ENVIRONMENT_REPLICA_STORE_ID } from '@hushos/db';
 import { evidenceStore, replicaStore, storeFor } from '@hushos/drive/storage';
 import { storageEnv } from '@hushos/env/storage';
 import { createLogger, sanitizeFailure } from '@hushos/logging';
@@ -17,13 +19,28 @@ import type { Job } from 'pg-boss';
 
 /*
  * Drive's background work, each job one wide event: what it examined, what it
- * did, how long it took. Every primary copy is reached through the store its
- * row names; the replica comes from the worker's environment, is optional, and
- * its absence is a fact the events carry.
+ * did, how long it took, and what failed by class. Every copy is reached
+ * through the store its row names; the replica comes from the worker's
+ * environment, is optional, and its absence is a fact the events carry.
  */
 
-function stores() {
-    return { open: storeFor, replica: replicaStore() };
+/*
+ * The one backup this worker keeps today: the environment's replica, of the
+ * environment's primary, when its own environment describes one. An object at
+ * any other store is not copied there.
+ */
+function stores(): Stores {
+    return {
+        open: storeFor,
+        backups: replicaStore()
+            ? [
+                  {
+                      storeId: ENVIRONMENT_PRIMARY_STORE_ID,
+                      backupStoreId: ENVIRONMENT_REPLICA_STORE_ID,
+                  },
+              ]
+            : [],
+    };
 }
 
 async function run<T extends Record<string, unknown>>(job: Job<unknown>, work: () => Promise<T>) {

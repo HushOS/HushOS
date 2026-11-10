@@ -560,13 +560,21 @@ drive_uploads
   completing_at   timestamptz null
   created_at timestamptz
 
-drive_object_deletions            the outbox every object deletion goes through
-  object_id       uuid PK
+drive_object_deletions            the outbox every deletion from a store goes through: one row per copy
+                                  (docs/company-storage-design.md 8.4 has its rules)
+  object_id       uuid              PK with store_id
   workspace_id    uuid              not a FK: the row outlives the workspace
   object_key      text
-  store_id        uuid FK object_stores   where the copy to remove is, from the object's row; never null, same default
+  store_id        uuid FK object_stores   where the copy to remove is, from the object's row; never null, no default
+  reason          text              purged | moved | stray
   published       boolean           false for an object that never became ready
-  replicated      boolean           true once the replica holds it; drive.replicate updates this row too
+  replicated      boolean           true once the backup holds it; drive.replicate updates this row too
+  backup_store_id uuid FK object_stores null   where that backup copy is
+  held_by_move    uuid null         a moved copy waits for its move, then for not_before
+  not_before      timestamptz null
+  backup_left     boolean           the backup copy was left for whoever runs the backup
+  attention       boolean           a moved copy whose new copy could not be confirmed: not deleted
+  failures        integer           tries that threw; failed_at is when the last one did
   primary_deleted_at timestamptz null
   delete_replica_after timestamptz null   primary deletion + 30 days; null when never published
   done_at         timestamptz null
@@ -1676,8 +1684,8 @@ No expiration rule ever deletes a completed object. Only the application does, t
 
 `drive.orphan-sweep` runs nightly over a bounded number of pages of the bucket listing.
 
-- It continues from a cursor it keeps in `drive_sweeps`, starting over once the listing is exhausted.
-- It deletes objects that neither `drive_objects` nor `drive_object_deletions` names and that are older than 7 days.
+- It walks every region's bucket, each from a cursor of its own in `drive_sweeps`, starting over once that listing is exhausted.
+- It deletes objects older than 7 days that nothing accounts for in the bucket they were listed in: no `drive_objects` row says the object or its backup is there, and no unfinished `drive_object_deletions` row is for that key and that store (docs/company-storage-design.md 8.4, "known at this store").
 
 Why both tables and the age bound:
 

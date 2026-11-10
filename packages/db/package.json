@@ -21,7 +21,7 @@
     "scripts": {
         "typecheck": "tsc --noEmit",
         "db:generate": "bun --bun drizzle-kit generate",
-        "db:migrate": "bun --bun drizzle-kit migrate",
+        "db:migrate": "bun --bun drizzle-kit migrate && bun scripts/after-migrate.ts",
         "db:studio": "bun --bun drizzle-kit studio",
         "admin": "bun scripts/admin.ts",
         "test": "vitest run"

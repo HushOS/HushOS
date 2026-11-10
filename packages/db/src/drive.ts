@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, sql } from 'drizzle-orm';
 import { db } from './client';
 import { holdsWorkspace } from './membership';
-import { heldObjectCondition } from './reports';
+import { queuePurgedObject } from './outbox';
 import { settlingPool, storageFigures, type StorageFigures } from './pool';
 import { openShareCursor, sealShareCursor } from './share-cursor';
 import { uploadStoreFor } from './stores';
@@ -13,10 +13,10 @@ import {
 } from './signatures';
 import {
     ENVIRONMENT_PRIMARY_STORE_ID,
+    ENVIRONMENT_REPLICA_STORE_ID,
     accountIdentities,
     driveLinks,
     driveNodes,
-    driveObjectDeletions,
     driveObjects,
     driveRotations,
     driveShareEvents,
@@ -48,6 +48,9 @@ import {
  */
 
 export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+// The deletion outbox, the backup mark and "known at this store" are the repository's too.
+export * from './outbox';
 
 /* Thrown to undo a transaction whose result is a refusal; carries the result out. */
 class Refusal extends Error {
@@ -1687,25 +1690,17 @@ async function retireObjectIfUnreferenced(tx: Tx, objectId: string) {
         .limit(1);
     if (live) return false;
     const [object] = await tx.delete(driveObjects).where(eq(driveObjects.id, objectId)).returning({
+        id: driveObjects.id,
         workspaceId: driveObjects.workspaceId,
         objectKey: driveObjects.objectKey,
         storeId: driveObjects.storeId,
         status: driveObjects.status,
         replicatedAt: driveObjects.replicatedAt,
+        backupStoreId: driveObjects.backupStoreId,
     });
     if (!object) return false;
-    await tx
-        .insert(driveObjectDeletions)
-        .values({
-            objectId,
-            workspaceId: object.workspaceId,
-            objectKey: object.objectKey,
-            // The copy to remove is where the object's row said it was.
-            storeId: object.storeId,
-            published: object.status === 'ready',
-            replicated: object.replicatedAt !== null,
-        })
-        .onConflictDoNothing();
+    // The copy to remove is where the object's row said it was, with the backup copy it had.
+    await queuePurgedObject(tx, object);
     return true;
 }
 
@@ -3653,107 +3648,6 @@ export async function getStorageBreakdown(workspaceId: string) {
     };
 }
 
-/* Outbox rows whose primary copy is still there, oldest first. */
-export async function listPendingObjectDeletions(limit = 200) {
-    return db
-        .select()
-        .from(driveObjectDeletions)
-        .where(
-            and(
-                isNull(driveObjectDeletions.doneAt),
-                isNull(driveObjectDeletions.primaryDeletedAt),
-                // An open or held report names the object: it stays until the report lets go.
-                heldObjectCondition(driveObjectDeletions.objectId),
-            ),
-        )
-        .orderBy(asc(driveObjectDeletions.createdAt))
-        .limit(limit);
-}
-
-/*
- * The primary copy is gone. With a replica copy to keep for the undo window the
- * row waits until `deleteReplicaAfter`; without one it is done.
- */
-export async function markPrimaryDeleted(objectId: string, deleteReplicaAfter: Date | null) {
-    const now = new Date();
-    await db
-        .update(driveObjectDeletions)
-        .set({
-            primaryDeletedAt: now,
-            deleteReplicaAfter,
-            doneAt: deleteReplicaAfter ? null : now,
-        })
-        .where(eq(driveObjectDeletions.objectId, objectId));
-}
-
-/* Replica copies whose undo window has passed. */
-export async function listReplicaDeletionsDue(limit = 200) {
-    return db
-        .select()
-        .from(driveObjectDeletions)
-        .where(
-            and(
-                isNull(driveObjectDeletions.doneAt),
-                sql`${driveObjectDeletions.primaryDeletedAt} is not null`,
-                sql`${driveObjectDeletions.deleteReplicaAfter} <= now()`,
-            ),
-        )
-        .orderBy(asc(driveObjectDeletions.deleteReplicaAfter))
-        .limit(limit);
-}
-
-export async function markObjectDeletionDone(objectId: string) {
-    await db
-        .update(driveObjectDeletions)
-        .set({ doneAt: new Date() })
-        .where(eq(driveObjectDeletions.objectId, objectId));
-}
-
-/*
- * Objects the replica does not hold yet: live ready objects, and outbox rows for
- * published objects that were purged before replication caught up, whose only
- * copy must reach the replica before the primary may go.
- */
-export async function listUnreplicatedObjects(limit = 100) {
-    const live = await db
-        .select({
-            objectId: driveObjects.id,
-            objectKey: driveObjects.objectKey,
-            storeId: driveObjects.storeId,
-        })
-        .from(driveObjects)
-        .where(and(eq(driveObjects.status, 'ready'), isNull(driveObjects.replicatedAt)))
-        .orderBy(asc(driveObjects.createdAt))
-        .limit(limit);
-    const retired = await db
-        .select({
-            objectId: driveObjectDeletions.objectId,
-            objectKey: driveObjectDeletions.objectKey,
-            storeId: driveObjectDeletions.storeId,
-        })
-        .from(driveObjectDeletions)
-        .where(
-            and(
-                eq(driveObjectDeletions.published, true),
-                eq(driveObjectDeletions.replicated, false),
-                isNull(driveObjectDeletions.primaryDeletedAt),
-            ),
-        )
-        .orderBy(asc(driveObjectDeletions.createdAt))
-        .limit(Math.max(0, limit - live.length));
-    return [...live, ...retired];
-}
-
-/* The replica holds the object: recorded on the object row, or on its outbox row if purge got there first. */
-export async function markObjectReplicated(objectId: string) {
-    const now = new Date();
-    await db.update(driveObjects).set({ replicatedAt: now }).where(eq(driveObjects.id, objectId));
-    await db
-        .update(driveObjectDeletions)
-        .set({ replicated: true })
-        .where(eq(driveObjectDeletions.objectId, objectId));
-}
-
 /*
  * The nightly accounting check: `used_bytes` against the sum of every ready
  * version's object, for a sample of workspaces. A pending version's bytes are
@@ -3800,7 +3694,16 @@ export type AuditTarget = 'primary' | 'replica';
  * around in turn. The replica audit only considers objects the copy job says
  * it holds.
  */
-export async function listObjectsForAudit(target: AuditTarget, limit = 200) {
+export async function listObjectsForAudit(
+    target: AuditTarget,
+    limit = 200,
+    /* The replica audit: the backup store whose copies are confirmed. */
+    backupStoreId: string = ENVIRONMENT_REPLICA_STORE_ID,
+) {
+    // A mark with no store named is the release before the column's, and means the environment's replica.
+    const backup = sql<
+        string | null
+    >`case when ${driveObjects.replicatedAt} is null then null else coalesce(${driveObjects.backupStoreId}, ${ENVIRONMENT_REPLICA_STORE_ID}::uuid) end`;
     return db
         .select({
             objectId: driveObjects.id,
@@ -3809,12 +3712,14 @@ export async function listObjectsForAudit(target: AuditTarget, limit = 200) {
             ciphertextSize: driveObjects.ciphertextSize,
             status: driveObjects.status,
             replicatedAt: driveObjects.replicatedAt,
+            // Where the object's backup copy is, or null.
+            backupStoreId: backup,
         })
         .from(driveObjects)
         .where(
             and(
                 inArray(driveObjects.status, ['ready', 'missing']),
-                target === 'replica' ? sql`${driveObjects.replicatedAt} is not null` : sql`true`,
+                target === 'replica' ? sql`${backup} = ${backupStoreId}` : sql`true`,
             ),
         )
         .orderBy(sql`${driveObjects.auditedAt} asc nulls first`, asc(driveObjects.createdAt))
@@ -3827,14 +3732,14 @@ export type AuditOutcome = 'present' | 'missing' | 'recovered' | 'replica-missin
  * What the audit found. A primary miss marks the object `missing` so the client
  * says the file is unavailable instead of failing to decrypt; an object found
  * again, or recovered from the replica, goes back to `ready`. A replica miss
- * clears `replicated_at`, which re-enqueues the copy.
+ * clears the backup mark, which re-enqueues the copy.
  */
 export async function recordObjectAudit(objectId: string, outcome: AuditOutcome) {
     const now = new Date();
     if (outcome === 'replica-missing') {
         await db
             .update(driveObjects)
-            .set({ replicatedAt: null, auditedAt: now })
+            .set({ replicatedAt: null, backupStoreId: null, auditedAt: now })
             .where(eq(driveObjects.id, objectId));
         return;
     }
@@ -3844,20 +3749,6 @@ export async function recordObjectAudit(objectId: string, outcome: AuditOutcome)
         .where(
             and(eq(driveObjects.id, objectId), inArray(driveObjects.status, ['ready', 'missing'])),
         );
-}
-
-/* The keys among `keys` that a row still names: an object, or a deletion still in the outbox. */
-export async function knownObjectKeys(keys: string[]) {
-    if (!keys.length) return new Set<string>();
-    const objects = await db
-        .select({ key: driveObjects.objectKey })
-        .from(driveObjects)
-        .where(inArray(driveObjects.objectKey, keys));
-    const deletions = await db
-        .select({ key: driveObjectDeletions.objectKey })
-        .from(driveObjectDeletions)
-        .where(inArray(driveObjectDeletions.objectKey, keys));
-    return new Set([...objects, ...deletions].map((row) => row.key));
 }
 
 export async function getSweepCursor(name: string) {

@@ -17,6 +17,7 @@ import {
 import type { PgColumn, PgTable } from 'drizzle-orm/pg-core';
 import { db } from './client';
 import { departAllForDeletion } from './groups';
+import { queueWorkspaceObjects } from './outbox';
 import { ownStorage, poolName, storageFigures } from './pool';
 import { pgCode } from './readiness';
 import { keyedHash } from './hash-key';
@@ -1481,7 +1482,14 @@ async function deleteAccountRow(
         .select()
         .from(personalWorkspaces)
         .where(eq(personalWorkspaces.userId, user.id));
-    if (personal) await tx.delete(workspaces).where(eq(workspaces.id, personal.workspaceId));
+    if (personal) {
+        // The space's rows go by cascade. Its objects are queued first, each at the store its
+        // row names, with its backup copy: nothing else would ever remove the bytes from a
+        // store other than the one the orphan sweep walks, or from a backup at all, and a
+        // report's hold keeps a queued copy where a sweep would not.
+        await queueWorkspaceObjects(tx, personal.workspaceId);
+        await tx.delete(workspaces).where(eq(workspaces.id, personal.workspaceId));
+    }
     await tx
         .delete(accountEnrollments)
         .where(eq(accountEnrollments.normalizedEmail, user.normalizedEmail));

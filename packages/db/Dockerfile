@@ -33,6 +33,9 @@ COPY packages/env/package.json ./packages/env/package.json
 COPY packages/env/src ./packages/env/src
 COPY packages/db/package.json packages/db/drizzle.config.ts ./packages/db/
 COPY packages/db/src/schema ./packages/db/src/schema
+# What `db:migrate` runs after drizzle-kit: validations and concurrent index builds.
+COPY packages/db/src/after-migrate.ts ./packages/db/src/after-migrate.ts
+COPY packages/db/scripts/after-migrate.ts ./packages/db/scripts/after-migrate.ts
 COPY packages/db/drizzle ./packages/db/drizzle
 USER bun
 WORKDIR /app/packages/db

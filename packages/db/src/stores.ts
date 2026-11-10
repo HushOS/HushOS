@@ -1,4 +1,4 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { db } from './client';
 import type { Tx } from './drive';
 import { ENVIRONMENT_REPLICA_STORE_ID, objectStores, storageRegions } from './schema';
@@ -61,4 +61,28 @@ export async function recordEnvironmentReplica(present: boolean) {
         )
         .returning({ id: objectStores.id });
     return rows.length > 0;
+}
+
+/*
+ * The stores whose whole bucket the orphan sweep walks: every region's store
+ * that holds, or may hold, objects. A draft or a store still being checked holds
+ * none. Backup stores are not swept, and a company's own bucket will be walked
+ * by its workspaces' prefixes, never whole (4.3).
+ *
+ * A store that is the target of a move still preparing or copying must be left
+ * out here once moves exist (8.3): a copy that has landed and not yet flipped is
+ * known nowhere.
+ */
+export async function listSweepStores() {
+    const rows = await db
+        .select({ id: objectStores.id })
+        .from(objectStores)
+        .where(
+            and(
+                eq(objectStores.kind, 'region'),
+                inArray(objectStores.status, ['ready', 'failing']),
+            ),
+        )
+        .orderBy(asc(objectStores.id));
+    return rows.map((row) => row.id);
 }

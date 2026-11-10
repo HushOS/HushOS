@@ -5,12 +5,13 @@ import {
     closeDatabase,
     createTestAccount,
     createTestIdentity,
+    createTestStore,
     resetDatabase,
 } from '../test/helpers';
 import * as signed from '../test/signed';
 import { db } from './client';
 import * as drive from './drive';
-import { driveObjects } from './schema';
+import { ENVIRONMENT_PRIMARY_STORE_ID, driveObjects } from './schema';
 
 /*
  * The queries behind the audit, the orphan sweep and tiering. Each one decides
@@ -150,11 +151,17 @@ describe('audit', () => {
     test('a replica miss re-enqueues the copy without touching the primary status', async () => {
         const { objectId } = await published();
         await setObject(objectId, { replicatedAt: new Date() });
-        expect((await drive.listUnreplicatedObjects()).map((row) => row.objectId)).toEqual([]);
+        expect(
+            (await drive.listUnreplicatedObjects(ENVIRONMENT_PRIMARY_STORE_ID)).map(
+                (row) => row.objectId,
+            ),
+        ).toEqual([]);
         await drive.recordObjectAudit(objectId, 'replica-missing');
-        expect((await drive.listUnreplicatedObjects()).map((row) => row.objectId)).toEqual([
-            objectId,
-        ]);
+        expect(
+            (await drive.listUnreplicatedObjects(ENVIRONMENT_PRIMARY_STORE_ID)).map(
+                (row) => row.objectId,
+            ),
+        ).toEqual([objectId]);
         expect((await drive.getVersionsForDownload(account.workspaceId, [])).length).toBe(0);
         const [row] = await db.select().from(driveObjects).where(eq(driveObjects.id, objectId));
         expect(row?.status).toBe('ready');
@@ -162,16 +169,20 @@ describe('audit', () => {
 });
 
 describe('orphan sweep', () => {
-    test('knows a key by its object row or its outbox row, and nothing else', async () => {
+    test('knows a key by its object row or its unfinished outbox row at that store, and nothing else', async () => {
         const live = await published();
         const pending = await upload();
         const retired = await published();
         await drive.trashNode({ workspaceId: account.workspaceId, nodeId: retired.node.id });
         await drive.purgeNode({ workspaceId: account.workspaceId, nodeId: retired.node.id });
         const stray = `ws/${account.workspaceId}/${randomUUID()}`;
-        const known = await drive.knownObjectKeys([live.key, pending.key, retired.key, stray]);
-        expect(known).toEqual(new Set([live.key, pending.key, retired.key]));
-        expect(await drive.knownObjectKeys([])).toEqual(new Set());
+        const keys = [live.key, pending.key, retired.key, stray];
+        expect(await drive.knownObjectKeys(ENVIRONMENT_PRIMARY_STORE_ID, keys)).toEqual(
+            new Set([live.key, pending.key, retired.key]),
+        );
+        // The same rows make nothing known at a store none of them names.
+        expect(await drive.knownObjectKeys(await createTestStore(), keys)).toEqual(new Set());
+        expect(await drive.knownObjectKeys(ENVIRONMENT_PRIMARY_STORE_ID, [])).toEqual(new Set());
     });
 
     test('the cursor survives between runs and clears when a pass completes', async () => {

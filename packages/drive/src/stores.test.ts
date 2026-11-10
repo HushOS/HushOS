@@ -68,8 +68,7 @@ const { closeDatabase, createTestStore, resetDatabase, signerFor } =
 const fixtures = await import('../test/fixtures');
 const jobs = await import('./jobs');
 const server = await import('./server');
-const { createObjectStore, replicaStore, storeFor, StoreUnavailableError } =
-    await import('./storage');
+const { createObjectStore, storeFor, StoreUnavailableError } = await import('./storage');
 
 type Account = Awaited<ReturnType<typeof fixtures.member>>;
 type Root = Awaited<ReturnType<typeof fixtures.root>>;
@@ -539,7 +538,7 @@ describe('begin and its store', () => {
         await run('update drive_uploads set created_at = now() - make_interval(secs => $1)', [
             driveRepository.UPLOAD_START_SECONDS + 1,
         ]);
-        expect(await jobs.expireUploads({ open: storeFor, replica: null })).toMatchObject({
+        expect(await jobs.expireUploads({ open: storeFor, backups: [] })).toMatchObject({
             examined: 1,
             aborted: 1,
         });
@@ -566,6 +565,10 @@ describe('the worker follows each row', () => {
     let secondId: string;
     /* The worker's opener, with a third store under a `database` row's id. */
     const open = async (storeId: string) => (storeId === secondId ? second : storeFor(storeId));
+    // The one backup a worker keeps today: the replica, of the environment's primary.
+    const REPLICATED = [
+        { storeId: ENVIRONMENT_PRIMARY_STORE_ID, backupStoreId: ENVIRONMENT_REPLICA_STORE_ID },
+    ];
 
     beforeEach(async () => {
         secondId = await createTestStore({ bucket: SECOND });
@@ -579,7 +582,7 @@ describe('the worker follows each row', () => {
             "update drive_uploads set expires_at = now() - interval '1 second' where id = $1",
             [expired.begun.upload.id],
         );
-        expect(await jobs.expireUploads({ open, replica: null })).toMatchObject({
+        expect(await jobs.expireUploads({ open, backups: [] })).toMatchObject({
             examined: 1,
             aborted: 1,
         });
@@ -611,9 +614,9 @@ describe('the worker follows each row', () => {
         expect(
             await jobs.expireUploads({
                 open: async (storeId) => (storeId === secondId ? unanswering : open(storeId)),
-                replica: null,
+                backups: [],
             }),
-        ).toEqual({ examined: 4, aborted: 1, finalised: 1, skipped: 2 });
+        ).toEqual({ examined: 4, aborted: 1, finalised: 1, skipped: 2, failed: 0 });
 
         const rows = Object.fromEntries((await uploadRows()).map((row) => [row.id, row.status]));
         // Neither was aborted: their objects and reservations stand until a store answers.
@@ -657,7 +660,8 @@ describe('the worker follows each row', () => {
             {
                 report: gone.reportId,
                 object: gone.file.objectId,
-                error: 'Error: The reported object is no longer in any store.',
+                // A class of failure, never a store's message.
+                error: 'ObjectInNoStore',
             },
         ]);
         const copyOf = (entry: typeof live) =>
@@ -688,24 +692,38 @@ describe('the worker follows each row', () => {
             [thereKey]: secondId,
         });
 
-        expect(await jobs.deleteObjects({ open, replica: null })).toMatchObject({ primaries: 2 });
+        expect(await jobs.deleteObjects({ open, backups: [] })).toMatchObject({ primaries: 2 });
         expect(s3.keys(PRIMARY)).toEqual([thereKey]);
         expect(s3.keys(SECOND)).toEqual([here.key]);
     });
 
-    test('replication copies from the object’s own store to the replica', async () => {
+    test('replication copies what is at the store the replica backs up, and nothing from any other', async () => {
         const a = randomBytes(3000);
         const b = randomBytes(3000);
         const here = await storedFile(ENVIRONMENT_PRIMARY_STORE_ID, PRIMARY, a);
         const there = await storedFile(secondId, SECOND, b);
         // A stale copy of the second object's key in the primary: a copy that ignored the row would take it.
         s3.put(PRIMARY, there.key, randomBytes(3000));
-        expect(await jobs.replicateObjects({ open, replica: replicaStore() })).toEqual({
-            copied: 2,
+        expect(await jobs.replicateObjects({ open, backups: REPLICATED })).toMatchObject({
+            copied: 1,
+            failed: 0,
         });
         expect(s3.get(REPLICA, here.key)).toEqual(a);
-        expect(s3.get(REPLICA, there.key)).toEqual(b);
-        expect(await driveRepository.listUnreplicatedObjects()).toEqual([]);
+        // The replica is the environment primary's backup: an object in another store is not
+        // copied into it, and stays marked as having no backup.
+        expect(s3.keys(REPLICA)).toEqual([here.key]);
+        const marks = await db.select().from(driveObjects);
+        expect(
+            Object.fromEntries(
+                marks.map((row) => [row.id, [row.backupStoreId, !!row.replicatedAt]]),
+            ),
+        ).toEqual({
+            [here.objectId]: [ENVIRONMENT_REPLICA_STORE_ID, true],
+            [there.objectId]: [null, false],
+        });
+        expect(await driveRepository.listUnreplicatedObjects(ENVIRONMENT_PRIMARY_STORE_ID)).toEqual(
+            [],
+        );
     });
 
     test('the audit looks where the row says, and heals a lost copy back into that store', async () => {
@@ -721,9 +739,11 @@ describe('the worker follows each row', () => {
         // In the third store, but its row says the primary: not there, and in no replica.
         s3.put(SECOND, gone.key, randomBytes(500));
 
-        expect(await jobs.auditObjects({ open, replica: replicaStore() }, 'primary')).toMatchObject(
-            { examined: 2, recovered: 1, missing: 1 },
-        );
+        expect(await jobs.auditObjects({ open, backups: REPLICATED }, 'primary')).toMatchObject({
+            examined: 2,
+            recovered: 1,
+            missing: 1,
+        });
         expect(s3.get(SECOND, lost.key)).toEqual(bytes);
         const rows = await db.select().from(driveObjects);
         expect(Object.fromEntries(rows.map((row) => [row.id, row.status]))).toEqual({
@@ -732,7 +752,7 @@ describe('the worker follows each row', () => {
         });
     });
 
-    test('the orphan sweep walks the environment’s primary bucket and no other', async () => {
+    test('the orphan sweep walks every region’s bucket, each by its own rows, and never a backup', async () => {
         const old = new Date(Date.now() - 30 * 24 * 3600 * 1000);
         const named = await storedFile(ENVIRONMENT_PRIMARY_STORE_ID, PRIMARY, randomBytes(64));
         s3.put(PRIMARY, named.key, randomBytes(64), old);
@@ -740,13 +760,16 @@ describe('the worker follows each row', () => {
         s3.put(PRIMARY, stray, randomBytes(64), old);
         s3.put(SECOND, stray, randomBytes(64), old);
         s3.put(REPLICA, stray, randomBytes(64), old);
-        expect(await jobs.sweepOrphans({ open, replica: null })).toMatchObject({
-            listed: 2,
-            deleted: 1,
+        expect(await jobs.sweepOrphans({ open, backups: [] })).toMatchObject({
+            stores: 2,
+            listed: 3,
+            deleted: 2,
             completed: true,
+            failed: 0,
         });
         expect(s3.keys(PRIMARY)).toEqual([named.key]);
-        expect(s3.keys(SECOND)).toEqual([stray]);
+        expect(s3.keys(SECOND)).toEqual([]);
+        // A backup is not swept: what is there is accounted for by the outbox or not at all.
         expect(s3.keys(REPLICA)).toEqual([stray]);
     });
 
@@ -755,9 +778,9 @@ describe('the worker follows each row', () => {
         const there = await storedFile(secondId, SECOND, randomBytes(64));
         s3.put(PRIMARY, there.key, randomBytes(64));
         await run("update drive_objects set ready_at = now() - interval '100 days'");
-        expect(
-            await jobs.tierObjects({ open, replica: null }, { coldClass: 'STANDARD_IA' }),
-        ).toEqual({ cooled: 1, warmed: 0 });
+        expect(await jobs.tierObjects({ open, backups: [] }, { coldClass: 'STANDARD_IA' })).toEqual(
+            { cooled: 1, warmed: 0, failed: 0, failures: {} },
+        );
         expect(s3.storageClass(PRIMARY, here.key)).toBe('STANDARD_IA');
         expect(s3.storageClass(PRIMARY, there.key)).toBe('STANDARD');
         expect(s3.storageClass(SECOND, there.key)).toBe('STANDARD');

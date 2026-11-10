@@ -5,7 +5,13 @@ import { closeDatabase, createTestAccount, resetDatabase } from '../test/helpers
 import * as admin from './admin';
 import { getStorageAllowance } from './auth';
 import { db } from './client';
-import { driveObjects, storageEntitlements, users, workspaceStorage } from './schema';
+import {
+    ENVIRONMENT_PRIMARY_STORE_ID,
+    driveObjects,
+    storageEntitlements,
+    users,
+    workspaceStorage,
+} from './schema';
 
 /*
  * What an operator lists has to agree with what each person is told: an
@@ -117,6 +123,7 @@ describe('operator lists', () => {
                 id,
                 workspaceId: account.workspaceId,
                 objectKey: `ws/${account.workspaceId}/${id}`,
+                storeId: ENVIRONMENT_PRIMARY_STORE_ID,
                 contentSuite: 2,
                 chunkSize: 8 * 1024 * 1024,
                 chunkCount: 1,

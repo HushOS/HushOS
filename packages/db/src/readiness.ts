@@ -1,5 +1,6 @@
 import { getTableName, is, sql } from 'drizzle-orm';
 import { PgTable } from 'drizzle-orm/pg-core';
+import { pendingAfterMigrate } from './after-migrate';
 import { db } from './client';
 import * as schema from './schema';
 
@@ -11,7 +12,7 @@ import * as schema from './schema';
  */
 
 /* The newest migration this build knows; `readiness.test.ts` keeps it honest. */
-export const LATEST_MIGRATION = '20261110000425_storage_stores';
+export const LATEST_MIGRATION = '20261110025847_storage_outbox';
 
 /* Every application table, in name order. */
 export const APP_TABLES = Object.values(schema)
@@ -53,6 +54,16 @@ export async function missingTablePrivileges(role?: string) {
         order by t.name
     `);
     return result.rows.filter((row) => !row.ok).map((row) => row.name);
+}
+
+/*
+ * The validations and index builds `db:migrate` runs after the migration that
+ * this database still lacks, by name. None is needed to run; each is worth
+ * telling the operator about.
+ */
+export async function pendingSchemaSteps() {
+    const pending = await pendingAfterMigrate((text, params) => db.$client.query(text, params));
+    return pending.map((step) => step.name);
 }
 
 /* The SQLSTATE of a Postgres error, through the query wrapper that carries it. */

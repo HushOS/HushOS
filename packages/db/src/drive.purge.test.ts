@@ -11,6 +11,8 @@ import * as signed from '../test/signed';
 import { db } from './client';
 import * as drive from './drive';
 import {
+    ENVIRONMENT_PRIMARY_STORE_ID,
+    ENVIRONMENT_REPLICA_STORE_ID,
     driveNodes,
     driveObjectDeletions,
     driveObjects,
@@ -390,38 +392,70 @@ describe('the sweeps', () => {
         expect(root).toBeDefined();
     });
 
-    test('the outbox waits for the replica on published objects and not on unpublished ones', async () => {
+    test('the outbox waits for the backup on published objects and not on unpublished ones', async () => {
+        const PRIMARY = ENVIRONMENT_PRIMARY_STORE_ID;
+        const REPLICA = ENVIRONMENT_REPLICA_STORE_ID;
+        const removed: string[] = [];
+        // A worker that keeps the replica as the primary's backup, and one that keeps none.
+        const store = (backups: boolean) => ({
+            backupOf: (storeId: string) => (backups && storeId === PRIMARY ? REPLICA : null),
+            keepsBackup: (storeId: string) => backups && storeId === REPLICA,
+            present: async () => true,
+            remove: async (storeId: string, key: string) => {
+                removed.push(`${storeId === PRIMARY ? 'primary' : 'replica'}:${key}`);
+            },
+        });
         const published = await file(rootId, rootEpoch, 1n * MiB);
+        const key = { objectId: published.objectId, storeId: PRIMARY };
+        const objectKey = `ws/${account.workspaceId}/${published.objectId}`;
         await drive.trashNode({ workspaceId: account.workspaceId, nodeId: published.node.id });
         await drive.purgeNode({ workspaceId: account.workspaceId, nodeId: published.node.id });
         const pending = await drive.listPendingObjectDeletions();
         expect(pending.map((row) => [row.objectId, row.published, row.replicated])).toEqual([
             [published.objectId, true, false],
         ]);
+        // Its only copy is the primary's: nothing is deleted until the backup holds it.
+        expect(await drive.removeQueuedCopy(key, store(true))).toEqual({ status: 'waiting' });
+        expect(removed).toEqual([]);
         // Replication catches up on the retired object's row, then the primary may go.
-        expect((await drive.listUnreplicatedObjects()).map((r) => r.objectId)).toEqual([
+        expect((await drive.listUnreplicatedObjects(PRIMARY)).map((r) => r.objectId)).toEqual([
             published.objectId,
         ]);
-        await drive.markObjectReplicated(published.objectId);
-        expect((await drive.listPendingObjectDeletions())[0]?.replicated).toBe(true);
-        const undoUntil = new Date(Date.now() + 1000);
-        await drive.markPrimaryDeleted(published.objectId, undoUntil);
+        expect(await drive.markObjectReplicated({ ...key, backupStoreId: REPLICA })).toBe('outbox');
+        expect(await drive.removeQueuedCopy(key, store(true))).toEqual({
+            status: 'removed',
+            backup: 'later',
+        });
+        expect(removed).toEqual([`primary:${objectKey}`]);
         expect(await drive.listPendingObjectDeletions()).toEqual([]);
-        expect(await drive.listReplicaDeletionsDue()).toEqual([]);
+        // The backup copy is kept for the undo window, and goes only after it.
+        expect(await drive.listBackupDeletionsDue()).toEqual([]);
+        expect(await drive.removeQueuedBackupCopy(key, store(true))).toEqual({ status: 'skipped' });
         await db
             .update(driveObjectDeletions)
             .set({ deleteReplicaAfter: sql`now() - interval '1 minute'` })
             .where(eq(driveObjectDeletions.objectId, published.objectId));
-        expect((await drive.listReplicaDeletionsDue()).map((r) => r.objectId)).toEqual([
+        expect((await drive.listBackupDeletionsDue()).map((r) => r.objectId)).toEqual([
             published.objectId,
         ]);
-        await drive.markObjectDeletionDone(published.objectId);
-        expect(await drive.listReplicaDeletionsDue()).toEqual([]);
-        // Without a replica the row is done the moment the primary is gone.
+        expect(await drive.removeQueuedBackupCopy(key, store(true))).toEqual({ status: 'removed' });
+        expect(removed).toEqual([`primary:${objectKey}`, `replica:${objectKey}`]);
+        expect(await drive.listBackupDeletionsDue()).toEqual([]);
+        expect((await outboxHas(published.objectId))?.doneAt).not.toBeNull();
+        // A second try deletes nothing twice.
+        expect(await drive.removeQueuedCopy(key, store(true))).toEqual({ status: 'skipped' });
+        expect(await drive.removeQueuedBackupCopy(key, store(true))).toEqual({ status: 'skipped' });
+        expect(removed).toHaveLength(2);
+        // Without a backup the row is done the moment the primary is gone.
         const other = await file(rootId, rootEpoch, 1n * MiB);
         await drive.trashNode({ workspaceId: account.workspaceId, nodeId: other.node.id });
         await drive.purgeNode({ workspaceId: account.workspaceId, nodeId: other.node.id });
-        await drive.markPrimaryDeleted(other.objectId, null);
+        expect(
+            await drive.removeQueuedCopy(
+                { objectId: other.objectId, storeId: PRIMARY },
+                store(false),
+            ),
+        ).toEqual({ status: 'removed', backup: 'none' });
         expect((await outboxHas(other.objectId))?.doneAt).not.toBeNull();
     });
 

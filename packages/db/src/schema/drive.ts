@@ -18,7 +18,7 @@ import {
     uuid,
 } from 'drizzle-orm/pg-core';
 import { bytea, users } from './auth';
-import { ENVIRONMENT_PRIMARY_STORE_ID, objectStores } from './object-stores';
+import { objectStores } from './object-stores';
 import { workspaces } from './workspaces';
 
 /*
@@ -175,11 +175,10 @@ export const driveObjects = pgTable(
             .references(() => workspaces.id, { onDelete: 'cascade' }),
         objectKey: text('object_key').notNull().unique(), // "ws/{workspaceId}/{objectId}"
         // The store the bytes are in (docs/company-storage-design.md 2.2): every read, copy and
-        // deletion follows it. The default is the environment's primary, which is what a
-        // container of the release before stores, writing no store id, means.
+        // deletion follows it. No default: an insert that forgot its store would silently mean
+        // the environment's primary, which stops being right once a region moves off it.
         storeId: uuid('store_id')
             .notNull()
-            .default(ENVIRONMENT_PRIMARY_STORE_ID)
             .references(() => objectStores.id),
         contentSuite: smallint('content_suite').notNull().default(1),
         chunkSize: integer('chunk_size').notNull(),
@@ -196,7 +195,15 @@ export const driveObjects = pgTable(
             .notNull()
             .$type<'standard' | 'cold'>()
             .default('standard'),
+        // The backup mark: when a second copy was made, and at which store. Both are set
+        // together, by compare-and-set against `store_id`, and cleared together. Null means no
+        // backup copy and nothing else. `replicated_at` set with no store is what a worker of
+        // the release before this column wrote, and means the environment's replica.
         replicatedAt: timestamp('replicated_at', { withTimezone: true }),
+        backupStoreId: uuid('backup_store_id').references(() => objectStores.id),
+        // Backup copies that failed in a row; a success clears it. The copy job takes the
+        // objects that have failed least first, and leaves one alone after ten.
+        copyFailures: integer('copy_failures').notNull().default(0),
         lastReadAt: timestamp('last_read_at', { withTimezone: true }),
         // When the audit last confirmed the object at the store; least recent goes first.
         auditedAt: timestamp('audited_at', { withTimezone: true }),
@@ -205,6 +212,10 @@ export const driveObjects = pgTable(
     },
     (table) => [
         index('drive_objects_workspace_idx').on(table.workspaceId),
+        // For scans of one store, and for the foreign key's check when a store's row is
+        // deleted. Built CONCURRENTLY by the step after the migration (src/after-migrate.ts),
+        // never inside the migration's transaction.
+        index('drive_objects_store_idx').on(table.storeId),
         index('drive_objects_audit_idx')
             .on(table.auditedAt)
             .where(sql`status in ('ready', 'missing')`),
@@ -368,7 +379,6 @@ export const driveUploads = pgTable(
         // and the object row carries the same one.
         storeId: uuid('store_id')
             .notNull()
-            .default(ENVIRONMENT_PRIMARY_STORE_ID)
             .references(() => objectStores.id),
         // Null from begin's commit until the store has started the multipart upload, which
         // is written only while the row is still open. A row left without one is expired.
@@ -428,31 +438,85 @@ export const driveUploads = pgTable(
 );
 
 /*
- * The outbox every object deletion goes through. Not keyed to the workspace or
- * the object by FK: the row outlives both, which is the point.
+ * The outbox every deletion from a store goes through: one row per copy to
+ * remove, keyed by the object and the store that copy is in
+ * (docs/company-storage-design.md 8.4). Not keyed to the workspace or the
+ * object by FK: the row outlives both, which is the point.
+ *
+ * `reason` says why the copy goes: `purged` (the object is gone), `moved` (the
+ * object lives on at another store and this copy was left behind) or `stray`
+ * (a copy that lost a race). A `moved` row is held by its move until the move
+ * is done and then waits until `not_before`; before it deletes anything the
+ * worker sees the object's new copy again, and marks the row `attention` when
+ * it cannot.
+ *
+ * `backup_store_id` names the store that holds a second copy of this one, or
+ * will once the copy job has caught up (`replicated`). That copy goes after the
+ * undo window (`delete_replica_after`), or is left for whoever runs the backup
+ * (`backup_left`) where HushOS may not delete there. `replicated` set with no
+ * backup store is a row of the release before the column, and means the
+ * environment's replica.
+ *
+ * A finished row (`done_at`) is kept 30 days and then deleted. A new row for
+ * the same object and store replaces a finished one whole.
  */
+export type DeletionReason = 'purged' | 'moved' | 'stray';
+
 export const driveObjectDeletions = pgTable(
     'drive_object_deletions',
     {
-        objectId: uuid('object_id').primaryKey(),
+        objectId: uuid('object_id').notNull(),
         workspaceId: uuid('workspace_id').notNull(),
         objectKey: text('object_key').notNull(),
-        // The store the copy to remove is in, taken from the object's row when it is retired.
+        // The store the copy to remove is in.
         storeId: uuid('store_id')
             .notNull()
-            .default(ENVIRONMENT_PRIMARY_STORE_ID)
             .references(() => objectStores.id),
+        // The default is for a container of the release before reasons, whose every row is a purge.
+        reason: text().notNull().$type<DeletionReason>().default('purged'),
         published: boolean().notNull(),
         replicated: boolean().notNull().default(false),
+        backupStoreId: uuid('backup_store_id').references(() => objectStores.id),
+        // For a company's export (10.2), which nothing writes yet: the export that holds a
+        // copy, and the last snapshot that listed it.
+        exportStoreId: uuid('export_store_id'),
+        exportLastSeq: bigint('export_last_seq', { mode: 'number' }),
+        // The move a `moved` row waits for. No foreign key: the row outlives its move.
+        heldByMove: uuid('held_by_move'),
+        notBefore: timestamp('not_before', { withTimezone: true }),
+        backupLeft: boolean('backup_left').notNull().default(false),
+        attention: boolean().notNull().default(false),
+        // Tries that threw, and when the last one did: the worker takes the rows that have
+        // waited longest since a failure first, so one that always fails cannot hold the rest.
+        failures: integer().notNull().default(0),
+        failedAt: timestamp('failed_at', { withTimezone: true }),
         primaryDeletedAt: timestamp('primary_deleted_at', { withTimezone: true }),
         deleteReplicaAfter: timestamp('delete_replica_after', { withTimezone: true }),
         doneAt: timestamp('done_at', { withTimezone: true }),
         createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     },
     (table) => [
+        primaryKey({ columns: [table.objectId, table.storeId] }),
         index('drive_object_deletions_pending_idx')
             .on(table.createdAt)
             .where(sql`done_at is null`),
+        // The orphan sweep asks which of a page of keys an unfinished row names.
+        index('drive_object_deletions_key_idx')
+            .on(table.objectKey)
+            .where(sql`done_at is null`),
+        check(
+            'drive_object_deletions_reason_valid',
+            sql`${table.reason} in ('purged', 'moved', 'stray')`,
+        ),
+        // Only a copy a move left behind waits for a move.
+        check(
+            'drive_object_deletions_hold_valid',
+            sql`${table.heldByMove} is null or ${table.reason} = 'moved'`,
+        ),
+        check(
+            'drive_object_deletions_values_valid',
+            sql`${table.failures} >= 0 and (not ${table.backupLeft} or ${table.doneAt} is not null)`,
+        ),
     ],
 );
 
