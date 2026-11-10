@@ -1,0 +1,90 @@
+packages/db/src/commission.ts
+  s_1f3a9ec02d29ed::t_f616a36cef8efc 1-947,953-954,957
+  s_1f3a9ec02d29ed::t_8290872ef35338 948-952,955-956,958-977
+packages/billing/src/commission.ts
+  s_1f3a9ec02d29ed::t_47a6b79bea1678 1-281
+  s_1f3a9ec02d29ed::t_ae2764e71c4d77 282-302
+apps/web/src/components/affiliate-ledger.tsx
+  s_1f3a9ec02d29ed::t_b5da2fde3c2722 1-561
+  s_1f3a9ec02d29ed::t_1935d8338eab06 562-579
+packages/billing/src/commission.test.ts
+  s_1f3a9ec02d29ed::t_8d093cead2a128 1-1136
+  s_1f3a9ec02d29ed::t_0debcf3d47e435 1137-1198
+packages/billing/src/commission-off.test.ts
+  s_1f3a9ec02d29ed::t_fe37ac7aaf39af 1-298
+  s_1f3a9ec02d29ed::t_ab50cfed01c9cc 299-307
+packages/db/src/commission.test.ts
+  s_1f3a9ec02d29ed::t_323e7702f9b422 1-1036
+  s_1f3a9ec02d29ed::t_e00edb93d695ff 1037-1060
+apps/web/src/lib/affiliate-ledger.ts
+  s_1f3a9ec02d29ed::t_aaa4337dc52cd7 1-120
+  s_1f3a9ec02d29ed::t_7ffd4d4599ad27 121
+.env.example
+  s_1f3a9ec02d29ed::t_bff17ba3145a20 68-69
+.env.production.example
+  s_1f3a9ec02d29ed::t_faddaf44e1cead 90-93
+CONTRIBUTING.md
+  s_1f3a9ec02d29ed::t_95b6f00fc8acc9 511-516
+apps/web/src/lib/affiliate-ledger.test.ts
+  s_1f3a9ec02d29ed::t_6bfb6c3856f835 1-181
+apps/web/src/lib/api/billing-responses.server.ts
+  s_1f3a9ec02d29ed::t_95b5357fde3552 204-229,246-290,307,322-389
+apps/web/src/lib/api/billing-responses.test.ts
+  s_1f3a9ec02d29ed::t_3f42e2389d8a0c 8-10,300-428,612-619,630,636-638,644,652-657,679-685,687,690-724,798-843,921-927
+apps/web/src/lib/api/billing.server.ts
+  s_1f3a9ec02d29ed::t_c8e42b34918ee1 16-18,36-39,319-328,331-420,422
+apps/web/src/lib/growth-api.ts
+  s_1f3a9ec02d29ed::t_30fa25d8e1f22d 13-29
+apps/web/src/routes/_authenticated/app/_drive/admin.affiliates.tsx
+  s_1f3a9ec02d29ed::t_d7fd33e4f9b536 7-13,62,97-99,102-109,112,114-121,132-136,151,177,190,198-214,220-233,243-258,274-278,282,286,291,295,298-308,311-313,328-330,358-362,364-366,370-402,409,417-421,426,432-436,438-448,452-455,460-461,464,470-490,493-503
+apps/web/src/routes/_authenticated/app/_drive/referrals.tsx
+  s_1f3a9ec02d29ed::t_20fcb0fe624e60 1,260,285-309,324-334
+compose.yaml
+  s_1f3a9ec02d29ed::t_818020372b5b42 123,192
+docs/self-hosting.md
+  s_1f3a9ec02d29ed::t_caaaed954edfb5 142,799-800,813-900,984,995,1399,1479,2530-2575
+packages/billing/src/api.ts
+  s_1f3a9ec02d29ed::t_5ea5d60bd46ba7 235-240,263-371,374-391,455,457-477
+packages/billing/src/endings.ts
+  s_1f3a9ec02d29ed::t_5f224138193825 2,5,864,1576
+packages/billing/src/growth.ts
+  s_1f3a9ec02d29ed::t_7a2a86fed649d5 4,6,8-10,12,16,22,25,81-132,134,152-158,162-197,203-205,222-224,335-336,340,467,471-475,479,483-484,527,532-559,581-585,588,595-599,607-608,611,631-698,701-873
+packages/billing/src/server.test.ts
+  s_1f3a9ec02d29ed::t_8b57432ba14828 3706-3708
+packages/billing/src/server.ts
+  s_1f3a9ec02d29ed::t_3c175badb0bb70 10,97,619-658,714,720-721,1080-1087
+packages/db/drizzle/20261110045932_affiliate_commission_safety/migration.sql
+  s_1f3a9ec02d29ed::t_0e8dba1a921dd9 1-73
+packages/db/drizzle/20261110045932_affiliate_commission_safety/snapshot.json
+  s_1f3a9ec02d29ed::t_a1a2d8b2b98c47 1-1204
+packages/db/src/growth.test.ts
+  s_1f3a9ec02d29ed::t_8ce76d5ce3c4dc 234,274
+packages/db/src/growth.ts
+  s_1f3a9ec02d29ed::t_21868eb69a15fe 3-10,24-25,368-369,523-527,596-602
+packages/db/src/readiness.ts
+  s_1f3a9ec02d29ed::t_b2353fae336b9d 14
+packages/db/src/schema/growth.ts
+  s_1f3a9ec02d29ed::t_f6bcd907f42483 11,63-70,134-148,157-158,162-165,167,169-170,173-214,217-230,242-283
+packages/env/src/billing.ts
+  s_1f3a9ec02d29ed::t_bec55326a6ab95 11-21
+packages/jobs/src/jobs/reconcile-billing.ts
+  s_1f3a9ec02d29ed::t_ead9c8cc4b5dbb 4,70-81,86
+turbo.json
+  s_1f3a9ec02d29ed::t_40c54990877902 47,123
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9a4a12b9577228fb4967d8e8eaeeb5fd7fb212b5",
+  "prompts": {},
+  "sessions": {
+    "s_1f3a9ec02d29ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aef80487-cabb-455f-b2f1-acb7f8d96c4e",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
