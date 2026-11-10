@@ -1451,7 +1451,7 @@ fn heads_of(ctx: &Ctx) -> CoreResult<Vec<CommittedHead>> {
 /* The head a run of steps reaches, with its place, and the furthest head when that was passed over. */
 struct Reached {
     head: CommittedHead,
-    anchor: usize,
+    head_at: usize,
     passed_over: Option<CommittedHead>,
 }
 
@@ -1465,12 +1465,12 @@ fn reached(steps: &[Step], heads: &[CommittedHead]) -> Option<Reached> {
             step.at.list.list_version == head.list_version && step.at.digest == head.list_digest
         })
     };
-    if let Some(anchor) = place(&heads[0]) {
-        return Some(Reached { head: heads[0].clone(), anchor, passed_over: None });
+    if let Some(head_at) = place(&heads[0]) {
+        return Some(Reached { head: heads[0].clone(), head_at, passed_over: None });
     }
     let end = steps.last().map_or(0, |step| step.at.list.list_version);
     let later = heads.get(1).filter(|_| heads[0].list_version > end)?;
-    place(later).map(|anchor| Reached { head: later.clone(), anchor, passed_over: Some(heads[0].clone()) })
+    place(later).map(|head_at| Reached { head: later.clone(), head_at, passed_over: Some(heads[0].clone()) })
 }
 
 /*
@@ -1580,14 +1580,14 @@ fn result(
     })
 }
 
-/* The record for a verified run of steps whose committed head is the step at `anchor`. */
+/* The record for a verified run of steps whose committed head is the step at `head_at`. */
 #[allow(clippy::too_many_arguments)]
 fn record_of(
     ctx: &Ctx,
     steps: &[Step],
     base: u64,
     digests: Vec<String>,
-    anchor: usize,
+    head_at: usize,
     committed_at: u64,
     held: &mut dyn FnMut(&Step) -> (u64, Option<u64>),
     judged_through: u64,
@@ -1600,8 +1600,8 @@ fn record_of(
         base_list_version: base,
         digests,
         committed_roster_version: committed_at,
-        committed_list_version: steps[anchor].at.list.list_version,
-        lists: steps[anchor..]
+        committed_list_version: steps[head_at].at.list.list_version,
+        lists: steps[head_at..]
             .iter()
             .map(|step| {
                 let (held_at, reported_at) = held(step);
@@ -1613,7 +1613,7 @@ fn record_of(
                 }
             })
             .collect(),
-        since: steps[anchor].since.clone(),
+        since: steps[head_at].since.clone(),
         judged_through,
         forks,
     }
@@ -1804,7 +1804,7 @@ pub fn area_lists_read(
             return Ok(forked(&head, old_end, record, None, refused, lost));
         };
         head = at.head.clone();
-        let anchor = at.anchor;
+        let head_at = at.head_at;
         let base = fresh[0].at.list.list_version;
         if kept.as_ref().is_some_and(|kept| base <= kept.committed_list_version) {
             // The new base list stands at or below a head an earlier roster committed: not on
@@ -1837,14 +1837,14 @@ pub fn area_lists_read(
             &fresh,
             base,
             fresh.iter().map(|step| step.at.digest.clone()).collect(),
-            anchor,
+            head_at,
             head.roster_version,
             &mut |_| (through, None),
             through,
             notes,
         );
-        let state = if anchor == fresh.len() - 1 { HeadState::Level } else { HeadState::Ahead };
-        let repost = fresh[anchor + 1..].iter().map(|step| signed_of(&step.at)).collect();
+        let state = if head_at == fresh.len() - 1 { HeadState::Level } else { HeadState::Ahead };
+        let repost = fresh[head_at + 1..].iter().map(|step| signed_of(&step.at)).collect();
         return Ok(result(
             &ctx,
             state,
@@ -1914,8 +1914,8 @@ pub fn area_lists_read(
         return Ok(forked(&head, Some(&end.at), Some(record), Some(&steps), refused, lost));
     }
     // The committed head is on the record: it becomes the head this device keeps, if further.
-    let anchor = head.list_version.saturating_sub(first) as usize;
-    let committed_at = if anchor > 0 { head.roster_version } else { kept.committed_roster_version };
+    let head_at = head.list_version.saturating_sub(first) as usize;
+    let committed_at = if head_at > 0 { head.roster_version } else { kept.committed_roster_version };
     let (mut notes, found) = notes_after(&kept.forks, passed_over.as_ref(), &end);
     // A later roster whose row fell back: on the record it moves nothing and is reported; off it,
     // two rosters committed to different records, which is a fork.
@@ -1969,8 +1969,8 @@ pub fn area_lists_read(
             _ => (held_at, reported_at),
         }
     };
-    let record = record_of(&ctx, &steps, base, digests, anchor, committed_at, &mut marked, through, notes);
-    let repost = steps[anchor + 1..].iter().map(|step| signed_of(&step.at)).collect();
+    let record = record_of(&ctx, &steps, base, digests, head_at, committed_at, &mut marked, through, notes);
+    let repost = steps[head_at + 1..].iter().map(|step| signed_of(&step.at)).collect();
     Ok(result(
         &ctx,
         state,
@@ -2045,7 +2045,7 @@ pub fn area_fork_settle(
         &steps,
         steps[0].at.list.list_version,
         steps.iter().map(|step| step.at.digest.clone()).collect(),
-        at.anchor,
+        at.head_at,
         at.head.roster_version,
         &mut |step| {
             if mine.contains(&step.at.digest) {
@@ -2057,8 +2057,8 @@ pub fn area_fork_settle(
         through,
         notes,
     );
-    let state = if at.anchor == steps.len() - 1 { HeadState::Level } else { HeadState::Ahead };
-    let repost = steps[at.anchor + 1..].iter().map(|step| signed_of(&step.at)).collect();
+    let state = if at.head_at == steps.len() - 1 { HeadState::Level } else { HeadState::Ahead };
+    let repost = steps[at.head_at + 1..].iter().map(|step| signed_of(&step.at)).collect();
     Ok(result(
         &ctx,
         state,

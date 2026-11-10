@@ -1134,12 +1134,12 @@ function reached(steps: Step[] | null, heads: CommittedHead[]) {
         (steps ?? []).findIndex(
             (step) => step.list.listVersion === head.listVersion && step.digest === head.listDigest,
         );
-    const anchor = place(heads[0]!);
-    if (anchor >= 0) return { head: heads[0]!, anchor, passedOver: null };
+    const headAt = place(heads[0]!);
+    if (headAt >= 0) return { head: heads[0]!, headAt, passedOver: null };
     const end = steps?.at(-1)?.list.listVersion ?? 0;
     if (heads[1] && heads[0]!.listVersion > end) {
         const later = place(heads[1]);
-        if (later >= 0) return { head: heads[1], anchor: later, passedOver: heads[0]! };
+        if (later >= 0) return { head: heads[1], headAt: later, passedOver: heads[0]! };
     }
     return null;
 }
@@ -1228,13 +1228,13 @@ const sameNote = (a: ForkNote, b: ForkNote) =>
     a.reported.position === b.reported.position &&
     a.reported.digest === b.reported.digest;
 
-/* The record for a verified run of steps whose committed head is the step at `anchor`. */
+/* The record for a verified run of steps whose committed head is the step at `headAt`. */
 function recordOf(
     ctx: Ctx,
     steps: Step[],
     base: number,
     digests: string[],
-    anchor: number,
+    headAt: number,
     committedAt: number,
     held: (step: Step) => { heldAt: number; reportedAt: number | null },
     judgedThrough: number,
@@ -1246,10 +1246,10 @@ function recordOf(
         workspaceKeyVersion: ctx.keyVersion,
         baseListVersion: base,
         digests,
-        committed: { rosterVersion: committedAt, listVersion: steps[anchor]!.list.listVersion },
-        lists: steps.slice(anchor).map((step) => ({ ...signedOf(step), ...held(step) })),
+        committed: { rosterVersion: committedAt, listVersion: steps[headAt]!.list.listVersion },
+        lists: steps.slice(headAt).map((step) => ({ ...signedOf(step), ...held(step) })),
         since: Object.fromEntries(
-            [...steps[anchor]!.since.entries()].sort(([x], [y]) => (x < y ? -1 : 1)),
+            [...steps[headAt]!.since.entries()].sort(([x], [y]) => (x < y ? -1 : 1)),
         ),
         judgedThrough,
         forks,
@@ -1387,7 +1387,7 @@ export async function readAreaLists(input: Input): Promise<AreaLists> {
         if (!fresh || !at)
             return forked(oldEnd ? { ...oldEnd, since: new Map() } : null, input.record, null);
         head = at.head;
-        const { anchor } = at;
+        const { headAt } = at;
         const base = fresh[0]!.list.listVersion;
         if (kept && base <= kept.committed.listVersion)
             // The new base list stands at or below a head an earlier roster committed: not on
@@ -1419,14 +1419,14 @@ export async function readAreaLists(input: Input): Promise<AreaLists> {
             fresh,
             base,
             fresh.map((step) => step.digest),
-            anchor,
+            headAt,
             head.rosterVersion,
             () => ({ heldAt: through, reportedAt: null }),
             through,
             notes,
         );
-        return result(ctx, anchor === fresh.length - 1 ? 'level' : 'ahead', fresh, record, head, {
-            repost: fresh.slice(anchor + 1).map(signedOf),
+        return result(ctx, headAt === fresh.length - 1 ? 'level' : 'ahead', fresh, record, head, {
+            repost: fresh.slice(headAt + 1).map(signedOf),
             report,
             refused,
             lost,
@@ -1477,8 +1477,8 @@ export async function readAreaLists(input: Input): Promise<AreaLists> {
         state = judge(head);
     }
     const held = heldOf(kept);
-    const keep = (anchor: number, committedAt: number, forks: ForkNote[], judged: number) =>
-        recordOf(ctx, steps, base, digests, anchor, committedAt, held, judged, forks);
+    const keep = (headAt: number, committedAt: number, forks: ForkNote[], judged: number) =>
+        recordOf(ctx, steps, base, digests, headAt, committedAt, held, judged, forks);
     if (state === 'behind')
         return result(
             ctx,
@@ -1495,8 +1495,8 @@ export async function readAreaLists(input: Input): Promise<AreaLists> {
             steps,
         );
     // The committed head is on the record: it becomes the head this device keeps, if further.
-    const anchor = Math.max(0, head.listVersion - first);
-    const committedAt = anchor > 0 ? head.rosterVersion : kept!.committed.rosterVersion;
+    const headAt = Math.max(0, head.listVersion - first);
+    const committedAt = headAt > 0 ? head.rosterVersion : kept!.committed.rosterVersion;
     const { notes, found } = notesAfter(kept!.forks, passedOver, end);
     // A later roster whose row fell back: on the record it moves nothing and is reported; off it,
     // two rosters committed to different records, which is a fork.
@@ -1539,9 +1539,9 @@ export async function readAreaLists(input: Input): Promise<AreaLists> {
         if (at.reportedAt !== null && through > at.reportedAt) missing = true;
         return at;
     };
-    const record = recordOf(ctx, steps, base, digests, anchor, committedAt, marked, through, notes);
+    const record = recordOf(ctx, steps, base, digests, headAt, committedAt, marked, through, notes);
     return result(ctx, state, steps, record, head, {
-        repost: steps.slice(anchor + 1).map(signedOf),
+        repost: steps.slice(headAt + 1).map(signedOf),
         report,
         missing,
         refused,
@@ -1574,7 +1574,7 @@ export async function settleAreaFork(input: Input): Promise<AreaLists> {
     const steps = await fromBase(ctx, served, refused);
     const at = reached(steps, headsOf(ctx));
     if (!steps || !at) throw new CryptoError(HEAD_FORKED);
-    const { head, anchor } = at;
+    const { head, headAt } = at;
     const through = ctx.chain.roster.rosterVersion;
     // What this device held and the committed record lacks: kept where it still follows.
     const committed = new Set(steps.map((step) => step.digest));
@@ -1614,7 +1614,7 @@ export async function settleAreaFork(input: Input): Promise<AreaLists> {
         steps,
         steps[0]!.list.listVersion,
         steps.map((step) => step.digest),
-        anchor,
+        headAt,
         head.rosterVersion,
         (step) => {
             const was = mine.has(step.digest) ? stored.get(step.digest) : undefined;
@@ -1625,8 +1625,8 @@ export async function settleAreaFork(input: Input): Promise<AreaLists> {
         through,
         notes,
     );
-    return result(ctx, anchor === steps.length - 1 ? 'level' : 'ahead', steps, record, head, {
-        repost: steps.slice(anchor + 1).map(signedOf),
+    return result(ctx, headAt === steps.length - 1 ? 'level' : 'ahead', steps, record, head, {
+        repost: steps.slice(headAt + 1).map(signedOf),
         refused,
         lost,
     });
