@@ -1,0 +1,77 @@
+e2e/two-step.spec.ts
+  s_1f3a9ec02d29ed::t_c10749282bec2b 1-623,631
+  s_1f3a9ec02d29ed::t_d6cc5b3f1112d7 624-630,632-729
+apps/web/src/components/account-two-step.tsx
+  s_1f3a9ec02d29ed::t_63476ab6a7e9c2 1-775,777-780,783,786,790-791,793-794,800,802-803,805-806,809-813
+  s_1f3a9ec02d29ed::t_ab5d17646ff7f5 776,781-782,784-785,787-789,792,795-799,801,804,807-808,814-815
+packages/crypto/src/session.two-step.test.ts
+  s_1f3a9ec02d29ed::t_9c12eb5999effe 1-158
+apps/web/src/components/two-step-prompt.tsx
+  s_1f3a9ec02d29ed::t_a36fdc68b0170c 1-255
+  s_1f3a9ec02d29ed::t_ad20f4bfc71535 256-264
+packages/auth/src/client.two-step.test.ts
+  s_1f3a9ec02d29ed::t_a28ac34e6a7384 1-534,536-545,548,550,554,556-557
+  s_1f3a9ec02d29ed::t_1646d1d84443e4 535,546-547,549,551-553,555,558-580
+packages/crypto/src/two-step-codes.ts
+  s_1f3a9ec02d29ed::t_e45f90f1bfd8c5 1-36
+.github/workflows/ci.yml
+  s_1f3a9ec02d29ed::t_c62427d2c95bbf 300-301
+.github/workflows/webkit.yml
+  s_1f3a9ec02d29ed::t_f45ba78ae17789 110-111
+CONTRIBUTING.md
+  s_1f3a9ec02d29ed::t_482fdac05f5c7a 628
+apps/web/src/components/account-dialogs.tsx
+  s_1f3a9ec02d29ed::t_aafb9564a03034 5-6,8-13,36-57,59-93,95-96,100,106-108,113-116,122-124,126-151,153-162,164,170-171,176-180,182-189,214,238-240,260-265,269,274,282-283,342,397,441,465,473-475,495-500,506,518-523,581,587,591,600,607,614-619,625,638-639,681
+apps/web/src/components/unlock-device.test.tsx
+  s_1f3a9ec02d29ed::t_a41fb06c0178b2 13-17,40-41,59,69
+apps/web/src/components/unlock-device.tsx
+  s_1f3a9ec02d29ed::t_27b65010bee99c 3,7-13,23-26,44,58,66-67,72,77-112
+apps/web/src/lib/api-client.ts
+  s_1f3a9ec02d29ed::t_77855d1b85245e 57-64
+apps/web/src/lib/auth-api.ts
+  s_1f3a9ec02d29ed::t_c40f0ee96fbf16 14-23
+apps/web/src/lib/device-data.test.ts
+  s_1f3a9ec02d29ed::t_e95e3c3fbf7005 329-330
+apps/web/src/lib/two-step-status.ts
+  s_1f3a9ec02d29ed::t_31903c4fe4eb4e 1-39
+apps/web/src/lib/two-step.test.ts
+  s_1f3a9ec02d29ed::t_fe12749238c341 1-100
+apps/web/src/lib/two-step.ts
+  s_1f3a9ec02d29ed::t_fad45b63b86f44 1-108
+apps/web/src/routes/_authenticated/app/account.tsx
+  s_1f3a9ec02d29ed::t_2ba96d215f29d1 13,29,32-39,46-47,119-120,232
+apps/web/src/routes/login/route.tsx
+  s_1f3a9ec02d29ed::t_441d5b1315451e 10,14-21,23,103-107,123,128-129,151-170,172-173,176,181,195-262,361-371
+apps/web/src/test/login-storage-choice.test.tsx
+  s_1f3a9ec02d29ed::t_005090d1bb2ba7 15-19,65-66,84,94
+docs/two-step-design.md
+  s_1f3a9ec02d29ed::t_183bc715eb08b9 9-10,705-718
+packages/auth/src/api.ts
+  s_1f3a9ec02d29ed::t_281c2bdecc7bdb 35-84,263-267,272-296,343,345-349,352-356
+packages/auth/src/client.test.ts
+  s_1f3a9ec02d29ed::t_3797a6757697a0 340-345
+packages/auth/src/client.ts
+  s_1f3a9ec02d29ed::t_49e4dd6b6d9751 12-22,94-95,98-149,469,473,475-479,574,576-577,579-580,582,589-771,898,900-911,990,995-996,998,1000-1029,1031-1033,1059-1061,1094-1125
+packages/crypto/package.json
+  s_1f3a9ec02d29ed::t_f6e2082bf6061b 16
+packages/crypto/src/session.ts
+  s_1f3a9ec02d29ed::t_6d44cec90f76ae 4,181-187,816-817,1753-1766
+packages/crypto/src/two-step-server.ts
+  s_1f3a9ec02d29ed::t_adef8415ac6afa 5,17-24
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b88e4cd1ff73ca3dbc2ef143fd300bb5f72bf6bf",
+  "prompts": {},
+  "sessions": {
+    "s_1f3a9ec02d29ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aef80487-cabb-455f-b2f1-acb7f8d96c4e",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
