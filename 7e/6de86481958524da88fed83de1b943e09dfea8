@@ -1,0 +1,21 @@
+.github/workflows/ci.yml
+  s_1f3a9ec02d29ed::t_1ecd78929a6b56 679,683-687,689-697,702,707,709,712,714-719
+docs/self-hosting.md
+  s_1f3a9ec02d29ed::t_ba658b824912c2 240
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7e6de86481958524da88fed83de1b943e09dfea8",
+  "prompts": {},
+  "sessions": {
+    "s_1f3a9ec02d29ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aef80487-cabb-455f-b2f1-acb7f8d96c4e",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
