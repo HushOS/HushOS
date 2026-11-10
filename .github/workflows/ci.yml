@@ -671,10 +671,53 @@ jobs:
               env:
                   DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
                   DEPLOY_WEBHOOK_TOKEN: ${{ secrets.DEPLOY_WEBHOOK_TOKEN }}
+              # Coolify starts nothing and answers "already queued" while an earlier deployment
+              # of the same application is still finishing, which it is for some seconds after
+              # production already serves that release. Two merges close together then left
+              # production on the first one. So ask again until each application has taken a
+              # request of its own. Any other reply (another host, a refusal) is left to the
+              # wait below, as before. The reply and curl's errors name the host: print neither.
               run: |
-                  curl --request POST --fail --silent --show-error --max-time 30 --output /dev/null \
-                    --header "Authorization: Bearer $DEPLOY_WEBHOOK_TOKEN" \
-                    "$DEPLOY_WEBHOOK_URL"
+                  taken=''
+                  for attempt in $(seq 1 18); do
+                    if (( attempt > 1 )); then
+                      sleep 10
+                    fi
+                    code=0
+                    body=$(curl --request POST --fail --silent --max-time 30 \
+                      --header "Authorization: Bearer $DEPLOY_WEBHOOK_TOKEN" \
+                      "$DEPLOY_WEBHOOK_URL" 2> /dev/null) || code=$?
+                    if (( code != 0 )); then
+                      if (( attempt == 1 )); then
+                        echo "::error title=Deploy request::the request failed (curl exit $code)."
+                        exit 1
+                      fi
+                      echo "The request failed (curl exit $code, attempt $attempt); asking again."
+                      continue
+                    fi
+                    state=$(jq -r --arg taken "$taken" '
+                      [.deployments[]? | select(.resource_uuid != null)] as $all
+                      | ([$all[] | select((.message // "") | test("already queued"; "i") | not) | .resource_uuid]
+                         + ($taken | split(" ") | map(select(. != ""))) | unique) as $now
+                      | "\(([$all[].resource_uuid] | unique) - $now | length) \($now | join(" "))"
+                    ' <<< "$body" 2> /dev/null || true)
+                    if [[ -z "$state" ]]; then
+                      exit 0
+                    fi
+                    pending=${state%% *}
+                    taken=${state#* }
+                    if (( pending == 0 )); then
+                      exit 0
+                    fi
+                    echo "An earlier deployment is still finishing ($pending waiting, attempt $attempt)."
+                  done
+                  # Only the web application reports its release, so a half-taken request
+                  # would pass the wait below with the other application left behind.
+                  if [[ -n "$taken" ]]; then
+                    echo "::error title=Deploy request::only some applications took the request."
+                    exit 1
+                  fi
+                  echo "::warning title=Deploy request::an earlier deployment never finished; the wait below decides."
             # A later commit's `latest` can land between the gate and the pull, and production
             # then comes up on it: that release counts too.
             - name: Wait for the published release
