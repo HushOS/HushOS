@@ -1477,20 +1477,12 @@ export function createCryptoSession() {
         },
     });
 
-    /*
-     * `keepProof`: only the saved unlock's restore. A password check begun on the account page
-     * (two-step setup, removing a device) while the saved key was still opening is not the
-     * restore's to end: it is its own exchange, and holds nothing of the root. A lock, a
-     * failed operation and every sign-in or change still drop it with the rest.
-     */
-    function clearState(keepProof = false) {
+    function clearState() {
         security.reset();
         accountKeyVersion = 1;
         password = '';
-        if (!keepProof) {
-            reauthPassword = '';
-            reauthState = '';
-        }
+        reauthPassword = '';
+        reauthState = '';
         state = '';
         exportKey = '';
         phase = 'idle';
@@ -1594,7 +1586,7 @@ export function createCryptoSession() {
             }
             case 'restore': {
                 if (unlockedUserId !== message.input.bundle.userId) forgetDriveKeys();
-                clearState(true);
+                clearState();
                 const root = await restoreAccountKey(message.input.bundle, message.input.deviceKey);
                 if (expected !== generation) {
                     root.fill(0);

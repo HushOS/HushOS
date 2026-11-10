@@ -75,18 +75,7 @@ async function setup() {
         });
         return finish;
     }
-    /* The saved unlock opening again, as a page that just loaded does it. */
-    const restore = () => call('restore', { deviceKey, bundle });
-    /* The server's half of one exchange, for a start the test made itself. */
-    const answer = (startLoginRequest: string) =>
-        server.startLogin({
-            serverSetup,
-            userIdentifier: USER,
-            registrationRecord,
-            startLoginRequest,
-            identifiers: OPAQUE_IDENTIFIERS,
-        }).loginResponse;
-    return { reauth, stillOpen, call, restore, answer, lock: () => session.reset() };
+    return { reauth, stillOpen, call };
 }
 
 describe('proving the password again while unlocked', () => {
@@ -120,44 +109,5 @@ describe('proving the password again while unlocked', () => {
         await expect(
             call('reauthFinish', { loginResponse: 'x', profileVersion: OPAQUE_PROFILE_VERSION }),
         ).rejects.toBeInstanceOf(RefusedError);
-    });
-});
-
-/*
- * A password check typed on a page that had only just loaded: the saved unlock was still
- * opening in the worker when the check began. The restore starts the account's state over,
- * but the check is its own exchange and must come through it, or the person is told to
- * "Enter your password again" for a password that was right. A lock still ends it.
- */
-describe('a password check begun while the saved unlock was opening', () => {
-    test('is finished after the restore, with the password it began with', async () => {
-        const { call, restore, answer, stillOpen } = await setup();
-        const start = (await call('reauthStart', { password: PASSWORD })) as {
-            startLoginRequest: string;
-        };
-        await restore();
-        await expect(
-            call('reauthFinish', {
-                loginResponse: answer(start.startLoginRequest),
-                profileVersion: OPAQUE_PROFILE_VERSION,
-            }),
-        ).resolves.toHaveProperty('finishLoginRequest');
-        expect(await stillOpen()).toBe(true);
-    });
-
-    test('is dropped by a lock all the same: its finish is refused, restore or none after it', async () => {
-        const { call, restore, answer, lock } = await setup();
-        const start = (await call('reauthStart', { password: PASSWORD })) as {
-            startLoginRequest: string;
-        };
-        const finish = () =>
-            call('reauthFinish', {
-                loginResponse: answer(start.startLoginRequest),
-                profileVersion: OPAQUE_PROFILE_VERSION,
-            });
-        lock();
-        await expect(finish()).rejects.toThrow('Enter your password again.');
-        await restore();
-        await expect(finish()).rejects.toThrow('Enter your password again.');
     });
 });
