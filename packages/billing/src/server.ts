@@ -7,7 +7,6 @@ import { log } from '@hushos/logging';
 import { webhooks, type Polar, type models } from '@polar-sh/sdk/2026-10';
 import { PolarClientError } from '@polar-sh/sdk';
 import type { BillingSummary, Catalogue, DiscountTerms } from './api';
-import { affiliateV2, noteRefundDelivery, recordHeldAffiliateEarning } from './commission';
 import {
     LapsedRevokeError,
     notePaidAfterRevoke,
@@ -94,7 +93,6 @@ export {
     type SeatResult,
 } from './groups';
 export { quoteTierChange } from './protocol';
-export { affiliateV2, reconcileAffiliateEarnings } from './commission';
 
 const WEBHOOK_MAX_BYTES = 256 * 1024;
 
@@ -617,46 +615,6 @@ export async function deleteProviderDiscount(id: string) {
 }
 
 /*
- * Pausing an affiliate with AFFILIATE_V2_ENABLED: Polar is asked to end their discount now, so
- * the code stops applying at its checkout. Never deleted: a new discount would have a new id, so
- * customers who only ever used the code would stop being found by it, and deleting may strip the
- * discount from subscriptions that carry it. False when Polar would not (it fixes a used
- * discount's terms): the discount is left as it is, and a code typed there earns nothing.
- */
-export async function endProviderDiscount(id: string) {
-    if (!billingEnabled()) return true;
-    try {
-        await polar().discounts.update(id, { ends_at: new Date().toISOString() });
-    } catch (error) {
-        log.warn({
-            message: 'Polar would not end a paused affiliate’s discount; it is left as it is',
-            billing: { discount: id, status: statusOf(error) },
-        });
-        return false;
-    }
-    discountCache.clear();
-    return true;
-}
-
-/* Resuming: the end date a pause set is taken off again. False when Polar would not; the discount stays ended there. */
-export async function reopenProviderDiscount(id: string) {
-    if (!billingEnabled()) return true;
-    try {
-        const discount = await polar().discounts.get(id);
-        if (!discount.ends_at) return true;
-        await polar().discounts.update(id, { ends_at: null });
-    } catch (error) {
-        log.warn({
-            message: 'Polar would not reopen a resumed affiliate’s discount; it stays ended there',
-            billing: { discount: id, status: statusOf(error) },
-        });
-        return false;
-    }
-    discountCache.clear();
-    return true;
-}
-
-/*
  * What a paid order earns: its affiliate's commission and, for its owner, their inviter's
  * reward. For a payment on a lapsed plan HushOS set out to revoke, the plan-ending job
  * grants these once it knows the plan stays its owner's (the revoke never landed).
@@ -711,14 +669,11 @@ async function recordAffiliateEarning(order: {
     id: string;
     discount_id?: string | null;
     net_amount?: number;
-    refunded_amount?: number;
     currency?: string;
     customer?: { external_id?: string | null } | null;
 }) {
     const externalId = order.customer?.external_id ?? null;
     const userId = externalId && USER_ID_PATTERN.test(externalId) ? externalId : null;
-    // Commission safety has its own rules for who earns and how the earning starts (commission.ts).
-    if (affiliateV2()) return recordHeldAffiliateEarning(order, userId);
     const affiliate =
         (order.discount_id
             ? await growthRepository.findAffiliateByDiscount(order.discount_id)
@@ -1077,14 +1032,6 @@ export async function handleWebhook(request: Request): Promise<Response> {
         // A refund HushOS made that failed after it succeeded: its plan's refunds are placed again.
         if (event.type === 'refund.updated')
             await noteRefundUpdated(event.data as Parameters<typeof noteRefundUpdated>[0]);
-        // Any refund, whoever made it: with commission safety on, the order's refunds are read
-        // again and what is left of its commission worked out from them.
-        if (
-            event.type === 'order.refunded' ||
-            event.type === 'refund.created' ||
-            event.type === 'refund.updated'
-        )
-            await noteRefundDelivery(event);
         if (event.type === 'order.paid') {
             // A payment for a lapsed plan HushOS revoked is refunded whole, so it earns no
             // commission and no referral reward. (A pooled member's renewal refunded by the

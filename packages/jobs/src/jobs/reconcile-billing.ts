@@ -1,7 +1,6 @@
 import {
     cancelDissolvedPlan,
     endPersonalPlans,
-    reconcileAffiliateEarnings,
     reconcileCustomer,
     reconcileGroup,
     reconcilePlanEndings,
@@ -67,32 +66,10 @@ export async function reconcileBilling(job: Job<JobPayloads[typeof queues.reconc
             failed += 1;
             if (error instanceof Error) event.error(error);
         }
-        // Commission safety, where it is on: Polar's disputes read, and the refunds of every
-        // earning that could still be paid or that a refund changed lately read again. A token
-        // without disputes:read is said by that read itself, once a run, and fails nothing
-        // here; refunds are still handled.
-        let commission: Awaited<ReturnType<typeof reconcileAffiliateEarnings>> = null;
-        try {
-            commission = await reconcileAffiliateEarnings(new Date(), { signal: job.signal });
-            if (commission?.refundsFailed) {
-                failed += 1;
-                event.error(new Error('Refunds of affiliate earnings could not be read.'));
-            }
-            // A failure to read disputes that is not a missing scope may pass: the run fails,
-            // so it is tried again. A missing scope would fail every retry the same way.
-            if (commission?.disputesFailure === 'failed') {
-                failed += 1;
-                event.error(new Error('Polar’s disputes could not be read.'));
-            }
-        } catch (error) {
-            failed += 1;
-            if (error instanceof Error) event.error(error);
-        }
         event.set({
             reconciled,
             failed,
             endingsQueued: endings,
-            ...(commission ? { commission } : {}),
             durationMs: Math.round(performance.now() - started),
         });
         if (failed) throw new Error('Some customers could not be reconciled.');

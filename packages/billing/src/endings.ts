@@ -1,8 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { billingRepository, groupsRepository } from '@hushos/db';
+import { billingRepository, groupsRepository, growthRepository } from '@hushos/db';
 import { log } from '@hushos/logging';
 import type { models } from '@polar-sh/sdk/2026-10';
-import { withdrawOrderEarning } from './commission';
 import { billingEnabled, getCatalogue, polar, polarErrorName, statusOf } from './provider';
 import { livePlan } from './protocol';
 
@@ -861,7 +860,7 @@ async function refundOrder(
     // after the ending noted it (its delivery raced the cure, say) is taken back while unpaid;
     // one already paid out is said once, for an operator. Asked every pass; a no-op once settled.
     if (isLapsedEnding(ending) && target > 0)
-        if ((await withdrawOrderEarning(state.order.id)) === 'paid')
+        if ((await growthRepository.withdrawEarning(state.order.id)) === 'paid')
             log.error({
                 message: 'An affiliate was paid commission on an order HushOS refunds whole',
                 billing: {
@@ -1573,7 +1572,7 @@ export async function endUnwantedFamilyPlan(
         // Refunded whole: they earn no commission. One a delivery already recorded is taken back
         // while unpaid; one already paid out is said, for an operator.
         for (const order of paid.filter(after))
-            if ((await withdrawOrderEarning(order.id)) === 'paid')
+            if ((await growthRepository.withdrawEarning(order.id)) === 'paid')
                 log.error({
                     message: 'An affiliate was paid commission on an order HushOS refunds whole',
                     billing: { group: groupId, subscription: subscriptionId, order: order.id },

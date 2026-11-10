@@ -3703,9 +3703,8 @@ describe('referrals', () => {
             await rawSql(
                 `select user_id, commission_amount from affiliate_earnings where order_id = 'order_fam_gone'`,
             )
-        ).rows as { user_id: string | null; commission_amount: string }[];
-        // The amount is a bigint column: the driver hands it back as digits.
-        expect(earning).toEqual({ user_id: null, commission_amount: '400' });
+        ).rows as { user_id: string | null; commission_amount: number }[];
+        expect(earning).toEqual({ user_id: null, commission_amount: 400 });
         expect((await growth.getReferralSummary(inviterB.userId)).paid).toMatchObject({ count: 0 });
     });
 
