@@ -237,7 +237,7 @@ The GitHub Actions workflow runs `bun run check` (lint, format, and typecheck), 
 
 ### Deploy webhook
 
-The optional deployment job calls `DEPLOY_WEBHOOK_URL` with `DEPLOY_WEBHOOK_TOKEN` after `latest` moves to the commit. It then verifies `/api/ready` reports that commit (or a later one). When Coolify answers that a deployment is already queued, because the previous one is still finishing, the job asks again every 10 seconds for up to three minutes until each application has taken the request. If only some have by then, the job fails; if none has, it carries on to the readiness check with a warning. A reply that is not in Coolify's shape is not interpreted.
+The optional deployment job calls `DEPLOY_WEBHOOK_URL` with `DEPLOY_WEBHOOK_TOKEN` after `latest` moves to the commit. It then verifies `/api/ready` reports that commit (or a later one).
 
 - Enable it with the repository variable `DEPLOY_ENABLED=true`, and set `DEPLOY_ORIGIN`.
 - Point the platform at the `latest` tags.
