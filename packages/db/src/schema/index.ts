@@ -4,6 +4,7 @@ export * from './groups';
 export * from './workspace-keys';
 export { relations } from './relations';
 export * from './storage';
+export * from './object-stores';
 export * from './billing';
 export * from './drive';
 export * from './growth';

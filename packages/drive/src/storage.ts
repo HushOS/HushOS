@@ -18,6 +18,7 @@ import {
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { createHash } from 'node:crypto';
+import { ENVIRONMENT_PRIMARY_STORE_ID, ENVIRONMENT_REPLICA_STORE_ID } from '@hushos/db/schema';
 import {
     evidenceConfigured,
     replicaConfigured,
@@ -25,6 +26,7 @@ import {
     storageEvidenceEnv,
     storageReplicaEnv,
 } from '@hushos/env/storage';
+import { log } from '@hushos/logging';
 
 /*
  * The object store, through the S3 API every candidate speaks: Garage locally, R2
@@ -333,8 +335,48 @@ function statusOf(error: unknown) {
     return error instanceof S3ServiceException ? error.$metadata.httpStatusCode : undefined;
 }
 
+/*
+ * Which store, by the id an object, upload or outbox row carries
+ * (docs/company-storage-design.md 2.2). Every read, signed URL, copy and
+ * deletion goes through here with its row's `store_id`; nothing picks "the"
+ * store any more.
+ *
+ * The environment's stores are rows with fixed ids and nothing in them: this
+ * process fills them in from its own variables, so changing `STORAGE_*` changes
+ * where the row points, as it always did. The web service holds no replica
+ * variables and so cannot open the replica's row, exactly as before.
+ *
+ * A store this process cannot open fails that request and is never swapped for
+ * another one: signing a URL at the wrong bucket would hand out a dead link,
+ * and deleting there would be worse. Stores added on the page are `database`
+ * rows, opened with a sealing key from the environment; until that exists
+ * every such id is unavailable here.
+ */
+export class StoreUnavailableError extends Error {
+    constructor(readonly storeId: string) {
+        super('This store cannot be opened by this process.');
+        this.name = 'StoreUnavailableError';
+    }
+}
+
+const reportedUnavailable = new Set<string>();
+
+export async function storeFor(storeId: string): Promise<ObjectStore> {
+    if (storeId === ENVIRONMENT_PRIMARY_STORE_ID) return environmentPrimary();
+    if (storeId === ENVIRONMENT_REPLICA_STORE_ID) {
+        const store = replicaStore();
+        if (store) return store;
+    }
+    // Once per store and process: the id and nothing about where it points.
+    if (!reportedUnavailable.has(storeId)) {
+        reportedUnavailable.add(storeId);
+        log.error({ message: 'A store cannot be opened by this process', storeId });
+    }
+    throw new StoreUnavailableError(storeId);
+}
+
 let primary: ObjectStore | undefined;
-export function primaryStore() {
+function environmentPrimary() {
     primary ??= createObjectStore({
         endpoint: storageEnv.STORAGE_ENDPOINT,
         internalEndpoint: storageEnv.STORAGE_INTERNAL_ENDPOINT,
@@ -348,7 +390,11 @@ export function primaryStore() {
 }
 
 let replica: ObjectStore | null | undefined;
-/* Null when no replica is configured; the worker says so once at start. */
+/*
+ * The environment's replica, which is the default region's backup store. Null
+ * when this process's environment does not describe one; the worker says so
+ * once at start and records it on the row.
+ */
 export function replicaStore() {
     if (replica !== undefined) return replica;
     if (!replicaConfigured()) return (replica = null);

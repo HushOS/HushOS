@@ -79,7 +79,9 @@ test('a purged family’s objects are deleted from the store through the outbox,
 
     // Before the purge the drain has nothing to delete.
     const { store, deleted } = recordingStore();
-    expect(await deleteObjects({ primary: store, replica: null })).toMatchObject({ primaries: 0 });
+    expect(await deleteObjects({ open: async () => store, replica: null })).toMatchObject({
+        primaries: 0,
+    });
 
     expect(await purgeDue()).toMatchObject({ areas: 2 });
     expect(
@@ -87,12 +89,16 @@ test('a purged family’s objects are deleted from the store through the outbox,
             groupsRepository.DISSOLVED_FAMILY_RETENTION_DAYS,
         ),
     ).toEqual({ retired: 0, families: 1, busy: 0 });
-    expect(await deleteObjects({ primary: store, replica: null })).toMatchObject({ primaries: 3 });
+    expect(await deleteObjects({ open: async () => store, replica: null })).toMatchObject({
+        primaries: 3,
+    });
     expect([...deleted].sort()).toEqual([...familyKeys].sort());
     expect(deleted).not.toContain(ownKey);
     expect(deleted).not.toContain(liveKey);
 
     // Drained once: a second pass deletes nothing more.
-    expect(await deleteObjects({ primary: store, replica: null })).toMatchObject({ primaries: 0 });
+    expect(await deleteObjects({ open: async () => store, replica: null })).toMatchObject({
+        primaries: 0,
+    });
     expect(deleted).toHaveLength(3);
 });

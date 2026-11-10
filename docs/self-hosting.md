@@ -1569,6 +1569,15 @@ Browsers upload to and download from the bucket directly, through presigned URLs
 | `STORAGE_COLD_CLASS`                                                                                                                                                                     | Optional. The provider's infrequent-access storage class as the S3 API spells it (`STANDARD_IA` on R2 and AWS). Worker only. See [Cold storage](#cold-storage).                                           |
 | `DRIVE_ORPHAN_SWEEP_PAUSED_UNTIL`                                                                                                                                                        | Optional ISO timestamp. Until then the worker skips the orphan sweep. Worker only. See [After restoring the database](#after-restoring-the-database-from-a-backup).                                       |
 
+#### Stores in the database
+
+The database holds a row for the bucket the `STORAGE_*` variables describe and one for the replica (`object_stores`), and a region named `default` that points at them (`storage_regions`). Every object, upload and queued deletion records the row of the store it is in.
+
+- The rows hold no endpoint, bucket or key. Each process still reads those from its own environment, so changing a variable and restarting works as it always did.
+- The worker records at start whether its environment describes the replica. The web service holds no replica settings and cannot reach it, as before.
+- The evidence bucket is not a row.
+- There is nothing to configure, and no page for it yet.
+
 #### Client minimums
 
 - Format: `web/1.0.0,ios/1.0.0,android/1.0.0`.
@@ -2380,3 +2389,46 @@ Rolling back:
 - Once it is removed, older containers sign those accounts in with the password alone. Remove it only if no account has a second step, or you accept that.
 
 Containers of the previous release neither read nor write the new tables. A device they insert gets `two_step_failures = 0`, and a session they open has no `two_step_at`.
+
+#### Stores release (`20261110000425_storage_stores`)
+
+What it adds:
+
+- Two tables, `object_stores` and `storage_regions`, and three rows:
+    - the store the `STORAGE_*` variables describe, with the fixed id `00000000-0000-4000-8000-000000000001`;
+    - the replica the `STORAGE_REPLICA_*` variables describe, with the fixed id `00000000-0000-4000-8000-000000000002`, marked absent until a worker of this release starts and says whether its environment has one;
+    - one region, `default`, pointing at the first with the second as its backup.
+- The two store rows hold no endpoint, bucket or key, and a check refuses any. Those stay in the environment. See [Stores in the database](#stores-in-the-database).
+- `store_id` on `drive_objects`, `drive_uploads` and `drive_object_deletions`: `uuid NOT NULL`, with the first id above as a constant default. Every existing row reads as that store, which is where every object is.
+- `drive_uploads.multipart_id` becomes nullable. An upload's row is now committed first, and the store's upload id is written to it a moment later, only while the row is still open.
+- No new environment variable, and nothing to set. Uploads and downloads go where they went.
+
+Locks:
+
+- Adding the column locks `drive_objects`, `drive_uploads` and `drive_object_deletions` against reads and writes (`ACCESS EXCLUSIVE`), in that order, until drizzle's single transaction commits. Every upload, download and deletion touches one of them.
+- None of the three is rewritten or scanned. A constant default is a change to the catalog only, and so is dropping `NOT NULL` from `multipart_id`. So the locks last milliseconds, whatever the size of the tables.
+- The foreign keys from the three tables to `object_stores`, and the new check `drive_uploads_multipart_started`, are added `NOT VALID`. They take no further lock on those tables, read no existing row, and bind every row written from then on. A later release validates them.
+- The new tables' own foreign keys and unique index are built on tables that hold three rows.
+- Each statement waits at most five seconds for its lock (`lock_timeout`) and fails rather than queue Drive requests behind it. A request that holds one of the three tables while the migration holds another can also end that way. Run it again.
+
+During a rolling update:
+
+- Containers of the previous release name no store when they insert an object, an upload or a queued deletion. The default gives those rows the environment's primary store.
+- A web container of this release leaves an upload row without a multipart id for the moment between its commit and the store's answer. No client knows that upload's id until the answer is written, so no container of the previous release is asked about it.
+- If that web container stops in that moment, the row keeps its reserved bytes until it is expired. A worker of this release expires such a row at its hourly run, once it is a minute old. A worker of the previous release expires it with every other upload, after 24 hours.
+- The worker of this release writes to `object_stores` at start. Roll the web service and the worker in either order.
+
+With one role per process:
+
+- The default privileges under [One role per process](#one-role-per-process) cover both new tables.
+- If you grant tables to the application and worker roles one by one instead, grant them `SELECT`, `INSERT`, `UPDATE` and `DELETE` on `object_stores` and `storage_regions` as soon as the migration has run, before the new containers start. Every upload locks the default region's row as it begins, which needs `UPDATE`. Without the grant every upload on a new web container fails, and the new worker refuses to start, naming the tables.
+
+Restoring a backup:
+
+- A full restore needs nothing. A database restored from before this release is migrated again and gets the same three rows.
+- A data-only restore of `drive_objects`, `drive_uploads` or `drive_object_deletions` needs the rows of `object_stores` in place first, which a migrated database has.
+
+Rolling back:
+
+- Containers of an earlier release run against this schema as they did during the update. Leave the tables and columns in place.
+- An upload row a container of this release left without a multipart id is expired by the older worker after 24 hours.

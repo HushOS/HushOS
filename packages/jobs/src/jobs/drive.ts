@@ -10,19 +10,20 @@ import {
     sweepOrphans,
     tierObjects,
 } from '@hushos/drive/jobs';
-import { evidenceStore, primaryStore, replicaStore } from '@hushos/drive/storage';
+import { evidenceStore, replicaStore, storeFor } from '@hushos/drive/storage';
 import { storageEnv } from '@hushos/env/storage';
 import { createLogger, sanitizeFailure } from '@hushos/logging';
 import type { Job } from 'pg-boss';
 
 /*
  * Drive's background work, each job one wide event: what it examined, what it
- * did, how long it took. The stores come from the worker's environment; the
- * replica is optional and its absence is a fact the events carry.
+ * did, how long it took. Every primary copy is reached through the store its
+ * row names; the replica comes from the worker's environment, is optional, and
+ * its absence is a fact the events carry.
  */
 
 function stores() {
-    return { primary: primaryStore(), replica: replicaStore() };
+    return { open: storeFor, replica: replicaStore() };
 }
 
 async function run<T extends Record<string, unknown>>(job: Job<unknown>, work: () => Promise<T>) {
@@ -73,6 +74,6 @@ export const driveOrphanSweep = (job: Job<unknown>) =>
 export const driveTier = (job: Job<unknown>) =>
     run(job, () => tierObjects(stores(), { coldClass: storageEnv.STORAGE_COLD_CLASS ?? null }));
 export const reportsEvidence = (job: Job<unknown>) =>
-    run(job, () => copyEvidence({ primary: primaryStore(), evidence: evidenceStore() }));
+    run(job, () => copyEvidence({ open: storeFor, evidence: evidenceStore() }));
 export const reportsRequests = (job: Job<unknown>) =>
     run(job, () => answerEvidenceRequests({ evidence: evidenceStore() }));

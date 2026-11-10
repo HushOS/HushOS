@@ -522,6 +522,7 @@ drive_objects
   id              uuid PK           client-generated
   workspace_id    uuid
   object_key      text              "ws/{workspaceId}/{objectId}"
+  store_id        uuid FK object_stores   the store the bytes are in; never null, default the environment's primary (company-storage-design.md 2)
   content_suite   smallint = 1
   chunk_size      integer
   chunk_count     integer >= 1
@@ -551,7 +552,8 @@ drive_uploads
   object_id       uuid FK drive_objects   the object this upload fills
   key_epoch       integer           the node key epoch the content-key envelope was wrapped under
   workspace_id    uuid
-  multipart_id    text              the store's upload id
+  store_id        uuid FK object_stores   chosen in begin's transaction; never null, default the environment's primary
+  multipart_id    text null         the store's upload id; null from begin's commit until the store has started the upload
   reserved_bytes  bigint            what was added to reserved_bytes
   expires_at      timestamptz
   status          'open' | 'completing' | 'conflicted' | 'completed' | 'aborted'
@@ -562,6 +564,7 @@ drive_object_deletions            the outbox every object deletion goes through
   object_id       uuid PK
   workspace_id    uuid              not a FK: the row outlives the workspace
   object_key      text
+  store_id        uuid FK object_stores   where the copy to remove is, from the object's row; never null, same default
   published       boolean           false for an object that never became ready
   replicated      boolean           true once the replica holds it; drive.replicate updates this row too
   primary_deleted_at timestamptz null
@@ -925,9 +928,14 @@ In one transaction it:
 3. inserts:
     - the node if new, with no `change_seq`;
     - the object and the version as `pending`;
-    - the upload row naming the object and the node's current `key_epoch`, with a 24-hour expiry.
+    - the upload row naming the object and the node's current `key_epoch`, with a 24-hour expiry;
+4. chooses the store, under a share lock on the row it reads it from (the default region's), and writes its id on the object and the upload (company-storage-design.md 2.2).
 
-It then starts a multipart upload at the store, and returns the upload id and presigned PUT URLs for the first batch of parts.
+The upload row is committed without a multipart id. The server then starts a multipart upload at that store and writes its id to the row, in an update that applies only while the row is still open and has none. It returns the upload id and presigned PUT URLs for the first batch of parts.
+
+- A store that refuses to start the upload has the begin undone, rows and reservation, so the same request can be sent again.
+- A store that answers after the row was expired has the multipart upload it started aborted, and the request fails as expired.
+- A row still without a multipart id a minute after begin is expired by `drive.expire-uploads` at its next run.
 
 - Each URL is signed for one part number in `1..chunkCount`, with `Content-Length` as a signed header.
 - That header is set to the exact length of that part, which the server derives from `ciphertextSize` and `chunkCount`.
@@ -1046,9 +1054,9 @@ Either failure leaves the upload `conflicted`, and the client tries again with f
 
 ### 5. Abort
 
-`DELETE /api/drive/uploads/:id`, or the worker's hourly `drive.expire-uploads` job for anything past `expires_at`. Both first refuse an upload that is `completing`; otherwise they:
+`DELETE /api/drive/uploads/:id`, or the worker's hourly `drive.expire-uploads` job for anything past `expires_at`, and for an upload whose store never started it within a minute of begin. Both first refuse an upload that is `completing`; otherwise they:
 
-- abort the multipart upload at the store;
+- abort the multipart upload at the store the upload's row names, when it has one;
 - release `reserved_bytes`;
 - delete the pending version and object and, for a new file, its node, which nobody has seen.
 

@@ -1,4 +1,9 @@
-import { driveRepository, groupsRepository, reportsRepository } from '@hushos/db';
+import {
+    ENVIRONMENT_PRIMARY_STORE_ID,
+    driveRepository,
+    groupsRepository,
+    reportsRepository,
+} from '@hushos/db';
 import { TOMBSTONE_DAYS, TRASH_RETENTION_DAYS } from './protocol';
 import type { ObjectStore } from './storage';
 
@@ -17,21 +22,35 @@ export function evidenceKey(reportId: string, objectId: string) {
     return `reports/${reportId}/${objectId}`;
 }
 
-type Stores = { primary: ObjectStore; replica: ObjectStore | null };
+/*
+ * The stores a job works with. `open` gives the store a row names (an object's,
+ * an upload's, an outbox row's `store_id`), and every primary copy is reached
+ * through it; nothing here reads "the" store. `replica` is the environment's
+ * replica, the default region's backup, or null without one.
+ */
+export type Stores = {
+    open: (storeId: string) => Promise<ObjectStore>;
+    replica: ObjectStore | null;
+};
 
 /*
  * Uploads past their expiry are aborted and their reservations released. One
  * stuck completing for an hour is resolved by asking the store: an object present
  * at the reserved size is published as complete's last step would have, anything
- * else is aborted.
+ * else is aborted. One whose store never started its multipart upload within a
+ * minute of begin is expired the same way, unless the store's answer was written
+ * since it was listed, in which case it is a live upload and is left alone.
+ * Each is resolved at the store its own row names.
  */
-export async function expireUploads({ primary }: Stores, limit = 200) {
+export async function expireUploads({ open }: Stores, limit = 200) {
     const rows = await driveRepository.listExpiredUploads(limit);
     let aborted = 0;
     let finalised = 0;
     for (const row of rows) {
         if (row.status === 'completing' && row.objectId && row.ciphertextSize !== null) {
-            const stored = await primary.head(row.objectKey).catch(() => null);
+            const stored = await open(row.storeId)
+                .then((store) => store.head(row.objectKey))
+                .catch(() => null);
             if (stored && BigInt(stored.size) === row.ciphertextSize) {
                 const result = await driveRepository.finishCompleting(
                     row.workspaceId,
@@ -44,10 +63,18 @@ export async function expireUploads({ primary }: Stores, limit = 200) {
                 }
             }
         }
-        const result = await driveRepository.abortUpload(row.workspaceId, row.id, { force: true });
+        const result =
+            row.multipartId === null
+                ? await driveRepository.expireUnstartedUpload(row.workspaceId, row.id)
+                : await driveRepository.abortUpload(row.workspaceId, row.id, { force: true });
         if (result.status === 'ok') {
-            if (!result.alreadyAborted)
-                await primary.abortMultipart(row.objectKey, row.multipartId).catch(() => {});
+            // The id read under the abort's lock, not the listing's: the store's answer may
+            // have been written in between.
+            const { multipartId, storeId, objectKey } = result.upload;
+            if (!result.alreadyAborted && multipartId !== null)
+                await open(storeId)
+                    .then((store) => store.abortMultipart(objectKey, multipartId))
+                    .catch(() => {});
             aborted++;
         }
     }
@@ -58,9 +85,11 @@ export async function expireUploads({ primary }: Stores, limit = 200) {
  * Drains the deletion outbox. With a replica configured, a published object's
  * primary copy waits until the replica holds it, then goes; the replica copy
  * follows after the undo window. Without a replica the primary goes at once.
- * An object that was never published waits for nothing.
+ * An object that was never published waits for nothing. The primary copy is
+ * deleted from the store the outbox row names, which is where the object's row
+ * said it was when it was retired.
  */
-export async function deleteObjects({ primary, replica }: Stores, limit = 200) {
+export async function deleteObjects({ open, replica }: Stores, limit = 200) {
     let primaries = 0;
     let replicas = 0;
     let waiting = 0;
@@ -70,7 +99,7 @@ export async function deleteObjects({ primary, replica }: Stores, limit = 200) {
             waiting++;
             continue;
         }
-        await primary.delete(row.objectKey);
+        await (await open(row.storeId)).delete(row.objectKey);
         await driveRepository.markPrimaryDeleted(
             row.objectId,
             keepReplicaCopy ? new Date(Date.now() + REPLICA_UNDO_DAYS * 24 * 3600 * 1000) : null,
@@ -86,12 +115,15 @@ export async function deleteObjects({ primary, replica }: Stores, limit = 200) {
     return { primaries, replicas, waiting };
 }
 
-/* Copies objects the replica does not hold yet. Objects are immutable, so a retry is harmless. */
-export async function replicateObjects({ primary, replica }: Stores, limit = 100) {
+/*
+ * Copies objects the replica does not hold yet, each from the store its row
+ * names. Objects are immutable, so a retry is harmless.
+ */
+export async function replicateObjects({ open, replica }: Stores, limit = 100) {
     if (!replica) return { copied: 0 };
     let copied = 0;
     for (const row of await driveRepository.listUnreplicatedObjects(limit)) {
-        await replica.copyFrom(primary, row.objectKey);
+        await replica.copyFrom(await open(row.storeId), row.objectKey);
         await driveRepository.markObjectReplicated(row.objectId);
         copied++;
     }
@@ -160,12 +192,13 @@ export function judgeObject(
 }
 
 /*
- * Confirms a page of objects at one store. Every miss is recorded, so the UI
- * can say a file is unavailable instead of failing to decrypt, and a primary
- * copy the replica still holds is copied back before anyone notices.
+ * Confirms a page of objects, each at the store its row names (or at the
+ * replica). Every miss is recorded, so the UI can say a file is unavailable
+ * instead of failing to decrypt, and a primary copy the replica still holds is
+ * copied back to the store the row names.
  */
 export async function auditObjects(
-    { primary, replica }: Stores,
+    { open, replica }: Stores,
     target: 'primary' | 'replica',
     limit = 200,
 ) {
@@ -173,8 +206,9 @@ export async function auditObjects(
     const counts = { examined: 0, present: 0, missing: 0, recovered: 0, replicaMissing: 0 };
     for (const row of await driveRepository.listObjectsForAudit(target, limit)) {
         counts.examined++;
+        const primary = target === 'primary' ? await open(row.storeId) : null;
         const heads = {
-            primary: target === 'primary' ? await primary.head(row.objectKey) : null,
+            primary: primary ? await primary.head(row.objectKey) : null,
             replica: null as Head,
         };
         if (replica && (target === 'replica' || heads.primary === null))
@@ -190,7 +224,7 @@ export async function auditObjects(
                 await driveRepository.recordObjectAudit(row.objectId, 'missing');
                 break;
             case 'recoverable':
-                await primary.copyFrom(replica!, row.objectKey);
+                await primary!.copyFrom(replica!, row.objectKey);
                 counts.recovered++;
                 await driveRepository.recordObjectAudit(row.objectId, 'recovered');
                 break;
@@ -222,18 +256,21 @@ export function selectOrphans(listed: Listed[], known: Set<string>, now: Date, m
 }
 
 /*
- * A rolling sweep of the primary bucket: a bounded number of pages per run,
- * continuing from where the last run stopped and starting over when the
- * listing is exhausted. Paused after a database restore until the operator says
- * the restored database is complete.
+ * A rolling sweep of the environment's primary bucket: a bounded number of
+ * pages per run, continuing from where the last run stopped and starting over
+ * when the listing is exhausted. Paused after a database restore until the
+ * operator says the restored database is complete. It walks that one bucket
+ * and no other: it is the only store that holds objects, and a key counts as
+ * known when any row names it.
  */
 export async function sweepOrphans(
-    { primary }: Stores,
+    { open }: Stores,
     options: { pausedUntil?: Date | null; pages?: number; now?: Date } = {},
 ) {
     const now = options.now ?? new Date();
     if (options.pausedUntil && options.pausedUntil > now)
         return { skipped: 'paused' as const, pausedUntil: options.pausedUntil.toISOString() };
+    const primary = await open(ENVIRONMENT_PRIMARY_STORE_ID);
     const pages = options.pages ?? 20;
     let cursor = await driveRepository.getSweepCursor('orphans');
     let listed = 0;
@@ -262,13 +299,16 @@ export async function sweepOrphans(
  * Moves objects nobody has read in a season to the provider's cheaper class,
  * and brings back the ones read since they went cold; both are a rewrite in
  * place at the store and a column here. Without a configured class it does
- * nothing, which is the case on Garage and B2 today.
+ * nothing, which is the case on Garage and B2 today. The class is the
+ * environment's (`STORAGE_COLD_CLASS`), so only objects in the environment's
+ * primary store are candidates.
  */
 export async function tierObjects(
-    { primary }: Stores,
+    { open }: Stores,
     options: { coldClass: string | null; limit?: number },
 ) {
     if (!options.coldClass) return { skipped: 'no cold class' as const };
+    const primary = await open(ENVIRONMENT_PRIMARY_STORE_ID);
     const limit = options.limit ?? 200;
     let cooled = 0;
     let warmed = 0;
@@ -297,10 +337,12 @@ export async function tierObjects(
  * and the hold on the primary bucket is the only preservation. A copy that
  * fails leaves the report failed for the operator to see, with the reason in
  * the run's log; the next run tries the remaining objects again. The copy is
- * verified: the store checks the digest.
+ * verified: the store checks the digest. Each object is read from the store
+ * that holds its primary copy: the one its row names or, once purged, its
+ * outbox row.
  */
 export async function copyEvidence(
-    { primary, evidence }: { primary: ObjectStore; evidence: ObjectStore | null },
+    { open, evidence }: { open: Stores['open']; evidence: ObjectStore | null },
     limit = 20,
 ) {
     const counts = {
@@ -319,10 +361,17 @@ export async function copyEvidence(
             continue;
         }
         let failed = false;
-        for (const object of await reportsRepository.listReportObjectsToCopy(report.id)) {
+        const objects = await reportsRepository.listReportObjectsToCopy(report.id);
+        const stores = await reportsRepository.storesOfReportObjects(
+            objects.map((object) => object.objectId!),
+        );
+        for (const object of objects) {
             try {
+                const storeId = stores.get(object.objectId!);
+                // No row names it any more: its primary copy was deleted before this run.
+                if (!storeId) throw new Error('The reported object is no longer in any store.');
                 await evidence.copyFrom(
-                    primary,
+                    await open(storeId),
                     object.objectKey!,
                     evidenceKey(report.id, object.objectId!),
                     { verified: true },

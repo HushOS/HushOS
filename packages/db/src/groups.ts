@@ -3553,8 +3553,8 @@ export async function purgeDeletedAreas(days: number, limit = 20) {
             if (!area) return false;
             await tx.execute(sql`
                 insert into ${driveObjectDeletions}
-                    (object_id, workspace_id, object_key, published, replicated)
-                select o.id, o.workspace_id, o.object_key, o.status = 'ready', o.replicated_at is not null
+                    (object_id, workspace_id, object_key, store_id, published, replicated)
+                select o.id, o.workspace_id, o.object_key, o.store_id, o.status = 'ready', o.replicated_at is not null
                 from ${driveObjects} o
                 where o.workspace_id = ${id}
                 on conflict do nothing

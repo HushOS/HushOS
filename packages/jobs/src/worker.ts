@@ -4,7 +4,12 @@ import {
     setDissolveCancelQueue,
     setEndPersonalPlanQueue,
 } from '@hushos/billing/server';
-import { LATEST_MIGRATION, missingTablePrivileges, schemaState } from '@hushos/db';
+import {
+    LATEST_MIGRATION,
+    missingTablePrivileges,
+    schemaState,
+    storesRepository,
+} from '@hushos/db';
 import { initProcessLogger, log } from '@hushos/logging';
 import type { Job } from 'pg-boss';
 import { createBoss, ensureQueues, queues, type JobPayloads } from './client';
@@ -182,6 +187,9 @@ if (billingEnabled()) {
  * backlog after downtime clears.
  */
 const replica = replicaConfigured();
+// The replica's row holds no settings, only whether this worker's environment has them: the
+// default region has a working backup exactly when it does (docs/company-storage-design.md 2.1).
+await storesRepository.recordEnvironmentReplica(replica);
 log.info({
     message: replica
         ? 'Object replication is on'

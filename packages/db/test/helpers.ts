@@ -12,6 +12,9 @@ import { Pool } from 'pg';
 import { db } from '../src/client';
 import type { CreateLink, CreateShare } from '../src/drive';
 import {
+    DEFAULT_REGION_CODE,
+    ENVIRONMENT_PRIMARY_STORE_ID,
+    ENVIRONMENT_REPLICA_STORE_ID,
     accountKeys,
     accountIdentities,
     driveLinks,
@@ -19,20 +22,79 @@ import {
     groupMemberships,
     groupStorage,
     groups,
+    objectStores,
     personalWorkspaces,
+    storageRegions,
     users,
     workspaceStorage,
     workspaces,
 } from '../src/schema';
 import type { GroupRole } from '../src/schema';
 
-/* Empties every application table between tests; migrations and pg-boss are left alone. */
+/*
+ * Empties every application table between tests; migrations and pg-boss are left alone.
+ * The environment's stores and the default region are rows the migration writes and every
+ * object's `store_id` points at, so they are put back as the migration leaves them
+ * (`stores.migration.test.ts` holds the migration itself to this).
+ */
 export async function resetDatabase() {
     const tables = await db.execute<{ tablename: string }>(
         sql`select tablename from pg_tables where schemaname = 'public'`,
     );
     const names = tables.rows.map((row) => `"${row.tablename}"`).join(', ');
     if (names) await db.execute(sql.raw(`truncate ${names} restart identity cascade`));
+    await db.insert(objectStores).values([
+        {
+            id: ENVIRONMENT_PRIMARY_STORE_ID,
+            source: 'environment',
+            kind: 'region',
+            status: 'ready',
+            envPresent: true,
+        },
+        {
+            id: ENVIRONMENT_REPLICA_STORE_ID,
+            source: 'environment',
+            kind: 'backup',
+            status: 'ready',
+            envPresent: false,
+        },
+    ]);
+    await db.insert(storageRegions).values({
+        code: DEFAULT_REGION_CODE,
+        label: 'Default',
+        storeId: ENVIRONMENT_PRIMARY_STORE_ID,
+        backupStoreId: ENVIRONMENT_REPLICA_STORE_ID,
+        backupEvery: '5m',
+        backupPrune: true,
+        isDefault: true,
+        offered: true,
+    });
+}
+
+/*
+ * A second store an operator would have added: a `database` row of kind `region`, whole as
+ * the table requires, with a sealed secret nothing here can open. For tests that point a
+ * region, an object or an upload somewhere other than the environment's primary.
+ */
+export async function createTestStore(input: { bucket?: string } = {}) {
+    const [store] = await db
+        .insert(objectStores)
+        .values({
+            source: 'database',
+            kind: 'region',
+            endpoint: 'https://s3.store.test',
+            signingRegion: 'auto',
+            bucket: input.bucket ?? `second-${randomUUID().slice(0, 8)}`,
+            pathStyle: false,
+            seal: 'symmetric',
+            secretKeyId: randomBytes(8),
+            secretNonce: randomBytes(24),
+            secretSealed: randomBytes(64),
+            status: 'ready',
+        })
+        .returning({ id: objectStores.id });
+    if (!store) throw new Error('Could not create the test store.');
+    return store.id;
 }
 
 /* A user with a personal workspace and base allowance, without the OPAQUE ceremony. */

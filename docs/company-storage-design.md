@@ -4,6 +4,8 @@
 
 This document specifies where file contents are stored and how that is managed: regions an operator sets up from the management pages, a company's choice of region, a company's own bucket, the test that proves a bucket works, the CORS and access documents to paste, moving between buckets, retention, backups and exports.
 
+**Built so far:** PR 1 of section 16: `object_stores` and `storage_regions`, the environment's stores as rows, `store_id` on objects, uploads and the outbox, the store chosen in `begin`'s transaction, and `storeFor`. Section 1 describes the code as it was before that.
+
 It builds on `docs/companies-design.md` (the company core, whose section 6 leaves the hooks used here), `docs/drive-design.md` (objects, uploads, purge, the deletion outbox), `docs/self-hosting.md` ("Drive object storage") and `docs/two-step-design.md` (the second step).
 
 The owner's decisions of 10 November 2026 are fixed inputs:
