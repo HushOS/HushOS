@@ -1,7 +1,10 @@
 import type { AffiliateEarningView, LedgerTotals } from '@hushos/billing/api';
 import { describe, expect, test } from 'vitest';
 import {
+    currencyDecimals,
+    exampleAmount,
     expectedPayouts,
+    formatMinor,
     ledgerCsv,
     ledgerMoney,
     minorAsDecimal,
@@ -30,17 +33,34 @@ const totals = (patch: Partial<LedgerTotals>): LedgerTotals => ({
 });
 
 describe('an amount an operator types', () => {
-    test('is read exactly, in minor units', () => {
-        expect(toMinor('12.50')).toBe('1250');
-        expect(toMinor('12.5')).toBe('1250');
-        expect(toMinor('12')).toBe('1200');
-        expect(toMinor(' 0.05 ')).toBe('5');
-        expect(toMinor('0.5')).toBe('50');
+    test('is read exactly, in the currency’s own minor units', () => {
+        expect(toMinor('12.50', 'usd')).toBe('1250');
+        expect(toMinor('12.5', 'usd')).toBe('1250');
+        expect(toMinor('12', 'USD')).toBe('1200');
+        expect(toMinor(' 0.05 ', 'eur')).toBe('5');
+        expect(toMinor('0.5', 'inr')).toBe('50');
         // No number in between: 90 trillion and one cent is that, to the cent.
-        expect(toMinor('900719925474099.35')).toBe('90071992547409935');
+        expect(toMinor('900719925474099.35', 'usd')).toBe('90071992547409935');
     });
 
-    test('is refused, never rounded or guessed, when it is not a plain amount above zero', () => {
+    test('a currency with no smaller unit takes whole amounts as they are, never a hundred times them', () => {
+        // 1,250 yen is 1250, not 125000; and half a yen does not exist.
+        expect(toMinor('1250', 'jpy')).toBe('1250');
+        expect(toMinor('1', 'jpy')).toBe('1');
+        expect(toMinor('1250.5', 'jpy')).toBeNull();
+        expect(toMinor('12.50', 'jpy')).toBeNull();
+        expect(toMinor('1250.0', 'krw')).toBeNull();
+        // Three decimals where the currency has them: 1.250 dinars is 1250 fils.
+        expect(toMinor('1.250', 'kwd')).toBe('1250');
+        expect(toMinor('1.25', 'kwd')).toBe('1250');
+        expect(toMinor('0.001', 'kwd')).toBe('1');
+        expect(toMinor('1.2505', 'kwd')).toBeNull();
+        expect(currencyDecimals('jpy')).toBe(0);
+        expect(currencyDecimals('usd')).toBe(2);
+        expect(currencyDecimals('kwd')).toBe(3);
+    });
+
+    test('is refused, never rounded or guessed, when it is not a plain amount above zero or its currency is not one Intl knows', () => {
         for (const text of [
             '',
             ' ',
@@ -60,7 +80,32 @@ describe('an amount an operator types', () => {
             'twelve',
             '1234567890123456',
         ])
-            expect(toMinor(text), JSON.stringify(text)).toBeNull();
+            expect(toMinor(text, 'usd'), JSON.stringify(text)).toBeNull();
+        expect(toMinor('0', 'jpy')).toBeNull();
+        expect(toMinor('12.50', 'not a currency')).toBeNull();
+        expect(currencyDecimals('??')).toBeNull();
+    });
+
+    test('is shown the shape to type for its currency', () => {
+        expect(exampleAmount('usd')).toBe('12.50');
+        expect(exampleAmount('jpy')).toBe('1250');
+        expect(exampleAmount('kwd')).toBe('1.250');
+    });
+});
+
+describe('an amount on the page', () => {
+    test('is drawn in its currency’s own decimals, exactly, with a whole amount’s decimals dropped as prices drop them', () => {
+        expect(formatMinor('1250', 'usd')).toBe('$12.50');
+        expect(formatMinor('2000', 'usd')).toBe('$20');
+        expect(formatMinor('5', 'usd')).toBe('$0.05');
+        expect(formatMinor('1598000', 'inr')).toBe('₹15,980');
+        // 1,250 yen, not 12.50 of them.
+        expect(formatMinor('1250', 'jpy')).toBe('¥1,250');
+        // Intl puts a no-break space after a code it has no sign for.
+        expect(formatMinor('1250', 'kwd')).toBe('KWD\u00a01.250');
+        // Past 2^53 a number would show ...99.36 or ...99.34.
+        expect(formatMinor('90071992547409935', 'usd')).toBe('$900,719,925,474,099.35');
+        expect(formatMinor('1250', 'not a currency')).toBe('1250 NOT A CURRENCY');
     });
 });
 
@@ -110,11 +155,24 @@ describe('the downloaded ledger', () => {
         ...patch,
     });
 
-    test('writes minor units as exact decimals, at any size', () => {
-        expect(minorAsDecimal('0')).toBe('0.00');
-        expect(minorAsDecimal('5')).toBe('0.05');
-        expect(minorAsDecimal('1250')).toBe('12.50');
-        expect(minorAsDecimal('90071992547409935')).toBe('900719925474099.35');
+    test('writes minor units as exact decimals in the currency’s own decimals, at any size', () => {
+        expect(minorAsDecimal('0', 'usd')).toBe('0.00');
+        expect(minorAsDecimal('5', 'usd')).toBe('0.05');
+        expect(minorAsDecimal('1250', 'usd')).toBe('12.50');
+        expect(minorAsDecimal('90071992547409935', 'usd')).toBe('900719925474099.35');
+        expect(minorAsDecimal('1250', 'jpy')).toBe('1250');
+        expect(minorAsDecimal('5', 'kwd')).toBe('0.005');
+        // Unknown to Intl: the units the server holds, rather than a guess at where the point goes.
+        expect(minorAsDecimal('1250', 'not a currency')).toBe('1250');
+    });
+
+    test('a yen earning is written in yen, beside a dollar one in dollars', () => {
+        const lines = ledgerCsv([
+            row({ currency: 'jpy', net: '125000', pot: '25000', left: '25000' }),
+            row({}),
+        ]).split('\r\n');
+        expect(lines[1]).toContain('"JPY","125000","25000","25000"');
+        expect(lines[2]).toContain('"USD","100.00","20.00","20.00"');
     });
 
     test('has a line an earning under one heading, with every amount and what was done about a clawback', () => {

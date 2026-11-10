@@ -99,8 +99,28 @@ const row = async (orderId: string) =>
 const ledger = async (affiliateId: string, now: Date, currency = 'usd') =>
     (await growth.affiliateLedger(affiliateId, now))[currency]!;
 
-const pay = (affiliateId: string, now: Date) =>
-    growth.settlePayout(affiliateId, { by: OPERATOR, now });
+/* The payout an operator would be shown at `now`, as the page sends it back with "Mark paid". */
+async function shown(affiliateId: string, now: Date) {
+    const expected: Record<string, { owed: string; netted: string }> = {};
+    for (const [currency, totals] of Object.entries(await growth.affiliateLedger(affiliateId, now)))
+        if (totals.payable > 0n) {
+            const { owed, netted } = growth.payoutOf(totals);
+            expected[currency] = { owed: owed.toString(), netted: netted.toString() };
+        }
+    return expected;
+}
+
+/* An operator marks paid exactly what the page shows them at `now`. */
+const pay = async (affiliateId: string, now: Date) =>
+    growth.settlePayout(affiliateId, {
+        by: OPERATOR,
+        now,
+        expected: await shown(affiliateId, now),
+    });
+
+/* The daily run has read an order's refunds since the switch and found `refunded`. */
+const read = (orderId: string, at: Date, refunded = 0n, reach?: { cutoverAt: Date }) =>
+    growth.applyRefundRead(orderId, refunded, { readAt: at, reach });
 
 describe('what is left of an earning', () => {
     test('a refund leaves the pot’s share of what was not refunded, rounded down', () => {
@@ -152,7 +172,7 @@ describe('what is left of an earning', () => {
         const net = 90_071_992_547_409_935n;
         const recorded = await earn(creator.id, 'order_huge', { net });
         expect(recorded).toMatchObject({ netAmount: net, potAmount: 18_014_398_509_481_987n });
-        await growth.applyRefundRead('order_huge', 1n, { now: days(1) });
+        await growth.applyRefundRead('order_huge', 1n, { readAt: days(1) });
         // One unit refunded of ninety quadrillion takes less than one unit of the pot: one off.
         expect((await row('order_huge')).commissionAmount).toBe(18_014_398_509_481_986n);
         expect((await ledger(creator.id, days(1))).held).toBe(18_014_398_509_481_986n);
@@ -192,7 +212,7 @@ describe('recording an earning with the switch on', () => {
         // Said once: the same refund seen again changes nothing and reports nothing.
         expect(await growth.withdrawHeldEarning('order_kept', days(2))).toBe('none');
         // The refund is still on its way at Polar, so its list shows nothing yet: still nothing left.
-        await growth.applyRefundRead('order_kept', 0n, { now: days(3) });
+        await growth.applyRefundRead('order_kept', 0n, { readAt: days(3) });
         expect((await row('order_kept')).commissionAmount).toBe(0n);
         expect(await db.select().from(affiliateWithdrawnOrders)).toHaveLength(2);
     });
@@ -236,31 +256,57 @@ describe('refunds', () => {
     test('two reads of one half-refunded order leave half the pot, not a quarter; the rest refunded leaves nothing; a refund that fails raises it again', async () => {
         const creator = await affiliate();
         await earn(creator.id, 'order_1');
-        expect(await growth.applyRefundRead('order_1', 5_000n, { now: days(1) })).toBe(1);
+        expect(await growth.applyRefundRead('order_1', 5_000n, { readAt: days(1) })).toBe(1);
         expect((await row('order_1')).commissionAmount).toBe(1_000n);
         // The same delivery again, or the daily read of the same list: nothing moves.
-        expect(await growth.applyRefundRead('order_1', 5_000n, { now: days(2) })).toBe(0);
+        expect(await growth.applyRefundRead('order_1', 5_000n, { readAt: days(2) })).toBe(0);
         expect(await row('order_1')).toMatchObject({
             potAmount: 2_000n,
             commissionAmount: 1_000n,
             refundsChangedAt: days(1),
             refundsReadAt: days(2),
         });
-        await growth.applyRefundRead('order_1', 10_000n, { now: days(3) });
+        await growth.applyRefundRead('order_1', 10_000n, { readAt: days(3) });
         expect((await row('order_1')).commissionAmount).toBe(0n);
         // Both refunds failed after all: everything is owed again, from the pot, not from zero.
-        await growth.applyRefundRead('order_1', 0n, { now: days(4) });
+        await growth.applyRefundRead('order_1', 0n, { readAt: days(4) });
         expect(await row('order_1')).toMatchObject({
             commissionAmount: 2_000n,
             refundedAmount: 0n,
         });
     });
 
+    test('two reads applied in the other order than they were made leave the newer one, never the stale one', async () => {
+        const creator = await affiliate();
+        await earn(creator.id, 'order_1');
+        await earn(creator.id, 'order_2');
+        // Read at noon: nothing refunded. Read at one: all of it. The noon answer arrives last.
+        expect(await growth.applyRefundRead('order_1', 10_000n, { readAt: days(1.05) })).toBe(1);
+        expect(await growth.applyRefundRead('order_1', 0n, { readAt: days(1) })).toBe(0);
+        expect(await row('order_1')).toMatchObject({
+            commissionAmount: 0n,
+            refundedAmount: 10_000n,
+            refundsReadAt: days(1.05),
+        });
+        // And the other way round: a stale "all refunded" does not undo a newer "refund failed".
+        await growth.applyRefundRead('order_2', 10_000n, { readAt: days(1) });
+        await growth.applyRefundRead('order_2', 0n, { readAt: days(2) });
+        await growth.applyRefundRead('order_2', 10_000n, { readAt: days(1.5) });
+        expect(await row('order_2')).toMatchObject({
+            commissionAmount: 2_000n,
+            refundedAmount: 0n,
+            refundsReadAt: days(2),
+        });
+        // A read made at the same instant as the one held is applied: it is not older.
+        expect(await growth.applyRefundRead('order_2', 5_000n, { readAt: days(2) })).toBe(1);
+        expect((await row('order_2')).commissionAmount).toBe(1_000n);
+    });
+
     test('a paid earning keeps what was paid and gains a clawback of the refunded share; a refund that fails takes the clawback away', async () => {
         const creator = await affiliate();
         await earn(creator.id, 'order_1');
         expect((await pay(creator.id, days(30))).paid).toBe(1);
-        await growth.applyRefundRead('order_1', 2_500n, { now: days(40) });
+        await growth.applyRefundRead('order_1', 2_500n, { readAt: days(40) });
         expect(await row('order_1')).toMatchObject({
             paidAmount: 2_000n,
             commissionAmount: 1_500n,
@@ -269,12 +315,12 @@ describe('refunds', () => {
             clawbackSettledAt: null,
             orderRefundedAt: days(40),
         });
-        await growth.applyRefundRead('order_1', 10_000n, { now: days(41) });
+        await growth.applyRefundRead('order_1', 10_000n, { readAt: days(41) });
         expect(await row('order_1')).toMatchObject({
             commissionAmount: 0n,
             clawbackAmount: 2_000n,
         });
-        await growth.applyRefundRead('order_1', 0n, { now: days(42) });
+        await growth.applyRefundRead('order_1', 0n, { readAt: days(42) });
         expect(await row('order_1')).toMatchObject({
             paidAmount: 2_000n,
             commissionAmount: 2_000n,
@@ -290,10 +336,10 @@ describe('refunds', () => {
     test('an earning paid at a lowered amount is owed the rest when the refund that lowered it fails', async () => {
         const creator = await affiliate();
         await earn(creator.id, 'order_1');
-        await growth.applyRefundRead('order_1', 5_000n, { now: days(1) });
+        await growth.applyRefundRead('order_1', 5_000n, { readAt: days(1) });
         await pay(creator.id, days(30));
         expect(await row('order_1')).toMatchObject({ paidAmount: 1_000n });
-        await growth.applyRefundRead('order_1', 0n, { now: days(35) });
+        await growth.applyRefundRead('order_1', 0n, { readAt: days(35) });
         expect(await ledger(creator.id, days(35))).toMatchObject({
             paidOut: 1_000n,
             payable: 1_000n,
@@ -346,7 +392,7 @@ describe('disputes', () => {
         expect((await row('order_1')).potAmount).toBe(76_800n);
         await growth.recordDispute(dispute('lost'), { now: days(5) });
         expect((await row('order_1')).commissionAmount).toBe(0n);
-        await growth.applyRefundRead('order_1', 0n, { now: days(6) });
+        await growth.applyRefundRead('order_1', 0n, { readAt: days(6) });
         expect(await row('order_1')).toMatchObject({ potAmount: 76_800n, commissionAmount: 0n });
         expect((await pay(creator.id, days(40))).paid).toBe(0);
     });
@@ -357,7 +403,7 @@ describe('disputes', () => {
         await pay(creator.id, days(30));
         await growth.recordDispute(dispute('lost', days(45)), { now: days(46) });
         expect((await row('order_1')).clawbackAmount).toBe(76_800n);
-        await growth.applyRefundRead('order_1', 0n, { now: days(47) });
+        await growth.applyRefundRead('order_1', 0n, { readAt: days(47) });
         expect(await row('order_1')).toMatchObject({
             paidAmount: 76_800n,
             clawbackAmount: 76_800n,
@@ -369,9 +415,9 @@ describe('disputes', () => {
     test('a half refund, then lost, then the refund read again, is nothing; won afterwards puts back the half the refund left', async () => {
         const creator = await affiliate();
         await earn(creator.id, 'order_1');
-        await growth.applyRefundRead('order_1', 5_000n, { now: days(1) });
+        await growth.applyRefundRead('order_1', 5_000n, { readAt: days(1) });
         await growth.recordDispute(dispute('lost'), { now: days(5) });
-        await growth.applyRefundRead('order_1', 5_000n, { now: days(6) });
+        await growth.applyRefundRead('order_1', 5_000n, { readAt: days(6) });
         expect((await row('order_1')).commissionAmount).toBe(0n);
         // Polar's own answer changes (a dispute lost, then won on appeal).
         await growth.recordDispute(dispute('won'), { now: days(9) });
@@ -538,11 +584,11 @@ describe('the hold, flags and voiding', () => {
     test('the figures an operator was shown must still be the ledger’s, or nothing is marked', async () => {
         const creator = await affiliate();
         await earn(creator.id, 'order_1');
-        const shown = { usd: { owed: '2000', netted: '0' } };
+        const onScreen = { usd: { owed: '2000', netted: '0' } };
         // A refund lands between the page loading and the click.
-        await growth.applyRefundRead('order_1', 5_000n, { now: days(31) });
+        await growth.applyRefundRead('order_1', 5_000n, { readAt: days(31) });
         await expect(
-            growth.settlePayout(creator.id, { by: OPERATOR, now: days(31), expected: shown }),
+            growth.settlePayout(creator.id, { by: OPERATOR, now: days(31), expected: onScreen }),
         ).rejects.toBeInstanceOf(growth.PayoutChangedError);
         expect((await row('order_1')).paidAt).toBeNull();
         // A currency the page did not show is a change too.
@@ -568,7 +614,7 @@ describe('clawbacks are settled by amount', () => {
     async function clawedBack(affiliateId: string, orderId: string, net: bigint, refundedOn: Date) {
         await earn(affiliateId, orderId, { net });
         await pay(affiliateId, days(30));
-        await growth.applyRefundRead(orderId, net, { now: refundedOn });
+        await growth.applyRefundRead(orderId, net, { readAt: refundedOn });
     }
 
     test('with 50 owed and a 768 clawback, marking paid pays nothing, applies 50, and leaves 718 open for the next payout', async () => {
@@ -628,9 +674,9 @@ describe('clawbacks are settled by amount', () => {
         await earn(creator.id, 'order_eur', { net: 10_000n, currency: 'eur' });
         await pay(creator.id, days(30));
         // The later order is refunded first: its clawback is the older one.
-        await growth.applyRefundRead('order_b', 20_000n, { now: days(40) });
-        await growth.applyRefundRead('order_a', 10_000n, { now: days(41) });
-        await growth.applyRefundRead('order_eur', 10_000n, { now: days(42) });
+        await growth.applyRefundRead('order_b', 20_000n, { readAt: days(40) });
+        await growth.applyRefundRead('order_a', 10_000n, { readAt: days(41) });
+        await growth.applyRefundRead('order_eur', 10_000n, { readAt: days(42) });
         await earn(creator.id, 'order_c', { net: 22_500n, at: days(43) });
         const paid = await pay(creator.id, days(80));
         expect(paid.payouts).toEqual({ usd: { owed: 4_500n, netted: 4_500n, payout: 0n } });
@@ -695,7 +741,7 @@ describe('clawbacks are settled by amount', () => {
             now: days(41),
         });
         // Half the refund failed after all: only 1,000 was ever due back, and 2,000 came back.
-        await growth.applyRefundRead('order_1', 5_000n, { now: days(45) });
+        await growth.applyRefundRead('order_1', 5_000n, { readAt: days(45) });
         expect(await row('order_1')).toMatchObject({
             clawbackAmount: 1_000n,
             clawbackSettledAmount: 2_000n,
@@ -720,7 +766,7 @@ describe('clawbacks are settled by amount', () => {
             by: OPERATOR,
             now: days(41),
         });
-        await growth.applyRefundRead('order_1', 0n, { now: days(45) });
+        await growth.applyRefundRead('order_1', 0n, { readAt: days(45) });
         expect(await ledger(creator.id, days(45))).toMatchObject({ payable: 0n, clawbackOpen: 0n });
     });
 });
@@ -754,15 +800,99 @@ describe('the cut-over', () => {
         expect(await db.select().from(affiliateLedgerState)).toHaveLength(1);
     });
 
-    test('an earning from before the switch is not held; one recorded after it is held 30 days', async () => {
+    test('an earning from before the switch is payable as soon as its refunds have been read, with no 30 days to wait; one recorded after it is held 30 days', async () => {
         const creator = await affiliate();
         await legacy(creator.id, 'order_before', { recordedAt: days(-1) });
-        await growth.beginCutover(T0);
+        const { state } = await growth.beginCutover(T0);
         await earn(creator.id, 'order_after', { at: days(1) });
+        // Not read yet: nobody knows whether its order was refunded while nothing looked.
+        expect(await ledger(creator.id, days(1))).toMatchObject({ payable: 0n, held: 4_000n });
+        expect((await pay(creator.id, days(1))).paid).toBe(0);
+        await read('order_before', days(1), 0n, { cutoverAt: state.cutoverAt });
         expect(await ledger(creator.id, days(2))).toMatchObject({ payable: 2_000n, held: 2_000n });
         expect((await pay(creator.id, days(2))).paid).toBe(1);
         expect((await row('order_before')).paidAt).toEqual(days(2));
         expect((await row('order_after')).paidAt).toBeNull();
+    });
+
+    test('an old earning whose order was refunded cannot be marked paid between the switch and the reach back, whatever the operator sends, and is then lowered', async () => {
+        const creator = await affiliate();
+        await legacy(creator.id, 'order_refunded_in_polar', { recordedAt: days(-200) });
+        await legacy(creator.id, 'order_fine', { recordedAt: days(-200), net: 5_000 });
+        // The switch goes on and an operator opens the page before any daily run.
+        const { state } = await growth.beginCutover(T0);
+        expect(await ledger(creator.id, T0)).toMatchObject({ payable: 0n, held: 3_000n });
+        expect(await pay(creator.id, T0)).toEqual({ paid: 0, payouts: {} });
+        // Figures from a page loaded before the switch do not get it paid either.
+        await expect(
+            growth.settlePayout(creator.id, {
+                by: OPERATOR,
+                now: T0,
+                expected: { usd: { owed: '3000', netted: '0' } },
+            }),
+        ).rejects.toBeInstanceOf(growth.PayoutChangedError);
+        expect((await row('order_refunded_in_polar')).paidAt).toBeNull();
+        // The reach back still has both, and reads them.
+        expect(await growth.reachBackOrders(state)).toEqual([
+            'order_fine',
+            'order_refunded_in_polar',
+        ]);
+        const reach = { cutoverAt: state.cutoverAt };
+        await read('order_refunded_in_polar', days(1), 10_000n, reach);
+        await read('order_fine', days(1), 0n, reach);
+        expect(await growth.reachBackOrders(state)).toEqual([]);
+        const paid = await pay(creator.id, days(1));
+        expect(paid.payouts.usd).toEqual({ owed: 1_000n, netted: 0n, payout: 1_000n });
+        expect(await row('order_refunded_in_polar')).toMatchObject({
+            paidAt: null,
+            commissionAmount: 0n,
+        });
+    });
+
+    test('an old earning that was paid after the switch without being read is still reached back to', async () => {
+        const creator = await affiliate();
+        await legacy(creator.id, 'order_1', { recordedAt: days(-200) });
+        const { state } = await growth.beginCutover(T0);
+        // A container without the switch marks it paid a moment later, as the old code does.
+        expect(await growth.markEarningsPaid(creator.id)).toBe(1);
+        const paidAt = (await row('order_1')).paidAt!;
+        expect(paidAt.getTime()).toBeGreaterThan(state.cutoverAt.getTime());
+        expect(await growth.reachBackOrders(state)).toEqual(['order_1']);
+        await read('order_1', new Date(paidAt.getTime() + DAY), 10_000n, {
+            cutoverAt: state.cutoverAt,
+        });
+        expect(await row('order_1')).toMatchObject({ paidAmount: 2_000n, clawbackAmount: 2_000n });
+        expect(await growth.reachBackOrders(state)).toEqual([]);
+    });
+
+    test('an earning recorded after the switch by code without it is held until it has been read, and one such that was paid unread is read by the daily run', async () => {
+        const creator = await affiliate();
+        const { state } = await growth.beginCutover(T0);
+        // An older container mid-deploy, or the switch turned off for a while.
+        await legacy(creator.id, 'order_old_code', { recordedAt: days(2) });
+        await legacy(creator.id, 'order_old_code_paid', { recordedAt: days(2), paidAt: days(3) });
+        await legacy(creator.id, 'order_paid_long_ago', { recordedAt: days(2), paidAt: days(3) });
+        expect(await row('order_old_code')).toMatchObject({ payableAt: null, potAmount: null });
+        expect(await ledger(creator.id, days(4))).toMatchObject({ payable: 0n, held: 2_000n });
+        expect((await pay(creator.id, days(4))).paid).toBe(0);
+        const due = (now: Date) => growth.dueRefundReads({ now, cutoverAt: state.cutoverAt });
+        expect(await due(days(4))).toEqual([
+            'order_old_code',
+            'order_old_code_paid',
+            'order_paid_long_ago',
+        ]);
+        await read('order_old_code', days(4));
+        await read('order_old_code_paid', days(4), 10_000n);
+        expect(await row('order_old_code_paid')).toMatchObject({
+            clawbackAmount: 2_000n,
+            clawbackOrigin: null,
+        });
+        // Read, it is payable at once: nothing ever gave it a hold.
+        expect((await pay(creator.id, days(5))).paid).toBe(1);
+        // One paid more than 120 days ago and never read is past looking at.
+        expect(await due(days(124))).toEqual([]);
+        // Without the switch's time, nothing paid is listed for being unread.
+        expect(await growth.dueRefundReads({ now: days(4) })).toEqual(['order_old_code_paid']);
     });
 
     test('a clawback the cut-over made is listed and counted in no net and no payout until an operator confirms it; then it nets as any other', async () => {
@@ -773,7 +903,8 @@ describe('the cut-over', () => {
             refundedAt: days(-70),
         });
         await legacy(creator.id, 'order_owed', { recordedAt: days(-5), net: 5_000 });
-        await growth.beginCutover(T0);
+        const { state } = await growth.beginCutover(T0);
+        await read('order_owed', days(1), 0n, { cutoverAt: state.cutoverAt });
         expect(await ledger(creator.id, days(1))).toMatchObject({
             payable: 1_000n,
             clawbackOpen: 0n,
@@ -790,8 +921,8 @@ describe('the cut-over', () => {
         expect(await growth.confirmClawback(creator.id, id, { by: OPERATOR, now: days(2) })).toBe(
             'done',
         );
-        await legacy(creator.id, 'order_next', { recordedAt: days(3), net: 5_000 });
-        const second = await pay(creator.id, days(4));
+        await earn(creator.id, 'order_next', { net: 5_000n, at: days(3) });
+        const second = await pay(creator.id, days(40));
         expect(second.payouts.usd).toEqual({ owed: 1_000n, netted: 1_000n, payout: 0n });
         expect(await row('order_refunded')).toMatchObject({
             clawbackSettledAmount: 1_000n,
@@ -804,7 +935,7 @@ describe('the cut-over', () => {
         await growth.beginCutover(T0);
         await earn(creator.id, 'order_1', { at: days(1) });
         await pay(creator.id, days(31));
-        await growth.applyRefundRead('order_1', 10_000n, { now: days(40) });
+        await growth.applyRefundRead('order_1', 10_000n, { readAt: days(40) });
         await earn(creator.id, 'order_2', { at: days(35) });
         expect(await row('order_1')).toMatchObject({ clawbackOrigin: null });
         expect(
@@ -833,10 +964,10 @@ describe('the cut-over', () => {
         ]);
         const reach = { cutoverAt: state.cutoverAt };
         // An unpaid one is lowered at once: it was never owed.
-        await growth.applyRefundRead('order_unpaid_old', 10_000n, { now: days(1), reach });
+        await growth.applyRefundRead('order_unpaid_old', 10_000n, { readAt: days(1), reach });
         expect((await row('order_unpaid_old')).commissionAmount).toBe(0n);
         // A paid one gains a clawback that waits for a yes.
-        await growth.applyRefundRead('order_paid_100', 10_000n, { now: days(1), reach });
+        await growth.applyRefundRead('order_paid_100', 10_000n, { readAt: days(1), reach });
         expect(await row('order_paid_100')).toMatchObject({
             clawbackAmount: 2_000n,
             clawbackOrigin: 'cutover',
@@ -896,16 +1027,16 @@ describe('the daily refund read', () => {
         const creator = await affiliate();
         await earn(creator.id, 'order_unread');
         await earn(creator.id, 'order_read_yesterday');
-        await growth.applyRefundRead('order_read_yesterday', 0n, { now: days(9) });
+        await growth.applyRefundRead('order_read_yesterday', 0n, { readAt: days(9) });
         const voided = (await earn(creator.id, 'order_voided'))!;
         await growth.voidEarning(creator.id, voided.id, { by: OPERATOR, reason: 'Fraud' });
         // Refunded whole 31 days ago and unpaid: nothing can be paid on it, and the refund is old.
         await earn(creator.id, 'order_refunded_long_ago', { at: days(-60) });
-        await growth.applyRefundRead('order_refunded_long_ago', 10_000n, { now: days(-21) });
+        await growth.applyRefundRead('order_refunded_long_ago', 10_000n, { readAt: days(-21) });
         // Paid, then refunded 29 days ago: the refund can still fail.
         await earn(creator.id, 'order_paid_refunded', { at: days(-60) });
         await pay(creator.id, days(-25));
-        await growth.applyRefundRead('order_paid_refunded', 10_000n, { now: days(-19) });
+        await growth.applyRefundRead('order_paid_refunded', 10_000n, { readAt: days(-19) });
         // Paid and never refunded: nothing reads it again.
         await earn(creator.id, 'order_paid_clean', { at: days(-80) });
         await pay(creator.id, days(-22));
@@ -929,7 +1060,7 @@ describe('the ledger', () => {
         await earn(creator.id, 'order_held', { net: 30_000n, at: days(-2) });
         await earn(creator.id, 'order_flagged', { net: 40_000n, at: days(-35), flag: 'self' });
         await earn(creator.id, 'order_half', { net: 50_000n, at: days(-2) });
-        await growth.applyRefundRead('order_half', 25_000n, { now: days(-1) });
+        await growth.applyRefundRead('order_half', 25_000n, { readAt: days(-1) });
         const voided = (await earn(creator.id, 'order_voided', { net: 60_000n, at: days(-2) }))!;
         await growth.voidEarning(creator.id, voided.id, { by: OPERATOR, reason: 'Fraud' });
         const totals = await ledger(creator.id, T0);
@@ -952,6 +1083,65 @@ describe('the ledger', () => {
                 totals.lowered +
                 totals.voided,
         ).toBe(totals.earned);
+    });
+});
+
+describe('deleting a removed affiliate’s record', () => {
+    test('waits 120 days from their last payout, to the day, and for everything on the ledger to be settled', async () => {
+        const creator = await affiliate();
+        const block = (now: Date) =>
+            db.transaction((tx) => growth.recordDeletionBlock(tx, creator.id, now));
+        // Nothing ever recorded: nothing to wait for.
+        expect(await block(T0)).toBeNull();
+        await earn(creator.id, 'order_1');
+        expect(await block(days(1))).toEqual({ reason: 'open' });
+        await pay(creator.id, days(30));
+        const from = days(150);
+        expect(await block(days(31))).toEqual({ reason: 'paid', from });
+        expect(await block(new Date(from.getTime() - 1))).toEqual({ reason: 'paid', from });
+        expect(await block(from)).toBeNull();
+        expect(await block(days(151))).toBeNull();
+        // A refund on day 100 finds the row it needs, and the clawback then holds the record.
+        await growth.applyRefundRead('order_1', 10_000n, { readAt: days(100) });
+        expect(await block(days(151))).toEqual({ reason: 'open' });
+        // A later payout moves the day.
+        await earn(creator.id, 'order_2', { at: days(100) });
+        await pay(creator.id, days(140));
+        await growth.settleClawback(creator.id, (await row('order_1')).id, {
+            kind: 'written-off',
+            note: 'Gone',
+            by: OPERATOR,
+            now: days(141),
+        });
+        expect(await block(days(151))).toEqual({ reason: 'paid', from: days(260) });
+    });
+});
+
+describe('with the switch turned off again', () => {
+    test('the old sums and the old Mark paid leave a voided earning out, and are what they were where nothing was ever voided', async () => {
+        const creator = await affiliate();
+        const fraud = (await earn(creator.id, 'order_fraud', { net: 50_000n }))!;
+        await earn(creator.id, 'order_honest');
+        await growth.voidEarning(creator.id, fraud.id, { by: OPERATOR, reason: 'Stolen cards' });
+        expect((await growth.affiliateStats(creator.id)).earnings).toEqual({
+            usd: { unpaid: 2000, paid: 0 },
+        });
+        expect(await growth.markEarningsPaid(creator.id)).toBe(1);
+        expect(await row('order_fraud')).toMatchObject({
+            paidAt: null,
+            voidReason: 'Stolen cards',
+        });
+        expect((await growth.affiliateStats(creator.id)).earnings).toEqual({
+            usd: { unpaid: 0, paid: 2000 },
+        });
+        // What it paid is what was left, where the switch had lowered it.
+        await earn(creator.id, 'order_half', { at: days(1) });
+        await growth.applyRefundRead('order_half', 5_000n, { readAt: days(2) });
+        await pay(creator.id, days(40));
+        await growth.applyRefundRead('order_half', 10_000n, { readAt: days(41) });
+        expect((await growth.affiliateStats(creator.id)).earnings).toEqual({
+            usd: { unpaid: 0, paid: 3000 },
+        });
     });
 });
 
@@ -991,8 +1181,8 @@ describe('during the rollout', () => {
         ).toHaveLength(0);
         expect(await db.select().from(affiliateEarnings)).toHaveLength(2);
         // An old row lowered by the new code keeps its pot from then on.
-        await growth.applyRefundRead('order_old', 500n, { now: days(1) });
-        await growth.applyRefundRead('order_old', 500n, { now: days(2) });
+        await growth.applyRefundRead('order_old', 500n, { readAt: days(1) });
+        await growth.applyRefundRead('order_old', 500n, { readAt: days(2) });
         expect(await row('order_old')).toMatchObject({ potAmount: 200n, commissionAmount: 100n });
     });
 

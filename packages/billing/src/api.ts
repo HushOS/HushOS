@@ -264,6 +264,8 @@ export type AffiliateView = {
     pausedAt?: string | null;
     /* Removed: no page, no code, nothing earns; the record and its ledger are kept. */
     removedAt?: string | null;
+    /* The day until which the record must stay, after their last payout; null when it may go. */
+    recordKeptUntil?: string | null;
     ledger?: Record<string, LedgerTotals>;
     /* On the answer to a pause or a resume alone: Polar would not end, or reopen, the discount. */
     discountNotice?: 'still-live' | 'still-ended';
@@ -347,7 +349,8 @@ export type AffiliateEarningView = {
     /* The commission as first recorded, and what is left of it. */
     pot: string;
     left: string;
-    state: 'payable' | 'held' | 'flagged' | 'paid' | 'voided';
+    /* `unread`: recorded without commission safety, and held until its order's refunds are read. */
+    state: 'payable' | 'held' | 'unread' | 'flagged' | 'paid' | 'voided';
     payableAt: string | null;
     paidAt: string | null;
     paid: string | null;
@@ -371,13 +374,18 @@ export type AffiliateEarningView = {
     voidReason: string | null;
 };
 
-/* Whether commission safety is on, and whether Polar's disputes could be read. */
+/* Whether commission safety is on, and when the daily run last read Polar's disputes and refunds. */
 export type AffiliateLedgerStatus =
     | { enabled: false }
     | {
           enabled: true;
           holdDays: number;
+          /* Days after a payout that the record of a removed affiliate must stay. */
+          recordKeepDays: number;
+          /* When the switch first ran here: nothing was read before it. */
+          since: string;
           disputes: { readAt: string | null; failure: 'scope' | 'failed' | null };
+          refunds: { readAt: string | null };
       };
 
 /* What an operator was shown as the next payout in one currency; marking paid is refused if it has changed. */
@@ -454,7 +462,10 @@ export interface GrowthApi {
     ): Promise<AffiliateView>;
     /* Without commission safety the record and its ledger go; with it they are kept (`removedAt`). */
     deleteAffiliate(id: string): Promise<{ deleted: true }>;
-    /* `payouts` only with commission safety on: per currency, what was owed, netted and sent. */
+    /*
+     * `payouts` only with commission safety on: per currency, what was owed, netted and sent.
+     * `expected` is then required: the figures the operator was shown.
+     */
     markAffiliatePaid(
         id: string,
         expected?: ExpectedPayouts,

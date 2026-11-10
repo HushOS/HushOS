@@ -835,6 +835,10 @@ If an affiliate is removed while one of their orders is being paid, that order's
 
 **Turning it on changes what affiliates you already have are owed, not only when.** Read [The day you turn it on](#the-day-you-turn-it-on) first, and tell them before you do.
 
+**Deploy the release everywhere first, then turn it on.** A web container of an older release that handles an `order.paid` while the switch is on records that earning the old way: not held for 30 days, and not flagged. It can't be marked paid until the daily reconcile has read its order's refunds, and nothing else protects it. So finish the rolling update, on every web and worker container, before you set the variable.
+
+**Turning it off again after the cut-over is not supported.** [If you turn it off again](#if-you-turn-it-off-again) says what happens if you do.
+
 What the token and the webhook endpoint need as well:
 
 - the `refunds:read` and `disputes:read` scopes on `POLAR_ACCESS_TOKEN`;
@@ -853,8 +857,11 @@ What the token and the webhook endpoint need as well:
 - A delivery (`order.refunded`, `refund.created`, `refund.updated`) is only a trigger. HushOS lists the order's refunds at Polar, adds up those that succeeded, and works the commission out again from what is left of the order: half refunded leaves half.
 - A refund that later fails raises the commission again. Stripe can fail a refund up to 30 days after it succeeded.
 - The daily reconcile reads the refunds again for every earning that could still be paid, and for every earning a refund changed in the last 30 days. So a delivery that never arrived is caught within a day, while the earning is still held.
+- It reads at most 500 orders a run, the least recently read first. With more than 500 such orders at once, each is read every second day, or less often; the 30-day hold leaves room for that up to a few thousand.
+- A refunds list is read to its last page. If any page fails, that order is not changed, and the read is tried again.
 - An order HushOS itself refunds whole keeps its earning in the ledger at nothing, where it was deleted before.
 - Without `refunds:read`, nothing is lowered. The web server logs `Refunds can’t be read, so commission on a refunded order was not lowered` at error level for each delivery, and the daily reconcile fails.
+- The Affiliates page says when refunds and disputes were last read, and warns when either is more than two days old. A warning there means the worker is not running, can't reach Polar, or lacks a scope.
 
 #### Disputes
 
@@ -869,7 +876,9 @@ Polar sends no delivery for a dispute (a chargeback), and a chargeback is not in
 
 - This is what the hold is for. A dispute is learned of only once a day, so an earning paid before its dispute is lost is money to take back.
 - A status HushOS doesn't know is treated as open.
-- Without `disputes:read` the list can't be read. The worker logs `Disputes can’t be read: the Polar token has no disputes:read scope` at error level once a run, and the Affiliates page says so until a run succeeds. Refunds are still handled. Until it is fixed, a chargeback takes no commission back, and the 30-day hold is the only thing in its way.
+- Without `disputes:read` the list can't be read. The worker logs `Disputes can’t be read: the Polar token has no disputes:read scope` at error level once a run, and the Affiliates page says so until a run succeeds. The daily reconcile does not fail for it. Refunds are still handled. Until it is fixed, a chargeback takes no commission back, and the 30-day hold is the only thing in its way.
+- Any other failure to read disputes (a token that is wrong or revoked, Polar down) is logged as `Polar’s disputes could not be read`, shown on the Affiliates page, and fails the daily reconcile, so it is run again.
+- Each run reads the list again from three days below the newest dispute it has seen, then every dispute it holds as open. A dispute Polar no longer has (it answers 404) stays as it was last read: if it was open, its earning stays unpayable until you void it.
 - **Not confirmed:** whether Polar answers the disputes list for an organisation that doesn't have its disputes dashboard. If yours gets the message above with the scope granted, that is why, and the hold is your only defence against a chargeback.
 
 #### Clawbacks
@@ -896,22 +905,35 @@ A clawback is commission that was paid out on an order that was then refunded or
 - To stop commission from customers they already brought, void each earning or remove them.
 - **Remove** is refused while anything is owed, held or flagged, or a clawback is not settled. Pay, void or settle each one first.
 - Removing no longer deletes anything. The affiliate's page and code go, their discount is ended at Polar, and nothing earns them commission again. Their record and ledger stay on the Affiliates page, marked Removed.
-- **Delete record**, on a removed affiliate, downloads their ledger as a CSV file and then deletes the record, the ledger and the note of who signed up through them. It is refused while anything on the ledger is still open.
+- **Delete record**, on a removed affiliate, downloads their ledger as a CSV file and then deletes the record, the ledger and the note of who signed up through them. It is refused while anything on the ledger is still open, and for 120 days after their last payout: a refund or a lost dispute on an order they were paid for must still find its earning, or the money to take back is never recorded.
 
 #### The day you turn it on
 
 The first thing HushOS does with the switch on (the first delivery, the first visit to the Affiliates page, or the first daily reconcile) is the cut-over. It happens once.
 
-- Earnings recorded before it are not held, and can be paid when they could before.
+- Earnings recorded before it are not held for 30 days. But none of them can be marked paid until the daily reconcile has read its order's refunds once: until then it shows under Held, and its line in the ledger says so. Otherwise an earning whose order was refunded in Polar long ago could be paid whole in the hours before the first run.
 - An affiliate who is paused that day is treated as paused from that moment: everyone they had brought goes on earning them commission.
 - A paid earning HushOS had already marked as refunded (`order_refunded_at`) gains a clawback of all of it.
 - The first daily reconcile after it then **reaches back** to refunds and disputes nothing acted on at the time:
     - for every unpaid earning, whatever its age. An unpaid earning whose order was refunded is lowered at once. **An affiliate is owed less the day after the switch than their page showed the day before.**
     - for every earning paid in the 120 days before the switch. Such an earning gains a clawback. Earnings paid longer ago are left alone.
-- **No clawback the cut-over makes is taken from anyone until you say yes to it.** It is listed in the affiliate's ledger with **Confirm**, and counts against no payout until you press it. A clawback that arises after the switch needs no confirmation.
+- **No clawback the cut-over makes is taken from anyone until you say yes to it.** It is listed in the affiliate's ledger with **Confirm**, and counts against no payout until you press it. A clawback that arises after the switch needs no confirmation. One the cut-over made that grows later (a second refund on the same order) stays unconfirmed as a whole.
 - If a reach back can't read an order (Polar is down, a scope is missing), it carries on at the next daily reconcile.
 
-Turning the switch off again stops all of this and removes nothing it wrote.
+#### If you turn it off again
+
+Don't, once the cut-over has happened. Nothing it wrote is removed, but the pages and jobs go back to the old rules, which know nothing of what it wrote:
+
+- **Mark paid** pays everything unpaid at once: earnings still inside their hold, flagged earnings, and earnings whose dispute is open. It nets no clawback.
+- Refunds and disputes are not read. An earning paid while it is off, on an order that is then refunded, gains its clawback only when the switch is on again: the daily reconcile then reads every earning paid in the last 120 days that was never read.
+- An order HushOS refunds whole has its unpaid earning deleted, not kept at nothing.
+- An earning recorded while it is off is not held and not flagged. When the switch is on again it can't be paid until its order's refunds have been read once.
+- A creator's own page is sent the operators' view again, notes included.
+
+Two things stay safe:
+
+- An earning you voided stays voided: it is in neither Owed nor Paid out, and Mark paid never pays it.
+- **Remove** is refused (`Commission safety was turned on for this server and is off now`). With the switch off it would delete the affiliate's ledger, with its dispute records and clawbacks. Turn the switch on to remove an affiliate.
 
 #### What an affiliate sees
 

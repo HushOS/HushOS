@@ -5,8 +5,8 @@ import { PlusIcon } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useId, useState } from 'react';
 import {
-    DisputesNotice,
     LedgerDialog,
+    ReadsNotice,
     downloadLedger,
     ledgerStatusQueryOptions,
     payoutLines,
@@ -60,7 +60,7 @@ import {
     readDraft,
 } from '@/lib/affiliate-form';
 import { expectedPayouts, ledgerMoney } from '@/lib/affiliate-ledger';
-import { formatWhen } from '@/lib/drive';
+import { formatDay, formatWhen } from '@/lib/drive';
 import { affiliatesQueryOptions, describeCommission, describeDiscount } from '@/lib/growth';
 import { growthApi } from '@/lib/growth-api';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
@@ -148,7 +148,7 @@ function Affiliates() {
                 }
             />
             <div className="flex flex-col gap-6 px-5 sm:px-8">
-                <DisputesNotice status={status} />
+                <ReadsNotice status={status} />
                 {list.isPending ? (
                     <div className="flex items-center justify-center py-10 text-muted-foreground">
                         <Spinner />
@@ -188,6 +188,7 @@ function Affiliates() {
                                     affiliate={affiliate}
                                     busy={busy === affiliate.id}
                                     safety={safety}
+                                    keepDays={status?.enabled ? status.recordKeepDays : 0}
                                     onToggle={() =>
                                         void act(
                                             affiliate.id,
@@ -280,6 +281,7 @@ function AffiliateRow({
     affiliate,
     busy,
     safety,
+    keepDays,
     onToggle,
     onPaid,
     onDelete,
@@ -289,6 +291,8 @@ function AffiliateRow({
     affiliate: AffiliateView;
     busy: boolean;
     safety: boolean;
+    /* Days after a payout that a removed affiliate's record must stay. */
+    keepDays: number;
     onToggle: () => void;
     onPaid: (owed: string) => void;
     onDelete: () => void;
@@ -306,6 +310,8 @@ function AffiliateRow({
             (key) => ledgerMoney(affiliate.ledger, key) !== '–',
         );
     const blocked = safety ? open : owed !== '–';
+    // A removed affiliate's record stays while a payout is recent: a refund still has to find it.
+    const keptUntil = removed ? (affiliate.recordKeptUntil ?? null) : null;
     const [editing, setEditing] = useState(false);
     const [deleting, setDeleting] = useState(false);
     const [paying, setPaying] = useState(false);
@@ -438,7 +444,9 @@ function AffiliateRow({
                                     {removed
                                         ? blocked
                                             ? 'Their ledger still has something owed, held or flagged, or a clawback that is not settled. Pay, void or settle each one first.'
-                                            : 'Their ledger is downloaded as a file first. Then the record, the ledger and the note of who signed up through them are deleted for good. Their discount stays ended at the payment provider.'
+                                            : keptUntil
+                                              ? `Their record can be deleted from ${formatDay(keptUntil)}, ${keepDays} days after they were last paid. Until then a refund or a lost dispute on an order they were paid for must still find its earning here.`
+                                              : 'Their ledger is downloaded as a file first. Then the record, the ledger and the note of who signed up through them are deleted for good. Their discount stays ended at the payment provider.'
                                         : !safety
                                           ? owed === '–'
                                               ? 'Their page and code stop working, the discount is removed at the payment provider, and the record of what they were paid goes with them. People who signed up through them keep their accounts.'
@@ -452,7 +460,7 @@ function AffiliateRow({
                                 <AlertDialogCancel>
                                     {removed ? 'Keep the record' : 'Keep them'}
                                 </AlertDialogCancel>
-                                {!blocked && (
+                                {!blocked && !keptUntil && (
                                     <AlertDialogAction
                                         variant="destructive"
                                         onClick={() => {

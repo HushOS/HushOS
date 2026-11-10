@@ -2,8 +2,8 @@
     "type": "diff",
     "version": "9",
     "dialect": "postgres",
-    "id": "9e702cb1-c1bb-4671-b5d3-bf811f31c0f0",
-    "prevIds": ["720d6af5-763a-4dd2-9a38-b73c70a2c84b"],
+    "id": "17d5fea2-39a9-4d40-8b5c-c1ddb4de19a0",
+    "prevIds": ["7c916c1f-109d-44d2-8947-80e753940ed0"],
     "footprints": [
         {
             "statementType": "create_table",
@@ -1056,6 +1056,22 @@
                 "schema": "public",
                 "table": "affiliate_ledger_state",
                 "name": "disputes_failed_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "affiliate_ledger_state",
+                "name": "refunds_read_at",
                 "type": "timestamp with time zone",
                 "typeSchema": null,
                 "notNull": false,

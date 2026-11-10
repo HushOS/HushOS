@@ -278,6 +278,8 @@ export const affiliateLedgerState = pgTable(
         // `scope`: the token lacks disputes:read. `failed`: anything else.
         disputesFailure: text('disputes_failure').$type<'scope' | 'failed'>(),
         disputesFailedAt: timestamp('disputes_failed_at', { withTimezone: true }),
+        // The last daily run that read every refund it set out to.
+        refundsReadAt: timestamp('refunds_read_at', { withTimezone: true }),
     },
     (table) => [check('affiliate_ledger_state_one', sql`${table.id}`)],
 );

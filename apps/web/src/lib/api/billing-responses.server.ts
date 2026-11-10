@@ -246,6 +246,7 @@ const affiliate = t.Object({
     stats: affiliateStats,
     pausedAt: t.Optional(t.Nullable(t.String())),
     removedAt: t.Optional(t.Nullable(t.String())),
+    recordKeptUntil: t.Optional(t.Nullable(t.String())),
     ledger: t.Optional(t.Record(t.String(), ledgerTotals)),
     discountNotice: t.Optional(t.Union([t.Literal('still-live'), t.Literal('still-ended')])),
 });
@@ -336,10 +337,13 @@ export const affiliateLedgerStatusResponse = t.Union([
     t.Object({
         enabled: t.Literal(true),
         holdDays: t.Integer(),
+        recordKeepDays: t.Integer(),
+        since: t.String(),
         disputes: t.Object({
             readAt: t.Nullable(t.String()),
             failure: t.Nullable(t.Union([t.Literal('scope'), t.Literal('failed')])),
         }),
+        refunds: t.Object({ readAt: t.Nullable(t.String()) }),
     }),
 ]);
 
@@ -357,6 +361,7 @@ export const affiliateEarningsResponse = t.Array(
         state: t.Union([
             t.Literal('payable'),
             t.Literal('held'),
+            t.Literal('unread'),
             t.Literal('flagged'),
             t.Literal('paid'),
             t.Literal('voided'),

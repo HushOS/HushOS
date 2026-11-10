@@ -31,8 +31,14 @@ import {
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/components/ui/toast';
-import { formatMinor, ledgerCsv, ledgerMoney, toMinor } from '@/lib/affiliate-ledger';
-import { formatDay } from '@/lib/drive';
+import {
+    exampleAmount,
+    formatMinor,
+    ledgerCsv,
+    ledgerMoney,
+    toMinor,
+} from '@/lib/affiliate-ledger';
+import { formatDay, formatWhen } from '@/lib/drive';
 import { affiliatesQueryOptions } from '@/lib/growth';
 import { growthApi } from '@/lib/growth-api';
 import { saveBlob } from '@/lib/save-file';
@@ -63,18 +69,50 @@ function message(error: unknown) {
     return error instanceof Error ? error.message : 'Please try again.';
 }
 
-/* Said above the list when the daily read of Polar's disputes did not work. */
-export function DisputesNotice({ status }: { status: AffiliateLedgerStatus | undefined }) {
-    if (!status?.enabled || !status.disputes.failure) return null;
+/* How long the daily run may have gone without reading before the page says so. */
+const STALE_MS = 2 * 24 * 60 * 60 * 1000;
+
+/* Whether a daily read is overdue: last done, or never done since the switch, more than two days ago. */
+function overdue(readAt: string | null, since: string) {
+    return Date.now() - new Date(readAt ?? since).getTime() > STALE_MS;
+}
+
+const warning = 'rounded-md bg-destructive-soft px-4 py-3 text-sm text-destructive';
+
+/*
+ * Above the list: when the daily run last read Polar's disputes and the refunds, and a plain
+ * warning when a read failed or has not happened for two days. Commission is only as safe as
+ * those reads are recent, so a run that has stopped must not look like one that found nothing.
+ */
+export function ReadsNotice({ status }: { status: AffiliateLedgerStatus | undefined }) {
+    if (!status?.enabled) return null;
+    const { disputes, refunds, since } = status;
+    const when = (readAt: string | null) =>
+        readAt ? formatWhen(readAt, { lower: true }) : 'not yet';
+    const warnings = [
+        disputes.failure === 'scope'
+            ? `Disputes can’t be read: the Polar token has no disputes:read scope. Until it has, a chargeback takes no commission back, and only the ${status.holdDays}-day hold stands in its way.`
+            : disputes.failure === 'failed'
+              ? 'Disputes couldn’t be read on the last daily run. The next run reads them again.'
+              : overdue(disputes.readAt, since)
+                ? 'Disputes haven’t been read for more than two days. Check that the worker is running and can reach Polar.'
+                : null,
+        overdue(refunds.readAt, since)
+            ? 'Refunds haven’t all been read for more than two days. Check that the worker is running and that the Polar token has the refunds:read scope. Until they are, a refund lowers commission only when its own delivery arrives.'
+            : null,
+    ].filter((line): line is string => line !== null);
     return (
-        <p
-            role="alert"
-            className="rounded-md bg-destructive-soft px-4 py-3 text-sm text-destructive"
-        >
-            {status.disputes.failure === 'scope'
-                ? 'Disputes can’t be read: the Polar token has no disputes:read scope. Until it has, a chargeback takes no commission back, and only the 30-day hold stands in its way.'
-                : 'Disputes couldn’t be read on the last daily run. The next run reads them again.'}
-        </p>
+        <div className="flex flex-col gap-2">
+            {warnings.map((line) => (
+                <p key={line} role="alert" className={warning}>
+                    {line}
+                </p>
+            ))}
+            <p className="text-[13px] text-muted-foreground">
+                Disputes last read {when(disputes.readAt)}. Refunds last read {when(refunds.readAt)}
+                .
+            </p>
+        </div>
     );
 }
 
@@ -100,6 +138,8 @@ function describe(row: AffiliateEarningView) {
     else if (row.flag === 'self') lines.push('Flagged: their own account bought this');
     else if (row.flag === 'member') lines.push('Flagged: their account is in this company');
     else if (row.flag === 'dispute') lines.push('Waiting for a dispute to close');
+    else if (row.state === 'unread')
+        lines.push('Held until its order’s refunds are read, by the next daily run');
     else if (row.state === 'held') lines.push(`Held until ${formatDay(row.payableAt)}`);
     else lines.push('Can be paid');
     if (row.dispute === 'lost') lines.push('Dispute lost: nothing is owed');
@@ -146,6 +186,9 @@ function standing(affiliate: AffiliateView) {
     const sentence = parts.join(', ');
     return `${sentence[0]!.toUpperCase()}${sentence.slice(1)}.`;
 }
+
+/* A phone's width fits the ledger's four columns only with tighter cells. */
+const narrow = 'max-sm:px-1';
 
 type Acting =
     | { kind: 'void'; row: AffiliateEarningView }
@@ -213,11 +256,11 @@ export function LedgerDialog({
                     <OperatorTable>
                         <thead>
                             <tr>
-                                <th className={th}>Recorded</th>
-                                <th className={th}>Order</th>
-                                <th className={cn(th, 'text-right')}>Commission</th>
-                                <th className={th}>Where it stands</th>
-                                <th className={th}>
+                                <th className={cn(th, narrow)}>Recorded</th>
+                                <th className={cn(th, 'max-sm:hidden')}>Order</th>
+                                <th className={cn(th, narrow, 'text-right')}>Commission</th>
+                                <th className={cn(th, narrow)}>Where it stands</th>
+                                <th className={cn(th, narrow)}>
                                     <span className="sr-only">Actions</span>
                                 </th>
                             </tr>
@@ -225,13 +268,16 @@ export function LedgerDialog({
                         <tbody>
                             {rows.map((row) => (
                                 <tr key={row.id} data-earning={row.orderId} className="align-top">
-                                    <td className={cn(td, 'py-2 whitespace-nowrap')}>
+                                    <td className={cn(td, narrow, 'py-2 whitespace-nowrap')}>
                                         {formatDay(row.recordedAt)}
                                     </td>
                                     <td
                                         className={cn(
                                             td,
-                                            'max-w-[180px] truncate py-2 font-mono text-xs',
+                                            narrow,
+                                            // On a phone the order is written under the
+                                            // state instead, so the row fits without scrolling.
+                                            'max-w-[180px] truncate py-2 font-mono text-xs max-sm:hidden',
                                         )}
                                         title={row.orderId}
                                     >
@@ -240,6 +286,7 @@ export function LedgerDialog({
                                     <td
                                         className={cn(
                                             td,
+                                            narrow,
                                             'py-2 text-right font-mono whitespace-nowrap tabular-nums',
                                         )}
                                     >
@@ -250,15 +297,24 @@ export function LedgerDialog({
                                             </span>
                                         )}
                                     </td>
-                                    <td className={cn(td, 'h-auto py-2')}>
+                                    <td className={cn(td, narrow, 'h-auto py-2')}>
                                         {describe(row).map((line) => (
                                             <span key={line} className="block wrap-anywhere">
                                                 {line}
                                             </span>
                                         ))}
+                                        <span className="block font-mono text-xs wrap-anywhere text-muted-foreground sm:hidden">
+                                            {row.orderId}
+                                        </span>
                                     </td>
-                                    <td className={cn(td, 'py-1 text-right whitespace-nowrap')}>
-                                        <span className="inline-flex gap-1">
+                                    <td
+                                        className={cn(
+                                            td,
+                                            narrow,
+                                            'py-1 text-right whitespace-nowrap',
+                                        )}
+                                    >
+                                        <span className="inline-flex gap-1 max-sm:flex-col max-sm:items-end">
                                             {(row.flag === 'self' || row.flag === 'member') && (
                                                 <Button
                                                     variant="ghost"
@@ -509,7 +565,7 @@ function SettleDialog({
                             className="tabular-nums"
                             inputMode="decimal"
                             autoComplete="off"
-                            placeholder="12.50"
+                            placeholder={acting ? exampleAmount(acting.currency) : undefined}
                             value={amount}
                             onChange={(event) => {
                                 setAmount(event.target.value);
@@ -556,10 +612,10 @@ function SettleDialog({
                     <AlertDialogAction
                         disabled={pending}
                         onClick={() => {
-                            const minor = toMinor(amount);
-                            if (!minor || BigInt(minor) > BigInt(open)) {
+                            const minor = acting ? toMinor(amount, acting.currency) : null;
+                            if (!acting || !minor || BigInt(minor) > BigInt(open)) {
                                 setError(
-                                    'Give an amount above zero, up to what is open, like 12.50.',
+                                    `Give an amount above zero, up to what is open, like ${exampleAmount(acting?.currency ?? 'usd')}.`,
                                 );
                                 return;
                             }

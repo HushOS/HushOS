@@ -315,6 +315,7 @@ const safeCreator: Affiliate = {
     ...creator,
     pausedAt: null,
     removedAt: null,
+    recordKeptUntil: null,
     // A total past 2^53 goes out digit for digit: it is a string, never a number.
     ledger: { usd: usdLedger, inr: { ...usdLedger, earned: '90071992547409935' } },
 };
@@ -322,6 +323,7 @@ const removedCreator: Affiliate = {
     ...pending,
     pausedAt: '2026-11-01T12:00:00.000Z',
     removedAt: '2026-11-02T12:00:00.000Z',
+    recordKeptUntil: '2027-02-28T12:00:00.000Z',
     ledger: {},
 };
 
@@ -357,14 +359,14 @@ type Earnings = Reply<typeof growth.listAffiliateEarnings>;
 const earnings: Earnings = [
     {
         id: '4f9c4b50-ae8c-4085-9e87-6f5d8bcd3c54',
-        orderId: 'order_held',
+        orderId: 'order_unread',
         userId: otherId,
         currency: 'usd',
         recordedAt: '2026-11-08T09:00:00.000Z',
         net: '20000',
         pot: '4000',
         left: '4000',
-        state: 'held',
+        state: 'unread',
         payableAt: '2026-12-08T09:00:00.000Z',
         paidAt: null,
         paid: null,
@@ -694,16 +696,23 @@ const cases: Record<string, Case> = {
             on: {
                 enabled: true,
                 holdDays: 30,
+                recordKeepDays: 120,
+                since: '2026-11-01T09:00:00.000Z',
                 disputes: { readAt: '2026-11-10T04:00:00.000Z', failure: null },
+                refunds: { readAt: '2026-11-10T04:00:05.000Z' },
             } satisfies Reply<typeof growth.affiliateLedgerStatus>,
-            'on, disputes unreadable': {
+            'on, disputes unreadable and refunds never read': {
                 enabled: true,
                 holdDays: 30,
+                recordKeepDays: 120,
+                since: '2026-11-01T09:00:00.000Z',
                 disputes: { readAt: null, failure: 'scope' },
+                refunds: { readAt: null },
             } satisfies Reply<typeof growth.affiliateLedgerStatus>,
         },
         stray: (v) => v.disputes ?? v,
-        required: ['on', (v) => delete v.disputes.failure],
+        // Without when refunds were last read, the page cannot say that they have not been.
+        required: ['on', (v) => delete v.refunds],
     },
     'GET /billing/affiliates/:id/earnings': {
         schema: affiliateEarningsResponse,

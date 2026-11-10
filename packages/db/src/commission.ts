@@ -274,6 +274,11 @@ export async function finishReachBack(now = new Date()) {
         .where(isNull(affiliateLedgerState.reachBackDoneAt));
 }
 
+/* The daily run read the refunds of every order it set out to, with none failing. */
+export async function noteRefundsRead(now = new Date()) {
+    await db.update(affiliateLedgerState).set({ refundsReadAt: now });
+}
+
 /* How the daily read of Polar's disputes went: read through, or why not. */
 export async function noteDisputesRead(
     outcome: { seenThrough: Date | null } | { failure: 'scope' | 'failed' },
@@ -459,14 +464,20 @@ export async function withdrawHeldEarning(orderId: string, now = new Date()) {
  * What the order's refunds list at Polar says is refunded (the sum of those that succeeded),
  * stored on the order's earnings and what is left written from it. An order HushOS itself set
  * out to refund whole stays wholly refunded whatever the list says yet: its refund may still be
- * on its way. Returns how many earnings changed.
+ * on its way.
+ *
+ * `readAt` is when the call to Polar began, and it is what the earning is stamped with. Polar is
+ * read outside the order's lock, so two reads can be applied in the other order than they were
+ * made (a delivery and the daily run, a slow answer and a fast one): a read older than the one an
+ * earning already holds is dropped for that earning, never written over the newer. Returns how
+ * many earnings changed.
  */
 export async function applyRefundRead(
     orderId: string,
     refundedAtPolar: bigint,
-    options: { now?: Date; reach?: { cutoverAt: Date } | null } = {},
+    options: { readAt?: Date; reach?: { cutoverAt: Date } | null } = {},
 ) {
-    const now = options.now ?? new Date();
+    const readAt = options.readAt ?? new Date();
     return db.transaction(async (tx) => {
         await lockOrder(tx, orderId);
         const [withdrawn] = await tx
@@ -475,6 +486,7 @@ export async function applyRefundRead(
             .where(eq(affiliateWithdrawnOrders.orderId, orderId));
         let changed = 0;
         for (const row of await lockedRows(tx, orderId)) {
+            if (row.refundsReadAt && row.refundsReadAt.getTime() > readAt.getTime()) continue;
             const refunded = withdrawn
                 ? row.netAmount
                 : refundedAtPolar > row.netAmount
@@ -488,10 +500,10 @@ export async function applyRefundRead(
                 row,
                 {
                     refundedAmount: refunded,
-                    refundsReadAt: now,
-                    ...(moved ? { refundsChangedAt: now } : {}),
+                    refundsReadAt: readAt,
+                    ...(moved ? { refundsChangedAt: readAt } : {}),
                 },
-                { now, reach: options.reach },
+                { now: readAt, reach: options.reach },
             );
             if (moved) changed += 1;
         }
@@ -560,18 +572,33 @@ export async function listOpenDisputes() {
     return rows.filter((row) => disputeOpen(row.status));
 }
 
+/* How many orders' refunds one daily run reads at most; the rest wait for the next. */
+export const REFUND_READS_PER_RUN = 500;
+
 /*
  * The orders whose refunds the daily run reads again: every earning that could still be paid for
  * an order that was refunded (unpaid, not voided, something left), so a refund whose delivery
- * never arrived is found before the money goes; and every earning a refund read changed in the
- * last `recheckDays`, paid or not, since a refund can fail weeks after it succeeded. The least
- * recently read first, `limit` an hour's worth at most, so a long list is read over several runs.
+ * never arrived is found before the money goes; every earning a refund read changed in the last
+ * `recheckDays`, paid or not, since a refund can fail weeks after it succeeded; and every earning
+ * recorded since the cut-over that was paid in the last `paidDays` without ever being read, which
+ * only code without the switch leaves (an older container mid-deploy, or the switch turned off
+ * for a while). The least recently read first, REFUND_READS_PER_RUN at most, so a long list is
+ * read over several runs.
  */
 export async function dueRefundReads(
-    options: { now?: Date; limit?: number; recheckDays?: number } = {},
+    options: {
+        now?: Date;
+        limit?: number;
+        recheckDays?: number;
+        paidDays?: number;
+        cutoverAt?: Date | null;
+    } = {},
 ) {
     const now = options.now ?? new Date();
     const since = new Date(now.getTime() - (options.recheckDays ?? REFUND_RECHECK_DAYS) * DAY_MS);
+    const paidSince = new Date(
+        now.getTime() - (options.paidDays ?? AFFILIATE_CUTOVER_DAYS) * DAY_MS,
+    );
     const rows = await db
         .select({
             orderId: affiliateEarnings.orderId,
@@ -587,6 +614,13 @@ export async function dueRefundReads(
                         gt(affiliateEarnings.commissionAmount, 0n),
                     ),
                     gt(affiliateEarnings.refundsChangedAt, since),
+                    options.cutoverAt
+                        ? and(
+                              isNull(affiliateEarnings.refundsReadAt),
+                              gte(affiliateEarnings.createdAt, options.cutoverAt),
+                              gt(affiliateEarnings.paidAt, paidSince),
+                          )
+                        : undefined,
                 ),
             ),
         )
@@ -595,14 +629,16 @@ export async function dueRefundReads(
             sql`min(${affiliateEarnings.refundsReadAt}) asc nulls first`,
             affiliateEarnings.orderId,
         )
-        .limit(options.limit ?? 500);
+        .limit(options.limit ?? REFUND_READS_PER_RUN);
     return rows.map((row) => row.orderId);
 }
 
 /*
  * The cut-over's reach back: orders whose refunds nothing acted on before the switch and that
- * have not been read since it. Every unpaid earning, whatever its age, and every earning paid in
- * the `days` before the switch. Empty once all were read.
+ * have not been read since it. Every earning recorded before the switch that is unpaid, whatever
+ * its age, or was paid no longer than `days` before the switch, or since it (one an operator
+ * could only have paid after it was read, but the rule does not rest on that). Empty once all
+ * were read.
  */
 export async function reachBackOrders(
     state: LedgerState,
@@ -622,17 +658,11 @@ export async function reachBackOrders(
                     isNull(affiliateEarnings.refundsReadAt),
                     lt(affiliateEarnings.refundsReadAt, state.cutoverAt),
                 ),
-                or(
-                    isNull(affiliateEarnings.paidAt),
-                    and(
-                        gte(affiliateEarnings.paidAt, floor),
-                        lt(affiliateEarnings.paidAt, state.cutoverAt),
-                    ),
-                ),
+                or(isNull(affiliateEarnings.paidAt), gte(affiliateEarnings.paidAt, floor)),
             ),
         )
         .orderBy(affiliateEarnings.orderId)
-        .limit(options.limit ?? 500);
+        .limit(options.limit ?? REFUND_READS_PER_RUN);
     return rows.map((row) => row.orderId);
 }
 
@@ -668,11 +698,31 @@ const noTotals = (): LedgerTotals => ({
     clawbackUnconfirmed: 0n,
 });
 
-/* Where an unpaid earning stands at `now`. Payable from the moment its hold ends, not after it. */
-export function earningState(row: Earning, now: Date) {
+/*
+ * Whether an unpaid earning was recorded without the switch and has not had its order's refunds
+ * read under it: one from before the cut-over not read since, or one code without the switch
+ * recorded after it (it sets no payable date) and nothing has read. Such an earning may be for an
+ * order that was refunded with nobody looking, so it is not payable until it has been read.
+ */
+export function earningUnread(
+    row: Pick<Earning, 'createdAt' | 'payableAt' | 'refundsReadAt'>,
+    cutoverAt: Date | null,
+) {
+    if (!cutoverAt) return false;
+    if (row.createdAt.getTime() < cutoverAt.getTime())
+        return !row.refundsReadAt || row.refundsReadAt.getTime() < cutoverAt.getTime();
+    return !row.payableAt && !row.refundsReadAt;
+}
+
+/*
+ * Where an earning stands at `now`. Payable from the moment its hold ends, not after it.
+ * `unread`: held until its order's refunds have been read (earningUnread).
+ */
+export function earningState(row: Earning, now: Date, cutoverAt: Date | null) {
     if (row.voidedAt) return 'voided' as const;
     if (row.paidAt) return 'paid' as const;
     if (earningFlagged(row)) return 'flagged' as const;
+    if (earningUnread(row, cutoverAt)) return 'unread' as const;
     if (row.payableAt && row.payableAt.getTime() > now.getTime()) return 'held' as const;
     return 'payable' as const;
 }
@@ -683,19 +733,20 @@ export function earningState(row: Earning, now: Date) {
  * and voided, so they sum to what was earned (less anything owed again after an over-collected
  * clawback, which is in payable beside them).
  */
-export function ledgerOf(rows: Earning[], now: Date) {
+export function ledgerOf(rows: Earning[], now: Date, cutoverAt: Date | null) {
     const ledger: Record<string, LedgerTotals> = {};
     for (const row of rows) {
         const totals = (ledger[row.currency] ??= noTotals());
         const pot = potOf(row);
         totals.earned += pot;
-        const state = earningState(row, now);
+        const state = earningState(row, now, cutoverAt);
         if (state === 'voided') {
             totals.voided += pot;
             continue;
         }
         if (state !== 'paid') {
-            totals[state] += row.commissionAmount;
+            // One waiting to be read is held: it has no date, only the next daily run.
+            totals[state === 'unread' ? 'held' : state] += row.commissionAmount;
             totals.lowered += pot - row.commissionAmount;
             continue;
         }
@@ -747,7 +798,36 @@ export async function affiliateLedger(
     now = new Date(),
     executor: typeof db | Tx = db,
 ) {
-    return ledgerOf(await listLedgerRows(affiliateId, executor), now);
+    const state = await getLedgerState(executor);
+    return ledgerOf(await listLedgerRows(affiliateId, executor), now, state?.cutoverAt ?? null);
+}
+
+/* How long after an earning was paid its record must stay: a refund or a lost dispute until then still finds its row. */
+export const AFFILIATE_RECORD_KEEP_DAYS = AFFILIATE_CUTOVER_DAYS;
+
+/*
+ * What stands in the way of deleting a removed affiliate's record, with every earning of theirs
+ * locked until the transaction ends, so nothing is paid or lowered between this answer and the
+ * delete: `open`, something is still owed, held, flagged or unsettled; `paid`, an earning was
+ * paid within AFFILIATE_RECORD_KEEP_DAYS, with the day from which the record may go; null, nothing.
+ */
+export async function recordDeletionBlock(tx: Tx, affiliateId: string, now = new Date()) {
+    const rows = await tx
+        .select()
+        .from(affiliateEarnings)
+        .where(eq(affiliateEarnings.affiliateId, affiliateId))
+        .orderBy(affiliateEarnings.id)
+        .for('update');
+    const state = await getLedgerState(tx);
+    if (ledgerBlocksRemoval(ledgerOf(rows, now, state?.cutoverAt ?? null)))
+        return { reason: 'open' as const };
+    const lastPaid = rows.reduce<Date | null>(
+        (latest, row) => (row.paidAt && (!latest || row.paidAt > latest) ? row.paidAt : latest),
+        null,
+    );
+    if (!lastPaid) return null;
+    const from = new Date(lastPaid.getTime() + AFFILIATE_RECORD_KEEP_DAYS * DAY_MS);
+    return from.getTime() > now.getTime() ? { reason: 'paid' as const, from } : null;
 }
 
 /* The figures an operator was shown differ from the ledger now: nothing was marked. */
@@ -767,15 +847,16 @@ export type Payout = { owed: bigint; netted: bigint; payout: bigint };
  * what open clawbacks took of the payout is applied to them, oldest first, each up to what is
  * open on it. A clawback covered in full is settled; one covered in part stays open for the rest.
  * Held, flagged and voided earnings are not touched, and a cut-over clawback nobody confirmed is
- * counted in nothing. `expected`: what the operator was shown, per currency; if the ledger says
- * otherwise now, nothing is written (PayoutChangedError).
+ * counted in nothing. `expected` is what the operator was shown, per currency, and is not
+ * optional: if the ledger says otherwise now, nothing is written (PayoutChangedError). They paid
+ * the figures on their screen, so those are the only figures that may be marked.
  */
 export async function settlePayout(
     affiliateId: string,
     input: {
         by: string | null;
         now?: Date;
-        expected?: Record<string, { owed: string; netted: string }>;
+        expected: Record<string, { owed: string; netted: string }>;
     },
 ) {
     const now = input.now ?? new Date();
@@ -786,25 +867,24 @@ export async function settlePayout(
             .where(eq(affiliateEarnings.affiliateId, affiliateId))
             .orderBy(affiliateEarnings.id)
             .for('update');
-        const ledger = ledgerOf(rows, now);
+        const cutoverAt = (await getLedgerState(tx))?.cutoverAt ?? null;
+        const ledger = ledgerOf(rows, now, cutoverAt);
         const payouts: Record<string, Payout> = {};
         for (const [currency, totals] of Object.entries(ledger))
             if (totals.payable > 0n) payouts[currency] = payoutOf(totals);
-        if (input.expected) {
-            const shown = Object.keys(input.expected).sort();
-            const same =
-                shown.join() === Object.keys(payouts).sort().join() &&
-                shown.every(
-                    (currency) =>
-                        input.expected![currency]!.owed === payouts[currency]!.owed.toString() &&
-                        input.expected![currency]!.netted === payouts[currency]!.netted.toString(),
-                );
-            if (!same) throw new PayoutChangedError();
-        }
+        const shown = Object.keys(input.expected).sort();
+        const same =
+            shown.join() === Object.keys(payouts).sort().join() &&
+            shown.every(
+                (currency) =>
+                    input.expected[currency]!.owed === payouts[currency]!.owed.toString() &&
+                    input.expected[currency]!.netted === payouts[currency]!.netted.toString(),
+            );
+        if (!same) throw new PayoutChangedError();
         let paid = 0;
         for (const row of rows) {
             if (!payouts[row.currency]) continue;
-            const state = earningState(row, now);
+            const state = earningState(row, now, cutoverAt);
             if (state === 'payable' && row.commissionAmount > 0n) {
                 await tx
                     .update(affiliateEarnings)

@@ -99,6 +99,8 @@ const { affiliateEarnings, affiliateLedgerState, affiliateWithdrawnOrders, affil
 const billing = await import('./server');
 const growth = await import('./growth');
 const commission = await import('./commission');
+/* Raw SQL on the test database, to set a row up as an earlier time left it. */
+const rawSql = (text: string, values: unknown[] = []) => db.$client.query(text, values);
 
 async function deliver(type: string, data: object) {
     const payload = JSON.stringify({ type, data });
@@ -289,6 +291,70 @@ describe('with commission safety off', () => {
         expect(await commission.withdrawOrderEarning('order_1')).toBe('withdrawn');
         expect(await db.select().from(affiliateEarnings)).toEqual([]);
         expect(await db.select().from(affiliateWithdrawnOrders)).toHaveLength(1);
+    });
+
+    test('turned off again after it was on: a voided earning stays owed to nobody and removal is refused, so the ledger is kept; the rest is the old behaviour, as the guide says', async () => {
+        const DAY = 24 * 60 * 60 * 1000;
+        const affiliate = await creator();
+        // What commission safety wrote while it was on, ten days ago.
+        await growthRepository.beginCutover(new Date(Date.now() - 10 * DAY));
+        const earn = (orderId: string, flag: 'self' | null = null) =>
+            growthRepository.recordHeldEarning({
+                affiliateId: affiliate.id,
+                orderId,
+                userId: null,
+                currency: 'usd',
+                netAmount: 10_000n,
+                commissionBps: 2000,
+                payableAt: new Date(Date.now() + 20 * DAY),
+                flag,
+            });
+        await earn('order_held');
+        await earn('order_own', 'self');
+        const fraud = (await earn('order_fraud'))!;
+        await growthRepository.voidEarning(affiliate.id, fraud.id, {
+            by: affiliate.id,
+            reason: 'Stolen cards',
+        });
+        const paidBefore = (await earn('order_paid'))!;
+        await rawSql(
+            `update affiliate_earnings set paid_at = now(), paid_amount = commission_amount where id = $1`,
+            [paidBefore.id],
+        );
+        await growthRepository.recordDispute({
+            id: 'dp_1',
+            orderId: 'order_paid',
+            status: 'lost',
+            openedAt: new Date(),
+        });
+        polar.calls = [];
+        // Off: the page's old figures. The voided earning is in neither, and what was paid is
+        // what was paid, though the lost dispute left nothing of it.
+        const [listed] = await growth.listAffiliates();
+        expect(listed!.stats.earnings).toEqual({ usd: { unpaid: 4000, paid: 2000 } });
+        expect(listed).not.toHaveProperty('ledger');
+        // Removing would delete a ledger that holds a dispute record and a clawback: refused,
+        // whether or not anything is owed.
+        await expect(growth.deleteAffiliate(affiliate.id)).rejects.toMatchObject({
+            status: 409,
+            message: expect.stringContaining('Turn it on again to remove an affiliate'),
+        });
+        // The old Mark paid pays what was held and what was flagged at once (nothing holds or
+        // flags with the switch off), and never the voided one.
+        expect(await growth.markAffiliatePaid(affiliate.id)).toEqual({ paid: 2 });
+        const rows = await db.select().from(affiliateEarnings);
+        const byOrder = Object.fromEntries(rows.map((row) => [row.orderId, row]));
+        expect(byOrder.order_fraud).toMatchObject({ paidAt: null, voidReason: 'Stolen cards' });
+        expect(byOrder.order_held!.paidAt).not.toBeNull();
+        expect(byOrder.order_own!.paidAt).not.toBeNull();
+        // The clawback is still on the books for when the switch is on again; nothing nets it now.
+        expect(byOrder.order_paid).toMatchObject({
+            clawbackAmount: 2_000n,
+            clawbackSettledAmount: 0n,
+        });
+        await expect(growth.deleteAffiliate(affiliate.id)).rejects.toMatchObject({ status: 409 });
+        expect(await db.select().from(affiliates)).toHaveLength(1);
+        expect(polar.calls).toEqual([]);
     });
 
     test('a creator’s own page is sent what it always was: the operators’ view, notes and all, and no totals', async () => {

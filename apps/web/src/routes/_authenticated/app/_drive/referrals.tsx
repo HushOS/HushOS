@@ -10,6 +10,7 @@ import { PageHeader } from '@/components/page-header';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { formatMinor } from '@/lib/affiliate-ledger';
 import { formatQuota, formatMoney } from '@/lib/format';
 import { describeCommission, describeDiscount, referralsQueryOptions } from '@/lib/growth';
 import { cue } from '@/lib/sounds';
@@ -328,7 +329,7 @@ function total(
 ) {
     const parts = Object.entries(totals)
         .filter(([, of]) => BigInt(of[key]) > 0n)
-        .map(([currency, of]) => formatMoney(Number(of[key]), currency));
+        .map(([currency, of]) => formatMinor(of[key], currency));
     return parts.length ? parts.join(' · ') : '–';
 }
 

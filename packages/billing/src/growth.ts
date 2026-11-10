@@ -115,15 +115,28 @@ async function statsFor(
     known?: Awaited<ReturnType<typeof growthRepository.affiliateStats>>,
 ) {
     const stats = known ?? (await growthRepository.affiliateStats(row.id));
-    if (!affiliateV2()) return { stats, ledger: null };
-    const ledger = await growthRepository.affiliateLedger(row.id);
+    if (!affiliateV2()) return { stats, ledger: null, recordKeptUntil: null };
+    const now = new Date();
+    const state = await growthRepository.getLedgerState();
+    const rows = await growthRepository.listLedgerRows(row.id);
+    const ledger = growthRepository.ledgerOf(rows, now, state?.cutoverAt ?? null);
     const earnings: typeof stats.earnings = {};
     for (const [currency, totals] of Object.entries(ledger))
         earnings[currency] = {
             unpaid: asNumber(totals.payable + totals.held + totals.flagged),
             paid: asNumber(totals.paidOut),
         };
-    return { stats: { ...stats, earnings }, ledger };
+    // Until when the record must stay: a refund or a lost dispute after a payout still needs its row.
+    const lastPaid = rows.reduce(
+        (latest, earning) => Math.max(latest, earning.paidAt?.getTime() ?? 0),
+        0,
+    );
+    const keptUntil = lastPaid + growthRepository.AFFILIATE_RECORD_KEEP_DAYS * 24 * 60 * 60 * 1000;
+    return {
+        stats: { ...stats, earnings },
+        ledger,
+        recordKeptUntil: lastPaid && keptUntil > now.getTime() ? new Date(keptUntil) : null,
+    };
 }
 
 async function view(
@@ -131,7 +144,7 @@ async function view(
     known?: Awaited<ReturnType<typeof growthRepository.affiliateStats>>,
 ) {
     if (!row) throw new BillingError('That affiliate does not exist.', 404);
-    const { stats, ledger } = await statsFor(row, known);
+    const { stats, ledger, recordKeptUntil } = await statsFor(row, known);
     return {
         id: row.id,
         name: row.name,
@@ -153,6 +166,7 @@ async function view(
             ? {
                   pausedAt: row.pausedAt?.toISOString() ?? null,
                   removedAt: row.removedAt?.toISOString() ?? null,
+                  recordKeptUntil: recordKeptUntil?.toISOString() ?? null,
                   ledger: ledgerView(ledger),
               }
             : {}),
@@ -609,6 +623,13 @@ async function otherChanges(
  */
 export async function deleteAffiliate(id: string) {
     if (affiliateV2()) return removeAffiliate(id);
+    // Commission safety was on here once and is off now: removing as before would delete a
+    // ledger that holds dispute records and clawbacks. Nothing to ask where it never was on.
+    if (await growthRepository.getLedgerState())
+        throw new BillingError(
+            'Commission safety was turned on for this server and is off now. Turn it on again to remove an affiliate: with it off, removing one deletes their ledger.',
+            409,
+        );
     // Under the affiliate's lock: a removal never interleaves with a change of terms.
     return underAffiliateLock(id, async (tx) => {
         // Locked before anything owed is counted: an earning recorded while Polar deletes the
@@ -662,7 +683,10 @@ async function removeAffiliate(id: string) {
 
 /*
  * Deletes a removed affiliate's record for good, with the attributions and the ledger. Only once
- * they were removed and nothing on the ledger is owed, held, flagged or unsettled; the operators'
+ * they were removed, nothing on the ledger is owed, held, flagged or unsettled, and no earning
+ * was paid in the last AFFILIATE_RECORD_KEEP_DAYS: until then a refund or a lost dispute on a
+ * paid order must still find its earning, or the money to take back is never recorded. The check
+ * holds every earning locked until the delete, so nothing changes between the two. The operators'
  * page downloads the ledger first. The discount at Polar is left ended, never deleted.
  */
 export async function deleteAffiliateRecord(id: string) {
@@ -675,12 +699,13 @@ export async function deleteAffiliateRecord(id: string) {
                 'Remove this affiliate first. Then their record can be deleted.',
                 409,
             );
-        if (
-            growthRepository.ledgerBlocksRemoval(
-                await growthRepository.affiliateLedger(id, new Date(), tx),
-            )
-        )
-            throw new BillingError(LEDGER_OPEN, 409);
+        const block = await growthRepository.recordDeletionBlock(tx, id);
+        if (block?.reason === 'open') throw new BillingError(LEDGER_OPEN, 409);
+        if (block?.reason === 'paid')
+            throw new BillingError(
+                `They were paid in the last ${growthRepository.AFFILIATE_RECORD_KEEP_DAYS} days. Their record can be deleted from ${block.from.toISOString().slice(0, 10)}: until then a refund or a lost dispute on an order they were paid for must still find its earning.`,
+                409,
+            );
         await growthRepository.deleteAffiliate(id, tx);
         return { deleted: true as const };
     });
@@ -690,7 +715,8 @@ export async function deleteAffiliateRecord(id: string) {
  * An operator has paid the affiliate. Without commission safety, everything unpaid is marked.
  * With it, only what may be paid (past its hold, not flagged, not voided), and what open
  * clawbacks took of the payout is applied to them by amount. `expected` is what the operator was
- * shown; if the ledger has moved since, nothing is marked and they are told to look again.
+ * shown and is required then; if the ledger has moved since, nothing is marked and they are told
+ * to look again.
  */
 export async function markAffiliatePaid(
     id: string,
@@ -699,6 +725,11 @@ export async function markAffiliatePaid(
     if (!(await growthRepository.getAffiliate(id)))
         throw new BillingError('That affiliate does not exist.', 404);
     if (!affiliateV2()) return { paid: await growthRepository.markEarningsPaid(id) };
+    // What was sent is what the operator was shown: without those figures nothing is marked.
+    if (!input.expected)
+        throw new BillingError(
+            'Say which amounts you paid: reload the page and mark it paid from the figures it shows.',
+        );
     try {
         const result = await growthRepository.settlePayout(id, {
             by: input.by ?? null,
@@ -733,17 +764,23 @@ function requireV2() {
     if (!affiliateV2()) throw new BillingError('That is not available on this server.', 404);
 }
 
-/* Whether commission safety is on, how long a new earning is held, and how the last read of Polar's disputes went. */
+/*
+ * Whether commission safety is on, how long a new earning is held, and when the daily run last
+ * read Polar's disputes and the refunds, so a run that has stopped working is seen on the page.
+ */
 export async function affiliateLedgerStatus(): Promise<AffiliateLedgerStatus> {
     if (!affiliateV2()) return { enabled: false };
     const state = await ensureCutover();
     return {
         enabled: true,
         holdDays: growthRepository.AFFILIATE_HOLD_DAYS,
+        recordKeepDays: growthRepository.AFFILIATE_RECORD_KEEP_DAYS,
+        since: state.cutoverAt.toISOString(),
         disputes: {
             readAt: state.disputesReadAt?.toISOString() ?? null,
             failure: state.disputesFailure,
         },
+        refunds: { readAt: state.refundsReadAt?.toISOString() ?? null },
     };
 }
 
@@ -753,6 +790,7 @@ export async function listAffiliateEarnings(id: string): Promise<AffiliateEarnin
     if (!(await growthRepository.getAffiliate(id)))
         throw new BillingError('That affiliate does not exist.', 404);
     const now = new Date();
+    const { cutoverAt } = await ensureCutover();
     const rows = await growthRepository.listLedgerRows(id);
     return rows.map((row) => ({
         id: row.id,
@@ -763,7 +801,7 @@ export async function listAffiliateEarnings(id: string): Promise<AffiliateEarnin
         net: row.netAmount.toString(),
         pot: (row.potAmount ?? row.commissionAmount).toString(),
         left: row.commissionAmount.toString(),
-        state: growthRepository.earningState(row, now),
+        state: growthRepository.earningState(row, now, cutoverAt),
         payableAt: row.payableAt?.toISOString() ?? null,
         paidAt: row.paidAt?.toISOString() ?? null,
         paid: row.paidAt ? (row.paidAmount ?? row.commissionAmount).toString() : null,

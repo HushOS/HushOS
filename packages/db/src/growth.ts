@@ -527,7 +527,11 @@ async function earningTotals(affiliateId: string, executor: Executor = db): Prom
             ),
         })
         .from(affiliateEarnings)
-        .where(eq(affiliateEarnings.affiliateId, affiliateId))
+        // An earning an operator voided while commission safety was on is owed to nobody,
+        // whether or not it is on now. No earning is voided where it never was on.
+        .where(
+            and(eq(affiliateEarnings.affiliateId, affiliateId), isNull(affiliateEarnings.voidedAt)),
+        )
         .groupBy(affiliateEarnings.currency, sql`${affiliateEarnings.paidAt} is not null`);
     const totals: EarningTotals = {};
     for (const row of rows) {
@@ -662,7 +666,12 @@ export async function markEarningsPaid(affiliateId: string) {
         .update(affiliateEarnings)
         .set({ paidAt: new Date() })
         .where(
-            and(eq(affiliateEarnings.affiliateId, affiliateId), isNull(affiliateEarnings.paidAt)),
+            and(
+                eq(affiliateEarnings.affiliateId, affiliateId),
+                isNull(affiliateEarnings.paidAt),
+                // Never one an operator voided while commission safety was on.
+                isNull(affiliateEarnings.voidedAt),
+            ),
         )
         .returning({ id: affiliateEarnings.id });
     return rows.length;

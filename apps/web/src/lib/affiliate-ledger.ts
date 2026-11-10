@@ -1,16 +1,57 @@
 import type { AffiliateEarningView, ExpectedPayouts, LedgerTotals } from '@hushos/billing/api';
-import { formatMoney } from '@/lib/format';
 
 /*
  * The operators' affiliate ledger in the browser: showing its amounts, reading an amount an
  * operator types, and writing the ledger out as a file. The server holds every amount as a whole
- * number of minor units and sends it as a decimal string, so a large total is never rounded on
- * the way; only what is drawn on screen passes through a number here.
+ * number of a currency's smallest unit and sends it as a decimal string, so a large total is
+ * never rounded on the way, and nothing here passes one through a number either.
+ *
+ * How many of those units make one of the currency is the currency's own: 100 cents to a dollar,
+ * no smaller unit of a yen, 1,000 fils to a Kuwaiti dinar. It is read from Intl, never assumed
+ * to be two decimals: 1250 is 12.50 dollars and 1,250 yen.
  */
 
-/* Minor units, as the server sends them, shown as money. */
+// As lib/format.ts: one locale on the server and in every browser.
+const LOCALE = 'en-US';
+
+/* The decimals a currency's amounts have (2, 0 for the yen, 3 for the dinar); null for a code Intl does not know. */
+export function currencyDecimals(currency: string) {
+    try {
+        return (
+            new Intl.NumberFormat(LOCALE, {
+                style: 'currency',
+                currency: currency.toUpperCase(),
+            }).resolvedOptions().maximumFractionDigits ?? null
+        );
+    } catch {
+        return null;
+    }
+}
+
+/*
+ * Minor units as a plain decimal in the currency's own decimals: "1250" is "12.50" in dollars,
+ * "1250" in yen, "1.250" in dinars. Exact at any size. A currency Intl does not know is written
+ * as the minor units themselves, which is at least what the server holds.
+ */
+export function minorAsDecimal(amount: string, currency: string) {
+    const decimals = currencyDecimals(currency);
+    if (!decimals) return amount;
+    const digits = amount.padStart(decimals + 1, '0');
+    return `${digits.slice(0, -decimals)}.${digits.slice(-decimals)}`;
+}
+
+/* Minor units, as the server sends them, shown as money; a whole amount drops its decimals, as prices do. */
 export function formatMinor(amount: string, currency: string) {
-    return formatMoney(Number(amount), currency);
+    const decimals = currencyDecimals(currency);
+    if (decimals === null) return `${amount} ${currency.toUpperCase()}`;
+    const decimal = minorAsDecimal(amount, currency);
+    const whole = !decimal.includes('.') || /\.0+$/.test(decimal);
+    return new Intl.NumberFormat(LOCALE, {
+        style: 'currency',
+        currency: currency.toUpperCase(),
+        minimumFractionDigits: whole ? 0 : decimals,
+        // A decimal string is formatted digit for digit; a number would round a large total.
+    }).format(decimal as unknown as number);
 }
 
 /* One of a ledger's totals in every currency that has any: "$12.00 · ₹900.00", or a dash for none. */
@@ -34,21 +75,26 @@ export function expectedPayouts(ledger: Record<string, LedgerTotals> | undefined
 }
 
 /*
- * An amount as an operator types it ("12.50", "12", "0.5"), in minor units as the server takes
- * it ("1250", "1200", "50"). Null for anything else: a sign, a third decimal, letters, a
- * thousands separator, nothing, or zero. Never rounded: a figure that is not exact is refused.
+ * An amount as an operator types it, in the currency's own decimals ("12.50", "12" or "0.5"
+ * dollars; "1250" yen), in minor units as the server takes it ("1250", "1200", "50"; "1250").
+ * Null for anything else: a sign, more decimals than the currency has (any at all for the yen),
+ * letters, a thousands separator, nothing, zero, or a currency Intl does not know. Never rounded:
+ * a figure that is not exact is refused.
  */
-export function toMinor(text: string) {
-    const match = /^([0-9]{1,15})(?:\.([0-9]{1,2}))?$/.exec(text.trim());
+export function toMinor(text: string, currency: string) {
+    const decimals = currencyDecimals(currency);
+    if (decimals === null) return null;
+    const match = /^([0-9]{1,15})(?:\.([0-9]+))?$/.exec(text.trim());
     if (!match) return null;
-    const minor = BigInt(match[1]!) * 100n + BigInt((match[2] ?? '').padEnd(2, '0'));
+    const fraction = match[2] ?? '';
+    if (fraction.length > decimals) return null;
+    const minor = BigInt(match[1]! + fraction.padEnd(decimals, '0'));
     return minor > 0n ? minor.toString() : null;
 }
 
-/* Minor units as a plain decimal for a spreadsheet: "1250" is "12.50". Exact at any size. */
-export function minorAsDecimal(amount: string) {
-    const digits = amount.padStart(3, '0');
-    return `${digits.slice(0, -2)}.${digits.slice(-2)}`;
+/* An amount to show as the shape to type: "12.50" where the currency has cents, "1250" where it has none. */
+export function exampleAmount(currency: string) {
+    return minorAsDecimal('1250', currency);
 }
 
 /*
@@ -95,20 +141,20 @@ export function ledgerCsv(rows: AffiliateEarningView[]) {
             row.orderId,
             row.userId,
             row.currency.toUpperCase(),
-            minorAsDecimal(row.net),
-            minorAsDecimal(row.pot),
-            minorAsDecimal(row.left),
+            minorAsDecimal(row.net, row.currency),
+            minorAsDecimal(row.pot, row.currency),
+            minorAsDecimal(row.left, row.currency),
             row.state,
             row.payableAt,
             row.paidAt,
-            row.paid === null ? null : minorAsDecimal(row.paid),
-            minorAsDecimal(row.refunded),
+            row.paid === null ? null : minorAsDecimal(row.paid, row.currency),
+            minorAsDecimal(row.refunded, row.currency),
             row.dispute,
             row.flag,
-            row.clawback ? minorAsDecimal(row.clawback.amount) : null,
-            row.clawback ? minorAsDecimal(row.clawback.open) : null,
-            row.clawback ? minorAsDecimal(row.clawback.settled) : null,
-            row.clawback ? minorAsDecimal(row.clawback.writtenOff) : null,
+            row.clawback ? minorAsDecimal(row.clawback.amount, row.currency) : null,
+            row.clawback ? minorAsDecimal(row.clawback.open, row.currency) : null,
+            row.clawback ? minorAsDecimal(row.clawback.settled, row.currency) : null,
+            row.clawback ? minorAsDecimal(row.clawback.writtenOff, row.currency) : null,
             row.clawback ? (row.clawback.confirmed ? 'no' : 'yes') : null,
             row.clawback?.note ?? null,
             row.voidedAt,

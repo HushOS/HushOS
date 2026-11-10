@@ -33,6 +33,7 @@ CREATE TABLE "affiliate_ledger_state" (
 	"disputes_read_at" timestamp with time zone,
 	"disputes_failure" text,
 	"disputes_failed_at" timestamp with time zone,
+	"refunds_read_at" timestamp with time zone,
 	CONSTRAINT "affiliate_ledger_state_one" CHECK ("id")
 );
 --> statement-breakpoint

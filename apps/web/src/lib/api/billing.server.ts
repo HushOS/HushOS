@@ -316,8 +316,9 @@ export const billingApi = new Elysia()
                 '/billing/affiliates/:id/paid',
                 {
                     params: t.Object({ id: uuidSchema }),
-                    // `expected`, with commission safety on: the payout the operator was shown,
-                    // per currency. If the ledger has moved since, nothing is marked (409).
+                    // `expected`: the payout the operator was shown, per currency. Required
+                    // with commission safety on (400 without it), and never sent with it off. If
+                    // the ledger has moved since, nothing is marked (409).
                     body: t.Object({
                         expected: t.Optional(
                             t.Record(

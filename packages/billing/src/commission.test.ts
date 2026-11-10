@@ -41,6 +41,12 @@ const polar = {
     /* The token has no refunds:read; or Polar is down for refunds. */
     refundsForbidden: false,
     refundsDown: false,
+    /* The token is wrong or revoked: every disputes and refunds call answers 401. */
+    unauthorized: false,
+    /* This page of a refunds list fails (1 is the first), after the pages before it answered. */
+    refundPageFails: null as number | null,
+    /* Awaited once inside the next refunds list, after Polar has decided its answer. */
+    onRefundList: null as (() => Promise<void>) | null,
     /* Polar fixes a used discount's terms: an end date is refused. */
     discountsFixed: false,
 };
@@ -62,23 +68,35 @@ const fakeClient = {
             throw missing();
         },
     },
+    // Paged as Polar pages it: `limit` to a page, a page that fails after earlier ones answered.
     refunds: {
-        async list(query: { order_id?: string }) {
+        async *iterList(query: { order_id?: string; limit?: number }) {
             polar.calls.push(`refunds.list:${query.order_id}`);
+            if (polar.unauthorized) throw new PolarClientError(401, { error: 'Unauthorized' });
             if (polar.refundsForbidden) throw new PolarClientError(403, { error: 'NotPermitted' });
             if (polar.refundsDown) throw new PolarClientError(503, { error: 'ServiceUnavailable' });
-            return {
-                items: polar.refunds
-                    .filter((refund) => refund.order_id === query.order_id)
-                    .map((refund) => ({ ...refund })),
-                pagination: { total_count: 0, max_page: 1 },
-            };
+            // What Polar held when the call was made; the answer may then be slow to arrive.
+            const held = polar.refunds
+                .filter((refund) => refund.order_id === query.order_id)
+                .map((refund) => ({ ...refund }));
+            const stall = polar.onRefundList;
+            polar.onRefundList = null;
+            await stall?.();
+            const size = query.limit ?? 10;
+            for (let from = 0; from < Math.max(held.length, 1); from += size) {
+                const page = from / size + 1;
+                if (page > 1) polar.calls.push(`refunds.page:${page}`);
+                if (polar.refundPageFails === page)
+                    throw new PolarClientError(503, { error: 'ServiceUnavailable' });
+                yield* held.slice(from, from + size);
+            }
         },
     },
     disputes: {
         // Newest first, as HushOS asks for them.
         async *iterList(query: { sorting?: string[] }) {
             polar.calls.push(`disputes.list:${(query.sorting ?? []).join()}`);
+            if (polar.unauthorized) throw new PolarClientError(401, { error: 'Unauthorized' });
             if (polar.disputesForbidden)
                 throw new PolarClientError(403, { error: 'InsufficientScopes' });
             const newestFirst = [...polar.disputes].sort(
@@ -249,12 +267,13 @@ const earning = async (orderId: string) =>
 /* Raw SQL on the test database, to move a row's dates: time passing, without waiting for it. */
 const rawSql = (text: string, values: unknown[] = []) => db.$client.query(text, values);
 
-/* The earning's hold is over: as if `days` had passed since it was recorded. */
+/*
+ * The earning's hold is over: its payable date is `days` earlier. When it was recorded stays,
+ * since an earning dated before the switch is one the reach back has to read first.
+ */
 async function age(orderId: string, days = 31) {
     await rawSql(
-        `update affiliate_earnings
-         set created_at = created_at - make_interval(days => $2), payable_at = payable_at - make_interval(days => $2)
-         where order_id = $1`,
+        `update affiliate_earnings set payable_at = payable_at - make_interval(days => $2) where order_id = $1`,
         [orderId, days],
     );
 }
@@ -272,6 +291,16 @@ async function errorsOf(run: () => Promise<unknown>) {
     }
 }
 
+/* An operator marks paid what the Affiliates page shows them now, as the page does it. */
+async function markPaid(affiliateId: string) {
+    const shown = (await growth.listAffiliates()).find((row) => row.id === affiliateId)!;
+    const expected: Record<string, { owed: string; netted: string }> = {};
+    for (const [currency, totals] of Object.entries(shown.ledger ?? {}))
+        if (BigInt(totals.payable) > 0n)
+            expected[currency] = { owed: totals.payable, netted: totals.netted };
+    return growth.markAffiliatePaid(affiliateId, { by: OPERATOR, expected });
+}
+
 const callsTo = (prefix: string) => polar.calls.filter((call) => call.startsWith(prefix));
 
 beforeEach(async () => {
@@ -284,6 +313,9 @@ beforeEach(async () => {
     polar.disputesFailAfter = null;
     polar.refundsForbidden = false;
     polar.refundsDown = false;
+    polar.unauthorized = false;
+    polar.refundPageFails = null;
+    polar.onRefundList = null;
     polar.discountsFixed = false;
 });
 afterAll(closeDatabase);
@@ -312,7 +344,7 @@ describe('a paid order', () => {
         expect(hold).toBeGreaterThanOrEqual(30 * DAY);
         expect(hold).toBeLessThan(30 * DAY + 60_000);
         // Held: marking paid today pays nothing, and the page says it is held, not owed.
-        expect(await growth.markAffiliatePaid(affiliate.id, { by: OPERATOR })).toEqual({
+        expect(await markPaid(affiliate.id)).toEqual({
             paid: 0,
             payouts: {},
         });
@@ -321,7 +353,7 @@ describe('a paid order', () => {
             usd: expect.objectContaining({ held: '2000', payable: '0', payout: '0' }),
         });
         await age('order_1');
-        expect(await growth.markAffiliatePaid(affiliate.id, { by: OPERATOR })).toEqual({
+        expect(await markPaid(affiliate.id)).toEqual({
             paid: 1,
             payouts: { usd: { owed: '2000', netted: '0', payout: '2000' } },
         });
@@ -364,11 +396,11 @@ describe('a paid order', () => {
             commissionAmount: 2_000n,
         });
         await age('order_own');
-        expect((await growth.markAffiliatePaid(affiliate.id, { by: OPERATOR })).paid).toBe(0);
+        expect((await markPaid(affiliate.id)).paid).toBe(0);
         const [listed] = await growth.listAffiliateEarnings(affiliate.id);
         expect(listed).toMatchObject({ state: 'flagged', flag: 'self' });
         await growth.releaseAffiliateEarning(affiliate.id, listed!.id, OPERATOR);
-        expect((await growth.markAffiliatePaid(affiliate.id, { by: OPERATOR })).paid).toBe(1);
+        expect((await markPaid(affiliate.id)).paid).toBe(1);
     });
 
     test('with no affiliate behind it, a net of nothing, or an amount that is not a whole number, records nothing', async () => {
@@ -440,7 +472,7 @@ describe('a refund made in Polar', () => {
         const affiliate = await creator();
         await paid({ id: 'order_big', discount: 'disc_creator20', net: 384_000 });
         await age('order_big');
-        await growth.markAffiliatePaid(affiliate.id, { by: OPERATOR });
+        await markPaid(affiliate.id);
         refund('order_big', 384_000);
         await deliver('order.refunded', { id: 'order_big' });
         expect(await earning('order_big')).toMatchObject({
@@ -457,7 +489,7 @@ describe('a refund made in Polar', () => {
             netted: '5000',
             payout: '0',
         });
-        expect(await growth.markAffiliatePaid(affiliate.id, { by: OPERATOR })).toEqual({
+        expect(await markPaid(affiliate.id)).toEqual({
             paid: 1,
             payouts: { usd: { owed: '5000', netted: '5000', payout: '0' } },
         });
@@ -492,12 +524,78 @@ describe('a refund made in Polar', () => {
         // `order.paid` arrives late, as Polar made it: it knows of no refund.
         await paid({ id: 'order_1', discount: 'disc_creator20' });
         expect((await earning('order_1'))!.commissionAmount).toBe(2_000n);
-        expect((await growth.markAffiliatePaid(affiliate.id, { by: OPERATOR })).paid).toBe(0);
+        expect((await markPaid(affiliate.id)).paid).toBe(0);
         expect(await billing.reconcileAffiliateEarnings()).toMatchObject({
             refundsRead: 1,
             refundsFailed: 0,
         });
         expect((await earning('order_1'))!.commissionAmount).toBe(0n);
+    });
+
+    test('listed over more than one page is added up over every page, and a page that fails is a read that failed, never fewer refunds', async () => {
+        await creator();
+        await paid({ id: 'order_1', discount: 'disc_creator20' });
+        // 150 refunds of 0.50: 75.00 of 100.00, a page and a half of Polar's list.
+        for (let count = 0; count < 150; count += 1) refund('order_1', 50);
+        polar.calls = [];
+        polar.refundPageFails = 2;
+        const request = await signedWebhook({
+            type: 'refund.created',
+            data: { id: 'refund_150', order_id: 'order_1' },
+        });
+        // The first page alone says 50.00 was refunded. It is not believed.
+        await expect(billing.handleWebhook(request())).rejects.toMatchObject({ status: 503 });
+        expect(await earning('order_1')).toMatchObject({
+            commissionAmount: 2_000n,
+            refundedAmount: 0n,
+            refundsReadAt: null,
+        });
+        await errorsOf(async () => {
+            expect(await billing.reconcileAffiliateEarnings()).toMatchObject({
+                refundsRead: 0,
+                refundsFailed: 1,
+            });
+        });
+        expect((await earning('order_1'))!.commissionAmount).toBe(2_000n);
+        expect((await growth.affiliateLedgerStatus()) as object).toMatchObject({
+            refunds: { readAt: null },
+        });
+        polar.refundPageFails = null;
+        polar.calls = [];
+        expect((await billing.handleWebhook(request())).status).toBe(200);
+        expect(polar.calls).toEqual(['refunds.list:order_1', 'refunds.page:2']);
+        expect(await earning('order_1')).toMatchObject({
+            commissionAmount: 500n,
+            refundedAmount: 7_500n,
+        });
+    });
+
+    test('read twice at once: the answer Polar gave first and delivered last does not undo the newer one', async () => {
+        await creator();
+        await paid({ id: 'order_1', discount: 'disc_creator20' });
+        // The first read reaches Polar before the refund exists, and its answer is slow.
+        let release!: () => void;
+        const stalled = new Promise<void>((resolve) => (release = resolve));
+        let reached!: () => void;
+        const atPolar = new Promise<void>((resolve) => (reached = resolve));
+        polar.onRefundList = async () => {
+            reached();
+            await stalled;
+        };
+        const slow = deliver('refund.updated', { id: 'r0', order_id: 'order_1' });
+        await atPolar;
+        // Meanwhile the order is refunded whole, and that delivery is read and applied.
+        refund('order_1', 10_000);
+        expect(await deliver('refund.created', { id: 'refund_1', order_id: 'order_1' })).toBe(200);
+        expect((await earning('order_1'))!.commissionAmount).toBe(0n);
+        const newer = (await earning('order_1'))!.refundsReadAt!;
+        release();
+        expect(await slow).toBe(200);
+        expect(await earning('order_1')).toMatchObject({
+            commissionAmount: 0n,
+            refundedAmount: 10_000n,
+            refundsReadAt: newer,
+        });
     });
 
     test('for an order with no earning asks Polar nothing, and one Polar can’t answer for is delivered again', async () => {
@@ -560,10 +658,10 @@ describe('the daily read of Polar’s disputes', () => {
             commissionAmount: 0n,
         });
         for (const id of ['order_open', 'order_lost', 'order_won']) await age(id);
-        expect((await growth.markAffiliatePaid(affiliate.id, { by: OPERATOR })).paid).toBe(0);
+        expect((await markPaid(affiliate.id)).paid).toBe(0);
         dispute('order_won', 'won', ago(3));
         await billing.reconcileAffiliateEarnings(new Date(NOW.getTime() + DAY));
-        expect(await growth.markAffiliatePaid(affiliate.id, { by: OPERATOR })).toEqual({
+        expect(await markPaid(affiliate.id)).toEqual({
             paid: 1,
             payouts: { usd: { owed: '2000', netted: '0', payout: '2000' } },
         });
@@ -575,7 +673,7 @@ describe('the daily read of Polar’s disputes', () => {
         const affiliate = await creator();
         await paid({ id: 'order_1', discount: 'disc_creator20', net: 384_000 });
         await age('order_1');
-        await growth.markAffiliatePaid(affiliate.id, { by: OPERATOR });
+        await markPaid(affiliate.id);
         dispute('order_1', 'lost', ago(1));
         await billing.reconcileAffiliateEarnings(NOW);
         // The next mornings: disputes read again, and the order's refunds, which list nothing.
@@ -594,7 +692,7 @@ describe('the daily read of Polar’s disputes', () => {
         await paid({ id: 'order_1', discount: 'disc_creator20' });
         const affiliate = (await db.select().from(affiliates))[0]!;
         await age('order_1');
-        await growth.markAffiliatePaid(affiliate.id, { by: OPERATOR });
+        await markPaid(affiliate.id);
         // Polar refunded half before the dispute escalated. No delivery told HushOS.
         refund('order_1', 5_000);
         dispute('order_1', 'prevented', ago(1));
@@ -641,7 +739,7 @@ describe('the daily read of Polar’s disputes', () => {
         });
         for (const id of ['order_open', 'order_lost', 'order_prevented']) await age(id);
         // Only what the refund left of the prevented one can be paid.
-        expect(await growth.markAffiliatePaid(affiliate.id, { by: OPERATOR })).toMatchObject({
+        expect(await markPaid(affiliate.id)).toMatchObject({
             paid: 1,
             payouts: { usd: { payout: '1500' } },
         });
@@ -703,9 +801,11 @@ describe('the daily read of Polar’s disputes', () => {
         ]);
         expect(outcome).toEqual({
             disputesRead: false,
+            disputesFailure: 'scope',
             disputes: 0,
             refundsRead: 1,
             refundsFailed: 0,
+            stopped: false,
         });
         expect(await growth.affiliateLedgerStatus()).toMatchObject({
             enabled: true,
@@ -721,7 +821,168 @@ describe('the daily read of Polar’s disputes', () => {
         expect(await growth.affiliateLedgerStatus()).toMatchObject({
             disputes: { failure: null, readAt: expect.any(String) },
         });
-        expect((await growth.markAffiliatePaid(affiliate.id, { by: OPERATOR })).paid).toBe(0);
+        expect((await markPaid(affiliate.id)).paid).toBe(0);
+    });
+
+    test('a token that is wrong or revoked is a failure, not a missing scope, and the page says which', async () => {
+        await creator();
+        await paid({ id: 'order_1', discount: 'disc_creator20' });
+        polar.unauthorized = true;
+        let outcome: Awaited<ReturnType<typeof billing.reconcileAffiliateEarnings>> = null;
+        const said = await errorsOf(async () => {
+            outcome = await billing.reconcileAffiliateEarnings(NOW);
+        });
+        expect(said).toEqual([
+            'Polar’s disputes could not be read; the next daily run reads them again',
+        ]);
+        expect(outcome).toMatchObject({
+            disputesRead: false,
+            disputesFailure: 'failed',
+            refundsFailed: 1,
+        });
+        expect(await growth.affiliateLedgerStatus()).toMatchObject({
+            disputes: { readAt: null, failure: 'failed' },
+            refunds: { readAt: null },
+        });
+        // A refund's delivery with such a token is refused, so Polar sends it again: it is
+        // not waved through as a missing scope would be.
+        const request = await signedWebhook({
+            type: 'refund.created',
+            data: { id: 'r', order_id: 'order_1' },
+        });
+        await expect(billing.handleWebhook(request())).rejects.toMatchObject({ status: 503 });
+        polar.unauthorized = false;
+        await billing.reconcileAffiliateEarnings(new Date(NOW.getTime() + DAY));
+        const status = await growth.affiliateLedgerStatus();
+        expect(status).toMatchObject({
+            enabled: true,
+            recordKeepDays: 120,
+            disputes: { failure: null, readAt: expect.any(String) },
+            refunds: { readAt: expect.any(String) },
+        });
+        // `since` is when the switch first ran here: before any read.
+        if (!status.enabled) throw new Error('unreachable');
+        expect(Date.parse(status.since)).toBeLessThanOrEqual(Date.parse(status.disputes.readAt!));
+    });
+
+    test('one prevented dispute whose refunds can’t be read does not stop the others, and is met again the next day', async () => {
+        const affiliate = await creator();
+        for (const id of ['order_prevented', 'order_lost'])
+            await paid({ id, discount: 'disc_creator20' });
+        // The daily runs of their 30 days read both, as they do before anything is paid.
+        await billing.reconcileAffiliateEarnings(ago(1));
+        for (const id of ['order_prevented', 'order_lost']) await age(id);
+        await markPaid(affiliate.id);
+        refund('order_prevented', 10_000);
+        dispute('order_prevented', 'prevented', ago(2));
+        // Older than the prevented one: read after it, so it shows the read went on.
+        dispute('order_lost', 'lost', ago(6));
+        polar.refundPageFails = 1;
+        let outcome: Awaited<ReturnType<typeof billing.reconcileAffiliateEarnings>> = null;
+        await errorsOf(async () => {
+            outcome = await billing.reconcileAffiliateEarnings(NOW);
+        });
+        expect(outcome).toMatchObject({ disputesRead: true, disputes: 2, refundsFailed: 1 });
+        expect((await earning('order_lost'))!.clawbackAmount).toBe(2_000n);
+        expect(await earning('order_prevented')).toMatchObject({
+            disputeStatus: 'prevented',
+            clawbackAmount: 0n,
+        });
+        // The marker did not move past what was not finished: the whole list is read again,
+        // and this time the refund is found. A paid earning, so nothing else would have read it.
+        polar.refundPageFails = null;
+        polar.calls = [];
+        await billing.reconcileAffiliateEarnings(new Date(NOW.getTime() + DAY));
+        expect(callsTo('disputes.read')).toEqual([
+            'disputes.read:dp_order_prevented',
+            'disputes.read:dp_order_lost',
+        ]);
+        expect((await earning('order_prevented'))!.clawbackAmount).toBe(2_000n);
+    });
+
+    test('a dispute that appears in the list below the newest one already seen is found within three days of it, and not below that', async () => {
+        await creator();
+        for (const id of ['order_late', 'order_too_late'])
+            await paid({ id, discount: 'disc_creator20' });
+        dispute('order_seen', 'won', ago(1));
+        await billing.reconcileAffiliateEarnings(NOW);
+        // Committed at Polar after that read, with an earlier time of its own.
+        dispute('order_late', 'lost', ago(3.5));
+        dispute('order_too_late', 'lost', ago(4.5));
+        polar.calls = [];
+        await billing.reconcileAffiliateEarnings(new Date(NOW.getTime() + DAY));
+        expect(callsTo('disputes.read')).toEqual([
+            'disputes.read:dp_order_seen',
+            'disputes.read:dp_order_late',
+            'disputes.read:dp_order_too_late',
+        ]);
+        expect((await earning('order_late'))!.commissionAmount).toBe(0n);
+        // More than three days below the marker: read to (the list stops there), not taken.
+        expect((await earning('order_too_late'))!.commissionAmount).toBe(2_000n);
+        expect(await db.select().from(affiliateDisputes)).toHaveLength(2);
+    });
+
+    test('a run that is being stopped starts nothing more, and says it stopped short', async () => {
+        await creator();
+        await paid({ id: 'order_1', discount: 'disc_creator20' });
+        refund('order_1', 10_000);
+        dispute('order_elsewhere', 'lost', ago(1));
+        const stopping = new AbortController();
+        stopping.abort();
+        polar.calls = [];
+        expect(
+            await billing.reconcileAffiliateEarnings(NOW, { signal: stopping.signal }),
+        ).toMatchObject({ stopped: true, refundsRead: 0, disputes: 0 });
+        expect(callsTo('refunds.')).toEqual([]);
+        expect((await earning('order_1'))!.commissionAmount).toBe(2_000n);
+        // Nothing is recorded as read, and the reach back is not called done.
+        expect(await growth.affiliateLedgerStatus()).toMatchObject({
+            disputes: { readAt: null, failure: null },
+            refunds: { readAt: null },
+        });
+        expect((await growthRepository.getLedgerState())!.reachBackDoneAt).toBeNull();
+        expect(await billing.reconcileAffiliateEarnings(NOW)).toMatchObject({
+            stopped: false,
+            disputes: 1,
+            refundsRead: 1,
+        });
+        expect((await earning('order_1'))!.commissionAmount).toBe(0n);
+    });
+
+    test('the daily job fails, to be run again, when disputes or refunds could not be read, and does not for a missing disputes scope', async () => {
+        const { reconcileBilling } = await import('../../jobs/src/jobs/reconcile-billing');
+        const daily = (signal?: AbortSignal) =>
+            reconcileBilling({ id: 'daily', name: 'billing.reconcile', data: {}, signal } as never);
+        await creator();
+        await paid({ id: 'order_1', discount: 'disc_creator20' });
+        refund('order_1', 5_000);
+        // A missing scope would fail every retry the same way: said, and the job is done.
+        polar.disputesForbidden = true;
+        await errorsOf(daily);
+        expect((await earning('order_1'))!.commissionAmount).toBe(1_000n);
+        // Polar down for disputes, or for refunds: the job fails so that it is run again.
+        polar.disputesForbidden = false;
+        polar.disputesFailAfter = 0;
+        dispute('order_x', 'won', ago(1));
+        await errorsOf(async () => {
+            await expect(daily()).rejects.toThrow('Some customers could not be reconciled.');
+        });
+        polar.disputesFailAfter = null;
+        polar.refundsDown = true;
+        await errorsOf(async () => {
+            await expect(daily()).rejects.toThrow('Some customers could not be reconciled.');
+        });
+        polar.refundsDown = false;
+        // Stopped by the worker: it starts no read, and that is not a failure.
+        const stopping = new AbortController();
+        stopping.abort();
+        polar.refunds = [];
+        polar.calls = [];
+        await daily(stopping.signal);
+        expect(callsTo('refunds.')).toEqual([]);
+        expect((await earning('order_1'))!.commissionAmount).toBe(1_000n);
+        await daily();
+        expect((await earning('order_1'))!.commissionAmount).toBe(2_000n);
     });
 
     test('a read that fails half-way does not move the marker: the disputes below it are read the next day', async () => {
@@ -831,7 +1092,7 @@ describe('removing', () => {
         await growthRepository.attributeSignup({ userId: customer.userId, code: 'CREATOR20' });
         await paid({ id: 'order_1', customer: customer.userId });
         await age('order_1');
-        await growth.markAffiliatePaid(affiliate.id, { by: OPERATOR });
+        await markPaid(affiliate.id);
         dispute('order_1', 'lost', new Date(Date.now() - DAY));
         await billing.reconcileAffiliateEarnings();
         const [owing] = await growth.listAffiliateEarnings(affiliate.id);
@@ -903,7 +1164,7 @@ describe('removing', () => {
             status: 409,
         });
         await age('order_1');
-        await growth.markAffiliatePaid(affiliate.id, { by: OPERATOR });
+        await markPaid(affiliate.id);
         await growth.deleteAffiliate(affiliate.id);
         // A refund lands on the removed affiliate's paid order: a clawback keeps the record.
         refund('order_1', 10_000);
@@ -925,6 +1186,25 @@ describe('removing', () => {
             by: OPERATOR,
         });
         polar.calls = [];
+        // Settled, but paid moments ago: a refund or a lost dispute must still find the row.
+        const [listed] = await growth.listAffiliates();
+        const keptUntil = new Date(listed!.recordKeptUntil!);
+        expect(keptUntil.getTime() - Date.now()).toBeGreaterThan(119 * DAY);
+        expect(keptUntil.getTime() - Date.now()).toBeLessThanOrEqual(120 * DAY);
+        await expect(growth.deleteAffiliateRecord(affiliate.id)).rejects.toMatchObject({
+            status: 409,
+            message: expect.stringContaining(
+                `Their record can be deleted from ${keptUntil.toISOString().slice(0, 10)}`,
+            ),
+        });
+        expect(await db.select().from(affiliateEarnings)).toHaveLength(1);
+        // 119 days after the payout it still stays; past the 120th it may go.
+        await rawSql(`update affiliate_earnings set paid_at = paid_at - interval '119 days'`);
+        await expect(growth.deleteAffiliateRecord(affiliate.id)).rejects.toMatchObject({
+            status: 409,
+        });
+        await rawSql(`update affiliate_earnings set paid_at = paid_at - interval '1 day 1 minute'`);
+        expect((await growth.listAffiliates())[0]!.recordKeptUntil).toBeNull();
         expect(await growth.deleteAffiliateRecord(affiliate.id)).toEqual({ deleted: true });
         expect(await db.select().from(affiliates)).toEqual([]);
         expect(await db.select().from(affiliateEarnings)).toEqual([]);
@@ -999,7 +1279,7 @@ describe('the cut-over, through the daily run', () => {
         });
         // The old unpaid earning that was not refunded is not held: it can be paid as before, and
         // the cut-over's clawback takes nothing from it until an operator says yes.
-        expect(await growth.markAffiliatePaid(id, { by: OPERATOR })).toEqual({
+        expect(await markPaid(id)).toEqual({
             paid: 1,
             payouts: { usd: { owed: '2000', netted: '0', payout: '2000' } },
         });
@@ -1020,9 +1300,45 @@ describe('the cut-over, through the daily run', () => {
         await growth.confirmAffiliateClawback(id, owing!.id, OPERATOR);
         await paid({ id: 'order_new', discount: 'disc_creator20' });
         await age('order_new');
-        expect(await growth.markAffiliatePaid(id, { by: OPERATOR })).toEqual({
+        expect(await markPaid(id)).toEqual({
             paid: 1,
             payouts: { usd: { owed: '2000', netted: '2000', payout: '0' } },
+        });
+    });
+
+    test('an operator who opens the page the moment the switch is on cannot mark an old, refunded earning paid before the daily run has read it', async () => {
+        const affiliate = await creator();
+        await legacy(affiliate.id, 'order_refunded', 200);
+        await legacy(affiliate.id, 'order_fine', 3);
+        refund('order_refunded', 10_000);
+        // Opening the Affiliates page is the cut-over. Nothing has been read yet.
+        const [shown] = await growth.listAffiliates();
+        expect(shown!.ledger!.usd).toMatchObject({ payable: '0', held: '4000', payout: '0' });
+        const rows = await growth.listAffiliateEarnings(affiliate.id);
+        expect(rows.map((row) => row.state)).toEqual(['unread', 'unread']);
+        expect(await markPaid(affiliate.id)).toEqual({ paid: 0, payouts: {} });
+        // Nor with the figures a page loaded before the switch would send, nor with none.
+        await expect(
+            growth.markAffiliatePaid(affiliate.id, {
+                by: OPERATOR,
+                expected: { usd: { owed: '4000', netted: '0' } },
+            }),
+        ).rejects.toMatchObject({ status: 409 });
+        await expect(
+            growth.markAffiliatePaid(affiliate.id, { by: OPERATOR }),
+        ).rejects.toMatchObject({ status: 400 });
+        expect((await db.select().from(affiliateEarnings)).map((row) => row.paidAt)).toEqual([
+            null,
+            null,
+        ]);
+        await billing.reconcileAffiliateEarnings();
+        expect(await markPaid(affiliate.id)).toEqual({
+            paid: 1,
+            payouts: { usd: { owed: '2000', netted: '0', payout: '2000' } },
+        });
+        expect(await earning('order_refunded')).toMatchObject({
+            paidAt: null,
+            commissionAmount: 0n,
         });
     });
 
@@ -1056,7 +1372,7 @@ describe('what each side reads', () => {
         // Paid, then refunded whole in Polar: a clawback, confirmed by being made after the switch.
         await order('order_PAIDBACK', 10_000);
         await age('order_PAIDBACK');
-        await growth.markAffiliatePaid(affiliate.id, { by: OPERATOR });
+        await markPaid(affiliate.id);
         refund('order_PAIDBACK', 10_000);
         await deliver('order.refunded', { id: 'order_PAIDBACK' });
         await order('order_HELD', 20_000);
