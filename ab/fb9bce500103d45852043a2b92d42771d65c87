@@ -1,0 +1,33 @@
+apps/web/src/components/brand.tsx
+  s_1f3a9ec02d29ed::t_d8135343510770 15,153,196-204
+apps/web/src/components/held-phrase.test.tsx
+  s_1f3a9ec02d29ed::t_ebf31bf70778e4 1-100
+apps/web/src/components/held-phrase.tsx
+  s_1f3a9ec02d29ed::t_60908e4cc25f6f 1-113
+apps/web/src/components/recovery-phrase.tsx
+  s_1f3a9ec02d29ed::t_860ac8855cc4fa 24,312
+apps/web/src/lib/unconfirmed-phrase.ts
+  s_1f3a9ec02d29ed::t_0d3abf8065a68d 15-19
+apps/web/src/routes/__root.tsx
+  s_1f3a9ec02d29ed::t_4c62c219d7a8e7 52,259-267,270-271,273-276,278-287
+docs/two-step-design.md
+  s_1f3a9ec02d29ed::t_ecf86ce99607ea 295
+e2e/two-step.spec.ts
+  s_1f3a9ec02d29ed::t_ef383dc92338c2 796-798,800-804,846-850,853
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "abfb9bce500103d45852043a2b92d42771d65c87",
+  "prompts": {},
+  "sessions": {
+    "s_1f3a9ec02d29ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aef80487-cabb-455f-b2f1-acb7f8d96c4e",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
