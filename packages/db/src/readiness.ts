@@ -12,7 +12,7 @@ import * as schema from './schema';
  */
 
 /* The newest migration this build knows; `readiness.test.ts` keeps it honest. */
-export const LATEST_MIGRATION = '20261110025847_storage_outbox';
+export const LATEST_MIGRATION = '20261110045932_affiliate_commission_safety';
 
 /* Every application table, in name order. */
 export const APP_TABLES = Object.values(schema)

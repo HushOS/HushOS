@@ -4,6 +4,13 @@ import { cn } from 'cn';
 import { PlusIcon } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useId, useState } from 'react';
+import {
+    LedgerDialog,
+    ReadsNotice,
+    downloadLedger,
+    ledgerStatusQueryOptions,
+    payoutLines,
+} from '@/components/affiliate-ledger';
 import { CopyValue } from '@/components/copy-value';
 import { Spinner } from '@/components/motion';
 import { OperatorHeader, OperatorTable, td, th } from '@/components/operator';
@@ -52,7 +59,8 @@ import {
     emptyDraft,
     readDraft,
 } from '@/lib/affiliate-form';
-import { formatWhen } from '@/lib/drive';
+import { expectedPayouts, ledgerMoney } from '@/lib/affiliate-ledger';
+import { formatDay, formatWhen } from '@/lib/drive';
 import { affiliatesQueryOptions, describeCommission, describeDiscount } from '@/lib/growth';
 import { growthApi } from '@/lib/growth-api';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
@@ -86,14 +94,31 @@ function message(error: unknown) {
 function Affiliates() {
     const queryClient = useQueryClient();
     const list = useQuery(affiliatesQueryOptions);
+    // Commission safety (AFFILIATE_V2_ENABLED): off, this page is exactly what it was.
+    const status = useQuery(ledgerStatusQueryOptions).data;
+    const safety = status?.enabled === true;
     const [busy, setBusy] = useState<string | null>(null);
     const [adding, setAdding] = useState(false);
-    async function act(id: string, run: () => Promise<unknown>, done: string) {
+    async function act<T>(
+        id: string,
+        run: () => Promise<T>,
+        done:
+            | string
+            | { title: string; description?: string }
+            | ((result: T) => { title: string; description?: string }),
+    ) {
         setBusy(id);
         try {
-            await run();
+            const result = await run();
             await queryClient.invalidateQueries({ queryKey: affiliatesQueryOptions.queryKey });
-            toast.add({ type: 'success', title: done });
+            toast.add({
+                type: 'success',
+                ...(typeof done === 'string'
+                    ? { title: done }
+                    : typeof done === 'function'
+                      ? done(result)
+                      : done),
+            });
         } catch (error) {
             toast.add({ type: 'error', title: 'That didn’t work', description: message(error) });
         } finally {
@@ -104,7 +129,11 @@ function Affiliates() {
         <div className="flex flex-1 flex-col pb-10">
             <OperatorHeader
                 title="Affiliates"
-                description="Creators who bring people in for a discount and a commission. Enrolling one registers the discount with the payment provider; their commission accrues on each paid order, and you mark it paid once you have sent it. A discount made at Polar directly has a page too, at /go/<code>."
+                description={
+                    safety
+                        ? `Creators who bring people in for a discount and a commission. Enrolling one registers the discount with the payment provider. Commission is recorded on each paid order and held for ${status.holdDays} days before it can be paid; a refund or a lost dispute lowers it, and what was already paid is taken back from the next payout. You mark it paid once you have sent it. A discount made at Polar directly has a page too, at /go/<code>.`
+                        : 'Creators who bring people in for a discount and a commission. Enrolling one registers the discount with the payment provider; their commission accrues on each paid order, and you mark it paid once you have sent it. A discount made at Polar directly has a page too, at /go/<code>.'
+                }
             >
                 <Button size="sm" onClick={() => setAdding(true)}>
                     <PlusIcon />
@@ -119,6 +148,7 @@ function Affiliates() {
                 }
             />
             <div className="flex flex-col gap-6 px-5 sm:px-8">
+                <ReadsNotice status={status} />
                 {list.isPending ? (
                     <div className="flex items-center justify-center py-10 text-muted-foreground">
                         <Spinner />
@@ -144,6 +174,7 @@ function Affiliates() {
                                 <th className={cn(th, 'text-right')}>Sign-ups</th>
                                 <th className={cn(th, 'text-right')}>Paid orders</th>
                                 <th className={cn(th, 'text-right')}>Owed</th>
+                                {safety && <th className={cn(th, 'text-right')}>Held</th>}
                                 <th className={cn(th, 'text-right')}>Paid out</th>
                                 <th className={th}>
                                     <span className="sr-only">Actions</span>
@@ -156,6 +187,8 @@ function Affiliates() {
                                     key={affiliate.id}
                                     affiliate={affiliate}
                                     busy={busy === affiliate.id}
+                                    safety={safety}
+                                    keepDays={status?.enabled ? status.recordKeepDays : 0}
                                     onToggle={() =>
                                         void act(
                                             affiliate.id,
@@ -163,16 +196,42 @@ function Affiliates() {
                                                 growthApi.updateAffiliate(affiliate.id, {
                                                     active: !affiliate.active,
                                                 }),
-                                            affiliate.active
-                                                ? `${affiliate.name} paused`
-                                                : `${affiliate.name} resumed`,
+                                            (saved) => ({
+                                                title: affiliate.active
+                                                    ? `${affiliate.name} paused`
+                                                    : `${affiliate.name} resumed`,
+                                                // Polar would not end, or reopen, the discount.
+                                                ...(saved.discountNotice === 'still-live'
+                                                    ? {
+                                                          description:
+                                                              'Polar kept their discount live. A code typed at its checkout still gives the discount, and earns them nothing.',
+                                                      }
+                                                    : saved.discountNotice === 'still-ended'
+                                                      ? {
+                                                            description:
+                                                                'Polar kept their discount ended, so the code won’t apply at checkout. Reopen it in Polar’s dashboard.',
+                                                        }
+                                                      : {}),
+                                            }),
                                         )
                                     }
                                     onPaid={(owed) =>
                                         void act(
                                             affiliate.id,
-                                            () => growthApi.markAffiliatePaid(affiliate.id),
-                                            `${owed} marked paid to ${affiliate.name}`,
+                                            () =>
+                                                safety
+                                                    ? growthApi.markAffiliatePaid(
+                                                          affiliate.id,
+                                                          expectedPayouts(affiliate.ledger),
+                                                      )
+                                                    : growthApi.markAffiliatePaid(affiliate.id),
+                                            safety
+                                                ? // What was owed, what clawbacks took of it, and what was sent.
+                                                  {
+                                                      title: `${affiliate.name} marked paid`,
+                                                      description: payoutLines(affiliate).join(' '),
+                                                  }
+                                                : `${owed} marked paid to ${affiliate.name}`,
                                         )
                                     }
                                     onDelete={() =>
@@ -180,6 +239,22 @@ function Affiliates() {
                                             affiliate.id,
                                             () => growthApi.deleteAffiliate(affiliate.id),
                                             `${affiliate.name} removed`,
+                                        )
+                                    }
+                                    onDeleteRecord={() =>
+                                        void act(
+                                            affiliate.id,
+                                            async () => {
+                                                // The ledger is saved as a file before it is deleted.
+                                                const rows = await growthApi.affiliateEarnings(
+                                                    affiliate.id,
+                                                );
+                                                if (rows.length) downloadLedger(affiliate, rows);
+                                                return growthApi.deleteAffiliateRecord(
+                                                    affiliate.id,
+                                                );
+                                            },
+                                            `${affiliate.name}’s record deleted`,
                                         )
                                     }
                                     onSaved={() =>
@@ -197,25 +272,51 @@ function Affiliates() {
     );
 }
 
-/* One creator: a row of numbers and actions; Edit opens their fields underneath. */
+/*
+ * One creator: a row of numbers and actions; Edit opens their fields underneath. With commission
+ * safety on, Owed is what can be paid now, Held is what is still inside its hold, Ledger opens
+ * every earning, and a removed creator's record stays in the list until it is deleted.
+ */
 function AffiliateRow({
     affiliate,
     busy,
+    safety,
+    keepDays,
     onToggle,
     onPaid,
     onDelete,
+    onDeleteRecord,
     onSaved,
 }: {
     affiliate: AffiliateView;
     busy: boolean;
+    safety: boolean;
+    /* Days after a payout that a removed affiliate's record must stay. */
+    keepDays: number;
     onToggle: () => void;
     onPaid: (owed: string) => void;
     onDelete: () => void;
+    onDeleteRecord: () => void;
     onSaved: () => Promise<unknown>;
 }) {
-    const owed = money(affiliate.stats.earnings, 'unpaid');
+    const owed = safety
+        ? ledgerMoney(affiliate.ledger, 'payable')
+        : money(affiliate.stats.earnings, 'unpaid');
+    const removed = safety && Boolean(affiliate.removedAt);
+    // What stands in the way of removing them: anything owed, held or flagged, or a clawback open.
+    const open =
+        safety &&
+        (['payable', 'held', 'flagged', 'clawbackOpen', 'clawbackUnconfirmed'] as const).some(
+            (key) => ledgerMoney(affiliate.ledger, key) !== '–',
+        );
+    const blocked = safety ? open : owed !== '–';
+    // A removed affiliate's record stays while a payout is recent: a refund still has to find it.
+    const keptUntil = removed ? (affiliate.recordKeptUntil ?? null) : null;
     const [editing, setEditing] = useState(false);
     const [deleting, setDeleting] = useState(false);
+    const [paying, setPaying] = useState(false);
+    const [ledger, setLedger] = useState(false);
+    const lines = safety ? payoutLines(affiliate) : [];
     return (
         <>
             <tr data-affiliate={affiliate.slug} className="hover:bg-muted">
@@ -230,7 +331,9 @@ function AffiliateRow({
                     <CopyValue value={affiliate.code} label="Code" />
                 </td>
                 <td className={cn(td, 'whitespace-nowrap')}>
-                    {!affiliate.providerDiscountId ? (
+                    {removed ? (
+                        <span className="text-muted-foreground">Removed</span>
+                    ) : !affiliate.providerDiscountId ? (
                         <span
                             className="font-semibold text-destructive"
                             title="No discount is registered with the payment provider, so the code can’t be applied at checkout."
@@ -258,36 +361,58 @@ function AffiliateRow({
                 >
                     {owed}
                 </td>
+                {safety && (
+                    <td className={cn(td, 'text-right font-mono tabular-nums')}>
+                        {ledgerMoney(affiliate.ledger, 'held')}
+                    </td>
+                )}
                 <td className={cn(td, 'text-right font-mono tabular-nums')}>
-                    {money(affiliate.stats.earnings, 'paid')}
+                    {safety
+                        ? ledgerMoney(affiliate.ledger, 'paidOut')
+                        : money(affiliate.stats.earnings, 'paid')}
                 </td>
                 <td className={cn(td, 'text-right whitespace-nowrap')}>
                     <span className="inline-flex gap-1">
-                        <Button
-                            variant="ghost"
-                            size="xs"
-                            aria-label={`Edit ${affiliate.name}`}
-                            disabled={busy}
-                            onClick={() => setEditing(true)}
-                        >
-                            Edit
-                        </Button>
-                        <Button
-                            variant="ghost"
-                            size="xs"
-                            aria-label={`${affiliate.active ? 'Pause' : 'Resume'} ${affiliate.name}`}
-                            disabled={busy}
-                            onClick={onToggle}
-                        >
-                            {affiliate.active ? 'Pause' : 'Resume'}
-                        </Button>
+                        {!removed && (
+                            <Button
+                                variant="ghost"
+                                size="xs"
+                                aria-label={`Edit ${affiliate.name}`}
+                                disabled={busy}
+                                onClick={() => setEditing(true)}
+                            >
+                                Edit
+                            </Button>
+                        )}
+                        {!removed && (
+                            <Button
+                                variant="ghost"
+                                size="xs"
+                                aria-label={`${affiliate.active ? 'Pause' : 'Resume'} ${affiliate.name}`}
+                                disabled={busy}
+                                onClick={onToggle}
+                            >
+                                {affiliate.active ? 'Pause' : 'Resume'}
+                            </Button>
+                        )}
+                        {safety && (
+                            <Button
+                                variant="ghost"
+                                size="xs"
+                                aria-label={`Open the ledger of ${affiliate.name}`}
+                                disabled={busy}
+                                onClick={() => setLedger(true)}
+                            >
+                                Ledger
+                            </Button>
+                        )}
                         {owed !== '–' && (
                             <Button
                                 variant="ghost"
                                 size="xs"
                                 aria-label={`Mark ${owed} paid to ${affiliate.name}`}
                                 disabled={busy}
-                                onClick={() => onPaid(owed)}
+                                onClick={() => (safety ? setPaying(true) : onPaid(owed))}
                             >
                                 Mark paid
                             </Button>
@@ -295,48 +420,95 @@ function AffiliateRow({
                         <Button
                             variant="ghost"
                             size="xs"
-                            aria-label={`Remove ${affiliate.name}`}
+                            aria-label={
+                                removed
+                                    ? `Delete the record of ${affiliate.name}`
+                                    : `Remove ${affiliate.name}`
+                            }
                             className="text-destructive hover:bg-destructive-soft hover:text-destructive"
                             disabled={busy}
                             onClick={() => setDeleting(true)}
                         >
-                            Remove
+                            {removed ? 'Delete record' : 'Remove'}
                         </Button>
                     </span>
                     <AlertDialog open={deleting} onOpenChange={setDeleting}>
                         <AlertDialogContent>
                             <AlertDialogHeader>
-                                <AlertDialogTitle>Remove {affiliate.name}?</AlertDialogTitle>
+                                <AlertDialogTitle>
+                                    {removed
+                                        ? `Delete the record of ${affiliate.name}?`
+                                        : `Remove ${affiliate.name}?`}
+                                </AlertDialogTitle>
                                 <AlertDialogDescription>
-                                    {owed === '–'
-                                        ? 'Their page and code stop working, the discount is removed at the payment provider, and the record of what they were paid goes with them. People who signed up through them keep their accounts.'
-                                        : `They are still owed ${owed}. Mark it paid first, or pause them instead.`}
+                                    {removed
+                                        ? blocked
+                                            ? 'Their ledger still has something owed, held or flagged, or a clawback that is not settled. Pay, void or settle each one first.'
+                                            : keptUntil
+                                              ? `Their record can be deleted from ${formatDay(keptUntil)}, ${keepDays} days after they were last paid. Until then a refund or a lost dispute on an order they were paid for must still find its earning here.`
+                                              : 'Their ledger is downloaded as a file first. Then the record, the ledger and the note of who signed up through them are deleted for good. Their discount stays ended at the payment provider.'
+                                        : !safety
+                                          ? owed === '–'
+                                              ? 'Their page and code stop working, the discount is removed at the payment provider, and the record of what they were paid goes with them. People who signed up through them keep their accounts.'
+                                              : `They are still owed ${owed}. Mark it paid first, or pause them instead.`
+                                          : blocked
+                                            ? 'They still have commission that is owed, held or flagged, or a clawback that is not settled. Pay, void or settle each one in their ledger first, or pause them instead.'
+                                            : 'Their page and code stop working, the discount is ended at the payment provider, and nothing earns them commission from now on. Their record and ledger are kept. People who signed up through them keep their accounts.'}
                                 </AlertDialogDescription>
                             </AlertDialogHeader>
                             <AlertDialogFooter>
-                                <AlertDialogCancel>Keep them</AlertDialogCancel>
-                                {owed === '–' && (
+                                <AlertDialogCancel>
+                                    {removed ? 'Keep the record' : 'Keep them'}
+                                </AlertDialogCancel>
+                                {!blocked && !keptUntil && (
                                     <AlertDialogAction
                                         variant="destructive"
                                         onClick={() => {
                                             setDeleting(false);
-                                            onDelete();
+                                            if (removed) onDeleteRecord();
+                                            else onDelete();
                                         }}
                                     >
-                                        Remove
+                                        {removed ? 'Download and delete' : 'Remove'}
                                     </AlertDialogAction>
                                 )}
                             </AlertDialogFooter>
                         </AlertDialogContent>
                     </AlertDialog>
+                    <AlertDialog open={paying} onOpenChange={setPaying}>
+                        <AlertDialogContent>
+                            <AlertDialogHeader>
+                                <AlertDialogTitle>Mark {affiliate.name} paid?</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                    {lines.join(' ')} Held and flagged commission is left as it is.
+                                </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                                <AlertDialogCancel>Not yet</AlertDialogCancel>
+                                <AlertDialogAction
+                                    onClick={() => {
+                                        setPaying(false);
+                                        onPaid(owed);
+                                    }}
+                                >
+                                    Mark paid
+                                </AlertDialogAction>
+                            </AlertDialogFooter>
+                        </AlertDialogContent>
+                    </AlertDialog>
                 </td>
             </tr>
-            <AffiliateDialog
-                affiliate={affiliate}
-                open={editing}
-                onOpenChange={setEditing}
-                onSaved={onSaved}
-            />
+            {!removed && (
+                <AffiliateDialog
+                    affiliate={affiliate}
+                    open={editing}
+                    onOpenChange={setEditing}
+                    onSaved={onSaved}
+                />
+            )}
+            {safety && (
+                <LedgerDialog affiliate={affiliate} open={ledger} onOpenChange={setLedger} />
+            )}
         </>
     );
 }

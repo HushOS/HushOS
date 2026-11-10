@@ -515,11 +515,12 @@ See [docs/groups-server.md](docs/groups-server.md).
 - Webhooks are only a trigger. Every handler re-reads the customer's state from Polar and rewrites the local subscription mirror and storage entitlements in one transaction.
 - With `BILLING_PROVIDER=none`, nothing talks to Polar and the app hides every billing surface.
 
-| File              | Role                                                                                                                                                                             |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/groups.ts`   | Family billing: team customer, checkout with units, raises and cuts, the payer's portal, `reconcileGroup`                                                                        |
-| `src/provider.ts` | The Polar client and catalogue, shared by personal and family billing                                                                                                            |
-| `src/endings.ts`  | Ending a personal plan, with its prorated refund, when that person's files join a family's pool (the worker's `billing.end-personal-plan` job; docs/families-shared-pool.md 5.1) |
+| File                | Role                                                                                                                                                                                                                                                                                     |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/groups.ts`     | Family billing: team customer, checkout with units, raises and cuts, the payer's portal, `reconcileGroup`                                                                                                                                                                                |
+| `src/provider.ts`   | The Polar client and catalogue, shared by personal and family billing                                                                                                                                                                                                                    |
+| `src/endings.ts`    | Ending a personal plan, with its prorated refund, when that person's files join a family's pool (the worker's `billing.end-personal-plan` job; docs/families-shared-pool.md 5.1)                                                                                                         |
+| `src/commission.ts` | Commission safety for affiliates, behind `AFFILIATE_V2_ENABLED`: the refund re-read, the daily read of Polar's disputes, who a paused affiliate still earns from, and the cut-over (docs/company-billing-design.md 8.4, 8.5). The ledger's arithmetic is `packages/db/src/commission.ts` |
 
 The groups domain calls `ensureGroupSeat` before it writes an admission.
 

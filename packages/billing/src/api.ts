@@ -232,8 +232,12 @@ export type ReferralSummary = {
     signup: RewardTotals;
     /* Storage earned when invited accounts first paid for a plan. */
     paid: RewardTotals;
-    /* Every creator this account runs, oldest first, each with its code, sign-ups and earnings; most run none. */
-    affiliates: AffiliateView[];
+    /*
+     * Every creator this account runs, oldest first, each with its code, sign-ups and earnings;
+     * most run none. With commission safety on (AFFILIATE_V2_ENABLED) each is the affiliate's own
+     * view, which carries nothing an operator wrote about them.
+     */
+    affiliates: OwnAffiliateView[];
 };
 
 export type EarningTotals = Record<string, { unpaid: number; paid: number }>;
@@ -256,7 +260,142 @@ export type AffiliateView = {
     providerDiscountId: string | null;
     createdAt: string;
     stats: { signups: number; orders: number; earnings: EarningTotals };
+    /* The three below only with commission safety on. */
+    pausedAt?: string | null;
+    /* Removed: no page, no code, nothing earns; the record and its ledger are kept. */
+    removedAt?: string | null;
+    /* The day until which the record must stay, after their last payout; null when it may go. */
+    recordKeptUntil?: string | null;
+    ledger?: Record<string, LedgerTotals>;
+    /* On the answer to a pause or a resume alone: Polar would not end, or reopen, the discount. */
+    discountNotice?: 'still-live' | 'still-ended';
 };
+
+/*
+ * An affiliate's money in one currency, with commission safety on. Minor units as decimal
+ * strings: a total can pass what a JSON number holds exactly.
+ */
+export type LedgerTotals = {
+    /* Every commission recorded for them, as first recorded. */
+    earned: string;
+    /* May be paid now. */
+    payable: string;
+    /* Recorded, and still inside its hold. */
+    held: string;
+    /* Waiting on an operator, or on a dispute to close. */
+    flagged: string;
+    paidOut: string;
+    voided: string;
+    /* Taken off by refunds and lost disputes before it was paid. */
+    lowered: string;
+    /* Paid, and to be taken back from what is paid next. */
+    clawbackOpen: string;
+    /* Made by the cut-over and waiting for an operator's yes: counted in no payout. */
+    clawbackUnconfirmed: string;
+    /* The next payout: what open clawbacks take of what is payable, and what is left to send. */
+    netted: string;
+    payout: string;
+};
+
+/*
+ * What an affiliate reads about themselves. With commission safety on: no notes, no discount id,
+ * no pending email, no account id, and no single order, and `totals`, which account for the
+ * difference between what was earned and what was paid: earned is paid out, payable, held, under
+ * review and reversed together. Without it the page is sent the operators' view, as it always
+ * was: the four optional fields, and no `totals`.
+ */
+export type OwnAffiliateView = {
+    id: string;
+    name: string;
+    slug: string;
+    code: string;
+    url: string;
+    percentOff: number;
+    duration: 'once' | 'forever' | 'repeating';
+    durationMonths: number | null;
+    commissionBps: number;
+    active: boolean;
+    createdAt: string;
+    stats: { signups: number; orders: number; earnings: EarningTotals };
+    userId?: string | null;
+    pendingEmail?: string | null;
+    notes?: string | null;
+    providerDiscountId?: string | null;
+    totals?: Record<
+        string,
+        {
+            earned: string;
+            paidOut: string;
+            payable: string;
+            held: string;
+            /* Being looked at before it can be paid, whatever the reason. */
+            underReview: string;
+            /* Not owed after all: the order was refunded or charged back, or the commission withdrawn. */
+            reversed: string;
+            /* Paid on an order that was later refunded: taken from the next payout. */
+            toReturn: string;
+        }
+    >;
+};
+
+/* One earning as the operators' ledger shows it. Amounts are minor units, as decimal strings. */
+export type AffiliateEarningView = {
+    id: string;
+    orderId: string;
+    userId: string | null;
+    currency: string;
+    recordedAt: string;
+    net: string;
+    /* The commission as first recorded, and what is left of it. */
+    pot: string;
+    left: string;
+    /* `unread`: recorded without commission safety, and held until its order's refunds are read. */
+    state: 'payable' | 'held' | 'unread' | 'flagged' | 'paid' | 'voided';
+    payableAt: string | null;
+    paidAt: string | null;
+    paid: string | null;
+    refunded: string;
+    /* Polar's status of the order's dispute, when it has one. */
+    dispute: string | null;
+    /* What keeps it from being paid: an operator's to release (`self`, `member`), or a dispute still open. */
+    flag: 'self' | 'member' | 'dispute' | null;
+    clawback: {
+        amount: string;
+        open: string;
+        settled: string;
+        writtenOff: string;
+        /* Made by the cut-over; counted against no payout until `confirmed`. */
+        cutover: boolean;
+        confirmed: boolean;
+        settledAt: string | null;
+        note: string | null;
+    } | null;
+    voidedAt: string | null;
+    voidReason: string | null;
+};
+
+/* Whether commission safety is on, and when the daily run last read Polar's disputes and refunds. */
+export type AffiliateLedgerStatus =
+    | { enabled: false }
+    | {
+          enabled: true;
+          holdDays: number;
+          /* Days after a payout that the record of a removed affiliate must stay. */
+          recordKeepDays: number;
+          /* When the switch first ran here: nothing was read before it. */
+          since: string;
+          disputes: { readAt: string | null; failure: 'scope' | 'failed' | null };
+          refunds: { readAt: string | null };
+      };
+
+/* What an operator was shown as the next payout in one currency; marking paid is refused if it has changed. */
+export type ExpectedPayouts = Record<string, { owed: string; netted: string }>;
+
+export type ClawbackSettlement =
+    /* The affiliate sent this much back: minor units, at most what is open. */
+    | { kind: 'repaid'; amount: string; note?: string | null }
+    /* What is open is given up; the note says why. */
+    | { kind: 'written-off'; note: string };
 
 export type AffiliateInput = {
     name: string;
@@ -321,8 +460,32 @@ export interface GrowthApi {
         id: string,
         patch: Partial<AffiliateInput> & { active?: boolean },
     ): Promise<AffiliateView>;
+    /* Without commission safety the record and its ledger go; with it they are kept (`removedAt`). */
     deleteAffiliate(id: string): Promise<{ deleted: true }>;
-    markAffiliatePaid(id: string): Promise<{ paid: number }>;
+    /*
+     * `payouts` only with commission safety on: per currency, what was owed, netted and sent.
+     * `expected` is then required: the figures the operator was shown.
+     */
+    markAffiliatePaid(
+        id: string,
+        expected?: ExpectedPayouts,
+    ): Promise<{
+        paid: number;
+        payouts?: Record<string, { owed: string; netted: string; payout: string }>;
+    }>;
+    /* The rest only answer with commission safety on (404 without). */
+    affiliateLedgerStatus(): Promise<AffiliateLedgerStatus>;
+    affiliateEarnings(id: string): Promise<AffiliateEarningView[]>;
+    voidAffiliateEarning(id: string, earningId: string, reason: string): Promise<{ done: true }>;
+    releaseAffiliateEarning(id: string, earningId: string): Promise<{ done: true }>;
+    confirmAffiliateClawback(id: string, earningId: string): Promise<{ done: true }>;
+    settleAffiliateClawback(
+        id: string,
+        earningId: string,
+        input: ClawbackSettlement,
+    ): Promise<{ done: true }>;
+    /* Deletes a removed affiliate's record and ledger for good, once nothing on it is open. */
+    deleteAffiliateRecord(id: string): Promise<{ deleted: true }>;
     /* Whether a slug or code is free, `except` an affiliate's own; saving checks again. */
     affiliateHandle(
         value: string,

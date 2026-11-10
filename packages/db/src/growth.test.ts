@@ -231,7 +231,7 @@ describe('affiliates and earnings', () => {
             netAmount: 2000,
             commissionBps: 2500,
         });
-        expect(row).toMatchObject({ orderId: 'order_gone', userId: null, commissionAmount: 500 });
+        expect(row).toMatchObject({ orderId: 'order_gone', userId: null, commissionAmount: 500n });
         // Replayed: recorded once.
         expect(
             await growth.recordEarning({
@@ -271,7 +271,7 @@ describe('affiliates and earnings', () => {
             commissionBps: 2500,
         });
         // 25% of 7.99 is 1.9975: never rounded up.
-        expect(first?.commissionAmount).toBe(199);
+        expect(first?.commissionAmount).toBe(199n);
         // The same order reported again (a webhook replay, or a second attribution path) pays nothing more.
         expect(
             await growth.recordEarning({

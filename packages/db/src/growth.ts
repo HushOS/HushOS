@@ -1,6 +1,14 @@
 import { and, count, desc, eq, isNull, ne, or, sql, sum } from 'drizzle-orm';
 import { db } from './client';
 import {
+    AffiliateGoneError,
+    EARNING_ACCOUNT_KEY,
+    EARNING_AFFILIATE_KEY,
+    commissionFor,
+    lockOrder,
+    violatedForeignKey,
+} from './commission';
+import {
     accountIntents,
     affiliateEarnings,
     affiliateWithdrawnOrders,
@@ -12,6 +20,8 @@ import {
     storageEntitlements,
     users,
 } from './schema';
+
+export * from './commission';
 
 /*
  * Referrals and affiliates. Attribution is written once per account, at
@@ -355,6 +365,8 @@ export async function updateAffiliate(
     patch: Partial<AffiliateInput> & {
         active?: boolean;
         providerDiscountId?: string | null;
+        pausedAt?: Date | null;
+        removedAt?: Date | null;
     },
     executor: Executor = db,
 ) {
@@ -508,10 +520,18 @@ async function earningTotals(affiliateId: string, executor: Executor = db): Prom
         .select({
             currency: affiliateEarnings.currency,
             paid: sql<boolean>`${affiliateEarnings.paidAt} is not null`,
-            total: sum(affiliateEarnings.commissionAmount),
+            // A paid row's own figure is what was paid, where the commission-safety switch has
+            // since lowered what is left of it (`paid_amount`); without it they are the same.
+            total: sum(
+                sql`case when ${affiliateEarnings.paidAt} is not null then coalesce(${affiliateEarnings.paidAmount}, ${affiliateEarnings.commissionAmount}) else ${affiliateEarnings.commissionAmount} end`,
+            ),
         })
         .from(affiliateEarnings)
-        .where(eq(affiliateEarnings.affiliateId, affiliateId))
+        // An earning an operator voided while commission safety was on is owed to nobody,
+        // whether or not it is on now. No earning is voided where it never was on.
+        .where(
+            and(eq(affiliateEarnings.affiliateId, affiliateId), isNull(affiliateEarnings.voidedAt)),
+        )
         .groupBy(affiliateEarnings.currency, sql`${affiliateEarnings.paidAt} is not null`);
     const totals: EarningTotals = {};
     for (const row of rows) {
@@ -541,41 +561,6 @@ export async function listAffiliates() {
     const rows = await db.select().from(affiliates).orderBy(desc(affiliates.createdAt));
     return Promise.all(rows.map(async (row) => ({ ...row, stats: await affiliateStats(row.id) })));
 }
-
-/* The commission on an order's net amount, in its smallest unit: rounded down. */
-export function commissionFor(netAmount: number, commissionBps: number) {
-    return Math.floor((netAmount * commissionBps) / 10_000);
-}
-
-/* An earning whose affiliate was removed while its order was on the way. */
-export class AffiliateGoneError extends Error {
-    constructor(options?: { cause?: unknown }) {
-        super('The affiliate was removed.', options);
-        this.name = 'AffiliateGoneError';
-    }
-}
-
-const EARNING_AFFILIATE_KEY = 'affiliate_earnings_affiliate_id_affiliates_id_fkey';
-const EARNING_ACCOUNT_KEY = 'affiliate_earnings_user_id_users_id_fkey';
-
-/* The foreign key a driver error says was violated, within a few causes; null for anything else. */
-function violatedForeignKey(error: unknown) {
-    let at = error;
-    for (let depth = 0; depth < 5 && at && typeof at === 'object'; depth++) {
-        const { code, constraint } = at as { code?: unknown; constraint?: unknown };
-        if (code === '23503') return typeof constraint === 'string' ? constraint : null;
-        at = (at as { cause?: unknown }).cause;
-    }
-    return null;
-}
-
-/*
- * One order's earning, recorded or withdrawn: both take this lock first, so a commission is never
- * recorded after the order was refunded whole (withdrawEarning), however their deliveries race.
- */
-const EARNING_LOCK_SPACE = 0x6561726e;
-const lockOrder = (tx: Tx, orderId: string) =>
-    tx.execute(sql`select pg_advisory_xact_lock(${EARNING_LOCK_SPACE}::int, hashtext(${orderId}))`);
 
 /*
  * Commission on one paid order. The order id is unique, so a replayed
@@ -612,10 +597,14 @@ export async function recordEarning(input: {
                     orderId: input.orderId,
                     userId,
                     currency: input.currency,
-                    netAmount: input.netAmount,
-                    commissionAmount: commission,
+                    netAmount: BigInt(input.netAmount),
+                    commissionAmount: BigInt(commission),
                 })
-                .onConflictDoNothing({ target: affiliateEarnings.orderId })
+                // Named with `part` from here on, so the release that writes a second row an
+                // order can drop the unique `order_id` once no older container runs.
+                .onConflictDoNothing({
+                    target: [affiliateEarnings.orderId, affiliateEarnings.part],
+                })
                 .returning();
             return row ?? null;
         });
@@ -677,7 +666,12 @@ export async function markEarningsPaid(affiliateId: string) {
         .update(affiliateEarnings)
         .set({ paidAt: new Date() })
         .where(
-            and(eq(affiliateEarnings.affiliateId, affiliateId), isNull(affiliateEarnings.paidAt)),
+            and(
+                eq(affiliateEarnings.affiliateId, affiliateId),
+                isNull(affiliateEarnings.paidAt),
+                // Never one an operator voided while commission safety was on.
+                isNull(affiliateEarnings.voidedAt),
+            ),
         )
         .returning({ id: affiliateEarnings.id });
     return rows.length;
