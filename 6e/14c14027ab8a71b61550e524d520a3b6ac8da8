@@ -1,0 +1,21 @@
+crates/hushos-core/src/area_lists.rs
+  s_1f3a9ec02d29ed::t_7ca3003d63f4af 1454,1468-1469,1473,1583,1590,1603-1604,1616,1807,1840,1846-1847,1917-1918,1972-1973,2048,2060-2061
+packages/crypto/src/area-lists.ts
+  s_1f3a9ec02d29ed::t_b8c6cf8bc334b0 1137-1138,1142,1231,1237,1249-1250,1252,1390,1422,1428-1429,1480-1481,1498-1499,1542,1544,1577,1617,1628-1629
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6e14c14027ab8a71b61550e524d520a3b6ac8da8",
+  "prompts": {},
+  "sessions": {
+    "s_1f3a9ec02d29ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aef80487-cabb-455f-b2f1-acb7f8d96c4e",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
