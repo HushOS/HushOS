@@ -1,0 +1,64 @@
+packages/db/src/commission.migration.test.ts
+  s_1f3a9ec02d29ed::t_a40c18fa23f2bc 1-253
+  s_1f3a9ec02d29ed::t_54769b030669d3 254-264
+apps/web/src/components/affiliate-ledger.tsx
+  s_1f3a9ec02d29ed::t_72f7a55110ff73 34-41,72-103,105-115,141-142,190-192,259-263,271,277-280,289,300,306-308,310-317,568,615-616,618
+apps/web/src/lib/affiliate-ledger.test.ts
+  s_1f3a9ec02d29ed::t_808d26b77e9c22 4-5,7,36-41,43,46-63,83-108,158-175
+apps/web/src/lib/affiliate-ledger.ts
+  s_1f3a9ec02d29ed::t_0d959bd6d28af5 6-11,14-43,45-54,78-82,84-87,89-91,95-97,144-146,150-151,154-157
+apps/web/src/lib/api/billing-responses.server.ts
+  s_1f3a9ec02d29ed::t_0d95ab39d88d72 249,340-341,346,364
+apps/web/src/lib/api/billing-responses.test.ts
+  s_1f3a9ec02d29ed::t_b67e2b5db9d5e6 318,326,362,369,699-700,702,704,707-708,710,714-715
+apps/web/src/lib/api/billing.server.ts
+  s_1f3a9ec02d29ed::t_18fd62e76f9363 319-321
+apps/web/src/routes/_authenticated/app/_drive/admin.affiliates.tsx
+  s_1f3a9ec02d29ed::t_3f55beacd53f63 9,63,151,191,284,294-295,313-314,447-449,463
+apps/web/src/routes/_authenticated/app/_drive/referrals.tsx
+  s_1f3a9ec02d29ed::t_031a0f74ae3e8f 13,332
+docs/company-billing-design.md
+  s_1f3a9ec02d29ed::t_0cd603b276250a 3,753,761-763,777,796-802,810,812,828-829,837,854
+docs/self-hosting.md
+  s_1f3a9ec02d29ed::t_77fd82d568c373 838-841,860-861,864,879-881,908,914,920,923-936
+packages/billing/src/api.ts
+  s_1f3a9ec02d29ed::t_0f512ef88337ac 267-268,352-353,377,383-386,388,465-468
+packages/billing/src/commission-off.test.ts
+  s_1f3a9ec02d29ed::t_4ca7f4b1b840bb 102-103,296-359
+packages/billing/src/commission.test.ts
+  s_1f3a9ec02d29ed::t_7e358da1bdfd8c 44-49,71,73,75,78-92,99,270-273,276,294-303,316-318,347,356,399,403,475,492,527,535-600,661,664,676,695,742,804,808,824-985,1095,1167,1189-1207,1282,1303,1309-1344,1375
+packages/billing/src/commission.ts
+  s_1f3a9ec02d29ed::t_61d291fbb1d178 5,34-38,40-54,57-63,179-180,192,204-227,235-236,239-242,258,261-265,274-275,277,282-283,288,293,302,304-306,311-317,319-322,324,328,330,332,335,341,348-354,357,363-370
+packages/billing/src/growth.ts
+  s_1f3a9ec02d29ed::t_e13e8290cbabd7 118-122,129-139,147,169,626-632,686-689,702-708,718-719,728-732,767-770,777-778,783,793,804
+packages/db/drizzle/20261110045932_affiliate_commission_safety/migration.sql
+  s_1f3a9ec02d29ed::t_7322f9f3c21f3a 36
+packages/db/drizzle/20261110045932_affiliate_commission_safety/snapshot.json
+  s_1f3a9ec02d29ed::t_0bdd2609c65482 5-6,1069-1084
+packages/db/src/commission.test.ts
+  s_1f3a9ec02d29ed::t_319eba13bc54fd 102-123,175,215,259,262,269,272-285,287-295,298,300-302,309,318,323,339,342,395,406,418,420,587,589,591,617,677-679,744,769,803,806,808-811,818-897,906-907,924-925,938,967,970,1030,1035,1039,1063,1089-1147,1184-1185
+packages/db/src/commission.ts
+  s_1f3a9ec02d29ed::t_b01ec82a1b4144 277-281,467-473,478,480,489,503-504,506,575-577,581-586,589-595,599-601,617-623,632,638-641,661,665,701-721,725,736,742,748-749,801-830,850-852,859,870-871,875-883,887
+packages/db/src/growth.ts
+  s_1f3a9ec02d29ed::t_94832bd59b52f4 530-534,669-674
+packages/db/src/schema/growth.ts
+  s_1f3a9ec02d29ed::t_df2b823ddaa1db 281-282
+packages/jobs/src/jobs/reconcile-billing.ts
+  s_1f3a9ec02d29ed::t_40b1c9cd06b8b7 71-73,76-86
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "83ebbaf4e0c5f86673c5aeab6440ce965833e5b1",
+  "prompts": {},
+  "sessions": {
+    "s_1f3a9ec02d29ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aef80487-cabb-455f-b2f1-acb7f8d96c4e",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
