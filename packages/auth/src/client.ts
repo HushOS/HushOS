@@ -211,6 +211,16 @@ export function createAuthClient(
     const { store, canPersist } = createAuthStore();
     let restoring: Promise<void> | undefined;
     let busy = false;
+    /*
+     * From the first half of a sign-in's or a security change's exchange with the worker until
+     * the account opens or the attempt ends. The worker then holds what the exchange needs (the
+     * password, its OPAQUE state, the export key) and no account key, and it starts over when
+     * an account operation fails (worker.ts). Anything else's account operation fails there
+     * for want of the key: a settings or identity read already on its way as a password change
+     * locked the worker would take the exchange with it, and the change would end as "expired"
+     * on a first try. So only the exchange's own operations reach the worker meanwhile.
+     */
+    let exchanging = false;
     let channel: BroadcastChannel | undefined;
     let listening = false;
     function lock() {
@@ -294,8 +304,10 @@ export function createAuthClient(
             // through onLock, which is the only Drive failure that should lock. While a
             // sign-in or security change runs, it owns the worker and locks on its own
             // failures: a background read refused by the locked worker (settings, an
-            // identity) must not throw away the change's state mid-way. A refusal the worker
-            // kept its keys through is an ordinary error too.
+            // identity) must not throw away the change's state mid-way. Not locking here is
+            // half of that: the worker starts over on such a failure whatever is done here,
+            // so `ask` keeps those reads from reaching it while an exchange is held. A
+            // refusal the worker kept its keys through is an ordinary error too.
             const kept = (error as { kept?: unknown } | null)?.kept === true;
             if (
                 !kept &&
@@ -306,6 +318,37 @@ export function createAuthClient(
                 lock();
             throw error;
         }
+    }
+    /*
+     * The worker, for everything that is not a sign-in's or a security change's own exchange:
+     * Drive, settings, identities, setup, a password check. While an exchange is held there, an
+     * account operation is refused here, in the words the worker has for it, and never sent.
+     * Drive's and a family's go through: their failures leave the worker as it was.
+     */
+    async function ask<K extends keyof WorkerRequests>(
+        operation: K,
+        input: WorkerRequests[K],
+        options?: RequestOptions,
+    ): Promise<WorkerResults[K]> {
+        if (exchanging && !ordinaryFailure(String(operation)))
+            throw new Error('Unlock your account first.');
+        return rpc(operation, input, options);
+    }
+    /* The first half of an exchange: from here the worker is the exchange's (see `exchanging`). */
+    function begin<K extends 'loginStart' | 'registerStart' | 'securityStart'>(
+        operation: K,
+        input: WorkerRequests[K],
+    ) {
+        exchanging = true;
+        return rpc(operation, input);
+    }
+    /*
+     * Before the second half of an exchange: a lock since the first has ended the worker that
+     * began it, and a new one has nothing to finish. Said as the lock it was, not as an exchange
+     * that "expired".
+     */
+    function stillHeld(began: number, locked = 'Your account was locked. Please try again.') {
+        if (epoch !== began) throw new Error(locked);
     }
     /*
      * WebKit stores a CryptoKey in IndexedDB by wrapping it with a key from the system
@@ -513,8 +556,9 @@ export function createAuthClient(
     async function login(email: string, password: string, options: LoginOptions = {}) {
         const loginEpoch = epoch;
         const stored = identities && !options.asNewDevice ? await storedIdentity(identities) : null;
-        const start = await rpc('loginStart', { password });
+        const start = await begin('loginStart', { password });
         const challenge = await api.loginStart({ email, ...start });
+        stillHeld(loginEpoch, 'Your account was locked. Please sign in again.');
         const finish = await rpc('loginFinish', challenge);
         const device = await deviceProof(stored, email, challenge.attemptToken);
         // A lock here has already dropped the export key; do not create a session for it.
@@ -557,6 +601,8 @@ export function createAuthClient(
             );
         }
         if (epoch !== loginEpoch) throw new Error('Your account was locked. Please sign in again.');
+        // The exchange is over: the worker holds the account key, and answers anything again.
+        exchanging = false;
         store.setState({ unlockedUserId: result.user.id, rememberError: '' });
         // Which step a failed save stopped at, and why: the banner says only that it failed.
         let saving = 'storage';
@@ -606,7 +652,7 @@ export function createAuthClient(
             )
                 return false;
             if (epoch !== setupEpoch) throw new Error('Your account was locked.');
-            const bundles = await rpc('initialize', {
+            const bundles = await ask('initialize', {
                 userId: user.id,
                 recovery: missing.recovery,
                 identity: missing.identity,
@@ -633,6 +679,7 @@ export function createAuthClient(
             throw error;
         } finally {
             busy = false;
+            exchanging = false;
         }
     }
     /*
@@ -645,14 +692,14 @@ export function createAuthClient(
         start: (input: { startLoginRequest: string }) => Promise<LoginChallenge>,
     ): Promise<DeviceRemovalProof> {
         try {
-            const begun = await rpc('reauthStart', { password });
+            const begun = await ask('reauthStart', { password });
             const challenge = await start(begun);
-            const finish = await rpc('reauthFinish', challenge);
+            const finish = await ask('reauthFinish', challenge);
             return { attemptToken: challenge.attemptToken, ...finish };
         } finally {
             // A server that refused the start (429, a lost session) leaves the password in the
             // worker otherwise, until the next lock.
-            await rpc('reauthCancel', {}).catch(() => {});
+            await ask('reauthCancel', {}).catch(() => {});
         }
     }
     async function withPassword<T>(
@@ -866,7 +913,7 @@ export function createAuthClient(
         isAuthenticating: () => busy,
         initializeAccount,
         /* Other domains (Drive) reach the crypto worker through the same transport and lock. */
-        rpc,
+        rpc: ask,
         // `validated`: the caller has just confirmed `user` against the live session
         // (a route guard did), so the bundle can be checked without another request.
         async restore(user: SessionUser, options: { validated?: boolean } = {}) {
@@ -891,6 +938,7 @@ export function createAuthClient(
                 // lock screen that "should" have opened can be traced to its reason.
                 const stop = (reason: string) =>
                     console.info(`Device restore stopped: ${reason} (${describeTrail()}).`);
+                const OWNED = 'a sign-in or a security change began';
                 store.setState({ restoring: true, restoreStep: null });
                 try {
                     const restoringEpoch = epoch;
@@ -920,6 +968,11 @@ export function createAuthClient(
                     if (epoch !== restoringEpoch) return stop('locked while checking the session');
                     step('device-key');
                     const deviceKey = await deviceKeys.load(device.deviceKeyId);
+                    // Not while a sign-in or a security change owns the worker: opening the
+                    // saved key there starts the worker's state over, and would drop the half
+                    // of an exchange it holds. This stops for it, here and below, as for a
+                    // lock: it opens the account itself, or leaves it for the next restore.
+                    if (busy) return stop(OWNED);
                     if (epoch !== restoringEpoch)
                         return stop('locked while reading the device key');
                     // Gone from this browser (cleared by a lock or sign-out elsewhere): the
@@ -930,9 +983,14 @@ export function createAuthClient(
                         });
                     step('worker');
                     await rpc('restore', { bundle: device, deviceKey });
+                    if (busy) return stop(OWNED);
                     if (epoch !== restoringEpoch) return stop('locked while opening the key');
                     store.setState({ unlockedUserId: user.id, rememberError: '' });
                 } catch (error) {
+                    // Cut short by a sign-in or a change that began meanwhile (its lock ended
+                    // the worker this restore was asking): the worker open now is theirs, and
+                    // so is what this device is told. Locking here would end their exchange.
+                    if (busy) return stop(OWNED);
                     lock();
                     // The trail is part of the message on purpose: a report from a phone
                     // then says which step stalled, and for how long. It goes to the
@@ -993,8 +1051,10 @@ export function createAuthClient(
                     'delete',
                     options.step,
                     async () => {
-                        const start = await rpc('loginStart', { password });
+                        const began = epoch;
+                        const start = await begin('loginStart', { password });
                         const challenge = await api.deleteStart(start);
+                        stillHeld(began);
                         const finish = await rpc('loginFinish', challenge);
                         return { attemptToken: challenge.attemptToken, ...finish };
                     },
@@ -1018,7 +1078,7 @@ export function createAuthClient(
                 throw new Error('Unlock your account to view your recovery key.');
             await initializeAccount(user);
             const backup = await api.recoveryBackup();
-            const { phrase } = await rpc('backup', backup);
+            const { phrase } = await ask('backup', backup);
             return { ...backup, phrase };
         },
         confirmRecoveryBackup: (recoveryVersion: number) =>
@@ -1039,8 +1099,10 @@ export function createAuthClient(
             api.saveSettingsKey(input),
         recover: (email: string, password: string, phrase: string) =>
             exclusive(async () => {
-                const start = await rpc('registerStart', { password });
+                const began = epoch;
+                const start = await begin('registerStart', { password });
                 const challenge = await api.recoverStart(start);
+                stillHeld(began);
                 const finish = await rpc('recoverFinish', { ...challenge, phrase });
                 try {
                     await api.recoverFinish({
@@ -1096,7 +1158,10 @@ export function createAuthClient(
                         options.step,
                         async () => {
                             lock();
-                            const start = await rpc('securityStart', {
+                            // From this lock on, not from the server's answer: a lock during
+                            // that round trip ends the worker that holds the first half.
+                            changeEpoch = epoch;
+                            const start = await begin('securityStart', {
                                 action,
                                 password,
                                 newPassword,
@@ -1104,10 +1169,9 @@ export function createAuthClient(
                             const challenge = await api.securityStart({ action, ...start });
                             if (challenge.userId !== user.id || challenge.action !== action)
                                 throw new Error('Your account changed. Sign in again.');
-                            changeEpoch = epoch;
+                            stillHeld(changeEpoch);
                             const finish = await rpc('securityFinish', challenge);
-                            if (epoch !== changeEpoch)
-                                throw new Error('Your account was locked. Please try again.');
+                            stillHeld(changeEpoch);
                             return { attemptToken: challenge.attemptToken, ...finish };
                         },
                         async (proof, twoStep) => {
@@ -1257,8 +1321,10 @@ export function createAuthClient(
             exclusive(() => login(email, password, options)),
         register: (email: string, name: string, password: string) =>
             exclusive(async () => {
-                const start = await rpc('registerStart', { password });
+                const began = epoch;
+                const start = await begin('registerStart', { password });
                 const challenge = await api.registerStart(start);
+                stillHeld(began);
                 const finish = await rpc('registerFinish', challenge);
                 await api.registerFinish({ name, ...finish });
                 try {
