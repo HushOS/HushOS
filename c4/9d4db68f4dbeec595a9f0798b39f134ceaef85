@@ -1,0 +1,102 @@
+apps/web/src/components/recovery-phrase.tsx
+  s_1f3a9ec02d29ed::t_efc5edae62779e 24,58-66,94-154,228-233,288-352
+packages/crypto/src/session.security-change.test.ts
+  s_1f3a9ec02d29ed::t_3cdc503f8ec3cf 1-164
+packages/db/src/auth.ts
+  s_1f3a9ec02d29ed::t_e49a1ef1697f66 1425,1433-1450,1464,1587-1623,1629,1632-1633,1680-1700,1711
+  s_1f3a9ec02d29ed::t_3f5944359cd6cd 1407,1424,1426-1432,1712
+packages/auth/src/server.ts
+  s_c56e31c87cddde::t_208174df13c135 222,236
+  s_1f3a9ec02d29ed::t_f3c6f929bea1af 2183-2185,2190-2196,2222-2240
+  s_1f3a9ec02d29ed::t_a0e97498e0d418 221,2128-2133,2144-2154
+apps/web/src/lib/api/auth-responses.test.ts
+  s_1f3a9ec02d29ed::t_7bfb42228ec3ad 29,561-577,751-781,914
+apps/web/src/components/held-phrase.test.tsx
+  s_1f3a9ec02d29ed::t_eec230728e1a09 1-100
+apps/web/src/components/held-phrase.tsx
+  s_1f3a9ec02d29ed::t_5f97170c1d5f74 1-113
+packages/auth/src/api.ts
+  s_1f3a9ec02d29ed::t_13194dee6958fb 35-40,275-280
+apps/web/src/routes/__root.tsx
+  s_1f3a9ec02d29ed::t_e00dd7016a6e5d 14,48,52,206-207,227,229,259-292
+apps/web/src/components/brand.tsx
+  s_1f3a9ec02d29ed::t_1b29a8faeda96a 15,153,196-204
+apps/web/src/lib/api/security-change.db.test.ts
+  s_1f3a9ec02d29ed::t_76ac46542180fb 1-288
+apps/web/src/lib/api-client.ts
+  s_1f3a9ec02d29ed::t_28d76db0bc4829 57-64
+packages/db/src/auth.devices.test.ts
+  s_1f3a9ec02d29ed::t_dd78c94bc36829 602,613-649,653-660,664-674,706-750
+  s_c56e31c87cddde::t_4a1077a606871f 650-652,662-663,675-705
+  s_1f3a9ec02d29ed::t_d0340293d1c782 601,661
+apps/web/src/lib/api/auth-responses.server.ts
+  s_1f3a9ec02d29ed::t_96e3ffa675fbe4 263-273
+  s_1f3a9ec02d29ed::t_72fa995a1afc6d 316-318
+packages/crypto/src/security.ts
+  s_1f3a9ec02d29ed::t_66f4a3dc5b8801 131-140,195,228-230
+apps/web/src/lib/api/auth.server.ts
+  s_1f3a9ec02d29ed::t_998a61699320b8 51,301-304,306,309-314,316,319
+packages/crypto/src/session.ts
+  s_1f3a9ec02d29ed::t_b0f48e43d39754 1510-1516
+packages/auth/src/client.test.ts
+  s_1f3a9ec02d29ed::t_2f4d05897be26c 339-342,442-443,450-451,453-454
+apps/web/src/routes/login/route.tsx
+  s_de0e5293e39e1a::t_17318e2e2da303 143
+  s_1f3a9ec02d29ed::t_281e17f4fdec7a 23-36,308-312
+  s_1f3a9ec02d29ed::t_9750a86e33a9e0 66-69,144-152
+docs/opaque-auth-design.md
+  s_1f3a9ec02d29ed::t_24f5535e77774d 210-231
+  s_1f3a9ec02d29ed::t_f3c28892c94c07 232
+apps/web/src/lib/unconfirmed-phrase.ts
+  s_1f3a9ec02d29ed::t_7587b0d7d35bf3 1-55
+packages/auth/src/tokens.ts
+  s_c56e31c87cddde::t_0123cc191610f6 22
+  s_1f3a9ec02d29ed::t_e6c0e85b85e631 18-20
+packages/auth/src/client.ts
+  s_1f3a9ec02d29ed::t_af9e5434a183fc 12,94-130,144-145,162,203-221,479-490,750-751,809,816-817,819,822,824,827-829,831-834,836-856,858-875,882-884,886-896,898-907,909
+  s_c56e31c87cddde::t_587a93b7863c82 31-38
+apps/web/src/test/auth-api.server.ts
+  s_1f3a9ec02d29ed::t_2ed25df26a3cf8 1-210
+packages/db/test/sessions.ts
+  s_1f3a9ec02d29ed::t_99a83df50e7de2 2-44
+  s_1f3a9ec02d29ed::t_054a6d5efc5d3c 1
+e2e/security-change.spec.ts
+  s_1f3a9ec02d29ed::t_184f2bb7250df8 1-280
+packages/auth/src/client.security-change.test.ts
+  s_1f3a9ec02d29ed::t_f397cf224289e7 732-762
+  s_1f3a9ec02d29ed::t_34221a68b2b54f 1-731
+apps/web/src/components/account-dialogs.tsx
+  s_1f3a9ec02d29ed::t_26f81d83d195b5 23-24,124-125,339-352,356-358,361
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c49d4db68f4dbeec595a9f0798b39f134ceaef85",
+  "prompts": {},
+  "sessions": {
+    "s_1f3a9ec02d29ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aef80487-cabb-455f-b2f1-acb7f8d96c4e",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_de0e5293e39e1a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7cc9ae66-6c00-42a8-9efa-1d3a01d04093",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
