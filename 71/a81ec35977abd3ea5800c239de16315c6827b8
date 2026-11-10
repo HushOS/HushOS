@@ -1,0 +1,39 @@
+docs/company-storage-design.md
+  s_1f3a9ec02d29ed::t_107555ed40a914 685-688,1298,1300-1303
+docs/self-hosting.md
+  s_1f3a9ec02d29ed::t_e9f065ff9dddba 317-318,2491,2512,2514-2515,2517
+packages/db/scripts/after-migrate.ts
+  s_1f3a9ec02d29ed::t_b72291c35dded4 24-29
+packages/db/src/after-migrate.ts
+  s_1f3a9ec02d29ed::t_1c97f90604f32b 145-146,158-166,172-173,179-194
+packages/db/src/drive.purge.test.ts
+  s_1f3a9ec02d29ed::t_46137a63c2e35c 404
+packages/db/src/drive.ts
+  s_1f3a9ec02d29ed::t_70cd5a7432959c 53-84
+packages/db/src/outbox.migration.test.ts
+  s_1f3a9ec02d29ed::t_064c1425bb772a 399,413,441,459,464-505
+packages/db/src/outbox.test.ts
+  s_1f3a9ec02d29ed::t_96e17bd4db0de4 10,17-18,54-57,140,142,292-309,311-321,368,373-375,394,477,563-652,654-683,695,700,738,742,765,773,798,806,819,829,831,839,857-858,861,868,893,895,910,954,1174-1251
+packages/db/src/outbox.ts
+  s_1f3a9ec02d29ed::t_2df13744513bc8 62-68,90,174-177,179-185,190,252-253,290-310,333-334,336-340,342,374-377,446,449,510-512,643-650,743-744,759-760,815-821
+packages/drive/src/jobs.ts
+  s_1f3a9ec02d29ed::t_4d8632058f50d9 138-139
+packages/drive/src/outbox.test.ts
+  s_1f3a9ec02d29ed::t_cb283a8a6901b1 52-53,152,166,193,239-245,287,292,310,325,349,356,367,383,422,430,453,633,656,765
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "71a81ec35977abd3ea5800c239de16315c6827b8",
+  "prompts": {},
+  "sessions": {
+    "s_1f3a9ec02d29ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aef80487-cabb-455f-b2f1-acb7f8d96c4e",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
