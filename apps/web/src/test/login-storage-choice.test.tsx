@@ -12,7 +12,11 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
  */
 const login =
     vi.fn<
-        (email: string, password: string, options?: { asNewDevice?: boolean }) => Promise<void>
+        (
+            email: string,
+            password: string,
+            options?: { asNewDevice?: boolean; step?: unknown },
+        ) => Promise<void>
     >();
 vi.mock('@tanstack/react-router', () => ({
     createFileRoute: () => (options: Record<string, unknown>) => ({
@@ -58,6 +62,8 @@ async function refusedOnce() {
     expect(screen.getByText(/didn’t answer in time/)).toBeInTheDocument();
     expect(login).toHaveBeenLastCalledWith('maya@example.com', 'correct horse', {
         asNewDevice: false,
+        // The page also hands sign-in its way of asking for a second step.
+        step: expect.any(Function),
     });
     return { user, password };
 }
@@ -75,6 +81,7 @@ describe('signing in when the device key could not be read', () => {
         await vi.waitFor(() => expect(login).toHaveBeenCalledTimes(2));
         expect(login).toHaveBeenLastCalledWith('maya@example.com', 'correct horse', {
             asNewDevice: false,
+            step: expect.any(Function),
         });
     });
 
@@ -84,6 +91,7 @@ describe('signing in when the device key could not be read', () => {
         await vi.waitFor(() => expect(login).toHaveBeenCalledTimes(2));
         expect(login).toHaveBeenLastCalledWith('maya@example.com', 'correct horse', {
             asNewDevice: true,
+            step: expect.any(Function),
         });
     });
 });

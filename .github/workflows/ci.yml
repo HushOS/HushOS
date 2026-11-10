@@ -297,6 +297,8 @@ jobs:
               run: |
                   bun run setup
                   echo 'GROUPS_ENABLED=false' >> .env
+                  # Offered, so e2e/two-step.spec.ts runs its flows instead of only its off check.
+                  echo 'TWO_STEP_ENABLED=true' >> .env
                   bun run infra:up
             - name: Apply migrations
               run: bun run db:migrate

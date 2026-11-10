@@ -7,12 +7,20 @@ import {
 } from '@tanstack/react-router';
 import { revalidateLogic, useForm } from '@tanstack/react-form';
 import { useEffect, useState } from 'react';
-import { DeviceStorageUnreadable } from '@hushos/auth/client';
+import { DeviceStorageUnreadable, StepCancelled } from '@hushos/auth/client';
 import { z } from 'zod';
 import { AuthInput } from '@/components/auth-input';
 import { AuthActions, AuthFields, AuthLayout, AuthNote, authLink } from '@/components/auth-layout';
-import { Button } from '@/components/ui/button';
+import {
+    StepChoices,
+    StepField,
+    STEP_TIMED_OUT,
+    stepWords,
+    useStepPrompt,
+} from '@/components/two-step-prompt';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { authClient } from '@/lib/auth-client';
+import { codesLeft, FEW_CODES, notePhraseSignIn } from '@/lib/two-step';
 import { rememberReturn, returnTarget, safeReturnPath } from '@/lib/return-to';
 import { ensureSessionUser, sessionQueryOptions } from '@/lib/session';
 import { authError, emailValue } from '@/lib/form';
@@ -92,6 +100,11 @@ function LoginPage() {
     // server rendered this page without a session) asks once: the auth client then clears
     // what this browser kept for that account.
     const [removed, setRemoved] = useState(false);
+    // The account asks for a second step this page's code cannot answer: a reload gets the code that can.
+    const [outdated, setOutdated] = useState(false);
+    // Signed in with a backup code and close to running out: said before the app opens.
+    const [fewCodes, setFewCodes] = useState<{ left: number; next: string } | null>(null);
+    const step = useStepPrompt({ onExpired: () => setError(STEP_TIMED_OUT) });
     useEffect(() => {
         void authClient
             .session()
@@ -107,10 +120,13 @@ function LoginPage() {
         onSubmitMeta: { asNewDevice: false },
         onSubmit: async ({ value, meta }) => {
             setError('');
+            setOutdated(false);
             setPending(true);
             try {
                 await authClient.login(value.email, value.password, {
                     asNewDevice: meta.asNewDevice,
+                    // An account with a second step: this page asks for it before anything opens.
+                    step: step.ask,
                 });
                 // The form keeps what was typed and stays busy until the app replaces it:
                 // emptied first, it would look for a moment as if signing in had failed.
@@ -132,14 +148,37 @@ function LoginPage() {
                         search: { reason: rotated },
                         replace: true,
                     });
-                } else await router.navigate({ href: returnTarget(returnTo), replace: true });
+                    return;
+                }
+                // What answered the step decides what comes next (docs/two-step-design.md 2 and 5).
+                // A server that no longer offers two-step sign-in answers neither: straight on.
+                const answered = step.answeredWith();
+                const status =
+                    answered === 'backup' || answered === 'phrase'
+                        ? await authClient.twoStep().catch(() => null)
+                        : null;
+                // The phrase stands in for a method that is lost: Account opens on the step.
+                notePhraseSignIn(answered === 'phrase' && status?.on === true);
+                if (answered === 'phrase' && status?.on) {
+                    await router.navigate({ to: '/app/account', hash: 'two-step', replace: true });
+                } else if (
+                    answered === 'backup' &&
+                    status?.on &&
+                    status.backupCodesLeft <= FEW_CODES
+                )
+                    setFewCodes({ left: status.backupCodesLeft, next: returnTarget(returnTo) });
+                else await router.navigate({ href: returnTarget(returnTo), replace: true });
             } catch (error) {
+                // Backed out of the step, or its time ran out (said by the step itself).
+                if (error instanceof StepCancelled) return;
                 cue('error');
                 setOfferNewDevice(error instanceof DeviceStorageUnreadable);
+                setOutdated((error as { code?: unknown } | null)?.code === 'update-required');
                 setError(authError(error, { signIn: true }));
             } finally {
                 // Unmounted by now, unless the app sent this page back to itself (a session the
                 // browser did not keep): then the form, still filled in, can be used again.
+                step.done();
                 setPending(false);
             }
         },
@@ -153,6 +192,74 @@ function LoginPage() {
               }
             : notices[securityChanged]
         : null;
+    if (fewCodes)
+        return (
+            <AuthLayout
+                title={codesLeft(fewCodes.left)}
+                art="HELLO"
+                description="Each backup code works once. Make a new set now, so you have one when you need it."
+            >
+                <AuthActions
+                    action={
+                        <Link
+                            to="/app/account"
+                            hash="two-step"
+                            replace
+                            className={buttonVariants({ size: 'lg' })}
+                        >
+                            Make new codes
+                        </Link>
+                    }
+                >
+                    {/* A real link to where the sign-in was headed, followed without a reload. */}
+                    <a
+                        href={fewCodes.next}
+                        className={authLink}
+                        onClick={(event) => {
+                            event.preventDefault();
+                            void router.navigate({ href: fewCodes.next, replace: true });
+                        }}
+                    >
+                        Not now
+                    </a>
+                </AuthActions>
+            </AuthLayout>
+        );
+    if (step.request)
+        return (
+            <AuthLayout
+                title={stepWords[step.kind].title}
+                description={stepWords[step.kind].about}
+                art="HELLO"
+                footer={
+                    <button type="button" className={authLink} onClick={step.cancel}>
+                        Back to sign in
+                    </button>
+                }
+            >
+                <form
+                    onSubmit={(event) => {
+                        event.preventDefault();
+                        step.submit();
+                    }}
+                    aria-busy={step.checking}
+                    noValidate
+                >
+                    <AuthFields>
+                        <StepField prompt={step} />
+                        <AuthActions
+                            action={
+                                <Button type="submit" size="lg" disabled={step.checking}>
+                                    {step.checking ? 'Signing in…' : 'Sign in'}
+                                </Button>
+                            }
+                        >
+                            <StepChoices prompt={step} />
+                        </AuthActions>
+                    </AuthFields>
+                </form>
+            </AuthLayout>
+        );
     return (
         <AuthLayout
             title="Welcome back"
@@ -249,6 +356,17 @@ function LoginPage() {
                                 onClick={() => void form.handleSubmit({ asNewDevice: true })}
                             >
                                 Sign in as a new device
+                            </Button>
+                        )}
+                        {outdated && (
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="lg"
+                                className="h-11 w-full text-[15px]"
+                                onClick={() => window.location.reload()}
+                            >
+                                Reload this page
                             </Button>
                         )}
                     </AuthActions>

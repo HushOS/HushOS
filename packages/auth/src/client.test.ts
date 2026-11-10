@@ -337,6 +337,12 @@ describe('a device store that does not answer at sign-in', () => {
                 attemptToken: 'security',
             }),
             securityFinish: async () => ({}),
+            // An account without a second step: the change goes on its password alone.
+            twoStepChallenge: async () => {
+                throw Object.assign(new Error('Two-step sign-in is not on for this account.'), {
+                    status: 409,
+                });
+            },
         } as unknown as AuthApi;
         const auth = createAuthClient(() => transport, keyStore([]).store, signing, {
             identities,

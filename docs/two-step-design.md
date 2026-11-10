@@ -6,6 +6,8 @@ Written on 21 October 2026, and revised the same day after an independent review
 
 Revised on 10 November 2026, when the server's side was built (steps 1 and 2 of the plan in section 10): what the failed-step notice counts, a known device's own freeze, the error codes a client acts on, what `TWO_STEP_ENABLED` leaves in force, and what is still unbuilt. Each change is marked "As built".
 
+Revised again that day, when the web's screens were built (step 3): what they do where this document was silent, and what they leave out, is under step 3 of the plan in section 10, marked "As built (web)".
+
 The recommendations, in short:
 
 - **The second step is a server rule.** It stops someone who has the password from signing in to an honest server. It does nothing against a server that is breached or hostile, and the design never says otherwise.
@@ -700,6 +702,20 @@ One change per pull request, as AGENTS.md asks:
     - **the phrase statement's Rust twin,** which is step 4. The fixture it must match is `crates/hushos-core/fixtures/web-two-step.json`.
 
 3. **`feat(web)`:** settings (enrol, list, rename, remove, codes) and the sign-in step screen, with Playwright tests.
+
+    **As built (web):**
+    - **At a change,** the browser asks for a step token first (`two-step/challenge`; 409 means the account has no step and the change goes on its password alone), proves the password before it asks the person, so a wrong password is said at once, then sends the proof and the answer together. A refused answer spends the proof, and the next answer goes with a new one; an answer the server did not read as a code (400) keeps it. A code or a phrase that is not one is said on the device and never sent.
+    - **After a password change or a rotation** on an account with the step, the browser ends on the sign-in page ("Password changed. Sign in with your new password."): the change ended every session, the new one needs the step, and the code that confirmed the change cannot be used twice.
+    - **The unlock form asks for the step too.** A browser left signed in when the step was turned on has a session that never passed it, so its next unlock is a sign-in that is not exempt.
+    - **Backup codes** are shown with Copy and Download. Print is not built.
+    - **Replacing the authenticator app** is not offered: the person removes it (the password and the step) and turns two-step sign-in on again.
+    - **The offer to sign out the other devices** is shown only when the account has another device.
+    - **After a backup code leaves two or fewer,** the sign-in page says so before the app opens, with "Make new codes" and "Not now". After the phrase, Account opens on Two-step sign-in with the suggestion of section 5. Neither happens on a server with `TWO_STEP_ENABLED` off, where the count cannot be read and the section is not drawn.
+    - **With `TWO_STEP_ENABLED` off,** Account draws nothing of the step; only the element the notices link to (`#two-step`) is there, hidden. Sign-in and every guarded change still ask.
+    - **A method's last use** is a day in UTC (section 10), and is compared with today's date in UTC, not read in the browser's timezone.
+    - **An account whose step offers nothing this version can answer** (a method from a later release) is told to update, as an old client is; on the web that is a reload.
+    - **End-to-end tests:** `e2e/two-step.spec.ts`, which runs its flows where the run sets `TWO_STEP_ENABLED=true` (CI does) and otherwise checks only that Account draws nothing. The security-key test waits for step 7.
+
 4. **`feat(ios)` and `feat(android)`:** the step screen for codes, backup codes and the phrase, and `update-required`; the phrase statement in `crates/hushos-core` with the shared fixtures.
 5. **`docs`:** `docs/self-hosting.md` (the settings, the key, the trigger, rollback) and `docs/opaque-auth-design.md`.
 6. **`chore(web)`:** turn `TWO_STEP_ENABLED` on at hushos.com once the apps from 4 are live in both stores. The roadmap item moves to Shipped in the same PR.
