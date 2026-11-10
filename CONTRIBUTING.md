@@ -683,7 +683,8 @@ The crypto twins, `crates/hushos-core` and `packages/crypto`, are fuzzed on ever
 ### What is fuzzed
 
 - **Statements:** the statement grammar; seal and grant statements and their openers (the key seal under varied contexts and readers too); identity envelopes and keys statements; device statements; drive record statements in all four forms.
-- **Rosters and successions:** rosters (a company's format 3 included) and group key successions; acceptance of a whole roster history, a family's or a company's; succession links and consent; the links offered for successor consent and the consent signed for them.
+- **Rosters and successions:** rosters and group key successions, a company's format 3 rosters included (parsing, and building from fields); acceptance of a whole roster history, with a company's from version 1 and from each twin's cache. Those reach a company's rules only through fixture histories with signatures, which an edit breaks;
+- **A company's next roster:** `company_next` builds the unsigned roster after a fixture company's chain from mutated members, roles, keys, areas, key and kit replacements and automatic admissions (`nextRoster`, `company_roster_next`), so the rules of `docs/companies-design.md` 2.1 are compared in both twins without a signature in the way. A company's statements (recovery roster, recovery request, the custody seals) are in the statements target. Not fuzzed: opening a company's seals, and a recovery roster's kit signature; succession links and consent; the links offered for successor consent and the consent signed for them.
 - **Managers and admins:** a manager's roster calls (an admission with a served identity changed, role changes, the handover); the admin's join code over served rosters.
 - **Sharing and contacts:** shares; fingerprints and pins.
 - **Re-keying:** re-keyed record verdicts, personal and in a group's area; the re-keyed origin opener.

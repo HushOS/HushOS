@@ -46,6 +46,16 @@ import {
  * which builds only what acceptance takes.
  */
 
+/* The four key fields of an entry: what a holder writes when it writes keys into another's. */
+function keysOf(entry: RosterMember) {
+    return {
+        encryptionPublicKey: entry.encryptionPublicKey,
+        signingPublicKey: entry.signingPublicKey,
+        mlDsaPublicKeyDigest: entry.mlDsaPublicKeyDigest,
+        kemPublicKeyDigest: entry.kemPublicKeyDigest,
+    };
+}
+
 async function accepted(c: Company, over: Parameters<typeof companyInput>[2] = {}) {
     const chain = await acceptRosters(await companyInput(c.h, c.cast, over));
     if (chain.status !== 'accepted') throw new Error('not accepted');
@@ -55,41 +65,53 @@ async function accepted(c: Company, over: Parameters<typeof companyInput>[2] = {
 describe('a company’s histories', async () => {
     const cases = await companyCases();
 
-    test('every rule has a history it passes and one it refuses', () => {
-        const refusals = new Set(cases.map((c) => c.refusal).filter(Boolean));
-        for (const rule of [
-            'droppedAdmin',
-            'kitNeedsKey',
-            'ownerOnly',
-            'ownerKeys',
-            'kitFollows',
-            'roleSet',
-            'leftWithRoles',
-            'noOwner',
-            'custody',
-            'reused',
-            'rotations',
-            'auto',
-            'areaCount',
-            'recovery',
-            'kitSigned',
-            'kind',
-        ])
-            expect(refusals.has(rule as never), rule).toBe(true);
-        expect(cases.filter((c) => c.expected.status === 'accepted').length).toBeGreaterThan(30);
-    });
+    /* What acceptance itself said of each history: the refusal's own words, or the version accepted. */
+    const said = new Map<string, string | number>();
 
     test.each(cases.map((c) => [c.name, c] as const))('%s', async (_name, c) => {
-        if (c.expected.status === 'accepted') {
-            const chain = await acceptRosters(c.input);
-            expect(chain.status).toBe('accepted');
-            expect((chain as AcceptedRosters).roster.rosterVersion).toBe(c.expected.rosterVersion);
-            return;
-        }
-        const refusal = refusalOf(c);
-        const attempt = acceptRosters(c.input);
-        await expect(attempt).rejects.toBeInstanceOf(CryptoError);
-        if (refusal) await expect(attempt).rejects.toThrow(refusal);
+        const outcome = await acceptRosters(c.input).then(
+            (chain) => (chain as AcceptedRosters).roster.rosterVersion,
+            (error: unknown) => {
+                if (!(error instanceof CryptoError)) throw error;
+                return error.message;
+            },
+        );
+        said.set(c.name, outcome);
+        if (c.expected.status === 'accepted') expect(outcome).toBe(c.expected.rosterVersion);
+        else expect(outcome).toBe(refusalOf(c) ?? outcome);
+        expect(typeof outcome).toBe(c.expected.status === 'accepted' ? 'number' : 'string');
+    });
+
+    test('acceptance itself gave every company refusal at least once, and accepted a fair share', () => {
+        // From what acceptRosters threw above, not from the cases' own labels: each sentence of
+        // companies-design 2.1 was the reason some history was refused.
+        const refusals = new Set([...said.values()].filter((at) => typeof at === 'string'));
+        for (const sentence of [
+            'A roster that removes a data admin replaces the company key.',
+            'A new recovery kit needs a new company key.',
+            'Only an owner can change an owner, the recovery kit or its holders.',
+            'Only an owner can replace the company’s keys.',
+            'A roster that takes the recovery kit from someone replaces the kit.',
+            'This is not one of a company’s roles.',
+            'Someone who has left a company holds no role.',
+            'A company keeps an active owner.',
+            'The company’s keys do not follow from the member list before.',
+            'This company key or recovery kit was used before: a new one is needed.',
+            'A company’s member list changes at most 8 folder keys.',
+            'This is not an automatic admission the company’s rules allow.',
+            'This member list does not count the company’s folders.',
+            'The recovery kit makes its holder an owner and changes nothing else.',
+            'This member list is not signed with the company’s recovery kit.',
+            'A company folder keeps the kind it was made with.',
+            'Only an owner, or the member themselves, changes the keys of someone who signs member lists.',
+            'Only a recovery roster carries the recovery kit’s signature.',
+            'Invalid member list cache.',
+        ])
+            expect(refusals.has(sentence), sentence).toBe(true);
+        expect([...said.values()].filter((at) => typeof at === 'number').length).toBeGreaterThan(
+            40,
+        );
+        expect(said.size).toBe(cases.length);
     });
 });
 
@@ -406,11 +428,58 @@ describe('nextRoster for a company', () => {
         ).resolves.toBeDefined();
         // The person's own roster needs none: they sign under the keys their entry named before.
         await expect(nextRoster(chain, members, by(cast.second))).resolves.toBeDefined();
-        // An Admin's entry is not guarded: any holder folds it in on the link alone.
+        // An Admin's keys change on their own roster or an Owner's (rule 8), on the link alone;
+        // a fellow Admin's roster cannot carry it.
         const adminFolded = await foldInEntry(c.e.admin, admin2.served, [adminLink], 3);
+        const adminMoved = withEntry(c, adminFolded.entry);
+        await expect(nextRoster(chain, adminMoved, by(cast.admin2))).rejects.toThrow(
+            'Only an owner, or the member themselves, changes the keys',
+        );
+        await expect(nextRoster(chain, adminMoved, by(cast.admin))).resolves.toBeDefined();
+        await expect(nextRoster(chain, adminMoved, by(cast.owner))).resolves.toBeDefined();
+    });
+
+    test('giving `members` or `recovery` to someone on the list needs a check of exactly the keys their entry names', async () => {
+        const cast = await companyCast();
+        const c = await companyStart(cast);
+        const chain = await accepted(c);
+        const by = (who: { userId: string }, checked: unknown[] = []) => ({
+            signerUserId: who.userId,
+            org: { ...heads, checked: checked as never },
+        });
+        const needsCheck = 'needs a fresh words check of their keys';
+        const admin = withEntry(c, { ...c.e.member, roles: [...ADMIN_ROLES] });
+        const holder = withEntry(c, { ...c.e.member, roles: ['recovery'] });
+        const pin = await cast.member.pin();
+        // Making a Member an Admin, or a kit holder: refused without the signer's verified pin.
+        await expect(nextRoster(chain, admin, by(cast.admin))).rejects.toThrow(needsCheck);
+        await expect(nextRoster(chain, holder, by(cast.owner))).rejects.toThrow(needsCheck);
+        for (const other of [
+            await cast.biller.pin(),
+            { ...pin, fingerprint: '' },
+            { ...pin, trustedVia: chain.groupId },
+        ]) {
+            await expect(nextRoster(chain, admin, by(cast.admin, [other]))).rejects.toThrow(
+                needsCheck,
+            );
+        }
+        await expect(nextRoster(chain, admin, by(cast.admin, [pin]))).resolves.toBeDefined();
+        await expect(nextRoster(chain, holder, by(cast.owner, [pin]))).resolves.toBeDefined();
+        // A role that opens nothing needs none; nor does taking a role away.
         await expect(
-            nextRoster(chain, withEntry(c, adminFolded.entry), by(cast.admin2)),
+            nextRoster(chain, withEntry(c, { ...c.e.member, roles: ['billing'] }), by(cast.admin)),
         ).resolves.toBeDefined();
+        // Plant, then promote: an Admin writes other keys into the Member's entry (the chain takes
+        // that, as a family's does), and an Owner's device is asked to make "them" an Admin. A
+        // check of the real person does not cover the keys the entry now names.
+        const planted = { ...c.e.member, ...keysOf(cast.newcomer.entry([])) };
+        await c.h.roster(cast.admin, withEntry(c, planted));
+        const after = await accepted(c);
+        const promoted = withEntry(c, { ...planted, roles: [...ADMIN_ROLES] });
+        await expect(nextRoster(after, promoted, by(cast.owner, [pin]))).rejects.toThrow(
+            needsCheck,
+        );
+        await expect(nextRoster(after, promoted, by(cast.owner))).rejects.toThrow(needsCheck);
     });
 
     test('a recovery roster is built only for the kit holder’s own promotion, and signed with the kit', async () => {

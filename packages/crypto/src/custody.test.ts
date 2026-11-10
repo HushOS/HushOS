@@ -1,7 +1,15 @@
 import { describe, expect, test } from 'vitest';
 import { areaKeyCommitment } from './area-keys';
 import { encodeStatement } from './canonical';
-import { companyCast, companyInput, companyStart, rowOf, withEntry } from './company-testkit';
+import {
+    companyCast,
+    companyInput,
+    companySeals,
+    companyStart,
+    rowOf,
+    sealItemVerdict,
+    withEntry,
+} from './company-testkit';
 import {
     CUSTODY_KEY_SEAL_BYTES,
     CUSTODY_PREVIOUS_BYTES,
@@ -1128,4 +1136,42 @@ describe('the company key’s words, and a folder’s notice keys', () => {
             'Invalid notice seed.',
         );
     });
+});
+
+describe('the seals of a company’s life, as the shared fixtures carry them', () => {
+    test('each opens, is unattributed, names its sealer, is refused or is made as declared', async () => {
+        const { items, chainAt } = await companySeals();
+        const said = new Map<string, unknown>();
+        for (const item of items) {
+            const verdict = await sealItemVerdict(item, chainAt);
+            said.set(item.name, verdict);
+            expect(verdict, item.name).toEqual(item.expected);
+        }
+        // What an opener is told when a seal's sealer has since moved to keys with no link to
+        // the ones that signed it (an Owner who started over and was let back in): the seal
+        // still opens to what the chain commits to, and is nobody's word any more.
+        const before = said.get('folder-key-at-creation') as string;
+        const after = said.get('folder-key-at-creation-after-the-sealers-keys-changed') as string;
+        expect(before.startsWith('opened:')).toBe(true);
+        expect(after).toBe(before.replace('opened:', 'unattributed:'));
+        expect(said.get('previous-envelope-2-after-the-sealers-keys-changed')).toBe(
+            (said.get('previous-envelope-2') as string).replace('opened:', 'unattributed:'),
+        );
+        // And blame for a bad one stops at the keys: nobody the list names now signed it.
+        expect(said.get('kit-seal-of-junk-after-the-sealers-keys-changed')).toMatchObject({
+            check: 'bad:',
+        });
+        // Signed under keys the entry did not name at the roster the seal names: no seal at all.
+        for (const name of [
+            'folder-key-signed-under-keys-the-entry-took-later',
+            'folder-key-signed-under-keys-the-entry-had-left',
+            'folder-key-resealed-before-joining',
+            'folder-key-resealed-on-the-roster-that-took-the-role',
+        ])
+            expect(said.get(name), name).toBe('refused');
+        // The sealing side refuses more than it makes, and makes what it should.
+        const sealing = items.filter((item) => item.kind === 'sealing');
+        expect(sealing.filter((item) => item.expected === 'sealed')).toHaveLength(3);
+        expect(sealing.filter((item) => item.expected === 'refused').length).toBeGreaterThan(10);
+    }, 120_000);
 });

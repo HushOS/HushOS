@@ -24,7 +24,8 @@ pub fn kit_ml_dsa_keys(versions: &[u8]) -> HashMap<String, String> {
 fn outcome(result: CoreResult<SealCheck>) -> String {
     match result {
         Ok(SealCheck::Opened { value }) => format!("opened:{}", e(&value)),
-        Ok(SealCheck::Bad { sealer_user_id }) => format!("bad:{sealer_user_id}"),
+        Ok(SealCheck::Unattributed { value }) => format!("unattributed:{}", e(&value)),
+        Ok(SealCheck::Bad { sealer_user_id }) => format!("bad:{}", sealer_user_id.unwrap_or_default()),
         Err(_) => "refused".into(),
     }
 }
@@ -60,9 +61,13 @@ fn kit_seal_ctx(ctx: &Value) -> KitSealContext {
  */
 pub fn seal_item_verdict(item: &Value, chain_at: &dyn Fn(u64) -> Arc<AcceptedRosters>) -> Value {
     let chain = chain_at(n(item, "through"));
-    let sealer = person(n(item, "sealer") as u8);
+    // The sealer's identity the opener is served (1 unless said): the keys their entry named, or did not.
+    let sealer = person_at(n(item, "sealer") as u8, item["sealerKeyVersion"].as_u64().unwrap_or(1) as u8);
     let sealer_key = base64url_decode(sealer.served.ml_dsa_public_key.clone()).unwrap();
-    let envelope = b(item, "envelope");
+    let envelope = if s(item, "kind") == "sealing" { vec![] } else { b(item, "envelope") };
+    let kem = |version: u64| {
+        base64url_decode(custody_public_key(custody_seed_at(version as u8)).unwrap().kem_public_key).unwrap()
+    };
     let ctx = &item["ctx"];
     let custody_seed = || custody_seed_at(n(ctx, "custodyKeyVersion") as u8);
     match s(item, "kind").as_str() {
@@ -72,8 +77,7 @@ pub fn seal_item_verdict(item: &Value, chain_at: &dyn Fn(u64) -> Arc<AcceptedRos
                 custody_seal_ctx(ctx),
                 chain,
                 sealer_key,
-                None,
-                custody_seed()
+                custody_seed(),
             )))
         }
         "custody-key-seal" => {
@@ -109,14 +113,14 @@ pub fn seal_item_verdict(item: &Value, chain_at: &dyn Fn(u64) -> Arc<AcceptedRos
                 chain.clone(),
                 base64url_decode(kit.kem_public_key).unwrap(),
                 sealer_key.clone(),
-                None,
                 custody_seed_at(ctx.custody_key_version as u8),
             );
-            let opened = kit_seal_open(envelope, ctx, chain, sealer_key, None, kit_secret_at(kit_version));
+            let opened = kit_seal_open(envelope, ctx, chain, sealer_key, kit_secret_at(kit_version));
             json!({
                 "check": match check {
-                    Ok(None) => "holds".to_string(),
-                    Ok(Some(sealer_user_id)) => format!("bad:{sealer_user_id}"),
+                    Ok(KitSealCheck::Holds) => "holds".to_string(),
+                    Ok(KitSealCheck::Unattributed) => "holds-unattributed".into(),
+                    Ok(KitSealCheck::Bad { sealer_user_id }) => format!("bad:{}", sealer_user_id.unwrap_or_default()),
                     Err(_) => "refused".into(),
                 },
                 "opened": opened.map_or("refused".to_string(), |seed| format!("opened:{}", e(&seed))),
@@ -134,7 +138,6 @@ pub fn seal_item_verdict(item: &Value, chain_at: &dyn Fn(u64) -> Arc<AcceptedRos
             },
             chain,
             sealer_key,
-            None,
             custody_seed(),
         ))),
         "custody-previous" => json!(outcome(custody_previous_open(
@@ -149,12 +152,35 @@ pub fn seal_item_verdict(item: &Value, chain_at: &dyn Fn(u64) -> Arc<AcceptedRos
             },
             chain,
             sealer_key,
-            None,
             custody_seed(),
         ))),
         "recovery-request" => {
             let verified = recovery_request_verify(envelope, b(item, "proof"), chain, sealer_key);
             json!(if verified.is_ok() { "verified" } else { "refused" })
+        }
+        // The sealing side: what this core's own sealers make, or refuse to.
+        "sealing" => {
+            let payload = b(item, "payload");
+            let made = if s(item, "op") == "custody-seal" {
+                let ctx = custody_seal_ctx(ctx);
+                let to = kem(ctx.custody_key_version);
+                custody_seal(payload, ctx, chain, to, sealer.keys.clone()).map(|_| ())
+            } else {
+                let ctx = kit_seal_ctx(ctx);
+                let kit =
+                    kit_public_keys(kit_secret_at(ctx.kit_version as u8), ctx.group_id.clone()).unwrap();
+                let to = kem(ctx.custody_key_version);
+                kit_seal(
+                    payload,
+                    ctx,
+                    chain,
+                    base64url_decode(kit.kem_public_key).unwrap(),
+                    to,
+                    sealer.keys.clone(),
+                )
+                .map(|_| ())
+            };
+            json!(if made.is_ok() { "sealed" } else { "refused" })
         }
         other => panic!("seal kind {other}"),
     }

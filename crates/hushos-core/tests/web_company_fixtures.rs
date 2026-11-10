@@ -43,6 +43,10 @@ fn each_refused_history_is_refused_here_by_the_rule_the_web_named() {
             continue;
         };
         let (name, input, _) = case_from(case);
+        // A cache the bindings cannot even hold is refused at the boundary, before any rule.
+        if input.raw_cache.is_some() {
+            continue;
+        }
         let error = accept_rosters(
             GROUP.into(),
             input.first_keys.clone(),
@@ -52,7 +56,7 @@ fn each_refused_history_is_refused_here_by_the_rule_the_web_named() {
             input.successions.clone(),
             input.ml_dsa_keys.clone(),
             input.me.clone(),
-            None,
+            input.cache.clone(),
         )
         .expect_err(&name);
         assert_eq!(error.to_string(), refusal, "{name}");
@@ -91,7 +95,19 @@ fn the_web_s_company_seals_open_or_are_refused_here_as_on_the_web() {
         case_from(&json!({ "name": "seals", "input": fixture["seals"]["history"], "expected": null }));
     let chain_at = |through: u64| chain_through(&input, through);
     let items = fixture["seals"]["items"].as_array().unwrap();
-    assert!(items.len() >= 18);
+    assert!(items.len() >= 45);
+    // Among them: seals whose sealer has since moved to keys with no link to the ones that
+    // signed them still open, as nobody's word; and the sealing side refuses a personal key.
+    for (name, said) in [
+        ("folder-key-at-creation-after-the-sealers-keys-changed", "unattributed:"),
+        ("previous-envelope-2-after-the-sealers-keys-changed", "unattributed:"),
+        ("folder-key-signed-under-keys-the-entry-took-later", "refused"),
+        ("sealing-a-personal-workspaces-key", "refused"),
+        ("sealing-a-folders-key", "sealed"),
+    ] {
+        let item = items.iter().find(|item| s(item, "name") == name).unwrap_or_else(|| panic!("{name}"));
+        assert!(item["expected"].as_str().unwrap().starts_with(said), "{name}");
+    }
     for item in items {
         assert_eq!(seal_item_verdict(item, &chain_at), item["expected"], "{}", s(item, "name"));
     }
@@ -161,7 +177,7 @@ fn company_roster_next_refuses_what_acceptance_refuses_before_anyone_signs() {
     let same = next(chain.roster().members, &admin, heads(None, None, vec![])).unwrap();
     let fields = same.org.unwrap();
     assert_eq!(fields.members_same, Some(roster_members_digest(chain.roster()).unwrap()));
-    assert_eq!((fields.custody, fields.heads.area_count), (chain.roster().org.unwrap().custody, 1));
+    assert_eq!((fields.custody, fields.heads.area_count), (chain.roster().org.unwrap().custody, 2));
     // Dropping a data admin needs a new company key (rule 2), and that key an Owner (rule 12).
     let demoted = with(&admin2.user_id, &|entry| entry.roles = vec![]);
     assert_eq!(
@@ -254,7 +270,64 @@ fn a_guarded_fold_in_needs_the_signers_fresh_check_and_the_persons_own_roster_ne
     // The person's own roster needs no check: they sign under the keys their entry named before.
     let (_, members) = moved(&second);
     assert!(build(&members, &second, vec![]).is_ok());
-    // An Admin's entry is not guarded: any holder folds it in.
+    // An Admin's keys change on their own roster or an Owner's (rule 8); a fellow Admin's roster
+    // cannot carry it.
     let (_, members) = moved(&admin);
-    assert!(build(&members, &admin2, vec![]).is_ok());
+    assert_eq!(
+        build(&members, &admin2, vec![]).expect_err("a fellow Admin").to_string(),
+        "Only an owner, or the member themselves, changes the keys of someone who signs member lists."
+    );
+    assert!(build(&members, &admin, vec![]).is_ok());
+    assert!(build(&members, &owner, vec![]).is_ok());
+}
+
+#[test]
+fn giving_members_or_recovery_to_someone_on_the_list_needs_a_check_of_the_keys_their_entry_names() {
+    let chain = company_of_seven();
+    let (owner, admin, member, biller) = (person(1), person(3), person(4), person(6));
+    let with_roles = |roles: &[GroupRole]| -> Vec<RosterMember> {
+        let mut members = chain.roster().members;
+        members.iter_mut().find(|entry| entry.user_id == member.user_id).unwrap().roles = roles.to_vec();
+        members
+    };
+    let build = |members: &[RosterMember], signer: &Person, checked: Vec<VerifiedPin>| {
+        company_roster_next(
+            chain.clone(),
+            members.to_vec(),
+            signer.user_id.clone(),
+            None,
+            None,
+            heads(None, None, checked),
+        )
+    };
+    let needs_check =
+        "Giving someone the member list or the recovery kit needs a fresh words check of their keys.";
+    let refused = |result: CoreResult<Roster>| result.expect_err("unchecked").to_string();
+    let as_admin = with_roles(&[GroupRole::DataAdmin, GroupRole::Members]);
+    let as_holder = with_roles(&[GroupRole::Recovery]);
+    let pin = verified_pin(&member);
+    // Making a Member an Admin, or a kit holder: refused without the signer's verified pin of them.
+    assert_eq!(refused(build(&as_admin, &admin, vec![])), needs_check);
+    assert_eq!(refused(build(&as_holder, &owner, vec![])), needs_check);
+    for other in [
+        verified_pin(&biller),
+        VerifiedPin { fingerprint: String::new(), ..pin.clone() },
+        VerifiedPin { trusted_via: Some(GROUP.into()), ..pin.clone() },
+    ] {
+        assert_eq!(refused(build(&as_admin, &admin, vec![other])), needs_check);
+    }
+    assert!(build(&as_admin, &admin, vec![pin.clone()]).is_ok());
+    assert!(build(&as_holder, &owner, vec![pin.clone()]).is_ok());
+    // A role that opens nothing needs none.
+    assert!(build(&with_roles(&[GroupRole::Billing]), &admin, vec![]).is_ok());
+    // Plant, then promote, on one roster the chain itself refuses (rule 8); the device's check
+    // refuses first, since a check of the real person does not cover the keys now in the entry.
+    let mut planted = as_admin.clone();
+    let entry = planted.iter_mut().find(|entry| entry.user_id == member.user_id).unwrap();
+    let other = person(7).entry(&[], 3, MemberStatus::Active);
+    entry.encryption_public_key = other.encryption_public_key;
+    entry.signing_public_key = other.signing_public_key;
+    entry.ml_dsa_public_key_digest = other.ml_dsa_public_key_digest;
+    entry.kem_public_key_digest = other.kem_public_key_digest;
+    assert_eq!(refused(build(&planted, &owner, vec![pin])), needs_check);
 }

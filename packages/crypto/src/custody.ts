@@ -60,6 +60,7 @@ import {
     digest,
     signHybrid,
     verifyHybrid,
+    type HybridPublicKey,
     type HybridSigningKey,
 } from './signatures';
 
@@ -245,13 +246,25 @@ export async function custodyWords(
 /* What the chain says of its company -------------------------------------- */
 
 /*
- * What a check of a seal says: opened, with what it held; or bad, when its
- * sealer's signature holds and yet it does not open or holds something other
- * than what the chain commits to. Bad names the sealer, under their own
- * signature. A seal nobody entitled signed is refused instead: it says
- * nothing of anyone.
+ * What a check of a seal says:
+ * - opened, with what it held: its sealer signed it under keys their entry
+ *   still names;
+ * - unattributed, with what it held: it holds what the chain commits to, and
+ *   was signed under the keys its sealer's entry named at the roster it
+ *   names, which the entry has since left (a new identity folded in, or keys
+ *   written over). It still opens: a `previousEnvelope` or a folder's seal is
+ *   never remade for its sealer's sake. It says nothing of who holds that
+ *   entry now;
+ * - bad: its signature holds under those keys and yet it does not open, or
+ *   holds something other than what the chain commits to. It names the
+ *   sealer, under their own signature, unless their keys have since been
+ *   replaced (then nobody the list names now is answerable for it: null).
+ * A seal nobody entitled signed is refused instead: it says nothing of anyone.
  */
-export type SealCheck<T> = { status: 'opened'; value: T } | { status: 'bad'; sealerUserId: string };
+export type SealCheck<T> =
+    | { status: 'opened'; value: T }
+    | { status: 'unattributed'; value: T }
+    | { status: 'bad'; sealerUserId: string | null };
 
 const NOT_A_COMPANY = 'This is not a company.';
 const NOT_PUBLISHED = 'This company key is not one the company has published.';
@@ -340,49 +353,79 @@ function kindOf(parts: unknown[], info: string, noun: string): HybridSealKind {
 
 type Opening = {
     chain: AcceptedRosters;
+    /* The sealer's served ML-DSA key: taken only if it is the one their entry named at the roster the seal names. */
     sealerMlDsaPublicKey: Uint8Array;
-    /* The sealer's served identity and links, so a seal made before a fold-in still opens. */
-    sealerHistory?: SignerHistory | null;
 };
 
 /*
- * Opens a seal to a company key and judges what it holds: refused unless one
- * of the sealer's keys through the chain signed it; then `bad`, naming the
- * sealer, when it does not open under `secrets` or `holds` says the payload
- * is not what the chain commits to.
+ * The keys a seal that names a roster is checked under: the ones its sealer's
+ * entry named at that roster (the chain's own record, OrgChain.signerKeys),
+ * whatever the entry names now, and whether it still names them. Family seals
+ * are remade when their sealer's keys change; a `previousEnvelope` and a
+ * folder's seal to the company key are not, so they are never judged by the
+ * sealer's latest keys or by a succession path that may not exist (an Owner
+ * who started over, a `left` entry written over). A served ML-DSA key the
+ * entry did not name there is refused, as is a sealer not yet on the list.
+ */
+async function signerAt(org: OrgChain, ctx: Sealed, servedMlDsaPublicKey: Uint8Array) {
+    const spans = Object.hasOwn(org.signerKeys, ctx.sealerUserId)
+        ? org.signerKeys[ctx.sealerUserId]!
+        : [];
+    const named = spans.filter((span) => span.from <= ctx.rosterVersion).at(-1);
+    if (
+        !named ||
+        servedMlDsaPublicKey.length !== ML_DSA_PUBLIC_KEY_BYTES ||
+        (await digest(servedMlDsaPublicKey)) !== named.mlDsaPublicKeyDigest
+    )
+        throw new CryptoError(NOT_LISTED);
+    return {
+        signer: {
+            signingPublicKey: decode(named.signingPublicKey, 32),
+            mlDsaPublicKey: servedMlDsaPublicKey,
+        } satisfies HybridPublicKey,
+        current: named === spans.at(-1),
+    };
+}
+
+/*
+ * Opens a seal to a company key and judges what it holds: refused unless the
+ * keys its sealer's entry named at the roster it names signed it; then `bad`
+ * when it does not open under `secrets` or `holds` says the payload is not
+ * what the chain commits to; else what it held, attributed to its sealer only
+ * while their entry still names those keys.
  */
 async function openChecked(
     envelope: Uint8Array,
     payloadBytes: number,
     ctx: Sealed,
     kind: HybridSealKind,
+    org: OrgChain,
     options: Opening,
     secrets: GranteeSecrets,
     holds: (payload: Uint8Array) => Promise<boolean>,
 ): Promise<SealCheck<Uint8Array>> {
-    const signers = await signersThrough(
-        options.chain,
-        ctx.sealerUserId,
-        options.sealerMlDsaPublicKey,
-        options.sealerHistory ?? null,
-    );
-    await requireSealedBy(envelope, payloadBytes, signers, kind);
-    const bad = { status: 'bad' as const, sealerUserId: ctx.sealerUserId };
     let payload: Uint8Array;
+    let current: boolean;
     try {
-        payload = await openHybrid(envelope, payloadBytes, signers, secrets, kind);
-    } catch (error) {
-        if (error instanceof CryptoError) return bad;
-        throw error;
+        const at = await signerAt(org, ctx, options.sealerMlDsaPublicKey);
+        current = at.current;
+        await requireSealedBy(envelope, payloadBytes, [at.signer], kind);
+        const bad = { status: 'bad' as const, sealerUserId: current ? ctx.sealerUserId : null };
+        try {
+            payload = await openHybrid(envelope, payloadBytes, [at.signer], secrets, kind);
+        } catch (error) {
+            if (error instanceof CryptoError) return bad;
+            throw error;
+        }
+        if (!(await holds(payload))) {
+            payload.fill(0);
+            return bad;
+        }
     } finally {
         secrets.privateKey.fill(0);
         secrets.kemSecretKey?.fill(0);
     }
-    if (!(await holds(payload))) {
-        payload.fill(0);
-        return bad;
-    }
-    return { status: 'opened', value: payload };
+    return { status: current ? 'opened' : 'unattributed', value: payload };
 }
 
 /* Folder keys sealed to the company key (2.2) ----------------------------- */
@@ -515,6 +558,7 @@ export async function openCustodySeal(
         32,
         ctx,
         kindOf(custodySealParts(ctx), CUSTODY_SEAL_INFO, 'folder key'),
+        org,
         options,
         secrets,
         async (key) => (await areaKeyCommitment(key)) === listed,
@@ -610,7 +654,12 @@ export async function sealCustodyKey(
 export async function openCustodyKey(
     envelope: Uint8Array,
     ctx: CustodyKeySealContext,
-    options: Opening & { reader: { userId: string; keyVersion: number }; holder: GranteeSecrets },
+    options: Opening & {
+        /* The sealer's served identity and links, so a seal made before a fold-in still opens. */
+        sealerHistory?: SignerHistory | null;
+        reader: { userId: string; keyVersion: number };
+        holder: GranteeSecrets;
+    },
 ) {
     const { chain } = options;
     const org = companyOf(chain, ctx.groupId);
@@ -786,20 +835,10 @@ export async function checkKitSeal(
     ctx: KitSealContext,
     options: Opening & { kitKemPublicKey: Uint8Array; custodySeed: Uint8Array },
 ): Promise<SealCheck<true>> {
-    const { chain } = options;
-    const org = kitSealOnChain(chain, ctx);
+    const org = kitSealOnChain(options.chain, ctx);
     const kind = kindOf(kitSealParts(ctx), KIT_SEAL_INFO, 'recovery kit');
-    await requireSealedBy(
-        kitSeal,
-        CUSTODY_SEED_BYTES,
-        await signersThrough(
-            chain,
-            ctx.sealerUserId,
-            options.sealerMlDsaPublicKey,
-            options.sealerHistory ?? null,
-        ),
-        kind,
-    );
+    const { signer, current } = await signerAt(org, ctx, options.sealerMlDsaPublicKey);
+    await requireSealedBy(kitSeal, CUSTODY_SEED_BYTES, [signer], kind);
     const toKit = await listedRecipient(kitAt(org, ctx.kitVersion), options.kitKemPublicKey);
     const secrets = await custodySecrets(org, ctx.custodyKeyVersion, options.custodySeed);
     const coins = await openChecked(
@@ -807,17 +846,19 @@ export async function checkKitSeal(
         SEAL_COINS_BYTES,
         ctx,
         kindOf(await kitSealProofParts(ctx, kitSeal), KIT_SEAL_PROOF_INFO, 'recovery kit proof'),
+        org,
         options,
         secrets,
         async () => true,
     );
     if (coins.status === 'bad') return coins;
     try {
+        // (The proof was signed under the same keys as the seal: `current` is one answer for both.)
         const again = await sealedWithCoins(options.custodySeed, toKit, kind, coins.value);
         const sealed = kitSeal.subarray(0, hybridSealedBytes(CUSTODY_SEED_BYTES));
-        return sameBytes(again, sealed)
-            ? { status: 'opened', value: true }
-            : { status: 'bad', sealerUserId: ctx.sealerUserId };
+        if (!sameBytes(again, sealed))
+            return { status: 'bad', sealerUserId: current ? ctx.sealerUserId : null };
+        return { status: current ? 'opened' : 'unattributed', value: true };
     } finally {
         coins.value.fill(0);
     }
@@ -835,27 +876,23 @@ export async function openKitSeal(
     ctx: KitSealContext,
     options: Opening & { kitSecret: Uint8Array },
 ) {
-    const { chain } = options;
-    const org = kitSealOnChain(chain, ctx);
+    const org = kitSealOnChain(options.chain, ctx);
     const kit = await kitKeys(options.kitSecret, ctx.groupId);
     kit.signer.signingKey.fill(0);
     kit.signer.mlDsaSecretKey.fill(0);
-    const listed = kitAt(org, ctx.kitVersion);
-    if (
-        kit.publicKeys.encryptionPublicKey !== listed.encryptionPublicKey ||
-        (await digest(decode(kit.publicKeys.kemPublicKey))) !== listed.kemPublicKeyDigest
-    )
-        throw new CryptoError(NOT_THE_KIT);
+    // Every path out wipes the kit's secrets, a refusal included.
     try {
+        const listed = kitAt(org, ctx.kitVersion);
+        if (
+            kit.publicKeys.encryptionPublicKey !== listed.encryptionPublicKey ||
+            (await digest(decode(kit.publicKeys.kemPublicKey))) !== listed.kemPublicKeyDigest
+        )
+            throw new CryptoError(NOT_THE_KIT);
+        const { signer } = await signerAt(org, ctx, options.sealerMlDsaPublicKey);
         const seed = await openHybrid(
             kitSeal,
             CUSTODY_SEED_BYTES,
-            await signersThrough(
-                chain,
-                ctx.sealerUserId,
-                options.sealerMlDsaPublicKey,
-                options.sealerHistory ?? null,
-            ),
+            [signer],
             kit.secrets,
             kindOf(kitSealParts(ctx), KIT_SEAL_INFO, 'recovery kit'),
         );
@@ -989,6 +1026,7 @@ export async function openKeyEscrow(
         GROUP_SEED_BYTES,
         ctx,
         kindOf(keyEscrowParts(ctx), KEY_ESCROW_INFO, 'group key escrow'),
+        org,
         options,
         secrets,
         (seed) => groupSeedIs(seed, chain, ctx.groupKeyVersion),
@@ -1093,6 +1131,7 @@ export async function openCustodyPrevious(
         CUSTODY_SEED_BYTES,
         ctx,
         kindOf(parts, CUSTODY_PREVIOUS_INFO, 'earlier company key'),
+        org,
         options,
         secrets,
         (seed) => seedIs(seed, before),

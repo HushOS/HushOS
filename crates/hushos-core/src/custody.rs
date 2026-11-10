@@ -206,16 +206,40 @@ fn same_bytes(a: &[u8], b: &[u8]) -> bool {
 
 /* What the chain says of its company */
 
-/// What a check of a seal says: opened, with what it held; or bad, when its
-/// sealer's signature holds and yet it does not open or holds something
-/// other than what the chain commits to. `Bad` names the sealer, under their
-/// own signature. A seal nobody entitled signed is refused instead: it says
-/// nothing of anyone.
+/// What a check of a seal says:
+///
+/// - `Opened`, with what it held: its sealer signed it under keys their entry
+///   still names;
+/// - `Unattributed`, with what it held: it holds what the chain commits to,
+///   and was signed under the keys its sealer's entry named at the roster it
+///   names, which the entry has since left (a new identity folded in, or keys
+///   written over). It still opens: a `previousEnvelope` or a folder's seal is
+///   never remade for its sealer's sake. It says nothing of who holds that
+///   entry now;
+/// - `Bad`: its signature holds under those keys and yet it does not open, or
+///   holds something other than what the chain commits to. It names the
+///   sealer, under their own signature, unless their keys have since been
+///   replaced (then nobody the list names now is answerable for it: `None`).
+///
+/// A seal nobody entitled signed is refused instead: it says nothing of anyone.
 #[derive(Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum SealCheck {
     Opened { value: SecretBytes },
-    Bad { sealer_user_id: String },
+    Unattributed { value: SecretBytes },
+    Bad { sealer_user_id: Option<String> },
+}
+
+/// What a data admin's check of a kit seal says ([`kit_seal_check`]): the kit
+/// will open to the company key (`Holds`; `Unattributed` when its sealer's
+/// keys have since been replaced), or it will not (`Bad`, naming the sealer
+/// unless their keys have since been replaced).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum KitSealCheck {
+    Holds,
+    Unattributed,
+    Bad { sealer_user_id: Option<String> },
 }
 
 fn company_of<'a>(chain: &'a Arc<AcceptedRosters>, group_id: &str) -> CoreResult<&'a OrgChain> {
@@ -295,32 +319,74 @@ fn kind_of<'a>(parts: &[Value], info: &'a [u8], statement: Statement<'a>) -> Cor
 }
 
 /*
- * Opens a seal to a company key and judges what it holds: refused unless one
- * of the sealer's keys through the chain signed it; then `Bad`, naming the
- * sealer, when it does not open under the seed or `holds` says the payload is
- * not what the chain commits to.
+ * The keys a seal that names a roster is checked under: the ones its sealer's
+ * entry named at that roster (the chain's own record, OrgChain::signer_keys),
+ * whatever the entry names now, and whether it still names them. Family seals
+ * are remade when their sealer's keys change; a `previousEnvelope` and a
+ * folder's seal to the company key are not, so they are never judged by the
+ * sealer's latest keys or by a succession path that may not exist (an Owner
+ * who started over, a `left` entry written over). A served ML-DSA key the
+ * entry did not name there is refused, as is a sealer not yet on the list.
+ */
+fn signer_at(
+    org: &OrgChain,
+    sealer_user_id: &str,
+    roster_version: u64,
+    served_ml_dsa_public_key: &[u8],
+) -> CoreResult<(HybridPublicKey, bool)> {
+    let spans = org.signer_keys.get(sealer_user_id).map(Vec::as_slice).unwrap_or_default();
+    let named = spans
+        .iter()
+        .enumerate()
+        .rfind(|(_, span)| span.from <= roster_version)
+        .filter(|(_, span)| {
+            served_ml_dsa_public_key.len() == ML_DSA_PUBLIC_KEY_BYTES
+                && digest(served_ml_dsa_public_key) == span.ml_dsa_public_key_digest
+        })
+        .ok_or_else(|| input(NOT_LISTED))?;
+    Ok((
+        HybridPublicKey {
+            signing_public_key: decode("signingPublicKey", &named.1.signing_public_key, Some(32))?,
+            ml_dsa_public_key: served_ml_dsa_public_key.to_vec(),
+        },
+        named.0 == spans.len() - 1,
+    ))
+}
+
+/*
+ * Opens a seal to a company key and judges what it holds: refused unless the
+ * keys its sealer's entry named at the roster it names signed it; then `Bad`
+ * when it does not open under the seed or `holds` says the payload is not
+ * what the chain commits to; else what it held, attributed to its sealer only
+ * while their entry still names those keys.
  */
 #[allow(clippy::too_many_arguments)]
 fn open_checked(
     envelope: &[u8],
     payload_len: usize,
     sealer_user_id: &str,
+    roster_version: u64,
     kind: &SealKind,
-    chain: &AcceptedRosters,
+    org: &OrgChain,
     sealer_ml_dsa_public_key: &[u8],
-    sealer_history: Option<&SignerHistory>,
     custody_seed: &[u8],
     holds: impl Fn(&[u8]) -> bool,
 ) -> CoreResult<SealCheck> {
-    let signers = signers_through(chain, sealer_user_id, Some(sealer_ml_dsa_public_key), sealer_history)?;
+    let (signer, current) = signer_at(org, sealer_user_id, roster_version, sealer_ml_dsa_public_key)?;
+    let signers = [signer];
     require_sealed_by(envelope, payload_len, &signers, kind)?;
-    let bad = || Ok(SealCheck::Bad { sealer_user_id: sealer_user_id.into() });
     let opened =
         open_hybrid_with(envelope, payload_len, &signers, &custody_seed[..32], &custody_seed[32..], kind);
-    match opened.map(SecretBytes::new) {
-        Ok(payload) if holds(&payload) => Ok(SealCheck::Opened { value: payload }),
-        _ => bad(),
-    }
+    Ok(match opened.map(SecretBytes::new) {
+        Ok(value) if holds(&value) => {
+            if current {
+                SealCheck::Opened { value }
+            } else {
+                SealCheck::Unattributed { value }
+            }
+        }
+        _ => SealCheck::Bad { sealer_user_id: current.then(|| sealer_user_id.to_string()) },
+    })
 }
 
 /* Folder keys sealed to the company key (2.2) */
@@ -445,7 +511,6 @@ pub fn custody_seal_open(
     ctx: CustodySealContext,
     chain: Arc<AcceptedRosters>,
     sealer_ml_dsa_public_key: Vec<u8>,
-    sealer_history: Option<SignerHistory>,
     custody_seed: Vec<u8>,
 ) -> CoreResult<SealCheck> {
     let custody_seed = Zeroizing::new(custody_seed);
@@ -468,10 +533,10 @@ pub fn custody_seal_open(
         &envelope,
         32,
         &ctx.sealer_user_id,
+        ctx.roster_version,
         &kind_of(&parts, CUSTODY_SEAL_INFO, &statement)?,
-        &chain,
+        org,
         &sealer_ml_dsa_public_key,
-        sealer_history.as_ref(),
         seed,
         |key| area_key_commitment(key).is_ok_and(|commitment| commitment == listed),
     )
@@ -777,11 +842,10 @@ fn kit_seal_on_chain<'a>(chain: &'a Arc<AcceptedRosters>, ctx: &KitSealContext) 
 /// compares everything before the signature (1,256 bytes) with the stored
 /// seal. Refused unless both the seal and its proof are signed by the Owner
 /// the chain entitles and `custody_seed` is the chain's key at the version
-/// named. Then nothing when the seal holds, or the sealer to report when the
-/// proof does not open or the seal is not the one those values make: the fix
-/// is a new kit.
+/// named. Then whether it holds ([`KitSealCheck`]): `Bad` when the proof does
+/// not open or the seal is not the one those values make. The fix is a new
+/// kit.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
-#[allow(clippy::too_many_arguments)]
 pub fn kit_seal_check(
     kit_seal: Vec<u8>,
     proof: Vec<u8>,
@@ -789,21 +853,16 @@ pub fn kit_seal_check(
     chain: Arc<AcceptedRosters>,
     kit_kem_public_key: Vec<u8>,
     sealer_ml_dsa_public_key: Vec<u8>,
-    sealer_history: Option<SignerHistory>,
     custody_seed: Vec<u8>,
-) -> CoreResult<Option<String>> {
+) -> CoreResult<KitSealCheck> {
     let custody_seed = Zeroizing::new(custody_seed);
     let parts = kit_seal_parts(&ctx, "hushos/group/kit-seal")?;
     let org = kit_seal_on_chain(&chain, &ctx)?;
     let statement = |sealed: &[u8]| kit_seal_statement(ctx.clone(), sealed.to_vec());
     let kind = kind_of(&parts, KIT_SEAL_INFO, &statement)?;
-    let signers = signers_through(
-        &chain,
-        &ctx.sealer_user_id,
-        Some(&sealer_ml_dsa_public_key),
-        sealer_history.as_ref(),
-    )?;
-    require_sealed_by(&kit_seal, CUSTODY_SEED_BYTES, &signers, &kind)?;
+    let (signer, current) =
+        signer_at(org, &ctx.sealer_user_id, ctx.roster_version, &sealer_ml_dsa_public_key)?;
+    require_sealed_by(&kit_seal, CUSTODY_SEED_BYTES, &[signer], &kind)?;
     let kit = kit_at(org, ctx.kit_version)?;
     let to_kit =
         listed_recipient(&kit.encryption_public_key, &kit.kem_public_key_digest, &kit_kem_public_key)?;
@@ -814,20 +873,28 @@ pub fn kit_seal_check(
         &proof,
         SEAL_COINS_BYTES,
         &ctx.sealer_user_id,
+        ctx.roster_version,
         &kind_of(&kit_seal_proof_parts(&ctx, &kit_seal)?, KIT_SEAL_PROOF_INFO, &proof_statement)?,
-        &chain,
+        org,
         &sealer_ml_dsa_public_key,
-        sealer_history.as_ref(),
         seed,
         |_| true,
     )?;
+    // (The proof was signed under the same keys as the seal: `current` is one answer for both.)
+    let bad = KitSealCheck::Bad { sealer_user_id: current.then(|| ctx.sealer_user_id.clone()) };
     let coins = match coins {
-        SealCheck::Opened { value } => value,
-        SealCheck::Bad { sealer_user_id } => return Ok(Some(sealer_user_id)),
+        SealCheck::Opened { value } | SealCheck::Unattributed { value } => value,
+        SealCheck::Bad { .. } => return Ok(bad),
     };
     let again = Zeroizing::new(sealed_with_coins(seed, &to_kit, &kit_kem_public_key, &kind, &coins)?);
     let sealed = &kit_seal[..hybrid_sealed_bytes(CUSTODY_SEED_BYTES)];
-    Ok((!same_bytes(&again, sealed)).then(|| ctx.sealer_user_id.clone()))
+    Ok(if !same_bytes(&again, sealed) {
+        bad
+    } else if current {
+        KitSealCheck::Holds
+    } else {
+        KitSealCheck::Unattributed
+    })
 }
 
 /// Opens the kit seal with the recovery kit: the company seed. Refused unless
@@ -841,7 +908,6 @@ pub fn kit_seal_open(
     ctx: KitSealContext,
     chain: Arc<AcceptedRosters>,
     sealer_ml_dsa_public_key: Vec<u8>,
-    sealer_history: Option<SignerHistory>,
     kit_secret: Vec<u8>,
 ) -> CoreResult<SecretBytes> {
     let kit_secret = Zeroizing::new(kit_secret);
@@ -855,12 +921,8 @@ pub fn kit_seal_open(
     {
         return Err(input(NOT_THE_KIT));
     }
-    let signers = signers_through(
-        &chain,
-        &ctx.sealer_user_id,
-        Some(&sealer_ml_dsa_public_key),
-        sealer_history.as_ref(),
-    )?;
+    let (signer, _) = signer_at(org, &ctx.sealer_user_id, ctx.roster_version, &sealer_ml_dsa_public_key)?;
+    let signers = [signer];
     let statement = |sealed: &[u8]| kit_seal_statement(ctx.clone(), sealed.to_vec());
     let seed = SecretBytes::new(open_hybrid_with(
         &kit_seal,
@@ -999,7 +1061,6 @@ pub fn key_escrow_open(
     ctx: KeyEscrowContext,
     chain: Arc<AcceptedRosters>,
     sealer_ml_dsa_public_key: Vec<u8>,
-    sealer_history: Option<SignerHistory>,
     custody_seed: Vec<u8>,
 ) -> CoreResult<SealCheck> {
     let custody_seed = Zeroizing::new(custody_seed);
@@ -1015,10 +1076,10 @@ pub fn key_escrow_open(
         &envelope,
         GROUP_SEED_BYTES,
         &ctx.sealer_user_id,
+        ctx.roster_version,
         &kind_of(&parts, KEY_ESCROW_INFO, &statement)?,
-        &chain,
+        org,
         &sealer_ml_dsa_public_key,
-        sealer_history.as_ref(),
         seed,
         |group_seed| group_seed_is(group_seed, &chain, ctx.group_key_version),
     )
@@ -1127,7 +1188,6 @@ pub fn custody_previous_open(
     ctx: CustodyPreviousContext,
     chain: Arc<AcceptedRosters>,
     sealer_ml_dsa_public_key: Vec<u8>,
-    sealer_history: Option<SignerHistory>,
     custody_seed: Vec<u8>,
 ) -> CoreResult<SealCheck> {
     let custody_seed = Zeroizing::new(custody_seed);
@@ -1144,10 +1204,10 @@ pub fn custody_previous_open(
         &envelope,
         CUSTODY_SEED_BYTES,
         &ctx.sealer_user_id,
+        ctx.roster_version,
         &kind_of(&parts, CUSTODY_PREVIOUS_INFO, &statement)?,
-        &chain,
+        org,
         &sealer_ml_dsa_public_key,
-        sealer_history.as_ref(),
         seed,
         |previous| seed_is(previous, before),
     )

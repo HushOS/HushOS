@@ -21,6 +21,7 @@ import {
     type AcceptInput,
     type AcceptedRosters,
     type GroupAnchor,
+    type GroupChainCache,
 } from './group-trust';
 import { parseRoster, rosterStatement, type SignedGroupStatement } from './groups';
 import { decode, encode } from './keys';
@@ -79,6 +80,26 @@ describe('a company made by the Rust core', () => {
         await expect(
             acceptRosters({ ...input, rosters: [...input.rosters.slice(0, 3), bare] }),
         ).rejects.toThrow('not signed with the company’s recovery kit');
+    });
+
+    test('the core’s cache of that chain continues here, and one with a part edited does not', async () => {
+        const cache = core.history.expected.cache as unknown as GroupChainCache;
+        const from = (edited: GroupChainCache) =>
+            acceptRosters({ ...input, anchor: null, rosters: [], cache: edited });
+        const chain = await from(structuredClone(cache));
+        expect(chain.status).toBe('accepted');
+        expect((chain as AcceptedRosters).recoveries).toHaveLength(1);
+        expect((chain as AcceptedRosters).cache).toEqual(cache);
+        const org = cache.org!;
+        for (const edited of [
+            { ...cache, org: { ...org, signerKeys: {} } },
+            { ...cache, org: { ...org, custodyKeys: org.custodyKeys.slice(1) } },
+            { ...cache, org: { ...org, dataAdmins: {} } },
+            { ...cache, cacheVersion: 2 },
+        ])
+            await expect(from(edited as GroupChainCache)).rejects.toThrow(
+                'Invalid member list cache.',
+            );
     });
 
     test('this twin’s builders write the core’s rosters byte for byte', async () => {

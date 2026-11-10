@@ -125,3 +125,42 @@ export const shareGrantee = once(async (): Promise<GranteeSecrets> => {
 });
 /* crates/hushos-core/fixtures/settings-area-cases.json: Core 6's settings and family folder cases. */
 export const settingsAreaCases = () => read('crates/hushos-core/fixtures/settings-area-cases.json');
+
+/*
+ * A fixture company's chain, accepted through its first `through` rosters:
+ * `core` is the one the Rust core made (core-company.json), `web` the one
+ * whose seals this twin made (web-company.json). Null when the fixture has
+ * no such roster. The Rust twin's `company_chain` accepts the same.
+ */
+const companyChains = new Map<string, Promise<AcceptedRosters | null>>();
+export function companyChain(which: 'core' | 'web', through: number) {
+    const key = `${which}:${through}`;
+    if (!companyChains.has(key))
+        companyChains.set(
+            key,
+            (async () => {
+                const history =
+                    which === 'core' ? company().history.input : webCompany().seals.history;
+                if (
+                    !Number.isSafeInteger(through) ||
+                    through < 1 ||
+                    through > history.rosters.length
+                )
+                    return null;
+                const accepted = await acceptRosters({
+                    groupId: GROUP,
+                    firstKeys: history.firstKeys,
+                    anchor: 'created',
+                    pins: [],
+                    rosters: history.rosters.slice(0, through).map(signed),
+                    successions: history.successions.map(signed),
+                    mlDsaKeys: history.mlDsaKeys,
+                    me: history.me,
+                    cache: null,
+                });
+                if (accepted.status !== 'accepted') throw new Error('a fixture company forked');
+                return accepted as AcceptedRosters;
+            })(),
+        );
+    return companyChains.get(key)!;
+}

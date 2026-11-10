@@ -234,6 +234,16 @@ pub struct DataAdminSpan {
     pub until: Option<u64>,
 }
 
+/// The signing keys a member's entry named from roster `from` on (until the
+/// next span's): the Ed25519 key, and the ML-DSA key by its SHA-256.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct SignerKeysAt {
+    pub from: u64,
+    pub signing_public_key: String,
+    pub ml_dsa_public_key_digest: String,
+}
+
 /// What acceptance folds from a company's rosters (companies-design 2.1, 2.2;
 /// the web's `OrgChain`), beside what every group's chain holds:
 ///
@@ -245,6 +255,9 @@ pub struct DataAdminSpan {
 ///   list digest and the roster that listed it, with its signer;
 /// - when each member held `DataAdmin`, so a seal that names a roster is
 ///   judged by who was a data admin there;
+/// - the signing keys each member's entry named, from the roster that first
+///   named them, so a seal that names a roster is checked under the keys its
+///   sealer's entry named there, whatever the entry names now;
 /// - every recovery roster (rule 11): its version and its signer.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -256,6 +269,7 @@ pub struct OrgChain {
     pub area_lists: HashMap<String, Vec<String>>,
     pub area_rosters: HashMap<String, Vec<IntroducedAt>>,
     pub data_admins: HashMap<String, Vec<DataAdminSpan>>,
+    pub signer_keys: HashMap<String, Vec<SignerKeysAt>>,
     pub recoveries: Vec<IntroducedAt>,
 }
 
@@ -375,10 +389,9 @@ impl AcceptedRosters {
     pub fn area_roots(&self) -> HashMap<String, Vec<Option<String>>> {
         self.area_roots.clone()
     }
-    /// The areas the chain retired (tombstones, design 2.10), sorted: never
-    /// written, granted or rotated again.
-    /// A company's chain: its company keys, kits, area kinds and lists, and
-    /// who held `DataAdmin` when ([`OrgChain`]). `None` for a family.
+    /// A company's chain: its company keys, kits, area kinds and lists, who
+    /// held `DataAdmin` when, and the signing keys each entry named when
+    /// ([`OrgChain`]). `None` for a family.
     pub fn org(&self) -> Option<OrgChain> {
         self.org.clone()
     }
@@ -390,6 +403,8 @@ impl AcceptedRosters {
         self.org.as_ref().map(|org| org.recoveries.clone()).unwrap_or_default()
     }
 
+    /// The areas the chain retired (tombstones, design 2.10), sorted: never
+    /// written, granted or rotated again.
     pub fn retired_areas(&self) -> Vec<String> {
         self.retired_areas.clone()
     }
@@ -761,6 +776,11 @@ const NOT_AUTOMATIC: &str = "This is not an automatic admission the company’s 
 const WRONG_AREA_COUNT: &str = "This member list does not count the company’s folders.";
 const NOT_A_RECOVERY: &str = "The recovery kit makes its holder an owner and changes nothing else.";
 const NOT_KIT_SIGNED: &str = "This member list is not signed with the company’s recovery kit.";
+const HOLDER_KEYS: &str =
+    "Only an owner, or the member themselves, changes the keys of someone who signs member lists.";
+const STRAY_KIT_SIGNATURE: &str = "Only a recovery roster carries the recovery kit’s signature.";
+const ROLE_NEEDS_CHECK: &str =
+    "Giving someone the member list or the recovery kit needs a fresh words check of their keys.";
 const GUARDED_FOLD_IN: &str =
     "An owner’s or kit holder’s new keys need a fresh words check before they are folded in.";
 
@@ -921,6 +941,21 @@ fn check_roster_org(
         if (guarded || kit_rises) && !signer_is_owner {
             return Err(input(OWNER_ONLY));
         }
+        // Rule 8, for every entry that holds `members` before or after: its keys change only on
+        // that member's own roster (their fold-in, signed under the keys the entry named before)
+        // or an Owner's. Keys planted in a fellow Admin's entry would be sealed the next company
+        // key and group key as that Admin.
+        let planted = next.members.iter().any(|entry| {
+            let Some(was) = previous.and_then(|previous| previous.entry(&entry.user_id)) else {
+                return false;
+            };
+            !same_keys(was, entry)
+                && entry.user_id != next.signer_user_id
+                && (holds(Some(was), GroupRole::Members) || holds(Some(entry), GroupRole::Members))
+        });
+        if planted && !signer_is_owner {
+            return Err(input(HOLDER_KEYS));
+        }
         // Rule 12: a new company key is an Owner's to sign.
         if custody_rises && !signer_is_owner {
             return Err(input(OWNER_KEYS));
@@ -946,6 +981,19 @@ fn check_roster_org(
             return Err(refused());
         };
         if !before.rules.auto_join || fields.members_same.is_some() {
+            return Err(refused());
+        }
+        // Nothing but the admission: the rules, the company key and the kit as they were, and no
+        // area row but the newcomer's own new employee area.
+        if fields.rules != before.rules
+            || fields.custody != before.custody
+            || next.areas.len() > 1
+            || next.areas.iter().any(|row| {
+                row.retired
+                    || row.area_kind != Some(AreaKind::Employee)
+                    || ledger.keys.contains_key(&row.workspace_id)
+            })
+        {
             return Err(refused());
         }
         let added: Vec<&RosterMember> =
@@ -1052,10 +1100,30 @@ fn signed_by_kit(
 }
 
 /* Folds a held company roster into the chain's company state (check_roster_org passed it). */
-fn fold_org(org: &mut OrgChain, roster: &Roster, recovery: bool) {
+fn fold_org(org: &mut OrgChain, previous: Option<&Roster>, roster: &Roster, recovery: bool) {
     let Some(fields) = &roster.org else {
         return;
     };
+    // Turning auto-join on (never an `auto` roster's doing) starts its count afresh: one
+    // admission with a wrong day would otherwise stop every later one for good.
+    let was_on = previous.and_then(|previous| previous.org.as_ref()).map(|before| before.rules.auto_join);
+    if fields.auto.is_none() && fields.rules.auto_join && was_on == Some(false) {
+        org.last_auto = None;
+    }
+    // The signing keys each entry names, from the roster that first named them there.
+    for entry in &roster.members {
+        let spans = org.signer_keys.entry(entry.user_id.clone()).or_default();
+        if !spans.last().is_some_and(|last| {
+            last.signing_public_key == entry.signing_public_key
+                && last.ml_dsa_public_key_digest == entry.ml_dsa_public_key_digest
+        }) {
+            spans.push(SignerKeysAt {
+                from: roster.roster_version,
+                signing_public_key: entry.signing_public_key.clone(),
+                ml_dsa_public_key_digest: entry.ml_dsa_public_key_digest.clone(),
+            });
+        }
+    }
     let at =
         IntroducedAt { roster_version: roster.roster_version, signer_user_id: roster.signer_user_id.clone() };
     let custody = &fields.custody;
@@ -1556,6 +1624,11 @@ pub(crate) fn org_cache_value(record: &OrgCache) -> serde_json::Value {
         "areaLists": org.area_lists,
         "areaRosters": org.area_rosters.iter().map(|(id, list)| (id.clone(), json!(list.iter().map(at).collect::<Vec<_>>()))).collect::<serde_json::Map<_, _>>(),
         "dataAdmins": org.data_admins.iter().map(|(id, spans)| (id.clone(), json!(spans.iter().map(|span| json!({ "from": span.from, "until": span.until })).collect::<Vec<_>>()))).collect::<serde_json::Map<_, _>>(),
+        "signerKeys": org.signer_keys.iter().map(|(id, spans)| (id.clone(), json!(spans.iter().map(|span| json!({
+            "from": span.from,
+            "signingPublicKey": span.signing_public_key,
+            "mlDsaPublicKeyDigest": span.ml_dsa_public_key_digest,
+        })).collect::<Vec<_>>()))).collect::<serde_json::Map<_, _>>(),
         "recoveries": org.recoveries.iter().map(at).collect::<Vec<_>>(),
         "members": record.members.as_ref().map(|members| members.iter().map(|m| json!({
             "userId": m.user_id,
@@ -1652,6 +1725,22 @@ pub(crate) fn org_cache_of(value: &serde_json::Value) -> Result<OrgCache, ()> {
                                 Some(Value::Null) => None,
                                 until => Some(number(until)?),
                             },
+                        })
+                    })
+                    .collect::<Result<_, ()>>()?;
+                Ok((id.clone(), spans))
+            })
+            .collect::<Result<_, ()>>()?,
+        signer_keys: object(record.get("signerKeys"))?
+            .iter()
+            .map(|(id, spans)| {
+                let spans = list(Some(spans))?
+                    .iter()
+                    .map(|span| {
+                        Ok(SignerKeysAt {
+                            from: number(span.get("from"))?,
+                            signing_public_key: text(span.get("signingPublicKey"))?,
+                            ml_dsa_public_key_digest: text(span.get("mlDsaPublicKeyDigest"))?,
                         })
                     })
                     .collect::<Result<_, ()>>()?;
@@ -1825,6 +1914,19 @@ fn check_org_cache(record: &OrgCache, cache: &GroupChainCache, roster: &Roster) 
             floor = span.until.unwrap_or(from);
         }
     }
+    for (user_id, spans) in &org.signer_keys {
+        uuid(user_id, "user id")?;
+        if spans.is_empty() || !in_order(spans.iter().map(|span| span.from).collect()) {
+            return Err(bad());
+        }
+        for span in spans {
+            if integer(span.from, "roster version")? > last {
+                return Err(bad());
+            }
+            bytes_of(&span.signing_public_key, 32, "signing key")?;
+            digest_of(&span.ml_dsa_public_key_digest, "key digest")?;
+        }
+    }
     for at in &org.recoveries {
         introduced(at.roster_version, &at.signer_user_id)?;
     }
@@ -1843,7 +1945,8 @@ fn check_org_cache(record: &OrgCache, cache: &GroupChainCache, roster: &Roster) 
         }
         _ => return Err(bad()),
     }
-    // Who holds `data_admin` on the last roster is who has an open span.
+    // Who holds `data_admin` on the last roster is who has an open span, and every entry's
+    // signing keys there are its latest span's; nobody else has spans.
     for entry in &resolved.members {
         let open = org
             .data_admins
@@ -1853,6 +1956,15 @@ fn check_org_cache(record: &OrgCache, cache: &GroupChainCache, roster: &Roster) 
         if open != entry.active_with(Some(GroupRole::DataAdmin)) {
             return Err(bad());
         }
+        if !org.signer_keys.get(&entry.user_id).and_then(|spans| spans.last()).is_some_and(|keys| {
+            keys.signing_public_key == entry.signing_public_key
+                && keys.ml_dsa_public_key_digest == entry.ml_dsa_public_key_digest
+        }) {
+            return Err(bad());
+        }
+    }
+    if org.signer_keys.len() != resolved.members.len() {
+        return Err(bad());
     }
     Ok(resolved)
 }
@@ -2173,6 +2285,7 @@ impl<'a> State<'a> {
             let mut group_signed = false;
             let mut signed = false;
             let mut kit_signed = false;
+            let mut stray_kit = false;
             for copy in copies {
                 if !verify_group(key, statement, &copy.signature) {
                     continue;
@@ -2182,6 +2295,12 @@ impl<'a> State<'a> {
                     continue;
                 }
                 signed = true;
+                // The kit signs a recovery roster and nothing else: a copy of any other roster
+                // that carries a kit signature is not taken.
+                if !recovery && copy.kit_signature.is_some() {
+                    stray_kit = true;
+                    continue;
+                }
                 if recovery && !signed_by_kit(authority, roster, statement, copy, self.ml_dsa_keys) {
                     continue;
                 }
@@ -2195,7 +2314,7 @@ impl<'a> State<'a> {
                 return Err(input(NOT_MEMBER).into());
             }
             if !kit_signed {
-                return Err(input(NOT_KIT_SIGNED).into());
+                return Err(input(if stray_kit { STRAY_KIT_SIGNATURE } else { NOT_KIT_SIGNED }).into());
             }
         }
         if let Some(previous) = previous.filter(|at| at.dropped_holder) {
@@ -2569,7 +2688,7 @@ fn accept(
         let roster = with_members(&at.value, previous.as_ref().map(|previous| &previous.roster))?;
         let recovery = state.roster_rules(&roster, &at.statement, Some(&at.copies), previous.as_ref())?;
         fold_areas(&mut state.areas, &roster);
-        fold_org(&mut state.org, &roster, recovery);
+        fold_org(&mut state.org, previous.as_ref().map(|previous| &previous.roster), &roster, recovery);
         state.held.push(Held {
             dropped_holder: previous.as_ref().is_some_and(|p| drops_holder(&p.roster, &roster)),
             roster,
@@ -3272,11 +3391,14 @@ pub struct NextOrgRoster {
     pub auto_utc_day: Option<String>,
     /// The digest over every live area's heads as this device verified them (2.3).
     pub heads_digest: String,
-    /// The fresh words checks this device holds (companies-design 2.2,
+    /// The fresh words checks this device holds (companies-design 1.2, and 2.2
     /// "Another Owner checks first"): a verified pin of each Owner or kit
-    /// holder whose entry this roster moves to new keys, made over those new
-    /// keys. Without one such an entry is folded in only on that person's own
-    /// roster: a signed link is not enough for someone who holds the company.
+    /// holder whose entry this roster moves to new keys, and of everyone
+    /// already on the list whom it gives `Members` or `Recovery`, each made
+    /// over exactly the keys the entry names on this roster. Without one such
+    /// an entry changes only on that person's own roster: a signed link, or
+    /// keys a holder wrote in earlier, are not enough for someone who holds
+    /// the company.
     #[cfg_attr(feature = "uniffi", uniffi(default = []))]
     pub checked: Vec<VerifiedPin>,
 }
@@ -3494,6 +3616,22 @@ fn company_fields(
         }
         if !options.checked.iter().any(|pin| checked_keys(pin, entry)) {
             return Err(input(GUARDED_FOLD_IN));
+        }
+    }
+    // Giving `members` or `recovery` to someone already on the list needs the same check, over
+    // exactly the keys their entry names: keys planted in a Member's entry first are not then
+    // promoted on the roster's word alone. The signer's own promotion (a recovery roster) is
+    // their own entry.
+    for entry in members {
+        let Some(was) = previous.entry(&entry.user_id).filter(|_| entry.user_id != signer_user_id) else {
+            continue;
+        };
+        let gains = |role: GroupRole| holds(Some(entry), role) && !holds(Some(was), role);
+        if !gains(GroupRole::Members) && !gains(GroupRole::Recovery) {
+            continue;
+        }
+        if !options.checked.iter().any(|pin| checked_keys(pin, entry)) {
+            return Err(input(ROLE_NEEDS_CHECK));
         }
     }
     // The company key and the kit: kept as they are, or each replaced by a new one at the next

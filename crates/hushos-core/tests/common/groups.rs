@@ -1107,16 +1107,16 @@ fn same_but_since(a: &RosterMember, b: &RosterMember) -> bool {
  * about; the fixture carries the full verdict.
  */
 pub fn group_cases() -> Vec<(&'static str, CaseInput, Value)> {
-    // Every case's histories are locals of one function: in a debug build its frame is past a
-    // test thread's 2 MiB, so it runs on a thread with room for it.
-    std::thread::Builder::new()
-        .stack_size(64 << 20)
-        .spawn(group_cases_built)
-        .expect("a thread")
-        .join()
-        .expect("the cases build")
+    group_cases_built()
 }
 
+/*
+ * Each block of cases below runs as a closure called on the spot, so its histories live in a
+ * frame of their own and are gone when it returns: written as plain blocks, every case's locals
+ * shared this function's one frame, which in a debug build outgrew a test thread's stack.
+ * Clippy would have each closure written out as a block again, which is what this undoes.
+ */
+#[allow(clippy::redundant_closure_call)]
 fn group_cases_built() -> Vec<(&'static str, CaseInput, Value)> {
     let (organizer, adult, holder, child, outsider) = (person(1), person(2), person(3), person(4), person(5));
     let everyone = [&organizer, &adult, &holder, &child, &outsider];
@@ -1158,7 +1158,7 @@ fn group_cases_built() -> Vec<(&'static str, CaseInput, Value)> {
     let mut cases = vec![];
 
     // Rosters 1-3, then: another 2 beside them (dead), two 3s (ambiguous), a broken link.
-    {
+    (|| {
         let mut h = History::new();
         h.roster(&organizer, vec![owner.clone(), active(&adult, &[])], None);
         h.roster(&organizer, vec![owner.clone(), active(&adult, &[GroupRole::Billing])], None);
@@ -1447,10 +1447,10 @@ fn group_cases_built() -> Vec<(&'static str, CaseInput, Value)> {
             CaseInput { next: next(None, Some(succeed_from(2)), None), ..from_one(&h) },
             next_says(3, "refused"),
         ));
-    }
+    })();
     // A holder removed at 2 (key replaced, tied to 2), then 3 under key 2; the removed holder
     // forges another 3 under key 1: two latest rosters, refused.
-    {
+    (|| {
         let left2 = holder.entry(&[GroupRole::Members], 2, MemberStatus::Left);
         let mut h = History::new();
         h.roster(&organizer, vec![owner.clone(), active(&holder, &[GroupRole::Members])], None);
@@ -1465,9 +1465,9 @@ fn group_cases_built() -> Vec<(&'static str, CaseInput, Value)> {
         let mut rosters = h.rosters.clone();
         rosters.push(forged);
         cases.push(("forged-latest", CaseInput { rosters, ..from_one(&h) }, refused.clone()));
-    }
+    })();
     // A succession tied to 2, then 3 still under key 1; a removal at 2 with no succession.
-    {
+    (|| {
         let mut h = History::new();
         h.roster(&organizer, vec![owner.clone()], None);
         h.roster(&organizer, vec![owner.clone(), active(&adult, &[])], None);
@@ -1480,9 +1480,9 @@ fn group_cases_built() -> Vec<(&'static str, CaseInput, Value)> {
         g.roster(&organizer, vec![owner.clone(), left2.clone()], None);
         g.roster(&organizer, vec![owner.clone(), left2, active(&adult, &[])], None);
         cases.push(("succession-due", from_one(&g), refused.clone()));
-    }
+    })();
     // Two successions from key 1 that both hold: refused, unless a group key mark chooses.
-    {
+    (|| {
         let mut h = History::new();
         h.roster(&organizer, vec![owner.clone(), active(&adult, &[])], None);
         h.succession(&organizer);
@@ -1504,9 +1504,9 @@ fn group_cases_built() -> Vec<(&'static str, CaseInput, Value)> {
             CaseInput { pins: vec![pin, rival_pin], ..from_one(&h) },
             fork("group-key", 2),
         ));
-    }
+    })();
     // The organizer replaces their identity; the holder folds it in at 3; the organizer signs 4 with it.
-    {
+    (|| {
         let (organizer2, _) = succeed(&organizer);
         let owner2 = organizer2.entry(&roles_all, 1, MemberStatus::Active);
         let mut h = History::new();
@@ -1549,9 +1549,9 @@ fn group_cases_built() -> Vec<(&'static str, CaseInput, Value)> {
             },
             refused.clone(),
         ));
-    }
+    })();
     // The entry rules: an entry dropped, a sinceVersion not the version it changed at.
-    {
+    (|| {
         let mut h = History::new();
         h.roster(&organizer, vec![owner.clone(), active(&adult, &[])], None);
         let second = |members: Vec<RosterMember>| {
@@ -1575,9 +1575,9 @@ fn group_cases_built() -> Vec<(&'static str, CaseInput, Value)> {
             CaseInput { rosters: vec![h.rosters[0].clone(), stale], ..from_one(&h) },
             refused.clone(),
         ));
-    }
+    })();
     // The adult's entry swapped for the outsider's keys at 2, then their own third identity at 3.
-    {
+    (|| {
         let (adult2, _) = succeed(&adult);
         let (adult3, _) = succeed(&adult2);
         let mut h = History::new();
@@ -1607,9 +1607,9 @@ fn group_cases_built() -> Vec<(&'static str, CaseInput, Value)> {
         let mut expected = accepted(2);
         expected["ownEntryBehindAt"] = json!([1, 2]);
         cases.push(("own-entry-behind", CaseInput { me, ..from_one(&behind) }, expected));
-    }
+    })();
     // Probes 1, 1b, 1c, F2, F3: a roster's keys are a holder's claim; versions are free.
-    {
+    (|| {
         let restarted = person_at(2, 2);
         let (adult3, _) = succeed(&restarted);
         let mut h = History::new();
@@ -1689,9 +1689,9 @@ fn group_cases_built() -> Vec<(&'static str, CaseInput, Value)> {
             },
             reads("verified", Some(GROUP), 2),
         ));
-    }
+    })();
     // P2, P3: the holder is removed at 3 and the key replaced; the outsider poses as the holder.
-    {
+    (|| {
         let mut h = History::new();
         h.roster(&organizer, vec![owner.clone(), active(&holder, &[GroupRole::Members])], None);
         h.roster(
@@ -1748,9 +1748,9 @@ fn group_cases_built() -> Vec<(&'static str, CaseInput, Value)> {
             CaseInput { pins: vec![pin_of(&h, 3, &everyone)], ..withheld },
             fork("roster", 3),
         ));
-    }
+    })();
     // F1, P4, p4b: a former holder of key 1 at a chain of nine rosters, six under key 2.
-    {
+    (|| {
         let gone = holder.entry(&[GroupRole::Members], 3, MemberStatus::Left);
         let mut h = History::new();
         h.roster(&organizer, vec![owner.clone(), active(&holder, &[GroupRole::Members])], None);
@@ -1842,9 +1842,9 @@ fn group_cases_built() -> Vec<(&'static str, CaseInput, Value)> {
             },
             accepted(9),
         ));
-    }
+    })();
     // A succession tied before the one into its key; a roster served twice; a copy with a bad signature.
-    {
+    (|| {
         let mut h = History::new();
         h.roster(&organizer, vec![owner.clone(), active(&adult, &[])], None);
         h.roster(&organizer, vec![owner.clone(), active(&adult, &[GroupRole::Billing])], None);
@@ -1875,10 +1875,10 @@ fn group_cases_built() -> Vec<(&'static str, CaseInput, Value)> {
         let mut rosters = h.rosters.clone();
         rosters[1] = flipped;
         cases.push(("only-bad-copy", CaseInput { rosters, ..from_one(&h) }, refused.clone()));
-    }
+    })();
     // Records read through the chain: the adult replaced their identity (folded in at 3 in the
     // second history), and writes before and after.
-    {
+    (|| {
         let (adult2, link) = succeed(&adult);
         let (adult3, second) = succeed(&adult2);
         let mut h = History::new();
@@ -1940,10 +1940,10 @@ fn group_cases_built() -> Vec<(&'static str, CaseInput, Value)> {
             CaseInput { record: Some(RecordProbe { signature: by_old, ..lag }), ..from_one(&h) },
             reads("retired-key", None, 3),
         ));
-    }
+    })();
     // The fifth review's probes. p4: an unsigned chain naming the child as signer, against a pin;
     // p7: an unsigned roster after the cache that does not continue it. Neither is a warning.
-    {
+    (|| {
         let mut h = History::new();
         h.roster(&organizer, vec![owner.clone(), active(&adult, &[])], None);
         h.roster(&organizer, vec![owner.clone(), active(&adult, &[GroupRole::Members])], None);
@@ -2007,9 +2007,9 @@ fn group_cases_built() -> Vec<(&'static str, CaseInput, Value)> {
             },
             refused.clone(),
         ));
-    }
+    })();
     // p3: a removed holder's rival succession tied before the real one, against group key marks.
-    {
+    (|| {
         let gone = holder.entry(&[GroupRole::Members], 1, MemberStatus::Left);
         let mut h = History::new();
         h.roster(&organizer, vec![owner.clone(), active(&holder, &[GroupRole::Members])], None);
@@ -2156,12 +2156,12 @@ fn group_cases_built() -> Vec<(&'static str, CaseInput, Value)> {
             },
             refused.clone(),
         ));
-    }
+    })();
     // r8 (Fable F3), r10: the join mark, the roster that admitted the child (2, signed by the
     // adult) by its twelve-word code over the roster's digest, its group key and key version: met;
     // another roster, key or key version is the warning; a chain short of it is a rollback; a
     // shorter code is no mark.
-    {
+    (|| {
         let mut h = History::new();
         h.roster(&organizer, vec![owner.clone(), active(&adult, &[GroupRole::Members])], None);
         h.roster(
@@ -2309,9 +2309,9 @@ fn group_cases_built() -> Vec<(&'static str, CaseInput, Value)> {
             },
             refused.clone(),
         ));
-    }
+    })();
     // r8: key 1, then key 2, then a succession from 2 back to key 1, roster 3 signed under it.
-    {
+    (|| {
         let mut h = History::new();
         h.roster(&organizer, vec![owner.clone(), active(&holder, &[GroupRole::Members])], None);
         h.succession(&organizer);
@@ -2353,9 +2353,9 @@ fn group_cases_built() -> Vec<(&'static str, CaseInput, Value)> {
             CaseInput { rosters, successions, ..from_one(&h) },
             refused.clone(),
         ));
-    }
+    })();
     // p1, p2: records under keys a fake link or a planted entry would retire; an own entry rolled back.
-    {
+    (|| {
         let mut h = History::new();
         h.roster(&organizer, vec![owner.clone(), active(&adult, &[])], None);
         let (adult2, link) = succeed(&adult);
@@ -2739,11 +2739,11 @@ fn group_cases_built() -> Vec<(&'static str, CaseInput, Value)> {
             },
             accepted(3),
         ));
-    }
+    })();
     // The sixth review: the person's own marks before anything served; version 1 keys a server
     // made up; and what the local tests alone used to cover (tie digest, succession order, the
     // extending first keys, the cache's binding, the group's kind).
-    {
+    (|| {
         let mut h = History::new();
         h.roster(&organizer, vec![owner.clone(), active(&adult, &[])], None);
         h.roster(&organizer, vec![owner.clone(), active(&adult, &[GroupRole::Billing])], None);
@@ -2995,10 +2995,10 @@ fn group_cases_built() -> Vec<(&'static str, CaseInput, Value)> {
             },
             refused.clone(),
         ));
-    }
+    })();
     // The sole signer's Ed25519 key beside someone else's ML-DSA key, served as theirs; and a
     // "succession" signed the same way, from the adult's keys with another ML-DSA key.
-    {
+    (|| {
         let mut h = History::new();
         h.roster(&organizer, vec![owner.clone(), active(&adult, &[])], None);
         h.roster(&organizer, vec![owner.clone(), active(&adult, &[GroupRole::Billing])], None);
@@ -3079,10 +3079,10 @@ fn group_cases_built() -> Vec<(&'static str, CaseInput, Value)> {
             },
             reads("unknown-signer", None, 2),
         ));
-    }
+    })();
     // r7: a member's identity forked (two successions they signed from one key), and a pin at
     // their newer identity.
-    {
+    (|| {
         let mut h = History::new();
         h.roster(&organizer, vec![owner.clone(), active(&child, &[])], None);
         let (child2, link) = succeed(&child);
@@ -3126,12 +3126,12 @@ fn group_cases_built() -> Vec<(&'static str, CaseInput, Value)> {
             },
             reads("retired-key", None, 1),
         ));
-    }
+    })();
     // r10 (Opus 6, Fable 4): a roster carries only the areas it creates or rotates: a new area at
     // version 1, a rotation one above the area's latest version on the chain. A rotation and a new
     // area are accepted; a row at a version already listed, a version skipped, or a new area (or a
     // first roster's area) above 1 is refused.
-    {
+    (|| {
         let standard = standard_areas();
         let row = |id: &str, version: u64, seed: u8| RosterArea {
             workspace_id: id.into(),
@@ -3167,12 +3167,12 @@ fn group_cases_built() -> Vec<(&'static str, CaseInput, Value)> {
         let mut first = History::new();
         first.roster_with(&organizer, members(), Some(1), Some(vec![row(AREA, 2, 78)]));
         cases.push(("areas-first-roster-above-one", from_one(&first), refused.clone()));
-    }
+    })();
     // r10 (Fable 1 = Opus 5): in a family a roster that marks anyone left rotates every area in the
     // same statement (the history rotates them by default); without, or with some areas unrotated,
     // it is refused. A company's removal is not held to it (its rosters do not say who opens what).
     // And no roster both removes a members holder and admits anyone.
-    {
+    (|| {
         let mut removal =
             |name: &'static str, kind: GroupKind, areas: Option<Vec<RosterArea>>, expected: Value| {
                 let mut h = History::of(kind);
@@ -3221,10 +3221,10 @@ fn group_cases_built() -> Vec<(&'static str, CaseInput, Value)> {
             None,
         );
         cases.push(("admission-on-holder-removal", from_one(&both), refused.clone()));
-    }
+    })();
     // r11 (Fable 1): the signer stays active on the roster they sign (a holder's departure, with
     // its rotations, is another holder's to sign), and a roster keeps an active members holder.
-    {
+    (|| {
         let mut own_departure = History::new();
         own_departure.roster(
             &organizer,
@@ -3256,12 +3256,12 @@ fn group_cases_built() -> Vec<(&'static str, CaseInput, Value)> {
             None,
         );
         cases.push(("last-holder-leaves", from_one(&last), refused.clone()));
-    }
+    })();
     // r9: a reader who pinned the adult's first keys, the adult's entry now their next identity, and
     // the one link between them on its version 2 signature alone. The first keys' walk asks consent
     // of it (and refuses it); the pin's walk takes the version 2 signature: the verdict is the
     // roster's, never a key conflict. One cache serves both walks, keyed by the proof.
-    {
+    (|| {
         let mut h = History::new();
         h.roster(&organizer, vec![owner.clone(), active(&adult, &[])], None);
         let (adult2, link) = succeed(&adult);
@@ -3280,13 +3280,13 @@ fn group_cases_built() -> Vec<(&'static str, CaseInput, Value)> {
             CaseInput { record: Some(probe), ..from_one(&h) },
             reads("verified", Some(GROUP), 2),
         ));
-    }
+    })();
     // r9 (Codex 2): two links whose fields, joined with "|", would read alike (the first's
     // signature "x|y", the second's KEM key ending "|x" with signature "y"), both carrying the
     // first's consent. Only the first holds, so the walk from the first keys reaches the entry and
     // the adult's first key reads retired; a verification cache that confused the two would see a
     // fork there instead.
-    {
+    (|| {
         let mut h = History::new();
         h.roster(&organizer, vec![owner.clone(), active(&adult, &[])], None);
         let (adult2, link) = succeed(&adult);
@@ -3312,10 +3312,10 @@ fn group_cases_built() -> Vec<(&'static str, CaseInput, Value)> {
             CaseInput { record: Some(probe), ..from_one(&h) },
             reads("retired-key", None, 2),
         ));
-    }
+    })();
     // r7: the group walk keeps the strict verifier's rules on versions and served keys, passes
     // over unsigned links, and retires from a pin older than the member's first keys.
-    {
+    (|| {
         let mut h = History::new();
         h.roster(&organizer, vec![owner.clone(), active(&child, &[])], None);
         let (child2, link) = succeed(&child);
@@ -3443,11 +3443,11 @@ fn group_cases_built() -> Vec<(&'static str, CaseInput, Value)> {
             },
             reads("verified", Some(GROUP), 1),
         ));
-    }
+    })();
     // Roster format 2 (design 2.10): each area version commits to its root's key under its own
     // label, and an area is retired by a tombstone at its next version. Old format 1 chains still
     // verify; a chain switches up at a roster boundary and never back.
-    {
+    (|| {
         let members = vec![owner.clone(), active(&adult, &[GroupRole::Members])];
         let root = |workspace_id: &str, version: u64, key: Option<Vec<u8>>| RootProbe {
             workspace_id: workspace_id.into(),
@@ -3668,11 +3668,11 @@ fn group_cases_built() -> Vec<(&'static str, CaseInput, Value)> {
             },
             refused.clone(),
         ));
-    }
+    })();
     // docs/optional-verification.md 3.3 and 3.4: what each anchor vouches for, first use, and the
     // pair marks a family check leaves. Roster 2 admits the adult and the child together, roster
     // 3 the holder; the adult reads.
-    {
+    (|| {
         let mut h = History::new();
         h.roster(&organizer, vec![owner.clone()], None);
         h.roster(&organizer, vec![owner.clone(), active(&adult, &[]), active(&child, &[])], None);
@@ -3895,7 +3895,7 @@ fn group_cases_built() -> Vec<(&'static str, CaseInput, Value)> {
             first_use(CaseInput { pins: vec![first_pin], first_keys: made_key, rosters: made_up, ..base() }),
             refused.clone(),
         ));
-    }
+    })();
     cases
 }
 
