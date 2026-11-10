@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.6.0](https://github.com/HushOS/HushOS/compare/v1.5.0...v1.6.0) (2026-11-10)
+
+
+### Features
+
+* **auth:** ask for the second step at sign-in and before security changes ([#402](https://github.com/HushOS/HushOS/issues/402)) ([54129ea](https://github.com/HushOS/HushOS/commit/54129ea68934f1c8f919592dd8b1a4095b98ba1e))
+* **db:** add the two-step tables, session guard and repository ([#399](https://github.com/HushOS/HushOS/issues/399)) ([29dc2b4](https://github.com/HushOS/HushOS/commit/29dc2b465a7fbe32f5a3796c9b3a03e914f2a069))
+* **web:** add the two-step sign-in screens and settings ([#406](https://github.com/HushOS/HushOS/issues/406)) ([095c215](https://github.com/HushOS/HushOS/commit/095c2153ac4a46e2c4d7fff7a19c198efbda8f64))
+
+
+### Bug fixes
+
+* **web:** show the new recovery phrase when the reply to a phrase change is lost ([#411](https://github.com/HushOS/HushOS/issues/411)) ([481c651](https://github.com/HushOS/HushOS/commit/481c651cdac1b862ef09dc149e42c9eb00b18b13))
+
 ## [1.5.0](https://github.com/HushOS/HushOS/compare/v1.4.1...v1.5.0) (2026-11-09)
 
 

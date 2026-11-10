@@ -1,6 +1,6 @@
 [package]
 name = "hushos-core"
-version = "1.5.0"
+version = "1.6.0"
 edition = "2021"
 publish = false
 description = "The client side of the HushOS protocol: OPAQUE, the account and workspace keys, Drive envelopes and content chunks."
