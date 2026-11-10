@@ -401,6 +401,7 @@ describe('the sweeps', () => {
             backupOf: (storeId: string) => (backups && storeId === PRIMARY ? REPLICA : null),
             keepsBackup: (storeId: string) => backups && storeId === REPLICA,
             present: async () => true,
+            exists: async () => true,
             remove: async (storeId: string, key: string) => {
                 removed.push(`${storeId === PRIMARY ? 'primary' : 'replica'}:${key}`);
             },

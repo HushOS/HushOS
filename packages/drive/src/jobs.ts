@@ -135,6 +135,8 @@ function copyStore({
             const head = await (await open(storeId)).head(objectKey);
             return head !== null && BigInt(head.size) === size;
         },
+        exists: async (storeId, objectKey) =>
+            (await (await open(storeId)).head(objectKey)) !== null,
         remove: async (storeId, objectKey) => {
             await (await open(storeId)).delete(objectKey);
         },

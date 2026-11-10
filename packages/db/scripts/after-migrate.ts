@@ -21,7 +21,12 @@ try {
             `after-migrate: ${failure.name} (${failure.kind}) failed with SQLSTATE ${failure.code}; ` +
                 'it stays pending and is tried again by the next db:migrate. See docs/self-hosting.md, "After the migration".',
         );
-    if (!result.done.length && !result.failed.length) console.log('after-migrate: nothing to do');
+    if (result.busy)
+        console.log(
+            'after-migrate: another process is running these steps; skipped here. That run does the work.',
+        );
+    else if (!result.done.length && !result.failed.length)
+        console.log('after-migrate: nothing to do');
 } finally {
     await client.end();
 }

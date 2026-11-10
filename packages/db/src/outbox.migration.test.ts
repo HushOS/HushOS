@@ -396,7 +396,7 @@ describe('the step after the migration', () => {
         const all = AFTER_MIGRATE.map((step) => step.name);
         expect((await pendingAfterMigrate(query)).map((step) => step.name)).toEqual(all);
         const first = await runAfterMigrate(query);
-        expect(first).toEqual({ done: all, failed: [] });
+        expect(first).toEqual({ busy: false, done: all, failed: [] });
         const constraints = AFTER_MIGRATE.filter((step) => step.kind === 'validate').map(
             (step) => step.name,
         );
@@ -410,7 +410,7 @@ describe('the step after the migration', () => {
         );
         expect(index.rows).toEqual([{ indisvalid: true, indisready: true }]);
         expect(await pendingAfterMigrate(query)).toEqual([]);
-        expect(await runAfterMigrate(query)).toEqual({ done: [], failed: [] });
+        expect(await runAfterMigrate(query)).toEqual({ busy: false, done: [], failed: [] });
         // Still not rewritten: validating and indexing read the tables, nothing more.
         expect(await relfilenodes()).toBe(before.relfilenodes);
     });
@@ -438,6 +438,7 @@ describe('the step after the migration', () => {
         ]);
         const result = await runAfterMigrate(query);
         expect(result).toEqual({
+            busy: false,
             done: ['drive_objects_store_idx'],
             failed: [
                 { name: 'drive_object_deletions_reason_valid', kind: 'validate', code: '23514' },
@@ -455,7 +456,50 @@ describe('the step after the migration', () => {
         // The row put right, the next run finishes the job.
         await pg.query(`delete from drive_object_deletions where object_id = $1`, [objectId]);
         expect(await runAfterMigrate(query)).toEqual({
+            busy: false,
             done: ['drive_object_deletions_reason_valid'],
+            failed: [],
+        });
+    });
+
+    test('two runs at once: the second does nothing, and does not drop the index the first is still building', async () => {
+        // As a concurrent build looks from outside while it runs: there, and not yet valid.
+        await pg.query(
+            `update pg_index set indisvalid = false where indexrelid = 'drive_objects_store_idx'::regclass`,
+        );
+        const indexId = async () =>
+            (
+                await pg.query<{ oid: string }>(
+                    `select c.oid::text from pg_class c where c.relname = 'drive_objects_store_idx'`,
+                )
+            ).rows[0]?.oid;
+        const building = await indexId();
+        // Another container's db:migrate is in the middle of the steps.
+        const other = new Client({ connectionString: scratchUrl.toString() });
+        await other.connect();
+        try {
+            const first = await runAfterMigrate((text, params) => other.query(text, params), {
+                pauseMs: 1,
+            });
+            // (That run finished and let go: taken by hand now, as a run still going holds it.)
+            expect(first.busy).toBe(false);
+            await pg.query(
+                `update pg_index set indisvalid = false where indexrelid = 'drive_objects_store_idx'::regclass`,
+            );
+            const rebuilt = await indexId();
+            await other.query(`select pg_advisory_lock(${0x68757368}, ${0x61667472})`);
+            expect(await runAfterMigrate(query)).toEqual({ busy: true, done: [], failed: [] });
+            // Untouched: the same index, still as the other run has it.
+            expect(await indexId()).toBe(rebuilt);
+            expect(rebuilt).not.toBe(building);
+            await other.query(`select pg_advisory_unlock(${0x68757368}, ${0x61667472})`);
+        } finally {
+            await other.end();
+        }
+        // The lock let go, the next run does the work.
+        expect(await runAfterMigrate(query)).toEqual({
+            busy: false,
+            done: ['drive_objects_store_idx'],
             failed: [],
         });
     });

@@ -59,10 +59,13 @@ const objectBackup = sql`case when o.replicated_at is null then null else coales
 
 /*
  * The replacement rule, as one statement's ON CONFLICT. `d` is the row already
- * there. Finished: everything is the new row's. Unfinished and overtaken by a
- * purge: the reason becomes `purged`, the hold, the wait and the attention mark
- * go, the copy at the store is removed again whatever the row had recorded, and
- * what either row knows of a backup copy is kept, so that copy goes too.
+ * there. Finished: everything is the new row's. Unfinished and met by a purge,
+ * whatever its own reason: the reason is `purged`, the hold, the wait and the
+ * attention mark go, the copy at the store is removed again whatever the row
+ * had recorded, and what either row knows is kept (that the object was
+ * published, that a backup copy exists and where), so a second purge of the
+ * same copy can add a fact and never drops one. Unfinished and met by anything
+ * else: left as it is.
  */
 const REPLACE = sql`
     on conflict (object_id, store_id) do update set
@@ -84,7 +87,7 @@ const REPLACE = sql`
         delete_replica_after = null,
         done_at = null,
         created_at = case when d.done_at is null then d.created_at else excluded.created_at end
-    where d.done_at is not null or (excluded.reason = 'purged' and d.reason <> 'purged')
+    where d.done_at is not null or excluded.reason = 'purged'
 `;
 
 export type QueuedCopy = {
@@ -168,13 +171,23 @@ export async function queuePurgedObject(
  * would never be removed at all. Returns how many were queued.
  */
 export async function queueWorkspaceObjects(tx: Tx, workspaceId: string) {
+    // The objects are locked before anything is queued, in id order. A flip locks the object's
+    // row and then its outbox rows, so this takes the same order and cannot deadlock with one;
+    // and a flip that commits while this waits is seen whole: the row read here is the one it
+    // wrote, so the copy queued is the one the object lives on now, not the one it had left.
     const result = await tx.execute<{ object_id: string }>(sql`
+        with o as materialized (
+            select id, store_id, workspace_id, object_key, status, replicated_at, backup_store_id
+            from ${driveObjects}
+            where workspace_id = ${workspaceId}
+            order by id
+            for update
+        )
         insert into ${driveObjectDeletions} as d
             (object_id, store_id, workspace_id, object_key, reason, published, replicated, backup_store_id)
         select o.id, o.store_id, o.workspace_id, o.object_key, 'purged', o.status = 'ready',
                o.replicated_at is not null, ${objectBackup}
-        from ${driveObjects} o
-        where o.workspace_id = ${workspaceId}
+        from o
         ${REPLACE}
         returning d.object_id
     `);
@@ -236,6 +249,8 @@ export type CopyStore = {
     keepsBackup: (storeId: string) => boolean;
     /* Whether the object is at `storeId` at exactly `size` bytes. */
     present: (storeId: string, objectKey: string, size: bigint) => Promise<boolean>;
+    /* Whether `storeId` holds anything at all under that key. */
+    exists: (storeId: string, objectKey: string) => Promise<boolean>;
     /* Deletes the copy at `storeId`. */
     remove: (storeId: string, objectKey: string) => Promise<void>;
 };
@@ -272,6 +287,27 @@ async function lockRow(tx: Tx, key: DeletionKey) {
     return row ?? null;
 }
 
+/*
+ * How long Postgres lets a removal sit idle inside its transaction, which is
+ * what it does while it waits for the store. Three minutes: twice the 60
+ * seconds one body-less store call will be allowed once every call has a total
+ * deadline (2.4), with room, since a removal may make two in a row (the look,
+ * then the delete) with no statement between them; and under the five minutes
+ * between runs, so a store that accepts a request and never answers has given
+ * the row back by the time the row is next due. Until those deadlines exist
+ * this is the only bound: without it such a store would hold the row's lock,
+ * hold back vacuum for the whole database, and block whoever needs the row or
+ * a lock on the table behind it, for as long as it liked. When it fires the
+ * session is ended, the transaction with it, nothing is marked, and the row is
+ * tried again.
+ */
+export const REMOVAL_IDLE_SECONDS = 180;
+
+async function boundIdle(tx: Tx, idleMs: number) {
+    if (!Number.isInteger(idleMs) || idleMs <= 0) throw new Error('Unexpected idle timeout.');
+    await tx.execute(sql.raw(`set local idle_in_transaction_session_timeout = ${idleMs}`));
+}
+
 const rowIs = (key: DeletionKey) =>
     and(
         eq(driveObjectDeletions.objectId, key.objectId),
@@ -294,10 +330,16 @@ const rowIs = (key: DeletionKey) =>
  *   it, where this worker keeps a backup of that store.
  *
  * A store that throws rolls everything back: the caller records the failure
- * and the row is tried again.
+ * and the row is tried again. So does a store that never answers: Postgres ends
+ * the transaction after `REMOVAL_IDLE_SECONDS` (`idleMs` is for tests).
  */
-export async function removeQueuedCopy(key: DeletionKey, store: CopyStore): Promise<CopyRemoval> {
+export async function removeQueuedCopy(
+    key: DeletionKey,
+    store: CopyStore,
+    idleMs = REMOVAL_IDLE_SECONDS * 1000,
+): Promise<CopyRemoval> {
     return db.transaction(async (tx): Promise<CopyRemoval> => {
+        await boundIdle(tx, idleMs);
         const locked = await lockRow(tx, key);
         if (!locked) return { status: 'skipped' };
         const { row } = locked;
@@ -329,7 +371,10 @@ export async function removeQueuedCopy(key: DeletionKey, store: CopyStore): Prom
             row.reason === 'purged' &&
             row.published &&
             backedUpAt === null &&
-            store.backupOf(row.storeId) !== null
+            store.backupOf(row.storeId) !== null &&
+            // A copy that is not there can never reach the backup: waiting for it would be
+            // for ever. The store said so itself; one that did not answer throws instead.
+            (await store.exists(row.storeId, row.objectKey))
         )
             return { status: 'waiting' };
 
@@ -398,8 +443,10 @@ export type BackupRemoval =
 export async function removeQueuedBackupCopy(
     key: DeletionKey,
     store: Pick<CopyStore, 'keepsBackup' | 'remove'>,
+    idleMs = REMOVAL_IDLE_SECONDS * 1000,
 ): Promise<BackupRemoval> {
     return db.transaction(async (tx): Promise<BackupRemoval> => {
+        await boundIdle(tx, idleMs);
         const locked = await lockRow(tx, key);
         if (!locked) return { status: 'skipped' };
         const { row } = locked;
@@ -460,6 +507,9 @@ export async function deleteFinishedObjectDeletions(
             where done_at < ${cutoff} and not backup_left
             limit ${limit}
         )
+        -- Again, on the row as it is when the delete reaches it: one queued anew for the
+        -- same copy since the batch was chosen is unfinished, and is not this statement's.
+        and done_at < ${cutoff} and not backup_left
         returning object_id
     `);
     return result.rows.length;
@@ -590,7 +640,14 @@ export async function recordObjectCopyFailure(key: DeletionKey) {
 export async function adoptLegacyBackupMarks(batch = 5000) {
     let objects = 0;
     let cursor: string | null = null;
-    for (;;) {
+    // Asked first, in one read: once that release is gone there are none, and the walk
+    // below would otherwise visit every object at every start to find that out.
+    const legacy = await db.execute<{ found: boolean }>(sql`
+        select exists(
+            select 1 from ${driveObjects} where replicated_at is not null and backup_store_id is null
+        ) as found
+    `);
+    for (; legacy.rows[0]?.found;) {
         const page: { rows: { last: string | null; changed: string }[] } = await db.execute<{
             last: string | null;
             changed: string;
@@ -683,6 +740,8 @@ export type ObjectFlip =
     | { status: 'gone' }
     /* Its row names a third store; a copy just made at the target is queued as a stray. */
     | { status: 'elsewhere' }
+    /* It is pending or missing, and stays where it is; a copy just made at the target is queued as a stray. */
+    | { status: 'not-ready' }
     /* Nothing was changed: the target's copy cannot be relied on, and the bytes must be copied (again). */
     | { status: 'copy-needed' };
 
@@ -697,7 +756,8 @@ export type ObjectFlip =
  * none and means to take back the copy the object left there, having seen it
  * at the row's size.
  *
- * - The row flips only if it still names `fromStoreId` (compare-and-set).
+ * - The row flips only if it still names `fromStoreId` (compare-and-set), and
+ *   only if the object is `ready`.
  * - An unfinished row for the target whose copy is still there is withdrawn:
  *   the copy is the live one again. Its lock is taken here, and the deletion
  *   job holds the same lock while it deletes, so one of them goes first. If the
@@ -751,6 +811,13 @@ export async function flipObjectStore(input: {
         if (current.storeId !== fromStoreId) {
             await stray();
             return { status: 'elsewhere' };
+        }
+        // Only an object that is whole where its row says moves. A pending one is an upload
+        // still in flight, which finishes where it began and is copied once it is ready; a
+        // missing one has no bytes to have been copied, and stays where the audit left it.
+        if (current.status !== 'ready') {
+            await stray();
+            return { status: 'not-ready' };
         }
 
         const target = { objectId: object.id, storeId: toStoreId };

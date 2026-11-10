@@ -50,7 +50,38 @@ import {
 export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 // The deletion outbox, the backup mark and "known at this store" are the repository's too.
-export * from './outbox';
+// What only a move will call (the flip, the release of its holds, the database's clock) is
+// not, until moves exist: nothing should be able to change an object's store through here.
+export {
+    BACKUP_UNDO_DAYS,
+    COPY_FAILURE_LIMIT,
+    FINISHED_DELETION_DAYS,
+    REMOVAL_IDLE_SECONDS,
+    adoptLegacyBackupMarks,
+    backupOfMark,
+    countObjectsNotCopied,
+    deleteFinishedObjectDeletions,
+    knownObjectKeys,
+    listBackupDeletionsDue,
+    listPendingObjectDeletions,
+    listUnreplicatedObjects,
+    markObjectReplicated,
+    queueCopy,
+    queuePurgedObject,
+    queueWorkspaceObjects,
+    recordObjectCopyFailure,
+    recordObjectDeletionFailure,
+    removeQueuedBackupCopy,
+    removeQueuedCopy,
+} from './outbox';
+export type {
+    BackupRemoval,
+    CopyRemoval,
+    CopyStore,
+    DeletionKey,
+    ObjectDeletion,
+    QueuedCopy,
+} from './outbox';
 
 /* Thrown to undo a transaction whose result is a refusal; carries the result out. */
 class Refusal extends Error {

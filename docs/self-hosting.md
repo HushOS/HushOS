@@ -314,6 +314,8 @@ What to know:
 - **The worker names what is still pending every time it starts** ("Schema steps that run after the migration are still pending", with the names). Nothing pending means nothing logged.
 - `23514` or `23503` on a validation means rows from before the constraint break it. Find them with the constraint's own expression (`select pg_get_constraintdef(oid) from pg_constraint where conname = '<name>'`), put them right, and run `bun run db:migrate` again.
 - An index build that was interrupted leaves an invalid index behind. The next run drops it and builds it again.
+- **One run at a time.** The steps take an advisory lock for their whole length. A second `db:migrate` that finds it held (two containers starting together) prints `another process is running these steps; skipped here` and goes on; the first run does the work.
+- **They run before the process that called `db:migrate` goes on.** With startup migrations, a web container therefore starts serving only once the steps are done: on a large database the first start after such a release takes as long as reading the tables named in its release note. The separate migration job has the same wait, with the old containers still serving meanwhile.
 - The steps run as the migration's role. The runtime roles need no new privilege.
 
 ### Rolling out safely
@@ -2486,6 +2488,7 @@ Rolling back:
     - take the stores release first and let its rollout finish; or
     - stop the web and worker containers, run the migration, and start the new ones. That is a short outage instead of failed requests.
 - A default Compose update (`docker compose up -d`) runs the migration while the old web container is still serving. Coming from the stores release, that is fine. Coming from an older one, use `docker compose stop web worker` first.
+- **If the stores release and this one reach you in the same numbered release, you are coming from an older one.** That is the case for an instance on 1.5.0: both migrations run in one transaction, and its containers never ran the stores release. Do not roll such an instance over with the old containers still serving: stop web and worker first, as above.
 
 What it changes:
 
@@ -2506,10 +2509,12 @@ What changes in behaviour:
 Locks:
 
 - The migration takes `ACCESS EXCLUSIVE` on `drive_objects`, `drive_uploads` and `drive_object_deletions`, in that order, until drizzle's single transaction commits.
+- **Every Drive request pauses for as long as the migration runs:** listings, an upload's begin and its completion, download URLs, purges and the worker's jobs. `drive_objects` and `drive_uploads` are locked first and stay locked until the commit, so the pause includes everything done to the outbox after them.
 - On `drive_objects` and `drive_uploads` every statement is a catalog change (a nullable column, a column with a constant default, a dropped default, a foreign key added `NOT VALID`): milliseconds, whatever their size.
-- **`drive_object_deletions` is read twice under its lock**, once to build the new primary key and once for a partial index on `object_key`. It holds one row for every object ever deleted, since finished rows were never removed until now. Rebuilding both took a third of a second per million rows on a laptop; allow a second per million. Meanwhile purges, the worker's deletion and sweep jobs and a report's evidence copy wait; uploads and downloads do not touch that table.
+- **What sets the length of the pause is `drive_object_deletions`,** which is read twice under its lock: once to build the new primary key and once for a partial index on `object_key`. It holds one row for every object ever deleted, since finished rows were never removed until now. Rebuilding both took a third of a second per million rows on a laptop; allow about a second per million outbox rows. `select count(*) from drive_object_deletions` says how many you have. Under a hundred thousand rows it is not noticeable; with tens of millions, pick a quiet moment.
+- A transfer already under way keeps moving on the URLs it already holds: those go from the browser to the store and back without the database.
 - Each statement waits at most five seconds for its lock (`lock_timeout`) and fails rather than queue Drive requests behind it. Run it again.
-- The steps after the migration take no lock that blocks a read or a write. The validations read `workspaces`, `drive_nodes`, `file_versions`, `drive_origin_drops`, `drive_uploads`, `drive_objects` and `drive_object_deletions` once each; the index build reads `drive_objects` twice. Expect I/O, not waiting.
+- The steps after the migration take no lock that blocks a read or a write, but they delay the start of whatever ran `db:migrate` until they finish ([After the migration](#after-the-migration)): with startup migrations, the first web container of this release. The validations read `workspaces`, `drive_nodes`, `file_versions`, `drive_origin_drops`, `drive_uploads`, `drive_objects` and `drive_object_deletions` once each; the index build reads `drive_objects` twice. Expect I/O, not waiting.
 - Do not run another schema change, or a manual `VACUUM FULL`, on those tables at the same time: they would wait on each other.
 
 Validating the twelve older constraints:

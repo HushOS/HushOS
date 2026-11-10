@@ -7,12 +7,15 @@ import {
     createTestAccount,
     createTestIdentity,
     createTestStore,
+    lockObserver,
     resetDatabase,
 } from '../test/helpers';
 import * as signed from '../test/signed';
 import * as auth from './auth';
 import { db } from './client';
 import * as drive from './drive';
+// What only a move will call is not on the repository yet: it is tested from its module.
+import * as outbox from './outbox';
 import {
     ENVIRONMENT_PRIMARY_STORE_ID as PRIMARY,
     ENVIRONMENT_REPLICA_STORE_ID as REPLICA,
@@ -45,6 +48,10 @@ function store(options: { backups?: boolean; failing?: string } = {}) {
         backupOf: (storeId: string) => (backups && storeId === PRIMARY ? REPLICA : null),
         keepsBackup: (storeId: string) => backups && storeId === REPLICA,
         present: async (storeId: string, key: string) => {
+            if (storeId === options.failing) throw new Error('socket hang up');
+            return copies.has(at(storeId, key));
+        },
+        exists: async (storeId: string, key: string) => {
             if (storeId === options.failing) throw new Error('socket hang up');
             return copies.has(at(storeId, key));
         },
@@ -130,9 +137,9 @@ async function purge(file: File) {
 
 /* A move's copy and flip, as a move will make them: bytes first, then the row. */
 async function moved(file: File, from: string, to: string, moveId = randomUUID()) {
-    const copiedSince = await drive.databaseNow();
+    const copiedSince = await outbox.databaseNow();
     copies.add(at(to, file.key));
-    const flip = await drive.flipObjectStore({
+    const flip = await outbox.flipObjectStore({
         object: file.object,
         fromStoreId: from,
         toStoreId: to,
@@ -282,12 +289,36 @@ describe('an insert meets a row for the same object and store', () => {
         expect(await queue(file, { reason: 'stray', published: false })).toBe(false);
         expect(await queue(file, { reason: 'moved', heldByMove: randomUUID() })).toBe(false);
         expect(await rows(file.object.id)).toEqual(before);
-        // A purge that meets an unfinished purge changes nothing either.
+    });
+
+    test('a purge that meets an unfinished purge of the same copy adds what it knows and drops nothing', async () => {
+        // First queued as never published and never backed up; the second knows better.
+        const file = await published();
+        await queue(file, { published: false });
+        await setRow(file.object.id, PRIMARY, { failures: 2, failedAt: new Date() });
+        expect(await queue(file, { published: true, backupStoreId: REPLICA })).toBe(true);
+        const [merged] = await rows(file.object.id);
+        // Dropped, the published copy would go without its backup ever being made or removed.
+        expect(merged).toMatchObject({
+            reason: 'purged',
+            published: true,
+            replicated: true,
+            backupStoreId: REPLICA,
+            doneAt: null,
+        });
+        // The other way round: a second purge that knows less takes nothing away.
         const other = await published();
-        await queue(other, { backupStoreId: REPLICA });
-        const queued = await rows(other.object.id);
-        expect(await queue(other, { published: false })).toBe(false);
-        expect(await rows(other.object.id)).toEqual(queued);
+        await queue(other, { published: true, backupStoreId: REPLICA });
+        const created = (await rows(other.object.id))[0]!.createdAt;
+        expect(await queue(other, { published: false })).toBe(true);
+        expect((await rows(other.object.id))[0]).toMatchObject({
+            published: true,
+            replicated: true,
+            backupStoreId: REPLICA,
+            // Still the same row in the line, not a new one behind everything else.
+            createdAt: created,
+        });
+        expect(await rows(other.object.id)).toHaveLength(1);
     });
 
     test('a purge replaces an unfinished moved or stray row, clears its hold, and keeps its backup copy to remove', async () => {
@@ -334,14 +365,14 @@ describe('what a row waits for', () => {
             status: 'held',
         });
         // Another move's end releases nothing of this one.
-        expect(await drive.releaseMoveHolds(randomUUID(), new Date())).toBe(0);
+        expect(await outbox.releaseMoveHolds(randomUUID(), new Date())).toBe(0);
         expect(await drive.removeQueuedCopy(key(file, PRIMARY), store())).toEqual({
             status: 'held',
         });
         // Done: the old copy now waits for as long as an old copy is kept.
-        expect(await drive.releaseMoveHolds(moveId, new Date(Date.now() + 7 * 24 * 3600_000))).toBe(
-            1,
-        );
+        expect(
+            await outbox.releaseMoveHolds(moveId, new Date(Date.now() + 7 * 24 * 3600_000)),
+        ).toBe(1);
         expect(await pendingIds()).toEqual([]);
         expect(await drive.removeQueuedCopy(key(file, PRIMARY), store())).toEqual({
             status: 'held',
@@ -360,7 +391,7 @@ describe('what a row waits for', () => {
     test('a moved copy goes only once the new copy is seen again; when it is not, nothing is deleted', async () => {
         const file = await published();
         const { moveId } = await moved(file, PRIMARY, second);
-        await drive.releaseMoveHolds(moveId, new Date(Date.now() - 1000));
+        await outbox.releaseMoveHolds(moveId, new Date(Date.now() - 1000));
         // The new copy has gone missing: the old one is now the only one.
         copies.delete(at(second, file.key));
         expect(await drive.removeQueuedCopy(key(file, PRIMARY), store())).toEqual({
@@ -443,7 +474,7 @@ describe('what a row waits for', () => {
             ],
         );
         const { moveId } = await moved(file, PRIMARY, second);
-        await drive.releaseMoveHolds(moveId, new Date(Date.now() - 1000));
+        await outbox.releaseMoveHolds(moveId, new Date(Date.now() - 1000));
         await purge(file);
         expect(await pendingIds()).toEqual([]);
         for (const storeId of [PRIMARY, second])
@@ -529,7 +560,127 @@ describe('one worker at a time, and a failure loses nothing', () => {
     });
 });
 
+describe('a store that never answers', () => {
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    for (const copy of ['primary', 'backup'] as const)
+        test(`does not keep the row: Postgres ends the idle removal of the ${copy} copy, and the row is tried again`, async () => {
+            const file = await published();
+            if (copy === 'backup') {
+                await drive.markObjectReplicated({ ...key(file, PRIMARY), backupStoreId: REPLICA });
+                copies.add(at(REPLICA, file.key));
+            }
+            await purge(file);
+            if (copy === 'backup') {
+                await drive.removeQueuedCopy(key(file, PRIMARY), store());
+                await setRow(file.object.id, PRIMARY, {
+                    deleteReplicaAfter: new Date(Date.now() - 1000),
+                });
+            }
+            const worker = store({ backups: copy === 'backup' });
+            const attempt = (using: typeof worker, idleMs?: number) =>
+                copy === 'primary'
+                    ? drive.removeQueuedCopy(key(file, PRIMARY), using, idleMs)
+                    : drive.removeQueuedBackupCopy(key(file, PRIMARY), using, idleMs);
+            // The store takes the request and says nothing.
+            let answer!: () => void;
+            const silence = new Promise<void>((resolve) => (answer = resolve));
+            let entered!: () => void;
+            const inside = new Promise<void>((resolve) => (entered = resolve));
+            const hung = {
+                ...worker,
+                remove: async () => {
+                    entered();
+                    await silence;
+                },
+            };
+            const first = attempt(hung, 300).then(
+                (value) => ({ value }),
+                (error: unknown) => ({ error }),
+            );
+            try {
+                await inside;
+                // While it is within its bound the row is its own.
+                expect(await attempt(worker)).toEqual({ status: 'skipped' });
+                // Past it, the row is free again without the store ever having answered.
+                let second = await attempt(worker);
+                for (let tries = 0; tries < 40 && second.status === 'skipped'; tries++) {
+                    await sleep(100);
+                    second = await attempt(worker);
+                }
+                expect(second.status).toBe('removed');
+            } finally {
+                // Whatever happened, the store answers at last: no transaction outlives the test.
+                answer();
+            }
+            // The removal that hung marked nothing, then or when its store at last answered.
+            expect(await first).toHaveProperty('error');
+            const finished = await row(file.object.id, PRIMARY);
+            expect(finished?.doneAt).not.toBeNull();
+            expect(finished?.failures).toBe(0);
+            // And the connection it lost is not handed to the next caller.
+            expect(await drive.listPendingObjectDeletions()).toEqual([]);
+        }, 15_000);
+});
+
+describe('a purged copy that waits for its backup', () => {
+    test('stops waiting when its store says the copy is not there: no backup of it can ever be made', async () => {
+        const lost = await published();
+        const whole = await published();
+        await purge(lost);
+        await purge(whole);
+        // The bytes of one are gone from the store its row names.
+        copies.delete(at(PRIMARY, lost.key));
+        expect(await drive.removeQueuedCopy(key(whole, PRIMARY), store())).toEqual({
+            status: 'waiting',
+        });
+        // A store that does not answer says nothing about it: the row waits on.
+        await expect(
+            drive.removeQueuedCopy(key(lost, PRIMARY), store({ failing: PRIMARY })),
+        ).rejects.toThrow();
+        expect(await row(lost.object.id, PRIMARY)).toMatchObject({ doneAt: null });
+        expect(await drive.removeQueuedCopy(key(lost, PRIMARY), store())).toEqual({
+            status: 'removed',
+            backup: 'none',
+        });
+        expect((await row(lost.object.id, PRIMARY))?.doneAt).not.toBeNull();
+        // The copy that is there was not deleted to get its row out of the way.
+        expect(copies.has(at(PRIMARY, whole.key))).toBe(true);
+        expect((await row(whole.object.id, PRIMARY))?.doneAt).toBeNull();
+    });
+});
+
 describe('the flip', () => {
+    test('an object that is not ready does not move, whether pending or missing', async () => {
+        for (const status of ['pending', 'missing'] as const) {
+            const file = await published();
+            await db
+                .update(driveObjects)
+                .set({ status })
+                .where(eq(driveObjects.id, file.object.id));
+            const flip = (copiedSince: string | null) =>
+                outbox.flipObjectStore({
+                    object: file.object,
+                    fromStoreId: PRIMARY,
+                    toStoreId: second,
+                    moveId: randomUUID(),
+                    copiedSince,
+                });
+            // With nothing copied, nothing changes at all.
+            expect(await flip(null), status).toEqual({ status: 'not-ready' });
+            expect(await rows(file.object.id)).toEqual([]);
+            // A copy made all the same is not flipped onto: it is a stray at the target.
+            copies.add(at(second, file.key));
+            expect(await flip(await outbox.databaseNow()), status).toEqual({ status: 'not-ready' });
+            expect(await objectRow(file.object.id)).toMatchObject({ storeId: PRIMARY, status });
+            expect(await rows(file.object.id)).toMatchObject([
+                { storeId: second, reason: 'stray', heldByMove: null },
+            ]);
+            // The copy the object is on is never queued.
+            expect(await row(file.object.id, PRIMARY)).toBeNull();
+        }
+    });
+
     test('moves the row only from the store the copy was read from, clears the backup mark, and queues the copy left behind', async () => {
         const file = await published();
         await drive.markObjectReplicated({ ...key(file, PRIMARY), backupStoreId: REPLICA });
@@ -541,12 +692,12 @@ describe('the flip', () => {
         // The object is not where this copy was read from: nothing flips, and the copy just made is a stray.
         copies.add(at(second, file.key));
         expect(
-            await drive.flipObjectStore({
+            await outbox.flipObjectStore({
                 object: file.object,
                 fromStoreId: third,
                 toStoreId: second,
                 moveId: randomUUID(),
-                copiedSince: await drive.databaseNow(),
+                copiedSince: await outbox.databaseNow(),
             }),
         ).toEqual({ status: 'elsewhere' });
         expect((await objectRow(file.object.id))?.storeId).toBe(PRIMARY);
@@ -584,11 +735,11 @@ describe('the flip', () => {
 
     test('an object purged while its copy was made leaves that copy queued as a stray', async () => {
         const file = await published();
-        const copiedSince = await drive.databaseNow();
+        const copiedSince = await outbox.databaseNow();
         copies.add(at(second, file.key));
         await purge(file);
         expect(
-            await drive.flipObjectStore({
+            await outbox.flipObjectStore({
                 object: file.object,
                 fromStoreId: PRIMARY,
                 toStoreId: second,
@@ -611,7 +762,7 @@ describe('the flip', () => {
         const back = randomUUID();
         for (const file of files)
             expect(
-                await drive.flipObjectStore({
+                await outbox.flipObjectStore({
                     object: file.object,
                     fromStoreId: second,
                     toStoreId: PRIMARY,
@@ -619,7 +770,7 @@ describe('the flip', () => {
                     copiedSince: null,
                 }),
             ).toEqual({ status: 'flipped', reused: true });
-        await drive.releaseMoveHolds(back, new Date(Date.now() - 1000));
+        await outbox.releaseMoveHolds(back, new Date(Date.now() - 1000));
         // Eight days on, the outbox has run as often as it likes.
         await db.execute(
             sql`update drive_object_deletions set created_at = created_at - interval '8 days'`,
@@ -644,7 +795,7 @@ describe('the flip', () => {
     test('a flip back after the old copy was deleted says the bytes must be copied, and changes nothing', async () => {
         const file = await published();
         const { moveId } = await moved(file, PRIMARY, second);
-        await drive.releaseMoveHolds(moveId, new Date(Date.now() - 1000));
+        await outbox.releaseMoveHolds(moveId, new Date(Date.now() - 1000));
         expect(await drive.removeQueuedCopy(key(file, PRIMARY), store({ backups: false }))).toEqual(
             {
                 status: 'removed',
@@ -652,7 +803,7 @@ describe('the flip', () => {
             },
         );
         const flipBack = (copiedSince: string | null) =>
-            drive.flipObjectStore({
+            outbox.flipObjectStore({
                 object: file.object,
                 fromStoreId: second,
                 toStoreId: PRIMARY,
@@ -665,7 +816,7 @@ describe('the flip', () => {
         await db.delete(driveObjectDeletions);
         expect(await flipBack(null)).toEqual({ status: 'copy-needed' });
         // Copied afresh, it flips.
-        const since = await drive.databaseNow();
+        const since = await outbox.databaseNow();
         copies.add(at(PRIMARY, file.key));
         expect(await flipBack(since)).toEqual({ status: 'flipped', reused: false });
         expect((await objectRow(file.object.id))?.storeId).toBe(PRIMARY);
@@ -675,9 +826,9 @@ describe('the flip', () => {
     test('a copy the outbox deleted after it was made is not flipped onto', async () => {
         const file = await published();
         const { moveId } = await moved(file, PRIMARY, second);
-        await drive.releaseMoveHolds(moveId, new Date(Date.now() - 1000));
+        await outbox.releaseMoveHolds(moveId, new Date(Date.now() - 1000));
         // A mover begins a fresh copy back to the primary...
-        const since = await drive.databaseNow();
+        const since = await outbox.databaseNow();
         copies.add(at(PRIMARY, file.key));
         // ...and the outbox, whose row for the old copy there was due, deletes it under its feet.
         expect(
@@ -685,7 +836,7 @@ describe('the flip', () => {
         ).toMatchObject({ status: 'removed' });
         expect(copies.has(at(PRIMARY, file.key))).toBe(false);
         expect(
-            await drive.flipObjectStore({
+            await outbox.flipObjectStore({
                 object: file.object,
                 fromStoreId: second,
                 toStoreId: PRIMARY,
@@ -703,18 +854,18 @@ describe('the flip', () => {
             for (let round = 0; round < 4; round++) {
                 const file = await published();
                 const { moveId } = await moved(file, PRIMARY, second);
-                await drive.releaseMoveHolds(moveId, new Date(Date.now() - 1000));
-                const outbox = () =>
+                await outbox.releaseMoveHolds(moveId, new Date(Date.now() - 1000));
+                const removal = () =>
                     drive.removeQueuedCopy(key(file, PRIMARY), store({ backups: false }));
                 const flip = () =>
-                    drive.flipObjectStore({
+                    outbox.flipObjectStore({
                         object: file.object,
                         fromStoreId: second,
                         toStoreId: PRIMARY,
                         moveId: randomUUID(),
                         copiedSince: null,
                     });
-                let flipped: drive.ObjectFlip;
+                let flipped: outbox.ObjectFlip;
                 if (order === 'outbox-first') {
                     // The outbox is inside the store's delete, holding the row, when the flip starts.
                     let release!: () => void;
@@ -739,9 +890,9 @@ describe('the flip', () => {
                     expect(flipped).toEqual({ status: 'copy-needed' });
                 } else if (order === 'flip-first') {
                     flipped = await flip();
-                    expect(await outbox()).toEqual({ status: 'skipped' });
+                    expect(await removal()).toEqual({ status: 'skipped' });
                     expect(flipped).toEqual({ status: 'flipped', reused: true });
-                } else [, flipped] = await Promise.all([outbox(), flip()]);
+                } else [, flipped] = await Promise.all([removal(), flip()]);
                 const object = await objectRow(file.object.id);
                 // Whatever the order: the copy the row names exists.
                 expect(copies.has(at(object!.storeId, file.key)), `${order} ${round}`).toBe(true);
@@ -756,7 +907,7 @@ describe('the flip', () => {
         await drive.markObjectReplicated({ ...key(file, PRIMARY), backupStoreId: REPLICA });
         copies.add(at(REPLICA, file.key));
         const { moveId } = await moved(file, PRIMARY, second);
-        await drive.releaseMoveHolds(moveId, new Date(Date.now() - 1000));
+        await outbox.releaseMoveHolds(moveId, new Date(Date.now() - 1000));
         // The old copy goes; its backup copy is to follow after the undo window.
         expect(await drive.removeQueuedCopy(key(file, PRIMARY), store())).toEqual({
             status: 'removed',
@@ -800,7 +951,7 @@ describe('the backup copy', () => {
         copies.add(at(REPLICA, file.key));
         const { moveId } = await moved(file, PRIMARY, second);
         await drive.markObjectReplicated({ ...key(file, second), backupStoreId: REPLICA });
-        await drive.releaseMoveHolds(moveId, new Date(Date.now() - 1000));
+        await outbox.releaseMoveHolds(moveId, new Date(Date.now() - 1000));
         expect(await drive.removeQueuedCopy(key(file, PRIMARY), store())).toEqual({
             status: 'removed',
             backup: 'later',
@@ -1017,6 +1168,84 @@ describe('known at this store', () => {
         expect(await row(recent.object.id, PRIMARY)).not.toBeNull();
         expect(await row(waiting.object.id, PRIMARY)).not.toBeNull();
         expect(await drive.deleteFinishedObjectDeletions()).toBe(0);
+    });
+});
+
+describe('two transactions on the same rows', () => {
+    const waitFor = async (observer: ReturnType<typeof lockObserver>, table: string) => {
+        for (let tries = 0; tries < 60; tries++) {
+            if (await observer.waitingOn(table)) return true;
+            await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        return false;
+    };
+
+    test('a row queued anew while the 30-day cleanup had chosen it is not deleted', async () => {
+        const file = await published();
+        await purge(file);
+        await setRow(file.object.id, PRIMARY, {
+            primaryDeletedAt: new Date(Date.now() - 40 * 24 * 3600_000),
+            doneAt: new Date(Date.now() - 40 * 24 * 3600_000),
+        });
+        const observer = lockObserver();
+        try {
+            // The object came back to this store and is purged again: the insert that replaces
+            // the finished row holds it, uncommitted, when the cleanup picks its batch.
+            await observer.query('begin');
+            await observer.query(
+                `update drive_object_deletions set done_at = null, primary_deleted_at = null, created_at = now() where object_id = $1`,
+                [file.object.id],
+            );
+            const cleanup = drive.deleteFinishedObjectDeletions();
+            expect(await waitFor(observer, 'drive_object_deletions')).toBe(true);
+            await observer.query('commit');
+            expect(await cleanup).toBe(0);
+        } finally {
+            await observer.query('rollback').catch(() => undefined);
+            await observer.end();
+        }
+        // Still queued: its copy will be deleted, which a removed row would never do.
+        expect(await row(file.object.id, PRIMARY)).toMatchObject({ doneAt: null });
+        expect(await pendingIds()).toEqual([`${PRIMARY}:${file.object.id}`]);
+    });
+
+    test('a workspace’s deletion waits for a flip in flight and queues the copy the object ends up on', async () => {
+        const file = await published();
+        const moveId = randomUUID();
+        const observer = lockObserver();
+        let queued: Promise<number>;
+        try {
+            // A flip, statement for statement, held open after it has locked the object's row.
+            await observer.query('begin');
+            await observer.query(`select 1 from drive_objects where id = $1 for update`, [
+                file.object.id,
+            ]);
+            queued = db.transaction((tx) => drive.queueWorkspaceObjects(tx, account.workspaceId));
+            // It must wait for that row rather than queue what it read before the flip.
+            expect(await waitFor(observer, 'drive_object_deletions')).toBe(true);
+            await observer.query(`update drive_objects set store_id = $2 where id = $1`, [
+                file.object.id,
+                second,
+            ]);
+            await observer.query(
+                `insert into drive_object_deletions (object_id, workspace_id, object_key, store_id, reason, published, held_by_move) values ($1, $2, $3, $4, 'moved', true, $5)`,
+                [file.object.id, account.workspaceId, file.key, PRIMARY, moveId],
+            );
+            await observer.query('commit');
+            expect(await queued).toBe(1);
+        } finally {
+            await observer.query('rollback').catch(() => undefined);
+            await observer.end();
+        }
+        // The copy at the store the object moved to is queued, and the one it left stops waiting.
+        expect(
+            (await rows(file.object.id))
+                .map((entry) => [entry.storeId, entry.reason, entry.heldByMove])
+                .sort((a, b) => a[1]!.localeCompare(b[1]!)),
+        ).toEqual([
+            [PRIMARY, 'moved', null],
+            [second, 'purged', null],
+        ]);
     });
 });
 

@@ -49,6 +49,8 @@ const {
 } = await import('@hushos/db');
 const logging = await import('@hushos/logging');
 const { db } = await import('../../db/src/client');
+// What only a move will call is not on the repository yet.
+const outbox = await import('../../db/src/outbox');
 const { driveObjectDeletions, driveObjects } = await import('../../db/src/schema');
 const { registered, signedIn } = await import('../../db/test/accounts');
 const { closeDatabase, createTestStore, resetDatabase } = await import('../../db/test/helpers');
@@ -147,7 +149,7 @@ async function purge(file: File) {
 /* A move's copy step for one object, standing in for the move job (section 8.2, step 4). */
 async function move(file: File, fromStoreId: string, toStoreId: string, moveId: string) {
     const flip = (copiedSince: string | null) =>
-        driveRepository.flipObjectStore({
+        outbox.flipObjectStore({
             object: file.object,
             fromStoreId,
             toStoreId,
@@ -161,7 +163,7 @@ async function move(file: File, fromStoreId: string, toStoreId: string, moveId: 
         const taken = await flip(null);
         if (taken.status !== 'copy-needed') return taken;
     }
-    const copiedSince = await driveRepository.databaseNow();
+    const copiedSince = await outbox.databaseNow();
     await target.copyFrom(await open(fromStoreId), file.key);
     return flip(copiedSince);
 }
@@ -188,7 +190,7 @@ async function drain() {
     return jobs.deleteObjects(stores);
 }
 
-const outbox = () => db.select().from(driveObjectDeletions);
+const outboxRows = () => db.select().from(driveObjectDeletions);
 const storeOf = async (objectId: string) =>
     (await run('select store_id from drive_objects where id = $1', [objectId])).rows[0]?.store_id;
 const knownAnywhere = async (key: string) =>
@@ -234,6 +236,13 @@ describe('nothing purged is kept', () => {
         expect(s3.get(REPLICA, file.key)).toEqual(file.bytes);
         expect(await drain()).toMatchObject({ failed: 0 });
         expect(everywhere()).toEqual(NOWHERE);
+        // A purged file whose bytes are already gone from its store can never be backed up:
+        // its row does not wait for a copy that cannot be made.
+        const lost = await storedFile();
+        await purge(lost);
+        s3.remove(PRIMARY, lost.key);
+        expect(await jobs.deleteObjects(stores)).toMatchObject({ primaries: 1, waiting: 0 });
+        expect((await outboxRows()).every((row) => row.doneAt !== null)).toBe(true);
         // A worker that keeps no backup waits for none.
         const other = await storedFile();
         await purge(other);
@@ -275,12 +284,12 @@ describe('nothing purged is kept', () => {
         expect(await jobs.replicateObjects(stores)).toMatchObject({ copied: 1 });
         expect(s3.keys(SECOND_BACKUP)).toEqual([file.key]);
         // The move is done, the old copy's wait passes, and its row finishes: copy and backup copy gone.
-        await driveRepository.releaseMoveHolds(out, new Date(Date.now() + 7 * DAY));
+        await outbox.releaseMoveHolds(out, new Date(Date.now() + 7 * DAY));
         expect(await jobs.deleteObjects(stores)).toMatchObject({ primaries: 0 });
         expect(s3.keys(PRIMARY)).toEqual([file.key]);
         await drain();
         expect([s3.keys(PRIMARY), s3.keys(REPLICA)]).toEqual([[], []]);
-        const finished = (await outbox()).find((row) => row.storeId === PRIMARY_ID);
+        const finished = (await outboxRows()).find((row) => row.storeId === PRIMARY_ID);
         expect(finished).toMatchObject({ reason: 'moved' });
         expect(finished?.doneAt).not.toBeNull();
 
@@ -298,7 +307,7 @@ describe('nothing purged is kept', () => {
         expect(await drain()).toMatchObject({ failed: 0 });
         expect(everywhere()).toEqual(NOWHERE);
         expect(await knownAnywhere(file.key)).toBe(false);
-        expect((await outbox()).every((row) => row.doneAt !== null)).toBe(true);
+        expect((await outboxRows()).every((row) => row.doneAt !== null)).toBe(true);
     });
 
     test('where HushOS may not delete from the backup, the row finishes with the copy recorded as left there', async () => {
@@ -313,7 +322,7 @@ describe('nothing purged is kept', () => {
         // Nothing was ever asked of the backup but the copy.
         expect(s3.get(REPLICA, file.key)).toEqual(file.bytes);
         expect(deletesOf(REPLICA, file.key)).toBe(0);
-        const [row] = await outbox();
+        const [row] = await outboxRows();
         expect(row).toMatchObject({ backupLeft: true, backupStoreId: REPLICA_ID });
         expect(row?.doneAt).not.toBeNull();
     });
@@ -337,14 +346,14 @@ describe('nothing purged is kept', () => {
         const file = await storedFile();
         await purge(file);
         await jobs.deleteObjects({ open, backups: [] });
-        expect((await outbox())[0]?.doneAt).not.toBeNull();
+        expect((await outboxRows())[0]?.doneAt).not.toBeNull();
         // The same key back in the bucket while the finished row is still kept: an orphan.
         s3.put(PRIMARY, file.key, file.bytes, OLD);
         expect(await jobs.sweepOrphans(stores)).toMatchObject({ deleted: 1 });
         expect(await jobs.deleteObjects(stores)).toMatchObject({ cleared: 0 });
         await run(`update drive_object_deletions set done_at = now() - interval '31 days'`);
         expect(await jobs.deleteObjects(stores)).toMatchObject({ cleared: 1 });
-        expect(await outbox()).toEqual([]);
+        expect(await outboxRows()).toEqual([]);
     });
 });
 
@@ -355,7 +364,7 @@ describe('nothing that should be kept is deleted', () => {
         const fine = await storedFile();
         const moveId = randomUUID();
         for (const file of [absent, short, fine]) await move(file, PRIMARY_ID, secondId, moveId);
-        await driveRepository.releaseMoveHolds(moveId, new Date(Date.now() - 1000));
+        await outbox.releaseMoveHolds(moveId, new Date(Date.now() - 1000));
         // The new store lost one and truncated another since they were verified.
         s3.remove(SECOND, absent.key);
         s3.put(SECOND, short.key, short.bytes.subarray(0, 100));
@@ -371,7 +380,7 @@ describe('nothing that should be kept is deleted', () => {
             expect(s3.get(PRIMARY, short.key)).toEqual(short.bytes);
             expect(s3.get(PRIMARY, fine.key)).toBeNull();
             const marked = Object.fromEntries(
-                (await outbox()).map((row) => [row.objectId, row.attention]),
+                (await outboxRows()).map((row) => [row.objectId, row.attention]),
             );
             expect(marked).toEqual({
                 [absent.objectId]: true,
@@ -410,7 +419,7 @@ describe('nothing that should be kept is deleted', () => {
             });
         // Taken back, not copied again.
         expect(s3.requests.filter((request) => request.method === 'PUT').length).toBe(copiesBefore);
-        await driveRepository.releaseMoveHolds(back, new Date(Date.now() - 1000));
+        await outbox.releaseMoveHolds(back, new Date(Date.now() - 1000));
         await run(`update drive_object_deletions set created_at = created_at - interval '8 days'`);
         await drain();
         for (const file of files) {
@@ -418,7 +427,7 @@ describe('nothing that should be kept is deleted', () => {
             expect(storeId).toBe(PRIMARY_ID);
             expect(s3.get(bucketOf(storeId), file.key)).toEqual(file.bytes);
         }
-        const left = (await outbox()).filter((row) => row.doneAt === null);
+        const left = (await outboxRows()).filter((row) => row.doneAt === null);
         expect(left).toEqual([]);
         // What the cancelled move had copied out is cleaned up; nothing else was.
         expect(s3.keys(SECOND)).toEqual([]);
@@ -441,7 +450,7 @@ describe('nothing that should be kept is deleted', () => {
             });
         for (const file of [gone, short]) expect(s3.get(PRIMARY, file.key)).toEqual(file.bytes);
         // No row is left that would delete the copies just made.
-        expect((await outbox()).filter((row) => row.storeId === PRIMARY_ID)).toEqual([]);
+        expect((await outboxRows()).filter((row) => row.storeId === PRIMARY_ID)).toEqual([]);
     });
 
     test('a report’s hold keeps the bytes through a purge, at the store and in its backup, until the report lets go', async () => {
@@ -621,7 +630,7 @@ describe('loops survive one failure', () => {
         expect(s3.get(PRIMARY, fine.key)).toBeNull();
         expect(s3.get(SECOND, refused.key)).toEqual(refused.bytes);
         // Neither row is lost, neither is marked as done, and each remembers that it failed.
-        const rows = Object.fromEntries((await outbox()).map((row) => [row.objectId, row]));
+        const rows = Object.fromEntries((await outboxRows()).map((row) => [row.objectId, row]));
         expect(rows[refused.objectId]).toMatchObject({
             failures: 1,
             primaryDeletedAt: null,
@@ -644,7 +653,7 @@ describe('loops survive one failure', () => {
         expect(deletesOf(PRIMARY, fine.key)).toBe(1);
         // The one nobody can open is still queued, for the day somebody can.
         expect(
-            (await outbox()).filter((row) => row.doneAt === null).map((row) => row.objectId),
+            (await outboxRows()).filter((row) => row.doneAt === null).map((row) => row.objectId),
         ).toEqual([stuck.objectId]);
     });
 
@@ -753,7 +762,7 @@ describe('the backup mark is a compare-and-set', () => {
         expect(s3.keys(SECOND_BACKUP)).toEqual([file.key]);
         // The copy the race left in the old backup is the old copy's row's to remove.
         expect(s3.keys(REPLICA)).toEqual([file.key]);
-        await driveRepository.releaseMoveHolds(moveId, new Date(Date.now() - 1000));
+        await outbox.releaseMoveHolds(moveId, new Date(Date.now() - 1000));
         await drain();
         expect([s3.keys(PRIMARY), s3.keys(REPLICA)]).toEqual([[], []]);
         expect(s3.get(SECOND, file.key)).toEqual(file.bytes);

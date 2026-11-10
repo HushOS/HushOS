@@ -142,6 +142,8 @@ export async function pendingAfterMigrate(query: Query) {
 }
 
 export type AfterMigrateResult = {
+    /* Another session was running the steps: nothing was looked at or done here. */
+    busy: boolean;
     done: string[];
     /* What failed, by name, with the SQLSTATE and nothing a row holds. */
     failed: { name: string; kind: AfterMigrateStep['kind']; code: string }[];
@@ -154,16 +156,42 @@ const sqlStateOf = (error: unknown) =>
         : 'unknown';
 
 /*
+ * One run at a time, by a session-level advisory lock ("hushos" and "after",
+ * as two integers). Two containers that start together would otherwise both
+ * find the index missing, and the second would take the first one's build,
+ * still in progress and so not yet valid, for one an interrupted build left
+ * behind, and drop it.
+ */
+const AFTER_MIGRATE_LOCK = [0x68757368, 0x61667472] as const;
+
+/*
  * Runs every pending step on `query`'s session, which must not be inside a
  * transaction: each statement is its own. A validation waits five seconds for
  * its lock, three times; an index build waits a minute for the transactions it
  * must outlast. An index a failed build left invalid is dropped and built again.
+ * When another session is already running the steps this one does nothing and
+ * says so (`busy`): that run does the work.
  */
 export async function runAfterMigrate(
     query: Query,
     options: { pauseMs?: number } = {},
 ): Promise<AfterMigrateResult> {
-    const result: AfterMigrateResult = { done: [], failed: [] };
+    const result: AfterMigrateResult = { busy: false, done: [], failed: [] };
+    const taken = await query(`select pg_try_advisory_lock($1, $2) as taken`, [
+        ...AFTER_MIGRATE_LOCK,
+    ]);
+    if (!taken.rows[0]?.taken) return { ...result, busy: true };
+    try {
+        await runSteps(query, result, options);
+    } finally {
+        await query(`select pg_advisory_unlock($1, $2)`, [...AFTER_MIGRATE_LOCK]).catch(
+            () => undefined,
+        );
+    }
+    return result;
+}
+
+async function runSteps(query: Query, result: AfterMigrateResult, options: { pauseMs?: number }) {
     const pause = () => new Promise((resolve) => setTimeout(resolve, options.pauseMs ?? 2_000));
     for (const step of AFTER_MIGRATE) {
         const table = quoted(step.table);
@@ -195,5 +223,4 @@ export async function runAfterMigrate(
         }
     }
     await query(`reset lock_timeout`).catch(() => undefined);
-    return result;
 }
