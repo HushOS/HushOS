@@ -67,10 +67,13 @@ const keys: DeviceKeyStore = {
  */
 function worker(answers: Record<string, (input: unknown) => unknown> = {}) {
     const asked: { operation: string; input: unknown }[] = [];
+    /* Operations and locks in the order they came: what the worker held when it was locked. */
+    const order: string[] = [];
     let locks = 0;
     const transport: CryptoTransport = {
         request: async (operation, input) => {
             asked.push({ operation, input });
+            order.push(operation);
             const answer = answers[operation];
             if (answer) return answer(input) as never;
             if (operation === 'twoStepPhrase')
@@ -86,11 +89,14 @@ function worker(answers: Record<string, (input: unknown) => unknown> = {}) {
             if (operation === 'remember') return { userId: user.id, deviceKeyId: 'k' } as never;
             return {} as never;
         },
-        lock: () => void locks++,
+        lock: () => {
+            locks++;
+            order.push('lock');
+        },
         onLock() {},
     };
     const did = (operation: string) => asked.filter((entry) => entry.operation === operation);
-    return { transport, asked, did, locks: () => locks };
+    return { transport, asked, order, did, locks: () => locks };
 }
 
 /* A screen that answers each request with the next of `answers`, and records what it was shown. */
@@ -713,5 +719,315 @@ describe('carrying on after a security change', () => {
         });
         expect(auth.store.getState().unlockedUserId).toBeNull();
         expect(auth.store.getState().device).toBeNull();
+    });
+});
+
+/*
+ * The reply to a new phrase or a rotation that never arrived (docs/two-step-design.md 4,
+ * "When the reply is lost"). The server may have made the change, and then the second step
+ * of the next sign-in can ask for a phrase only this device ever held. So the client reads
+ * it out of what it sent, before it locks, and hands it back to be shown.
+ */
+describe('a new recovery phrase whose reply never arrived', () => {
+    const NEW_PHRASE =
+        'zebra obtain quantum velvet zebra obtain quantum velvet zebra obtain quantum velvet zebra obtain quantum velvet zebra obtain quantum velvet zebra obtain quantum velvet';
+    const sentEnvelope = { envelopeVersion: 1, keyVersion: 2, credentialVersion: 2, sent: true };
+    const sentRecovery = { envelopeVersion: 1, recoveryVersion: 4, keyVersion: 2 };
+    const lost = () => new Error('Failed to fetch');
+    /* The worker's update, as `securityFinish` makes it: a password change carries no phrase. */
+    const update = (input: unknown) => ({
+        finishLoginRequest: 'finish',
+        registrationRecord: 'record',
+        envelope: sentEnvelope,
+        ...((input as { action: string }).action === 'password' ? {} : { recovery: sentRecovery }),
+    });
+    const answers = (extra: Record<string, (input: unknown) => unknown> = {}) => ({
+        securityFinish: update,
+        backup: () => ({ phrase: NEW_PHRASE }),
+        ...extra,
+    });
+    function changing(options: {
+        on?: boolean;
+        /* What the server answers the change with: no answer at all, unless given. */
+        reply?: Error;
+        /* Replaces the worker's replies, as `worker` takes them. */
+        answers?: Record<string, (input: unknown) => unknown>;
+        /* What the session says once the change is over: signed out, unless given. */
+        session?: () => Promise<{ user: SessionUser | null; device: null }>;
+        /* Runs while the server holds the change, before the reply is lost. */
+        during?: () => void;
+        keys?: DeviceKeyStore;
+    }) {
+        const api = {
+            twoStepChallenge: async (): Promise<StepOffer> =>
+                options.on ? { on: true, ...challenge('change-1') } : { on: false },
+            // The server hands back the action it was asked for, as the client checks.
+            securityStart: async ({ action }: { action: string }) => ({
+                userId: user.id,
+                action,
+                attemptToken: 'change-1',
+            }),
+            securityFinish: async () => {
+                options.during?.();
+                throw options.reply ?? lost();
+            },
+            session: options.session ?? (async () => ({ user: null, device: null })),
+        } as unknown as AuthApi;
+        const crypto = worker(options.answers ?? answers());
+        const auth = createAuthClient(() => crypto.transport, options.keys ?? keys, api);
+        return { auth, crypto };
+    }
+    const change = (
+        auth: ReturnType<typeof changing>['auth'],
+        action: 'recovery-key' | 'master-key' | 'password',
+        ask?: AskStep,
+    ) =>
+        auth.changeSecurity(
+            user,
+            action,
+            'correct horse',
+            action === 'password' ? 'new horse' : '',
+            ask ? { step: ask } : {},
+        );
+
+    test.each(['recovery-key', 'master-key'] as const)(
+        'a %s change hands back the phrase it made, read from what was sent, and only then locks',
+        async (action) => {
+            const { auth, crypto } = changing({ on: true });
+            const { ask } = screen([{ kind: 'phrase', phrase: PHRASE }]);
+            expect(await change(auth, action, ask)).toStrictEqual({
+                signedIn: false,
+                uncertain: true,
+                kit: { phrase: NEW_PHRASE, recovery: sentRecovery },
+            });
+            // Opened from the envelope this device sent (the server answered with none), and
+            // the phrase read from the recovery envelope sent beside it.
+            expect(crypto.did('unlock')).toEqual([
+                { operation: 'unlock', input: { userId: user.id, envelope: sentEnvelope } },
+            ]);
+            expect(crypto.did('backup')).toEqual([
+                { operation: 'backup', input: { userId: user.id, recovery: sentRecovery } },
+            ]);
+            // Read while the worker still held the new password's key, and locked straight
+            // after: the account is not left open on a device that is signed out.
+            const read = crypto.order.lastIndexOf('backup');
+            expect(crypto.order.slice(crypto.order.lastIndexOf('securityFinish'), read)).toEqual([
+                'securityFinish',
+                'twoStepPhrase',
+                'unlock',
+            ]);
+            expect(crypto.order.slice(read + 1)).toEqual(['lock']);
+            expect(auth.store.getState().unlockedUserId).toBeNull();
+            expect(auth.store.getState().device).toBeNull();
+        },
+    );
+
+    test('a password change makes no phrase: nothing is opened, and it ends as it did before', async () => {
+        const { auth, crypto } = changing({});
+        expect(await change(auth, 'password')).toStrictEqual({ signedIn: false, uncertain: true });
+        expect(crypto.did('unlock')).toEqual([]);
+        expect(crypto.did('backup')).toEqual([]);
+        expect(auth.store.getState().unlockedUserId).toBeNull();
+    });
+
+    test('with the phrase in hand the session is not asked: no second wait, and old credentials do not make it a failure', async () => {
+        // A server still at work when the wait ran out makes the change afterwards, and its
+        // session says "nothing changed" until then. Told "it failed", the person would meet
+        // a second step asking for a phrase they never saw. And a second request on a dead
+        // connection is up to thirty more seconds in which a reload loses the words.
+        let asked = 0;
+        const session = async () => {
+            asked++;
+            return { user, device: null };
+        };
+        const { auth } = changing({ session });
+        expect(await change(auth, 'master-key')).toStrictEqual({
+            signedIn: false,
+            uncertain: true,
+            kit: { phrase: NEW_PHRASE, recovery: sentRecovery },
+        });
+        expect(asked).toBe(0);
+        // A password change in the same spot is still the failure it was: the session is
+        // what says so, and there is nothing to save.
+        const password = changing({ session });
+        await expect(change(password.auth, 'password')).rejects.toThrow('Failed to fetch');
+        expect(asked).toBe(1);
+    });
+
+    test.each([
+        ['no answer in time', new DOMException('The operation timed out.', 'TimeoutError')],
+        ['a gateway with no answer from the app', refused('Bad Gateway', 502)],
+        ['a gateway that stopped waiting', refused('Gateway Timeout', 504)],
+        ['the app failing without one of its codes', refused('Please try again.', 500)],
+        // The request sent twice: the first copy made the change and ended the session.
+        ['“no session”', refused('Sign in before changing account security.', 401)],
+    ])('%s is a lost reply: the phrase is shown', async (_name, reply) => {
+        const { auth } = changing({ reply: reply as Error });
+        expect(await change(auth, 'recovery-key')).toStrictEqual({
+            signedIn: false,
+            uncertain: true,
+            kit: { phrase: NEW_PHRASE, recovery: sentRecovery },
+        });
+    });
+
+    test('a wrong code, then a lost reply: the phrase is read from the update that was lost, not the one refused', async () => {
+        // Each try at the step makes a new update, with a new phrase in it. The refused
+        // one was never taken; shown, it would be a phrase the server has never seen.
+        let made = 0;
+        const replies = [refused(WRONG, 403, 'two-step'), lost()];
+        const crypto = worker({
+            securityFinish: () => {
+                made++;
+                return {
+                    finishLoginRequest: 'finish',
+                    registrationRecord: 'record',
+                    envelope: { ...sentEnvelope, made },
+                    recovery: { ...sentRecovery, made },
+                };
+            },
+            backup: (input) => ({
+                phrase: `${NEW_PHRASE} ${(input as { recovery: { made: number } }).recovery.made}`,
+            }),
+        });
+        const api = {
+            twoStepChallenge: async (): Promise<StepOffer> => ({ on: true, ...challenge('c-1') }),
+            securityStart: async ({ action }: { action: string }) => ({
+                userId: user.id,
+                action,
+                attemptToken: `change-${made + 1}`,
+            }),
+            securityFinish: async () => {
+                throw replies.shift();
+            },
+            session: async () => ({ user: null, device: null }),
+        } as unknown as AuthApi;
+        const auth = createAuthClient(() => crypto.transport, keys, api);
+        const { ask } = screen([
+            { kind: 'totp', code: '111111' },
+            { kind: 'totp', code: '222222' },
+        ]);
+        expect(await change(auth, 'recovery-key', ask)).toStrictEqual({
+            signedIn: false,
+            uncertain: true,
+            kit: { phrase: `${NEW_PHRASE} 2`, recovery: { ...sentRecovery, made: 2 } },
+        });
+        expect(crypto.did('unlock')).toEqual([
+            {
+                operation: 'unlock',
+                input: { userId: user.id, envelope: { ...sentEnvelope, made: 2 } },
+            },
+        ]);
+    });
+
+    test.each([
+        ['the per-address limit', refused('Too many attempts. Try again later.', 429)],
+        [
+            'a change the server cannot check',
+            refused('Try again later.', 503, 'two-step-unavailable'),
+        ],
+    ])(
+        'a refusal is not a lost reply (%s): the old phrase stands, and no new one is shown',
+        async (_name, reply) => {
+            const { auth, crypto } = changing({
+                reply,
+                session: async () => ({ user, device: null }),
+            });
+            await expect(change(auth, 'recovery-key')).rejects.toBe(reply);
+            expect(crypto.did('unlock')).toEqual([]);
+            expect(crypto.did('backup')).toEqual([]);
+        },
+    );
+
+    test.each([
+        [
+            'the worker refuses to open (it dropped the key)',
+            () =>
+                answers({
+                    unlock: () =>
+                        Promise.reject(new Error('Sign in again to unlock your account.')),
+                }),
+        ],
+        [
+            'the worker cannot read the phrase',
+            () =>
+                answers({
+                    backup: () =>
+                        Promise.reject(new Error('Unlock your account to view your recovery key.')),
+                }),
+        ],
+    ])('falls back to the sign-in page when %s', async (_name, replies) => {
+        const { auth, crypto } = changing({ answers: replies() });
+        expect(await change(auth, 'recovery-key')).toStrictEqual({
+            signedIn: false,
+            uncertain: true,
+        });
+        expect(crypto.order.at(-1)).toBe('lock');
+        expect(auth.store.getState().unlockedUserId).toBeNull();
+    });
+
+    test('a lock while the server held the change: the key is gone, so a new worker is not asked for it', async () => {
+        const run = changing({ during: () => run.auth.resync() });
+        expect(await change(run.auth, 'recovery-key')).toStrictEqual({
+            signedIn: false,
+            uncertain: true,
+        });
+        expect(run.crypto.did('unlock')).toEqual([]);
+        expect(run.crypto.did('backup')).toEqual([]);
+    });
+
+    test('a lock while the worker reads the phrase drops it', async () => {
+        const run = changing({
+            answers: answers({
+                backup: () => {
+                    run.auth.resync();
+                    return { phrase: NEW_PHRASE };
+                },
+            }),
+        });
+        expect(await change(run.auth, 'recovery-key')).toStrictEqual({
+            signedIn: false,
+            uncertain: true,
+        });
+    });
+
+    test('the phrase goes nowhere but back to the caller: not into a log, storage or an error', async () => {
+        const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((level) =>
+            vi.spyOn(console, level).mockImplementation(() => {}),
+        );
+        const said = () =>
+            JSON.stringify(spies.flatMap((spy) => spy.mock.calls.flat().map(String)));
+        const leaks = (text: string) => text.includes('zebra') || text.includes('velvet');
+        try {
+            // Everything after the read fails: the device store, and the session check.
+            const failing = changing({
+                keys: { ...keys, clear: async () => Promise.reject(new Error('store')) },
+                session: async () => Promise.reject(new Error('offline')),
+            });
+            const result = await change(failing.auth, 'master-key');
+            expect(result).toMatchObject({ kit: { phrase: NEW_PHRASE } });
+            expect(leaks(said())).toBe(false);
+            expect(leaks(JSON.stringify([...items]))).toBe(false);
+            expect(leaks(JSON.stringify(failing.auth.store.getState()))).toBe(false);
+            // Read, then locked out from under it, with the old session still live: the
+            // change ends as the failure it was, and the error carries none of the words.
+            const locked = changing({
+                session: async () => ({ user, device: null }),
+                answers: answers({
+                    backup: () => {
+                        locked.auth.resync();
+                        return { phrase: NEW_PHRASE };
+                    },
+                }),
+            });
+            const error = await change(locked.auth, 'master-key').then(
+                () => null,
+                (cause: Error) => cause,
+            );
+            expect(error?.message).toBe('Failed to fetch');
+            expect(leaks(`${error?.message} ${error?.stack} ${JSON.stringify(error)}`)).toBe(false);
+            expect(leaks(said())).toBe(false);
+        } finally {
+            for (const spy of spies) spy.mockRestore();
+        }
     });
 });
