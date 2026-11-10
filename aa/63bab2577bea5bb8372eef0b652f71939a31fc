@@ -1,0 +1,96 @@
+packages/db/src/outbox.ts
+  s_1f3a9ec02d29ed::t_e5feaed7b46745 1-797
+  s_1f3a9ec02d29ed::t_9ac92a5b0a1b89 798-830
+packages/db/src/outbox.migration.test.ts
+  s_1f3a9ec02d29ed::t_ff33b08874b412 1-457
+  s_1f3a9ec02d29ed::t_7d6bf88bd44535 458-462
+packages/db/drizzle/20261110025847_storage_outbox/migration.sql
+  s_1f3a9ec02d29ed::t_1f988b4e5adf3f 1-50
+packages/db/scripts/after-migrate.ts
+  s_1f3a9ec02d29ed::t_fa745a3983e39b 1-27
+packages/db/src/after-migrate.ts
+  s_1f3a9ec02d29ed::t_7c26bd97de5dc4 1-198
+  s_1f3a9ec02d29ed::t_b774b413ed0885 199
+packages/drive/src/outbox.test.ts
+  s_1f3a9ec02d29ed::t_7be4c2b10fa2b9 1-814,822-823,827-828
+  s_1f3a9ec02d29ed::t_897d5f0c406abe 815-821,824-826,829-876
+packages/db/src/outbox.test.ts
+  s_1f3a9ec02d29ed::t_73ffcd21657e8b 1-1059,1065,1067-1068
+  s_1f3a9ec02d29ed::t_92eba7adafa51d 1060-1064,1066,1069-1093
+CONTRIBUTING.md
+  s_1f3a9ec02d29ed::t_0d918a65e55108 374-380,588
+apps/web/Dockerfile
+  s_1f3a9ec02d29ed::t_5b7f649568ce31 49-51
+apps/web/src/lib/api/admin.db.test.ts
+  s_1f3a9ec02d29ed::t_759d089e59a4fb 4,81
+docs/company-storage-design.md
+  s_1f3a9ec02d29ed::t_0a754e9541309c 7-12,672-685,934,936,954-955,1294-1296
+docs/drive-design.md
+  s_1f3a9ec02d29ed::t_1880675eac09c5 563-565,568-569,571-577,1687-1688
+docs/self-hosting.md
+  s_1f3a9ec02d29ed::t_8a483b452de423 302-318,1596,1669,1671-1675,1678-1694,2475-2546
+packages/db/Dockerfile
+  s_1f3a9ec02d29ed::t_d0d50c0fcfd7f9 36-38
+packages/db/drizzle/20261110025847_storage_outbox/snapshot.json
+  s_1f3a9ec02d29ed::t_965699cc53b4f8 1-628
+packages/db/package.json
+  s_1f3a9ec02d29ed::t_0be20ec5287d7a 24
+packages/db/src/admin.test.ts
+  s_1f3a9ec02d29ed::t_9d2acf9eb34452 8-14,126
+packages/db/src/auth.ts
+  s_1f3a9ec02d29ed::t_b10339a61176a1 20,1485-1492
+packages/db/src/constraints.test.ts
+  s_1f3a9ec02d29ed::t_e129d6bd6a3e2c 1,5,11-15,17-53,57-86,100-115
+packages/db/src/drive.ops.test.ts
+  s_1f3a9ec02d29ed::t_4b372650095c90 8,14,154-158,160-164,172,179-185
+packages/db/src/drive.purge.test.ts
+  s_1f3a9ec02d29ed::t_1fa751a14bf8bb 14-15,395-407,409-410,417-419,421,424-429,431-433,438,441-449,453-458
+packages/db/src/drive.ts
+  s_1f3a9ec02d29ed::t_0dc797d0e60f8e 4,16,52-54,1693,1699,1702-1703,3697-3706,3715-3716,3722,3735,3742
+packages/db/src/groups.test.ts
+  s_1f3a9ec02d29ed::t_1caa8477dd8bd3 25,3953
+packages/db/src/groups.ts
+  s_1f3a9ec02d29ed::t_aad8b433955def 17,3553-3554
+packages/db/src/index.ts
+  s_1f3a9ec02d29ed::t_09d88ab745bf46 16-22
+packages/db/src/readiness.ts
+  s_1f3a9ec02d29ed::t_48d8d28a4d1a30 3,15,59-68
+packages/db/src/reports.ts
+  s_1f3a9ec02d29ed::t_5f7cb2031bacb9 731-735,746-754
+packages/db/src/schema/drive.ts
+  s_1f3a9ec02d29ed::t_124eb6f099621b 21,178-179,198-201,203-206,215-218,441-461,463-464,468,471,475-476,479-492,499,503-519
+packages/db/src/stores.test.ts
+  s_1f3a9ec02d29ed::t_2fa51e27679f05 461,476,483-493
+packages/db/src/stores.ts
+  s_1f3a9ec02d29ed::t_d0c81bfe787833 1,65-88
+packages/db/test/global-setup.ts
+  s_1f3a9ec02d29ed::t_2a574fe4b99ddd 161-168
+packages/drive/src/jobs.dissolved.test.ts
+  s_1f3a9ec02d29ed::t_20f1acf679a7d5 5,44,83,93,101
+packages/drive/src/jobs.ts
+  s_1f3a9ec02d29ed::t_8401de25580ab5 6,8,18-21,31-36,38,41,44-57,78-79,90,101,119-141,145-159,161-178,180-202,205-212,214-221,225-236,238-277,279,344-352,355,359-384,386-420,423,444-448,450-465,475-515,517,519,539-562,575-576,581-587,598,617,633-634,641-651,702-703
+packages/drive/src/stores.test.ts
+  s_1f3a9ec02d29ed::t_87564f3e9b50d2 71,541,568-571,585,617,619,663-664,695,700,707-709,712-726,742-746,755,763-766,768,771-772,781-783
+packages/drive/test/s3-server.ts
+  s_1f3a9ec02d29ed::t_87546f3247cff7 28-29,49-59,249
+packages/jobs/src/jobs/drive.ts
+  s_1f3a9ec02d29ed::t_c82ac531de2fd3 12,14,22-24,27-43
+packages/jobs/src/worker.ts
+  s_1f3a9ec02d29ed::t_b5614929905c85 9,11,79-89,196-197,200,207-216
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "aa63bab2577bea5bb8372eef0b652f71939a31fc",
+  "prompts": {},
+  "sessions": {
+    "s_1f3a9ec02d29ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aef80487-cabb-455f-b2f1-acb7f8d96c4e",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
