@@ -63,6 +63,8 @@ export function useStepPrompt({
     const resolver = useRef<((answer: StepAnswer | null) => void) | null>(null);
     const shown = useRef<StepAnswerKind>('totp');
     const began = useRef<number | null>(null);
+    // The page that drew this went away: nobody is left to answer.
+    const gone = useRef(false);
 
     // What was refused is said until the person picks another way to answer: it was about the last one.
     const [said, setSaid] = useState(true);
@@ -74,6 +76,9 @@ export function useStepPrompt({
     const ask = useCallback<AskStep>(
         (next) =>
             new Promise((resolve) => {
+                // Asked after the page went away (it left while the password was being
+                // proved): backed out, or the flow would wait for ever, holding the worker.
+                if (gone.current) return resolve(null);
                 resolver.current = resolve;
                 began.current ??= Date.now();
                 // The method on screen stays while it can still answer; otherwise the first that can.
@@ -127,8 +132,15 @@ export function useStepPrompt({
         );
         return () => window.clearTimeout(timer);
     }, [deadline, cancel]);
-    // Left behind by a page that went away: the flow waiting on an answer ends.
-    useEffect(() => () => resolver.current?.(null), []);
+    // Left behind by a page that went away: the flow waiting on an answer ends, and so does
+    // one that asks later.
+    useEffect(() => {
+        gone.current = false;
+        return () => {
+            gone.current = true;
+            resolver.current?.(null);
+        };
+    }, []);
 
     return {
         /* Handed to the auth client: `authClient.login(email, password, { step: ask })`. */
