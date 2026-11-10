@@ -21,7 +21,7 @@ import { authError } from '@/lib/form';
 import { checkQuestions, kitText } from '@/lib/recovery-kit';
 import { cue } from '@/lib/sounds';
 import { copySecret } from '@/lib/clipboard';
-import type { PhraseScreenProps } from '@/lib/unconfirmed-phrase';
+import { PHRASE_ABOUT, PHRASE_TITLE, type PhraseScreenProps } from '@/lib/unconfirmed-phrase';
 
 export type RecoveryReason = 'master-key' | 'recovery-key';
 
@@ -309,12 +309,7 @@ export function LostReplyPhrase({ account, phrase, recovery, onDone }: PhraseScr
             />
         );
     return (
-        <AuthLayout
-            wide
-            title="Save your new recovery phrase"
-            art="24"
-            description="We lost the connection while making this change. If it went through, this is your new recovery phrase. Save it, then sign in."
-        >
+        <AuthLayout wide title={PHRASE_TITLE} art="24" description={PHRASE_ABOUT}>
             <div className="flex flex-col gap-5">
                 <AuthNote tone="info">
                     If it didn’t go through, your old phrase still works, so keep that one too.

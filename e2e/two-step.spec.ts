@@ -793,8 +793,15 @@ test.describe('an account with two-step sign-in', () => {
         await expect(a.getByRole('list', { name: 'Recovery phrase' })).toBeVisible();
         await expect(a.getByRole('heading')).toHaveCount(1);
         await expect(a.getByText(/reload|went wrong/i)).toHaveCount(0);
-        // Under them the address is the sign-in page's, so a reload lands on its notice.
+        // Under them the address is the sign-in page's, so a reload lands on its notice,
+        // and the mark at the top is no link that could move it. The tab and the focus
+        // say what replaced the page.
         await expect(a).toHaveURL(/\/login\?securityChanged=uncertain-phrase$/);
+        await expect(a.getByRole('link', { name: 'HushOS' })).toHaveCount(0);
+        await expect(a).toHaveTitle('Save your new recovery phrase · HushOS');
+        await expect(
+            a.getByRole('heading', { name: 'Save your new recovery phrase' }),
+        ).toBeFocused();
         // The page asked the server for more (the sign-in page at least) and got nothing.
         await expect.poll(() => refusedSince.length).toBeGreaterThan(0);
         await expect(a.getByRole('main')).toContainText(
@@ -836,13 +843,15 @@ test.describe('an account with two-step sign-in', () => {
         await a.unroute(finish);
         await a.unroute('**/*', everything);
         await saveKit(a);
-        await expect(a).toHaveURL(/\/login$/, { timeout: 60_000 });
-        await expect(a.getByRole('heading', { name: 'Welcome back' })).toBeVisible();
+        await expect(a.getByRole('heading', { name: 'Welcome back' })).toBeVisible({
+            timeout: 60_000,
+        });
+        await expect(a).toHaveURL(/\/login\?securityChanged=uncertain-phrase$/);
+        await expect(a).toHaveTitle('Sign in · HushOS');
         await expect(list).toHaveCount(0);
         expect(await kept()).not.toContain(start);
-        // What a reload of that page would have landed on: said for a phrase, not a
+        // The sign-in page, as a reload would also have found it: said for a phrase, not a
         // password (the password never changed), and with no words to show.
-        await a.goto('/login?securityChanged=uncertain-phrase', { waitUntil: 'networkidle' });
         await expect(a.getByRole('main')).toContainText(
             'We couldn’t confirm the change. Sign in with your password as usual. If you’re asked for your recovery phrase, use the one you have. After you sign in, the Recovery phrase page shows your current phrase.',
         );

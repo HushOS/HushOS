@@ -49,6 +49,7 @@ import { forgetPhrase, useHeldPhrase } from '@/lib/unconfirmed-phrase';
 import styles from '@/styles.css?url';
 import { ThemeColor } from '@/components/theme-color';
 import { SitePage } from '@/components/site';
+import { HeldPhraseScreen } from '@/components/held-phrase';
 
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
     server: {
@@ -226,24 +227,6 @@ function Document({ children, release }: { children: ReactNode; release: string 
             reloadIfStale(phrase !== null);
         if (moved && !pathname.startsWith('/app')) void checkRelease();
     }, [pathname, stale, phrase]);
-    /*
-     * A new recovery phrase whose change went unanswered (lib/unconfirmed-phrase) is drawn
-     * here, in place of the page, for as long as it is held. Here because this document is
-     * always on screen: whatever the router is doing underneath (a sign-in page that will
-     * not load, the error page of a server that is restarting, a redirect) the only copy of
-     * the phrase stays in front of the person, and nothing under it can tell them to reload.
-     * The browser asks before it closes or reloads the tab, and a page put away keeps none.
-     */
-    useEffect(() => {
-        if (!phrase) return;
-        const ask = (event: BeforeUnloadEvent) => event.preventDefault();
-        window.addEventListener('beforeunload', ask);
-        window.addEventListener('pagehide', forgetPhrase);
-        return () => {
-            window.removeEventListener('beforeunload', ask);
-            window.removeEventListener('pagehide', forgetPhrase);
-        };
-    }, [phrase]);
     return (
         <html lang="en" className={contrast ? `${theme} hc` : theme}>
             <head>
@@ -273,16 +256,35 @@ function Document({ children, release }: { children: ReactNode; release: string 
                 <ThemeColor />
                 <MotionProvider>
                     <TooltipProvider delay={0} closeDelay={0}>
+                        {/*
+                         * A new recovery phrase whose change went unanswered is drawn here, in
+                         * place of the page, for as long as it is held (lib/unconfirmed-phrase).
+                         * Here because this document is always on screen: whatever the router is
+                         * doing underneath (a sign-in page that will not load, the error page of
+                         * a server that is restarting, a redirect) the only copy of the phrase
+                         * stays in front of the person, and nothing under it can tell them to
+                         * reload.
+                         */}
                         <Toaster>
                             {phrase ? (
-                                <phrase.Screen
-                                    account={phrase.account}
-                                    phrase={phrase.phrase}
-                                    recovery={phrase.recovery}
-                                    // Saved: forgotten at once, then on to the sign-in page.
+                                <HeldPhraseScreen
+                                    held={phrase}
                                     onDone={() => {
+                                        // Saved: forgotten at once. Underneath is the sign-in
+                                        // page with its notice, put there when the phrase came
+                                        // up, so nothing is asked of the server; only a page
+                                        // that never loaded is asked for once more.
                                         forgetPhrase();
-                                        void router.navigate({ to: '/login', replace: true });
+                                        if (
+                                            router.state.matches.some(
+                                                ({ status }) => status !== 'success',
+                                            )
+                                        )
+                                            void router.navigate({
+                                                to: '/login',
+                                                search: { securityChanged: 'uncertain-phrase' },
+                                                replace: true,
+                                            });
                                     }}
                                 />
                             ) : (

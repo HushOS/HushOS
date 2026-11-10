@@ -12,6 +12,11 @@ import { useSyncExternalStore, type ComponentType } from 'react';
  * entry, storage or a query cache, so a reload or a closed tab ends it, as does the screen's
  * own Finish.
  */
+/* The screen's title and what it says under it: also the tab's name, and the plain fallback's words. */
+export const PHRASE_TITLE = 'Save your new recovery phrase';
+export const PHRASE_ABOUT =
+    'We lost the connection while making this change. If it went through, this is your new recovery phrase. Save it, then sign in.';
+
 export type PhraseScreenProps = UnconfirmedPhrase & {
     account: { id: string; email: string };
     onDone: () => void;
