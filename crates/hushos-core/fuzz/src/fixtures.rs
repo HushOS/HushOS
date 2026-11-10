@@ -107,3 +107,67 @@ pub fn share_grantee() -> &'static IdentityKeys {
         .expect("the web's identity opens")
     })
 }
+
+/// `packages/crypto/src/__fixtures__/core-company.json`: a company this crate made, with its seals.
+pub fn company() -> &'static Value {
+    static COMPANY: OnceLock<Value> = OnceLock::new();
+    COMPANY.get_or_init(|| read("packages/crypto/src/__fixtures__/core-company.json"))
+}
+
+/// `crates/hushos-core/fixtures/web-company.json`: the web's company histories and seals.
+pub fn web_company() -> &'static Value {
+    static COMPANY: OnceLock<Value> = OnceLock::new();
+    COMPANY.get_or_init(|| read("crates/hushos-core/fixtures/web-company.json"))
+}
+
+/// A fixture company's chain, accepted through its first `through` rosters:
+/// `core` is the one this crate made, `web` the one whose seals the web made,
+/// `case:<name>` a rule case of the web's that starts from version 1. `None`
+/// when the fixture has no such roster, or the history is not accepted so
+/// far. The web's `companyChain` accepts the same.
+pub fn company_chain(which: &str, through: u64) -> Option<Arc<AcceptedRosters>> {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    type Chains = Mutex<HashMap<(String, u64), Option<Arc<AcceptedRosters>>>>;
+    static CHAINS: OnceLock<Chains> = OnceLock::new();
+    let history = match which {
+        "core" => &company()["history"]["input"],
+        "web" => &web_company()["seals"]["history"],
+        _ => {
+            let name = which.strip_prefix("case:")?;
+            let found = web_company()["cases"].as_array()?.iter().find(|case| case["name"] == name)?;
+            // A case that starts from a cache has no rosters to cut.
+            Some(&found["input"]).filter(|input| input["cache"].is_null())?
+        }
+    };
+    let count = history["rosters"].as_array()?.len() as u64;
+    if through < 1 || through > count {
+        return None;
+    }
+    let chains = CHAINS.get_or_init(Default::default);
+    let key = (which.to_string(), through);
+    if let Some(chain) = chains.lock().expect("chains").get(&key) {
+        return chain.clone();
+    }
+    let (_, input, _) = crate::groups::case_from(&serde_json::json!({
+        "name": "company", "input": history, "expected": null,
+    }));
+    let accepted = accept_rosters(
+        GROUP.into(),
+        input.first_keys.clone(),
+        Some(GroupAnchor::Created),
+        vec![],
+        input.rosters[..through as usize].to_vec(),
+        input.successions.clone(),
+        input.ml_dsa_keys.clone(),
+        input.me.clone(),
+        None,
+    )
+    .ok();
+    let chain = match accepted {
+        Some(RosterChain::Accepted { chain }) => Some(chain),
+        _ => None,
+    };
+    chains.lock().expect("chains").insert(key, chain.clone());
+    chain
+}

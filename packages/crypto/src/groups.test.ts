@@ -61,6 +61,8 @@ import {
     groupIdFor,
     type Person,
     servedKeysOf,
+    HEADS_DIGEST,
+    custodyFieldAt,
 } from './group-testkit';
 import {
     acceptStored,
@@ -208,11 +210,18 @@ describe('encoding', () => {
                     members: [{ ...organizer.entry([]), roles: roles as never }, adult.entry([])],
                 }),
             ).toThrow(CryptoError);
-        // A company has them.
+        // A company has them, in a statement of its own format.
+        const custody = await custodyFieldAt(1, 1);
         expect(() =>
             rosterStatement({
                 ...roster,
                 kind: 'org',
+                format: 3,
+                areas: [],
+                custody,
+                rules: { autoJoin: false, autoJoinDailyLimit: 10 },
+                auto: null,
+                heads: { areaCount: 0, headsDigest: HEADS_DIGEST },
                 members: [organizer.entry(['data_admin', 'members', 'recovery']), adult.entry([])],
             }),
         ).not.toThrow();
@@ -1378,7 +1387,7 @@ describe('round 8', () => {
         }));
         const roster = {
             groupId: GROUP,
-            kind: 'org' as const,
+            kind: 'family' as const,
             rosterVersion: 1,
             previousRosterDigest: '',
             groupKeyVersion: 1,

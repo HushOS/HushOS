@@ -39,6 +39,26 @@ export function kemEncapsulate(publicKey: Uint8Array) {
 }
 
 /*
+ * ML-KEM.Encaps_internal (FIPS 203) with the 32 bytes of `randomness` chosen
+ * by the caller: the same key and randomness give the same ciphertext and
+ * secret. Only for a seal that must be reproducible (the recovery kit seal's
+ * proof, companies-design 2.2) and for tests; every other seal draws its own.
+ */
+export function kemEncapsulateWith(publicKey: Uint8Array, randomness: Uint8Array) {
+    if (publicKey.length !== KEM_PUBLIC_KEY_BYTES) throw new CryptoError('Invalid identity key.');
+    if (randomness.length !== 32) throw new CryptoError('Invalid seal randomness.');
+    try {
+        const { cipherText, sharedSecret } = ml_kem768.encapsulate(publicKey, randomness);
+        return {
+            ciphertext: cipherText as Uint8Array<ArrayBuffer>,
+            sharedSecret: sharedSecret as Uint8Array<ArrayBuffer>,
+        };
+    } catch {
+        throw new CryptoError('Invalid identity key.');
+    }
+}
+
+/*
  * The shared secret behind a ciphertext. ML-KEM rejects implicitly: a tampered
  * ciphertext yields a different secret, never an error, and it is the AEAD
  * over the share body that then refuses.

@@ -3,6 +3,8 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { GROUP } from '../src/group-testkit';
 import { parseRoster } from '../src/groups';
+import { encode } from '../src/keys';
+import { companyNextSeeds } from './company-next';
 import {
     core,
     coreJoin,
@@ -17,6 +19,8 @@ import {
     repository,
     web,
     webGroups,
+    company,
+    webCompany,
     webJoin,
     webLedger,
     type Json,
@@ -60,12 +64,83 @@ function statementsOf(served: Json[]) {
     return served.map((s: Json) => bytes(s.statement));
 }
 
+/* A company's statements as the `statements` target takes them, from the web's seal items. */
+function companyStatements(): Uint8Array[] {
+    const wc = webCompany();
+    const item = (name: string) => wc.seals.items.find((k: Json) => k.name === name);
+    const sealed = (k: Json) => encode(bytes(k.envelope).slice(0, -3373));
+    const kitSeal = item('kit-seal-at-creation');
+    const request = JSON.parse(new TextDecoder().decode(bytes(item('recovery-request').envelope)));
+    const roster = wc.seals.history.rosters[2];
+    return [
+        json({
+            kind: 'custody-seal',
+            ctx: item('folder-key-at-creation').ctx,
+            sealed: sealed(item('folder-key-at-creation')),
+        }),
+        json({
+            kind: 'custody-key-seal',
+            ctx: item('seed-to-an-admin').ctx,
+            sealed: sealed(item('seed-to-an-admin')),
+        }),
+        json({ kind: 'kit-seal', ctx: kitSeal.ctx, sealed: sealed(kitSeal) }),
+        json({
+            kind: 'kit-seal-proof',
+            ctx: kitSeal.ctx,
+            kitSeal: kitSeal.envelope,
+            sealed: encode(bytes(kitSeal.proof).slice(0, -3373)),
+        }),
+        json({
+            kind: 'key-escrow',
+            ctx: item('escrow-at-creation').ctx,
+            sealed: sealed(item('escrow-at-creation')),
+        }),
+        json({
+            kind: 'custody-previous',
+            ctx: item('previous-envelope-2').ctx,
+            sealed: sealed(item('previous-envelope-2')),
+        }),
+        json({
+            kind: 'recovery-request',
+            groupId: request[2],
+            requesterUserId: request[3],
+            requesterKeyVersion: request[4],
+            kitVersion: request[5],
+            custodyKeyVersion: request[6],
+            rosterVersion: request[7],
+            rosterDigest: request[8],
+            requestedAt: request[9],
+        }),
+        json({
+            kind: 'recovery-roster',
+            groupId: wc.groupId,
+            rosterVersion: 3,
+            kitVersion: 1,
+            rosterDigest: kitSeal.ctx.rosterDigest,
+        }),
+        json({
+            kind: 'recovery-roster',
+            groupId: wc.groupId,
+            rosterVersion: 0,
+            kitVersion: 1,
+            rosterDigest: roster.statement.slice(0, 8),
+        }),
+    ];
+}
+
 export function documents(target: Target): Uint8Array[] {
     const c = core();
     const g = groups();
     const w = web();
     const wg = webGroups();
     const caseRosters = g.cases.flatMap((k: Json) => statementsOf(k.input.rosters));
+    // A company's rosters (format 3, companies-design 2.1): the core's own, and a spread of the
+    // web's rule cases (each case ends in the roster its rule is about).
+    const companyCases = webCompany().cases.filter((_: Json, index: number) => index % 4 === 0);
+    const companyRosters = unique([
+        ...statementsOf(company().history.input.rosters),
+        ...companyCases.map((k: Json) => bytes(k.input.rosters.at(-1).statement)),
+    ]);
     const caseSuccessions = g.cases.flatMap((k: Json) => statementsOf(k.input.successions));
     switch (target) {
         case 'canonical':
@@ -73,6 +148,7 @@ export function documents(target: Target): Uint8Array[] {
                 ...statementsOf(g.rosters),
                 ...statementsOf(g.successions),
                 ...statementsOf(wg.rosters),
+                ...companyRosters.slice(0, 6),
                 ...g.statementCases.map((k: Json) => bytes(k.statement)),
                 bytes(c.keys.statement),
                 bytes(c.succession.statement),
@@ -84,6 +160,7 @@ export function documents(target: Target): Uint8Array[] {
         case 'roster':
             // Format 2 rosters (design 2.10) first, so the cut keeps them.
             return unique([
+                ...companyRosters,
                 ...caseRosters.filter(isFormat2),
                 ...statementsOf(g.rosters),
                 ...statementsOf(wg.rosters),
@@ -103,6 +180,10 @@ export function documents(target: Target): Uint8Array[] {
                     .filter(isFormat2)
                     .slice(0, 8)
                     .map((statement: Uint8Array) => json(parseRoster(statement))),
+                // Format 3 rosters, `same` and listed members both, as parseRoster reads them.
+                ...companyRosters
+                    .slice(0, 12)
+                    .map((statement: Uint8Array) => json(parseRoster(statement))),
             ];
         case 'statements': {
             const link = c.succession.link;
@@ -113,6 +194,8 @@ export function documents(target: Target): Uint8Array[] {
             );
             return [
                 json({ kind: 'share', ctx: c.share.ctx, sealed: withoutSignature(c.share.signed) }),
+                // A company's statements (companies-design 2.1, 2.2), from the seal items.
+                ...companyStatements(),
                 json({ kind: 'keys', userId: c.keys.userId, ...c.keys.identity }),
                 json({ kind: 'succession', userId: c.succession.userId, link }),
                 ...consentLinks
@@ -809,7 +892,99 @@ export function documents(target: Target): Uint8Array[] {
             ];
         }
         case 'accept':
-            return g.cases.map((k: Json) => json(k.input));
+            return [
+                ...g.cases.map((k: Json) => json(k.input)),
+                // A company's histories: the core's own, and the web's rule cases.
+                json(company().history.input),
+                ...companyCases.map((k: Json) => json(k.input)),
+                // And from each twin's cache of a company's chain: the core's own record of the
+                // chain it made, and the web's, continued and edited.
+                json({
+                    ...company().history.input,
+                    rosters: [],
+                    cache: company().history.expected.cache,
+                }),
+                ...webCompany()
+                    .cases.filter((k: Json) => k.input.cache !== null)
+                    .slice(0, 8)
+                    .map((k: Json) => json(k.input)),
+            ];
+        case 'company_next': {
+            const wc = webCompany();
+            const web = wc.seals.history.rosters.map((r: Json) => parseRoster(bytes(r.statement)));
+            const core = company().history.input.rosters.map((r: Json) =>
+                parseRoster(bytes(r.statement)),
+            );
+            const headsDigest = web[0].heads.headsDigest;
+            const [owner, admin] = [web[0].signerUserId, web[1].members[2].userId];
+            const everyone = web[1].members;
+            const keeper = core[3].signerUserId;
+            const key = wc.keys.custody[1].publicKey;
+            const kit = wc.keys.kits[1].publicKeys;
+            const with_ = (userId: string, change: Json) =>
+                everyone.map((m: Json) => (m.userId === userId ? { ...m, ...change } : m));
+            const of = (over: Json) =>
+                json({
+                    chain: 'web',
+                    through: 2,
+                    members: everyone,
+                    signerUserId: admin,
+                    vouch: true,
+                    areaKeys: [],
+                    org: { headsDigest },
+                    ...over,
+                });
+            const member = everyone.find((m: Json) => m.roles.length === 0).userId;
+            const holder = everyone.find((m: Json) => m.roles.join() === 'recovery').userId;
+            return [
+                // No entry changed: `same`.
+                of({}),
+                // A Member removed by an Admin; made an Admin; given the kit by an Owner.
+                of({ members: with_(member, { status: 'left' }) }),
+                of({ members: with_(member, { roles: ['data_admin', 'members'] }) }),
+                of({ members: with_(member, { roles: ['recovery'] }), signerUserId: owner }),
+                // An Admin dropped: refused without a new company key, built with one, by an Owner.
+                of({ members: with_(admin, { roles: [] }), signerUserId: owner }),
+                of({
+                    members: with_(admin, { roles: [] }),
+                    signerUserId: owner,
+                    org: { headsDigest, custodyKey: key },
+                }),
+                // The kit taken from its holder, with a new kit and key.
+                of({
+                    members: with_(holder, { roles: [] }),
+                    signerUserId: owner,
+                    org: { headsDigest, custodyKey: key, kit },
+                }),
+                // Auto-join turned on; an automatic admission where it is off.
+                of({ org: { headsDigest, rules: { autoJoin: true, autoJoinDailyLimit: 10 } } }),
+                of({ org: { headsDigest, autoUtcDay: '2026-11-10' } }),
+                // A new employee area.
+                of({
+                    areaKeys: [
+                        {
+                            workspaceId: 'c0000001-8dfc-4914-8447-0417b55e2ec5',
+                            workspaceKey: Buffer.alloc(32, 1).toString('base64url'),
+                            rootKey: Buffer.alloc(32, 2).toString('base64url'),
+                            areaKind: 'employee',
+                            listDigest: headsDigest,
+                        },
+                    ],
+                }),
+                // The core's company: its kit holder's own promotion (a recovery roster), unsigned.
+                json({
+                    chain: 'core',
+                    through: 3,
+                    members: core[3].members,
+                    signerUserId: keeper,
+                    vouch: false,
+                    areaKeys: [],
+                    org: { headsDigest: core[0].heads.headsDigest },
+                }),
+                // Every company the generator starts from, unchanged, and a fixed walk of changes.
+                ...companyNextSeeds().map(json),
+            ];
+        }
         case 'area_ledger':
             // Each scenario's steps, and its first half: a walk or a write cut short.
             return ledgerScenarios().scenarios.flatMap((k: Json) => [

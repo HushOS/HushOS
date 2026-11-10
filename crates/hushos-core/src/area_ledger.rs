@@ -2649,6 +2649,8 @@ mod tests {
                         commitment: area_key_commitment(&area_key_at(AREA, v)).unwrap(),
                         root_commitment: Some(area_root_commitment(&root_key(v)).unwrap()),
                         retired: false,
+                        area_kind: None,
+                        list_digest: None,
                     },
                     Row::F1(v) => RosterArea {
                         workspace_id: AREA.into(),
@@ -2656,6 +2658,8 @@ mod tests {
                         commitment: area_key_commitment(&area_key_at(AREA, v)).unwrap(),
                         root_commitment: None,
                         retired: false,
+                        area_kind: None,
+                        list_digest: None,
                     },
                     Row::Retired(v) => RosterArea {
                         workspace_id: AREA.into(),
@@ -2663,6 +2667,8 @@ mod tests {
                         commitment: String::new(),
                         root_commitment: None,
                         retired: true,
+                        area_kind: None,
+                        list_digest: None,
                     },
                 })
                 .collect();
@@ -2679,6 +2685,7 @@ mod tests {
                 members: vec![entry.clone()],
                 areas,
                 format,
+                org: None,
             };
             signed.push(roster_sign(roster, group_seed_at(1), owner.keys.clone()).unwrap());
         }
@@ -3292,6 +3299,8 @@ mod tests {
             commitment: area_key_commitment(&area_key_at(AREA, v)).unwrap(),
             root_commitment: Some(area_root_commitment(&root_key(v)).unwrap()),
             retired: false,
+            area_kind: None,
+            list_digest: None,
         };
         let mut signed: Vec<crate::groups::SignedGroupStatement> = vec![];
         for (version, removed) in [(1u64, false), (2, true)] {
@@ -3308,6 +3317,7 @@ mod tests {
                 members: entries(removed),
                 areas: vec![row(version)],
                 format: 2,
+                org: None,
             };
             signed.push(roster_sign(roster, group_seed_at(1), people[0].keys.clone()).unwrap());
         }

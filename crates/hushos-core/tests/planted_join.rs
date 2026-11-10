@@ -49,6 +49,7 @@ fn rosters(f: &Value) -> Vec<SignedGroupStatement> {
                 ml_dsa: bytes(&at["signature"], "mlDsa"),
             },
             signer_signature: bytes(at, "signerSignature"),
+            kit_signature: None,
         })
         .collect()
 }

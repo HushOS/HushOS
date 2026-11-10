@@ -1,6 +1,6 @@
 import { uuid } from './canonical';
 import { CryptoError } from './errors';
-import type { RosterArea, RosterFormat } from './groups';
+import type { AreaKind, RosterArea, RosterFormat } from './groups';
 import { encode } from './keys';
 
 /*
@@ -70,6 +70,8 @@ export type ListedAreas = {
     roots: Readonly<Record<string, readonly (string | null)[]>>;
     /* The retired areas. */
     retired: readonly string[];
+    /* A company's areas by kind (format 3); absent or empty for a family. */
+    kinds?: Readonly<Record<string, AreaKind>>;
 };
 
 export const NOTHING_LISTED: ListedAreas = { keys: {}, roots: {}, retired: [] };
@@ -90,7 +92,13 @@ export const NOTHING_LISTED: ListedAreas = { keys: {}, roots: {}, retired: [] };
  */
 export async function rowsAfter(
     listed: ListedAreas,
-    keys: readonly { workspaceId: string; workspaceKey: Uint8Array; rootKey?: Uint8Array }[],
+    keys: readonly {
+        workspaceId: string;
+        workspaceKey: Uint8Array;
+        rootKey?: Uint8Array;
+        areaKind?: AreaKind;
+        listDigest?: string;
+    }[],
     format: RosterFormat,
     retire: readonly string[] = [],
 ): Promise<RosterArea[]> {
@@ -116,9 +124,12 @@ export async function rowsAfter(
     const fresh = new Set<string>();
     const freshRoots = new Set<string>();
     const rows: RosterArea[] = [];
-    for (const { workspaceId, workspaceKey, rootKey } of keys) {
+    for (const { workspaceId, workspaceKey, rootKey, areaKind, listDigest } of keys) {
         if ((format === 1) !== (rootKey === undefined))
             throw new CryptoError(format === 1 ? OLD_FORMAT : NO_ROOT_KEY);
+        // Only a company's rows (format 3) say an area's kind and commit to its base list.
+        if (format !== 3 && (areaKind !== undefined || listDigest !== undefined))
+            throw new CryptoError(NOT_A_COMPANY);
         const commitment = await areaKeyCommitment(workspaceKey);
         if (before.has(commitment) || fresh.has(commitment)) throw new CryptoError(EARLIER_KEY);
         fresh.add(commitment);
@@ -133,6 +144,20 @@ export async function rowsAfter(
                 throw new CryptoError(EARLIER_ROOT);
             freshRoots.add(rootCommitment);
             row.rootCommitment = rootCommitment;
+        }
+        if (format === 3) {
+            // An area's kind is fixed at its first row: a rotation carries the one the chain
+            // lists, whatever was passed must agree with it, and a new area must say its own.
+            const listedKind =
+                listed.kinds && Object.hasOwn(listed.kinds, workspaceId)
+                    ? listed.kinds[workspaceId]
+                    : undefined;
+            const kind = listedKind ?? areaKind;
+            if (kind === undefined || (areaKind !== undefined && areaKind !== kind))
+                throw new CryptoError(KIND_FIXED);
+            if (listDigest === undefined) throw new CryptoError(NO_LIST);
+            row.areaKind = kind;
+            row.listDigest = listDigest;
         }
         rows.push(row);
     }
@@ -155,4 +180,7 @@ const EARLIER_ROOT = 'This folder key was used before: a rotation needs a new on
 const NO_ROOT_KEY = 'A new area key needs its folder’s key beside it.';
 const OLD_FORMAT = 'This member list format has no folder keys or deleted folders.';
 const NOT_AN_AREA = 'This folder is not one of the group’s.';
+const NOT_A_COMPANY = 'Only a company’s member list says a folder’s kind and list.';
+const NO_LIST = 'A company folder’s key needs its list beside it.';
+export const KIND_FIXED = 'A company folder keeps the kind it was made with.';
 export const RETIRED = 'This family folder was deleted: it cannot be used again.';

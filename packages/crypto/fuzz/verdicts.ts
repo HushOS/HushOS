@@ -1,6 +1,17 @@
 import { isDeepStrictEqual } from 'node:util';
 import { encodeStatement, parseStatement } from '../src/canonical';
 import { deviceSessionStatement } from '../src/device-identity';
+import type { ContactPin } from '../src/contacts';
+import {
+    custodyKeySealStatement,
+    custodyPreviousStatement,
+    custodySealStatement,
+    keyEscrowStatement,
+    kitSealProofStatement,
+    kitSealStatement,
+    parseRecoveryRequest,
+    recoveryRequestStatement,
+} from '../src/custody';
 import { CryptoError } from '../src/errors';
 import {
     digestBase64url,
@@ -17,6 +28,8 @@ import {
     type PairMark,
     type ServedIdentity,
 } from '../src/group-trust';
+import { nextRoster } from '../src/group-trust';
+import { parseRecoveryRoster, recoveryRosterStatement, type AreaKey } from '../src/groups';
 import { GROUP, verdictOf, type RecordProbe, type RootProbe } from '../src/group-testkit';
 import {
     areaGrantStatement,
@@ -125,6 +138,7 @@ import {
 } from '../src/removal-calls-testkit';
 import {
     chain,
+    companyChain,
     core,
     coreJoin,
     coreLedger,
@@ -167,10 +181,11 @@ export const TARGETS = [
     'record_integrity',
     'origin_open',
     'area_ledger',
+    'company_next',
 ] as const;
 export type Target = (typeof TARGETS)[number];
 
-export type Verdict = { ok: true; out: unknown } | { ok: false } | { skip: true };
+export type Verdict = { ok: true; out: unknown } | { ok: false; why?: string } | { skip: true };
 
 /* A broken invariant: never a refusal, always a finding. */
 export class InvariantError extends Error {
@@ -199,6 +214,20 @@ async function either<T>(run: () => T | Promise<T>, out: (value: T) => unknown) 
     }
     return ok(await out(value));
 }
+
+/* `either`, with the refusal's sentence beside it. */
+async function eitherWhy<T>(run: () => T | Promise<T>, out: (value: T) => unknown) {
+    let value: T;
+    try {
+        value = await run();
+    } catch (error) {
+        if (error instanceof CryptoError) return { ok: false, why: error.message } as Verdict;
+        throw error;
+    }
+    return ok(await out(value));
+}
+
+const isText = (value: unknown): value is string => typeof value === 'string';
 
 /* Whether a call throws only a CryptoError (false), or returns (true). */
 async function holds(run: () => unknown) {
@@ -288,10 +317,24 @@ function rosterOf(value: unknown): Roster | undefined {
             // Format 2 (design 2.10): a root commitment on a key row, or a tombstone. Left out
             // when absent (or false), as parseRoster leaves them out; anything else is no input.
             if (!row) return undefined;
-            const extra: { rootCommitment?: string; retired?: true } = {};
+            const extra: {
+                rootCommitment?: string;
+                retired?: true;
+                areaKind?: 'employee' | 'shared';
+                listDigest?: string;
+            } = {};
             if (a.rootCommitment !== undefined && a.rootCommitment !== null) {
                 if (typeof a.rootCommitment !== 'string') return undefined;
                 extra.rootCommitment = a.rootCommitment;
+            }
+            // Format 3 (companies-design 2.1): a key row's kind and base list digest.
+            if (a.areaKind !== undefined && a.areaKind !== null) {
+                if (a.areaKind !== 'employee' && a.areaKind !== 'shared') return undefined;
+                extra.areaKind = a.areaKind;
+            }
+            if (a.listDigest !== undefined && a.listDigest !== null) {
+                if (typeof a.listDigest !== 'string') return undefined;
+                extra.listDigest = a.listDigest;
             }
             if (a.retired !== undefined && a.retired !== null) {
                 if (typeof a.retired !== 'boolean') return undefined;
@@ -323,9 +366,60 @@ function rosterOf(value: unknown): Roster | undefined {
         members: members as Roster['members'],
         areas: areas as NonNullable<Roster['areas']>,
     });
-    return (
-        roster && (format === undefined ? roster : { ...roster, format: format as RosterFormat })
-    );
+    if (!roster) return undefined;
+    const company = companyOf(value);
+    if (company === undefined) return undefined;
+    return {
+        ...roster,
+        // `same` stands for the member list: a roster that says it is given none (the Rust twin
+        // drops them too), so what encodes parses back to the same roster.
+        ...(company?.membersSame !== undefined ? { members: [] } : {}),
+        ...(format === undefined ? {} : { format: format as RosterFormat }),
+        ...company,
+    };
+}
+
+/*
+ * A company roster's own fields (format 3) as the web types them: null when
+ * the object has none, undefined when one does not fit. Rust holds them as
+ * one record, so a partial set does not fit there, and is no input here.
+ */
+function companyOf(value: Doc) {
+    const given = (key: string) => value[key] !== undefined && value[key] !== null;
+    if (!['custody', 'rules', 'heads', 'auto', 'membersSame'].some(given)) return null;
+    const { custody, rules, heads, auto, membersSame } = value;
+    if (!isObject(custody) || !isObject(rules) || !isObject(heads)) return undefined;
+    if (typeof rules.autoJoin !== 'boolean') return undefined;
+    if (given('membersSame') && typeof membersSame !== 'string') return undefined;
+    if (given('auto') && !isObject(auto)) return undefined;
+    const fields = all({
+        custody: all({
+            custodyKeyVersion: number(custody, 'custodyKeyVersion'),
+            custodyEncryptionPublicKey: text(custody, 'custodyEncryptionPublicKey'),
+            custodyKemPublicKeyDigest: text(custody, 'custodyKemPublicKeyDigest'),
+            kitVersion: number(custody, 'kitVersion'),
+            kitEncryptionPublicKey: text(custody, 'kitEncryptionPublicKey'),
+            kitKemPublicKeyDigest: text(custody, 'kitKemPublicKeyDigest'),
+            kitSigningPublicKey: text(custody, 'kitSigningPublicKey'),
+            kitMlDsaPublicKeyDigest: text(custody, 'kitMlDsaPublicKeyDigest'),
+        }),
+        rules: all({
+            autoJoin: rules.autoJoin as boolean,
+            autoJoinDailyLimit: number(rules, 'autoJoinDailyLimit'),
+        }),
+        heads: all({
+            areaCount: number(heads, 'areaCount'),
+            headsDigest: text(heads, 'headsDigest'),
+        }),
+        auto: given('auto')
+            ? all({
+                  utcDay: text(auto as Doc, 'utcDay'),
+                  countThatDay: number(auto as Doc, 'countThatDay'),
+              })
+            : null,
+    });
+    if (!fields) return undefined;
+    return { ...fields, ...(given('membersSame') ? { membersSame: membersSame as string } : {}) };
 }
 
 const shareContextOf = (value: unknown): ShareContext | undefined =>
@@ -569,8 +663,282 @@ async function rosterBuild(value: Doc) {
     );
 }
 
+/* The fields of `value` a company statement's context names: text or a number each, or undefined. */
+// The builders check every field: a context of the wrong shape is refused by them, alike in Rust.
+function fieldsOf(value: unknown, spec: Record<string, 'text' | 'number'>): any {
+    if (!isObject(value)) return undefined;
+    return all(
+        Object.fromEntries(
+            Object.entries(spec).map(([key, kind]) => [
+                key,
+                kind === 'text' ? text(value, key) : number(value, key),
+            ]),
+        ),
+    ) as any;
+}
+const SEALED_AT = { sealerUserId: 'text', rosterVersion: 'number', rosterDigest: 'text' } as const;
+const KIT_SEAL = {
+    groupId: 'text',
+    custodyKeyVersion: 'number',
+    kitVersion: 'number',
+    ...SEALED_AT,
+} as const;
+
+/* A company's statements (companies-design 2.1, 2.2), built from their fields: refused alike, or the same bytes. */
+async function companyStatement(value: Doc): Promise<Verdict | undefined> {
+    const out = (statement: Uint8Array) => encode(statement);
+    const sealed = bytes(value, 'sealed');
+    switch (text(value, 'kind')) {
+        case 'recovery-roster': {
+            const fields = fieldsOf(value, {
+                groupId: 'text',
+                rosterVersion: 'number',
+                kitVersion: 'number',
+                rosterDigest: 'text',
+            });
+            if (!fields) return undefined;
+            return either(
+                () => recoveryRosterStatement(fields),
+                (statement) => {
+                    invariant(
+                        isDeepStrictEqual(parseRecoveryRoster(statement), fields),
+                        'a recovery-roster statement parses back to what was encoded',
+                    );
+                    return out(statement);
+                },
+            );
+        }
+        case 'recovery-request': {
+            const fields = fieldsOf(value, {
+                groupId: 'text',
+                requesterUserId: 'text',
+                requesterKeyVersion: 'number',
+                kitVersion: 'number',
+                custodyKeyVersion: 'number',
+                rosterVersion: 'number',
+                rosterDigest: 'text',
+                requestedAt: 'text',
+            });
+            if (!fields) return undefined;
+            return either(
+                () => recoveryRequestStatement(fields),
+                (statement) => {
+                    invariant(
+                        isDeepStrictEqual(parseRecoveryRequest(statement), fields),
+                        'a recovery request parses back to what was encoded',
+                    );
+                    return out(statement);
+                },
+            );
+        }
+        case 'custody-seal': {
+            const ctx = fieldsOf(value.ctx, {
+                groupId: 'text',
+                workspaceId: 'text',
+                workspaceKeyVersion: 'number',
+                custodyKeyVersion: 'number',
+                ...SEALED_AT,
+            });
+            if (!ctx || !sealed) return undefined;
+            return either(() => custodySealStatement(ctx, sealed), out);
+        }
+        case 'custody-key-seal': {
+            const ctx = fieldsOf(value.ctx, {
+                groupId: 'text',
+                custodyKeyVersion: 'number',
+                holderUserId: 'text',
+                holderKeyVersion: 'number',
+                ...SEALED_AT,
+            });
+            if (!ctx || !sealed) return undefined;
+            return either(() => custodyKeySealStatement(ctx, sealed), out);
+        }
+        case 'kit-seal': {
+            const ctx = fieldsOf(value.ctx, KIT_SEAL);
+            if (!ctx || !sealed) return undefined;
+            return either(() => kitSealStatement(ctx, sealed), out);
+        }
+        case 'kit-seal-proof': {
+            const ctx = fieldsOf(value.ctx, KIT_SEAL);
+            const kitSeal = bytes(value, 'kitSeal');
+            if (!ctx || !sealed || !kitSeal) return undefined;
+            return either(() => kitSealProofStatement(ctx, kitSeal, sealed), out);
+        }
+        case 'key-escrow': {
+            const ctx = fieldsOf(value.ctx, {
+                groupId: 'text',
+                groupKeyVersion: 'number',
+                custodyKeyVersion: 'number',
+                ...SEALED_AT,
+            });
+            if (!ctx || !sealed) return undefined;
+            return either(() => keyEscrowStatement(ctx, sealed), out);
+        }
+        case 'custody-previous': {
+            const ctx = fieldsOf(value.ctx, {
+                groupId: 'text',
+                custodyKeyVersion: 'number',
+                previousVersion: 'number',
+                ...SEALED_AT,
+            });
+            if (!ctx || !sealed) return undefined;
+            return either(() => custodyPreviousStatement(ctx, sealed), out);
+        }
+        default:
+            return undefined;
+    }
+}
+
+/*
+ * The roster after a company's chain, as a holder's client builds it before
+ * signing (nextRoster; Rust's company_roster_next): unsigned, so mutated
+ * members, roles, keys, areas and company fields reach every acceptance rule
+ * of companies-design 2.1 in both twins. The chain is one of the fixture
+ * companies, accepted through `through`; `vouch` hands in a verified pin of
+ * every entry's keys as given, so a role or a fold-in is not stopped at the
+ * device's own check before the chain's rules are reached.
+ */
+async function companyNext(value: Doc): Promise<Verdict | undefined> {
+    const which = text(value, 'chain');
+    const through = number(value, 'through');
+    const signerUserId = text(value, 'signerUserId');
+    const org = value.org;
+    if (which === undefined || through === undefined || !signerUserId) return undefined;
+    if (!isObject(org) || typeof value.vouch !== 'boolean') return undefined;
+    const members = rosterOf({
+        groupId: GROUP,
+        kind: 'org',
+        rosterVersion: 1,
+        previousRosterDigest: '',
+        groupKeyVersion: 1,
+        signerUserId: GROUP,
+        members: value.members,
+    })?.members;
+    const headsDigest = text(org, 'headsDigest');
+    if (!members || headsDigest === undefined) return undefined;
+    const publicKeys = (given: unknown, keys: string[]) => {
+        if (given === undefined || given === null) return null;
+        if (!isObject(given)) return undefined;
+        return all(Object.fromEntries(keys.map((key) => [key, text(given, key)]))) as
+            | Record<string, string>
+            | undefined;
+    };
+    const custodyKey = publicKeys(org.custodyKey, ['encryptionPublicKey', 'kemPublicKey']);
+    const kit = publicKeys(org.kit, [
+        'encryptionPublicKey',
+        'kemPublicKey',
+        'signingPublicKey',
+        'mlDsaPublicKey',
+    ]);
+    let rules: { autoJoin: boolean; autoJoinDailyLimit: number } | null = null;
+    if (org.rules !== undefined && org.rules !== null) {
+        if (!isObject(org.rules) || typeof org.rules.autoJoin !== 'boolean') return undefined;
+        const limit = number(org.rules, 'autoJoinDailyLimit');
+        if (limit === undefined) return undefined;
+        rules = { autoJoin: org.rules.autoJoin, autoJoinDailyLimit: limit };
+    }
+    let autoUtcDay: string | null = null;
+    if (org.autoUtcDay !== undefined && org.autoUtcDay !== null) {
+        if (typeof org.autoUtcDay !== 'string') return undefined;
+        autoUtcDay = org.autoUtcDay;
+    }
+    if (custodyKey === undefined || kit === undefined) return undefined;
+    let areaKeys: AreaKey[] = [];
+    if (value.areaKeys !== undefined && value.areaKeys !== null) {
+        if (!Array.isArray(value.areaKeys)) return undefined;
+        const read = value.areaKeys.map((area: unknown) => {
+            if (!isObject(area)) return undefined;
+            const workspaceId = text(area, 'workspaceId');
+            const workspaceKey = bytes(area, 'workspaceKey');
+            const rootKey = bytes(area, 'rootKey');
+            const listDigest = text(area, 'listDigest');
+            const areaKind = area.areaKind;
+            if (
+                workspaceId === undefined ||
+                !workspaceKey ||
+                !rootKey ||
+                listDigest === undefined ||
+                (areaKind !== null && areaKind !== 'employee' && areaKind !== 'shared')
+            )
+                return undefined;
+            return {
+                workspaceId,
+                workspaceKey,
+                rootKey,
+                listDigest,
+                ...(areaKind === null ? {} : { areaKind }),
+            } as AreaKey;
+        });
+        if (read.includes(undefined)) return undefined;
+        areaKeys = read as AreaKey[];
+    }
+    let retireAreas: string[] = [];
+    if (value.retireAreas !== undefined && value.retireAreas !== null) {
+        if (!Array.isArray(value.retireAreas) || !value.retireAreas.every(isText)) return undefined;
+        retireAreas = value.retireAreas as string[];
+    }
+    const chain = await companyChain(which, through);
+    if (!chain) return undefined;
+    // A verified pin of every entry's keys as given, where they make one at all.
+    const checked: ContactPin[] = [];
+    if (value.vouch)
+        for (const entry of members) {
+            try {
+                const mlDsa = decode(entry.mlDsaPublicKeyDigest, 32);
+                const kem = decode(entry.kemPublicKeyDigest, 32);
+                checked.push({
+                    userId: entry.userId,
+                    email: '',
+                    name: '',
+                    pinnedAt: '2026-11-10T00:00:00.000Z',
+                    keyVersion: entry.keyVersion,
+                    encryptionPublicKey: entry.encryptionPublicKey,
+                    signingPublicKey: entry.signingPublicKey,
+                    mlDsaPublicKeyHash: digestHex(entry.mlDsaPublicKeyDigest),
+                    kemPublicKeyHash: digestHex(entry.kemPublicKeyDigest),
+                    fingerprint: await fingerprint(
+                        decode(entry.encryptionPublicKey, 32),
+                        decode(entry.signingPublicKey, 32),
+                        mlDsa,
+                        kem,
+                    ),
+                });
+            } catch (error) {
+                if (!(error instanceof CryptoError)) throw error;
+            }
+        }
+    // A refusal with its sentence: the twins share them for a company's rules, so "refused by
+    // which rule" is compared, not only "refused".
+    return eitherWhy(
+        () =>
+            nextRoster(chain, members, {
+                signerUserId,
+                areaKeys,
+                ...(retireAreas.length ? { retireAreas } : {}),
+                org: {
+                    headsDigest,
+                    checked,
+                    ...(custodyKey ? { custodyKey: custodyKey as never } : {}),
+                    ...(kit ? { kit: kit as never } : {}),
+                    ...(rules ? { rules } : {}),
+                    ...(autoUtcDay !== null ? { auto: { utcDay: autoUtcDay } } : {}),
+                },
+            }),
+        (roster) => {
+            const statement = rosterStatement(roster);
+            invariant(
+                parseRoster(statement).rosterVersion === chain.roster.rosterVersion + 1,
+                'the next roster is the next version',
+            );
+            return encode(statement);
+        },
+    );
+}
+
 async function statements(value: Doc): Promise<Verdict | undefined> {
     const out = (statement: Uint8Array) => encode(statement);
+    const company = await companyStatement(value);
+    if (company !== undefined) return company;
     switch (text(value, 'kind')) {
         case 'share': {
             const ctx = shareContextOf(value.ctx);
@@ -2111,6 +2479,8 @@ export async function verdict(target: Target, data: Uint8Array): Promise<Verdict
             return originOpen(data);
         case 'area_ledger':
             return withJson(data, areaLedger);
+        case 'company_next':
+            return withJson(data, companyNext);
     }
 }
 

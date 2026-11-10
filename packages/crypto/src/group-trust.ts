@@ -6,7 +6,7 @@ import {
     requireStoredOrAccepted,
     STORED_ACCEPTANCE,
 } from './accepted';
-import { NOTHING_LISTED, RETIRED, rowsAfter } from './area-keys';
+import { KIND_FIXED, NOTHING_LISTED, RETIRED, rowsAfter } from './area-keys';
 import { ascending, bytesOf, digestOf, integer, uuid } from './canonical';
 import { CryptoError } from './errors';
 import {
@@ -19,19 +19,29 @@ import {
 } from './fingerprint';
 import {
     activeWith,
+    AREA_KINDS,
     MAX_FAMILY_AREAS,
+    MAX_ORG_ROTATIONS_PER_ROSTER,
     areaRows,
     groupKeyDigest,
+    isOwner,
     parseGroupSuccession,
     parseRoster,
+    recoveryRosterStatement,
     rosterDigest,
     rosterEntry,
     rosterFormat,
+    rosterMembersDigest,
     rosterStatement,
     sameGroupKey,
     verifyGroup,
+    verifyKit,
     type AreaKey,
+    type AreaKind,
+    type RosterAuto,
+    type RosterCustody,
     type RosterFormat,
+    type RosterRules,
     type GroupKeySuccession,
     type GroupKind,
     type GroupPublicKey,
@@ -49,7 +59,7 @@ import {
 import { decode, encode } from './keys';
 import { checkGroupPin, checkTime, pinTrust, type GroupPin } from './pins';
 import { successionPath } from './succession-path';
-import { ML_DSA_PUBLIC_KEY_BYTES } from './pq';
+import { KEM_PUBLIC_KEY_BYTES, ML_DSA_PUBLIC_KEY_BYTES } from './pq';
 import type { ContactPin } from './contacts';
 import {
     digest,
@@ -141,8 +151,63 @@ export type GroupChainCache = {
      */
     cacheVersion?: number;
     ownEntryWrongAt: number[];
+    /*
+     * A company's chain only (cacheVersion 3): what acceptance carries along
+     * a format 3 chain (OrgChain), and the last roster's members when its
+     * statement says `same`, null when it lists them. Absent for a family.
+     */
+    org?: OrgChain & { members: RosterMember[] | null };
     /* A device's own cache never has an origin; the server's record says 'server' (StoredChainCache). */
     origin?: undefined;
+};
+
+/* Where a company key or kit came onto the chain: the roster that introduced it, and its signer. */
+export type IntroducedAt = { rosterVersion: number; signerUserId: string };
+/* A company key at one version, as the roster that introduced it named it. */
+export type CustodyKeyAt = IntroducedAt & {
+    encryptionPublicKey: string;
+    kemPublicKeyDigest: string;
+};
+/* A recovery kit at one version: its two sealing keys and its two signing keys. */
+export type KitKeysAt = CustodyKeyAt & {
+    signingPublicKey: string;
+    mlDsaPublicKeyDigest: string;
+};
+/*
+ * What acceptance folds from a company's rosters (companies-design 2.1, 2.2),
+ * beside what every group's chain holds:
+ * - every company key and every kit, version 1 first, with the roster that
+ *   introduced each and its signer (an Owner: rules 8 and 12). A device seals
+ *   to the latest company key and to no other;
+ * - the latest automatic admission's day and count (rule 9), or null;
+ * - each area's kind, fixed at its first row, and each key version's base
+ *   list digest and the roster that listed it, with its signer;
+ * - when each member held `data_admin`: from the roster that gave it up to,
+ *   and not including, the roster that took it (`until` null while held), so
+ *   a seal that names a roster is judged by who was a data admin there;
+ * - the signing keys each member's entry named, from the roster that first
+ *   named them (the Ed25519 key, the ML-DSA key by digest), so a seal that
+ *   names a roster is checked under the keys its sealer's entry named there,
+ *   whatever the entry names now;
+ * - every recovery roster (rule 11): its version and its signer.
+ */
+export type SignerKeysAt = {
+    from: number;
+    signingPublicKey: string;
+    mlDsaPublicKeyDigest: string;
+};
+export type OrgChain = {
+    readonly custodyKeys: readonly CustodyKeyAt[];
+    readonly kitKeys: readonly KitKeysAt[];
+    readonly lastAuto: RosterAuto | null;
+    readonly areaKinds: Readonly<Record<string, AreaKind>>;
+    readonly areaLists: Readonly<Record<string, readonly string[]>>;
+    readonly areaRosters: Readonly<Record<string, readonly IntroducedAt[]>>;
+    readonly dataAdmins: Readonly<
+        Record<string, readonly { from: number; until: number | null }[]>
+    >;
+    readonly signerKeys: Readonly<Record<string, readonly SignerKeysAt[]>>;
+    readonly recoveries: readonly IntroducedAt[];
 };
 
 /*
@@ -210,6 +275,14 @@ type ChainBody = {
     readonly areaRoots: Readonly<Record<string, readonly (string | null)[]>>;
     /* The areas the chain retired (tombstones, design 2.10), sorted: never written, granted or rotated again. */
     readonly retiredAreas: readonly string[];
+    /* A company's chain: its company keys, kits, area kinds and lists, data admins (OrgChain). Null for a family. */
+    readonly org: OrgChain | null;
+    /*
+     * Every recovery roster on the chain (companies-design 2.1, rule 11): its
+     * version and the member who used the kit to become an Owner. Every
+     * member's app says so once. Empty for a family.
+     */
+    readonly recoveries: readonly IntroducedAt[];
     /*
      * The roster versions whose entry for the reader named none of the
      * reader's own identities: a hard warning, even when a later roster put it
@@ -358,6 +431,436 @@ const REUSED_ROOT = 'This folder key was used before: a rotation needs a new one
 const DOWNGRADE = 'This member list is in an older format than the one before it.';
 /* The cache format this core writes (GroupChainCache.cacheVersion): root commitments and retired areas. */
 const CACHE_VERSION = 2;
+/* A company's cache (format 3 chains): CACHE_VERSION's fields and `org`. */
+const ORG_CACHE_VERSION = 3;
+
+/* The refusals of checkRosterOrg, as companies-design 2.1 words them. */
+const DROPPED_ADMIN = 'A roster that removes a data admin replaces the company key.';
+const KIT_NEEDS_KEY = 'A new recovery kit needs a new company key.';
+const OWNER_ONLY = 'Only an owner can change an owner, the recovery kit or its holders.';
+const OWNER_KEYS = 'Only an owner can replace the company’s keys.';
+const KIT_FOLLOWS = 'A roster that takes the recovery kit from someone replaces the kit.';
+const ORG_ROLE_SET = 'This is not one of a company’s roles.';
+const LEFT_WITH_ROLES = 'Someone who has left a company holds no role.';
+const NO_OWNER = 'A company keeps an active owner.';
+const CUSTODY_NOT_FOLLOWING = 'The company’s keys do not follow from the member list before.';
+const REUSED_CUSTODY = 'This company key or recovery kit was used before: a new one is needed.';
+const TOO_MANY_ROTATIONS = 'A company’s member list changes at most 8 folder keys.';
+const NOT_AUTOMATIC = 'This is not an automatic admission the company’s rules allow.';
+const WRONG_AREA_COUNT = 'This member list does not count the company’s folders.';
+const NOT_A_RECOVERY = 'The recovery kit makes its holder an owner and changes nothing else.';
+const NOT_KIT_SIGNED = 'This member list is not signed with the company’s recovery kit.';
+const HOLDER_KEYS =
+    'Only an owner, or the member themselves, changes the keys of someone who signs member lists.';
+const STRAY_KIT_SIGNATURE = 'Only a recovery roster carries the recovery kit’s signature.';
+const ROLE_NEEDS_CHECK =
+    'Giving someone the member list or the recovery kit needs a fresh words check of their keys.';
+const GUARDED_FOLD_IN =
+    'An owner’s or kit holder’s new keys need a fresh words check before they are folded in.';
+
+/* The six sets of roles a company's entry may hold (companies-design 2.1, rule 3), as sorted roles join. */
+const ORG_ROLE_SETS = [
+    '',
+    'billing',
+    'recovery',
+    'billing,recovery',
+    'data_admin,members',
+    'billing,data_admin,members,recovery',
+];
+
+/* What acceptance folds along a company's chain: OrgChain, while it is being written. */
+type OrgState = {
+    custodyKeys: CustodyKeyAt[];
+    kitKeys: KitKeysAt[];
+    lastAuto: RosterAuto | null;
+    areaKinds: Map<string, AreaKind>;
+    areaLists: Map<string, string[]>;
+    areaRosters: Map<string, IntroducedAt[]>;
+    dataAdmins: Map<string, { from: number; until: number | null }[]>;
+    signerKeys: Map<string, SignerKeysAt[]>;
+    recoveries: IntroducedAt[];
+};
+
+function orgStateOf(org: OrgChain | null | undefined): OrgState {
+    return {
+        custodyKeys: (org?.custodyKeys ?? []).map((at) => ({ ...at })),
+        kitKeys: (org?.kitKeys ?? []).map((at) => ({ ...at })),
+        lastAuto: org?.lastAuto ? { ...org.lastAuto } : null,
+        areaKinds: new Map(Object.entries(org?.areaKinds ?? {})),
+        areaLists: new Map(
+            Object.entries(org?.areaLists ?? {}).map(([id, list]) => [id, [...list]]),
+        ),
+        areaRosters: new Map(
+            Object.entries(org?.areaRosters ?? {}).map(([id, list]) => [
+                id,
+                list.map((at) => ({ ...at })),
+            ]),
+        ),
+        dataAdmins: new Map(
+            Object.entries(org?.dataAdmins ?? {}).map(([id, list]) => [
+                id,
+                list.map((at) => ({ ...at })),
+            ]),
+        ),
+        signerKeys: new Map(
+            Object.entries(org?.signerKeys ?? {}).map(([id, list]) => [
+                id,
+                list.map((at) => ({ ...at })),
+            ]),
+        ),
+        recoveries: (org?.recoveries ?? []).map((at) => ({ ...at })),
+    };
+}
+
+/* An OrgState as a chain and its cache hold it: plain objects, areas and members sorted by id. */
+function orgChainOf(org: OrgState): OrgChain {
+    const sorted = <T>(map: Map<string, T>, copy: (value: T) => T) =>
+        Object.fromEntries(
+            [...map.entries()]
+                .sort(([x], [y]) => (x < y ? -1 : 1))
+                .map(([id, value]) => [id, copy(value)]),
+        );
+    return {
+        custodyKeys: org.custodyKeys.map((at) => ({ ...at })),
+        kitKeys: org.kitKeys.map((at) => ({ ...at })),
+        lastAuto: org.lastAuto ? { ...org.lastAuto } : null,
+        areaKinds: sorted(org.areaKinds, (kind) => kind),
+        areaLists: sorted(org.areaLists, (list) => [...list]),
+        areaRosters: sorted(org.areaRosters, (list) => list.map((at) => ({ ...at }))),
+        dataAdmins: sorted(org.dataAdmins, (list) => list.map((at) => ({ ...at }))),
+        signerKeys: sorted(org.signerKeys, (list) => list.map((at) => ({ ...at }))),
+        recoveries: org.recoveries.map((at) => ({ ...at })),
+    };
+}
+
+function sameCustodyKey(a: RosterCustody, b: RosterCustody) {
+    return (
+        a.custodyEncryptionPublicKey === b.custodyEncryptionPublicKey &&
+        a.custodyKemPublicKeyDigest === b.custodyKemPublicKeyDigest
+    );
+}
+function sameKit(a: RosterCustody, b: RosterCustody) {
+    return (
+        a.kitEncryptionPublicKey === b.kitEncryptionPublicKey &&
+        a.kitKemPublicKeyDigest === b.kitKemPublicKeyDigest &&
+        a.kitSigningPublicKey === b.kitSigningPublicKey &&
+        a.kitMlDsaPublicKeyDigest === b.kitMlDsaPublicKeyDigest
+    );
+}
+function sameCustody(a: RosterCustody, b: RosterCustody) {
+    return (
+        a.custodyKeyVersion === b.custodyKeyVersion &&
+        a.kitVersion === b.kitVersion &&
+        sameCustodyKey(a, b) &&
+        sameKit(a, b)
+    );
+}
+
+/*
+ * Whether `next` is a recovery roster after `previous` (companies-design 2.1,
+ * rule 11): a company's roster whose signer holds `recovery` but not
+ * `members` on the roster before. It is then accepted under rule 11 and no
+ * other way: such a signer signs nothing else.
+ */
+function isRecoveryRoster(previous: Roster | undefined, next: Roster) {
+    if (!previous || next.kind !== 'org') return false;
+    const signer = rosterEntry(previous, next.signerUserId);
+    return activeWith(signer, 'recovery') && !activeWith(signer, 'members');
+}
+
+/*
+ * What acceptance adds for a company's roster (companies-design 2.1, rules 1
+ * to 12; `check_roster_org` in the Rust core), after the entry and area rules
+ * every group keeps. `org` and `ledger` are the chain so far, before this
+ * roster is folded in; `next` holds its members resolved. `recovery` says the
+ * roster is a recovery roster (isRecoveryRoster), which is held to rule 11 in
+ * place of rules 8 and 12; its kit signature is checked with the others.
+ */
+function checkRosterOrg(
+    org: OrgState,
+    ledger: AreaLedger,
+    previous: Roster | undefined,
+    next: Roster,
+    recovery: boolean,
+) {
+    const custody = next.custody!;
+    const before = previous?.custody;
+    // Rule 3: one of the six role sets, and none at all once left.
+    for (const entry of next.members) {
+        if (!ORG_ROLE_SETS.includes(entry.roles.join())) throw new CryptoError(ORG_ROLE_SET);
+        if (entry.status === 'left' && entry.roles.length > 0)
+            throw new CryptoError(LEFT_WITH_ROLES);
+    }
+    // Rule 4: an Owner stays.
+    if (!next.members.some(isOwner)) throw new CryptoError(NO_OWNER);
+    // Rule 1: each version is the one before or one more; kept, its keys are kept; raised, every
+    // key is new, never one an earlier version had. Version 1 of each is on roster 1.
+    const custodyRises = before ? custody.custodyKeyVersion === before.custodyKeyVersion + 1 : true;
+    const kitRises = before ? custody.kitVersion === before.kitVersion + 1 : true;
+    if (!before) {
+        if (custody.custodyKeyVersion !== 1 || custody.kitVersion !== 1)
+            throw new CryptoError(CUSTODY_NOT_FOLLOWING);
+    } else {
+        if (!custodyRises && custody.custodyKeyVersion !== before.custodyKeyVersion)
+            throw new CryptoError(CUSTODY_NOT_FOLLOWING);
+        if (!kitRises && custody.kitVersion !== before.kitVersion)
+            throw new CryptoError(CUSTODY_NOT_FOLLOWING);
+        if (!custodyRises && !sameCustodyKey(custody, before))
+            throw new CryptoError(CUSTODY_NOT_FOLLOWING);
+        if (!kitRises && !sameKit(custody, before)) throw new CryptoError(CUSTODY_NOT_FOLLOWING);
+    }
+    if (
+        custodyRises &&
+        org.custodyKeys.some(
+            (at) =>
+                at.encryptionPublicKey === custody.custodyEncryptionPublicKey ||
+                at.kemPublicKeyDigest === custody.custodyKemPublicKeyDigest,
+        )
+    )
+        throw new CryptoError(REUSED_CUSTODY);
+    if (
+        kitRises &&
+        org.kitKeys.some(
+            (at) =>
+                at.encryptionPublicKey === custody.kitEncryptionPublicKey ||
+                at.kemPublicKeyDigest === custody.kitKemPublicKeyDigest ||
+                at.signingPublicKey === custody.kitSigningPublicKey ||
+                at.mlDsaPublicKeyDigest === custody.kitMlDsaPublicKeyDigest,
+        )
+    )
+        throw new CryptoError(REUSED_CUSTODY);
+    if (previous) {
+        const loses = (role: GroupRole) =>
+            previous.members.some(
+                (entry) =>
+                    activeWith(entry, role) && !activeWith(rosterEntry(next, entry.userId), role),
+            );
+        // Rule 2: dropping a data admin replaces the company key.
+        if (loses('data_admin') && !custodyRises) throw new CryptoError(DROPPED_ADMIN);
+        // Rule 7: the kit follows `recovery`, and a new kit needs a new company key.
+        if (loses('recovery') && !kitRises) throw new CryptoError(KIT_FOLLOWS);
+        if (kitRises && !custodyRises) throw new CryptoError(KIT_NEEDS_KEY);
+    }
+    if (recovery) checkRecoveryRoster(previous!, next);
+    else {
+        // The signer as the roster before named them (version 1: as it names them itself).
+        const signerIsOwner = isOwner(rosterEntry(previous ?? next, next.signerUserId));
+        // Rule 8: any change to a guarded entry (one that holds `recovery` before or after), a
+        // new guarded entry, and a new kit are an Owner's to sign.
+        const guarded = next.members.some((entry) => {
+            const was = previous ? rosterEntry(previous, entry.userId) : undefined;
+            if (!activeWith(entry, 'recovery') && !activeWith(was, 'recovery')) return false;
+            return !was || !sameEntry(was, entry);
+        });
+        if ((guarded || kitRises) && !signerIsOwner) throw new CryptoError(OWNER_ONLY);
+        // Rule 8, for every entry that holds `members` before or after: its keys change only on
+        // that member's own roster (their fold-in, signed under the keys the entry named before)
+        // or an Owner's. Keys planted in a fellow Admin's entry would be sealed the next company
+        // key and group key as that Admin.
+        const planted = next.members.some((entry) => {
+            const was = previous ? rosterEntry(previous, entry.userId) : undefined;
+            if (!was || sameKeys(was, entry) || entry.userId === next.signerUserId) return false;
+            return activeWith(was, 'members') || activeWith(entry, 'members');
+        });
+        if (planted && !signerIsOwner) throw new CryptoError(HOLDER_KEYS);
+        // Rule 12: a new company key is an Owner's to sign.
+        if (custodyRises && !signerIsOwner) throw new CryptoError(OWNER_KEYS);
+    }
+    // An area's kind is fixed at its first row; rule 6: at most 8 rows rotate an existing area.
+    const rows = next.areas ?? [];
+    let rotations = 0;
+    for (const row of rows) {
+        if (row.retired) continue;
+        const kind = org.areaKinds.get(row.workspaceId);
+        if (kind !== undefined && kind !== row.areaKind) throw new CryptoError(KIND_FIXED);
+        if (ledger.keys.has(row.workspaceId)) rotations++;
+    }
+    if (rotations > MAX_ORG_ROTATIONS_PER_ROSTER) throw new CryptoError(TOO_MANY_ROTATIONS);
+    // Rule 9: an automatic admission says so, and is nothing but one new Member.
+    if (next.auto) {
+        const refuse = () => new CryptoError(NOT_AUTOMATIC);
+        if (!previous || !previous.rules!.autoJoin || next.membersSame !== undefined)
+            throw refuse();
+        // Nothing but the admission: the rules, the company key and the kit as they were, and no
+        // area row but the newcomer's own new employee area.
+        if (
+            next.rules!.autoJoin !== previous.rules!.autoJoin ||
+            next.rules!.autoJoinDailyLimit !== previous.rules!.autoJoinDailyLimit ||
+            !sameCustody(custody, previous.custody!) ||
+            rows.length > 1 ||
+            rows.some(
+                (row) =>
+                    row.retired || row.areaKind !== 'employee' || ledger.keys.has(row.workspaceId),
+            )
+        )
+            throw refuse();
+        const added = next.members.filter((entry) => !rosterEntry(previous, entry.userId));
+        if (
+            added.length !== 1 ||
+            added[0]!.status !== 'active' ||
+            added[0]!.roles.length !== 0 ||
+            next.members.length !== previous.members.length + 1 ||
+            previous.members.some((entry) => !sameEntry(entry, rosterEntry(next, entry.userId)!))
+        )
+            throw refuse();
+        const last = org.lastAuto;
+        if (last && next.auto.utcDay < last.utcDay) throw refuse();
+        const count = last && last.utcDay === next.auto.utcDay ? last.countThatDay + 1 : 1;
+        if (next.auto.countThatDay !== count || count > previous.rules!.autoJoinDailyLimit)
+            throw refuse();
+    }
+    // Rule 10: the live areas after this roster.
+    const created = rows.filter((row) => !ledger.keys.has(row.workspaceId)).length;
+    const retiring = rows.filter((row) => row.retired).length;
+    if (next.heads!.areaCount !== ledger.keys.size - ledger.retired.size + created - retiring)
+        throw new CryptoError(WRONG_AREA_COUNT);
+}
+
+/*
+ * Rule 11, signatures aside: the recovery roster changes exactly one entry,
+ * the signer's own, and only by giving it all four roles (its keys stay); it
+ * carries no area row and no `auto`, and the `custody`, `rules` and `heads`
+ * of the roster before.
+ */
+function checkRecoveryRoster(previous: Roster, next: Roster) {
+    const refuse = () => new CryptoError(NOT_A_RECOVERY);
+    if (next.membersSame !== undefined || next.members.length !== previous.members.length)
+        throw refuse();
+    for (const entry of next.members) {
+        const was = rosterEntry(previous, entry.userId);
+        if (!was) throw refuse();
+        if (entry.userId !== next.signerUserId) {
+            if (!sameEntry(was, entry)) throw refuse();
+        } else if (!sameKeys(was, entry) || !isOwner(entry)) throw refuse();
+    }
+    if (
+        (next.areas ?? []).length > 0 ||
+        next.auto ||
+        !sameCustody(next.custody!, previous.custody!) ||
+        next.rules!.autoJoin !== previous.rules!.autoJoin ||
+        next.rules!.autoJoinDailyLimit !== previous.rules!.autoJoinDailyLimit ||
+        next.heads!.areaCount !== previous.heads!.areaCount ||
+        next.heads!.headsDigest !== previous.heads!.headsDigest
+    )
+        throw refuse();
+}
+
+/*
+ * Whether `copy` carries the recovery kit's signature over this roster (rule
+ * 11): a hybrid signature under the kit's own ML-DSA context over the
+ * recovery-roster statement of its group, version, kit version and statement
+ * digest, under the kit's signing keys in the `custody` field of the roster
+ * before, the ML-DSA key served and matched by its digest.
+ */
+async function signedByKit(
+    previous: Roster,
+    next: Roster,
+    statement: Uint8Array,
+    copy: SignedGroupStatement,
+    mlDsaKeys: Record<string, string>,
+) {
+    if (!copy.kitSignature) return false;
+    const kit = previous.custody!;
+    try {
+        const mlDsaPublicKey = decode(
+            mlDsaKeys[kit.kitMlDsaPublicKeyDigest] ?? '',
+            ML_DSA_PUBLIC_KEY_BYTES,
+        );
+        return (
+            (await digest(mlDsaPublicKey)) === kit.kitMlDsaPublicKeyDigest &&
+            (await verifyKit(
+                recoveryRosterStatement({
+                    groupId: next.groupId,
+                    rosterVersion: next.rosterVersion,
+                    kitVersion: kit.kitVersion,
+                    rosterDigest: await rosterDigest(statement),
+                }),
+                copy.kitSignature,
+                { signingPublicKey: decode(kit.kitSigningPublicKey, 32), mlDsaPublicKey },
+            ))
+        );
+    } catch {
+        return false;
+    }
+}
+
+/* Folds a held company roster into the chain's company state (checkRosterOrg passed it). */
+function foldOrg(org: OrgState, previous: Roster | undefined, roster: Roster, recovery: boolean) {
+    const at = { rosterVersion: roster.rosterVersion, signerUserId: roster.signerUserId };
+    const custody = roster.custody!;
+    if (custody.custodyKeyVersion > org.custodyKeys.length)
+        org.custodyKeys.push({
+            encryptionPublicKey: custody.custodyEncryptionPublicKey,
+            kemPublicKeyDigest: custody.custodyKemPublicKeyDigest,
+            ...at,
+        });
+    if (custody.kitVersion > org.kitKeys.length)
+        org.kitKeys.push({
+            encryptionPublicKey: custody.kitEncryptionPublicKey,
+            kemPublicKeyDigest: custody.kitKemPublicKeyDigest,
+            signingPublicKey: custody.kitSigningPublicKey,
+            mlDsaPublicKeyDigest: custody.kitMlDsaPublicKeyDigest,
+            ...at,
+        });
+    // Turning auto-join on (never an `auto` roster's doing) starts its count afresh: one
+    // admission with a wrong day would otherwise stop every later one for good.
+    if (!roster.auto && roster.rules!.autoJoin && previous && !previous.rules!.autoJoin)
+        org.lastAuto = null;
+    if (roster.auto) org.lastAuto = { ...roster.auto };
+    for (const row of roster.areas ?? []) {
+        if (row.retired) continue;
+        if (!org.areaKinds.has(row.workspaceId)) org.areaKinds.set(row.workspaceId, row.areaKind!);
+        org.areaLists.set(row.workspaceId, [
+            ...(org.areaLists.get(row.workspaceId) ?? []),
+            row.listDigest!,
+        ]);
+        org.areaRosters.set(row.workspaceId, [
+            ...(org.areaRosters.get(row.workspaceId) ?? []),
+            { ...at },
+        ]);
+    }
+    for (const entry of roster.members) {
+        const spans = org.dataAdmins.get(entry.userId) ?? [];
+        const open = spans.length > 0 && spans.at(-1)!.until === null;
+        const holds = activeWith(entry, 'data_admin');
+        if (holds && !open) spans.push({ from: roster.rosterVersion, until: null });
+        if (!holds && open) spans.at(-1)!.until = roster.rosterVersion;
+        if (spans.length > 0) org.dataAdmins.set(entry.userId, spans);
+    }
+    // The signing keys each entry names, from the roster that first named them there.
+    for (const entry of roster.members) {
+        const spans = org.signerKeys.get(entry.userId) ?? [];
+        const last = spans.at(-1);
+        if (
+            last?.signingPublicKey !== entry.signingPublicKey ||
+            last.mlDsaPublicKeyDigest !== entry.mlDsaPublicKeyDigest
+        )
+            spans.push({
+                from: roster.rosterVersion,
+                signingPublicKey: entry.signingPublicKey,
+                mlDsaPublicKeyDigest: entry.mlDsaPublicKeyDigest,
+            });
+        org.signerKeys.set(entry.userId, spans);
+    }
+    if (recovery) org.recoveries.push({ ...at });
+}
+
+/*
+ * A served roster with its members in place: for `["same",membersDigest]`
+ * (format 3), the list of the roster before, taken only when the digest is
+ * that list's; any other roster as it is. Never at version 1, which the
+ * statement itself refuses.
+ */
+async function withMembers(roster: Roster, previous: Roster | undefined): Promise<Roster> {
+    if (roster.membersSame === undefined) return roster;
+    if (
+        !previous ||
+        previous.kind !== roster.kind ||
+        (await rosterMembersDigest(previous)) !== roster.membersSame
+    )
+        throw new CryptoError(NOT_FOLLOWING_AREAS);
+    return { ...roster, members: previous.members.map((entry) => ({ ...entry })) };
+}
 const NOT_FOLLOWING_AREAS = 'This member list does not follow from the one before.';
 
 /*
@@ -789,7 +1292,7 @@ async function checkCache(groupId: string, value: unknown, server: boolean) {
         const rosterDigests = cache.rosterDigests.map((at) => digestOf(at, 'roster digest'));
         if (typeof cache.statement !== 'string') throw bad();
         const statement = decode(cache.statement);
-        const roster = parseRoster(statement);
+        let roster = parseRoster(statement);
         if (
             roster.groupId !== groupId ||
             roster.rosterVersion !== rosterDigests.length ||
@@ -853,7 +1356,15 @@ async function checkCache(groupId: string, value: unknown, server: boolean) {
         // cache's own version says (design 2.10): version 2 carries both, every area's roots
         // listed; a cache written before format 2 (no version) has neither and described none.
         const cacheVersion = cache.cacheVersion ?? 1;
-        if (cacheVersion !== 1 && cacheVersion !== CACHE_VERSION) throw bad();
+        // A company's cache is version 3 and carries `org`; a family's never does.
+        const company = roster.kind === 'org';
+        if (
+            company
+                ? cacheVersion !== ORG_CACHE_VERSION
+                : cacheVersion !== 1 && cacheVersion !== CACHE_VERSION
+        )
+            throw bad();
+        if (company !== (cache.org !== undefined)) throw bad();
         const beforeFormat2 = cacheVersion === 1;
         if (cache.areaRoots !== undefined && !plain(cache.areaRoots)) throw bad();
         const cachedRoots = (cache.areaRoots ?? {}) as Record<string, unknown>;
@@ -919,6 +1430,219 @@ async function checkCache(groupId: string, value: unknown, server: boolean) {
             if (at > rosterDigests.length || (index > 0 && at <= ownEntryWrongAt[index - 1]!))
                 throw bad();
         });
+        // A company's record: every part canonical, and consistent with the last roster.
+        let org: OrgChain | null = null;
+        if (company) {
+            if (!plain(cache.org)) throw bad();
+            const record = cache.org;
+            const last = rosterDigests.length;
+            const introducedAt = (at: Record<string, unknown>) => {
+                const rosterVersion = integer(at.rosterVersion, 'roster version');
+                if (rosterVersion > last) throw bad();
+                return { rosterVersion, signerUserId: uuid(at.signerUserId, 'user id') };
+            };
+            const inOrder = (list: readonly IntroducedAt[], strictly: boolean) =>
+                list.forEach((at, index) => {
+                    const before = list[index - 1];
+                    if (
+                        before &&
+                        (strictly
+                            ? at.rosterVersion <= before.rosterVersion
+                            : at.rosterVersion < before.rosterVersion)
+                    )
+                        throw bad();
+                });
+            if (!Array.isArray(record.custodyKeys) || !Array.isArray(record.kitKeys)) throw bad();
+            const custodyKeys = record.custodyKeys.map((at: unknown) => {
+                if (!plain(at)) throw bad();
+                return {
+                    encryptionPublicKey: bytesOf(at.encryptionPublicKey, 32, 'company key'),
+                    kemPublicKeyDigest: digestOf(at.kemPublicKeyDigest, 'company key digest'),
+                    ...introducedAt(at),
+                };
+            });
+            const kitKeys = record.kitKeys.map((at: unknown) => {
+                if (!plain(at)) throw bad();
+                return {
+                    encryptionPublicKey: bytesOf(at.encryptionPublicKey, 32, 'recovery kit key'),
+                    kemPublicKeyDigest: digestOf(at.kemPublicKeyDigest, 'recovery kit key digest'),
+                    signingPublicKey: bytesOf(at.signingPublicKey, 32, 'recovery kit key'),
+                    mlDsaPublicKeyDigest: digestOf(
+                        at.mlDsaPublicKeyDigest,
+                        'recovery kit key digest',
+                    ),
+                    ...introducedAt(at),
+                };
+            });
+            inOrder(custodyKeys, true);
+            inOrder(kitKeys, true);
+            // The last roster names the latest of each, by version and by key.
+            const custody = roster.custody!;
+            const latestKey = custodyKeys.at(-1);
+            const latestKit = kitKeys.at(-1);
+            if (
+                custodyKeys.length !== custody.custodyKeyVersion ||
+                kitKeys.length !== custody.kitVersion ||
+                latestKey?.encryptionPublicKey !== custody.custodyEncryptionPublicKey ||
+                latestKey.kemPublicKeyDigest !== custody.custodyKemPublicKeyDigest ||
+                latestKit?.encryptionPublicKey !== custody.kitEncryptionPublicKey ||
+                latestKit.kemPublicKeyDigest !== custody.kitKemPublicKeyDigest ||
+                latestKit.signingPublicKey !== custody.kitSigningPublicKey ||
+                latestKit.mlDsaPublicKeyDigest !== custody.kitMlDsaPublicKeyDigest
+            )
+                throw bad();
+            let lastAuto: RosterAuto | null = null;
+            if (record.lastAuto !== null) {
+                if (!plain(record.lastAuto)) throw bad();
+                lastAuto = {
+                    utcDay: record.lastAuto.utcDay as string,
+                    countThatDay: record.lastAuto.countThatDay as number,
+                };
+                // Canonical as a roster carries it: the statement's own check, on a copy of the last roster.
+                rosterStatement({ ...roster, auto: lastAuto });
+            }
+            if (
+                roster.auto &&
+                (lastAuto?.utcDay !== roster.auto.utcDay ||
+                    lastAuto.countThatDay !== roster.auto.countThatDay)
+            )
+                throw bad();
+            if (
+                !plain(record.areaKinds) ||
+                !plain(record.areaLists) ||
+                !plain(record.areaRosters) ||
+                !plain(record.dataAdmins)
+            )
+                throw bad();
+            const ids = Object.keys(areaKeys);
+            const sameIds = (map: Record<string, unknown>) =>
+                Object.keys(map).length === ids.length && ids.every((id) => Object.hasOwn(map, id));
+            if (
+                !sameIds(record.areaKinds) ||
+                !sameIds(record.areaLists) ||
+                !sameIds(record.areaRosters)
+            )
+                throw bad();
+            const areaKinds: Record<string, AreaKind> = {};
+            const areaLists: Record<string, string[]> = {};
+            const areaRosters: Record<string, IntroducedAt[]> = {};
+            for (const id of ids) {
+                const kind = record.areaKinds[id];
+                if (!AREA_KINDS.includes(kind as AreaKind)) throw bad();
+                areaKinds[id] = kind as AreaKind;
+                const lists = record.areaLists[id];
+                const rosters = record.areaRosters[id];
+                if (
+                    !Array.isArray(lists) ||
+                    !Array.isArray(rosters) ||
+                    lists.length !== areaKeys[id]!.length ||
+                    rosters.length !== areaKeys[id]!.length
+                )
+                    throw bad();
+                areaLists[id] = lists.map((at) => digestOf(at, 'area list digest'));
+                areaRosters[id] = rosters.map((at: unknown) => {
+                    if (!plain(at)) throw bad();
+                    return introducedAt(at);
+                });
+                inOrder(areaRosters[id], true);
+            }
+            // The last roster's rows are each its area's latest kind and list, listed by it.
+            for (const area of roster.areas ?? []) {
+                if (area.retired) continue;
+                const listedAt = areaRosters[area.workspaceId]!.at(-1)!;
+                if (
+                    areaKinds[area.workspaceId] !== area.areaKind ||
+                    areaLists[area.workspaceId]!.at(-1) !== area.listDigest ||
+                    listedAt.rosterVersion !== last ||
+                    listedAt.signerUserId !== roster.signerUserId
+                )
+                    throw bad();
+            }
+            const dataAdmins: Record<string, { from: number; until: number | null }[]> = {};
+            for (const [userId, spans] of Object.entries(record.dataAdmins)) {
+                if (!Array.isArray(spans) || spans.length === 0) throw bad();
+                let floor = 0;
+                dataAdmins[uuid(userId, 'user id')] = spans.map((span: unknown, index) => {
+                    if (!plain(span)) throw bad();
+                    const from = integer(span.from, 'roster version');
+                    const until =
+                        span.until === null ? null : integer(span.until, 'roster version');
+                    // In order, never overlapping, within the chain; only the last may be open.
+                    if (
+                        from <= floor ||
+                        from > last ||
+                        (until === null
+                            ? index !== spans.length - 1
+                            : until <= from || until > last)
+                    )
+                        throw bad();
+                    floor = until ?? from;
+                    return { from, until };
+                });
+            }
+            if (!plain(record.signerKeys)) throw bad();
+            const signerKeys: Record<string, SignerKeysAt[]> = {};
+            for (const [userId, spans] of Object.entries(record.signerKeys)) {
+                if (!Array.isArray(spans) || spans.length === 0) throw bad();
+                let floor = 0;
+                signerKeys[uuid(userId, 'user id')] = spans.map((span: unknown) => {
+                    if (!plain(span)) throw bad();
+                    const from = integer(span.from, 'roster version');
+                    // In order, within the chain.
+                    if (from <= floor || from > last) throw bad();
+                    floor = from;
+                    return {
+                        from,
+                        signingPublicKey: bytesOf(span.signingPublicKey, 32, 'signing key'),
+                        mlDsaPublicKeyDigest: digestOf(span.mlDsaPublicKeyDigest, 'key digest'),
+                    };
+                });
+            }
+            if (!Array.isArray(record.recoveries)) throw bad();
+            const recoveries = record.recoveries.map((at: unknown) => {
+                if (!plain(at)) throw bad();
+                return introducedAt(at);
+            });
+            inOrder(recoveries, true);
+            // The statement kept says `same`: the members kept beside it are that list, or refused.
+            if ((roster.membersSame !== undefined) !== (record.members !== null)) throw bad();
+            if (roster.membersSame !== undefined) {
+                if (!Array.isArray(record.members)) throw bad();
+                const resolved = {
+                    ...roster,
+                    members: (record.members as RosterMember[]).map((entry) => {
+                        if (!plain(entry) || !Array.isArray(entry.roles)) throw bad();
+                        return { ...entry, roles: [...entry.roles] };
+                    }),
+                };
+                if ((await rosterMembersDigest(resolved)) !== roster.membersSame) throw bad();
+                roster = resolved;
+            }
+            // Who holds `data_admin` on the last roster is who has an open span, and every
+            // entry's signing keys there are its latest span's; nobody else has spans.
+            for (const entry of roster.members) {
+                const open = dataAdmins[entry.userId]?.at(-1)?.until === null;
+                if (open !== activeWith(entry, 'data_admin')) throw bad();
+                const keys = signerKeys[entry.userId]?.at(-1);
+                if (
+                    keys?.signingPublicKey !== entry.signingPublicKey ||
+                    keys.mlDsaPublicKeyDigest !== entry.mlDsaPublicKeyDigest
+                )
+                    throw bad();
+            }
+            if (Object.keys(signerKeys).length !== roster.members.length) throw bad();
+            org = {
+                custodyKeys,
+                kitKeys,
+                lastAuto,
+                areaKinds,
+                areaLists,
+                areaRosters,
+                dataAdmins,
+                signerKeys,
+                recoveries,
+            };
+        }
         return {
             rosterDigests,
             statement,
@@ -932,6 +1656,7 @@ async function checkCache(groupId: string, value: unknown, server: boolean) {
             areaRoots,
             retiredAreas,
             ownEntryWrongAt,
+            org,
         };
     } catch (error) {
         if (error instanceof CryptoError) throw bad();
@@ -966,6 +1691,8 @@ type State = {
     signatures: Map<string, 'held' | 'not-member' | 'not-old-key'>;
     /* What the held rosters listed of the areas (foldAreas): keys, roots, tombstones. */
     areas: AreaLedger;
+    /* What the held rosters of a company said beside (foldOrg); empty for a family. */
+    org: OrgState;
 };
 
 function stateOf(groupId: string, mlDsaKeys: Record<string, string>, cached: Cached | null): State {
@@ -992,8 +1719,11 @@ function stateOf(groupId: string, mlDsaKeys: Record<string, string>, cached: Cac
         waiting: new Map(),
         signatures: new Map(),
         areas: ledgerOf(cached),
+        org: orgStateOf(cached?.org),
     };
 }
+
+const EMPTY = new Uint8Array(0);
 
 /* Served statements by digest, every distinct copy of their signatures kept. */
 async function byDigest<T>(signed: SignedGroupStatement[], parse: (statement: Uint8Array) => T) {
@@ -1009,7 +1739,8 @@ async function byDigest<T>(signed: SignedGroupStatement[], parse: (statement: Ui
                 (c) =>
                     same(c.signature.ed25519, copy.signature.ed25519) &&
                     same(c.signature.mlDsa, copy.signature.mlDsa) &&
-                    same(c.signerSignature, copy.signerSignature),
+                    same(c.signerSignature, copy.signerSignature) &&
+                    same(c.kitSignature ?? EMPTY, copy.kitSignature ?? EMPTY),
             )
         )
             held.copies.push(copy);
@@ -1053,8 +1784,10 @@ async function admissibleSuccession(
     const into = state.verified.get(oldVersion - 1);
     if (into && succession.lastRosterVersion < into.lastRosterVersion)
         return new CryptoError(OUT_OF_ORDER);
-    if (!activeWith(rosterEntry(last.roster, succession.signerUserId), 'members'))
-        return new CryptoError(NOT_HOLDER);
+    // A family's succession is any `members` holder's; a company's is an Owner's (rule 12).
+    const signer = rosterEntry(last.roster, succession.signerUserId);
+    if (last.roster.kind === 'org' ? !isOwner(signer) : !activeWith(signer, 'members'))
+        return new CryptoError(last.roster.kind === 'org' ? OWNER_KEYS : NOT_HOLDER);
     let verdict = state.signatures.get(served.digest);
     if (verdict === undefined) {
         verdict = 'not-old-key';
@@ -1215,7 +1948,10 @@ async function rosterRules(
     const out = state.verified.get(roster.groupKeyVersion);
     if (out && roster.rosterVersion > out.lastRosterVersion) throw new CryptoError(REPLACED_KEY);
     const authority = previous?.roster ?? roster;
-    if (!activeWith(rosterEntry(authority, roster.signerUserId), 'members'))
+    // A company's recovery roster is the one roster a member without `members` signs: with the
+    // kit's signature, for their own promotion to Owner and nothing else (rule 11).
+    const recovery = isRecoveryRoster(previous?.roster, roster);
+    if (!recovery && !activeWith(rosterEntry(authority, roster.signerUserId), 'members'))
         throw new CryptoError(NOT_HOLDER);
     // The signer stays active on what they sign (a holder's departure is another holder's to
     // sign, with its rotations), and the group keeps someone who can sign the next one.
@@ -1227,16 +1963,33 @@ async function rosterRules(
         const key = state.keys[roster.groupKeyVersion - 1]!;
         let groupSigned = false;
         let signed = false;
+        let kitSigned = false;
+        let strayKit = false;
         for (const copy of copies) {
             if (!(await verifyGroup(statement, copy.signature, key))) continue;
             groupSigned = true;
-            if (await signedByMember(authority, roster.signerUserId, copy, state.mlDsaKeys)) {
-                signed = true;
-                break;
+            if (!(await signedByMember(authority, roster.signerUserId, copy, state.mlDsaKeys)))
+                continue;
+            signed = true;
+            // The kit signs a recovery roster and nothing else: a copy of any other roster that
+            // carries a kit signature is not taken.
+            // (None is `undefined` or, from a store that maps an empty column so, `null`, as
+            // `signedByKit` and `byDigest` read it.)
+            if (!recovery && copy.kitSignature !== undefined && copy.kitSignature !== null) {
+                strayKit = true;
+                continue;
             }
+            if (
+                recovery &&
+                !(await signedByKit(previous!.roster, roster, statement, copy, state.mlDsaKeys))
+            )
+                continue;
+            kitSigned = true;
+            break;
         }
         if (!groupSigned) throw new CryptoError(NOT_GROUP_SIGNED);
         if (!signed) throw new CryptoError(NOT_MEMBER);
+        if (!kitSigned) throw new CryptoError(strayKit ? STRAY_KIT_SIGNATURE : NOT_KIT_SIGNED);
     }
     if (previous?.droppedHolder) {
         // The roster that took a holder away was the last under that key.
@@ -1247,6 +2000,9 @@ async function rosterRules(
     }
     if (previous) checkEntries(previous.roster, roster);
     checkAreas(state.areas, previous?.roster, roster);
+    if (roster.kind === 'org')
+        checkRosterOrg(state.org, state.areas, previous?.roster, roster, recovery);
+    return { recovery };
 }
 
 /*
@@ -1443,13 +2199,16 @@ async function accept(input: Accepting) {
     for (let version = bottom + 1; version <= head; version++) {
         const at = path.get(version)!;
         const previous = state.held.at(-1);
-        await rosterRules(state, at.value, at.statement, at.copies, previous);
-        foldAreas(state.areas, at.value);
+        // A company's `same` stands for the members of the roster before: every rule reads them.
+        const roster = await withMembers(at.value, previous?.roster);
+        const { recovery } = await rosterRules(state, roster, at.statement, at.copies, previous);
+        foldAreas(state.areas, roster);
+        if (roster.kind === 'org') foldOrg(state.org, previous?.roster, roster, recovery);
         state.held.push({
-            roster: at.value,
+            roster,
             statement: at.statement,
             digest: at.digest,
-            droppedHolder: previous ? dropsHolder(previous.roster, at.value) : false,
+            droppedHolder: previous ? dropsHolder(previous.roster, roster) : false,
         });
         while (await establishNext(state));
     }
@@ -1610,6 +2369,7 @@ async function accept(input: Accepting) {
         .sort(([x], [y]) => x - y)
         .map(([, at]) => ({ ...at }));
     const outOfLatest = state.verified.get(latest.roster.groupKeyVersion);
+    const org = latest.roster.kind === 'org' ? orgChainOf(state.org) : null;
     const body: ChainBody = {
         groupId,
         kind: latest.roster.kind,
@@ -1629,6 +2389,8 @@ async function accept(input: Accepting) {
         areaKeys,
         areaRoots,
         retiredAreas,
+        org,
+        recoveries: org ? org.recoveries.map((at) => ({ ...at })) : [],
         ownEntryWrongAt,
         ownEntryBehindAt,
         deadBranches,
@@ -1653,8 +2415,23 @@ async function accept(input: Accepting) {
                 Object.entries(areaRoots).map(([id, list]) => [id, [...list]]),
             ),
             retiredAreas: [...retiredAreas],
-            cacheVersion: CACHE_VERSION,
+            cacheVersion: org ? ORG_CACHE_VERSION : CACHE_VERSION,
             ownEntryWrongAt: [...ownEntryWrongAt],
+            ...(org
+                ? {
+                      org: {
+                          ...orgChainOf(state.org),
+                          // The statement kept says `same`: its members are kept beside it.
+                          members:
+                              latest.roster.membersSame !== undefined
+                                  ? latest.roster.members.map((entry) => ({
+                                        ...entry,
+                                        roles: [...entry.roles],
+                                    }))
+                                  : null,
+                      },
+                  }
+                : {}),
         },
         checked:
             vouching === 'created'
@@ -2046,11 +2823,22 @@ export async function foldInEntry(
 export async function firstRoster(
     groupId: string,
     creator: RosterMember,
-    options: { kind: GroupKind; areaKeys?: AreaKey[]; format?: RosterFormat },
+    options: {
+        kind: GroupKind;
+        areaKeys?: AreaKey[];
+        format?: RosterFormat;
+        /* A company's first roster (format 3, whatever `format` says): its key, kit, rules and heads. */
+        org?: FirstOrgRoster;
+    },
 ): Promise<Roster> {
     if (typeof creator !== 'object' || creator === null || !Array.isArray(creator.roles))
         throw new CryptoError('Invalid roster entry.');
-    const format = rosterFormat({ format: options.format });
+    // A company's rosters are format 3 from version 1, and only a company's are.
+    const company = options.kind === 'org';
+    if (company !== (options.org !== undefined)) throw new CryptoError('Invalid roster format.');
+    const format = company ? 3 : rosterFormat({ format: options.format });
+    if (!company && format === 3) throw new CryptoError('Invalid roster format.');
+    const areas = await rowsAfter(NOTHING_LISTED, options.areaKeys ?? [], format);
     const roster: Roster = {
         groupId,
         kind: options.kind,
@@ -2071,8 +2859,16 @@ export async function firstRoster(
                 sinceVersion: 1,
             },
         ],
-        areas: await rowsAfter(NOTHING_LISTED, options.areaKeys ?? [], format),
-        ...(format === 2 ? { format } : {}),
+        areas,
+        ...(format !== 1 ? { format } : {}),
+        ...(options.org
+            ? {
+                  custody: await custodyField(1, options.org.custodyKey, 1, options.org.kit),
+                  rules: options.org.rules ?? { autoJoin: false, autoJoinDailyLimit: 10 },
+                  auto: null,
+                  heads: { areaCount: areas.length, headsDigest: options.org.headsDigest },
+              }
+            : {}),
     };
     const statement = rosterStatement(roster);
     // The very rules acceptance applies to version 1, signatures aside. Unsigned, the group key
@@ -2113,12 +2909,17 @@ export async function nextRoster(
          * (format 2 keys need their root's key, AreaKey.rootKey); a lower one is refused.
          */
         format?: RosterFormat;
+        /* A company's roster (format 3): what it says beside members and areas (NextOrgRoster). */
+        org?: NextOrgRoster;
     },
 ): Promise<Roster> {
     requireAccepted(chain);
     const latest = rosterFormat(chain.roster);
     const format = rosterFormat({ format: options.format ?? latest });
     if (format < latest) throw new CryptoError(DOWNGRADE);
+    // A company's chain is format 3 throughout, a family's never: neither switches to the other.
+    if ((format === 3) !== (chain.kind === 'org') || (chain.kind === 'org') !== !!options.org)
+        throw new CryptoError('Invalid roster format.');
     const areas = await areaRows(chain, options.areaKeys ?? [], {
         format,
         retire: options.retireAreas,
@@ -2143,14 +2944,215 @@ export async function nextRoster(
             })
             .sort((a, b) => (a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0)),
         areas,
-        ...(format === 2 ? { format } : {}),
+        ...(format !== 1 ? { format } : {}),
     };
+    if (options.org) await companyFields(chain, roster, options.signerUserId, options.org);
     const statement = rosterStatement(roster);
     // The very rules acceptance applies, from the chain's cache, signatures aside.
     const state = stateOf(chain.groupId, {}, await checkCache(chain.groupId, chain.cache, false));
     await rosterRules(state, roster, statement, null, state.held.at(-1));
     return roster;
 }
+
+/* A company key's public halves, base64url: X25519 and ML-KEM-768. */
+export type CustodyPublicKey = { encryptionPublicKey: string; kemPublicKey: string };
+/* A recovery kit's four public keys, base64url: X25519, ML-KEM-768, Ed25519 and ML-DSA-65. */
+export type KitPublicKeys = CustodyPublicKey & {
+    signingPublicKey: string;
+    mlDsaPublicKey: string;
+};
+
+/* What a company's first roster says beside its creator and areas (companies-design 2.1, 3.1). */
+export type FirstOrgRoster = {
+    custodyKey: CustodyPublicKey;
+    kit: KitPublicKeys;
+    /* Auto-join off, ten a day, unless given. */
+    rules?: RosterRules;
+    /* The digest over the heads of the roster's areas, as the creator's device verified them (2.3). */
+    headsDigest: string;
+};
+
+/*
+ * What a company's next roster says beside its members and areas
+ * (companies-design 2.1). The versions, the digests of the lattice keys, the
+ * automatic admission's count and the area count are computed here: a client
+ * hands in keys and a day, never a field of its own making.
+ */
+export type NextOrgRoster = {
+    /* A new company key: the next version. Needed when a data admin is dropped (rule 2), and with a new kit (rule 7). */
+    custodyKey?: CustodyPublicKey;
+    /* A new recovery kit: the next version. Needed when `recovery` is taken from anyone (rule 7). */
+    kit?: KitPublicKeys;
+    /* The auto-join policy from this roster on; the chain's when absent. */
+    rules?: RosterRules;
+    /* Set by a device admitting someone unattended (rule 9): the UTC day by its own clock. */
+    auto?: { utcDay: string };
+    /* The digest over every live area's heads as this device verified them (2.3). */
+    headsDigest: string;
+    /*
+     * The fresh words checks this device holds (companies-design 1.2, and 2.2
+     * "Another Owner checks first"): a verified pin of each Owner or kit
+     * holder whose entry this roster moves to new keys, and of everyone it
+     * gives `members` or `recovery` (already on the list or let in with the
+     * role), each made over exactly the keys the entry names on this roster. Without one such
+     * an entry changes only on that person's own roster: a signed link, or
+     * keys a holder wrote in earlier, are not enough for someone who holds
+     * the company.
+     */
+    checked?: ContactPin[];
+};
+
+/*
+ * The `custody` field for a company key and a kit at their versions, the
+ * lattice keys by digest. `only` leaves a half that is not being replaced
+ * unread (companyFields keeps the chain's).
+ */
+async function custodyField(
+    custodyKeyVersion: number,
+    custodyKey: CustodyPublicKey,
+    kitVersion: number,
+    kit: KitPublicKeys,
+    only: { custodyKey: boolean; kit: boolean } = { custodyKey: true, kit: true },
+): Promise<RosterCustody> {
+    if (typeof custodyKey !== 'object' || custodyKey === null || typeof kit !== 'object' || !kit)
+        throw new CryptoError('Invalid roster custody.');
+    const digestOfKey = async (key: string, bytes: number, what: string) =>
+        digest(decode(bytesOf(key, bytes, what), bytes));
+    return {
+        custodyKeyVersion,
+        custodyEncryptionPublicKey: custodyKey.encryptionPublicKey,
+        custodyKemPublicKeyDigest: only.custodyKey
+            ? await digestOfKey(custodyKey.kemPublicKey, KEM_PUBLIC_KEY_BYTES, 'company key')
+            : '',
+        kitVersion,
+        kitEncryptionPublicKey: kit.encryptionPublicKey,
+        kitKemPublicKeyDigest: only.kit
+            ? await digestOfKey(kit.kemPublicKey, KEM_PUBLIC_KEY_BYTES, 'recovery kit key')
+            : '',
+        kitSigningPublicKey: kit.signingPublicKey,
+        kitMlDsaPublicKeyDigest: only.kit
+            ? await digestOfKey(kit.mlDsaPublicKey, ML_DSA_PUBLIC_KEY_BYTES, 'recovery kit key')
+            : '',
+    };
+}
+
+/* Whether `pin` is this person's own words check of exactly the keys `entry` names. */
+async function checkedKeys(pin: ContactPin, entry: RosterMember) {
+    return (
+        pin.userId === entry.userId &&
+        (pin.trustedVia === undefined || pin.trustedVia === null) &&
+        (await pinTrust(pin)) === 'verified' &&
+        pin.keyVersion === entry.keyVersion &&
+        pin.encryptionPublicKey === entry.encryptionPublicKey &&
+        pin.signingPublicKey === entry.signingPublicKey &&
+        sameKeyDigest(pin.mlDsaPublicKeyHash, entry.mlDsaPublicKeyDigest) &&
+        sameKeyDigest(pin.kemPublicKeyHash, entry.kemPublicKeyDigest)
+    );
+}
+
+/* Fills a company's next roster in: custody, rules, auto, heads, and `same` when no entry changed. */
+async function companyFields(
+    chain: AcceptedRosters,
+    roster: Roster,
+    signerUserId: string,
+    options: NextOrgRoster,
+) {
+    const previous = chain.roster;
+    const before = previous.custody!;
+    // A guarded entry (one that holds `recovery` before or after) moves to new keys on another
+    // person's roster only with that signer's fresh check of the new keys. A device rule: the
+    // chain cannot see a words check (rule 8 is what it holds: only an Owner signs this at all).
+    for (const entry of roster.members) {
+        const was = rosterEntry(previous, entry.userId);
+        if (!was || sameKeys(was, entry) || entry.userId === signerUserId) continue;
+        if (!activeWith(was, 'recovery') && !activeWith(entry, 'recovery')) continue;
+        let checked = false;
+        for (const pin of options.checked ?? []) checked ||= await checkedKeys(pin, entry);
+        if (!checked) throw new CryptoError(GUARDED_FOLD_IN);
+    }
+    // Giving `members` or `recovery` to anyone needs the same check, over exactly the keys their
+    // entry names: keys planted in a Member's entry first are not then promoted on the roster's
+    // word alone, and someone let in with either role (no entry before, or one that had left)
+    // is not let in on keys this device only saw served. The signer's own promotion (a recovery
+    // roster) is their own entry.
+    for (const entry of roster.members) {
+        if (entry.userId === signerUserId) continue;
+        const was = rosterEntry(previous, entry.userId);
+        const gains = (role: GroupRole) => activeWith(entry, role) && !activeWith(was, role);
+        if (!gains('members') && !gains('recovery')) continue;
+        let checked = false;
+        for (const pin of options.checked ?? []) checked ||= await checkedKeys(pin, entry);
+        if (!checked) throw new CryptoError(ROLE_NEEDS_CHECK);
+    }
+    // The company key and the kit: kept as they are, or each replaced by a new one at the next
+    // version, its lattice keys by digest.
+    const replaced = await custodyField(
+        before.custodyKeyVersion + 1,
+        options.custodyKey ?? NO_KEYS,
+        before.kitVersion + 1,
+        options.kit ?? NO_KEYS,
+        { custodyKey: !!options.custodyKey, kit: !!options.kit },
+    );
+    roster.custody = {
+        ...before,
+        ...(options.custodyKey
+            ? {
+                  custodyKeyVersion: replaced.custodyKeyVersion,
+                  custodyEncryptionPublicKey: replaced.custodyEncryptionPublicKey,
+                  custodyKemPublicKeyDigest: replaced.custodyKemPublicKeyDigest,
+              }
+            : {}),
+        ...(options.kit
+            ? {
+                  kitVersion: replaced.kitVersion,
+                  kitEncryptionPublicKey: replaced.kitEncryptionPublicKey,
+                  kitKemPublicKeyDigest: replaced.kitKemPublicKeyDigest,
+                  kitSigningPublicKey: replaced.kitSigningPublicKey,
+                  kitMlDsaPublicKeyDigest: replaced.kitMlDsaPublicKeyDigest,
+              }
+            : {}),
+    };
+    roster.rules = options.rules
+        ? {
+              autoJoin: options.rules.autoJoin,
+              autoJoinDailyLimit: options.rules.autoJoinDailyLimit,
+          }
+        : { ...previous.rules! };
+    // An automatic admission's count: one more than the last one's on the same day, else 1.
+    const last = chain.org!.lastAuto;
+    roster.auto = options.auto
+        ? {
+              utcDay: options.auto.utcDay,
+              countThatDay: last && last.utcDay === options.auto.utcDay ? last.countThatDay + 1 : 1,
+          }
+        : null;
+    // The live areas after this roster: those listed and not retired, with its new ones, without
+    // the ones it retires.
+    const rows = roster.areas ?? [];
+    const created = rows.filter((row) => !Object.hasOwn(chain.areaKeys, row.workspaceId)).length;
+    const retiring = rows.filter((row) => row.retired).length;
+    roster.heads = {
+        areaCount:
+            Object.keys(chain.areaKeys).length - chain.retiredAreas.length + created - retiring,
+        headsDigest: options.headsDigest,
+    };
+    // No entry changed: the statement says `same` and names the members of the roster before.
+    if (
+        roster.members.length === previous.members.length &&
+        roster.members.every((entry) => {
+            const was = rosterEntry(previous, entry.userId);
+            return was !== undefined && sameEntry(was, entry);
+        })
+    )
+        roster.membersSame = await rosterMembersDigest(previous);
+}
+
+const NO_KEYS: KitPublicKeys = {
+    encryptionPublicKey: '',
+    kemPublicKey: '',
+    signingPublicKey: '',
+    mlDsaPublicKey: '',
+};
 
 /*
  * Whether the reader's own entry names their own keys (each member checks on

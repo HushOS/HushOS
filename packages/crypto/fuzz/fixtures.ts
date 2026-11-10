@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { CryptoError } from '../src/errors';
 import { acceptRosters, type AcceptedRosters } from '../src/group-trust';
 import type { SignedGroupStatement } from '../src/groups';
 import { READER, mlDsaKeysOf, person, GROUP, type Person } from '../src/group-testkit';
@@ -67,15 +68,23 @@ export const joinCheckCases = () => read('crates/hushos-core/fixtures/join-check
 export const joinSessionScenarios = () =>
     read('crates/hushos-core/fixtures/join-session-scenarios.json');
 
+/* packages/crypto/src/__fixtures__/core-company.json: a company the core made, with its seals. */
+export const company = () => read('packages/crypto/src/__fixtures__/core-company.json');
+/* crates/hushos-core/fixtures/web-company.json: the histories that keep or break each company rule. */
+export const webCompany = () => read('crates/hushos-core/fixtures/web-company.json');
+
 type Served = {
     statement: string;
     signature: { ed25519: string; mlDsa: string };
     signerSignature: string;
+    kitSignature?: string;
 };
 export const signed = (value: Served): SignedGroupStatement => ({
     statement: decode(value.statement),
     signature: { ed25519: decode(value.signature.ed25519), mlDsa: decode(value.signature.mlDsa) },
     signerSignature: decode(value.signerSignature),
+    // A company's recovery roster carries the kit's signature beside the other two.
+    ...(typeof value.kitSignature === 'string' ? { kitSignature: decode(value.kitSignature) } : {}),
 });
 
 function once<T>(make: () => Promise<T>) {
@@ -117,3 +126,63 @@ export const shareGrantee = once(async (): Promise<GranteeSecrets> => {
 });
 /* crates/hushos-core/fixtures/settings-area-cases.json: Core 6's settings and family folder cases. */
 export const settingsAreaCases = () => read('crates/hushos-core/fixtures/settings-area-cases.json');
+
+/*
+ * A fixture company's chain, accepted through its first `through` rosters:
+ * `core` is the one the Rust core made (core-company.json), `web` the one
+ * whose seals this twin made (web-company.json). Null when the fixture has
+ * no such roster. The Rust twin's `company_chain` accepts the same.
+ */
+/*
+ * A company's served history by the name the `company_next` target gives it:
+ * `core` (the one the core made), `web` (the one whose seals the web made), or
+ * `case:<name>`, a rule case of the web's that starts from version 1.
+ */
+export function companyHistory(chain: string): any {
+    if (chain === 'core') return company().history.input;
+    if (chain === 'web') return webCompany().seals.history;
+    if (!chain.startsWith('case:')) return undefined;
+    const found = webCompany().cases.find(
+        (k: { name: string }) => k.name === chain.slice('case:'.length),
+    );
+    // A case that starts from a cache has no rosters to cut.
+    return found && found.input.cache === null ? found.input : undefined;
+}
+
+const companyChains = new Map<string, Promise<AcceptedRosters | null>>();
+/* That history accepted through its first `through` rosters; null when it has no such roster or is not accepted so far. */
+export function companyChain(which: string, through: number) {
+    const key = `${which}:${through}`;
+    if (!companyChains.has(key))
+        companyChains.set(
+            key,
+            (async () => {
+                const history = companyHistory(which);
+                if (
+                    !history ||
+                    !Number.isSafeInteger(through) ||
+                    through < 1 ||
+                    through > history.rosters.length
+                )
+                    return null;
+                try {
+                    const accepted = await acceptRosters({
+                        groupId: GROUP,
+                        firstKeys: history.firstKeys,
+                        anchor: 'created',
+                        pins: [],
+                        rosters: history.rosters.slice(0, through).map(signed),
+                        successions: history.successions.map(signed),
+                        mlDsaKeys: history.mlDsaKeys,
+                        me: history.me,
+                        cache: null,
+                    });
+                    return accepted.status === 'accepted' ? (accepted as AcceptedRosters) : null;
+                } catch (error) {
+                    if (error instanceof CryptoError) return null;
+                    throw error;
+                }
+            })(),
+        );
+    return companyChains.get(key)!;
+}

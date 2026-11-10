@@ -47,6 +47,8 @@ fn key_row(workspace_id: &str, version: u64, key: &[u8], root: &[u8]) -> RosterA
         commitment: area_key_commitment(key).unwrap(),
         root_commitment: Some(area_root_commitment(root).unwrap()),
         retired: false,
+        area_kind: None,
+        list_digest: None,
     }
 }
 
@@ -78,6 +80,8 @@ fn family_with(p3_roles: &[GroupRole], extra: &[Entries]) -> Family {
                 commitment: String::new(),
                 root_commitment: None,
                 retired: true,
+                area_kind: None,
+                list_digest: None,
             },
             key_row(&third(), 2, &third_key(2), &[64; 32]),
         ]),
@@ -308,6 +312,7 @@ fn signed_of(wire: &Value) -> SignedGroupStatement {
             ml_dsa: d(&wire["signature"]["mlDsa"]),
         },
         signer_signature: d(&wire["signerSignature"]),
+        kit_signature: None,
     }
 }
 
