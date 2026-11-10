@@ -107,14 +107,21 @@ export async function renameNode(
     });
 }
 
-export function beginUpload(
+/*
+ * Begin as the server does it: the repository's transaction, then, with a
+ * `multipartId`, the store's answer written to the row. Without one the row is
+ * left as begin commits it, for tests of an upload the store never started.
+ */
+export async function beginUpload(
     input: Omit<drive.UploadBegin, 'node' | 'version'> & {
         node:
             | { existing: false; id: string; parentId: string; envelopes: Unsigned }
             | { existing: true; id: string; keyEpoch: number; expectedVersionId: string | null };
         version: { id: string; contentKeyEnvelope: Buffer };
+        multipartId?: string;
     },
 ) {
+    const { multipartId, ...begin } = input;
     const node = input.node.existing
         ? input.node
         : {
@@ -127,8 +134,8 @@ export function beginUpload(
                   input.node.envelopes,
               ),
           };
-    return drive.beginUpload({
-        ...input,
+    const result = await drive.beginUpload({
+        ...begin,
         node,
         version: {
             ...input.version,
@@ -142,6 +149,9 @@ export function beginUpload(
             }),
         },
     });
+    if (result.status === 'ok' && multipartId !== undefined)
+        await drive.setUploadMultipartId(input.workspaceId, result.uploadId, multipartId);
+    return result;
 }
 
 export async function copyFile(

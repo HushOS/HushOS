@@ -37,6 +37,15 @@ describe('readiness', () => {
             await db.execute(sql.raw(`grant delete on drive_objects to ${role}`));
             await db.execute(sql.raw(`grant update on sessions to ${role}`));
             expect(await missingTablePrivileges(role)).toEqual([]);
+            // The store tables are the application's too: an upload's begin locks the default
+            // region's row (FOR SHARE needs UPDATE) and the worker writes the replica's row. A
+            // role granted table by table before they existed is named here, not in every begin.
+            await db.execute(sql.raw(`revoke update on storage_regions from ${role}`));
+            await db.execute(sql.raw(`revoke select on object_stores from ${role}`));
+            expect(await missingTablePrivileges(role)).toEqual([
+                'object_stores',
+                'storage_regions',
+            ]);
         } finally {
             await db.execute(sql.raw(`drop owned by ${role}`));
             await db.execute(sql.raw(`drop role ${role}`));

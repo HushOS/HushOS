@@ -12,6 +12,8 @@ import {
 import {
     accountIdentities,
     driveNodes,
+    driveObjectDeletions,
+    driveObjects,
     driveReportEvents,
     driveReportItems,
     driveReportRequests,
@@ -722,6 +724,30 @@ export async function listReportObjectsToCopy(reportId: string) {
             ),
         )
         .orderBy(asc(driveReportItems.depth), asc(driveReportItems.nodeId));
+}
+
+/*
+ * Where each reported object's primary copy is: the store its own row names
+ * or, once its owner has purged it, the store its outbox row names, which is
+ * the copy the hold keeps. An object no row names any more is absent.
+ */
+export async function storesOfReportObjects(objectIds: string[]) {
+    const stores = new Map<string, string>();
+    if (!objectIds.length) return stores;
+    const retired = await db
+        .select({
+            objectId: driveObjectDeletions.objectId,
+            storeId: driveObjectDeletions.storeId,
+        })
+        .from(driveObjectDeletions)
+        .where(inArray(driveObjectDeletions.objectId, objectIds));
+    for (const row of retired) stores.set(row.objectId, row.storeId);
+    const live = await db
+        .select({ objectId: driveObjects.id, storeId: driveObjects.storeId })
+        .from(driveObjects)
+        .where(inArray(driveObjects.id, objectIds));
+    for (const row of live) stores.set(row.objectId, row.storeId);
+    return stores;
 }
 
 export async function markReportItemCopied(reportId: string, nodeId: string) {

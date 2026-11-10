@@ -4,6 +4,7 @@ import { holdsWorkspace } from './membership';
 import { heldObjectCondition } from './reports';
 import { settlingPool, storageFigures, type StorageFigures } from './pool';
 import { openShareCursor, sealShareCursor } from './share-cursor';
+import { uploadStoreFor } from './stores';
 import {
     metadataSigned as metadataSignedStatement,
     verifySigned,
@@ -11,6 +12,7 @@ import {
     type SignedStatement,
 } from './signatures';
 import {
+    ENVIRONMENT_PRIMARY_STORE_ID,
     accountIdentities,
     driveLinks,
     driveNodes,
@@ -1687,6 +1689,7 @@ async function retireObjectIfUnreferenced(tx: Tx, objectId: string) {
     const [object] = await tx.delete(driveObjects).where(eq(driveObjects.id, objectId)).returning({
         workspaceId: driveObjects.workspaceId,
         objectKey: driveObjects.objectKey,
+        storeId: driveObjects.storeId,
         status: driveObjects.status,
         replicatedAt: driveObjects.replicatedAt,
     });
@@ -1697,6 +1700,8 @@ async function retireObjectIfUnreferenced(tx: Tx, objectId: string) {
             objectId,
             workspaceId: object.workspaceId,
             objectKey: object.objectKey,
+            // The copy to remove is where the object's row said it was.
+            storeId: object.storeId,
             published: object.status === 'ready',
             replicated: object.replicatedAt !== null,
         })
@@ -1723,7 +1728,6 @@ export type UploadBegin = {
         contentNonce: Buffer;
         ciphertextSize: bigint;
     };
-    multipartId: string;
     expiresAt: Date;
     /*
      * The file this upload moves here from another workspace of the same pool: the
@@ -1944,6 +1948,9 @@ async function beginUploadOnce(input: UploadBegin) {
         if (reserve > 0n && spendable(storage) < reserve)
             return { status: 'over-quota' as const, free: named(spendable(storage)) };
         await adjustStorage(tx, input.workspaceId, 0n, reserve);
+        // The store is chosen here, in the transaction that records the upload, and written
+        // on both rows; everything after begin follows them (docs/company-storage-design.md 2.2).
+        const storeId = await uploadStoreFor(tx, input.workspaceId);
         if (!input.node.existing) {
             const [node] = await tx
                 .insert(driveNodes)
@@ -1970,6 +1977,7 @@ async function beginUploadOnce(input: UploadBegin) {
                 id: input.object.id,
                 workspaceId: input.workspaceId,
                 objectKey: input.object.objectKey,
+                storeId,
                 contentSuite: input.object.contentSuite,
                 chunkSize: input.object.chunkSize,
                 chunkCount: input.object.chunkCount,
@@ -2007,7 +2015,9 @@ async function beginUploadOnce(input: UploadBegin) {
                 keyEpoch,
                 expectedVersionId,
                 newNode: !input.node.existing,
-                multipartId: input.multipartId,
+                storeId,
+                // Written by setUploadMultipartId, once the store has started the upload.
+                multipartId: null,
                 reservedBytes: reserve,
                 expiresAt: input.expiresAt,
                 status: 'open',
@@ -2025,7 +2035,62 @@ async function beginUploadOnce(input: UploadBegin) {
             .onConflictDoNothing()
             .returning({ id: driveUploads.id });
         if (!upload) return { status: 'moving' as const };
-        return { status: 'ok' as const, uploadId: upload.id };
+        return { status: 'ok' as const, uploadId: upload.id, storeId };
+    });
+}
+
+/*
+ * The store has started the multipart upload: its id goes on the row, but only
+ * while the row is still open, not past its expiry, and without one. False
+ * means the row was expired or aborted while the store was answering (or never
+ * existed), and the caller aborts the multipart upload it just started.
+ */
+export async function setUploadMultipartId(
+    workspaceId: string,
+    uploadId: string,
+    multipartId: string,
+) {
+    const rows = await db
+        .update(driveUploads)
+        .set({ multipartId })
+        .where(
+            and(
+                eq(driveUploads.id, uploadId),
+                eq(driveUploads.workspaceId, workspaceId),
+                eq(driveUploads.status, 'open'),
+                isNull(driveUploads.multipartId),
+                sql`${driveUploads.expiresAt} > now()`,
+            ),
+        )
+        .returning({ id: driveUploads.id });
+    return rows.length > 0;
+}
+
+/*
+ * Undoes a begin whose store refused to start the multipart upload, as if it
+ * had never been sent: the reservation, the upload, its pending version and
+ * object, and a new file's node are removed, so the client's next begin, which
+ * reuses the same ids, is not refused as a duplicate. Nothing reached the
+ * store under this key, so there is no outbox row. Only an open row that never
+ * got a multipart id is undone; anything else is left to abort and expiry.
+ */
+export async function discardUnstartedUpload(workspaceId: string, uploadId: string) {
+    return db.transaction(async (tx) => {
+        await nextChangeSeq(tx, workspaceId);
+        const [upload] = await tx
+            .select(uploadColumns)
+            .from(driveUploads)
+            .leftJoin(driveObjects, eq(driveObjects.id, driveUploads.objectId))
+            .where(and(eq(driveUploads.id, uploadId), eq(driveUploads.workspaceId, workspaceId)))
+            .for('update', { of: driveUploads });
+        const row = upload as UploadRow | undefined;
+        if (!row || row.status !== 'open' || row.multipartId !== null) return false;
+        await adjustStorage(tx, workspaceId, 0n, -row.reservedBytes);
+        await tx.delete(driveUploads).where(eq(driveUploads.id, row.id));
+        await tx.delete(fileVersions).where(eq(fileVersions.id, row.versionId));
+        if (row.objectId) await tx.delete(driveObjects).where(eq(driveObjects.id, row.objectId));
+        if (row.newNode) await tx.delete(driveNodes).where(eq(driveNodes.id, row.nodeId));
+        return true;
     });
 }
 
@@ -2038,6 +2103,7 @@ const uploadColumns = {
     keyEpoch: driveUploads.keyEpoch,
     expectedVersionId: driveUploads.expectedVersionId,
     newNode: driveUploads.newNode,
+    storeId: driveUploads.storeId,
     multipartId: driveUploads.multipartId,
     reservedBytes: driveUploads.reservedBytes,
     expiresAt: driveUploads.expiresAt,
@@ -2089,6 +2155,8 @@ export async function startCompleting(workspaceId: string, uploadId: string, wri
         if (upload.status === 'conflicted') return { status: 'conflicted' as const, upload };
         if (upload.status === 'open' && upload.expiresAt.getTime() <= Date.now())
             return { status: 'expired' as const };
+        // The store never started it, so there is nothing to complete; expiry takes the row.
+        if (upload.multipartId === null) return { status: 'expired' as const };
         if (upload.status === 'open') {
             await tx
                 .update(driveUploads)
@@ -2678,11 +2746,34 @@ async function attachUploadOnce(
     });
 }
 
-/* Abort, from the client or from expiry. Refuses an upload that is completing. */
+/*
+ * Abort, from the client or from expiry. Refuses an upload that is completing.
+ * The row returned is the one read under the lock, so its multipart id is the
+ * one to abort at the store.
+ */
 export async function abortUpload(
     workspaceId: string,
     uploadId: string,
     options: { force?: boolean } = {},
+) {
+    const result = await abortUploadWhere(workspaceId, uploadId, options);
+    if (result.status === 'started') throw new Error('Only expiry asks whether an upload started.');
+    return result;
+}
+
+/*
+ * Expiry's abort of a row listed as never having got a multipart id. If the
+ * store's answer was written since the listing, the row is a live upload and
+ * is left alone (`started`).
+ */
+export async function expireUnstartedUpload(workspaceId: string, uploadId: string) {
+    return abortUploadWhere(workspaceId, uploadId, { force: true, unstarted: true });
+}
+
+async function abortUploadWhere(
+    workspaceId: string,
+    uploadId: string,
+    options: { force?: boolean; unstarted?: boolean },
 ) {
     return db.transaction(async (tx) => {
         await nextChangeSeq(tx, workspaceId);
@@ -2700,23 +2791,36 @@ export async function abortUpload(
         if (row.status === 'completed') return { status: 'completed' as const };
         if (row.status === 'aborted')
             return { status: 'ok' as const, upload: row, alreadyAborted: true };
+        if (options.unstarted && row.multipartId !== null) return { status: 'started' as const };
         await releaseUpload(tx, row, 'aborted');
         return { status: 'ok' as const, upload: row, alreadyAborted: false };
     });
 }
 
-/* Uploads past their expiry, for the worker's sweep. Completing ones older than an hour too. */
-export async function listExpiredUploads(limit = 100) {
-    const rows = await db
+/* How long begin's row may wait for its store to start the multipart upload before it is expired. */
+export const UPLOAD_START_SECONDS = 60;
+
+/*
+ * Uploads past their expiry, for the worker's sweep. Completing ones older than an hour too,
+ * and open ones whose store never started the multipart upload within a minute of begin.
+ * It runs every five minutes, so every arm names a live status: the planner then reads
+ * only `drive_uploads_expiry_idx`, the partial index of live uploads, however many
+ * finished ones the table keeps. The query is apart so a test can ask the planner.
+ */
+export function expiredUploadsQuery(limit: number) {
+    return db
         .select(uploadColumns)
         .from(driveUploads)
         .leftJoin(driveObjects, eq(driveObjects.id, driveUploads.objectId))
         .where(
-            sql`(${driveUploads.status} in ('open', 'conflicted') and ${driveUploads.expiresAt} <= now()) or (${driveUploads.status} = 'completing' and ${driveUploads.completingAt} <= now() - interval '1 hour')`,
+            sql`(${driveUploads.status} in ('open', 'conflicted') and ${driveUploads.expiresAt} <= now()) or (${driveUploads.status} = 'completing' and ${driveUploads.completingAt} <= now() - interval '1 hour') or (${driveUploads.status} = 'open' and ${driveUploads.multipartId} is null and ${driveUploads.createdAt} <= now() - make_interval(secs => ${UPLOAD_START_SECONDS}))`,
         )
         .orderBy(asc(driveUploads.expiresAt))
         .limit(limit);
-    return rows as UploadRow[];
+}
+
+export async function listExpiredUploads(limit = 100) {
+    return (await expiredUploadsQuery(limit)) as UploadRow[];
 }
 
 /*
@@ -2740,7 +2844,11 @@ export async function getStorage(workspaceId: string) {
 export async function getVersionForDownload(workspaceId: string, versionId: string) {
     return db.transaction(async (tx) => {
         const [row] = await tx
-            .select({ version: versionColumns, nodeId: fileVersions.nodeId })
+            .select({
+                version: versionColumns,
+                nodeId: fileVersions.nodeId,
+                storeId: driveObjects.storeId,
+            })
             .from(fileVersions)
             .innerJoin(driveObjects, eq(driveObjects.id, fileVersions.objectId))
             .where(and(eq(fileVersions.id, versionId), eq(fileVersions.workspaceId, workspaceId)));
@@ -2756,6 +2864,7 @@ export async function getVersionForDownload(workspaceId: string, versionId: stri
             version,
             node: node!,
             objectKey: objectKeyFor(workspaceId, version.objectId),
+            storeId: row.storeId,
         };
     });
 }
@@ -2765,7 +2874,11 @@ export async function getVersionsForDownload(workspaceId: string, versionIds: st
     if (!versionIds.length) return [];
     return db.transaction(async (tx) => {
         const rows = await tx
-            .select({ version: versionColumns, nodeId: fileVersions.nodeId })
+            .select({
+                version: versionColumns,
+                nodeId: fileVersions.nodeId,
+                storeId: driveObjects.storeId,
+            })
             .from(fileVersions)
             .innerJoin(driveObjects, eq(driveObjects.id, fileVersions.objectId))
             .where(
@@ -2774,13 +2887,17 @@ export async function getVersionsForDownload(workspaceId: string, versionIds: st
                     eq(fileVersions.workspaceId, workspaceId),
                 ),
             );
-        const out: { version: RawVersionRow; objectKey: string }[] = [];
+        const out: { version: RawVersionRow; objectKey: string; storeId: string }[] = [];
         for (const row of rows) {
             const version = row.version as RawVersionRow;
             if (version.status !== 'ready' || version.objectStatus !== 'ready') continue;
             const chain = await walk(tx, row.nodeId);
             if (!chain || chain.purged) continue;
-            out.push({ version, objectKey: objectKeyFor(workspaceId, version.objectId) });
+            out.push({
+                version,
+                objectKey: objectKeyFor(workspaceId, version.objectId),
+                storeId: row.storeId,
+            });
         }
         return out;
     });
@@ -3599,7 +3716,11 @@ export async function markObjectDeletionDone(objectId: string) {
  */
 export async function listUnreplicatedObjects(limit = 100) {
     const live = await db
-        .select({ objectId: driveObjects.id, objectKey: driveObjects.objectKey })
+        .select({
+            objectId: driveObjects.id,
+            objectKey: driveObjects.objectKey,
+            storeId: driveObjects.storeId,
+        })
         .from(driveObjects)
         .where(and(eq(driveObjects.status, 'ready'), isNull(driveObjects.replicatedAt)))
         .orderBy(asc(driveObjects.createdAt))
@@ -3608,6 +3729,7 @@ export async function listUnreplicatedObjects(limit = 100) {
         .select({
             objectId: driveObjectDeletions.objectId,
             objectKey: driveObjectDeletions.objectKey,
+            storeId: driveObjectDeletions.storeId,
         })
         .from(driveObjectDeletions)
         .where(
@@ -3683,6 +3805,7 @@ export async function listObjectsForAudit(target: AuditTarget, limit = 200) {
         .select({
             objectId: driveObjects.id,
             objectKey: driveObjects.objectKey,
+            storeId: driveObjects.storeId,
             ciphertextSize: driveObjects.ciphertextSize,
             status: driveObjects.status,
             replicatedAt: driveObjects.replicatedAt,
@@ -3755,7 +3878,9 @@ export async function setSweepCursor(name: string, cursor: string | null) {
 /*
  * Tiering candidates: ready objects in the standard class that nobody has read
  * for `idleDays` (or ever, counting from when they became ready), oldest read
- * first. Cold objects read since they went cold come back the other way.
+ * first. Cold objects read since they went cold come back the other way. Only
+ * objects in the environment's primary store: the cold class is that store's
+ * (`STORAGE_COLD_CLASS`), and an object elsewhere is not there to rewrite.
  */
 export async function listTierCandidates(idleDays: number, limit = 200) {
     return db
@@ -3764,6 +3889,7 @@ export async function listTierCandidates(idleDays: number, limit = 200) {
         .where(
             and(
                 eq(driveObjects.status, 'ready'),
+                eq(driveObjects.storeId, ENVIRONMENT_PRIMARY_STORE_ID),
                 eq(driveObjects.storageClass, 'standard'),
                 sql`coalesce(${driveObjects.lastReadAt}, ${driveObjects.readyAt}, ${driveObjects.createdAt}) < now() - make_interval(days => ${idleDays})`,
             ),
@@ -3779,6 +3905,7 @@ export async function listWarmCandidates(idleDays: number, limit = 200) {
         .where(
             and(
                 eq(driveObjects.status, 'ready'),
+                eq(driveObjects.storeId, ENVIRONMENT_PRIMARY_STORE_ID),
                 eq(driveObjects.storageClass, 'cold'),
                 sql`${driveObjects.lastReadAt} >= now() - make_interval(days => ${idleDays})`,
             ),

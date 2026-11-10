@@ -21,7 +21,7 @@ import * as server from './server';
 
 vi.mock('./storage', () => ({
     objectKey: (workspaceId: string, objectId: string) => `ws/${workspaceId}/${objectId}`,
-    primaryStore: () => ({
+    storeFor: async () => ({
         createMultipart: async () => 'multipart-test',
         abortMultipart: async () => {},
         presignGet: async (key: string) => `https://store.test/${key}`,

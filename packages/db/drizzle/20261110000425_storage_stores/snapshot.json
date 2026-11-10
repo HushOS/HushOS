@@ -1,0 +1,1195 @@
+{
+    "type": "diff",
+    "version": "9",
+    "dialect": "postgres",
+    "id": "720d6af5-763a-4dd2-9a38-b73c70a2c84b",
+    "prevIds": ["d50e1251-30e2-43ba-b674-23a288e7e388"],
+    "footprints": [
+        {
+            "statementType": "create_table",
+            "statementTarget": ["table", "public", "object_stores"],
+            "writes": [
+                "s|tbl|public.object_stores",
+                "n|tbl|public.object_stores",
+                "e|tbl|public.object_stores",
+                "n|rel|public.object_stores",
+                "n|type|public.object_stores",
+                "n|rel|public.object_stores_pkey"
+            ],
+            "reads": ["n|sch|public"]
+        },
+        {
+            "statementType": "create_table",
+            "statementTarget": ["table", "public", "storage_regions"],
+            "writes": [
+                "s|tbl|public.storage_regions",
+                "n|tbl|public.storage_regions",
+                "e|tbl|public.storage_regions",
+                "n|rel|public.storage_regions",
+                "n|type|public.storage_regions",
+                "n|rel|public.storage_regions_pkey",
+                "n|rel|public.storage_regions_code_key"
+            ],
+            "reads": ["n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "drive_object_deletions", "store_id"],
+            "writes": [
+                "s|col|public.drive_object_deletions.store_id",
+                "n|col|public.drive_object_deletions.store_id",
+                "e|col|public.drive_object_deletions.store_id"
+            ],
+            "reads": ["n|tbl|public.drive_object_deletions", "n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "drive_objects", "store_id"],
+            "writes": [
+                "s|col|public.drive_objects.store_id",
+                "n|col|public.drive_objects.store_id",
+                "e|col|public.drive_objects.store_id"
+            ],
+            "reads": ["n|tbl|public.drive_objects", "n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "drive_uploads", "store_id"],
+            "writes": [
+                "s|col|public.drive_uploads.store_id",
+                "n|col|public.drive_uploads.store_id",
+                "e|col|public.drive_uploads.store_id"
+            ],
+            "reads": ["n|tbl|public.drive_uploads", "n|sch|public"]
+        },
+        {
+            "statementType": "alter_column",
+            "statementTarget": ["column", "public", "drive_uploads", "multipart_id"],
+            "writes": ["s|colprop|public.drive_uploads.multipart_id.notNull"],
+            "reads": [
+                "n|tbl|public.drive_uploads",
+                "n|sch|public",
+                "n|col|public.drive_uploads.multipart_id"
+            ],
+            "sqlHash": "01f272a75ec7223b"
+        },
+        {
+            "statementType": "create_index",
+            "statementTarget": [
+                "index",
+                "public",
+                "storage_regions",
+                "storage_regions_one_default"
+            ],
+            "writes": [
+                "s|idx|public.storage_regions_one_default",
+                "n|idx|public.storage_regions_one_default",
+                "e|idx|public.storage_regions_one_default",
+                "n|rel|public.storage_regions_one_default"
+            ],
+            "reads": [
+                "n|tbl|public.storage_regions",
+                "n|sch|public",
+                "n|col|public.storage_regions.is_default"
+            ]
+        },
+        {
+            "statementType": "create_fk",
+            "statementTarget": ["table", "public", "drive_object_deletions"],
+            "writes": [
+                "s|fk|public.drive_object_deletions.drive_object_deletions_store_id_object_stores_id_fkey",
+                "n|fk|public.drive_object_deletions.drive_object_deletions_store_id_object_stores_id_fkey",
+                "e|fk|public.drive_object_deletions.drive_object_deletions_store_id_object_stores_id_fkey",
+                "n|con|public.drive_object_deletions.drive_object_deletions_store_id_object_stores_id_fkey"
+            ],
+            "reads": [
+                "n|tbl|public.drive_object_deletions",
+                "n|sch|public",
+                "n|tbl|public.object_stores",
+                "n|sch|public",
+                "n|col|public.drive_object_deletions.store_id",
+                "n|col|public.object_stores.id",
+                "e|uniqueness|public.object_stores.id"
+            ]
+        },
+        {
+            "statementType": "create_fk",
+            "statementTarget": ["table", "public", "drive_objects"],
+            "writes": [
+                "s|fk|public.drive_objects.drive_objects_store_id_object_stores_id_fkey",
+                "n|fk|public.drive_objects.drive_objects_store_id_object_stores_id_fkey",
+                "e|fk|public.drive_objects.drive_objects_store_id_object_stores_id_fkey",
+                "n|con|public.drive_objects.drive_objects_store_id_object_stores_id_fkey"
+            ],
+            "reads": [
+                "n|tbl|public.drive_objects",
+                "n|sch|public",
+                "n|tbl|public.object_stores",
+                "n|sch|public",
+                "n|col|public.drive_objects.store_id",
+                "n|col|public.object_stores.id",
+                "e|uniqueness|public.object_stores.id"
+            ]
+        },
+        {
+            "statementType": "create_fk",
+            "statementTarget": ["table", "public", "drive_uploads"],
+            "writes": [
+                "s|fk|public.drive_uploads.drive_uploads_store_id_object_stores_id_fkey",
+                "n|fk|public.drive_uploads.drive_uploads_store_id_object_stores_id_fkey",
+                "e|fk|public.drive_uploads.drive_uploads_store_id_object_stores_id_fkey",
+                "n|con|public.drive_uploads.drive_uploads_store_id_object_stores_id_fkey"
+            ],
+            "reads": [
+                "n|tbl|public.drive_uploads",
+                "n|sch|public",
+                "n|tbl|public.object_stores",
+                "n|sch|public",
+                "n|col|public.drive_uploads.store_id",
+                "n|col|public.object_stores.id",
+                "e|uniqueness|public.object_stores.id"
+            ]
+        },
+        {
+            "statementType": "create_fk",
+            "statementTarget": ["table", "public", "storage_regions"],
+            "writes": [
+                "s|fk|public.storage_regions.storage_regions_store_id_object_stores_id_fkey",
+                "n|fk|public.storage_regions.storage_regions_store_id_object_stores_id_fkey",
+                "e|fk|public.storage_regions.storage_regions_store_id_object_stores_id_fkey",
+                "n|con|public.storage_regions.storage_regions_store_id_object_stores_id_fkey"
+            ],
+            "reads": [
+                "n|tbl|public.storage_regions",
+                "n|sch|public",
+                "n|tbl|public.object_stores",
+                "n|sch|public",
+                "n|col|public.storage_regions.store_id",
+                "n|col|public.object_stores.id",
+                "e|uniqueness|public.object_stores.id"
+            ]
+        },
+        {
+            "statementType": "create_fk",
+            "statementTarget": ["table", "public", "storage_regions"],
+            "writes": [
+                "s|fk|public.storage_regions.storage_regions_backup_store_id_object_stores_id_fkey",
+                "n|fk|public.storage_regions.storage_regions_backup_store_id_object_stores_id_fkey",
+                "e|fk|public.storage_regions.storage_regions_backup_store_id_object_stores_id_fkey",
+                "n|con|public.storage_regions.storage_regions_backup_store_id_object_stores_id_fkey"
+            ],
+            "reads": [
+                "n|tbl|public.storage_regions",
+                "n|sch|public",
+                "n|tbl|public.object_stores",
+                "n|sch|public",
+                "n|col|public.storage_regions.backup_store_id",
+                "n|col|public.object_stores.id",
+                "e|uniqueness|public.object_stores.id"
+            ]
+        },
+        {
+            "statementType": "add_check",
+            "statementTarget": ["table", "public", "drive_uploads"],
+            "writes": [
+                "s|ck|public.drive_uploads.drive_uploads_multipart_started",
+                "n|ck|public.drive_uploads.drive_uploads_multipart_started",
+                "e|ck|public.drive_uploads.drive_uploads_multipart_started",
+                "n|con|public.drive_uploads.drive_uploads_multipart_started"
+            ],
+            "reads": [
+                "n|tbl|public.drive_uploads",
+                "n|sch|public",
+                "n|col|public.drive_uploads.multipart_id",
+                "n|col|public.drive_uploads.status"
+            ]
+        }
+    ],
+    "deltas": [
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "name": "object_stores",
+                "isRlsEnabled": false,
+                "entityType": "tables"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "name": "storage_regions",
+                "isRlsEnabled": false,
+                "entityType": "tables"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "drive_object_deletions",
+                "name": "store_id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "'00000000-0000-4000-8000-000000000001'",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "drive_objects",
+                "name": "store_id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "'00000000-0000-4000-8000-000000000001'",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "drive_uploads",
+                "name": "store_id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "'00000000-0000-4000-8000-000000000001'",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "gen_random_uuid()",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "source",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "kind",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "group_id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "endpoint",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "internal_endpoint",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "signing_region",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "bucket",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "path_style",
+                "type": "boolean",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "origin",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "key_hint",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "seal",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "secret_key_id",
+                "type": "bytea",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "secret_nonce",
+                "type": "bytea",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "secret_sealed",
+                "type": "bytea",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "status",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "'draft'",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "draft_until",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "env_present",
+                "type": "boolean",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "tested_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "test_result",
+                "type": "jsonb",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "probed_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "probe_failures",
+                "type": "integer",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "0",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "audit_pass_started_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "audit_pass_finished_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "stated_location",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "version",
+                "type": "integer",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "1",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "created_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "now()",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "updated_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "now()",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "storage_regions",
+                "name": "id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "gen_random_uuid()",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "storage_regions",
+                "name": "code",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "storage_regions",
+                "name": "label",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "storage_regions",
+                "name": "store_id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "storage_regions",
+                "name": "backup_store_id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "storage_regions",
+                "name": "backup_every",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "'5m'",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "storage_regions",
+                "name": "backup_prune",
+                "type": "boolean",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "false",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "storage_regions",
+                "name": "is_default",
+                "type": "boolean",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "false",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "storage_regions",
+                "name": "offered",
+                "type": "boolean",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "false",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "storage_regions",
+                "name": "created_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "now()",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "storage_regions",
+                "name": "updated_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "now()",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "storage_regions",
+                "name": "storage_regions_one_default",
+                "nameExplicit": true,
+                "columns": [
+                    {
+                        "value": "is_default",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": false,
+                        "opclass": null
+                    }
+                ],
+                "isUnique": true,
+                "where": "is_default",
+                "with": "",
+                "method": "btree",
+                "concurrently": false,
+                "entityType": "indexes"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "drive_object_deletions",
+                "name": "drive_object_deletions_store_id_object_stores_id_fkey",
+                "nameExplicit": false,
+                "columns": ["store_id"],
+                "schemaTo": "public",
+                "tableTo": "object_stores",
+                "columnsTo": ["id"],
+                "onUpdate": "NO ACTION",
+                "onDelete": "NO ACTION",
+                "entityType": "fks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "drive_objects",
+                "name": "drive_objects_store_id_object_stores_id_fkey",
+                "nameExplicit": false,
+                "columns": ["store_id"],
+                "schemaTo": "public",
+                "tableTo": "object_stores",
+                "columnsTo": ["id"],
+                "onUpdate": "NO ACTION",
+                "onDelete": "NO ACTION",
+                "entityType": "fks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "drive_uploads",
+                "name": "drive_uploads_store_id_object_stores_id_fkey",
+                "nameExplicit": false,
+                "columns": ["store_id"],
+                "schemaTo": "public",
+                "tableTo": "object_stores",
+                "columnsTo": ["id"],
+                "onUpdate": "NO ACTION",
+                "onDelete": "NO ACTION",
+                "entityType": "fks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "storage_regions",
+                "name": "storage_regions_store_id_object_stores_id_fkey",
+                "nameExplicit": false,
+                "columns": ["store_id"],
+                "schemaTo": "public",
+                "tableTo": "object_stores",
+                "columnsTo": ["id"],
+                "onUpdate": "NO ACTION",
+                "onDelete": "NO ACTION",
+                "entityType": "fks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "storage_regions",
+                "name": "storage_regions_backup_store_id_object_stores_id_fkey",
+                "nameExplicit": false,
+                "columns": ["backup_store_id"],
+                "schemaTo": "public",
+                "tableTo": "object_stores",
+                "columnsTo": ["id"],
+                "onUpdate": "NO ACTION",
+                "onDelete": "NO ACTION",
+                "entityType": "fks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "object_stores_pkey",
+                "columns": ["id"],
+                "nameExplicit": false,
+                "entityType": "pks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "storage_regions",
+                "name": "storage_regions_pkey",
+                "columns": ["id"],
+                "nameExplicit": false,
+                "entityType": "pks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "storage_regions",
+                "name": "storage_regions_code_key",
+                "nameExplicit": false,
+                "columns": ["code"],
+                "nullsNotDistinct": false,
+                "entityType": "uniques"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "drive_uploads",
+                "name": "drive_uploads_multipart_started",
+                "value": "\"multipart_id\" is not null or \"status\" in ('open', 'aborted')",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "object_stores_source_valid",
+                "value": "\"source\" in ('environment', 'database')",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "object_stores_kind_valid",
+                "value": "\"kind\" in ('region', 'backup', 'company', 'export')",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "object_stores_status_valid",
+                "value": "\"status\" in ('draft', 'checking', 'ready', 'failing', 'retired')",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "object_stores_seal_valid",
+                "value": "\"seal\" is null or (\"seal\" in ('symmetric', 'worker') and (\"seal\" = 'symmetric') = (\"kind\" in ('region', 'company')))",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "object_stores_group_valid",
+                "value": "(\"kind\" in ('company', 'export')) = (\"group_id\" is not null)",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "object_stores_internal_endpoint_valid",
+                "value": "\"internal_endpoint\" is null or \"kind\" in ('region', 'backup')",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "object_stores_environment_fixed",
+                "value": "(\"source\" = 'environment') = (\"id\" in ('00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002')) and (\"id\" <> '00000000-0000-4000-8000-000000000001' or \"kind\" = 'region') and (\"id\" <> '00000000-0000-4000-8000-000000000002' or \"kind\" = 'backup')",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "object_stores_environment_empty",
+                "value": "\"source\" <> 'environment' or (\"endpoint\" is null and \"internal_endpoint\" is null and \"signing_region\" is null and \"bucket\" is null and \"path_style\" is null and \"origin\" is null and \"key_hint\" is null and \"seal\" is null and \"secret_key_id\" is null and \"secret_nonce\" is null and \"secret_sealed\" is null and \"draft_until\" is null and \"group_id\" is null and \"status\" in ('ready', 'failing') and \"env_present\" is not null)",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "object_stores_database_address",
+                "value": "\"source\" <> 'database' or (\"endpoint\" is not null and \"signing_region\" is not null and \"bucket\" is not null and \"path_style\" is not null and \"env_present\" is null)",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "object_stores",
+                "name": "object_stores_values_valid",
+                "value": "\"version\" >= 1 and \"probe_failures\" >= 0 and (\"key_hint\" is null or char_length(\"key_hint\") <= 4) and (\"secret_key_id\" is null or octet_length(\"secret_key_id\") = 8)",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "storage_regions",
+                "name": "storage_regions_code_valid",
+                "value": "\"code\" ~ '^[a-z][a-z0-9-]{0,31}$'",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "storage_regions",
+                "name": "storage_regions_label_valid",
+                "value": "char_length(\"label\") between 1 and 80",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "storage_regions",
+                "name": "storage_regions_backup_every_valid",
+                "value": "\"backup_every\" in ('5m', 'hour', 'day')",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "storage_regions",
+                "name": "storage_regions_backup_distinct",
+                "value": "\"backup_store_id\" is null or \"backup_store_id\" <> \"store_id\"",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "alter",
+            "key": "columns\u0000[\"public\",\"drive_uploads\",\"multipart_id\"]",
+            "set": {
+                "notNull": false
+            }
+        }
+    ]
+}

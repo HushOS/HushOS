@@ -353,6 +353,7 @@ The schema files in `packages/db/src/schema`:
 - `drive.ts`
 - `groups.ts`
 - `growth.ts`
+- `object-stores.ts`
 - `relations.ts`
 - `storage.ts`
 - `two-step.ts`
@@ -471,7 +472,7 @@ Error handlers (`onError` in `api/shared.server.ts`) must return literal status 
 | `./transfers`         | The upload queue that runs across pages                                                                                                                  |
 | `./downloads`         | Ordered ranged reads decrypted in the worker, written to a sink the app supplies, zipped for folders, plus a cached random-access reader for the viewers |
 | `./journal`           | The IndexedDB upload journal                                                                                                                             |
-| `./storage`           | The S3 client                                                                                                                                            |
+| `./storage`           | The S3 client, and `storeFor`, which opens the store a row's `store_id` names                                                                            |
 | `./api`, `./protocol` | The contract and constants a native client would share                                                                                                   |
 
 Other entries: `./catalogue`, `./jobs`, `./mirror`, `./tags`, `./trust`.

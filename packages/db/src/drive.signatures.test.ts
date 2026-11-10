@@ -121,9 +121,11 @@ async function beginWith(sign: {
             contentNonce: randomBytes(16),
             ciphertextSize: 4096n,
         },
-        multipartId: `mp-${objectId}`,
         expiresAt: new Date(Date.now() + 3600_000),
     });
+    // The store's answer, as the server writes it once the multipart upload has started.
+    if (result.status === 'ok')
+        await drive.setUploadMultipartId(owner.workspaceId, result.uploadId, `mp-${objectId}`);
     return { result, nodeId, versionId, objectId };
 }
 async function publish(uploadId: string) {

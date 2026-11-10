@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
+    ENVIRONMENT_PRIMARY_STORE_ID,
     authRepository,
     driveRepository,
     keyedHash,
@@ -18,7 +19,7 @@ import {
     partLength,
     validObjectSize,
 } from '@hushos/crypto/drive';
-import { objectKey, primaryStore } from './storage';
+import { type ObjectStore, objectKey, storeFor } from './storage';
 import { groupsEnv } from '@hushos/env/groups';
 import { storageEnv } from '@hushos/env/storage';
 import {
@@ -1412,6 +1413,17 @@ function live(row: UploadRow): LiveUploadRow {
     return row as LiveUploadRow;
 }
 
+/*
+ * An upload the store has started. A row without a multipart id is one whose
+ * begin never heard back from its store: no client was given its id, and
+ * expiry takes it once it is a minute old.
+ */
+function started<T extends UploadRow>(row: T): T & { multipartId: string } {
+    if (row.multipartId === null)
+        throw new DriveError('expired', 'This upload expired. Start it again.', 409);
+    return row as T & { multipartId: string };
+}
+
 function uploadView(row: UploadRow): UploadView {
     return {
         id: row.id,
@@ -1455,9 +1467,10 @@ function parseCiphertextSize(value: string, chunkCount: number) {
     return size;
 }
 
+/* Parts are signed against the store the upload's row names, whatever new uploads use now. */
 async function presignParts(upload: UploadRow, from: number, count: number) {
-    const row = live(upload);
-    const store = primaryStore();
+    const row = started(live(upload));
+    const store = await storeFor(row.storeId);
     const total = row.chunkCount;
     const size = Number(row.ciphertextSize);
     const to = Math.min(total, from + count - 1);
@@ -1483,9 +1496,13 @@ async function presignParts(upload: UploadRow, from: number, count: number) {
 }
 
 /*
- * Begin: the store's multipart upload is opened first (an abandoned one costs
- * nothing until parts arrive and is swept), then the reservation and pending rows
- * are written in one transaction; a refusal there aborts the multipart upload.
+ * Begin (docs/company-storage-design.md 2.2): the reservation and pending rows
+ * are written in one transaction, which also chooses the store and writes it on
+ * the upload and the object. Only then is the store's multipart upload opened,
+ * at that store, and its id written to the row, which takes it only while it is
+ * still open. A store that answers after the row was expired has its multipart
+ * upload aborted; one that refuses has the begin undone, so the same ids can be
+ * sent again.
  */
 export async function beginUpload(userId: string, workspaceId: string, input: UploadBeginInput) {
     requireMadeFor(workspaceId, [
@@ -1511,8 +1528,6 @@ export async function beginUpload(userId: string, workspaceId: string, input: Up
     const ciphertextSize = parseCiphertextSize(input.ciphertextSize, input.chunkCount);
     const contentNonce = decodeEnvelope(input.contentNonce, 16);
     const key = objectKey(workspaceId, input.objectId);
-    const store = primaryStore();
-    const multipartId = await store.createMultipart(key);
     const result = await driveRepository.beginUpload({
         workspaceId,
         userId,
@@ -1543,12 +1558,10 @@ export async function beginUpload(userId: string, workspaceId: string, input: Up
             contentNonce,
             ciphertextSize,
         },
-        multipartId,
         expiresAt: new Date(Date.now() + UPLOAD_TTL_HOURS * 3600 * 1000),
         ...(input.moveOf && { moveOf: input.moveOf }),
     });
     if (result.status !== 'ok') {
-        await store.abortMultipart(key, multipartId).catch(() => {});
         switch (result.status) {
             case 'over-quota':
                 throw await overQuota(
@@ -1581,6 +1594,29 @@ export async function beginUpload(userId: string, workspaceId: string, input: Up
             case 'moving':
                 throw new DriveError('conflict', 'This file is already being moved.', 409);
         }
+    }
+    let store: ObjectStore;
+    let multipartId: string;
+    try {
+        store = await storeFor(result.storeId);
+        multipartId = await store.createMultipart(key);
+    } catch (error) {
+        // Nothing was started at the store: as before stores were rows, a begin the store
+        // refused leaves nothing behind.
+        await driveRepository.discardUnstartedUpload(workspaceId, result.uploadId).catch(() => {});
+        throw error;
+    }
+    // Written only while the row is still open. If it is not, or the write itself fails, no
+    // row will ever name this multipart upload, so it is aborted here.
+    const written = await driveRepository
+        .setUploadMultipartId(workspaceId, result.uploadId, multipartId)
+        .catch(async (error: unknown) => {
+            await store.abortMultipart(key, multipartId).catch(() => {});
+            throw error;
+        });
+    if (!written) {
+        await store.abortMultipart(key, multipartId).catch(() => {});
+        throw new DriveError('expired', 'This upload expired. Start it again.', 409);
     }
     const row = await driveRepository.getUpload(workspaceId, result.uploadId);
     if (!row) throw notFound();
@@ -1618,8 +1654,8 @@ export async function uploadPartUrls(
 export async function getUploadState(userId: string, workspaceId: string, uploadId: string) {
     const row = await openUpload(userId, workspaceId, uploadId);
     const stored =
-        row.status === 'open'
-            ? await primaryStore().listParts(row.objectKey, row.multipartId)
+        row.status === 'open' && row.multipartId !== null
+            ? await (await storeFor(row.storeId)).listParts(row.objectKey, row.multipartId)
             : null;
     return { upload: uploadView(row), parts: stored ?? [] };
 }
@@ -1635,8 +1671,8 @@ export async function completeUpload(
     parts: { partNumber: number; etag: string }[],
 ) {
     const view = viewFor(await requireUploadAccess(userId, workspaceId, uploadId));
-    const started = await driveRepository.startCompleting(workspaceId, uploadId, userId);
-    switch (started.status) {
+    const begun = await driveRepository.startCompleting(workspaceId, uploadId, userId);
+    switch (begun.status) {
         case 'not-found':
             throw new DriveError('not-found', 'This upload no longer exists.', 404);
         case 'aborted':
@@ -1644,7 +1680,7 @@ export async function completeUpload(
         case 'expired':
             throw new DriveError('expired', 'This upload expired. Start it again.', 409);
         case 'completed': {
-            const node = await driveRepository.getNode(workspaceId, started.upload.nodeId);
+            const node = await driveRepository.getNode(workspaceId, begun.upload.nodeId);
             return { status: 'completed' as const, node: node ? view(node.node) : null };
         }
         case 'conflicted':
@@ -1652,10 +1688,11 @@ export async function completeUpload(
                 conflicted: true,
             });
     }
-    const row = live(started.upload);
+    const row = started(live(begun.upload));
     if (parts.length !== row.chunkCount)
         throw new DriveError('invalid', 'Every part must be listed exactly once.');
-    const store = primaryStore();
+    // Completion checks the store the upload began at, and the object row carries it.
+    const store = await storeFor(row.storeId);
     const stored = await store.completeMultipart(
         row.objectKey,
         row.multipartId,
@@ -1807,12 +1844,15 @@ export async function abortUpload(userId: string, workspaceId: string, uploadId:
             );
         case 'completed':
             throw new DriveError('conflict', 'This upload already finished.', 409);
-        case 'ok':
-            if (!result.alreadyAborted)
-                await primaryStore()
-                    .abortMultipart(result.upload.objectKey, result.upload.multipartId)
+        case 'ok': {
+            // At the store the upload began at; one the store never started has nothing there.
+            const { objectKey: key, multipartId, storeId } = result.upload;
+            if (!result.alreadyAborted && multipartId !== null)
+                await storeFor(storeId)
+                    .then((store) => store.abortMultipart(key, multipartId))
                     .catch(() => {});
             return { aborted: true };
+        }
     }
 }
 
@@ -1839,11 +1879,11 @@ export async function thumbnailUrls(userId: string, workspaceId: string, version
 /* The rows come back too, for callers that record the read; they hold bigints and never go on the wire. */
 async function presignObjects(workspaceId: string, ids: string[], ttl: number) {
     const rows = await driveRepository.getVersionsForDownload(workspaceId, ids);
-    const store = primaryStore();
+    // Each object is read from the store its own row names.
     const urls = await Promise.all(
         rows.map(async (row) => ({
             versionId: row.version.id,
-            url: await store.presignGet(row.objectKey, ttl),
+            url: await (await storeFor(row.storeId)).presignGet(row.objectKey, ttl),
         })),
     );
     return { rows, urls, urlExpiresAt: new Date(Date.now() + ttl * 1000).toISOString() };
@@ -1894,7 +1934,7 @@ async function presignDownload(workspaceId: string, versionId: string, ttl: numb
                 : 'This file is still being uploaded.',
             409,
         );
-    const url = await primaryStore().presignGet(result.objectKey, ttl);
+    const url = await (await storeFor(result.storeId)).presignGet(result.objectKey, ttl);
     void driveRepository.touchObjectRead(result.version.objectId).catch(() => {});
     return {
         url,
@@ -2516,8 +2556,23 @@ export async function reportChildren(reportId: string, parentId: string) {
 }
 
 /*
- * URLs for reported bytes, from the primary store, where the hold keeps them
- * while the report is open or held. Once released and drained there is nothing
+ * The store a reported object's primary copy is in: the one its own row names
+ * or, once purged, its outbox row, which is the copy the hold keeps. With no
+ * row left the copy is gone as well (released and drained), and the URL is
+ * signed at the environment's primary as it always was: it finds nothing, and
+ * the page reads the evidence copy instead.
+ */
+async function reportStores(items: { objectId: string | null }[]) {
+    const stores = await reportsRepository.storesOfReportObjects(
+        items.flatMap((item) => (item.objectId ? [item.objectId] : [])),
+    );
+    return (item: { objectId: string | null }) =>
+        storeFor((item.objectId && stores.get(item.objectId)) || ENVIRONMENT_PRIMARY_STORE_ID);
+}
+
+/*
+ * URLs for reported bytes, from the store that holds them, where the hold keeps
+ * them while the report is open or held. Once released and drained there is nothing
  * to show; the evidence copy, when one was made, is the worker's to reach.
  */
 export async function reportDownloadUrls(reportId: string, versionIds: string[]) {
@@ -2526,11 +2581,11 @@ export async function reportDownloadUrls(reportId: string, versionIds: string[])
         reportId,
         [...new Set(versionIds)].slice(0, THUMBNAIL_BATCH),
     );
-    const store = primaryStore();
+    const storeOf = await reportStores(items);
     const urls = await Promise.all(
         items.map(async (item) => ({
             versionId: item.versionId!,
-            url: await store.presignGet(item.objectKey!, SHARE_URL_TTL_SECONDS),
+            url: await (await storeOf(item)).presignGet(item.objectKey!, SHARE_URL_TTL_SECONDS),
         })),
     );
     return {
@@ -2546,8 +2601,9 @@ export async function reportDownloadUrl(reportId: string, versionId: string) {
     // Presigned whether or not the primary copy is still there: once a released hold has
     // drained it, the page reads the evidence copy through a worker-answered request instead.
     const node = reportItemView(item, found.report.workspaceId);
+    const store = await (await reportStores([item]))(item);
     return {
-        url: await primaryStore().presignGet(item.objectKey!, SHARE_URL_TTL_SECONDS),
+        url: await store.presignGet(item.objectKey!, SHARE_URL_TTL_SECONDS),
         urlExpiresAt: new Date(Date.now() + SHARE_URL_TTL_SECONDS * 1000).toISOString(),
         node,
         version: node.currentVersion!,

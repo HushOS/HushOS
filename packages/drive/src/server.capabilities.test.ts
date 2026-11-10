@@ -9,7 +9,7 @@ import { afterEach, expect, test, vi } from 'vitest';
  * afresh under its own value.
  */
 
-vi.mock('./storage', () => ({ objectKey: () => '', primaryStore: () => ({}) }));
+vi.mock('./storage', () => ({ objectKey: () => '', storeFor: async () => ({}) }));
 
 const original = process.env.GROUPS_ENABLED;
 afterEach(() => {

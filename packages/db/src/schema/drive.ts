@@ -18,6 +18,7 @@ import {
     uuid,
 } from 'drizzle-orm/pg-core';
 import { bytea, users } from './auth';
+import { ENVIRONMENT_PRIMARY_STORE_ID, objectStores } from './object-stores';
 import { workspaces } from './workspaces';
 
 /*
@@ -173,6 +174,13 @@ export const driveObjects = pgTable(
             .notNull()
             .references(() => workspaces.id, { onDelete: 'cascade' }),
         objectKey: text('object_key').notNull().unique(), // "ws/{workspaceId}/{objectId}"
+        // The store the bytes are in (docs/company-storage-design.md 2.2): every read, copy and
+        // deletion follows it. The default is the environment's primary, which is what a
+        // container of the release before stores, writing no store id, means.
+        storeId: uuid('store_id')
+            .notNull()
+            .default(ENVIRONMENT_PRIMARY_STORE_ID)
+            .references(() => objectStores.id),
         contentSuite: smallint('content_suite').notNull().default(1),
         chunkSize: integer('chunk_size').notNull(),
         chunkCount: integer('chunk_count').notNull(),
@@ -356,7 +364,15 @@ export const driveUploads = pgTable(
         keyEpoch: integer('key_epoch').notNull(),
         expectedVersionId: uuid('expected_version_id'),
         newNode: boolean('new_node').notNull().default(false),
-        multipartId: text('multipart_id').notNull(),
+        // Chosen inside begin's transaction and never changed: parts are signed against it
+        // and the object row carries the same one.
+        storeId: uuid('store_id')
+            .notNull()
+            .default(ENVIRONMENT_PRIMARY_STORE_ID)
+            .references(() => objectStores.id),
+        // Null from begin's commit until the store has started the multipart upload, which
+        // is written only while the row is still open. A row left without one is expired.
+        multipartId: text('multipart_id'),
         reservedBytes: bigint('reserved_bytes', { mode: 'bigint' }).notNull(),
         expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
         status: text()
@@ -403,6 +419,11 @@ export const driveUploads = pgTable(
             'drive_uploads_values_valid',
             sql`${table.keyEpoch} >= 1 and ${table.reservedBytes} >= 0 and (${table.status} <> 'completing' or ${table.completingAt} is not null) and (${table.status} in ('aborted', 'completed') or ${table.objectId} is not null)`,
         ),
+        // Nothing completes an upload the store never started.
+        check(
+            'drive_uploads_multipart_started',
+            sql`${table.multipartId} is not null or ${table.status} in ('open', 'aborted')`,
+        ),
     ],
 );
 
@@ -416,6 +437,11 @@ export const driveObjectDeletions = pgTable(
         objectId: uuid('object_id').primaryKey(),
         workspaceId: uuid('workspace_id').notNull(),
         objectKey: text('object_key').notNull(),
+        // The store the copy to remove is in, taken from the object's row when it is retired.
+        storeId: uuid('store_id')
+            .notNull()
+            .default(ENVIRONMENT_PRIMARY_STORE_ID)
+            .references(() => objectStores.id),
         published: boolean().notNull(),
         replicated: boolean().notNull().default(false),
         primaryDeletedAt: timestamp('primary_deleted_at', { withTimezone: true }),
