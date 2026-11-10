@@ -671,10 +671,37 @@ jobs:
               env:
                   DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
                   DEPLOY_WEBHOOK_TOKEN: ${{ secrets.DEPLOY_WEBHOOK_TOKEN }}
+              # Coolify starts nothing and answers "already queued" while an earlier deployment
+              # of the same application is still finishing, which it is for some seconds after
+              # production already serves that release. Two merges close together then left
+              # production on the first one. So ask again until each application has taken a
+              # request of its own. Any other reply (another host, a refusal) is left to the
+              # wait below, as before. The reply names the host's resources: print none of it.
               run: |
-                  curl --request POST --fail --silent --show-error --max-time 30 --output /dev/null \
-                    --header "Authorization: Bearer $DEPLOY_WEBHOOK_TOKEN" \
-                    "$DEPLOY_WEBHOOK_URL"
+                  taken=''
+                  for attempt in $(seq 1 18); do
+                    body=$(curl --request POST --fail --silent --show-error --max-time 30 \
+                      --header "Authorization: Bearer $DEPLOY_WEBHOOK_TOKEN" \
+                      "$DEPLOY_WEBHOOK_URL")
+                    state=$(jq -r --arg taken "$taken" '
+                      [.deployments[]? | select(.resource_uuid != null)] as $all
+                      | ([$all[] | select((.message // "") | test("already queued"; "i") | not) | .resource_uuid]
+                         + ($taken | split(" ") | map(select(. != ""))) | unique) as $now
+                      | "\([$all[].resource_uuid] | unique | length) \($now | join(" "))"
+                    ' <<< "$body" 2> /dev/null || true)
+                    if [[ -z "$state" ]]; then
+                      exit 0
+                    fi
+                    total=${state%% *}
+                    taken=${state#* }
+                    read -r -a done_list <<< "$taken"
+                    if (( ${#done_list[@]} >= total )); then
+                      exit 0
+                    fi
+                    echo "An earlier deployment is still finishing (${#done_list[@]} of $total taken, attempt $attempt)."
+                    sleep 10
+                  done
+                  echo "::warning title=Deploy request::an earlier deployment never finished; the wait below decides."
             # A later commit's `latest` can land between the gate and the pull, and production
             # then comes up on it: that release counts too.
             - name: Wait for the published release
