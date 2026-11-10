@@ -2,7 +2,9 @@
 //! mirror of `packages/crypto/scripts/company-fixtures.ts`: a history written
 //! with `company_roster_first`, `company_roster_next` and
 //! `recovery_roster_sign`, the company key, kit and notice keys from the
-//! shared seeds, and the seals of a company's life. Writes
+//! shared seeds, the seals of a company's life, and a folder's lists and heads
+//! made with `area_list_base_sign`, `area_list_addition_sign` and
+//! `fork_dismissal_sign` (docs/companies-design.md 2.3). Writes
 //! `packages/crypto/src/__fixtures__/core-company.json`; `bun run fixtures`
 //! at the repository root runs both directions. Signatures and seals differ
 //! on every run.
@@ -12,6 +14,9 @@ mod groups;
 
 #[path = "../tests/common/company.rs"]
 mod company;
+
+#[path = "../tests/common/company_lists.rs"]
+mod company_lists;
 
 use serde_json::json;
 use std::fs;
@@ -25,6 +30,7 @@ fn main() {
         "keys": company::company_keys(),
         "history": history,
         "seals": { "items": items },
+        "lists": company_lists::lists_made_here(),
     });
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../packages/crypto/src/__fixtures__/core-company.json");

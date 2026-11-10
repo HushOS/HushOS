@@ -185,7 +185,7 @@ describe('what the chain keeps of a company', () => {
         });
         await c.h.roster(cast.admin, all);
         const five = await accepted(c);
-        expect(five.cache.cacheVersion).toBe(3);
+        expect(five.cache.cacheVersion).toBe(4);
         expect(five.cache.org!.members).toHaveLength(all.length);
         const cache = structuredClone(five.cache) as GroupChainCache;
         // From the cache: a second automatic admission must count 2, and the kit still signs.

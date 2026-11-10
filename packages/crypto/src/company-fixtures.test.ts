@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import { listCaseVerdict, type ListCase, type ListStepVerdict } from './company-lists-testkit';
 import { companyKeys, sealItemVerdict, type SealItem } from './company-testkit';
 import { openPreviousNoticeSeed } from './custody';
 import {
@@ -186,5 +187,51 @@ describe('a company made by the Rust core', () => {
         expect(await sealItemVerdict({ ...kit, envelope: encode(moved) }, chainAt)).toMatchObject({
             check: 'refused',
         });
+    });
+
+    test('a folder’s lists and heads the core signed read here, step by step, as the core read them', async () => {
+        // A base list, two additions, the heads three rosters commit and a dismissal, all made
+        // with the core's builders (companies-design 2.3): the same states, the same record.
+        const made = core.lists as unknown as ListCase & { expected: ListStepVerdict[] };
+        const served = (served: typeof made.input) => ({
+            ...served,
+            groupId: GROUP,
+            rosters: (served.rosters as unknown as Served[]).map(signed),
+            successions: [],
+        });
+        const verdict = await listCaseVerdict({ ...made, input: served(made.input) });
+        expect(verdict).toEqual(made.expected);
+        const [before, after] = verdict as [ListStepVerdict, ListStepVerdict];
+        if ('error' in before.lists || 'error' in after.lists) throw new Error('refused');
+        expect([before.lists.state, after.lists.state]).toEqual(['ahead', 'level']);
+        expect(after.lists.people.map((person) => person.role)).toEqual([
+            'manager',
+            'manager',
+            'viewer',
+        ]);
+        expect(after.dismissals).toEqual(['verified']);
+        // One byte of the core's addition moved: this twin refuses it, and nothing reaches the head.
+        const step = made.steps[1]!;
+        const moved = decode(step.served![1]!.signature);
+        moved[100]! ^= 1;
+        const [tampered] = await listCaseVerdict({
+            ...made,
+            input: served(made.input),
+            steps: [
+                {
+                    ...step,
+                    served: [
+                        step.served![0]!,
+                        { ...step.served![1]!, signature: encode(moved) },
+                        step.served![2]!,
+                    ],
+                },
+            ],
+        });
+        if ('error' in tampered!.lists) throw new Error('refused');
+        expect(tampered!.lists.state).toBe('forked');
+        expect(tampered!.lists.refused.map((at) => [at.listVersion, at.reason])).toEqual([
+            [2, 'This list is not signed by the member it names.'],
+        ]);
     });
 });

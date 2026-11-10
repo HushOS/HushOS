@@ -9,6 +9,7 @@
 mod common;
 
 use common::company::*;
+use common::company_lists::*;
 use common::groups::*;
 use hushos_core::*;
 use serde_json::{json, Value};
@@ -121,6 +122,85 @@ fn the_web_s_company_seals_open_or_are_refused_here_as_on_the_web() {
     assert_eq!(seal_item_verdict(&moved, &chain_at)["check"], json!("refused"));
 }
 
+#[test]
+fn the_web_s_lists_and_heads_read_here_step_by_step_as_on_the_web() {
+    let fixture = fixture();
+    let lists = &fixture["lists"];
+    let keys: std::collections::HashMap<String, String> = lists["mlDsaKeys"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(digest, key)| (digest.clone(), key.as_str().unwrap().to_string()))
+        .collect();
+    let cases = lists["cases"].as_array().unwrap();
+    // Every rule of 2.3 has a device that reads a history that keeps it and one that reads a
+    // history that breaks it; both twins say the same at every step, the record kept included.
+    assert!(cases.len() > 80);
+    let mut said = std::collections::HashSet::new();
+    for case in cases {
+        let ours = list_case_verdict(case, &keys);
+        let (ours, theirs) = (ours.as_array().unwrap(), case["expected"].as_array().unwrap());
+        assert_eq!(ours.len(), theirs.len(), "{}", s(case, "name"));
+        for (index, (ours, theirs)) in ours.iter().zip(theirs).enumerate() {
+            assert_eq!(ours, theirs, "{} step {index}", s(case, "name"));
+            for refusal in ours["lists"]["refused"].as_array().into_iter().flatten() {
+                said.insert(s(refusal, "reason"));
+            }
+            for error in [&ours["lists"]["error"], &ours["heads"]["error"], &ours["writable"]] {
+                said.extend(error.as_str().map(str::to_string));
+            }
+        }
+    }
+    // Among them, by the rule's own words.
+    for refusal in [
+        AFTER_LEAVING,
+        HEAD_BEHIND,
+        HEAD_FORKED,
+        HEADS_MISMATCH,
+        "Invalid list record.",
+        "Invalid heads record.",
+    ] {
+        assert!(said.contains(refusal), "{refusal}");
+    }
+}
+
+#[test]
+fn list_statements_heads_digests_and_the_folder_s_rows_are_the_web_s() {
+    let fixture = fixture();
+    let lists = &fixture["lists"];
+    let statements = lists["statements"].as_array().unwrap();
+    assert!(statements.len() >= 25);
+    for case in statements {
+        let ours = list_statement_verdict(&s(case, "kind"), b(case, "statement"));
+        assert_eq!(json!(ours), case["expected"], "{}", s(case, "name"));
+        // A valid statement encodes back to its very bytes; anything else is refused.
+        assert_eq!(ours != "refused", case["valid"] == json!(true), "{}", s(case, "name"));
+    }
+    for case in lists["heads"].as_array().unwrap() {
+        let rows = case["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| HeadRow {
+                workspace_id: s(row, "workspaceId"),
+                workspace_key_version: n(row, "workspaceKeyVersion"),
+                list_version: row["listVersion"].as_u64().unwrap(),
+                list_digest: s(row, "listDigest"),
+                share_log_index: n(row, "shareLogIndex"),
+                share_log_digest: s(row, "shareLogDigest"),
+            })
+            .collect();
+        let ours = heads_digest(GROUP.into(), rows).ok();
+        assert_eq!(json!(ours), case["digest"], "{}", s(case, "name"));
+    }
+    assert_eq!(json!(share_log_start(GROUP.into(), AREA.into()).unwrap()), lists["shareLogStart"]);
+    let verdicts = lists["folderVerdicts"].as_array().unwrap();
+    assert!(verdicts.len() >= 500);
+    for case in verdicts {
+        assert_eq!(folder_verdict(case), case["expected"], "{case}");
+    }
+}
+
 /* The company of the seal fixtures after roster 2: two Owners, two Admins, a Member, a kit holder, a Billing holder. */
 fn company_of_seven() -> std::sync::Arc<AcceptedRosters> {
     let fixture = fixture();
@@ -134,7 +214,14 @@ fn heads(
     kit: Option<KitPublicKeys>,
     checked: Vec<VerifiedPin>,
 ) -> NextOrgRoster {
-    NextOrgRoster { custody_key, kit, rules: None, auto_utc_day: None, heads_digest: heads_digest(), checked }
+    NextOrgRoster {
+        custody_key,
+        kit,
+        rules: None,
+        auto_utc_day: None,
+        heads_digest: testkit_heads_digest(),
+        checked,
+    }
 }
 
 #[test]

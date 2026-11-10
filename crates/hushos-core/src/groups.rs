@@ -1709,6 +1709,9 @@ pub fn area_grant_seal(
 /// key the real chain never listed. Not exported to the apps (Core 6): they
 /// open a family folder through [`crate::AreaLedger::open_family_area`], and
 /// its key never leaves the ledger.
+///
+/// A company's area never opens here: its grant opens only for someone its
+/// list entitles ([`company_area_grant_open`]).
 #[allow(clippy::too_many_arguments)]
 pub fn area_grant_open(
     envelope: Vec<u8>,
@@ -1721,9 +1724,86 @@ pub fn area_grant_open(
     reader_key_version: u64,
     grantee: IdentityKeys,
 ) -> CoreResult<Vec<u8>> {
+    open_area_grant(
+        envelope,
+        ctx,
+        chain,
+        area_id_seed,
+        granter_ml_dsa_public_key,
+        granter_history,
+        reader,
+        reader_key_version,
+        grantee,
+        None,
+    )
+}
+
+/// Opens a company area's grant (companies-design 2.3, "Grants"): every rule
+/// [`area_grant_open`] keeps, and the grantee entitled by the folder's list as
+/// this device verified it (`lists`, from `area_lists_read` at this chain's
+/// latest roster), for that key version or a later one. Being a member of the
+/// company opens nothing. Not uniffi-exported, as [`area_grant_open`] is not:
+/// an app reaches a folder's key through the ledger.
+#[allow(clippy::too_many_arguments)]
+pub fn company_area_grant_open(
+    envelope: Vec<u8>,
+    ctx: AreaGrantContext,
+    chain: Arc<AcceptedRosters>,
+    area_id_seed: String,
+    granter_ml_dsa_public_key: Vec<u8>,
+    granter_history: Option<SignerHistory>,
+    reader: String,
+    reader_key_version: u64,
+    grantee: IdentityKeys,
+    lists: Arc<crate::area_lists::AreaLists>,
+) -> CoreResult<Vec<u8>> {
+    open_area_grant(
+        envelope,
+        ctx,
+        chain,
+        area_id_seed,
+        granter_ml_dsa_public_key,
+        granter_history,
+        reader,
+        reader_key_version,
+        grantee,
+        Some(lists),
+    )
+}
+
+pub(crate) const NOT_ON_THE_LIST: &str = "This folder’s list of people does not name this account.";
+
+#[allow(clippy::too_many_arguments)]
+fn open_area_grant(
+    envelope: Vec<u8>,
+    ctx: AreaGrantContext,
+    chain: Arc<AcceptedRosters>,
+    area_id_seed: String,
+    granter_ml_dsa_public_key: Vec<u8>,
+    granter_history: Option<SignerHistory>,
+    reader: String,
+    reader_key_version: u64,
+    grantee: IdentityKeys,
+    lists: Option<Arc<crate::area_lists::AreaLists>>,
+) -> CoreResult<Vec<u8>> {
     same_group(&chain, &ctx.group_id)?;
     sealed_on_chain(&chain, ctx.roster_version, &ctx.roster_digest)?;
     area_of(&ctx.group_id, &ctx.workspace_id, &area_id_seed)?;
+    if chain.kind == GroupKind::Org {
+        let entitled = match &lists {
+            Some(lists) => crate::area_lists::grant_allowed(
+                &chain,
+                lists,
+                &reader,
+                &ctx.workspace_id,
+                ctx.workspace_key_version,
+            )?,
+            None => false,
+        };
+        if !entitled {
+            return Err(input(NOT_ON_THE_LIST));
+        }
+    }
     if ctx.grantee_user_id != reader || ctx.grantee_key_version != reader_key_version {
         return Err(input("This grant is not for this account’s keys."));
     }

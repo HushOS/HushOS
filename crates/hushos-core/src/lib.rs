@@ -13,6 +13,7 @@
 
 mod account;
 mod area_ledger;
+mod area_lists;
 mod area_open;
 mod bytes;
 mod canonical;
@@ -50,6 +51,7 @@ mod succession_path;
 
 pub use account::*;
 pub use area_ledger::*;
+pub use area_lists::*;
 pub use area_open::*;
 pub use bytes::*;
 pub use colour::*;
