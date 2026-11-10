@@ -830,18 +830,93 @@ describe('a new recovery phrase whose reply never arrived', () => {
         expect(auth.store.getState().unlockedUserId).toBeNull();
     });
 
-    test('a server still at work when the wait ran out: the session says nothing changed yet, and the phrase is shown all the same', async () => {
-        // The change lands after this device stopped waiting. Told "it failed" and nothing
-        // else, the person would meet a second step asking for a phrase they never saw.
-        const { auth } = changing({ session: async () => ({ user, device: null }) });
+    test('with the phrase in hand the session is not asked: no second wait, and old credentials do not make it a failure', async () => {
+        // A server still at work when the wait ran out makes the change afterwards, and its
+        // session says "nothing changed" until then. Told "it failed", the person would meet
+        // a second step asking for a phrase they never saw. And a second request on a dead
+        // connection is up to thirty more seconds in which a reload loses the words.
+        let asked = 0;
+        const session = async () => {
+            asked++;
+            return { user, device: null };
+        };
+        const { auth } = changing({ session });
         expect(await change(auth, 'master-key')).toStrictEqual({
             signedIn: false,
             uncertain: true,
             kit: { phrase: NEW_PHRASE, recovery: sentRecovery },
         });
-        // A password change in the same spot is still the failure it was: nothing to save.
-        const password = changing({ session: async () => ({ user, device: null }) });
+        expect(asked).toBe(0);
+        // A password change in the same spot is still the failure it was: the session is
+        // what says so, and there is nothing to save.
+        const password = changing({ session });
         await expect(change(password.auth, 'password')).rejects.toThrow('Failed to fetch');
+        expect(asked).toBe(1);
+    });
+
+    test.each([
+        ['no answer in time', new DOMException('The operation timed out.', 'TimeoutError')],
+        ['a gateway with no answer from the app', refused('Bad Gateway', 502)],
+        ['a gateway that stopped waiting', refused('Gateway Timeout', 504)],
+        ['the app failing without one of its codes', refused('Please try again.', 500)],
+        // The request sent twice: the first copy made the change and ended the session.
+        ['“no session”', refused('Sign in before changing account security.', 401)],
+    ])('%s is a lost reply: the phrase is shown', async (_name, reply) => {
+        const { auth } = changing({ reply: reply as Error });
+        expect(await change(auth, 'recovery-key')).toStrictEqual({
+            signedIn: false,
+            uncertain: true,
+            kit: { phrase: NEW_PHRASE, recovery: sentRecovery },
+        });
+    });
+
+    test('a wrong code, then a lost reply: the phrase is read from the update that was lost, not the one refused', async () => {
+        // Each try at the step makes a new update, with a new phrase in it. The refused
+        // one was never taken; shown, it would be a phrase the server has never seen.
+        let made = 0;
+        const replies = [refused(WRONG, 403, 'two-step'), lost()];
+        const crypto = worker({
+            securityFinish: () => {
+                made++;
+                return {
+                    finishLoginRequest: 'finish',
+                    registrationRecord: 'record',
+                    envelope: { ...sentEnvelope, made },
+                    recovery: { ...sentRecovery, made },
+                };
+            },
+            backup: (input) => ({
+                phrase: `${NEW_PHRASE} ${(input as { recovery: { made: number } }).recovery.made}`,
+            }),
+        });
+        const api = {
+            twoStepChallenge: async (): Promise<StepOffer> => ({ on: true, ...challenge('c-1') }),
+            securityStart: async ({ action }: { action: string }) => ({
+                userId: user.id,
+                action,
+                attemptToken: `change-${made + 1}`,
+            }),
+            securityFinish: async () => {
+                throw replies.shift();
+            },
+            session: async () => ({ user: null, device: null }),
+        } as unknown as AuthApi;
+        const auth = createAuthClient(() => crypto.transport, keys, api);
+        const { ask } = screen([
+            { kind: 'totp', code: '111111' },
+            { kind: 'totp', code: '222222' },
+        ]);
+        expect(await change(auth, 'recovery-key', ask)).toStrictEqual({
+            signedIn: false,
+            uncertain: true,
+            kit: { phrase: `${NEW_PHRASE} 2`, recovery: { ...sentRecovery, made: 2 } },
+        });
+        expect(crypto.did('unlock')).toEqual([
+            {
+                operation: 'unlock',
+                input: { userId: user.id, envelope: { ...sentEnvelope, made: 2 } },
+            },
+        ]);
     });
 
     test.each([

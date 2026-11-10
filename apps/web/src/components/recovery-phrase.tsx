@@ -21,6 +21,7 @@ import { authError } from '@/lib/form';
 import { checkQuestions, kitText } from '@/lib/recovery-kit';
 import { cue } from '@/lib/sounds';
 import { copySecret } from '@/lib/clipboard';
+import type { PhraseScreenProps } from '@/lib/unconfirmed-phrase';
 
 export type RecoveryReason = 'master-key' | 'recovery-key';
 
@@ -290,19 +291,10 @@ export function RecoveryPhrase({
  * second step of that sign-in may ask for it. Whether the server made the change is not known
  * here, so the page says both: this phrase if it did, the old one if it did not. Saved and
  * checked as any new phrase is; nothing is confirmed to the server, there being no session to
- * confirm it in.
+ * confirm it in. Drawn by the root document in place of the page (lib/unconfirmed-phrase),
+ * so nothing in it may need the network: no query, no lazy import.
  */
-export function LostReplyPhrase({
-    account,
-    phrase,
-    recovery,
-    onDone,
-}: {
-    account: { email: string; id: string };
-    phrase: string;
-    recovery: unknown;
-    onDone: () => void;
-}) {
+export function LostReplyPhrase({ account, phrase, recovery, onDone }: PhraseScreenProps) {
     const [error, setError] = useState('');
     const [saved, setSaved] = useState(false);
     const [checking, setChecking] = useState(false);

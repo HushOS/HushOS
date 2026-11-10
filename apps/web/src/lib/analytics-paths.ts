@@ -10,7 +10,6 @@ const PRIVATE = [
     '/login',
     '/register',
     '/recover',
-    '/new-phrase',
     '/s',
     '/account-deleted',
     '/hushos-download',

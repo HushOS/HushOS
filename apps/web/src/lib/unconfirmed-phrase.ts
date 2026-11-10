@@ -1,15 +1,25 @@
 import type { UnconfirmedPhrase } from '@hushos/auth/client';
-import { useSyncExternalStore } from 'react';
+import { useSyncExternalStore, type ComponentType } from 'react';
 
 /*
  * A new recovery phrase from a change whose reply never arrived (docs/two-step-design.md 4,
- * "When the reply is lost"), on its way from the dialog that made it to the page that shows
- * it (/new-phrase). The person is signed out by then, so the server cannot serve it again:
- * this is the only copy. It is held here, in this tab's memory, and nowhere else: not in the
- * URL, the history entry, storage or a query cache, so a reload, a closed tab or leaving the
- * page ends it.
+ * "When the reply is lost"). The person may be signed out by then, so the server cannot serve
+ * it again: this is the only copy, and the connection it would take to load anything has just
+ * failed. So the dialog that made it hands it over here together with the screen that shows
+ * it, both already in memory, and the root document draws that screen in place of the page
+ * (routes/__root.tsx): no navigation, no request and no chunk stands between the phrase and
+ * the person. It is held in this tab's memory and nowhere else: not in the URL, the history
+ * entry, storage or a query cache, so a reload or a closed tab ends it, as does the screen's
+ * own Finish.
  */
-export type HeldPhrase = UnconfirmedPhrase & { account: { id: string; email: string } };
+export type PhraseScreenProps = UnconfirmedPhrase & {
+    account: { id: string; email: string };
+    onDone: () => void;
+};
+export type HeldPhrase = Omit<PhraseScreenProps, 'onDone'> & {
+    /* The screen, from the chunk that made the phrase: showing it loads nothing. */
+    Screen: ComponentType<PhraseScreenProps>;
+};
 
 let held: HeldPhrase | null = null;
 const listeners = new Set<() => void>();
@@ -28,14 +38,13 @@ export function forgetPhrase() {
     changed();
 }
 
-export const heldPhrase = () => held;
-
+const heldPhrase = () => held;
 const subscribe = (listener: () => void) => {
     listeners.add(listener);
     return () => void listeners.delete(listener);
 };
 
-/* The phrase while it is held: null once the page showing it is left, and on the server. */
+/* The phrase while it is held: null once its screen is left, and on the server. */
 export function useHeldPhrase() {
     return useSyncExternalStore(subscribe, heldPhrase, () => null);
 }

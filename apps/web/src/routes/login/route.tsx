@@ -388,6 +388,6 @@ const notices = {
     'uncertain-phrase': {
         tone: 'warning',
         title: 'We lost the connection',
-        text: 'We couldn’t confirm the change to your recovery phrase. Sign in with your password as usual. After you sign in, the Recovery phrase page shows your current phrase.',
+        text: 'We couldn’t confirm the change. Sign in with your password as usual. If you’re asked for your recovery phrase, use the one you have. After you sign in, the Recovery phrase page shows your current phrase.',
     },
 } as const;

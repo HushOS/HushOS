@@ -20,7 +20,6 @@ import { Route as IosRouteRouteImport } from './routes/ios/route'
 import { Route as JoinRouteRouteImport } from './routes/join/route'
 import { Route as LlmsDottxtRouteImport } from './routes/llms[.]txt'
 import { Route as LoginRouteRouteImport } from './routes/login/route'
-import { Route as NewPhraseRouteRouteImport } from './routes/new-phrase/route'
 import { Route as OgDotjpgRouteImport } from './routes/og[.]jpg'
 import { Route as PricingRouteRouteImport } from './routes/pricing/route'
 import { Route as PrivacyRouteRouteImport } from './routes/privacy/route'
@@ -136,11 +135,6 @@ const LlmsDottxtRoute = LlmsDottxtRouteImport.update({
 const LoginRouteRoute = LoginRouteRouteImport.update({
   id: '/login',
   path: '/login',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const NewPhraseRouteRoute = NewPhraseRouteRouteImport.update({
-  id: '/new-phrase',
-  path: '/new-phrase',
   getParentRoute: () => rootRouteImport,
 } as any)
 const OgDotjpgRoute = OgDotjpgRouteImport.update({
@@ -494,7 +488,6 @@ export interface FileRoutesByFullPath {
   '/ios': typeof IosRouteRoute
   '/join': typeof JoinRouteRoute
   '/login': typeof LoginRouteRoute
-  '/new-phrase': typeof NewPhraseRouteRoute
   '/pricing': typeof PricingRouteRoute
   '/privacy': typeof PrivacyRouteRoute
   '/recover': typeof RecoverRouteRouteWithChildren
@@ -568,7 +561,6 @@ export interface FileRoutesByTo {
   '/ios': typeof IosRouteRoute
   '/join': typeof JoinRouteRoute
   '/login': typeof LoginRouteRoute
-  '/new-phrase': typeof NewPhraseRouteRoute
   '/pricing': typeof PricingRouteRoute
   '/privacy': typeof PrivacyRouteRoute
   '/roadmap': typeof RoadmapRouteRoute
@@ -637,7 +629,6 @@ export interface FileRoutesById {
   '/ios': typeof IosRouteRoute
   '/join': typeof JoinRouteRoute
   '/login': typeof LoginRouteRoute
-  '/new-phrase': typeof NewPhraseRouteRoute
   '/pricing': typeof PricingRouteRoute
   '/privacy': typeof PrivacyRouteRoute
   '/recover': typeof RecoverRouteRouteWithChildren
@@ -715,7 +706,6 @@ export interface FileRouteTypes {
     | '/ios'
     | '/join'
     | '/login'
-    | '/new-phrase'
     | '/pricing'
     | '/privacy'
     | '/recover'
@@ -789,7 +779,6 @@ export interface FileRouteTypes {
     | '/ios'
     | '/join'
     | '/login'
-    | '/new-phrase'
     | '/pricing'
     | '/privacy'
     | '/roadmap'
@@ -857,7 +846,6 @@ export interface FileRouteTypes {
     | '/ios'
     | '/join'
     | '/login'
-    | '/new-phrase'
     | '/pricing'
     | '/privacy'
     | '/recover'
@@ -934,7 +922,6 @@ export interface RootRouteChildren {
   IosRouteRoute: typeof IosRouteRoute
   JoinRouteRoute: typeof JoinRouteRoute
   LoginRouteRoute: typeof LoginRouteRoute
-  NewPhraseRouteRoute: typeof NewPhraseRouteRoute
   PricingRouteRoute: typeof PricingRouteRoute
   PrivacyRouteRoute: typeof PrivacyRouteRoute
   RecoverRouteRoute: typeof RecoverRouteRouteWithChildren
@@ -1040,13 +1027,6 @@ declare module '@tanstack/react-router' {
       path: '/login'
       fullPath: '/login'
       preLoaderRoute: typeof LoginRouteRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/new-phrase': {
-      id: '/new-phrase'
-      path: '/new-phrase'
-      fullPath: '/new-phrase'
-      preLoaderRoute: typeof NewPhraseRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/og.jpg': {
@@ -1677,7 +1657,6 @@ const rootRouteChildren: RootRouteChildren = {
   IosRouteRoute: IosRouteRoute,
   JoinRouteRoute: JoinRouteRoute,
   LoginRouteRoute: LoginRouteRoute,
-  NewPhraseRouteRoute: NewPhraseRouteRoute,
   PricingRouteRoute: PricingRouteRoute,
   PrivacyRouteRoute: PrivacyRouteRoute,
   RecoverRouteRoute: RecoverRouteRouteWithChildren,

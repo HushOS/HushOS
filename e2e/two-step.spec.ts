@@ -1,7 +1,8 @@
 import { createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page, type Route } from '@playwright/test';
 import {
+    check,
     givenAFactor,
     hydrated,
     landedOnHome,
@@ -745,13 +746,22 @@ test.describe('an account with two-step sign-in', () => {
         await other.context().close();
     });
 
-    test('a new phrase whose reply is lost is shown before the sign-in page, kept nowhere, and answers the step there', async () => {
+    test('a new phrase whose reply is lost is shown with the server out of reach, kept nowhere, and answers the step at the next sign-in', async () => {
         test.setTimeout(300_000);
         await openAccount(a);
-        // The server makes the change and answers; the answer never reaches the browser. What a
-        // dropped connection leaves behind: the old session's cookie, which the change ended,
-        // and none of the new one's (the request the test made in the browser's place kept it).
+        // The server makes the change and answers; the answer never reaches the browser, and
+        // nothing else does from then on: a server restarting, or a link that went down. What
+        // that leaves behind: the old session's cookie, which the change ended, and none of
+        // the new one's (the request the test made in the browser's place kept it).
         let made = 0;
+        let down = false;
+        const refusedSince: string[] = [];
+        const everything = async (route: Route) => {
+            if (!down) return route.fallback();
+            refusedSince.push(new URL(route.request().url()).pathname);
+            await route.abort('internetdisconnected');
+        };
+        await a.route('**/*', everything);
         const finish = '**/api/auth/security/finish';
         await a.route(finish, async (route) => {
             const before = await a.context().cookies();
@@ -759,6 +769,7 @@ test.describe('an account with two-step sign-in', () => {
             if (response.ok()) made++;
             await a.context().clearCookies();
             await a.context().addCookies(before);
+            down = true;
             await route.abort('connectionreset');
         });
         await a.getByRole('button', { name: 'Make a new phrase' }).click();
@@ -773,11 +784,19 @@ test.describe('an account with two-step sign-in', () => {
         await make.getByLabel('Recovery phrase', { exact: true }).fill(phrase);
         await make.getByRole('button', { name: 'Make a new phrase' }).click();
 
-        // Not the sign-in page: the words this browser made, with what is and is not known.
-        await expect(a).toHaveURL(/\/new-phrase$/, { timeout: 120_000 });
-        await expect(
-            a.getByRole('heading', { name: 'Save your new recovery phrase' }),
-        ).toBeVisible();
+        // Not the sign-in page, and not the error page of a server that cannot be reached:
+        // the words this browser made, with what is and is not known. Nothing on screen
+        // says to reload, which would lose them.
+        await expect(a.getByRole('heading', { name: 'Save your new recovery phrase' })).toBeVisible(
+            { timeout: 120_000 },
+        );
+        await expect(a.getByRole('list', { name: 'Recovery phrase' })).toBeVisible();
+        await expect(a.getByRole('heading')).toHaveCount(1);
+        await expect(a.getByText(/reload|went wrong/i)).toHaveCount(0);
+        // Under them the address is the sign-in page's, so a reload lands on its notice.
+        await expect(a).toHaveURL(/\/login\?securityChanged=uncertain-phrase$/);
+        // The page asked the server for more (the sign-in page at least) and got nothing.
+        await expect.poll(() => refusedSince.length).toBeGreaterThan(0);
         await expect(a.getByRole('main')).toContainText(
             'We lost the connection while making this change. If it went through, this is your new recovery phrase. Save it, then sign in.',
         );
@@ -785,7 +804,6 @@ test.describe('an account with two-step sign-in', () => {
             'If it didn’t go through, your old phrase still works',
         );
         expect(made).toBe(1);
-        await a.unroute(finish);
         const words = a.getByRole('list', { name: 'Recovery phrase' });
         await expect(words).toBeVisible();
         const fresh = (await words.getByRole('listitem').allInnerTexts())
@@ -806,20 +824,30 @@ test.describe('an account with two-step sign-in', () => {
         const start = fresh.split(' ').slice(0, 4).join(' ');
         expect(await kept()).not.toContain(start);
 
-        // Saved and checked as any new phrase is, then on to the sign-in page, which has
-        // nothing more to say; the page that showed the words has none left to show.
+        // Saved and checked as any new phrase is, still without the server; then, the
+        // connection back, on to the sign-in page, and the words are on no screen.
+        const list = a.getByRole('list', { name: 'Recovery phrase' });
+        await check(a.getByRole('checkbox'));
+        await a.getByRole('button', { name: 'Continue', exact: true }).click();
+        await expect(a.getByRole('heading', { name: 'Check you saved it' })).toBeVisible();
+        await a.getByRole('button', { name: 'Show my words again' }).click();
+        await expect(list).toBeVisible();
+        down = false;
+        await a.unroute(finish);
+        await a.unroute('**/*', everything);
         await saveKit(a);
         await expect(a).toHaveURL(/\/login$/, { timeout: 60_000 });
         await expect(a.getByRole('heading', { name: 'Welcome back' })).toBeVisible();
+        await expect(list).toHaveCount(0);
         expect(await kept()).not.toContain(start);
-        await a.goto('/new-phrase', { waitUntil: 'networkidle' });
-        await expect(a).toHaveURL(/\/login\?securityChanged=uncertain-phrase$/);
-        // Said for a phrase, not a password: the password never changed.
+        // What a reload of that page would have landed on: said for a phrase, not a
+        // password (the password never changed), and with no words to show.
+        await a.goto('/login?securityChanged=uncertain-phrase', { waitUntil: 'networkidle' });
         await expect(a.getByRole('main')).toContainText(
-            'We couldn’t confirm the change to your recovery phrase. Sign in with your password as usual. After you sign in, the Recovery phrase page shows your current phrase.',
+            'We couldn’t confirm the change. Sign in with your password as usual. If you’re asked for your recovery phrase, use the one you have. After you sign in, the Recovery phrase page shows your current phrase.',
         );
         await expect(a.getByRole('main')).not.toContainText('new password');
-        await expect(a.getByRole('list', { name: 'Recovery phrase' })).toHaveCount(0);
+        await expect(list).toHaveCount(0);
 
         // The change was made: the old phrase answers nothing now, and the one this browser
         // showed signs in. Without that page the account would be out of reach.

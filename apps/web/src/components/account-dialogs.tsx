@@ -29,6 +29,7 @@ import { authError } from '@/lib/form';
 import { cue } from '@/lib/sounds';
 import { forgetDevice } from '@/lib/sign-out';
 import { holdPhrase } from '@/lib/unconfirmed-phrase';
+import { LostReplyPhrase } from '@/components/recovery-phrase';
 
 /*
  * The account's heavy actions, each a dialog that asks once: change the
@@ -503,18 +504,26 @@ export function NewKeyDialog({
             const result = await authClient.changeSecurity(user, action, password, '', {
                 step: step.ask,
             });
+            /*
+             * The reply never arrived. The phrase this device made for the change is the only
+             * copy, and the next sign-in's second step may ask for it. It goes on screen now,
+             * before anything else here can fail: the root document draws it in place of the
+             * page, from this tab's memory, with the screen this file already loaded. The
+             * connection has just failed, so nothing that shows it may need one.
+             */
+            const kit = result.signedIn ? undefined : result.kit;
+            if (kit)
+                holdPhrase({
+                    account: { id: user.id, email: user.email },
+                    ...kit,
+                    Screen: LostReplyPhrase,
+                });
             cue('success');
             router.options.context.queryClient.clear();
             if (!result.signedIn) {
-                // The reply never arrived. The phrase this device made for the change is the
-                // only copy, and the next sign-in's second step may ask for it: it is shown
-                // before the sign-in page, from this tab's memory alone.
-                if (result.kit) {
-                    holdPhrase({ account: { id: user.id, email: user.email }, ...result.kit });
-                    await router.navigate({ to: '/new-phrase', replace: true });
-                    return;
-                }
-                // No phrase to show (the worker had locked): the password is what it was.
+                // Underneath the phrase, or in its place when there is none to show (the
+                // worker had locked): the sign-in page, which says what is known, so a reload
+                // lands there. It may fail to load; the phrase does not wait for it.
                 await router.navigate({
                     to: '/login',
                     search: { securityChanged: 'uncertain-phrase' },

@@ -146,15 +146,18 @@ export type SecurityChangeResult =
     | { signedIn: false; uncertain: true; kit?: UnconfirmedPhrase };
 
 /*
- * Whether the server answered a request with a refusal of its own: one of its codes, or a 4xx
- * (the API adapter attaches both). Then nothing was done. Anything else (no answer at all, a
- * timeout, a gateway's 5xx without a code) says nothing about what the server did with it.
+ * Whether the server answered a security change with a refusal of its own: one of its codes,
+ * or a 4xx (the API adapter attaches both). Then nothing was done. Anything else says nothing
+ * about what the server did with it: no answer at all, a timeout, a 5xx without a code (the
+ * app's own or a gateway's), and a 401 without one. That 401 is "no session", which is also
+ * what a request sent twice is told (a browser or a proxy resending it over a dropped
+ * connection): the first copy made the change and ended the session the second arrives on.
+ * None of the server's codes on this route comes with a 401, so every coded reply is a refusal.
  */
 function answeredNo(error: unknown) {
     const { code, status } = (error ?? {}) as { code?: unknown; status?: unknown };
-    return (
-        typeof code === 'string' || (typeof status === 'number' && status >= 400 && status < 500)
-    );
+    if (typeof code === 'string') return true;
+    return typeof status === 'number' && status >= 400 && status < 500 && status !== 401;
 }
 
 /* The person backed out of the second step: nothing was changed, and nothing needs saying. */
@@ -1160,18 +1163,20 @@ export function createAuthClient(
                     });
                     broadcastLock();
                     await deviceKeys.clear().catch(() => {});
+                    // With a phrase in hand the session is not asked: whatever it says, the
+                    // phrase is shown (old credentials only mean "not yet", when the server
+                    // was still at work as the wait ran out), and the person is not kept
+                    // waiting on a second request while a reload would lose the words.
+                    if (kit) return { signedIn: false, uncertain: true, kit };
                     let live: SessionUser | null = null;
                     try {
                         live = (await readSession()).user;
                     } catch {
                         /* Unknown either way. */
                     }
-                    // Still the old credentials: not made. With a phrase in hand that is only
-                    // "not yet": a server still at work when the wait ran out makes the change
-                    // after this answer, so the phrase is shown all the same.
-                    if (live && live.credentialVersion === user.credentialVersion && !kit)
-                        throw error;
-                    return { signedIn: false, uncertain: true, ...(kit ? { kit } : {}) };
+                    // Still the old credentials: not made.
+                    if (live && live.credentialVersion === user.credentialVersion) throw error;
+                    return { signedIn: false, uncertain: true };
                 }
                 /*
                  * The change is made. The server ended every session of the account and, in
