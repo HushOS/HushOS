@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/context-menu';
 import { BADGE_SIDE, badgeSvg, BRAND_WORDMARK_SIZE, brandWordmarkSvg } from '@/lib/brand';
 import { cue } from '@/lib/sounds';
+import { useHeldPhrase } from '@/lib/unconfirmed-phrase';
 
 type Asset = 'wordmark' | 'logo';
 type Format = 'svg' | 'png';
@@ -149,6 +150,7 @@ export function Brand({
     compact?: boolean;
 }) {
     const [copied, setCopied] = useState<Copied | null>(null);
+    const held = useHeldPhrase() !== null;
     useEffect(() => {
         if (!copied) return;
         const timer = window.setTimeout(() => setCopied(null), 1_800);
@@ -191,6 +193,15 @@ export function Brand({
             cue('error');
         }
     }
+    // On the screen that holds a new recovery phrase (lib/unconfirmed-phrase) the mark goes
+    // nowhere: a press would move the address under the phrase, and a reload would then land
+    // on the home page, not on the sign-in page's notice.
+    if (held)
+        return (
+            <span className={cn('flex items-center rounded-md text-foreground', className)}>
+                <Wordmark compact={compact} />
+            </span>
+        );
     return (
         <ContextMenu onOpenChange={(open) => !open && setCopied(null)}>
             <ContextMenuTrigger

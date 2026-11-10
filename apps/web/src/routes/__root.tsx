@@ -11,6 +11,7 @@ import {
     redirect,
     Scripts,
     useLocation,
+    useRouter,
 } from '@tanstack/react-router';
 import { createMiddleware } from '@tanstack/react-start';
 import { useEffect, useRef, type ReactNode } from 'react';
@@ -44,9 +45,11 @@ import { initSounds } from '@/lib/sounds';
 import { getContrastServerFn, getThemeServerFn } from '@/lib/theme';
 import { isAppleTouch, viewportContent } from '@/lib/viewport';
 import { forgetReturn } from '@/lib/return-to';
+import { forgetPhrase, useHeldPhrase } from '@/lib/unconfirmed-phrase';
 import styles from '@/styles.css?url';
 import { ThemeColor } from '@/components/theme-color';
 import { SitePage } from '@/components/site';
+import { HeldPhraseScreen } from '@/components/held-phrase';
 
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
     server: {
@@ -200,6 +203,8 @@ function RootDocument({ children }: { children: ReactNode }) {
 function Document({ children, release }: { children: ReactNode; release: string | null }) {
     const { theme, contrast } = useTheme();
     const { pathname } = useLocation();
+    const router = useRouter();
+    const phrase = useHeldPhrase();
     useEffect(() => {
         setServedRelease(release);
         startReleaseChecks();
@@ -219,9 +224,9 @@ function Document({ children, release }: { children: ReactNode; release: string 
         lastPath.current = pathname;
         if (pathname.startsWith('/app')) visitedApp.current = true;
         else if (mayReloadPublicPage({ pathname, moved, visitedApp: visitedApp.current }))
-            reloadIfStale(false);
+            reloadIfStale(phrase !== null);
         if (moved && !pathname.startsWith('/app')) void checkRelease();
-    }, [pathname, stale]);
+    }, [pathname, stale, phrase]);
     return (
         <html lang="en" className={contrast ? `${theme} hc` : theme}>
             <head>
@@ -251,7 +256,41 @@ function Document({ children, release }: { children: ReactNode; release: string 
                 <ThemeColor />
                 <MotionProvider>
                     <TooltipProvider delay={0} closeDelay={0}>
-                        <Toaster>{children}</Toaster>
+                        {/*
+                         * A new recovery phrase whose change went unanswered is drawn here, in
+                         * place of the page, for as long as it is held (lib/unconfirmed-phrase).
+                         * Here because this document is always on screen: whatever the router is
+                         * doing underneath (a sign-in page that will not load, the error page of
+                         * a server that is restarting, a redirect) the only copy of the phrase
+                         * stays in front of the person, and nothing under it can tell them to
+                         * reload.
+                         */}
+                        <Toaster>
+                            {phrase ? (
+                                <HeldPhraseScreen
+                                    held={phrase}
+                                    onDone={() => {
+                                        // Saved: forgotten at once. Underneath is the sign-in
+                                        // page with its notice, put there when the phrase came
+                                        // up, so nothing is asked of the server; only a page
+                                        // that never loaded is asked for once more.
+                                        forgetPhrase();
+                                        if (
+                                            router.state.matches.some(
+                                                ({ status }) => status !== 'success',
+                                            )
+                                        )
+                                            void router.navigate({
+                                                to: '/login',
+                                                search: { securityChanged: 'uncertain-phrase' },
+                                                replace: true,
+                                            });
+                                    }}
+                                />
+                            ) : (
+                                children
+                            )}
+                        </Toaster>
                     </TooltipProvider>
                 </MotionProvider>
                 <Scripts />

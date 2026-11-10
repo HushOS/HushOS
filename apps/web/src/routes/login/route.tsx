@@ -25,8 +25,11 @@ import { cue } from '@/lib/sounds';
 /*
  * A security change whose reply never arrived: the one way such a change still ends here. A
  * change that was made keeps this browser signed in (the server opens its session with it).
+ * Which kind it was decides what is said: after a password change (`uncertain`) either
+ * password may be the one; after a new phrase or a rotation (`uncertain-phrase`) the
+ * password is what it was, and only the phrase is in doubt.
  */
-const securityChanged = oneOf(['uncertain']);
+const securityChanged = oneOf(['uncertain', 'uncertain-phrase']);
 
 const loginFields = z.object({
     email: emailValue,
@@ -381,5 +384,10 @@ const notices = {
         tone: 'warning',
         title: 'We lost the connection',
         text: 'Your change may not have saved. Try your new password first, then the old one.',
+    },
+    'uncertain-phrase': {
+        tone: 'warning',
+        title: 'We lost the connection',
+        text: 'We couldn’t confirm the change. Sign in with your password as usual. If you’re asked for your recovery phrase, use the one you have. After you sign in, the Recovery phrase page shows your current phrase.',
     },
 } as const;
