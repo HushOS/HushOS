@@ -228,8 +228,12 @@ export function AccountTwoStep({ user }: { user: { email: string } }) {
     );
 }
 
-/* One method, as a device is listed: what it is, its name, and when it was added and last used. */
+/*
+ * One method, as a device is listed: what it is, its name, and when it was added and last used.
+ * A name that only repeats the label ("Authenticator app", the default) is left out.
+ */
 function MethodRow({ method, onRemove }: { method: TwoStepMethod; onRemove: () => void }) {
+    const named = method.name !== kindWords[method.kind];
     return (
         <Setting
             label={kindWords[method.kind]}
@@ -244,9 +248,13 @@ function MethodRow({ method, onRemove }: { method: TwoStepMethod; onRemove: () =
             }
         >
             <div className="flex min-w-0 flex-col gap-0.5">
-                <span className="font-medium wrap-anywhere">{method.name}</span>
+                {named ? <span className="font-medium wrap-anywhere">{method.name}</span> : null}
                 {/* Both days in the server's calendar (UTC), so they agree with each other. */}
-                <span className="text-[13px] text-muted-foreground">
+                <span
+                    className={
+                        named ? 'text-[13px] text-muted-foreground' : 'text-muted-foreground'
+                    }
+                >
                     Added {addedOn(method.createdAt)} ·{' '}
                     {method.lastUsedAt ? `Last used ${usedOn(method.lastUsedAt)}` : 'Never used'}
                 </span>
