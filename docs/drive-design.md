@@ -935,7 +935,7 @@ The upload row is committed without a multipart id. The server then starts a mul
 
 - A store that refuses to start the upload has the begin undone, rows and reservation, so the same request can be sent again.
 - A store that answers after the row was expired has the multipart upload it started aborted, and the request fails as expired.
-- A row still without a multipart id a minute after begin is expired by `drive.expire-uploads` at its next run.
+- A row still without a multipart id a minute after begin is expired by `drive.expire-uploads` at its next run (every five minutes).
 
 - Each URL is signed for one part number in `1..chunkCount`, with `Content-Length` as a signed header.
 - That header is set to the exact length of that part, which the server derives from `ciphertextSize` and `chunkCount`.
@@ -1054,7 +1054,7 @@ Either failure leaves the upload `conflicted`, and the client tries again with f
 
 ### 5. Abort
 
-`DELETE /api/drive/uploads/:id`, or the worker's hourly `drive.expire-uploads` job for anything past `expires_at`, and for an upload whose store never started it within a minute of begin. Both first refuse an upload that is `completing`; otherwise they:
+`DELETE /api/drive/uploads/:id`, or the worker's `drive.expire-uploads` job, every five minutes, for anything past `expires_at`, and for an upload whose store never started it within a minute of begin. Both first refuse an upload that is `completing`; otherwise they:
 
 - abort the multipart upload at the store the upload's row names, when it has one;
 - release `reserved_bytes`;
@@ -1063,9 +1063,10 @@ Either failure leaves the upload `conflicted`, and the client tries again with f
 Then:
 
 - An aborted `conflicted` upload's object goes into the deletion outbox as never published, so it is deleted at once and waits for no replica.
-- The expiry job resolves a `completing` upload older than an hour by asking the store:
+- The expiry job resolves a `completing` upload older than an hour by asking the store its row names:
     - an object present at the recorded size is finalised as step three above;
-    - anything else is aborted.
+    - an object that is not there, or is there at another size, is aborted;
+    - a store that cannot be opened or does not answer says nothing about the object: the upload is left as it is and asked about again at the next run.
 
 ### Sizes and limits
 
@@ -1591,7 +1592,7 @@ A native client cannot be redeployed. A File Provider extension or a CLI that so
 
 | Job                    | Runs                                                                                                                                                                                              |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `drive.expire-uploads` | Hourly                                                                                                                                                                                            |
+| `drive.expire-uploads` | Every five minutes                                                                                                                                                                                |
 | `drive.purge`          | Daily, for trash and superseded versions past 30 days and for tombstones past 90                                                                                                                  |
 | `drive.purge-subtree`  | The fan-out queue a purge request pushes its node onto                                                                                                                                            |
 | `drive.empty-trash`    | A workspace's trash roots in batches                                                                                                                                                              |

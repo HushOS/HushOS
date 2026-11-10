@@ -213,6 +213,35 @@ describe('which store an upload begins at', () => {
         }
     });
 
+    test('the default flag moving to another region while begin waits is followed, not read as no default', async () => {
+        const target = await createTestStore();
+        await db
+            .insert(storageRegions)
+            .values({ code: 'eu', label: 'European Union', storeId: target });
+        const observer = lockObserver();
+        try {
+            // An operator makes another region the default: two rows change in one transaction.
+            await observer.query('begin');
+            await observer.query(
+                `update storage_regions set is_default = false where code = 'default'`,
+            );
+            await observer.query(`update storage_regions set is_default = true where code = 'eu'`);
+            const upload = began();
+            for (let i = 0; i < 100 && !(await observer.waitingOn('storage_regions')); i++)
+                await new Promise((resolve) => setTimeout(resolve, 20));
+            expect(await observer.waitingOn('storage_regions')).toBe(true);
+            await observer.query('commit');
+            // The row begin waited on is no longer the default, and the one that now is was
+            // not when its statement began: one statement finds neither, and begin would fail.
+            const result = await upload;
+            expect(result.storeId).toBe(target);
+            expect(await objectStore(result.ids.objectId)).toBe(target);
+        } finally {
+            await observer.query('rollback').catch(() => {});
+            await observer.end();
+        }
+    });
+
     test('without a default region begin fails and reserves nothing, rather than pick a store', async () => {
         await db.delete(storageRegions);
         await expect(begin()).rejects.toThrow('There is no default storage region.');
@@ -349,6 +378,26 @@ describe('an upload its store never started', () => {
         const again = await begin({ ids, multipartId: 'mp' });
         expect(again.result.status).toBe('ok');
         expect(await reserved()).toBe(MiB);
+    });
+
+    test('is found by a listing that reads only the index of live uploads', async () => {
+        // Expiry runs every five minutes over a table that keeps every finished upload.
+        const { sql: text, params } = drive.expiredUploadsQuery(100).toSQL();
+        const client = await db.$client.connect();
+        try {
+            await client.query('begin');
+            // With the table this small the planner would scan it whatever the indexes: ask
+            // what it does when a scan is the last resort.
+            await client.query('set local enable_seqscan = off');
+            const plan = (await client.query(`explain ${text}`, params)).rows
+                .map((row) => row['QUERY PLAN'] as string)
+                .join('\n');
+            expect(plan).toContain('drive_uploads_expiry_idx');
+            expect(plan).not.toMatch(/Seq Scan on drive_uploads|drive_uploads_pkey/);
+        } finally {
+            await client.query('rollback');
+            client.release();
+        }
     });
 
     test('is the only kind undone: a started upload keeps its rows and its reservation', async () => {

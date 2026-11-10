@@ -180,8 +180,9 @@ if (billingEnabled()) {
 } else await boss.unschedule(queues.reconcileBilling);
 
 /*
- * Drive: uploads past their expiry hourly, the deletion outbox and replication
- * every five minutes, the purge sweep every fifteen, the accounting and object
+ * Drive: uploads past their expiry, the deletion outbox and replication every
+ * five minutes (an upload whose store never started it holds its reserved bytes
+ * until expiry's next run), the purge sweep every fifteen, the accounting and object
  * audits and tiering nightly, the replica audit weekly, and the orphan sweep a
  * bounded page of the bucket every night. Each also runs once at start so a
  * backlog after downtime clears.
@@ -197,7 +198,7 @@ log.info({
     schema: 'drive',
 });
 const driveJobs: [string, string, (job: Job<unknown>) => Promise<unknown>][] = [
-    [queues.driveExpireUploads, '7 * * * *', driveExpireUploads],
+    [queues.driveExpireUploads, '*/5 * * * *', driveExpireUploads],
     [queues.driveDeleteObjects, '*/5 * * * *', driveDeleteObjects],
     [queues.drivePurge, '*/15 * * * *', drivePurge],
     [queues.driveAuditUsage, '45 3 * * *', driveAuditUsage],

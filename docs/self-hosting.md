@@ -111,7 +111,7 @@ The worker runs background jobs with [pg-boss](https://pgboss.io). pg-boss keeps
 | Billing reconciliation | Daily                 | Re-reads every billing customer from the provider, when billing is enabled. Queues the end of any pooled family member's personal plan still live or not yet refunded                                        |
 | Dissolved family plans | When queued           | Sets a dissolved family's plan that can still charge, or a renewing plan whose payer is no longer in the family, to end at its period's end, with no refund. See [Dissolved families](#dissolved-families)   |
 | End personal plans     | When queued           | Ends a family member's own personal plan at Polar once their files draw from the family's pool, and refunds the unused days. See [Members who pay for a personal plan](#members-who-pay-for-a-personal-plan) |
-| Expire uploads         | Hourly                | Aborts uploads past their expiry. Finishes ones that stalled while completing when the store holds the object                                                                                                |
+| Expire uploads         | Every five minutes    | Aborts uploads past their expiry, and ones the store never started within a minute. Finishes ones that stalled while completing when the store holds the object                                              |
 | Deletion outbox        | Every five minutes    | Drains the object deletion outbox                                                                                                                                                                            |
 | Replication            | Every five minutes    | Copies every completed object to the replica bucket, when one is configured                                                                                                                                  |
 | Purge                  | Every fifteen minutes | Purges trash and superseded versions past 30 days, and deletes tombstones past 90 days. See the notes below                                                                                                  |
@@ -2415,7 +2415,7 @@ During a rolling update:
 
 - Containers of the previous release name no store when they insert an object, an upload or a queued deletion. The default gives those rows the environment's primary store.
 - A web container of this release leaves an upload row without a multipart id for the moment between its commit and the store's answer. No client knows that upload's id until the answer is written, so no container of the previous release is asked about it.
-- If that web container stops in that moment, the row keeps its reserved bytes until it is expired. A worker of this release expires such a row at its hourly run, once it is a minute old. A worker of the previous release expires it with every other upload, after 24 hours.
+- If that web container stops in that moment, the row keeps its reserved bytes until it is expired. A worker of this release expires such a row at its next run once it is a minute old; this release runs that job every five minutes instead of hourly. A worker of the previous release expires it with every other upload, after 24 hours.
 - The worker of this release writes to `object_stores` at start. Roll the web service and the worker in either order.
 
 With one role per process:

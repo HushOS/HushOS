@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { closeDatabase, resetDatabase } from '../test/helpers';
 
 /*
  * The storage-stores migration, run as a deployment runs it: against a
@@ -51,6 +52,22 @@ async function sqlState(work: () => Promise<unknown>) {
 }
 
 const before = { workspaceId: '', objectId: '', uploadId: '', retiredId: '', relfilenodes: '' };
+
+/* The store and region rows of the database `client` is on, without what differs by run. */
+async function storeRows(client: Client) {
+    const strip = (rows: Record<string, unknown>[], ...columns: string[]) =>
+        rows.map((row) =>
+            Object.fromEntries(Object.entries(row).filter(([name]) => !columns.includes(name))),
+        );
+    const stores = await client.query(`select * from object_stores order by id`);
+    const regions = await client.query(`select * from storage_regions order by code`);
+    return {
+        stores: strip(stores.rows, 'created_at', 'updated_at'),
+        // A region's id is random; everything else is the migration's to say.
+        regions: strip(regions.rows, 'id', 'created_at', 'updated_at'),
+    };
+}
+let migrated: Awaited<ReturnType<typeof storeRows>>;
 
 /*
  * What the release before this one wrote, in its own words: no column of this
@@ -116,6 +133,7 @@ beforeAll(async () => {
     const written = await writeAsPreviousRelease();
     Object.assign(before, written, { relfilenodes: await relfilenodes() });
     await migrate(MIGRATION);
+    migrated = await storeRows(pg);
 }, 120_000);
 
 // Dropping a database checkpoints first, which takes seconds on a busy machine.
@@ -123,6 +141,7 @@ afterAll(async () => {
     await pg?.end();
     await admin?.query(`drop database if exists "${scratchName}" with (force)`);
     await admin?.end();
+    await closeDatabase();
 }, 120_000);
 
 describe('what the migration leaves', () => {
@@ -224,6 +243,18 @@ describe('what the migration leaves', () => {
     });
 });
 
+describe('the tests’ own reset', () => {
+    test('puts back exactly the store and region rows the migration writes', async () => {
+        // Every other suite truncates between tests and relies on resetDatabase for these
+        // rows. If the helper and the migration ever differ, those suites test a database
+        // no deployment has.
+        await resetDatabase();
+        expect(await storeRows(admin)).toEqual(migrated);
+        expect(migrated.stores).toHaveLength(2);
+        expect(migrated.regions).toHaveLength(1);
+    });
+});
+
 describe('a container of the previous release, still running beside the new ones', () => {
     test('its inserts, which name no store, land at the environment’s primary', async () => {
         const written = await writeAsPreviousRelease();
@@ -245,7 +276,7 @@ describe('a container of the previous release, still running beside the new ones
         expect(retired.rows).toEqual([{ store_id: PRIMARY }]);
     });
 
-    test('it can still complete and abort the uploads it began', async () => {
+    test('it can still complete the uploads it began', async () => {
         const written = await writeAsPreviousRelease();
         await pg.query(
             `update drive_uploads set status = 'completing', completing_at = now() where id = $1`,
@@ -258,6 +289,45 @@ describe('a container of the previous release, still running beside the new ones
             written.uploadId,
         ]);
         expect(row.rows).toEqual([{ status: 'completed' }]);
+    });
+
+    test('it can still abort them, and the object it retires is queued at the environment’s primary', async () => {
+        const written = await writeAsPreviousRelease();
+        // Its abort, statement for statement: the version purged, the upload aborted, the
+        // object row replaced by an outbox row that names no store, the unseen node removed.
+        await pg.query('begin');
+        await pg.query(
+            `update file_versions set status = 'purged', content_key_envelope = null, purged_at = now() where id = $1`,
+            [written.versionId],
+        );
+        await pg.query(
+            `update drive_uploads set status = 'aborted', reserved_bytes = 0 where id = $1`,
+            [written.uploadId],
+        );
+        const aborted = await pg.query(`select status from drive_uploads where id = $1`, [
+            written.uploadId,
+        ]);
+        await pg.query(
+            `with gone as (delete from drive_objects where id = $1 returning id, workspace_id, object_key, status, replicated_at)
+             insert into drive_object_deletions (object_id, workspace_id, object_key, published, replicated)
+             select id, workspace_id, object_key, status = 'ready', replicated_at is not null from gone
+             on conflict do nothing`,
+            [written.objectId],
+        );
+        await pg.query(`delete from file_versions where node_id = $1`, [written.nodeId]);
+        await pg.query(`delete from drive_nodes where id = $1`, [written.nodeId]);
+        await pg.query('commit');
+
+        expect(aborted.rows).toEqual([{ status: 'aborted' }]);
+        const queued = await pg.query(
+            `select store_id, published from drive_object_deletions where object_id = $1`,
+            [written.objectId],
+        );
+        expect(queued.rows).toEqual([{ store_id: PRIMARY, published: false }]);
+        const left = await pg.query(`select 1 from drive_objects where id = $1`, [
+            written.objectId,
+        ]);
+        expect(left.rows).toEqual([]);
     });
 });
 

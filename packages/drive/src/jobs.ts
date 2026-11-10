@@ -41,16 +41,32 @@ export type Stores = {
  * minute of begin is expired the same way, unless the store's answer was written
  * since it was listed, in which case it is a live upload and is left alone.
  * Each is resolved at the store its own row names.
+ *
+ * "The store says the object is not there" is the only answer that aborts a
+ * completing upload. A store this process cannot open, or one that did not
+ * answer, says nothing about the object: the row is skipped and asked about
+ * again at the next run, since aborting it would retire bytes that may be
+ * fully uploaded.
  */
 export async function expireUploads({ open }: Stores, limit = 200) {
     const rows = await driveRepository.listExpiredUploads(limit);
     let aborted = 0;
     let finalised = 0;
+    let skipped = 0;
     for (const row of rows) {
         if (row.status === 'completing' && row.objectId && row.ciphertextSize !== null) {
-            const stored = await open(row.storeId)
+            // `head` answers null for an object that is not there and throws for anything else.
+            const asked = await open(row.storeId)
                 .then((store) => store.head(row.objectKey))
-                .catch(() => null);
+                .then(
+                    (stored) => ({ stored }),
+                    () => null,
+                );
+            if (!asked) {
+                skipped++;
+                continue;
+            }
+            const { stored } = asked;
             if (stored && BigInt(stored.size) === row.ciphertextSize) {
                 const result = await driveRepository.finishCompleting(
                     row.workspaceId,
@@ -78,7 +94,7 @@ export async function expireUploads({ open }: Stores, limit = 200) {
             aborted++;
         }
     }
-    return { examined: rows.length, aborted, finalised };
+    return { examined: rows.length, aborted, finalised, skipped };
 }
 
 /*

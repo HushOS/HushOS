@@ -21,11 +21,20 @@ import { ENVIRONMENT_REPLICA_STORE_ID, objectStores, storageRegions } from './sc
  * company's row, once `groups` carries them.
  */
 export async function uploadStoreFor(tx: Tx, _workspaceId: string) {
-    const [region] = await tx
-        .select({ storeId: storageRegions.storeId })
-        .from(storageRegions)
-        .where(eq(storageRegions.isDefault, true))
-        .for('share');
+    const defaultRegion = () =>
+        tx
+            .select({ storeId: storageRegions.storeId })
+            .from(storageRegions)
+            .where(eq(storageRegions.isDefault, true))
+            .for('share');
+    /*
+     * Asked twice when the first answer is empty. If the default flag moved from one region
+     * to another while this waited for the lock, the row it waited on is no longer the
+     * default when the lock comes, and the region that now is was not the default when the
+     * statement began, so the statement finds neither (READ COMMITTED). A second statement
+     * sees what the change committed.
+     */
+    const [region] = await defaultRegion().then((rows) => (rows.length ? rows : defaultRegion()));
     if (!region) throw new Error('There is no default storage region.');
     return region.storeId;
 }

@@ -2803,9 +2803,12 @@ export const UPLOAD_START_SECONDS = 60;
 /*
  * Uploads past their expiry, for the worker's sweep. Completing ones older than an hour too,
  * and open ones whose store never started the multipart upload within a minute of begin.
+ * It runs every five minutes, so every arm names a live status: the planner then reads
+ * only `drive_uploads_expiry_idx`, the partial index of live uploads, however many
+ * finished ones the table keeps. The query is apart so a test can ask the planner.
  */
-export async function listExpiredUploads(limit = 100) {
-    const rows = await db
+export function expiredUploadsQuery(limit: number) {
+    return db
         .select(uploadColumns)
         .from(driveUploads)
         .leftJoin(driveObjects, eq(driveObjects.id, driveUploads.objectId))
@@ -2814,7 +2817,10 @@ export async function listExpiredUploads(limit = 100) {
         )
         .orderBy(asc(driveUploads.expiresAt))
         .limit(limit);
-    return rows as UploadRow[];
+}
+
+export async function listExpiredUploads(limit = 100) {
+    return (await expiredUploadsQuery(limit)) as UploadRow[];
 }
 
 /*

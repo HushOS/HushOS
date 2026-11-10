@@ -1,6 +1,21 @@
-import { randomBytes } from 'node:crypto';
-import { afterAll, beforeEach, describe, expect, test } from 'vitest';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { afterAll, beforeEach, describe, expect, test, vi } from 'vitest';
+import type * as Database from '@hushos/db';
 import { startS3 } from '../test/s3-server';
+
+/*
+ * The repository as it is, except that one test can make the write of the
+ * multipart id fail the way a lost database connection would.
+ */
+const failing = vi.hoisted(() => ({ setUploadMultipartId: null as Error | null }));
+vi.mock('@hushos/db', async (importOriginal) => {
+    const real = await importOriginal<typeof Database>();
+    const setUploadMultipartId: typeof real.driveRepository.setUploadMultipartId = (...args) =>
+        failing.setUploadMultipartId
+            ? Promise.reject(failing.setUploadMultipartId)
+            : real.driveRepository.setUploadMultipartId(...args);
+    return { ...real, driveRepository: { ...real.driveRepository, setUploadMultipartId } };
+});
 
 /*
  * Every object and upload names its store, and everything that reads, signs,
@@ -22,6 +37,7 @@ const s3 = await startS3();
 const PRIMARY = s3.bucket('primary');
 const REPLICA = s3.bucket('replica');
 const SECOND = s3.bucket('second');
+const EVIDENCE = s3.bucket('evidence');
 const credentials = { accessKeyId: 'test-key', secretAccessKey: 'test-secret' };
 Object.assign(process.env, {
     STORAGE_ENDPOINT: s3.url,
@@ -38,8 +54,12 @@ Object.assign(process.env, {
 delete process.env.STORAGE_INTERNAL_ENDPOINT;
 
 // After the environment is set: these read it when they load.
-const { driveRepository, ENVIRONMENT_PRIMARY_STORE_ID, ENVIRONMENT_REPLICA_STORE_ID } =
-    await import('@hushos/db');
+const {
+    driveRepository,
+    reportsRepository,
+    ENVIRONMENT_PRIMARY_STORE_ID,
+    ENVIRONMENT_REPLICA_STORE_ID,
+} = await import('@hushos/db');
 const { db } = await import('../../db/src/client');
 const { driveObjectDeletions, driveObjects, driveUploads } = await import('../../db/src/schema');
 const { metadataStatement, versionStatement } = await import('../../db/src/signatures');
@@ -185,6 +205,38 @@ async function storedFile(storeId: string, bucket: string, bytes: Buffer) {
     await run('update drive_objects set store_id = $1 where id = $2', [storeId, objectId]);
     s3.put(bucket, keyOf(objectId), bytes);
     return { node, objectId, key: keyOf(objectId), versionId: node.currentVersion!.id };
+}
+
+/* Files a report on `file`, sealed to an operator made for it, and returns the report's id. */
+async function reported(file: { node: { id: string; keyEpoch: number } }) {
+    const operator = await fixtures.member();
+    await run(`update users set role = 'admin' where id = $1`, [operator.userId]);
+    const id = randomUUID();
+    const filed = await reportsRepository.createReport({
+        id,
+        workspaceId: owner.workspaceId,
+        nodeId: file.node.id,
+        keyEpoch: file.node.keyEpoch,
+        linkId: null,
+        shareId: null,
+        category: 'other',
+        reason: 'Looks wrong.',
+        reporterUserId: null,
+        reporterEmail: null,
+        reporterAddressHash: randomBytes(32),
+        keys: (await reportsRepository.listOperators()).map((entry) => ({
+            operatorUserId: entry.userId,
+            keyEnvelope: randomBytes(112),
+        })),
+    });
+    expect(filed.status).toBe('ok');
+    return id;
+}
+
+/* The owner trashes and purges a file: its object row becomes an outbox row. */
+async function purged(file: { node: { id: string } }) {
+    await driveRepository.trashNode({ workspaceId: owner.workspaceId, nodeId: file.node.id });
+    await driveRepository.purgeNode({ workspaceId: owner.workspaceId, nodeId: file.node.id });
 }
 
 describe('an upload, from begin to download', () => {
@@ -381,6 +433,36 @@ describe('the store is the row’s, not a global', () => {
     });
 });
 
+describe('a report’s bytes', () => {
+    test('are signed at the store that holds them, before and after the owner purges the file', async () => {
+        const there = randomBytes(2048);
+        const file = await storedFile(ENVIRONMENT_REPLICA_STORE_ID, REPLICA, there);
+        // A different object under the same key in the primary: a URL signed there would read it.
+        s3.put(PRIMARY, file.key, randomBytes(2048));
+        const reportId = await reported(file);
+
+        const readAll = async () => {
+            const one = await server.reportDownloadUrl(reportId, file.versionId);
+            const many = await server.reportDownloadUrls(reportId, [file.versionId]);
+            const thumbnails = await server.reportThumbnailUrls(reportId, [file.versionId]);
+            return [
+                await read(one.url, 0, 2047),
+                await read(many.urls[0]!.url, 0, 2047),
+                await read(thumbnails.urls[0]!.url, 0, 2047),
+            ];
+        };
+        expect(await readAll()).toEqual([there, there, there]);
+
+        // Purged: the object's row is gone, and the hold keeps the copy its outbox row names.
+        await purged(file);
+        expect(await db.select().from(driveObjects)).toEqual([]);
+        expect((await db.select().from(driveObjectDeletions)).map((row) => row.storeId)).toEqual([
+            ENVIRONMENT_REPLICA_STORE_ID,
+        ]);
+        expect(await readAll()).toEqual([there, there, there]);
+    });
+});
+
 describe('begin and its store', () => {
     test('the row is committed, open and without an id, before the store is asked', async () => {
         let seen: Awaited<ReturnType<typeof uploadRows>> = [];
@@ -416,6 +498,26 @@ describe('begin and its store', () => {
         const begun = await server.beginUpload(owner.userId, owner.workspaceId, input);
         expect(begun.upload.status).toBe('open');
         expect(await reserved()).toBe(4096n);
+    });
+
+    test('a failure writing the multipart id aborts the upload the store just started, and is rethrown', async () => {
+        const input = await beginInput({ chunkCount: 1, ciphertextSize: 4096 });
+        failing.setUploadMultipartId = new Error('the database went away');
+        try {
+            await expect(
+                server.beginUpload(owner.userId, owner.workspaceId, input),
+            ).rejects.toThrow('the database went away');
+        } finally {
+            failing.setUploadMultipartId = null;
+        }
+        // The store did start one, and no row will ever name it: it must not be left open.
+        const started = s3.requests.filter(
+            (request) => request.method === 'POST' && request.query.includes('uploads'),
+        );
+        expect(started).toHaveLength(1);
+        expect(s3.openUploads(PRIMARY)).toEqual([]);
+        // The row stays as begin committed it, for expiry to take once it is a minute old.
+        expect(await uploadRows()).toMatchObject([{ status: 'open', multipartId: null }]);
     });
 
     test('a store that answers after the row was expired leaves no row with an id and no open multipart upload', async () => {
@@ -484,6 +586,86 @@ describe('the worker follows each row', () => {
         expect(s3.openUploads(REPLICA)).toEqual([]);
         // The live upload at the other store was not what got aborted.
         expect(s3.openUploads(PRIMARY).map((upload) => upload.key)).toEqual([kept.key]);
+    });
+
+    test('expiry aborts a completing upload only when its store says the object is not there', async () => {
+        const unopened = await createTestStore();
+        // Four uploads whose completion stalled more than an hour ago.
+        const stalled = async () => {
+            const upload = await begin();
+            await driveRepository.startCompleting(owner.workspaceId, upload.begun.upload.id);
+            return { ...upload, id: upload.begun.upload.id };
+        };
+        const elsewhere = await stalled();
+        const silent = await stalled();
+        const absent = await stalled();
+        const present = await stalled();
+        await run(`update drive_uploads set completing_at = now() - interval '2 hours'`);
+        // One at a store this worker cannot open, with its bytes fully uploaded there for all
+        // this worker knows; one at a store that does not answer.
+        await run(`update drive_uploads set store_id = $1 where id = $2`, [unopened, elsewhere.id]);
+        await run(`update drive_uploads set store_id = $1 where id = $2`, [secondId, silent.id]);
+        s3.put(PRIMARY, present.key, randomBytes(4096));
+        const unanswering = { ...second, head: () => Promise.reject(new Error('socket hang up')) };
+
+        expect(
+            await jobs.expireUploads({
+                open: async (storeId) => (storeId === secondId ? unanswering : open(storeId)),
+                replica: null,
+            }),
+        ).toEqual({ examined: 4, aborted: 1, finalised: 1, skipped: 2 });
+
+        const rows = Object.fromEntries((await uploadRows()).map((row) => [row.id, row.status]));
+        // Neither was aborted: their objects and reservations stand until a store answers.
+        expect(rows[elsewhere.id]).toBe('completing');
+        expect(rows[silent.id]).toBe('completing');
+        expect(rows[present.id]).toBe('completed');
+        // Truly absent: aborted, and a file nobody saw goes with its upload.
+        expect(rows[absent.id]).toBeUndefined();
+        expect(await reserved()).toBe(2n * 4096n);
+        expect((await db.select().from(driveObjects)).map((row) => row.id).sort()).toEqual(
+            [elsewhere.input.objectId, silent.input.objectId, present.input.objectId].sort(),
+        );
+    });
+
+    test('evidence is copied from the store that holds the reported object, live or purged', async () => {
+        const evidence = createObjectStore({
+            endpoint: s3.url,
+            region: 'auto',
+            bucket: EVIDENCE,
+            forcePathStyle: true,
+            ...credentials,
+        });
+        const reportedFile = async () => {
+            const bytes = randomBytes(1500);
+            const file = await storedFile(secondId, SECOND, bytes);
+            // A different object under the same key in the primary: a copy from there would show.
+            s3.put(PRIMARY, file.key, randomBytes(1500));
+            return { bytes, file, reportId: await reported(file) };
+        };
+        const live = await reportedFile();
+        const held = await reportedFile();
+        const gone = await reportedFile();
+        await purged(held.file);
+        // No row names the third any more, as after its outbox row is cleared away.
+        await purged(gone.file);
+        await run(`delete from drive_object_deletions where object_id = $1`, [gone.file.objectId]);
+
+        const result = await jobs.copyEvidence({ open, evidence });
+        expect(result).toMatchObject({ reports: 3, copied: 2, failed: 1 });
+        expect(result.failures).toEqual([
+            {
+                report: gone.reportId,
+                object: gone.file.objectId,
+                error: 'Error: The reported object is no longer in any store.',
+            },
+        ]);
+        const copyOf = (entry: typeof live) =>
+            s3.get(EVIDENCE, `reports/${entry.reportId}/${entry.file.objectId}`);
+        expect(copyOf(live)).toEqual(live.bytes);
+        expect(copyOf(held)).toEqual(held.bytes);
+        // Not guessed at from the primary, where a key of the same name sits.
+        expect(copyOf(gone)).toBeNull();
     });
 
     test('the outbox deletes each copy from the store its row names, and only there', async () => {
