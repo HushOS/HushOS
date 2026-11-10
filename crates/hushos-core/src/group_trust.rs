@@ -225,8 +225,8 @@ pub struct KitKeysAt {
     pub signer_user_id: String,
 }
 
-/// A stretch of rosters, from `from` up to, and not including, `until`
-/// (`None` while it lasts): when a member held `DataAdmin`, or was active.
+/// When a member held `DataAdmin`: from the roster that gave it up to, and
+/// not including, the roster that took it (`until` is `None` while held).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct DataAdminSpan {
@@ -235,13 +235,11 @@ pub struct DataAdminSpan {
 }
 
 /// The signing keys a member's entry named from roster `from` on (until the
-/// next span's): the key version, the Ed25519 key, and the ML-DSA key by its
-/// SHA-256.
+/// next span's): the Ed25519 key, and the ML-DSA key by its SHA-256.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SignerKeysAt {
     pub from: u64,
-    pub key_version: u64,
     pub signing_public_key: String,
     pub ml_dsa_public_key_digest: String,
 }
@@ -257,18 +255,10 @@ pub struct SignerKeysAt {
 ///   list digest and the roster that listed it, with its signer;
 /// - when each member held `DataAdmin`, so a seal that names a roster is
 ///   judged by who was a data admin there;
-/// - the signing keys each member's entry named, with its key version, from
-///   the roster that first named them, so a seal or a list that names a
-///   roster is checked under the keys its signer's entry named there,
-///   whatever the entry names now;
-/// - every recovery roster (rule 11): its version and its signer;
-/// - every roster's heads digest, roster 1 first (2.3): what the rows served
-///   with any roster on the chain must hash to;
-/// - the roster that retired each retired area, so the live areas at any
-///   roster are known;
-/// - when each entry was active: from the roster that let them in up to, and
-///   not including, the roster that marked them left (`until` is `None`
-///   while active). A list is judged at the roster it names by these.
+/// - the signing keys each member's entry named, from the roster that first
+///   named them, so a seal that names a roster is checked under the keys its
+///   sealer's entry named there, whatever the entry names now;
+/// - every recovery roster (rule 11): its version and its signer.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct OrgChain {
@@ -281,9 +271,6 @@ pub struct OrgChain {
     pub data_admins: HashMap<String, Vec<DataAdminSpan>>,
     pub signer_keys: HashMap<String, Vec<SignerKeysAt>>,
     pub recoveries: Vec<IntroducedAt>,
-    pub heads_digests: Vec<String>,
-    pub area_retired_at: HashMap<String, u64>,
-    pub active: HashMap<String, Vec<DataAdminSpan>>,
 }
 
 /// A company's record in the cache: [`OrgChain`], and the last roster's
@@ -771,7 +758,7 @@ pub(crate) const DOWNGRADE: &str = "This member list is in an older format than 
 /* The cache format this core writes (`GroupChainCache::cache_version`). */
 const CACHE_VERSION: u8 = 2;
 /* A company's cache (format 3 chains): CACHE_VERSION's fields and `org`. */
-const ORG_CACHE_VERSION: u8 = 4;
+const ORG_CACHE_VERSION: u8 = 3;
 
 /* The refusals of check_roster_org, as companies-design 2.1 words them. */
 const DROPPED_ADMIN: &str = "A roster that removes a data admin replaces the company key.";
@@ -1123,43 +1110,15 @@ fn fold_org(org: &mut OrgChain, previous: Option<&Roster>, roster: &Roster, reco
     if fields.auto.is_none() && fields.rules.auto_join && was_on == Some(false) {
         org.last_auto = None;
     }
-    org.heads_digests.push(fields.heads.heads_digest.clone());
-    for row in roster.areas.iter().filter(|row| row.retired) {
-        org.area_retired_at.insert(row.workspace_id.clone(), roster.roster_version);
-    }
-    // When each entry was active: a span opens on the roster that lets them in (again) and
-    // closes on the one that marks them left.
-    for entry in &roster.members {
-        let active = entry.active_with(None);
-        let open = org
-            .active
-            .get(&entry.user_id)
-            .and_then(|spans| spans.last())
-            .is_some_and(|span| span.until.is_none());
-        if active && !open {
-            org.active
-                .entry(entry.user_id.clone())
-                .or_default()
-                .push(DataAdminSpan { from: roster.roster_version, until: None });
-        }
-        if !active && open {
-            if let Some(span) = org.active.get_mut(&entry.user_id).and_then(|spans| spans.last_mut()) {
-                span.until = Some(roster.roster_version);
-            }
-        }
-    }
-    // The signing keys each entry names, with its key version, from the roster that first
-    // named them there.
+    // The signing keys each entry names, from the roster that first named them there.
     for entry in &roster.members {
         let spans = org.signer_keys.entry(entry.user_id.clone()).or_default();
         if !spans.last().is_some_and(|last| {
-            last.key_version == entry.key_version
-                && last.signing_public_key == entry.signing_public_key
+            last.signing_public_key == entry.signing_public_key
                 && last.ml_dsa_public_key_digest == entry.ml_dsa_public_key_digest
         }) {
             spans.push(SignerKeysAt {
                 from: roster.roster_version,
-                key_version: entry.key_version,
                 signing_public_key: entry.signing_public_key.clone(),
                 ml_dsa_public_key_digest: entry.ml_dsa_public_key_digest.clone(),
             });
@@ -1639,19 +1598,6 @@ fn role_name(role: GroupRole) -> &'static str {
     }
 }
 
-/* Spans by member, as the web's cache holds them. */
-fn spans_value(spans: &HashMap<String, Vec<DataAdminSpan>>) -> serde_json::Value {
-    use serde_json::json;
-    spans
-        .iter()
-        .map(|(id, spans)| {
-            let list = spans.iter().map(|span| json!({ "from": span.from, "until": span.until }));
-            (id.clone(), json!(list.collect::<Vec<_>>()))
-        })
-        .collect::<serde_json::Map<_, _>>()
-        .into()
-}
-
 /* A company's record as the web's cache holds it: `OrgChain`'s fields, camelCase, and `members`. */
 pub(crate) fn org_cache_value(record: &OrgCache) -> serde_json::Value {
     use serde_json::json;
@@ -1677,13 +1623,9 @@ pub(crate) fn org_cache_value(record: &OrgCache) -> serde_json::Value {
         "areaKinds": org.area_kinds.iter().map(|(id, kind)| (id.clone(), json!(kind.as_str()))).collect::<serde_json::Map<_, _>>(),
         "areaLists": org.area_lists,
         "areaRosters": org.area_rosters.iter().map(|(id, list)| (id.clone(), json!(list.iter().map(at).collect::<Vec<_>>()))).collect::<serde_json::Map<_, _>>(),
-        "dataAdmins": spans_value(&org.data_admins),
-        "headsDigests": org.heads_digests,
-        "areaRetiredAt": org.area_retired_at,
-        "active": spans_value(&org.active),
+        "dataAdmins": org.data_admins.iter().map(|(id, spans)| (id.clone(), json!(spans.iter().map(|span| json!({ "from": span.from, "until": span.until })).collect::<Vec<_>>()))).collect::<serde_json::Map<_, _>>(),
         "signerKeys": org.signer_keys.iter().map(|(id, spans)| (id.clone(), json!(spans.iter().map(|span| json!({
             "from": span.from,
-            "keyVersion": span.key_version,
             "signingPublicKey": span.signing_public_key,
             "mlDsaPublicKeyDigest": span.ml_dsa_public_key_digest,
         })).collect::<Vec<_>>()))).collect::<serde_json::Map<_, _>>(),
@@ -1719,26 +1661,6 @@ pub(crate) fn org_cache_of(value: &serde_json::Value) -> Result<OrgCache, ()> {
             roster_version: number(value.get("rosterVersion"))?,
             signer_user_id: text(value.get("signerUserId"))?,
         })
-    };
-    let spans_of = |value: Option<&Value>| -> Result<HashMap<String, Vec<DataAdminSpan>>, ()> {
-        object(value)?
-            .iter()
-            .map(|(id, spans)| {
-                let spans = list(Some(spans))?
-                    .iter()
-                    .map(|span| {
-                        Ok(DataAdminSpan {
-                            from: number(span.get("from"))?,
-                            until: match span.get("until") {
-                                Some(Value::Null) => None,
-                                until => Some(number(until)?),
-                            },
-                        })
-                    })
-                    .collect::<Result<_, ()>>()?;
-                Ok((id.clone(), spans))
-            })
-            .collect()
     };
     let chain = OrgChain {
         custody_keys: list(record.get("custodyKeys"))?
@@ -1791,16 +1713,24 @@ pub(crate) fn org_cache_of(value: &serde_json::Value) -> Result<OrgCache, ()> {
                 Ok((id.clone(), list(Some(rosters))?.iter().map(at).collect::<Result<_, ()>>()?))
             })
             .collect::<Result<_, ()>>()?,
-        data_admins: spans_of(record.get("dataAdmins"))?,
-        heads_digests: list(record.get("headsDigests"))?
+        data_admins: object(record.get("dataAdmins"))?
             .iter()
-            .map(|at| text(Some(at)))
+            .map(|(id, spans)| {
+                let spans = list(Some(spans))?
+                    .iter()
+                    .map(|span| {
+                        Ok(DataAdminSpan {
+                            from: number(span.get("from"))?,
+                            until: match span.get("until") {
+                                Some(Value::Null) => None,
+                                until => Some(number(until)?),
+                            },
+                        })
+                    })
+                    .collect::<Result<_, ()>>()?;
+                Ok((id.clone(), spans))
+            })
             .collect::<Result<_, ()>>()?,
-        area_retired_at: object(record.get("areaRetiredAt"))?
-            .iter()
-            .map(|(id, at)| Ok((id.clone(), number(Some(at))?)))
-            .collect::<Result<_, ()>>()?,
-        active: spans_of(record.get("active"))?,
         signer_keys: object(record.get("signerKeys"))?
             .iter()
             .map(|(id, spans)| {
@@ -1809,7 +1739,6 @@ pub(crate) fn org_cache_of(value: &serde_json::Value) -> Result<OrgCache, ()> {
                     .map(|span| {
                         Ok(SignerKeysAt {
                             from: number(span.get("from"))?,
-                            key_version: number(span.get("keyVersion"))?,
                             signing_public_key: text(span.get("signingPublicKey"))?,
                             ml_dsa_public_key_digest: text(span.get("mlDsaPublicKeyDigest"))?,
                         })
@@ -1966,7 +1895,7 @@ fn check_org_cache(record: &OrgCache, cache: &GroupChainCache, roster: &Roster) 
             return Err(bad());
         }
     }
-    for (user_id, spans) in org.data_admins.iter().chain(&org.active) {
+    for (user_id, spans) in &org.data_admins {
         uuid(user_id, "user id")?;
         if spans.is_empty() {
             return Err(bad());
@@ -1985,33 +1914,6 @@ fn check_org_cache(record: &OrgCache, cache: &GroupChainCache, roster: &Roster) 
             floor = span.until.unwrap_or(from);
         }
     }
-    // Every roster's heads digest, one per version; the last is the last roster's.
-    if org.heads_digests.len() as u64 != last || org.heads_digests.last() != Some(&fields.heads.heads_digest)
-    {
-        return Err(bad());
-    }
-    for at in &org.heads_digests {
-        digest_of(at, "heads digest")?;
-    }
-    // Exactly the retired areas, each retired after its last key was listed; the last roster's
-    // tombstones are retired by it.
-    if org.area_retired_at.len() != cache.retired_areas.len() {
-        return Err(bad());
-    }
-    for id in &cache.retired_areas {
-        let at = integer(*org.area_retired_at.get(id).ok_or_else(bad)?, "roster version")?;
-        let listed = org.area_rosters.get(id).and_then(|rows| rows.last()).ok_or_else(bad)?;
-        if at > last || at <= listed.roster_version {
-            return Err(bad());
-        }
-    }
-    if roster
-        .areas
-        .iter()
-        .any(|area| area.retired && org.area_retired_at.get(&area.workspace_id) != Some(&last))
-    {
-        return Err(bad());
-    }
     for (user_id, spans) in &org.signer_keys {
         uuid(user_id, "user id")?;
         if spans.is_empty() || !in_order(spans.iter().map(|span| span.from).collect()) {
@@ -2021,7 +1923,6 @@ fn check_org_cache(record: &OrgCache, cache: &GroupChainCache, roster: &Roster) 
             if integer(span.from, "roster version")? > last {
                 return Err(bad());
             }
-            integer(span.key_version, "key version")?;
             bytes_of(&span.signing_public_key, 32, "signing key")?;
             digest_of(&span.ml_dsa_public_key_digest, "key digest")?;
         }
@@ -2055,25 +1956,14 @@ fn check_org_cache(record: &OrgCache, cache: &GroupChainCache, roster: &Roster) 
         if open != entry.active_with(Some(GroupRole::DataAdmin)) {
             return Err(bad());
         }
-        let active = org
-            .active
-            .get(&entry.user_id)
-            .and_then(|spans| spans.last())
-            .is_some_and(|span| span.until.is_none());
-        if active != entry.active_with(None) {
-            return Err(bad());
-        }
         if !org.signer_keys.get(&entry.user_id).and_then(|spans| spans.last()).is_some_and(|keys| {
-            keys.key_version == entry.key_version
-                && keys.signing_public_key == entry.signing_public_key
+            keys.signing_public_key == entry.signing_public_key
                 && keys.ml_dsa_public_key_digest == entry.ml_dsa_public_key_digest
         }) {
             return Err(bad());
         }
     }
-    if org.signer_keys.len() != resolved.members.len()
-        || org.active.keys().any(|id| !org.signer_keys.contains_key(id))
-    {
+    if org.signer_keys.len() != resolved.members.len() {
         return Err(bad());
     }
     Ok(resolved)
@@ -3471,54 +3361,9 @@ pub struct FirstOrgRoster {
     /// Auto-join off, ten a day, unless given.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub rules: Option<crate::groups::RosterRules>,
-    /// The heads of the roster's areas, built by `heads_to_commit` from their
-    /// base lists (2.3).
-    pub heads: Arc<crate::area_lists::CommittedHeads>,
-}
-
-const HEADS_NOT_FOR_THIS: &str = "These heads were not built for this member list.";
-
-/*
- * The digest a roster carries for its heads: only of heads `heads_to_commit`
- * built, on the roster this one follows, for exactly the areas it creates,
- * rotates and retires, each with the base list its row commits to. A
- * recovery roster commits nothing new (rule 11): it takes only the heads of
- * the roster before, restated (`heads_carried`), and no other roster takes
- * those.
- */
-fn heads_for(
-    built: &crate::area_lists::CommittedHeads,
-    on_roster: u64,
-    group_id: &str,
-    areas: &[crate::groups::RosterArea],
-    recovery: bool,
-) -> CoreResult<String> {
-    // (Heads no device verified, in tests and fuzzers: a digest and nothing to hold it to.)
-    let Some(roster_version) = built.roster_version else {
-        return Ok(built.heads_digest.clone());
-    };
-    if built.carried != recovery {
-        return Err(input(if recovery { NOT_A_RECOVERY } else { HEADS_NOT_FOR_THIS }));
-    }
-    let rows: Vec<&crate::groups::RosterArea> = areas.iter().filter(|row| !row.retired).collect();
-    let retired: Vec<&String> = areas.iter().filter(|row| row.retired).map(|row| &row.workspace_id).collect();
-    let listed = |row: &&crate::groups::RosterArea| {
-        built.changed.iter().any(|at| {
-            at.0 == row.workspace_id
-                && at.1 == row.workspace_key_version
-                && Some(&at.2) == row.list_digest.as_ref()
-        })
-    };
-    if built.group_id != group_id
-        || roster_version != on_roster
-        || rows.len() != built.changed.len()
-        || !rows.iter().all(listed)
-        || retired.len() != built.retired.len()
-        || !retired.iter().all(|id| built.retired.contains(id))
-    {
-        return Err(input(HEADS_NOT_FOR_THIS));
-    }
-    Ok(built.heads_digest.clone())
+    /// The digest over the heads of the roster's areas, as the creator's
+    /// device verified them (2.3).
+    pub heads_digest: String,
 }
 
 /// What a company's next roster says beside its members and areas
@@ -3544,10 +3389,8 @@ pub struct NextOrgRoster {
     /// its own clock, `YYYY-MM-DD`.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub auto_utc_day: Option<String>,
-    /// Every live area's heads as this device verified them, built by
-    /// `heads_to_commit` (2.3); for a recovery roster, the heads of the roster
-    /// before, restated by `heads_carried` (rule 11).
-    pub heads: Arc<crate::area_lists::CommittedHeads>,
+    /// The digest over every live area's heads as this device verified them (2.3).
+    pub heads_digest: String,
     /// The fresh words checks this device holds (companies-design 1.2, and 2.2
     /// "Another Owner checks first"): a verified pin of each Owner or kit
     /// holder whose entry this roster moves to new keys, and of everyone it
@@ -3578,8 +3421,7 @@ pub struct NextOrgRoster {
 ///     custody_key: custody_public_key(vec![1; 96])?,
 ///     kit: kit_public_keys(vec![2; 32], group_id.clone())?,
 ///     rules: None,
-///     // The heads of its folders, from their base lists: none here, so none to list.
-///     heads: heads_to_commit(None, group_id.clone(), None, vec![], vec![], vec![], Default::default())?,
+///     heads_digest: roster_digest(b"heads".to_vec()),
 /// };
 /// let roster = company_roster_first(group_id.clone(), creator.clone(), None, org.clone())?;
 /// assert_eq!((roster.format, roster.kind), (3, GroupKind::Org));
@@ -3647,7 +3489,7 @@ fn first_roster(
                 auto: None,
                 heads: crate::groups::RosterHeads {
                     area_count: areas.len() as u64,
-                    heads_digest: heads_for(&org.heads, 0, &group_id, &areas, false)?,
+                    heads_digest: org.heads_digest,
                 },
             })
         })
@@ -3759,11 +3601,6 @@ fn company_fields(
     let previous = &chain.roster;
     let before = org_of(previous)?;
     let org = chain.org.as_ref().ok_or_else(|| input("Invalid roster format."))?;
-    // A recovery roster (rule 11): its signer holds `recovery` and not `members` on the roster before.
-    let recovery = {
-        let signer = previous.entry(signer_user_id);
-        holds(signer, GroupRole::Recovery) && !holds(signer, GroupRole::Members)
-    };
     // A guarded entry (one that holds `recovery` before or after) moves to new keys on another
     // person's roster only with that signer's fresh check of the new keys. A device rule: the
     // chain cannot see a words check (rule 8 is what it holds: only an Owner signs this at all).
@@ -3841,16 +3678,7 @@ fn company_fields(
         custody,
         rules: options.rules.unwrap_or_else(|| before.rules.clone()),
         auto,
-        heads: crate::groups::RosterHeads {
-            area_count: live as u64,
-            heads_digest: heads_for(
-                &options.heads,
-                previous.roster_version,
-                &chain.group_id,
-                areas,
-                recovery,
-            )?,
-        },
+        heads: crate::groups::RosterHeads { area_count: live as u64, heads_digest: options.heads_digest },
     })
 }
 
@@ -4349,91 +4177,6 @@ pub enum GroupVerdict {
     Unchecked,
     KeyConflict,
     FormerMember,
-}
-
-/// A record's verdict in a company's folder: a group's, or `NotOnThisFolder`
-/// for a colleague whose signature holds and whom the folder's list does not
-/// name (companies-design 2.3, "Who writes"; drawn as Unverified: "Written by
-/// Sam, who isn't on this folder now"). Its own type, so a family's verdicts,
-/// and everything that draws them, are as they were.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum FolderVerdict {
-    Group { verdict: GroupVerdict },
-    NotOnThisFolder,
-}
-
-/// A company folder's verdict for one record, and the group it was verified
-/// through when the roster vouched.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct FolderIntegrity {
-    pub verdict: FolderVerdict,
-    pub via: Option<String>,
-}
-
-/// A company folder's own rows (companies-design 2.3, "Who writes"), applied
-/// after the verdict of design 2.8, and only for a writer who is active on the
-/// roster and whose signature holds, whether under the roster's keys or under
-/// a pin the reader made themselves: a personal check says whose keys these
-/// are, not that the person is on this folder. `standing` is
-/// [`crate::folder_standing`]'s: with the reader's list not loaded, behind or
-/// forked the verdict is `Unchecked`; a writer the list, the company key or a
-/// share record stands behind keeps the verdict they had; anyone else reads
-/// `NotOnThisFolder`, never a bad signature. A signature that failed, a key
-/// conflict, a former member and a writer outside the roster read as 2.8 has
-/// them.
-///
-/// ```
-/// use hushos_core::*;
-/// let signer = TrustedKeys { current: vec![1; 32], retired: vec![], seen: false };
-/// let roster = GroupWriterTrust::Roster { signer, via: None, followed: None, links_loaded: true };
-/// let verified = GroupIntegrity { verdict: GroupVerdict::Verified, via: None };
-/// let group = |verdict| FolderVerdict::Group { verdict };
-/// // Checked by the reader personally, and still not on this folder.
-/// let off = folder_integrity(verified.clone(), roster.clone(), FolderStanding::NotOnThisFolder);
-/// assert_eq!(off.verdict, FolderVerdict::NotOnThisFolder);
-/// let on = folder_integrity(verified.clone(), roster.clone(), FolderStanding::Listed);
-/// assert_eq!(on.verdict, group(GroupVerdict::Verified));
-/// let unchecked = folder_integrity(verified.clone(), roster.clone(), FolderStanding::Unchecked);
-/// assert_eq!(unchecked.verdict, group(GroupVerdict::Unchecked));
-/// // A bad signature is never excused, and never made of an honest editor.
-/// let bad = GroupIntegrity { verdict: GroupVerdict::BadSignature, via: None };
-/// let still = folder_integrity(bad, roster, FolderStanding::NotOnThisFolder);
-/// assert_eq!(still.verdict, group(GroupVerdict::BadSignature));
-/// // Outside the roster the list says nothing.
-/// let outside = folder_integrity(verified, GroupWriterTrust::Outside, FolderStanding::NotOnThisFolder);
-/// assert_eq!(outside.verdict, group(GroupVerdict::Verified));
-/// ```
-#[cfg_attr(feature = "uniffi", uniffi::export)]
-pub fn folder_integrity(
-    verdict: GroupIntegrity,
-    trust: GroupWriterTrust,
-    standing: crate::area_lists::FolderStanding,
-) -> FolderIntegrity {
-    use crate::area_lists::FolderStanding;
-    let group = |verdict: GroupIntegrity| FolderIntegrity {
-        verdict: FolderVerdict::Group { verdict: verdict.verdict },
-        via: verdict.via,
-    };
-    let held = matches!(
-        verdict.verdict,
-        GroupVerdict::Verified
-            | GroupVerdict::Seen
-            | GroupVerdict::SavedFromLink
-            | GroupVerdict::Resealed
-            | GroupVerdict::RetiredKey
-    );
-    if !matches!(trust, GroupWriterTrust::Roster { .. }) || !held {
-        return group(verdict);
-    }
-    match standing {
-        FolderStanding::Unchecked => group(GroupIntegrity { verdict: GroupVerdict::Unchecked, via: None }),
-        FolderStanding::NotOnThisFolder => {
-            FolderIntegrity { verdict: FolderVerdict::NotOnThisFolder, via: None }
-        }
-        FolderStanding::Listed | FolderStanding::DataAdmin | FolderStanding::Share => group(verdict),
-    }
 }
 
 impl From<Integrity> for GroupVerdict {
@@ -8335,7 +8078,7 @@ mod tests {
                 custody_key: crate::custody::custody_public_key(vec![201; 96]).unwrap(),
                 kit: crate::custody::kit_public_keys(vec![221; 32], GROUP.into()).unwrap(),
                 rules: None,
-                heads: crate::area_lists::heads_unverified(digest(b"heads")),
+                heads_digest: digest(b"heads"),
             },
         )
         .unwrap();

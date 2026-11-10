@@ -1,4 +1,3 @@
-import { unverifiedHeads } from './committed-heads';
 import { describe, expect, test } from 'vitest';
 import { companyCast, companyStart } from './company-testkit';
 import { CryptoError } from './errors';
@@ -249,7 +248,7 @@ describe('roster format 3', () => {
         const org = {
             custodyKey: (await custodyAt(1)).publicKey,
             kit: (await kitAt(1)).publicKeys,
-            heads: unverifiedHeads(HEADS_DIGEST),
+            headsDigest: HEADS_DIGEST,
         };
         const areaKeys = [
             {

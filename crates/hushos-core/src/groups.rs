@@ -1655,9 +1655,6 @@ pub fn group_key_open(
 /// Seals an area's workspace key to a member: only for an area derived under
 /// the group (`area_id_seed`), and only to an active entry of the accepted
 /// roster at the key version the context names.
-///
-/// A company's area is sealed with [`company_area_grant_seal`], which takes
-/// the folder's list: here a company's chain is refused.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn area_grant_seal(
     workspace_key: Vec<u8>,
@@ -1666,36 +1663,6 @@ pub fn area_grant_seal(
     area_id_seed: String,
     grantee_kem_public_key: Vec<u8>,
     granter: IdentityKeys,
-) -> CoreResult<Vec<u8>> {
-    seal_area_grant(workspace_key, ctx, chain, area_id_seed, grantee_kem_public_key, granter, None)
-}
-
-/// Seals a company area's key to a member (companies-design 2.3, "Grants"):
-/// every rule [`area_grant_seal`] keeps, and only to someone the folder's list
-/// entitles, as this device verified it (`lists`, from `area_lists_read` at
-/// this chain's latest roster). A colleague the list does not name is sealed
-/// nothing.
-#[cfg_attr(feature = "uniffi", uniffi::export)]
-pub fn company_area_grant_seal(
-    workspace_key: Vec<u8>,
-    ctx: AreaGrantContext,
-    chain: Arc<AcceptedRosters>,
-    area_id_seed: String,
-    grantee_kem_public_key: Vec<u8>,
-    granter: IdentityKeys,
-    lists: Arc<crate::area_lists::AreaLists>,
-) -> CoreResult<Vec<u8>> {
-    seal_area_grant(workspace_key, ctx, chain, area_id_seed, grantee_kem_public_key, granter, Some(lists))
-}
-
-fn seal_area_grant(
-    workspace_key: Vec<u8>,
-    ctx: AreaGrantContext,
-    chain: Arc<AcceptedRosters>,
-    area_id_seed: String,
-    grantee_kem_public_key: Vec<u8>,
-    granter: IdentityKeys,
-    lists: Option<Arc<crate::area_lists::AreaLists>>,
 ) -> CoreResult<Vec<u8>> {
     crate::bytes::expect_len("workspace key", &workspace_key, 32)?;
     same_group(&chain, &ctx.group_id)?;
@@ -1720,21 +1687,6 @@ fn seal_area_grant(
         .entry(&ctx.grantee_user_id)
         .filter(|e| e.active_with(None) && e.key_version == ctx.grantee_key_version)
         .ok_or_else(|| input("Areas are granted only to active members."))?;
-    if chain.kind == GroupKind::Org {
-        let entitled = match &lists {
-            Some(lists) => crate::area_lists::grant_allowed(
-                &chain,
-                lists,
-                &ctx.grantee_user_id,
-                &ctx.workspace_id,
-                ctx.workspace_key_version,
-            )?,
-            None => false,
-        };
-        if !entitled {
-            return Err(input(NOT_ON_THE_LIST));
-        }
-    }
     let recipient = member_recipient(grantee, &grantee_kem_public_key)?;
     let statement = |sealed: &[u8]| area_grant_statement(ctx.clone(), sealed.to_vec());
     seal_hybrid(
@@ -1757,9 +1709,6 @@ fn seal_area_grant(
 /// key the real chain never listed. Not exported to the apps (Core 6): they
 /// open a family folder through [`crate::AreaLedger::open_family_area`], and
 /// its key never leaves the ledger.
-///
-/// A company's area never opens here: its grant opens only for someone its
-/// list entitles ([`company_area_grant_open`]).
 #[allow(clippy::too_many_arguments)]
 pub fn area_grant_open(
     envelope: Vec<u8>,
@@ -1772,110 +1721,21 @@ pub fn area_grant_open(
     reader_key_version: u64,
     grantee: IdentityKeys,
 ) -> CoreResult<Vec<u8>> {
-    open_area_grant(
-        envelope,
-        ctx,
-        chain,
-        area_id_seed,
-        granter_ml_dsa_public_key,
-        granter_history,
-        reader,
-        reader_key_version,
-        grantee,
-        None,
-    )
-}
-
-/// Opens a company area's grant (companies-design 2.3, "Grants"): every rule
-/// [`area_grant_open`] keeps, and the grantee entitled by the folder's list as
-/// this device verified it (`lists`, from `area_lists_read` at this chain's
-/// latest roster), for that key version or a later one. Being a member of the
-/// company opens nothing. Not uniffi-exported, as [`area_grant_open`] is not:
-/// an app reaches a folder's key through the ledger.
-#[allow(clippy::too_many_arguments)]
-pub fn company_area_grant_open(
-    envelope: Vec<u8>,
-    ctx: AreaGrantContext,
-    chain: Arc<AcceptedRosters>,
-    area_id_seed: String,
-    granter_ml_dsa_public_key: Vec<u8>,
-    granter_history: Option<SignerHistory>,
-    reader: String,
-    reader_key_version: u64,
-    grantee: IdentityKeys,
-    lists: Arc<crate::area_lists::AreaLists>,
-) -> CoreResult<Vec<u8>> {
-    open_area_grant(
-        envelope,
-        ctx,
-        chain,
-        area_id_seed,
-        granter_ml_dsa_public_key,
-        granter_history,
-        reader,
-        reader_key_version,
-        grantee,
-        Some(lists),
-    )
-}
-
-pub(crate) const NOT_ON_THE_LIST: &str = "This folder’s list of people does not name this account.";
-
-#[allow(clippy::too_many_arguments)]
-fn open_area_grant(
-    envelope: Vec<u8>,
-    ctx: AreaGrantContext,
-    chain: Arc<AcceptedRosters>,
-    area_id_seed: String,
-    granter_ml_dsa_public_key: Vec<u8>,
-    granter_history: Option<SignerHistory>,
-    reader: String,
-    reader_key_version: u64,
-    grantee: IdentityKeys,
-    lists: Option<Arc<crate::area_lists::AreaLists>>,
-) -> CoreResult<Vec<u8>> {
     same_group(&chain, &ctx.group_id)?;
     sealed_on_chain(&chain, ctx.roster_version, &ctx.roster_digest)?;
     area_of(&ctx.group_id, &ctx.workspace_id, &area_id_seed)?;
-    if chain.kind == GroupKind::Org {
-        let entitled = match &lists {
-            Some(lists) => crate::area_lists::grant_allowed(
-                &chain,
-                lists,
-                &reader,
-                &ctx.workspace_id,
-                ctx.workspace_key_version,
-            )?,
-            None => false,
-        };
-        if !entitled {
-            return Err(input(NOT_ON_THE_LIST));
-        }
-    }
     if ctx.grantee_user_id != reader || ctx.grantee_key_version != reader_key_version {
         return Err(input("This grant is not for this account’s keys."));
     }
-    // A family's granter is judged on the latest roster, as ever. A company's is judged at the
-    // roster the grant names, by the chain's own record of who was active there and under which
-    // keys, so a grant made by an Admin who has since been removed still opens.
-    let signers = if chain.kind == GroupKind::Org {
-        crate::area_lists::granter_at(
-            &chain,
-            &ctx.granter_user_id,
-            ctx.roster_version,
-            &granter_ml_dsa_public_key,
-        )?
-    } else {
-        if !chain.roster.entry(&ctx.granter_user_id).is_some_and(|e| e.active_with(None)) {
-            return Err(input("This grant is not from an active member of the group."));
-        }
-        signers_through(
-            &chain,
-            &ctx.granter_user_id,
-            Some(&granter_ml_dsa_public_key),
-            granter_history.as_ref(),
-        )?
-    };
+    if !chain.roster.entry(&ctx.granter_user_id).is_some_and(|e| e.active_with(None)) {
+        return Err(input("This grant is not from an active member of the group."));
+    }
+    let signers = signers_through(
+        &chain,
+        &ctx.granter_user_id,
+        Some(&granter_ml_dsa_public_key),
+        granter_history.as_ref(),
+    )?;
     let listed = listed_area(&chain, &ctx.workspace_id, ctx.workspace_key_version)
         .ok_or_else(|| input("This area key version is not on the group’s member list."))?
         .to_string();

@@ -253,95 +253,6 @@ fn company_statement(kind: &str, value: &Value) -> Option<Option<Value>> {
             };
             Some(built(custody_previous_statement(ctx, sealed()?)))
         })(),
-        // A folder's list, the heads a roster commits to and a fork's dismissal (2.3).
-        "area-list" => (|| {
-            // A role the core's types cannot hold does not fit: both twins skip it.
-            let role = |name: &str| match name {
-                "editor" => Some(ListRole::Editor),
-                "manager" => Some(ListRole::Manager),
-                "viewer" => Some(ListRole::Viewer),
-                _ => None,
-            };
-            let everyone = match text(value, "everyone")?.as_str() {
-                "" => None,
-                name => Some(role(name)?),
-            };
-            let people = value
-                .get("people")?
-                .as_array()?
-                .iter()
-                .map(|person| {
-                    Some(ListPerson { user_id: text(person, "userId")?, role: role(&text(person, "role")?)? })
-                })
-                .collect::<Option<Vec<_>>>()?;
-            let list = AreaList {
-                group_id: text(value, "groupId")?,
-                workspace_id: text(value, "workspaceId")?,
-                list_version: number(value, "listVersion")?,
-                previous_list_digest: text(value, "previousListDigest")?,
-                workspace_key_version: number(value, "workspaceKeyVersion")?,
-                signer_user_id: text(value, "signerUserId")?,
-                signer_key_version: number(value, "signerKeyVersion")?,
-                roster_version: number(value, "rosterVersion")?,
-                roster_digest: text(value, "rosterDigest")?,
-                nonce: text(value, "nonce")?,
-                everyone,
-                people,
-            };
-            Some(either(area_list_statement(list.clone()), |statement| {
-                assert_eq!(
-                    area_list_parse(statement.clone()).expect("an encoded statement parses"),
-                    list,
-                    "an area list parses back to what was encoded"
-                );
-                ok_bytes(&statement)
-            }))
-        })(),
-        "heads" => (|| {
-            let rows = value
-                .get("rows")?
-                .as_array()?
-                .iter()
-                .map(|row| {
-                    Some(HeadRow {
-                        workspace_id: text(row, "workspaceId")?,
-                        workspace_key_version: number(row, "workspaceKeyVersion")?,
-                        list_version: number(row, "listVersion")?,
-                        list_digest: text(row, "listDigest")?,
-                        share_log_index: number(row, "shareLogIndex")?,
-                        share_log_digest: text(row, "shareLogDigest")?,
-                    })
-                })
-                .collect::<Option<Vec<_>>>()?;
-            Some(either(heads_digest(text(value, "groupId")?, rows), |digest| json!(digest)))
-        })(),
-        "fork-dismissal" => (|| {
-            let dismissal = ForkDismissal {
-                group_id: text(value, "groupId")?,
-                workspace_id: text(value, "workspaceId")?,
-                kind: match text(value, "forkKind")?.as_str() {
-                    "list" => ForkKind::List,
-                    "share-log" => ForkKind::ShareLog,
-                    _ => return None,
-                },
-                committed_position: number(value, "committedPosition")?,
-                committed_digest: text(value, "committedDigest")?,
-                reported_position: number(value, "reportedPosition")?,
-                reported_digest: text(value, "reportedDigest")?,
-                signer_user_id: text(value, "signerUserId")?,
-                signer_key_version: number(value, "signerKeyVersion")?,
-                roster_version: number(value, "rosterVersion")?,
-                roster_digest: text(value, "rosterDigest")?,
-            };
-            Some(either(fork_dismissal_statement(dismissal.clone()), |statement| {
-                assert_eq!(
-                    fork_dismissal_parse(statement.clone()).expect("an encoded statement parses"),
-                    dismissal,
-                    "a fork dismissal parses back to what was encoded"
-                );
-                ok_bytes(&statement)
-            }))
-        })(),
         _ => return None,
     })
 }
@@ -472,14 +383,7 @@ pub fn company_next(value: &Value) -> Option<Value> {
         signer_user_id,
         Some(area_keys),
         retire_areas,
-        NextOrgRoster {
-            custody_key,
-            kit,
-            rules,
-            auto_utc_day,
-            heads: heads_unverified(heads_digest),
-            checked,
-        },
+        NextOrgRoster { custody_key, kit, rules, auto_utc_day, heads_digest, checked },
     )
     .and_then(roster_statement);
     // A refusal with its sentence: the twins share them for a company's rules, so "refused by

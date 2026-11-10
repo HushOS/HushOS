@@ -1,4 +1,3 @@
-import { unverifiedHeads } from './committed-heads';
 import { describe, expect, test, vi } from 'vitest';
 import {
     acceptRosters,
@@ -3293,7 +3292,7 @@ describe('milestone 1c: creating a group', () => {
             org: {
                 custodyKey: (await custodyAt(1)).publicKey,
                 kit: (await kitAt(1)).publicKeys,
-                heads: unverifiedHeads(HEADS_DIGEST),
+                headsDigest: HEADS_DIGEST,
             },
         });
         expect(org.format).toBe(3);

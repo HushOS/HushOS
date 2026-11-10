@@ -1,19 +1,5 @@
-import { unverifiedHeads } from '../src/committed-heads';
 import { isDeepStrictEqual } from 'node:util';
 import { encodeStatement, parseStatement } from '../src/canonical';
-import {
-    FORK_KINDS,
-    LIST_ROLES,
-    areaListStatement,
-    forkDismissalStatement,
-    headsDigest,
-    parseAreaList,
-    parseForkDismissal,
-    type AreaList,
-    type ForkDismissal,
-    type HeadRow,
-    type ListPerson,
-} from '../src/area-lists';
 import { deviceSessionStatement } from '../src/device-identity';
 import type { ContactPin } from '../src/contacts';
 import {
@@ -798,86 +784,6 @@ async function companyStatement(value: Doc): Promise<Verdict | undefined> {
             if (!ctx || !sealed) return undefined;
             return either(() => custodyPreviousStatement(ctx, sealed), out);
         }
-        // A folder's list, the heads a roster commits to and a fork's dismissal (2.3).
-        case 'area-list': {
-            const fields = fieldsOf(value, {
-                groupId: 'text',
-                workspaceId: 'text',
-                listVersion: 'number',
-                previousListDigest: 'text',
-                workspaceKeyVersion: 'number',
-                signerUserId: 'text',
-                signerKeyVersion: 'number',
-                rosterVersion: 'number',
-                rosterDigest: 'text',
-                nonce: 'text',
-                everyone: 'text',
-            });
-            const people = listOf(value.people, (person) => {
-                const at = fieldsOf(person, { userId: 'text', role: 'text' });
-                return at && LIST_ROLES.includes(at.role) ? (at as ListPerson) : undefined;
-            });
-            // A role the core's types cannot hold does not fit: both twins skip it.
-            if (!fields || !people || !['', ...LIST_ROLES].includes(fields.everyone))
-                return undefined;
-            const list = { ...fields, people } as AreaList;
-            return either(
-                () => areaListStatement(list),
-                (statement) => {
-                    invariant(
-                        isDeepStrictEqual(parseAreaList(statement), list),
-                        'an area list parses back to what was encoded',
-                    );
-                    return out(statement);
-                },
-            );
-        }
-        case 'heads': {
-            const groupId = text(value, 'groupId');
-            const rows = listOf(value.rows, (row) =>
-                fieldsOf(row, {
-                    workspaceId: 'text',
-                    workspaceKeyVersion: 'number',
-                    listVersion: 'number',
-                    listDigest: 'text',
-                    shareLogIndex: 'number',
-                    shareLogDigest: 'text',
-                }),
-            );
-            if (groupId === undefined || !rows) return undefined;
-            return either(
-                () => headsDigest(groupId, rows as HeadRow[]),
-                (digest) => digest,
-            );
-        }
-        case 'fork-dismissal': {
-            const fields = fieldsOf(value, {
-                groupId: 'text',
-                workspaceId: 'text',
-                forkKind: 'text',
-                committedPosition: 'number',
-                committedDigest: 'text',
-                reportedPosition: 'number',
-                reportedDigest: 'text',
-                signerUserId: 'text',
-                signerKeyVersion: 'number',
-                rosterVersion: 'number',
-                rosterDigest: 'text',
-            });
-            if (!fields || !FORK_KINDS.includes(fields.forkKind)) return undefined;
-            const { forkKind, ...rest } = fields;
-            const dismissal = { ...rest, kind: forkKind } as ForkDismissal;
-            return either(
-                () => forkDismissalStatement(dismissal),
-                (statement) => {
-                    invariant(
-                        isDeepStrictEqual(parseForkDismissal(statement), dismissal),
-                        'a fork dismissal parses back to what was encoded',
-                    );
-                    return out(statement);
-                },
-            );
-        }
         default:
             return undefined;
     }
@@ -1010,7 +916,7 @@ async function companyNext(value: Doc): Promise<Verdict | undefined> {
                 areaKeys,
                 ...(retireAreas.length ? { retireAreas } : {}),
                 org: {
-                    heads: unverifiedHeads(headsDigest),
+                    headsDigest,
                     checked,
                     ...(custodyKey ? { custodyKey: custodyKey as never } : {}),
                     ...(kit ? { kit: kit as never } : {}),

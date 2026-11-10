@@ -1,4 +1,3 @@
-import { unverifiedHeads } from './committed-heads';
 import { areaKeyCommitment, areaRootCommitment } from './area-keys';
 import sodium from 'libsodium-wrappers';
 import { parseStatement } from './canonical';
@@ -3874,15 +3873,7 @@ export async function firstRosterVerdict(c: Omit<FirstRosterCase, 'expected'>) {
                 ...(k.areaKind !== undefined ? { areaKind: k.areaKind } : {}),
                 ...(k.listDigest !== undefined ? { listDigest: k.listDigest } : {}),
             })),
-            ...(c.org
-                ? {
-                      org: {
-                          custodyKey: c.org.custodyKey,
-                          kit: c.org.kit,
-                          heads: unverifiedHeads(c.org.headsDigest),
-                      },
-                  }
-                : {}),
+            ...(c.org ? { org: c.org } : {}),
         });
         return encode(rosterStatement(roster));
     } catch (error) {

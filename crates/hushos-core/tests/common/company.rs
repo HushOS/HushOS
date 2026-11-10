@@ -257,7 +257,7 @@ pub fn company_keys() -> Value {
 }
 
 /* A company roster's entry for testkit person `n` with `roles`. */
-pub fn entry(n: u8, roles: &[GroupRole]) -> RosterMember {
+fn entry(n: u8, roles: &[GroupRole]) -> RosterMember {
     person(n).entry(roles, 1, MemberStatus::Active)
 }
 
@@ -315,7 +315,7 @@ pub fn company_made_here() -> (Value, Vec<Value>) {
         kit: None,
         rules: None,
         auto_utc_day: None,
-        heads: heads_unverified(testkit_heads_digest()),
+        heads_digest: heads_digest(),
         checked: vec![],
     };
     let mut ml_dsa_keys = served_ml_dsa(&people.iter().collect::<Vec<_>>());
@@ -352,7 +352,7 @@ pub fn company_made_here() -> (Value, Vec<Value>) {
             custody_key: key_at(1),
             kit: kit.clone(),
             rules: None,
-            heads: heads_unverified(testkit_heads_digest()),
+            heads_digest: heads_digest(),
         },
     )
     .unwrap();
@@ -370,9 +370,7 @@ pub fn company_made_here() -> (Value, Vec<Value>) {
     assert!(third.org.as_ref().unwrap().members_same.is_some(), "a roster that changes no entry says `same`");
     input.rosters.push(roster_sign(third, group_seed(1), owner.keys.clone()).unwrap());
     // Roster 4: the kit holder's recovery roster, signed with the kit.
-    // It carries the heads of the roster before, restated: the kit commits nothing (rule 11).
-    let carried = heads_carried(chain_through(&input, 3), GROUP.into(), None).unwrap();
-    let fourth = next(&input, all(&OWNER_ROLES), &keeper, NextOrgRoster { heads: carried, ..heads(None) });
+    let fourth = next(&input, all(&OWNER_ROLES), &keeper, heads(None));
     input
         .rosters
         .push(recovery_roster_sign(fourth, group_seed(1), keeper.keys.clone(), kit_secret_at(1)).unwrap());

@@ -1,7 +1,4 @@
-import { carriedHeads } from './area-lists';
-import { unverifiedHeads } from './committed-heads';
 import { describe, expect, test } from 'vitest';
-import { listCaseVerdict, type ListCase, type ListStepVerdict } from './company-lists-testkit';
 import { companyKeys, sealItemVerdict, type SealItem } from './company-testkit';
 import { openPreviousNoticeSeed } from './custody';
 import {
@@ -121,7 +118,7 @@ describe('a company made by the Rust core', () => {
             org: {
                 custodyKey: (await custodyAt(1)).publicKey,
                 kit: (await kitAt(1)).publicKeys,
-                heads: unverifiedHeads(HEADS_DIGEST),
+                headsDigest: HEADS_DIGEST,
             },
         });
         expect(encode(rosterStatement(first))).toBe(encode(input.rosters[0]!.statement));
@@ -129,10 +126,7 @@ describe('a company made by the Rust core', () => {
         const two = await chainAt(2);
         const third = await nextRoster(two, [...two.roster.members], {
             signerUserId: owner.userId,
-            org: {
-                heads: unverifiedHeads(HEADS_DIGEST),
-                custodyKey: (await custodyAt(2)).publicKey,
-            },
+            org: { headsDigest: HEADS_DIGEST, custodyKey: (await custodyAt(2)).publicKey },
         });
         expect(encode(rosterStatement(third))).toBe(encode(input.rosters[2]!.statement));
         expect(parseRoster(input.rosters[2]!.statement).membersSame).toBeDefined();
@@ -144,10 +138,7 @@ describe('a company made by the Rust core', () => {
             three.roster.members.map((entry) =>
                 entry.userId === keeper.userId ? { ...entry, roles: [...OWNER_ROLES] } : entry,
             ),
-            {
-                signerUserId: keeper.userId,
-                org: { heads: await carriedHeads({ chain: three, groupId: GROUP, heads: null }) },
-            },
+            { signerUserId: keeper.userId, org: { headsDigest: HEADS_DIGEST } },
         );
         expect(encode(rosterStatement(fourth))).toBe(encode(input.rosters[3]!.statement));
     });
@@ -195,61 +186,5 @@ describe('a company made by the Rust core', () => {
         expect(await sealItemVerdict({ ...kit, envelope: encode(moved) }, chainAt)).toMatchObject({
             check: 'refused',
         });
-    });
-
-    test('a folder’s lists and heads the core signed read here, step by step, as the core read them', async () => {
-        // A base list, two additions, a key change's base list, the heads four rosters commit
-        // (each built by the core over what a device read) and a dismissal, all made with the
-        // core's builders (companies-design 2.3): the same states, the same record.
-        const made = core.lists as unknown as ListCase & { expected: ListStepVerdict[] };
-        const served = (served: typeof made.input) => ({
-            ...served,
-            groupId: GROUP,
-            rosters: (served.rosters as unknown as Served[]).map(signed),
-            successions: [],
-        });
-        const verdict = await listCaseVerdict({ ...made, input: served(made.input) });
-        expect(verdict).toEqual(made.expected);
-        const [before, after, rotated] = verdict as ListStepVerdict[] as [
-            ListStepVerdict,
-            ListStepVerdict,
-            ListStepVerdict,
-        ];
-        if ('error' in before.lists || 'error' in after.lists || 'error' in rotated.lists)
-            throw new Error('refused');
-        expect([before.lists.state, after.lists.state]).toEqual(['ahead', 'level']);
-        expect(after.lists.people.map((person) => person.role)).toEqual([
-            'manager',
-            'manager',
-            'viewer',
-        ]);
-        // The key change's base list is numbered past the head, and leaves the viewer out.
-        expect([rotated.lists.state, rotated.lists.workspaceKeyVersion]).toEqual(['level', 2]);
-        expect(rotated.lists.listVersion).toBe(4);
-        expect(rotated.lists.people.map((person) => person.role)).toEqual(['manager', 'manager']);
-        expect(rotated.dismissals).toEqual(['verified']);
-        // One byte of the core's addition moved: this twin refuses it, and nothing reaches the head.
-        const step = made.steps[1]!;
-        const moved = decode(step.served![1]!.signature);
-        moved[100]! ^= 1;
-        const [tampered] = await listCaseVerdict({
-            ...made,
-            input: served(made.input),
-            steps: [
-                {
-                    ...step,
-                    served: [
-                        step.served![0]!,
-                        { ...step.served![1]!, signature: encode(moved) },
-                        step.served![2]!,
-                    ],
-                },
-            ],
-        });
-        if ('error' in tampered!.lists) throw new Error('refused');
-        expect(tampered!.lists.state).toBe('forked');
-        expect(tampered!.lists.refused.map((at) => [at.listVersion, at.reason])).toEqual([
-            [2, 'This list is not signed by the member it names.'],
-        ]);
     });
 });
