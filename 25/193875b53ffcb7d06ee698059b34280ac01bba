@@ -1,0 +1,42 @@
+apps/web/src/lib/unconfirmed-phrase.ts
+  s_1f3a9ec02d29ed::t_6efb6823a01848 1-41
+apps/web/src/routes/new-phrase/route.tsx
+  s_1f3a9ec02d29ed::t_b659b81cfdb99b 1-60
+  s_1f3a9ec02d29ed::t_0cfc39c366ca75 61-69
+apps/web/src/components/account-dialogs.tsx
+  s_1f3a9ec02d29ed::t_92658a6f060cd6 31,509-517,520
+apps/web/src/components/recovery-phrase.tsx
+  s_1f3a9ec02d29ed::t_de5bf58efcd252 57-65,93-153,227-232,287-364
+apps/web/src/lib/analytics-paths.ts
+  s_1f3a9ec02d29ed::t_aa8515f36b4b9d 13
+apps/web/src/lib/analytics.test.ts
+  s_1f3a9ec02d29ed::t_8237772435ce08 27
+apps/web/src/routeTree.gen.ts
+  s_1f3a9ec02d29ed::t_1ff71958286786 23,141-145,497,571,640,718,792,860,937,1045-1051,1680
+apps/web/src/routes/login/route.tsx
+  s_1f3a9ec02d29ed::t_7145ac6b24a254 28-30,32,388-392
+docs/two-step-design.md
+  s_1f3a9ec02d29ed::t_9644c066cc270b 292-297,731
+e2e/two-step.spec.ts
+  s_1f3a9ec02d29ed::t_12efd9bdebbfb8 23-24,748-842
+packages/auth/src/client.ts
+  s_1f3a9ec02d29ed::t_7fffd056124d53 1,12,130-159,1081,1083-1085,1118,1127-1151,1169-1174
+packages/auth/src/client.two-step.test.ts
+  s_1f3a9ec02d29ed::t_5af42ad2fa7cdf 70-71,76,92-95,99,724-958
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "25193875b53ffcb7d06ee698059b34280ac01bba",
+  "prompts": {},
+  "sessions": {
+    "s_1f3a9ec02d29ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aef80487-cabb-455f-b2f1-acb7f8d96c4e",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
