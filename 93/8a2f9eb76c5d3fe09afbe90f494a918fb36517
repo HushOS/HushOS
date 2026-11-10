@@ -1,0 +1,24 @@
+packages/auth/src/client.exchange.test.ts
+  s_1f3a9ec02d29ed::t_254900dda615d1 1-405,409-410
+  s_1f3a9ec02d29ed::t_3479b84ac6622d 406-408,411-439
+packages/auth/src/client.ts
+  s_1f3a9ec02d29ed::t_529e1b05274175 214-223,307-310,322-352,559,561,604-605,655,682,695,697,702,916,941,971-975,986,990-993,1054-1055,1057,1081,1102-1103,1105,1161-1164,1172,1174,1324-1325,1327
+packages/auth/src/worker.ts
+  s_1f3a9ec02d29ed::t_6ffe0e772fbce8 13-52
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "938a2f9eb76c5d3fe09afbe90f494a918fb36517",
+  "prompts": {},
+  "sessions": {
+    "s_1f3a9ec02d29ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aef80487-cabb-455f-b2f1-acb7f8d96c4e",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
