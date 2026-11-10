@@ -3,7 +3,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { deflateSync } from 'node:zlib';
+import { deflateSync, inflateSync } from 'node:zlib';
 import {
     expect,
     test,
@@ -13,6 +13,7 @@ import {
     type Page,
 } from '@playwright/test';
 import { strToU8, zipSync } from 'fflate';
+import jsQR from 'jsqr';
 import * as XLSX from 'xlsx';
 
 /*
@@ -561,4 +562,86 @@ export async function openWaiting(page: Page, text: string | RegExp) {
     await expect(waiting).toBeVisible({ timeout: 60_000 });
     await waiting.getByRole('button', { name: 'Open', exact: true }).click();
     await expect(waiting).toHaveCount(0, { timeout: 60_000 });
+}
+
+/* A screenshot's pixels (8-bit RGB or RGBA, as Playwright writes them), as RGBA. */
+function pngPixels(png: Buffer) {
+    let offset = 8;
+    let width = 0;
+    let height = 0;
+    let channels = 4;
+    const data: Buffer[] = [];
+    while (offset < png.length) {
+        const length = png.readUInt32BE(offset);
+        const type = png.toString('latin1', offset + 4, offset + 8);
+        const body = png.subarray(offset + 8, offset + 8 + length);
+        if (type === 'IHDR') {
+            width = body.readUInt32BE(0);
+            height = body.readUInt32BE(4);
+            if (body[8] !== 8 || (body[9] !== 2 && body[9] !== 6) || body[12] !== 0)
+                throw new Error('Not an 8-bit RGB or RGBA screenshot.');
+            channels = body[9] === 6 ? 4 : 3;
+        } else if (type === 'IDAT') data.push(body);
+        offset += length + 12;
+    }
+    const raw = inflateSync(Buffer.concat(data));
+    const stride = width * channels;
+    const rgba = new Uint8ClampedArray(width * height * 4);
+    let previous = new Uint8Array(stride);
+    for (let y = 0; y < height; y++) {
+        const filter = raw[y * (stride + 1)]!;
+        const line = Uint8Array.from(raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1)));
+        for (let x = 0; x < stride; x++) {
+            const left = x >= channels ? line[x - channels]! : 0;
+            const up = previous[x]!;
+            const corner = x >= channels ? previous[x - channels]! : 0;
+            const paeth = () => {
+                const guess = left + up - corner;
+                const [a, b, c] = [
+                    Math.abs(guess - left),
+                    Math.abs(guess - up),
+                    Math.abs(guess - corner),
+                ];
+                return a <= b && a <= c ? left : b <= c ? up : corner;
+            };
+            const add = [0, left, up, (left + up) >> 1, paeth()][filter] ?? 0;
+            line[x] = (line[x]! + (filter === 4 ? paeth() : add)) & 255;
+        }
+        for (let x = 0; x < width; x++) {
+            rgba.set(line.subarray(x * channels, x * channels + 3), (y * width + x) * 4);
+            rgba[(y * width + x) * 4 + 3] = channels === 4 ? line[x * channels + 3]! : 255;
+        }
+        previous = line;
+    }
+    return { rgba, width, height };
+}
+
+/*
+ * What a QR code on the page says, read from a screenshot of it as a phone's camera would
+ * read the screen: null when it does not decode.
+ */
+export async function readQr(code: Locator) {
+    const { rgba, width, height } = pngPixels(await code.screenshot());
+    return jsQR(rgba, width, height)?.data ?? null;
+}
+
+/*
+ * Gives an account an authenticator app and backup codes in the database of the server under
+ * test (e2e/fixtures/two-step-factor.ts): for a server that does not offer two-step sign-in,
+ * where no request can turn it on. Returns the setup key and the codes.
+ */
+export function givenAFactor(email: string) {
+    const database = e2eDatabase();
+    const out = execFileSync('bun', ['e2e/fixtures/two-step-factor.ts', email], {
+        stdio: ['ignore', 'pipe', 'inherit'],
+        env: {
+            ...process.env,
+            DATABASE_URL: database.url,
+            MIGRATION_DATABASE_URL: database.migrationUrl,
+        },
+    });
+    return JSON.parse(out.toString().trim().split('\n').at(-1)!) as {
+        secret: string;
+        codes: string[];
+    };
 }

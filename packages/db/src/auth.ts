@@ -1719,6 +1719,12 @@ export async function changeAccountSecurity(
         userId: string;
         action: 'password' | 'master-key' | 'recovery-key';
         sessionTokenHash: Buffer;
+        /*
+         * The session that takes the asking one's place, on the same device: the change ends
+         * every session of the account, and the device that made it carries on without signing
+         * in again (docs/two-step-design.md 4).
+         */
+        replacement: { tokenHash: Buffer; expiresAt: Date };
         credentialVersion: number;
         registrationRecord: string;
         envelope: Pick<
@@ -1748,6 +1754,11 @@ export async function changeAccountSecurity(
                 envelope: accountKeys,
                 recovery: accountRecoveryKeys,
                 identity: accountIdentities,
+                session: {
+                    deviceId: sessions.deviceId,
+                    createdAt: sessions.createdAt,
+                    twoStepAt: sessions.twoStepAt,
+                },
             })
             .from(sessions)
             .innerJoin(
@@ -1924,7 +1935,50 @@ export async function changeAccountSecurity(
                         eq(workspaceKeys.workspaceId, workspace.id),
                     ),
                 );
+        // The asking session's device, still the account's own, approved and not removed: the
+        // replacement attaches to it. A session without one resolves nowhere, and changes nothing.
+        if (!current.session.deviceId) return false;
+        const [row] = await tx
+            .select({ id: accountDevices.id, kind: accountDevices.kind })
+            .from(accountDevices)
+            .where(
+                and(
+                    eq(accountDevices.id, current.session.deviceId),
+                    eq(accountDevices.userId, user.id),
+                    isNull(accountDevices.revokedAt),
+                    isNotNull(accountDevices.approvedAt),
+                ),
+            )
+            .for('update');
+        if (!row) return false;
+        const device = { id: row.id, registered: row.kind !== null };
         await tx.delete(sessions).where(eq(sessions.userId, user.id));
+        /*
+         * Every session ends, and the asking device gets the one that replaces its own, here,
+         * so the change and the session are one fact: without it the person would have to sign
+         * in again, and with a second step that sign-in can be one they cannot answer (a
+         * recovery phrase just replaced, a last backup code just spent). It is the same
+         * sign-in, on new credentials: it keeps when it began and when it passed the step
+         * (stamped by passStep, in this transaction, if it never had), so a change extends
+         * neither the thirty days of a session nor those of the step. The guard trigger still
+         * has the last word: a session without `two_step_at` on an account with the step is
+         * refused, and the whole change with it.
+         */
+        const now = new Date();
+        await tx.insert(sessions).values({
+            userId: user.id,
+            credentialVersion: version,
+            tokenHash: input.replacement.tokenHash,
+            deviceId: device.id,
+            createdAt: current.session.createdAt,
+            expiresAt: input.replacement.expiresAt,
+            lastSeenAt: now,
+            twoStepAt: current.session.twoStepAt,
+        });
+        await tx
+            .update(accountDevices)
+            .set({ lastSeenAt: now })
+            .where(eq(accountDevices.id, device.id));
         await tx.delete(opaqueLoginAttempts).where(eq(opaqueLoginAttempts.userId, user.id));
         // Step tokens were issued under the old password; none of them answers the new one.
         await tx.delete(twoStepAttempts).where(eq(twoStepAttempts.userId, user.id));
@@ -1937,7 +1991,11 @@ export async function changeAccountSecurity(
                     eq(accountEnrollments.purpose, 'recover'),
                 ),
             );
-        return true;
+        const [key] = await tx.select().from(accountKeys).where(eq(accountKeys.userId, user.id));
+        if (!key) return false;
+        const { normalizedEmail: _normalizedEmail, ...plain } = user;
+        // What a sign-in answers: the account, its key as now wrapped, and the session's device.
+        return { user: plain, key, device };
     });
 }
 

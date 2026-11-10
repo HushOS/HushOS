@@ -2,8 +2,16 @@ import type { SessionUser } from '@hushos/auth/protocol';
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '@hushos/auth/protocol';
 import { useQueryClient } from '@tanstack/react-query';
 import { useRouter } from '@tanstack/react-router';
-import { useState, type ReactNode } from 'react';
+import { StepCancelled } from '@hushos/auth/client';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { DialogField } from '@/components/settings';
+import {
+    STEP_LIMIT_MS,
+    StepChoices,
+    StepField,
+    useStepPrompt,
+    type StepPrompt,
+} from '@/components/two-step-prompt';
 import { Button } from '@/components/ui/button';
 import {
     Dialog,
@@ -26,46 +34,178 @@ import { forgetDevice } from '@/lib/sign-out';
  * password, make a new recovery phrase, rotate the account key (a new master
  * key), replace sharing keys (a new identity), delete the account. Those that
  * change what the password and phrase unlock ask for the password; the server
- * proves it with OPAQUE and it never leaves this device.
+ * proves it with OPAQUE and it never leaves this device. On an account with
+ * two-step sign-in they then ask for the second step, in the same dialog, before
+ * anything changes (docs/two-step-design.md 4).
  */
 
-function Shell({
+/*
+ * Proving the password for one of these changes locks this browser first, as it always has.
+ * Someone who then backs out of the second step changed nothing, so the saved unlock opens
+ * it again rather than leave them to type the password once more. The dialog stays busy
+ * until that has settled: a second try started while it runs would cut it short, and be
+ * refused as a lock.
+ */
+function reopen(user: SessionUser) {
+    return authClient.restore(user).catch(() => {});
+}
+
+/*
+ * Said when a dialog gives up on a step left unanswered (STEP_LIMIT_MS): it was holding the
+ * password, and what was typed is cleared with it.
+ */
+export const STEP_GAVE_UP = 'That took too long, so nothing was changed. Start again.';
+
+/* The server's words for a change that needs the second step. */
+export const STEP_ASKED = 'Confirm it’s you with your second step.';
+
+/*
+ * What a dialog shows while the auth client asks for the second step: the field, the other
+ * ways to answer, Back, and the dialog's own action, since the answer is what commits it.
+ */
+export function StepView({
+    step,
+    action,
+    busy,
+    destructive = false,
+}: {
+    step: StepPrompt;
+    action: string;
+    busy: string;
+    destructive?: boolean;
+}) {
+    return (
+        <>
+            <StepField prompt={step} />
+            <StepChoices prompt={step} />
+            <DialogFooter>
+                <Button
+                    type="button"
+                    variant="outline"
+                    disabled={step.checking}
+                    onClick={step.cancel}
+                >
+                    Back
+                </Button>
+                <Button
+                    type="submit"
+                    variant={destructive ? 'destructive' : 'default'}
+                    disabled={step.checking}
+                >
+                    {step.checking ? busy : action}
+                </Button>
+            </DialogFooter>
+        </>
+    );
+}
+
+/* One of the account's dialogs: a form with its title, what it asks for, and its actions. */
+export function AccountDialog({
     open,
     onOpenChange,
     pending,
+    locked = false,
     title,
     description,
     children,
     footer,
     onSubmit,
+    step,
+    stepAction,
+    sticky = false,
+    view = '',
 }: {
     open: boolean;
     onOpenChange: (open: boolean) => void;
     pending: boolean;
+    /* It shows something shown only once: nothing but its own button closes it. */
+    locked?: boolean;
+    /*
+     * It holds something a stray click or Esc must not throw away (an authenticator app half
+     * set up): only its buttons and its close control close it.
+     */
+    sticky?: boolean;
+    /* Which of its views a dialog with several is showing: focus moves in when it changes. */
+    view?: string;
     title: string;
     description?: ReactNode;
     children: ReactNode;
     footer: ReactNode;
     onSubmit: () => void;
+    /* The second step, and what the dialog's action is called while it is asked for. */
+    step?: StepPrompt;
+    stepAction?: { action: string; busy: string; destructive?: boolean };
 }) {
+    const asking = Boolean(step?.request);
+    /*
+     * A dialog that swaps what it shows (the password, then the step, then what came of it)
+     * takes the focus with it: the view's own starting point (`data-focus`), else its first
+     * field. Without this the focus stays on a field that is gone, which is nowhere.
+     */
+    const form = useRef<HTMLFormElement>(null);
+    const opened = useRef(false);
+    useEffect(() => {
+        const first = !opened.current;
+        opened.current = open;
+        // Opening is the dialog's own to handle; the step's field takes the focus itself.
+        if (!open || first || asking) return;
+        const enter = () =>
+            form.current
+                ?.querySelector<HTMLElement>(
+                    '[data-focus], input:not([disabled]), textarea:not([disabled])',
+                )
+                ?.focus();
+        enter();
+        // Once more a frame later: the dialog itself takes the focus back to its frame when
+        // the element that held it is removed, and that can come after this.
+        const frame = requestAnimationFrame(enter);
+        return () => cancelAnimationFrame(frame);
+        // Also when it stops being busy: its fields were disabled meanwhile, and lost the focus.
+    }, [open, view, asking, pending]);
     return (
-        <Dialog open={open} onOpenChange={(next) => !pending && onOpenChange(next)}>
-            <DialogContent className="sm:max-w-[480px]">
+        <Dialog
+            open={open}
+            onOpenChange={(next, details) => {
+                if (locked) return;
+                if (
+                    sticky &&
+                    !next &&
+                    (details.reason === 'escape-key' || details.reason === 'outside-press')
+                )
+                    return;
+                // Closing while the step is asked backs out of the step, to the form before it.
+                if (!next && step?.request && !step.checking) step.cancel();
+                else if (!pending) onOpenChange(next);
+            }}
+        >
+            <DialogContent className="sm:max-w-[480px]" showCloseButton={!locked}>
                 <form
+                    ref={form}
                     noValidate
                     aria-busy={pending}
                     className="contents"
                     onSubmit={(event) => {
                         event.preventDefault();
-                        onSubmit();
+                        if (step?.request) step.submit();
+                        else onSubmit();
                     }}
                 >
                     <DialogHeader>
                         <DialogTitle>{title}</DialogTitle>
-                        {description && <DialogDescription>{description}</DialogDescription>}
+                        {asking ? (
+                            <DialogDescription>{STEP_ASKED}</DialogDescription>
+                        ) : (
+                            description && <DialogDescription>{description}</DialogDescription>
+                        )}
                     </DialogHeader>
-                    {children}
-                    <DialogFooter>{footer}</DialogFooter>
+                    {asking && step && stepAction ? (
+                        <StepView step={step} {...stepAction} />
+                    ) : (
+                        <>
+                            {children}
+                            <DialogFooter>{footer}</DialogFooter>
+                        </>
+                    )}
                 </form>
             </DialogContent>
         </Dialog>
@@ -90,6 +230,13 @@ export function ChangePasswordDialog({
     const [tried, setTried] = useState(false);
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
+    const step = useStepPrompt({
+        limitMs: STEP_LIMIT_MS,
+        onExpired: () => {
+            reset();
+            setError(STEP_GAVE_UP);
+        },
+    });
     const errors = {
         current: current ? '' : 'Enter your current password.',
         next:
@@ -113,17 +260,16 @@ export function ChangePasswordDialog({
         setPending(true);
         setError('');
         try {
-            const result = await authClient.changeSecurity(user, 'password', current, next);
+            const result = await authClient.changeSecurity(user, 'password', current, next, {
+                step: step.ask,
+            });
             cue('success');
             router.options.context.queryClient.clear();
             if (!result.signedIn) {
                 await router.navigate({
                     to: '/login',
-                    search: {
-                        securityChanged: result.uncertain ? 'uncertain' : 'password',
-                        // Signed out because this browser's device key could not be read: said there.
-                        storage: result.storage ?? undefined,
-                    },
+                    // The reply never arrived, so the change may or may not have been made.
+                    search: { securityChanged: 'uncertain' },
                     replace: true,
                 });
                 return;
@@ -133,14 +279,21 @@ export function ChangePasswordDialog({
             onOpenChange(false);
             onChanged();
         } catch (cause) {
+            // Backed out of the second step: the form is as it was.
+            if (cause instanceof StepCancelled) {
+                step.done();
+                await reopen(user);
+                return;
+            }
             cue('error');
             setError(authError(cause));
         } finally {
+            step.done();
             setPending(false);
         }
     }
     return (
-        <Shell
+        <AccountDialog
             open={open}
             onOpenChange={(value) => {
                 if (!value) reset();
@@ -148,6 +301,8 @@ export function ChangePasswordDialog({
             }}
             pending={pending}
             title="Change password"
+            step={step}
+            stepAction={{ action: 'Change password', busy: 'Changing…' }}
             onSubmit={() => void submit()}
             footer={
                 <>
@@ -206,7 +361,7 @@ export function ChangePasswordDialog({
             <p className="text-[13px] text-muted-foreground">
                 Your other devices will be signed out. Your recovery phrase stays the same.
             </p>
-        </Shell>
+        </AccountDialog>
     );
 }
 
@@ -261,7 +416,7 @@ export function ReplaceSharingKeysDialog({
         }
     }
     return (
-        <Shell
+        <AccountDialog
             open={open}
             onOpenChange={(value) => {
                 if (!value) setError('');
@@ -305,7 +460,7 @@ export function ReplaceSharingKeysDialog({
                     {error}
                 </p>
             )}
-        </Shell>
+        </AccountDialog>
     );
 }
 
@@ -329,6 +484,14 @@ export function NewKeyDialog({
     const [tried, setTried] = useState(false);
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
+    const step = useStepPrompt({
+        limitMs: STEP_LIMIT_MS,
+        onExpired: () => {
+            setPassword('');
+            setTried(false);
+            setError(STEP_GAVE_UP);
+        },
+    });
     const keys = action === 'master-key';
     async function submit() {
         setTried(true);
@@ -336,16 +499,15 @@ export function NewKeyDialog({
         setPending(true);
         setError('');
         try {
-            const result = await authClient.changeSecurity(user, action, password, '');
+            const result = await authClient.changeSecurity(user, action, password, '', {
+                step: step.ask,
+            });
             cue('success');
             router.options.context.queryClient.clear();
             if (!result.signedIn) {
                 await router.navigate({
                     to: '/login',
-                    search: {
-                        securityChanged: result.uncertain ? 'uncertain' : action,
-                        storage: result.storage ?? undefined,
-                    },
+                    search: { securityChanged: 'uncertain' },
                     replace: true,
                 });
                 return;
@@ -356,13 +518,18 @@ export function NewKeyDialog({
                 replace: true,
             });
         } catch (cause) {
+            step.done();
+            // Backed out of the second step: the form is as it was.
+            const backedOut = cause instanceof StepCancelled;
+            if (backedOut) await reopen(user);
+            setPending(false);
+            if (backedOut) return;
             cue('error');
             setError(authError(cause));
-            setPending(false);
         }
     }
     return (
-        <Shell
+        <AccountDialog
             open={open}
             onOpenChange={(value) => {
                 if (!value) {
@@ -374,6 +541,12 @@ export function NewKeyDialog({
             }}
             pending={pending}
             title={keys ? 'Rotate account key?' : 'Make a new recovery phrase?'}
+            step={step}
+            stepAction={
+                keys
+                    ? { action: 'Rotate account key', busy: 'Rotating…' }
+                    : { action: 'Make a new phrase', busy: 'Making…' }
+            }
             description={
                 keys
                     ? undefined
@@ -431,15 +604,17 @@ export function NewKeyDialog({
                     {error}
                 </p>
             )}
-        </Shell>
+        </AccountDialog>
     );
 }
 
 /* Delete account: the password and DELETE, the same two things the phones ask for. */
 export function DeleteAccountDialog({
+    user,
     open,
     onOpenChange,
 }: {
+    user: SessionUser;
     open: boolean;
     onOpenChange: (open: boolean) => void;
 }) {
@@ -448,26 +623,39 @@ export function DeleteAccountDialog({
     const [typed, setTyped] = useState('');
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
+    const step = useStepPrompt({
+        limitMs: STEP_LIMIT_MS,
+        onExpired: () => {
+            setPassword('');
+            setTyped('');
+            setError(STEP_GAVE_UP);
+        },
+    });
     const ready = password.length > 0 && typed === 'DELETE';
     async function submit() {
         if (!ready) return;
         setPending(true);
         setError('');
         try {
-            await authClient.deleteAccount(password);
+            await authClient.deleteAccount(password, { step: step.ask });
             // The account is gone; what Drive kept of it on this device goes too.
             await forgetDevice();
             router.options.context.queryClient.clear();
             await router.invalidate();
             await router.navigate({ to: '/account-deleted', replace: true });
         } catch (cause) {
+            step.done();
+            // Backed out of the second step: nothing was deleted.
+            const backedOut = cause instanceof StepCancelled;
+            if (backedOut) await reopen(user);
+            setPending(false);
+            if (backedOut) return;
             cue('error');
             setError(authError(cause));
-            setPending(false);
         }
     }
     return (
-        <Shell
+        <AccountDialog
             open={open}
             onOpenChange={(value) => {
                 if (!value) {
@@ -480,6 +668,8 @@ export function DeleteAccountDialog({
             pending={pending}
             title="Delete your account?"
             description="Deleting removes every file, every earlier version, every share and link, and the account itself. It can’t be undone."
+            step={step}
+            stepAction={{ action: 'Delete forever', busy: 'Deleting…', destructive: true }}
             onSubmit={() => void submit()}
             footer={
                 <>
@@ -521,6 +711,6 @@ export function DeleteAccountDialog({
                     {error}
                 </p>
             )}
-        </Shell>
+        </AccountDialog>
     );
 }

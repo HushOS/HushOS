@@ -128,7 +128,16 @@ export function createSecurityChange() {
             registrationRequest: registration.registrationRequest,
         };
     }
-    async function finish(input: SecurityChallenge): Promise<SecurityUpdate> {
+    /*
+     * `keep` is handed the new password's export key, the one the new envelope is wrapped
+     * under: the session holds it until the server has made the change and answers with that
+     * envelope, and opens the account from it as a sign-in would, so the person is not asked
+     * to sign in again (docs/two-step-design.md 4). It never leaves the worker.
+     */
+    async function finish(
+        input: SecurityChallenge,
+        keep?: (exportKey: string) => void,
+    ): Promise<SecurityUpdate> {
         const attempt = pending;
         reset();
         if (!attempt || attempt.action !== input.action)
@@ -183,7 +192,7 @@ export function createSecurityChange() {
             const nonce = crypto.getRandomValues(new Uint8Array(24));
             const wrap = await wrappingKey(registration.exportKey, salt);
             secrets.push(wrap);
-            return {
+            const update: SecurityUpdate = {
                 finishLoginRequest: login.finishLoginRequest,
                 registrationRecord: registration.registrationRecord,
                 envelope: {
@@ -216,6 +225,9 @@ export function createSecurityChange() {
                     ? await rewrapAccountKeys(root, nextRoot, input.userId, keyVersion, input)
                     : {}),
             };
+            // Only once the whole update is made: a change that failed half-way keeps nothing.
+            keep?.(registration.exportKey);
+            return update;
         } finally {
             attempt.password = '';
             attempt.nextPassword = '';

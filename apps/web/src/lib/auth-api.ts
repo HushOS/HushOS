@@ -11,13 +11,15 @@ export const authApi: AuthApi = {
     registerStart: (input) => unwrap(api().register.start.post(input)),
     registerFinish: (input) => unwrap(api().register.finish.post(input)),
     loginStart: (input) => unwrap(api().login.start.post(input)),
-    loginFinish: async (input) => {
-        const result = await unwrap(api().login.finish.post(input));
-        // This client does not send `twoStep: 1` yet, so the server never answers with a step
-        // token (it answers 409 `update-required`); the sign-in step screen changes both.
-        if ('twoStep' in result) throw new Error('This sign-in needs a second step.');
-        return result;
-    },
+    loginFinish: (input) => unwrap(api().login.finish.post(input)),
+    loginTwoStep: (input) => unwrap(api().login['two-step'].post(input)),
+    twoStep: () => unwrap(api()['two-step'].get()),
+    twoStepReauth: (input) => unwrap(api()['two-step'].reauth.post(input)),
+    twoStepChallenge: (purpose) => unwrap(api()['two-step'].challenge.post({ purpose })),
+    startTotp: (proof) => unwrap(api()['two-step'].totp.post(proof)),
+    confirmTotp: (id, input) => unwrap(api()['two-step'].totp({ id }).confirm.post(input)),
+    removeTwoStepMethod: (id, proof) => unwrap(api()['two-step'].methods({ id }).delete(proof)),
+    replaceBackupCodes: (proof) => unwrap(api()['two-step']['backup-codes'].post(proof)),
     session: () => unwrap(api().session.get()),
     forgetSession: () => unwrap(api().session.forget.post({})),
     devices: () => unwrap(api().devices.get()),

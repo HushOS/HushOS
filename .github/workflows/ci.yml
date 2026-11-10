@@ -297,6 +297,8 @@ jobs:
               run: |
                   bun run setup
                   echo 'GROUPS_ENABLED=false' >> .env
+                  # Offered, so e2e/two-step.spec.ts runs its flows instead of only its off check.
+                  echo 'TWO_STEP_ENABLED=true' >> .env
                   bun run infra:up
             - name: Apply migrations
               run: bun run db:migrate
@@ -427,8 +429,10 @@ jobs:
                   TURBO_LOG_ORDER: stream
             # GROUPS_ENABLED reaches the spec from .env too: with it on, a server that says
             # families are off fails the run instead of skipping it.
-            - name: Run the families suite against the production build
-              run: bun run e2e -- --project=chromium e2e/families.spec.ts
+            # two-step.spec.ts too: this job leaves TWO_STEP_ENABLED off, as hushos.com has it, so
+            # here it runs its off path (Account draws nothing; an account with a method is still asked).
+            - name: Run the families suite, and two-step sign-in's off path, against the production build
+              run: bun run e2e -- --project=chromium e2e/families.spec.ts e2e/two-step.spec.ts
             - name: Show the end of the server log
               if: failure()
               run: tail -n 60 scratchpad/e2e-server.log || true

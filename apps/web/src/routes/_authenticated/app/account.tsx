@@ -10,6 +10,7 @@ import {
 import { AccountDevices } from '@/components/account-devices';
 import { AccountFamily } from '@/components/account-family';
 import { AccountNotifications } from '@/components/account-notifications';
+import { AccountTwoStep } from '@/components/account-two-step';
 import { CopyValue } from '@/components/copy-value';
 import { openDeviceDialog } from '@/components/device-control';
 import { PageHeader } from '@/components/page-header';
@@ -25,15 +26,25 @@ import { useBillingEnabled } from '@/lib/queries';
 import { forgetSession } from '@/lib/session';
 import { cue, setSoundsEnabled, useSoundsEnabled } from '@/lib/sounds';
 import type { Theme } from '@/lib/theme';
+import { twoStepQueryOptions } from '@/lib/two-step-status';
 
 export const Route = createFileRoute('/_authenticated/app/account')({
+    // Known before the page draws, so the two-step section neither flashes in nor moves the
+    // sections under it, and a notice's link to it (#two-step) lands on it. A read that fails
+    // is the section's to show.
+    loader: ({ context }) =>
+        context.queryClient
+            .ensureQueryData(twoStepQueryOptions)
+            .then(() => null)
+            .catch(() => null),
     head: () => ({ meta: [{ title: 'Account · HushOS' }] }),
     component: AccountPage,
 });
 
 /*
  * Account: somewhere people come rarely and want to leave quickly. Name and
- * password, the recovery phrase, your family (or making one), the devices signed in, what this browser does, and, folded away,
+ * password, the recovery phrase, two-step sign-in (where the server offers it), your family
+ * (or making one), the devices signed in, what this browser does, and, folded away,
  * the heavy things: replacing sharing keys, rotating the account key, the
  * account ID, deleting the
  * account. Each of those asks once, in a dialog.
@@ -104,6 +115,8 @@ function AccountPage() {
                         <span className="text-muted-foreground">24 words</span>
                     </Setting>
                 </SettingsGroup>
+
+                <AccountTwoStep user={user} />
 
                 <AccountFamily userId={user.id} />
 
@@ -216,7 +229,7 @@ function AccountPage() {
                 open={dialog === 'identity'}
                 onOpenChange={close}
             />
-            <DeleteAccountDialog open={dialog === 'delete'} onOpenChange={close} />
+            <DeleteAccountDialog user={user} open={dialog === 'delete'} onOpenChange={close} />
         </div>
     );
 }

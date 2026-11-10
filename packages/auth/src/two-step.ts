@@ -121,6 +121,7 @@ export function twoStepKeys() {
  */
 function keyMissing() {
     return new AuthError('Two-step sign-in is unavailable. Please try again later.', 503, {
+        code: 'two-step-unavailable',
         cause: Object.assign(new Error('A two-step key that rows were made under is not set.'), {
             name: 'ConfigurationError',
             code: 'TWO_STEP_KEY_MISSING',
@@ -291,7 +292,14 @@ export async function issueStepToken(input: {
         ...input,
         tokenHash: hash(token),
     });
-    return { token, expiresAt: expiresAt.toISOString(), ...(await stepOffer(input.userId)) };
+    return {
+        token,
+        expiresAt: expiresAt.toISOString(),
+        // The same, as seconds from now: a client counts from when it got this, on its own
+        // clock, and one that runs minutes fast or slow still gives the person the whole time.
+        expiresIn: Math.max(0, Math.round((expiresAt.getTime() - Date.now()) / 1000)),
+        ...(await stepOffer(input.userId)),
+    };
 }
 
 /* ------------------------------------------------------------------------- */
@@ -353,14 +361,19 @@ export function stepRequired() {
  */
 export function readTotpCode(typed: string) {
     const code = normalizeTotpCode(typed);
-    if (!code) throw new AuthError('Enter the six digits your authenticator app shows.', 400);
+    if (!code)
+        throw new AuthError('Enter the six digits your authenticator app shows.', 400, {
+            code: 'not-a-code',
+        });
     return code;
 }
 
 function readBackupCode(typed: string) {
     const code = normalizeBackupCode(typed);
     if (!code)
-        throw new AuthError('Enter a backup code as it was shown: ten letters and numbers.', 400);
+        throw new AuthError('Enter a backup code as it was shown: ten letters and numbers.', 400, {
+            code: 'not-a-code',
+        });
     return code;
 }
 
@@ -405,6 +418,7 @@ async function chargeCodeBudget(userId: string, deviceId: string | null) {
         throw new AuthError(
             'Too many wrong codes. Try again in 15 minutes, or use your recovery phrase.',
             429,
+            { code: 'code-budget' },
         );
     return bucket;
 }

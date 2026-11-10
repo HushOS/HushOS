@@ -46,7 +46,6 @@ import {
     identityResponse,
     loginChallengeResponse,
     loginOrStepResponse,
-    loginResponse,
     profileResponse,
     recoveryBackupResponse,
     recoveryChallengeResponse,
@@ -63,6 +62,8 @@ import {
     successResponse,
     totpConfirmedResponse,
     totpSetupResponse,
+    securityChangedResponse,
+    steppedLoginResponse,
     twoStepMethodRemovedResponse,
     twoStepMethodResponse,
     twoStepResponse,
@@ -203,7 +204,7 @@ export const authApi = new Elysia()
     // The second step of a sign-in: the token /auth/login/finish gave, and an answer to it.
     .post(
         '/auth/login/two-step',
-        { body: stepSchema, response: { 200: loginResponse } },
+        { body: stepSchema, response: { 200: steppedLoginResponse } },
         async ({ body, set, log }) => {
             const {
                 user,
@@ -211,12 +212,13 @@ export const authApi = new Elysia()
                 device,
                 newDevice,
                 method,
+                twoStep,
                 sessionToken: token,
             } = await auth.finishTwoStepLogin(body);
             set.headers['set-cookie'] = authCookie('session', token);
             // A new device: the notice names the password and what answered the step.
             if (newDevice) notifyDevices(log, user.id, 'new-device', undefined, method);
-            return { user, envelope, device };
+            return { user, envelope, device, twoStep };
         },
     )
     .post(
@@ -334,15 +336,20 @@ export const authApi = new Elysia()
                 // The second step, for an account that has one (403 `two-step` without it).
                 twoStep: t.Optional(stepSchema),
             }),
-            response: { 200: successResponse },
+            response: { 200: securityChangedResponse },
         },
         async ({ sessionToken, body, set }) => {
-            const result = await auth.finishSecurityChange(sessionToken, body);
+            const { sessionToken: token, ...changed } = await auth.finishSecurityChange(
+                sessionToken,
+                body,
+            );
+            // Every session of the account ended with the change; this device carries on in
+            // the one that was opened with it.
             set.headers['set-cookie'] = [
-                authCookie('session', null),
+                authCookie('session', token),
                 authCookie('enrollment', null),
             ];
-            return result;
+            return changed;
         },
     )
     .get('/auth/storage', { response: { 200: storageResponse } }, ({ sessionToken }) =>

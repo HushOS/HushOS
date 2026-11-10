@@ -4075,6 +4075,10 @@ describe('a self-grant written while its writer rotates their account key', () =
             userId: m.user.id,
             action: 'master-key',
             sessionTokenHash: m.sessionTokenHash,
+            replacement: {
+                tokenHash: randomBytes(32),
+                expiresAt: new Date(Date.now() + 3_600_000),
+            },
             credentialVersion: 1,
             registrationRecord: 'record-2',
             envelope: {
@@ -4178,7 +4182,7 @@ describe('a self-grant written while its writer rotates their account key', () =
         await blocker.started;
         const write = put(m, 1);
         // The client read only the personal grant: the folder's self-grant did not exist yet.
-        let rotation: Promise<boolean> | undefined;
+        let rotation: ReturnType<typeof rotate> | undefined;
         try {
             expect(await pending(write)).toBe(true);
             rotation = rotate(m, [m.workspaceId]);
@@ -4192,7 +4196,7 @@ describe('a self-grant written while its writer rotates their account key', () =
         expect(await rotation).toBe(false);
         expect(await consistent(m.user.id)).toBe(true);
         // Read again, with the new row, the rotation goes through.
-        expect(await rotate(m, [m.workspaceId, m.group.areaId])).toBe(true);
+        expect(await rotate(m, [m.workspaceId, m.group.areaId])).toBeTruthy();
         expect(await consistent(m.user.id)).toBe(true);
     });
 });

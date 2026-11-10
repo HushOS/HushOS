@@ -32,6 +32,76 @@ export type LoginChallenge = {
 };
 /* The finished password exchange a device removal carries. */
 export type DeviceRemovalProof = { attemptToken: string; finishLoginRequest: string };
+
+/*
+ * Two-step sign-in (docs/two-step-design.md 4 and 10). A step token and what can answer it:
+ * the methods the account has, when the token ends, and for the recovery phrase what its
+ * statement and signing key need. `webauthn` is listed once security keys exist; a client
+ * offers only the methods it can answer.
+ */
+export type StepMethod = 'webauthn' | 'totp' | 'backup' | 'phrase';
+export type StepChallenge = {
+    token: string;
+    methods: StepMethod[];
+    expiresAt: string;
+    /* The same, as seconds from when the server answered: count from receipt, on the local clock. */
+    expiresIn: number;
+    phrase?: { userId: string; recoveryVersion: number; wrappingSalt: string };
+};
+/* What a session is answered when it asks for a step token: none, for an account without the step. */
+export type StepOffer = { on: false } | ({ on: true } & StepChallenge);
+/* An answer as it is sent: a code as typed, or the phrase's signature over the step's statement. */
+export type StepProof =
+    | { kind: 'totp'; code: string }
+    | { kind: 'backup'; code: string }
+    | { kind: 'phrase'; signature: string };
+export type StepSubmission = { token: string; proof: StepProof };
+/* The changes a session may ask a step token for (POST /auth/two-step/challenge). */
+export type StepPurpose = 'password' | 'master-key' | 'recovery-key' | 'delete' | 'two-step';
+/* A change to the second step: the finished password exchange, and the step once it is on. */
+export type TwoStepChangeProof = DeviceRemovalProof & { twoStep?: StepSubmission };
+/*
+ * A method as Settings lists it. Dates are ISO strings, rounded by the server; a client that
+ * parses timestamps as it reads a reply (the web's does) holds Date objects here at runtime,
+ * so read them with `new Date(value)`, never as text.
+ */
+export type TwoStepMethod = {
+    id: string;
+    kind: 'totp' | 'webauthn';
+    name: string;
+    createdAt: string;
+    lastUsedAt: string | null;
+    synced: boolean;
+};
+export type TwoStepStatus = {
+    on: boolean;
+    methods: TwoStepMethod[];
+    backupCodesLeft: number;
+    /* Authenticator codes are paused for devices the account has not used. */
+    totpFrozen: boolean;
+};
+/* A finished sign-in: the account, its wrapped key and the session's device. */
+export type SignedIn = {
+    user: AuthUser;
+    envelope: AccountKeyEnvelope;
+    device: SessionDevice & { attached: boolean };
+};
+/*
+ * A sign-in finished by the second step, with what the step leaves to say: whether this
+ * server lets the account change its step (TWO_STEP_ENABLED), and after a backup code how
+ * many are left.
+ */
+export type SteppedIn = SignedIn & { twoStep: { offered: boolean; backupCodesLeft?: number } };
+/*
+ * A security change as the server answers it: every session of the account is ended, and the
+ * device that asked has the one that replaces its own (the cookie), with the account's key as
+ * now wrapped.
+ */
+export type SecurityChanged = {
+    user: AuthUser;
+    envelope: AccountKeyEnvelope;
+    device: SessionDevice & { attached: boolean };
+};
 export type RegistrationChallenge = {
     registrationResponse: string;
     userId: string;
@@ -210,15 +280,39 @@ export interface AuthApi {
      * device the session is on, whether the proof brought it back (`attached`),
      * and whether that device has described itself yet (`registered`).
      */
+    /*
+     * `twoStep: 1` says this client can answer a second step. An account that has one then
+     * gets a step token and nothing else (no session, no envelope) unless the sign-in is
+     * exempt; without it the server answers 409 `update-required`.
+     */
     loginFinish(input: {
         attemptToken: string;
         finishLoginRequest: string;
         device?: { id: string; signature: string };
-    }): Promise<{
-        user: AuthUser;
-        envelope: AccountKeyEnvelope;
-        device: SessionDevice & { attached: boolean };
-    }>;
+        twoStep: 1;
+    }): Promise<SignedIn | { twoStep: StepChallenge }>;
+    /*
+     * The second step of a sign-in. 401 `two-step` for a wrong answer (the token takes
+     * another), 401 `two-step-expired` once the token is gone, 403 `totp-frozen`, 429
+     * `code-budget`, 503 `two-step-unavailable`, 400 `not-a-code`.
+     */
+    loginTwoStep(input: StepSubmission): Promise<SteppedIn>;
+    /* 501 `unsupported` while the server does not offer two-step sign-in. */
+    twoStep(): Promise<TwoStepStatus>;
+    /* Changing the second step asks for the password: this starts the exchange, bound to the session. */
+    twoStepReauth(input: { startLoginRequest: string }): Promise<LoginChallenge>;
+    /* A step token for one change, or `on: false` when the account has no second step. */
+    twoStepChallenge(purpose: StepPurpose): Promise<StepOffer>;
+    /* A pending authenticator app, for ten minutes: its secret (base32) and key URI, once. */
+    startTotp(proof: TwoStepChangeProof): Promise<{ id: string; secret: string; uri: string }>;
+    /* The ten backup codes only when this turned the step on; only then are other devices signed out. */
+    confirmTotp(
+        id: string,
+        input: { code: string; signOutOthers?: boolean },
+    ): Promise<{ backupCodes?: string[] }>;
+    /* `on`: whether the step is still on; removing the last method turns it off. */
+    removeTwoStepMethod(id: string, proof: TwoStepChangeProof): Promise<{ on: boolean }>;
+    replaceBackupCodes(proof: TwoStepChangeProof): Promise<{ codes: string[] }>;
     /* No user: `removed` when this session ended because its device was removed. */
     session(): Promise<{
         user: SessionUser | null;
@@ -265,10 +359,19 @@ export interface AuthApi {
         startLoginRequest: string;
         registrationRequest: string;
     }): Promise<AccountSecurityChallenge>;
+    /* `twoStep`: the second step, for an account that has one (403 `two-step` without it). */
     securityFinish(
-        input: { action: SecurityAction; attemptToken: string } & AccountSecurityUpdate,
-    ): Promise<unknown>;
+        input: {
+            action: SecurityAction;
+            attemptToken: string;
+            twoStep?: StepSubmission;
+        } & AccountSecurityUpdate,
+    ): Promise<SecurityChanged>;
     deleteStart(input: { startLoginRequest: string }): Promise<LoginChallenge>;
-    deleteFinish(input: { attemptToken: string; finishLoginRequest: string }): Promise<unknown>;
+    deleteFinish(input: {
+        attemptToken: string;
+        finishLoginRequest: string;
+        twoStep?: StepSubmission;
+    }): Promise<unknown>;
     updateProfile(name: string): Promise<{ user: SessionUser }>;
 }

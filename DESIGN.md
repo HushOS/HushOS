@@ -308,6 +308,8 @@ The dark ground is pure black, as in Apple's Files app, and the surface (#1c1c1e
 
 Tags have five presets and any colour of your own: Blue (`primary`), Ink (`ink`), Yellow, Teal (#23766d) and Coral (#b4503b) on the web. Yellow has its own value per scheme on the web (`--tag-yellow`, #b8860b in light) with ink that reads on it; it is a tag colour, not the warning. A custom hex gets ink or white text, whichever contrasts more.
 
+A QR code a camera has to read (the recovery kit, the authenticator setup code) sits on plain white (`bg-white`) in every theme: the one fixed colour on an app screen, because a scanner needs dark modules on a light ground.
+
 ## Typography
 
 The web sets everything in **Geist Variable** (Geist Sans), with a local Arial fallback resized to Geist's metrics so the swap barely moves a line. Geist's capital I and lowercase l are close, so anything a person must read character by character goes in mono. **Geist Mono Variable** is for characters read one by one: recovery words, fingerprints and their twelve words shown as code, IDs, object keys, invite codes, `kbd` and `code`. Both are bundled from Fontsource. The phones keep the system face (SF Pro, Roboto): iOS maps the scale onto Dynamic Type text styles (`largeTitle` heavy, `title2` bold, `headline`, `body`, `subheadline`, `footnote`, `caption` semibold); Android uses Material 3's roles at Material's sizes, with one Alpine size, the 34 extra-bold large title.

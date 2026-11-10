@@ -63,6 +63,8 @@ export function DeviceControl({
     const unlocked = unlockedUser === user.id;
     const [open, setOpen] = useState(false);
     const [locking, setLocking] = useState(false);
+    // What the second step asks for, while the unlock form asks it: the dialog's one description.
+    const [stepAbout, setStepAbout] = useState<string | null>(null);
     useEffect(() => {
         const opener = () => setOpen(true);
         openers.add(opener);
@@ -105,11 +107,12 @@ export function DeviceControl({
                 <DialogHeader>
                     <DialogTitle>Unlock HushOS</DialogTitle>
                     <DialogDescription>
-                        Enter your password to open your files on this browser.
+                        {stepAbout ?? 'Enter your password to open your files on this browser.'}
                     </DialogDescription>
                 </DialogHeader>
                 <UnlockDevice
                     user={user}
+                    onDescribe={setStepAbout}
                     onCancel={() => setOpen(false)}
                     onUnlocked={async () => {
                         setOpen(false);

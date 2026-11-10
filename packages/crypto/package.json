@@ -13,6 +13,7 @@
         "./recovery": "./src/recovery.ts",
         "./two-step": "./src/two-step.ts",
         "./two-step/server": "./src/two-step-server.ts",
+        "./two-step/codes": "./src/two-step-codes.ts",
         "./identity": "./src/identity.ts",
         "./consent-due": "./src/consent-due.ts",
         "./drive": "./src/drive.ts",

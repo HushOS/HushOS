@@ -204,6 +204,8 @@ describe('a correct password with the step on', () => {
             token: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
             methods: ['totp', 'backup', 'phrase'],
             expiresAt: new Date(Date.now() + 5 * MINUTE).toISOString(),
+            // The same, counted from now: for a client whose clock is not this server's.
+            expiresIn: 300,
             phrase: {
                 userId: who.id,
                 recoveryVersion: 1,
@@ -277,6 +279,8 @@ describe('a correct password with the step on', () => {
             user: { id: who.id, name: 'Test Person', email: who.email, role: 'member' },
             envelope: expect.objectContaining({ envelopeVersion: 1, credentialVersion: 1 }),
             device: { id: expect.any(String), attached: false, registered: false },
+            // Offered here, and no backup code was used: nothing to say of how many are left.
+            twoStep: { offered: true },
         });
         const session = await sessionOf(done.cookie!);
         expect(session).toMatchObject({ userId: who.id, deviceId: done.body.device.id });
@@ -356,7 +360,8 @@ describe('an authenticator code', () => {
         for (const proof of [...malformed, ...malformed]) {
             const reply = await answer(offer.token, proof);
             expect(reply.status, JSON.stringify(proof)).toBe(400);
-            expect(reply.body.code).toBeUndefined();
+            // Told apart from every other 400 by its code, never by its words.
+            expect(reply.body.code).toBe('not-a-code');
         }
         expect((await answer(offer.token, totp('12345'))).body.message).toBe(
             'Enter the six digits your authenticator app shows.',
@@ -401,6 +406,8 @@ describe('a backup code', () => {
         const done = await answer((await asked(who)).token, backup(` ${typed} `));
         expect(done.status).toBe(200);
         expect(done.body.envelope).toBeDefined();
+        // The reply carries the count, so a client can suggest a new set without asking again.
+        expect(done.body.twoStep).toEqual({ offered: true, backupCodesLeft: 9 });
         const notices = await api.notices();
         const used = notices.find((message) =>
             message.subject.startsWith('A backup code was used'),
@@ -698,6 +705,8 @@ describe('the budget for wrong codes', () => {
             address: '198.51.100.78',
         });
         expect(refused.status).toBe(429);
+        // The step's own 429, by its code: the per-address limiter's has none.
+        expect(refused.body.code).toBe('code-budget');
         // A backup code shares the budget.
         expect((await answer(offer.token, backup(app.backupCodes[0]!))).status).toBe(429);
         // Refused unchecked: nothing counted on the token, no code or step spent.
@@ -909,7 +918,8 @@ describe('a code made under a key this server no longer has', () => {
             for (const proof of [totp(await app.code()), backup(app.backupCodes[0]!)]) {
                 const reply = await answer(offer.token, proof);
                 expect(reply.status, proof.kind).toBe(503);
-                expect(reply.body.code).toBeUndefined();
+                // Its own code: a gateway's 503 has none, and is not this.
+                expect(reply.body.code).toBe('two-step-unavailable');
             }
         expect((await attemptRows()).map((row) => row.failures)).toEqual([0]);
         expect(await api.rows.sharedFailures(who.id)).toBe(99);
@@ -930,7 +940,7 @@ describe('a code made under a key this server no longer has', () => {
         for (let index = 0; index < 12; index++) {
             const reply = await answer(offer.token, backup('00000-00000'));
             expect(reply.status).toBe(503);
-            expect(reply.body.code).toBeUndefined();
+            expect(reply.body.code).toBe('two-step-unavailable');
         }
         // Nothing is compared with the codes that could be checked either: each of the ten
         // codes that were shown gets the same 503, and none is spent.
@@ -1053,7 +1063,10 @@ describe('a change the step guards', () => {
             proof: totp(await nextCode(app)),
         });
         expect(changed.reply.status).toBe(200);
-        expect(await sessionRows()).toEqual([]);
+        // Every session ended but the one that replaces the asking device's own.
+        expect((await sessionRows()).map((row) => row.tokenHash)).toEqual([
+            api.sha256(changed.reply.cookie as string),
+        ]);
         // A step token from before the change answers nothing after it.
         expect(refusedStep(await answer(outstanding.token, totp(await nextCode(app))))).toEqual({
             status: 401,
@@ -1074,7 +1087,7 @@ describe('a change the step guards', () => {
         for (const proof of [totp('12345'), backup('7KQ2M-9XD4')]) {
             const slip = await change.send({ token: forPassword.token, proof });
             expect(slip.status).toBe(400);
-            expect(slip.body.code).toBeUndefined();
+            expect(slip.body.code).toBe('not-a-code');
         }
         expect((await attemptRows()).map((row) => row.failures)).toEqual([0]);
         // New backup codes, the same way: the proof made for it survives the slip.
@@ -1095,7 +1108,8 @@ describe('a change the step guards', () => {
             proof: totp(await nextCode(app)),
         });
         expect(changed.status, JSON.stringify(changed.body)).toBe(200);
-        expect(await sessionRows()).toEqual([]);
+        // Only the session that replaces the asking device's is left.
+        expect(await sessionRows()).toHaveLength(1);
     });
 
     test('nor at deletion: a mistyped code leaves the password proof for the right one', async () => {
@@ -1269,7 +1283,7 @@ describe('a change the step guards', () => {
         });
         expect(rotated.status, JSON.stringify(rotated.body)).toBe(200);
         expect(await keyVersion()).toBe(before + 1);
-        expect(await sessionRows()).toEqual([]);
+        expect(await sessionRows()).toHaveLength(1);
         // The step is still on afterwards, with the new recovery key on offer.
         expect((await asked(who)).phrase.recoveryVersion).toBe(2);
     });
@@ -1347,6 +1361,192 @@ describe('a change the step guards', () => {
         });
         expect(started.status).toBe(200);
         expect((await changePassword(who, cookie!, 'a new password')).reply.status).toBe(200);
+    });
+});
+
+/*
+ * A password change, a new recovery phrase and a rotation end every session of the account.
+ * The device that asked is handed the session that replaces its own, in the same transaction
+ * and in the same reply: were it to sign in again, the step it met could be one it can no
+ * longer answer (the phrase just replaced, the last backup code just spent), and the account
+ * would be lost for good.
+ */
+describe('a security change leaves the device that asked signed in', () => {
+    const rotation = async (who: Account, cookie: string, twoStep: unknown) => {
+        const registration = client.startRegistration({ password: who.password });
+        const proof = await api.prove(who, '/security/start', {
+            cookie,
+            extra: { action: 'master-key', registrationRequest: registration.registrationRequest },
+        });
+        const { registrationRecord } = client.finishRegistration({
+            password: who.password,
+            registrationResponse: proof.challenge.registrationResponse,
+            clientRegistrationState: registration.clientRegistrationState,
+            identifiers: OPAQUE_IDENTIFIERS,
+        });
+        const { envelope, recovery, identity, workspaces } = proof.challenge;
+        const keyVersion = envelope.keyVersion + 1;
+        const next = await api.recoveryKey(who.id, recovery.recoveryVersion + 1);
+        return api.call(
+            'POST',
+            '/security/finish',
+            {
+                action: 'master-key',
+                attemptToken: proof.attemptToken,
+                finishLoginRequest: proof.finishLoginRequest,
+                registrationRecord,
+                envelope: {
+                    envelopeVersion: 1,
+                    keyVersion,
+                    credentialVersion: envelope.credentialVersion + 1,
+                    wrappingSalt: b64(32),
+                    wrappingNonce: b64(24),
+                    encryptedKey: b64(48),
+                },
+                recovery: { ...next.envelope, keyVersion },
+                identity: { ...identity, kem: undefined },
+                workspaces: workspaces.map((grant: Record<string, unknown>) => ({
+                    version: 1,
+                    workspaceId: grant.workspaceId,
+                    keyVersion,
+                    workspaceKeyVersion: grant.workspaceKeyVersion,
+                    wrappingSalt: grant.wrappingSalt,
+                    wrappingNonce: grant.wrappingNonce,
+                    encryptedKey: grant.encryptedKey,
+                })),
+                twoStep,
+            },
+            { cookie },
+        );
+    };
+    const whoIs = async (cookie: string) =>
+        (await api.call('GET', '/session', undefined, { cookie })).body;
+
+    test.each(['password', 'recovery-key', 'master-key'] as const)(
+        'a %s change answered with the recovery phrase: this device carries on, stepped, and every other session ends',
+        async (action) => {
+            // The case that lost accounts: the app is gone and so are the codes, so the phrase
+            // answers the step, and after a new phrase nothing the person holds would again.
+            const { who, app } = await stepped();
+            const here = await signedIn(who, app);
+            const there = await signedIn(who, app);
+            const before = (await sessionOf(here.cookie))!;
+            const purpose = action;
+            const token = await challenge(here.cookie, purpose);
+            const twoStep = { token: token.token, proof: await api.phraseProof(who, token) };
+            const reply =
+                action === 'master-key'
+                    ? await rotation(who, here.cookie, twoStep)
+                    : (
+                          await changePassword(
+                              who,
+                              here.cookie,
+                              // A new phrase keeps the password; only a password change moves it.
+                              action === 'password' ? 'a new password' : who.password,
+                              twoStep,
+                              action,
+                          )
+                      ).reply;
+            expect(reply.status, JSON.stringify(reply.body)).toBe(200);
+            expect(reply.body).toEqual({
+                success: true,
+                user: { id: who.id, name: 'Test Person', email: who.email, role: 'member' },
+                envelope: expect.objectContaining({ envelopeVersion: 1, credentialVersion: 2 }),
+                device: { id: before.deviceId, attached: true, registered: false },
+            });
+            // A new session, handed over as a sign-in hands one over, and none of the old ones.
+            const cookie = reply.cookie as string;
+            expect(cookie).toMatch(/^[A-Za-z0-9_-]{43}$/);
+            expect(cookie).not.toBe(here.cookie);
+            expect((await whoIs(cookie)).user).toMatchObject({ id: who.id, credentialVersion: 2 });
+            expect((await whoIs(here.cookie)).user).toBeNull();
+            expect((await whoIs(there.cookie)).user).toBeNull();
+            const rows = await sessionRows();
+            expect(rows).toHaveLength(1);
+            expect(rows[0]).toMatchObject({
+                tokenHash: api.sha256(cookie),
+                deviceId: before.deviceId,
+                credentialVersion: 2,
+            });
+            // The same sign-in on new credentials: stepped when the old one was, begun when it began.
+            expect(rows[0]!.twoStepAt?.getTime()).toBe(before.twoStepAt?.getTime());
+            expect(rows[0]!.createdAt.getTime()).toBe(before.createdAt.getTime());
+            expect(await deviceRows()).toHaveLength(2);
+            // It can go straight on to what the change promised: the new phrase, to save.
+            const kit = await api.call('GET', '/recovery-key', undefined, { cookie });
+            expect(kit.status).toBe(200);
+            if (action !== 'password') {
+                expect(kit.body.recovery.recoveryVersion).toBe(2);
+                expect(kit.body.confirmed).toBe(false);
+                // The old phrase answers nothing now. Without the session above, this account
+                // would be out of reach: no app, no codes, and a phrase nobody has seen.
+                const offer = await asked(who);
+                const old = await answer(offer.token, await api.phraseProof(who, offer));
+                expect(refusedStep(old)).toEqual({ status: 401, code: 'two-step' });
+            }
+        },
+    );
+
+    test('a session that never passed the step is stepped by the change it answers, and so is the one that replaces it', async () => {
+        // Signed in before the step was turned on: this session has no `two_step_at`.
+        const who = await api.account();
+        const { cookie } = await api.signIn(who);
+        const app = await api.enrol(who.id);
+        expect((await sessionOf(cookie as string))?.twoStepAt).toBeNull();
+        const token = await challenge(cookie as string, 'password');
+        const changed = await changePassword(who, cookie as string, 'a new password', {
+            token: token.token,
+            proof: totp(await app.code()),
+        });
+        expect(changed.reply.status, JSON.stringify(changed.reply.body)).toBe(200);
+        expect((await sessionOf(changed.reply.cookie as string))?.twoStepAt).toBeInstanceOf(Date);
+    });
+
+    test('an account without the step carries on the same way, with no step to its session', async () => {
+        const who = await api.account();
+        const here = await api.signIn(who);
+        const there = await api.signIn(who);
+        const changed = await changePassword(who, here.cookie as string, 'a new password');
+        expect(changed.reply.status, JSON.stringify(changed.reply.body)).toBe(200);
+        const cookie = changed.reply.cookie as string;
+        expect((await whoIs(cookie)).user).toMatchObject({ id: who.id, credentialVersion: 2 });
+        expect((await whoIs(there.cookie as string)).user).toBeNull();
+        expect((await sessionOf(cookie))?.twoStepAt).toBeNull();
+    });
+
+    test('when that session cannot be opened nothing is changed: the password, the step and every session stand', async () => {
+        const { who, app } = await stepped();
+        const here = await signedIn(who, app);
+        const there = await signedIn(who, app);
+        const token = await challenge(here.cookie, 'password');
+        const code = await nextCode(app);
+        const allow = await api.rows.refuseNewSessions(who.id);
+        try {
+            const refused = await changePassword(who, here.cookie, 'a new password', {
+                token: token.token,
+                proof: totp(code),
+            });
+            // The database's refusal, not the step's or the password's: a server failure.
+            expect(refused.reply.status).toBeGreaterThanOrEqual(500);
+            expect(refused.reply.cookie).toBeNull();
+        } finally {
+            await allow();
+        }
+        // Both devices are still signed in, on the old password.
+        expect((await whoIs(here.cookie)).user).toMatchObject({ id: who.id, credentialVersion: 1 });
+        expect((await whoIs(there.cookie)).user).toMatchObject({ id: who.id });
+        expect((await api.signIn(who)).body.twoStep).toBeDefined();
+        // The step was not spent on a change that did not happen: the same token and the same
+        // code, with a new proof of the password, now make it.
+        expect((await attemptRows()).some((row) => row.failures > 0)).toBe(false);
+        const made = await changePassword(who, here.cookie, 'a new password', {
+            token: token.token,
+            proof: totp(code),
+        });
+        expect(made.reply.status, JSON.stringify(made.reply.body)).toBe(200);
+        expect((await whoIs(made.reply.cookie as string)).user).toMatchObject({
+            credentialVersion: 2,
+        });
     });
 });
 
@@ -1954,11 +2154,15 @@ describe('setting the step up', () => {
             backupCodesLeft: 0,
         });
         expect((await api.signIn(who, { old: true })).body.envelope).toBeDefined();
-        // And a challenge has nothing to be for.
-        expect(
-            (await api.call('POST', '/two-step/challenge', { purpose: 'two-step' }, { cookie }))
-                .status,
-        ).toBe(409);
+        // And a challenge says so, as an answer: every password change asks this first, and a
+        // refusal would be a failed request on each of them.
+        const none = await api.call(
+            'POST',
+            '/two-step/challenge',
+            { purpose: 'two-step' },
+            { cookie },
+        );
+        expect([none.status, none.body]).toEqual([200, { on: false }]);
     });
 
     test('a method is renamed by any session, within the rules a device name follows', async () => {
@@ -2015,9 +2219,12 @@ describe('setting the step up', () => {
         const offer = await ask('delete');
         expect(offer.status).toBe(200);
         expect(offer.body).toEqual({
+            on: true,
             token: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
             methods: ['totp', 'backup', 'phrase'],
             expiresAt: new Date(Date.now() + 5 * MINUTE).toISOString(),
+            // The same, counted from now: for a client whose clock is not this server's.
+            expiresIn: 300,
             phrase: {
                 userId: who.id,
                 recoveryVersion: 1,

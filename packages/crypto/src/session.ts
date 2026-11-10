@@ -1,6 +1,7 @@
 import { guardRowId, openGuardRow, sealGuardRow, type GuardRowKind } from './contact-guard';
 import { CryptoError, RefusedError } from './errors';
 import { checkPassword, normalizePassword } from './password';
+import { signTwoStepPhrase } from './two-step';
 import {
     createSecurityChange,
     type SecurityAction,
@@ -177,6 +178,13 @@ type BaseRequests = {
     /* Forgets a re-authentication's password and state, finished or not. */
     reauthCancel: Record<string, never>;
     unlock: { userId: string; envelope: AccountKeyEnvelope };
+    /*
+     * The recovery phrase answering the second step (docs/two-step-design.md 5): the phrase as
+     * typed, and what the step offer carries. It reads and changes nothing of the session, so a
+     * sign-in waiting on its step keeps its place and an open account stays open; a phrase
+     * that cannot be read is a refusal, never the failure that resets the worker.
+     */
+    twoStepPhrase: { phrase: string; userId: string; stepToken: string; wrappingSalt: string };
     /*
      * Identity: opens the X25519 private key under the unlocked account and keeps
      * it for the session (it dies with a lock). Settings are sealed under a key
@@ -805,6 +813,8 @@ type BaseResults = {
     reauthFinish: { finishLoginRequest: string };
     reauthCancel: { ok: true };
     unlock: { userId: string };
+    /* The phrase's signature over the step's statement, base64url: the answer the server checks. */
+    twoStepPhrase: { signature: string };
     identityOpen: {
         keyVersion: number;
         identityVersion: 1 | 2;
@@ -1507,7 +1517,13 @@ export function createCryptoSession() {
                 clearState();
                 return security.start(message.input);
             case 'securityFinish':
-                return security.finish(message.input);
+                // The new password's export key stays here, as after a sign-in's `loginFinish`:
+                // once the server has made the change, `unlock` opens the envelope it answers
+                // with. A lock, another start or a failure drops it (clearState).
+                return security.finish(message.input, (key) => {
+                    exportKey = key;
+                    phase = 'unlock';
+                });
             case 'initialize': {
                 if (!accountKey || unlockedUserId !== message.input.userId)
                     throw new CryptoError('Unlock your account to finish setup.');
@@ -1739,6 +1755,20 @@ export function createCryptoSession() {
                     throw new RefusedError('That password isn’t right. Check it and try again.');
                 // The export key is not needed and not kept: this proves the password, nothing more.
                 return { finishLoginRequest: result.finishLoginRequest };
+            }
+            case 'twoStepPhrase': {
+                const { phrase, ...step } = message.input;
+                try {
+                    // The phrase goes no further than this call: the key it derives signs the
+                    // statement and is wiped (signTwoStepPhrase), and nothing of either is kept.
+                    return { signature: await signTwoStepPhrase(phrase, step) };
+                } catch (error) {
+                    throw new RefusedError(
+                        error instanceof CryptoError
+                            ? error.message
+                            : 'That recovery phrase couldn’t be read. Check each word and try again.',
+                    );
+                }
             }
             case 'identityOpen': {
                 const { userId, identity } = message.input;
