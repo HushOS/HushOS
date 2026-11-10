@@ -25,8 +25,10 @@ use crate::contacts::{
 };
 use crate::error::{input, CoreError, CoreResult};
 use crate::groups::{
-    group_key_digest_of, parse_roster, parse_succession, roster_bytes, verify_group, GroupKeySuccession,
-    GroupKind, GroupPublicKey, GroupRole, MemberStatus, Roster, RosterMember, SignedGroupStatement,
+    group_key_digest_of, members_digest, parse_roster, parse_succession, recovery_roster_bytes, roster_bytes,
+    verify_group, verify_kit, AreaKind, GroupKeySuccession, GroupKind, GroupPublicKey, GroupRole,
+    MemberStatus, RecoveryRoster, Roster, RosterAuto, RosterCustody, RosterMember, RosterOrg,
+    SignedGroupStatement, KIND_FIXED, MAX_ORG_ROTATIONS_PER_ROSTER,
 };
 use crate::identity::{
     identity_verify_keys, PinnedKeys, PublicIdentity, ServedKeys, SuccessionLink, KEM_PUBLIC_KEY_BYTES,
@@ -185,6 +187,85 @@ pub struct GroupChainCache {
     #[cfg_attr(feature = "uniffi", uniffi(default = 1))]
     pub cache_version: u8,
     pub own_entry_wrong_at: Vec<u64>,
+    /// A company's chain only (cache version 3): what acceptance carries along
+    /// a format 3 chain, and the last roster's members when its statement
+    /// says `same`. `None` for a family.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub org: Option<OrgCache>,
+}
+
+/// Where a company key, a kit or an area key came onto the chain: the roster
+/// that introduced it, and its signer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct IntroducedAt {
+    pub roster_version: u64,
+    pub signer_user_id: String,
+}
+
+/// A company key at one version, as the roster that introduced it named it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct CustodyKeyAt {
+    pub encryption_public_key: String,
+    pub kem_public_key_digest: String,
+    pub roster_version: u64,
+    pub signer_user_id: String,
+}
+
+/// A recovery kit at one version: its two sealing keys and its two signing keys.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct KitKeysAt {
+    pub encryption_public_key: String,
+    pub kem_public_key_digest: String,
+    pub signing_public_key: String,
+    pub ml_dsa_public_key_digest: String,
+    pub roster_version: u64,
+    pub signer_user_id: String,
+}
+
+/// When a member held `DataAdmin`: from the roster that gave it up to, and
+/// not including, the roster that took it (`until` is `None` while held).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct DataAdminSpan {
+    pub from: u64,
+    pub until: Option<u64>,
+}
+
+/// What acceptance folds from a company's rosters (companies-design 2.1, 2.2;
+/// the web's `OrgChain`), beside what every group's chain holds:
+///
+/// - every company key and every kit, version 1 first, with the roster that
+///   introduced each and its signer (an Owner: rules 8 and 12). A device
+///   seals to the latest company key and to no other;
+/// - the latest automatic admission's day and count (rule 9);
+/// - each area's kind, fixed at its first row, and each key version's base
+///   list digest and the roster that listed it, with its signer;
+/// - when each member held `DataAdmin`, so a seal that names a roster is
+///   judged by who was a data admin there;
+/// - every recovery roster (rule 11): its version and its signer.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct OrgChain {
+    pub custody_keys: Vec<CustodyKeyAt>,
+    pub kit_keys: Vec<KitKeysAt>,
+    pub last_auto: Option<RosterAuto>,
+    pub area_kinds: HashMap<String, AreaKind>,
+    pub area_lists: HashMap<String, Vec<String>>,
+    pub area_rosters: HashMap<String, Vec<IntroducedAt>>,
+    pub data_admins: HashMap<String, Vec<DataAdminSpan>>,
+    pub recoveries: Vec<IntroducedAt>,
+}
+
+/// A company's record in the cache: [`OrgChain`], and the last roster's
+/// members when its statement says `same` (`None` when it lists them).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct OrgCache {
+    pub chain: OrgChain,
+    pub members: Option<Vec<RosterMember>>,
 }
 
 /// A roster the server served off the accepted chain: its version and the
@@ -220,6 +301,7 @@ pub struct AcceptedRosters {
     pub(crate) area_keys: HashMap<String, Vec<String>>,
     pub(crate) area_roots: HashMap<String, Vec<Option<String>>>,
     pub(crate) retired_areas: Vec<String>,
+    pub(crate) org: Option<OrgChain>,
     pub(crate) own_entry_wrong_at: Vec<u64>,
     pub(crate) own_entry_behind_at: Vec<u64>,
     pub(crate) dead_branches: Vec<DeadBranch>,
@@ -295,6 +377,19 @@ impl AcceptedRosters {
     }
     /// The areas the chain retired (tombstones, design 2.10), sorted: never
     /// written, granted or rotated again.
+    /// A company's chain: its company keys, kits, area kinds and lists, and
+    /// who held `DataAdmin` when ([`OrgChain`]). `None` for a family.
+    pub fn org(&self) -> Option<OrgChain> {
+        self.org.clone()
+    }
+
+    /// Every recovery roster on the chain (companies-design 2.1, rule 11): its
+    /// version and the member who used the kit to become an Owner. Every
+    /// member's app says so once. Empty for a family.
+    pub fn recoveries(&self) -> Vec<IntroducedAt> {
+        self.org.as_ref().map(|org| org.recoveries.clone()).unwrap_or_default()
+    }
+
     pub fn retired_areas(&self) -> Vec<String> {
         self.retired_areas.clone()
     }
@@ -647,6 +742,395 @@ const REUSED_ROOT: &str = "This folder key was used before: a rotation needs a n
 pub(crate) const DOWNGRADE: &str = "This member list is in an older format than the one before it.";
 /* The cache format this core writes (`GroupChainCache::cache_version`). */
 const CACHE_VERSION: u8 = 2;
+/* A company's cache (format 3 chains): CACHE_VERSION's fields and `org`. */
+const ORG_CACHE_VERSION: u8 = 3;
+
+/* The refusals of check_roster_org, as companies-design 2.1 words them. */
+const DROPPED_ADMIN: &str = "A roster that removes a data admin replaces the company key.";
+const KIT_NEEDS_KEY: &str = "A new recovery kit needs a new company key.";
+const OWNER_ONLY: &str = "Only an owner can change an owner, the recovery kit or its holders.";
+const OWNER_KEYS: &str = "Only an owner can replace the company’s keys.";
+const KIT_FOLLOWS: &str = "A roster that takes the recovery kit from someone replaces the kit.";
+const ORG_ROLE_SET: &str = "This is not one of a company’s roles.";
+const LEFT_WITH_ROLES: &str = "Someone who has left a company holds no role.";
+const NO_OWNER: &str = "A company keeps an active owner.";
+const CUSTODY_NOT_FOLLOWING: &str = "The company’s keys do not follow from the member list before.";
+const REUSED_CUSTODY: &str = "This company key or recovery kit was used before: a new one is needed.";
+const TOO_MANY_ROTATIONS: &str = "A company’s member list changes at most 8 folder keys.";
+const NOT_AUTOMATIC: &str = "This is not an automatic admission the company’s rules allow.";
+const WRONG_AREA_COUNT: &str = "This member list does not count the company’s folders.";
+const NOT_A_RECOVERY: &str = "The recovery kit makes its holder an owner and changes nothing else.";
+const NOT_KIT_SIGNED: &str = "This member list is not signed with the company’s recovery kit.";
+const GUARDED_FOLD_IN: &str =
+    "An owner’s or kit holder’s new keys need a fresh words check before they are folded in.";
+
+/* The six sets of roles a company's entry may hold (companies-design 2.1, rule 3); roles are sorted. */
+const ORG_ROLE_SETS: [&[GroupRole]; 6] = [
+    &[],
+    &[GroupRole::Billing],
+    &[GroupRole::Recovery],
+    &[GroupRole::Billing, GroupRole::Recovery],
+    &[GroupRole::DataAdmin, GroupRole::Members],
+    &[GroupRole::Billing, GroupRole::DataAdmin, GroupRole::Members, GroupRole::Recovery],
+];
+
+/* Whether `entry` is an Owner of a company (companies-design 1.2): active, with all four capabilities. */
+pub(crate) fn is_owner(entry: Option<&RosterMember>) -> bool {
+    entry.is_some_and(|entry| entry.status == MemberStatus::Active && entry.roles == ORG_ROLE_SETS[5])
+}
+
+fn holds(entry: Option<&RosterMember>, role: GroupRole) -> bool {
+    entry.is_some_and(|entry| entry.active_with(Some(role)))
+}
+
+/* A company roster's own fields: there on every format 3 roster (its statement saw to that). */
+fn org_of(roster: &Roster) -> CoreResult<&RosterOrg> {
+    roster.org.as_ref().ok_or_else(|| input("Invalid roster format."))
+}
+
+fn same_custody_key(a: &RosterCustody, b: &RosterCustody) -> bool {
+    a.custody_encryption_public_key == b.custody_encryption_public_key
+        && a.custody_kem_public_key_digest == b.custody_kem_public_key_digest
+}
+
+fn same_kit(a: &RosterCustody, b: &RosterCustody) -> bool {
+    a.kit_encryption_public_key == b.kit_encryption_public_key
+        && a.kit_kem_public_key_digest == b.kit_kem_public_key_digest
+        && a.kit_signing_public_key == b.kit_signing_public_key
+        && a.kit_ml_dsa_public_key_digest == b.kit_ml_dsa_public_key_digest
+}
+
+/*
+ * Whether `next` is a recovery roster after `previous` (companies-design 2.1,
+ * rule 11): a company's roster whose signer holds `Recovery` but not
+ * `Members` on the roster before. It is then accepted under rule 11 and no
+ * other way: such a signer signs nothing else.
+ */
+fn is_recovery_roster(previous: Option<&Roster>, next: &Roster) -> bool {
+    let Some(previous) = previous.filter(|_| next.kind == GroupKind::Org) else {
+        return false;
+    };
+    let signer = previous.entry(&next.signer_user_id);
+    holds(signer, GroupRole::Recovery) && !holds(signer, GroupRole::Members)
+}
+
+/*
+ * What acceptance adds for a company's roster (companies-design 2.1, rules 1
+ * to 12; the web's checkRosterOrg), after the entry and area rules every
+ * group keeps. `org` and `ledger` are the chain so far, before this roster is
+ * folded in; `next` holds its members resolved. `recovery` says the roster is
+ * a recovery roster (is_recovery_roster), which is held to rule 11 in place
+ * of rules 8 and 12; its kit signature is checked with the others.
+ */
+fn check_roster_org(
+    org: &OrgChain,
+    ledger: &AreaLedger,
+    previous: Option<&Roster>,
+    next: &Roster,
+    recovery: bool,
+) -> CoreResult<()> {
+    let fields = org_of(next)?;
+    let custody = &fields.custody;
+    let before = previous.map(org_of).transpose()?;
+    // Rule 3: one of the six role sets, and none at all once left.
+    for entry in &next.members {
+        if !ORG_ROLE_SETS.contains(&entry.roles.as_slice()) {
+            return Err(input(ORG_ROLE_SET));
+        }
+        if entry.status == MemberStatus::Left && !entry.roles.is_empty() {
+            return Err(input(LEFT_WITH_ROLES));
+        }
+    }
+    // Rule 4: an Owner stays.
+    if !next.members.iter().any(|entry| is_owner(Some(entry))) {
+        return Err(input(NO_OWNER));
+    }
+    // Rule 1: each version is the one before or one more; kept, its keys are kept; raised, every
+    // key is new, never one an earlier version had. Version 1 of each is on roster 1.
+    let custody_rises =
+        before.is_none_or(|b| custody.custody_key_version == b.custody.custody_key_version + 1);
+    let kit_rises = before.is_none_or(|b| custody.kit_version == b.custody.kit_version + 1);
+    match before {
+        None => {
+            if custody.custody_key_version != 1 || custody.kit_version != 1 {
+                return Err(input(CUSTODY_NOT_FOLLOWING));
+            }
+        }
+        Some(before) => {
+            let b = &before.custody;
+            if (!custody_rises && custody.custody_key_version != b.custody_key_version)
+                || (!kit_rises && custody.kit_version != b.kit_version)
+                || (!custody_rises && !same_custody_key(custody, b))
+                || (!kit_rises && !same_kit(custody, b))
+            {
+                return Err(input(CUSTODY_NOT_FOLLOWING));
+            }
+        }
+    }
+    if custody_rises
+        && org.custody_keys.iter().any(|at| {
+            at.encryption_public_key == custody.custody_encryption_public_key
+                || at.kem_public_key_digest == custody.custody_kem_public_key_digest
+        })
+    {
+        return Err(input(REUSED_CUSTODY));
+    }
+    if kit_rises
+        && org.kit_keys.iter().any(|at| {
+            at.encryption_public_key == custody.kit_encryption_public_key
+                || at.kem_public_key_digest == custody.kit_kem_public_key_digest
+                || at.signing_public_key == custody.kit_signing_public_key
+                || at.ml_dsa_public_key_digest == custody.kit_ml_dsa_public_key_digest
+        })
+    {
+        return Err(input(REUSED_CUSTODY));
+    }
+    if let Some(previous) = previous {
+        let loses = |role: GroupRole| {
+            previous
+                .members
+                .iter()
+                .any(|entry| entry.active_with(Some(role)) && !holds(next.entry(&entry.user_id), role))
+        };
+        // Rule 2: dropping a data admin replaces the company key.
+        if loses(GroupRole::DataAdmin) && !custody_rises {
+            return Err(input(DROPPED_ADMIN));
+        }
+        // Rule 7: the kit follows `recovery`, and a new kit needs a new company key.
+        if loses(GroupRole::Recovery) && !kit_rises {
+            return Err(input(KIT_FOLLOWS));
+        }
+        if kit_rises && !custody_rises {
+            return Err(input(KIT_NEEDS_KEY));
+        }
+    }
+    if recovery {
+        check_recovery_roster(previous.expect("a recovery roster follows one"), next)?;
+    } else {
+        // The signer as the roster before named them (version 1: as it names them itself).
+        let signer_is_owner = is_owner(previous.unwrap_or(next).entry(&next.signer_user_id));
+        // Rule 8: any change to a guarded entry (one that holds `recovery` before or after), a
+        // new guarded entry, and a new kit are an Owner's to sign.
+        let guarded = next.members.iter().any(|entry| {
+            let was = previous.and_then(|previous| previous.entry(&entry.user_id));
+            if !holds(Some(entry), GroupRole::Recovery) && !holds(was, GroupRole::Recovery) {
+                return false;
+            }
+            !was.is_some_and(|was| same_entry(was, entry))
+        });
+        if (guarded || kit_rises) && !signer_is_owner {
+            return Err(input(OWNER_ONLY));
+        }
+        // Rule 12: a new company key is an Owner's to sign.
+        if custody_rises && !signer_is_owner {
+            return Err(input(OWNER_KEYS));
+        }
+    }
+    // An area's kind is fixed at its first row; rule 6: at most 8 rows rotate an existing area.
+    let mut rotations = 0;
+    for row in next.areas.iter().filter(|row| !row.retired) {
+        if org.area_kinds.get(&row.workspace_id).is_some_and(|kind| Some(*kind) != row.area_kind) {
+            return Err(input(KIND_FIXED));
+        }
+        if ledger.keys.contains_key(&row.workspace_id) {
+            rotations += 1;
+        }
+    }
+    if rotations > MAX_ORG_ROTATIONS_PER_ROSTER {
+        return Err(input(TOO_MANY_ROTATIONS));
+    }
+    // Rule 9: an automatic admission says so, and is nothing but one new Member.
+    if let Some(auto) = &fields.auto {
+        let refused = || input(NOT_AUTOMATIC);
+        let (Some(previous), Some(before)) = (previous, before) else {
+            return Err(refused());
+        };
+        if !before.rules.auto_join || fields.members_same.is_some() {
+            return Err(refused());
+        }
+        let added: Vec<&RosterMember> =
+            next.members.iter().filter(|entry| previous.entry(&entry.user_id).is_none()).collect();
+        if added.len() != 1
+            || added[0].status != MemberStatus::Active
+            || !added[0].roles.is_empty()
+            || next.members.len() != previous.members.len() + 1
+            || previous
+                .members
+                .iter()
+                .any(|entry| !next.entry(&entry.user_id).is_some_and(|now| same_entry(entry, now)))
+        {
+            return Err(refused());
+        }
+        let last = org.last_auto.as_ref();
+        if last.is_some_and(|last| auto.utc_day < last.utc_day) {
+            return Err(refused());
+        }
+        let count =
+            last.filter(|last| last.utc_day == auto.utc_day).map_or(1, |last| last.count_that_day + 1);
+        if auto.count_that_day != count || count > before.rules.auto_join_daily_limit {
+            return Err(refused());
+        }
+    }
+    // Rule 10: the live areas after this roster.
+    let created = next.areas.iter().filter(|row| !ledger.keys.contains_key(&row.workspace_id)).count();
+    let retiring = next.areas.iter().filter(|row| row.retired).count();
+    let live = (ledger.keys.len() - ledger.retired.len() + created).saturating_sub(retiring);
+    if fields.heads.area_count != live as u64 {
+        return Err(input(WRONG_AREA_COUNT));
+    }
+    Ok(())
+}
+
+/*
+ * Rule 11, signatures aside: the recovery roster changes exactly one entry,
+ * the signer's own, and only by giving it all four roles (its keys stay); it
+ * carries no area row and no `auto`, and the `custody`, `rules` and `heads`
+ * of the roster before.
+ */
+fn check_recovery_roster(previous: &Roster, next: &Roster) -> CoreResult<()> {
+    let refused = || input(NOT_A_RECOVERY);
+    let (fields, before) = (org_of(next)?, org_of(previous)?);
+    if fields.members_same.is_some() || next.members.len() != previous.members.len() {
+        return Err(refused());
+    }
+    for entry in &next.members {
+        let was = previous.entry(&entry.user_id).ok_or_else(refused)?;
+        let kept = if entry.user_id == next.signer_user_id {
+            same_keys(was, entry) && is_owner(Some(entry))
+        } else {
+            same_entry(was, entry)
+        };
+        if !kept {
+            return Err(refused());
+        }
+    }
+    if !next.areas.is_empty()
+        || fields.auto.is_some()
+        || fields.custody != before.custody
+        || fields.rules != before.rules
+        || fields.heads != before.heads
+    {
+        return Err(refused());
+    }
+    Ok(())
+}
+
+/*
+ * Whether `copy` carries the recovery kit's signature over this roster (rule
+ * 11): a hybrid signature under the kit's own ML-DSA context over the
+ * recovery-roster statement of its group, version, kit version and statement
+ * digest, under the kit's signing keys in the `custody` field of the roster
+ * before, the ML-DSA key served and matched by its digest.
+ */
+fn signed_by_kit(
+    previous: &Roster,
+    next: &Roster,
+    statement: &[u8],
+    copy: &SignedGroupStatement,
+    ml_dsa_keys: &HashMap<String, String>,
+) -> bool {
+    let (Some(kit_signature), Some(before)) = (&copy.kit_signature, &previous.org) else {
+        return false;
+    };
+    let kit = &before.custody;
+    let Ok(message) = recovery_roster_bytes(&RecoveryRoster {
+        group_id: next.group_id.clone(),
+        roster_version: next.roster_version,
+        kit_version: kit.kit_version,
+        roster_digest: digest(statement),
+    }) else {
+        return false;
+    };
+    ml_dsa_keys
+        .get(&kit.kit_ml_dsa_public_key_digest)
+        .and_then(|served| decode("mlDsaPublicKey", served, Some(ML_DSA_PUBLIC_KEY_BYTES)).ok())
+        .filter(|served| digest(served) == kit.kit_ml_dsa_public_key_digest)
+        .zip(decode("signingPublicKey", &kit.kit_signing_public_key, Some(32)).ok())
+        .is_some_and(|(ml_dsa_public_key, signing_public_key)| {
+            verify_kit(&HybridPublicKey { signing_public_key, ml_dsa_public_key }, &message, kit_signature)
+        })
+}
+
+/* Folds a held company roster into the chain's company state (check_roster_org passed it). */
+fn fold_org(org: &mut OrgChain, roster: &Roster, recovery: bool) {
+    let Some(fields) = &roster.org else {
+        return;
+    };
+    let at =
+        IntroducedAt { roster_version: roster.roster_version, signer_user_id: roster.signer_user_id.clone() };
+    let custody = &fields.custody;
+    if custody.custody_key_version > org.custody_keys.len() as u64 {
+        org.custody_keys.push(CustodyKeyAt {
+            encryption_public_key: custody.custody_encryption_public_key.clone(),
+            kem_public_key_digest: custody.custody_kem_public_key_digest.clone(),
+            roster_version: at.roster_version,
+            signer_user_id: at.signer_user_id.clone(),
+        });
+    }
+    if custody.kit_version > org.kit_keys.len() as u64 {
+        org.kit_keys.push(KitKeysAt {
+            encryption_public_key: custody.kit_encryption_public_key.clone(),
+            kem_public_key_digest: custody.kit_kem_public_key_digest.clone(),
+            signing_public_key: custody.kit_signing_public_key.clone(),
+            ml_dsa_public_key_digest: custody.kit_ml_dsa_public_key_digest.clone(),
+            roster_version: at.roster_version,
+            signer_user_id: at.signer_user_id.clone(),
+        });
+    }
+    if let Some(auto) = &fields.auto {
+        org.last_auto = Some(auto.clone());
+    }
+    for row in roster.areas.iter().filter(|row| !row.retired) {
+        if let Some(kind) = row.area_kind {
+            org.area_kinds.entry(row.workspace_id.clone()).or_insert(kind);
+        }
+        org.area_lists
+            .entry(row.workspace_id.clone())
+            .or_default()
+            .push(row.list_digest.clone().unwrap_or_default());
+        org.area_rosters.entry(row.workspace_id.clone()).or_default().push(at.clone());
+    }
+    for entry in &roster.members {
+        let holding = entry.active_with(Some(GroupRole::DataAdmin));
+        let open = org
+            .data_admins
+            .get(&entry.user_id)
+            .and_then(|spans| spans.last())
+            .is_some_and(|span| span.until.is_none());
+        if holding && !open {
+            org.data_admins
+                .entry(entry.user_id.clone())
+                .or_default()
+                .push(DataAdminSpan { from: roster.roster_version, until: None });
+        }
+        if !holding && open {
+            if let Some(span) = org.data_admins.get_mut(&entry.user_id).and_then(|spans| spans.last_mut()) {
+                span.until = Some(roster.roster_version);
+            }
+        }
+    }
+    if recovery {
+        org.recoveries.push(at);
+    }
+}
+
+/*
+ * A served roster with its members in place: for `["same",membersDigest]`
+ * (format 3), the list of the roster before, taken only when the digest is
+ * that list's; any other roster as it is. Never at version 1, which the
+ * statement itself refuses.
+ */
+fn with_members(roster: &Roster, previous: Option<&Roster>) -> CoreResult<Roster> {
+    let Some(same) = roster.org.as_ref().and_then(|org| org.members_same.as_ref()) else {
+        return Ok(roster.clone());
+    };
+    let refused = || input("This member list does not follow from the one before.");
+    let previous = previous.filter(|previous| previous.kind == roster.kind).ok_or_else(refused)?;
+    if members_digest(previous)? != *same {
+        return Err(refused());
+    }
+    Ok(Roster { members: previous.members.clone(), ..roster.clone() })
+}
 
 /*
  * What the chain has listed of its areas so far (2.4, 2.6, 2.10), folded
@@ -911,7 +1395,7 @@ fn check_cache(group_id: &str, cache: GroupChainCache) -> CoreResult<Cached> {
             digest_of(at, "roster digest")?;
         }
         let statement = decode("statement", &cache.statement, None)?;
-        let roster = parse_roster(&statement)?;
+        let mut roster = parse_roster(&statement)?;
         let through = cache.roster_digests.len() as u64;
         if roster.group_id != group_id
             || roster.roster_version != through
@@ -970,9 +1454,15 @@ fn check_cache(group_id: &str, cache: GroupChainCache) -> CoreResult<Cached> {
         }
         // The cache's own version says what it carries (design 2.10): 2 has every area's roots and
         // the retired areas; 1, a cache written before format 2, has neither and described none.
+        // A company's cache is version 3 and carries `org`; a family's never does.
+        let company = roster.kind == GroupKind::Org;
+        if company != cache.org.is_some() {
+            return Err(bad());
+        }
         let before_format_2 = match cache.cache_version {
-            1 => true,
-            CACHE_VERSION => false,
+            1 if !company => true,
+            CACHE_VERSION if !company => false,
+            ORG_CACHE_VERSION if company => false,
             _ => return Err(bad()),
         };
         if before_format_2 && (!cache.area_roots.is_empty() || !cache.retired_areas.is_empty()) {
@@ -1022,9 +1512,349 @@ fn check_cache(group_id: &str, cache: GroupChainCache) -> CoreResult<Cached> {
                 return Err(bad());
             }
         }
+        if let Some(record) = &cache.org {
+            roster = check_org_cache(record, &cache, &roster)?;
+        }
         Ok(Cached { roster_digests: cache.roster_digests.clone(), statement, roster, cache })
     };
     checked().map_err(|_| bad())
+}
+
+fn role_name(role: GroupRole) -> &'static str {
+    match role {
+        GroupRole::Billing => "billing",
+        GroupRole::DataAdmin => "data_admin",
+        GroupRole::Guardian => "guardian",
+        GroupRole::Members => "members",
+        GroupRole::Recovery => "recovery",
+    }
+}
+
+/* A company's record as the web's cache holds it: `OrgChain`'s fields, camelCase, and `members`. */
+pub(crate) fn org_cache_value(record: &OrgCache) -> serde_json::Value {
+    use serde_json::json;
+    let org = &record.chain;
+    let at =
+        |at: &IntroducedAt| json!({ "rosterVersion": at.roster_version, "signerUserId": at.signer_user_id });
+    json!({
+        "custodyKeys": org.custody_keys.iter().map(|key| json!({
+            "encryptionPublicKey": key.encryption_public_key,
+            "kemPublicKeyDigest": key.kem_public_key_digest,
+            "rosterVersion": key.roster_version,
+            "signerUserId": key.signer_user_id,
+        })).collect::<Vec<_>>(),
+        "kitKeys": org.kit_keys.iter().map(|kit| json!({
+            "encryptionPublicKey": kit.encryption_public_key,
+            "kemPublicKeyDigest": kit.kem_public_key_digest,
+            "signingPublicKey": kit.signing_public_key,
+            "mlDsaPublicKeyDigest": kit.ml_dsa_public_key_digest,
+            "rosterVersion": kit.roster_version,
+            "signerUserId": kit.signer_user_id,
+        })).collect::<Vec<_>>(),
+        "lastAuto": org.last_auto.as_ref().map(|auto| json!({ "utcDay": auto.utc_day, "countThatDay": auto.count_that_day })),
+        "areaKinds": org.area_kinds.iter().map(|(id, kind)| (id.clone(), json!(kind.as_str()))).collect::<serde_json::Map<_, _>>(),
+        "areaLists": org.area_lists,
+        "areaRosters": org.area_rosters.iter().map(|(id, list)| (id.clone(), json!(list.iter().map(at).collect::<Vec<_>>()))).collect::<serde_json::Map<_, _>>(),
+        "dataAdmins": org.data_admins.iter().map(|(id, spans)| (id.clone(), json!(spans.iter().map(|span| json!({ "from": span.from, "until": span.until })).collect::<Vec<_>>()))).collect::<serde_json::Map<_, _>>(),
+        "recoveries": org.recoveries.iter().map(at).collect::<Vec<_>>(),
+        "members": record.members.as_ref().map(|members| members.iter().map(|m| json!({
+            "userId": m.user_id,
+            "keyVersion": m.key_version,
+            "encryptionPublicKey": m.encryption_public_key,
+            "signingPublicKey": m.signing_public_key,
+            "mlDsaPublicKeyDigest": m.ml_dsa_public_key_digest,
+            "kemPublicKeyDigest": m.kem_public_key_digest,
+            "status": match m.status { MemberStatus::Active => "active", MemberStatus::Left => "left" },
+            "roles": m.roles.iter().map(|role| role_name(*role)).collect::<Vec<_>>(),
+            "sinceVersion": m.since_version,
+        })).collect::<Vec<_>>()),
+    })
+}
+
+/* The same record from the web's JSON, or `Err` for a field of the wrong kind (check_cache judges the rest). */
+pub(crate) fn org_cache_of(value: &serde_json::Value) -> Result<OrgCache, ()> {
+    use serde_json::Value;
+    let record = value.as_object().ok_or(())?;
+    let text = |value: Option<&Value>| value.and_then(Value::as_str).map(str::to_string).ok_or(());
+    let number = |value: Option<&Value>| value.and_then(Value::as_u64).ok_or(());
+    fn list(value: Option<&Value>) -> Result<&Vec<Value>, ()> {
+        value.and_then(Value::as_array).ok_or(())
+    }
+    fn object(value: Option<&Value>) -> Result<&serde_json::Map<String, Value>, ()> {
+        value.and_then(Value::as_object).ok_or(())
+    }
+    let at = |value: &Value| -> Result<IntroducedAt, ()> {
+        Ok(IntroducedAt {
+            roster_version: number(value.get("rosterVersion"))?,
+            signer_user_id: text(value.get("signerUserId"))?,
+        })
+    };
+    let chain = OrgChain {
+        custody_keys: list(record.get("custodyKeys"))?
+            .iter()
+            .map(|key| {
+                Ok(CustodyKeyAt {
+                    encryption_public_key: text(key.get("encryptionPublicKey"))?,
+                    kem_public_key_digest: text(key.get("kemPublicKeyDigest"))?,
+                    roster_version: number(key.get("rosterVersion"))?,
+                    signer_user_id: text(key.get("signerUserId"))?,
+                })
+            })
+            .collect::<Result<_, ()>>()?,
+        kit_keys: list(record.get("kitKeys"))?
+            .iter()
+            .map(|kit| {
+                Ok(KitKeysAt {
+                    encryption_public_key: text(kit.get("encryptionPublicKey"))?,
+                    kem_public_key_digest: text(kit.get("kemPublicKeyDigest"))?,
+                    signing_public_key: text(kit.get("signingPublicKey"))?,
+                    ml_dsa_public_key_digest: text(kit.get("mlDsaPublicKeyDigest"))?,
+                    roster_version: number(kit.get("rosterVersion"))?,
+                    signer_user_id: text(kit.get("signerUserId"))?,
+                })
+            })
+            .collect::<Result<_, ()>>()?,
+        last_auto: match record.get("lastAuto") {
+            Some(Value::Null) => None,
+            auto => Some(RosterAuto {
+                utc_day: text(auto.and_then(|auto| auto.get("utcDay")))?,
+                count_that_day: number(auto.and_then(|auto| auto.get("countThatDay")))?,
+            }),
+        },
+        area_kinds: object(record.get("areaKinds"))?
+            .iter()
+            .map(|(id, kind)| Ok((id.clone(), AreaKind::parse(kind.as_str().ok_or(())?).map_err(|_| ())?)))
+            .collect::<Result<_, ()>>()?,
+        area_lists: object(record.get("areaLists"))?
+            .iter()
+            .map(|(id, lists)| {
+                Ok((
+                    id.clone(),
+                    list(Some(lists))?.iter().map(|at| text(Some(at))).collect::<Result<_, ()>>()?,
+                ))
+            })
+            .collect::<Result<_, ()>>()?,
+        area_rosters: object(record.get("areaRosters"))?
+            .iter()
+            .map(|(id, rosters)| {
+                Ok((id.clone(), list(Some(rosters))?.iter().map(at).collect::<Result<_, ()>>()?))
+            })
+            .collect::<Result<_, ()>>()?,
+        data_admins: object(record.get("dataAdmins"))?
+            .iter()
+            .map(|(id, spans)| {
+                let spans = list(Some(spans))?
+                    .iter()
+                    .map(|span| {
+                        Ok(DataAdminSpan {
+                            from: number(span.get("from"))?,
+                            until: match span.get("until") {
+                                Some(Value::Null) => None,
+                                until => Some(number(until)?),
+                            },
+                        })
+                    })
+                    .collect::<Result<_, ()>>()?;
+                Ok((id.clone(), spans))
+            })
+            .collect::<Result<_, ()>>()?,
+        recoveries: list(record.get("recoveries"))?.iter().map(at).collect::<Result<_, ()>>()?,
+    };
+    let members = match record.get("members") {
+        Some(Value::Null) => None,
+        members => Some(
+            list(members)?
+                .iter()
+                .map(|m| {
+                    Ok(RosterMember {
+                        user_id: text(m.get("userId"))?,
+                        key_version: number(m.get("keyVersion"))?,
+                        encryption_public_key: text(m.get("encryptionPublicKey"))?,
+                        signing_public_key: text(m.get("signingPublicKey"))?,
+                        ml_dsa_public_key_digest: text(m.get("mlDsaPublicKeyDigest"))?,
+                        kem_public_key_digest: text(m.get("kemPublicKeyDigest"))?,
+                        status: match m.get("status").and_then(Value::as_str) {
+                            Some("active") => MemberStatus::Active,
+                            Some("left") => MemberStatus::Left,
+                            _ => return Err(()),
+                        },
+                        roles: list(m.get("roles"))?
+                            .iter()
+                            .map(|role| match role.as_str() {
+                                Some("billing") => Ok(GroupRole::Billing),
+                                Some("data_admin") => Ok(GroupRole::DataAdmin),
+                                Some("guardian") => Ok(GroupRole::Guardian),
+                                Some("members") => Ok(GroupRole::Members),
+                                Some("recovery") => Ok(GroupRole::Recovery),
+                                _ => Err(()),
+                            })
+                            .collect::<Result<_, ()>>()?,
+                        since_version: number(m.get("sinceVersion"))?,
+                    })
+                })
+                .collect::<Result<_, ()>>()?,
+        ),
+    };
+    Ok(OrgCache { chain, members })
+}
+
+/// A company's cache record as the web's JSON holds it (the shared fixtures
+/// compare the twins' caches through it). Not exported to the apps.
+#[doc(hidden)]
+pub fn org_cache_json(record: OrgCache) -> String {
+    org_cache_value(&record).to_string()
+}
+
+/// The reverse of [`org_cache_json`]. Not exported to the apps.
+#[doc(hidden)]
+pub fn org_cache_from_json(json: String) -> CoreResult<OrgCache> {
+    let bad = || input("Invalid member list cache.");
+    org_cache_of(&serde_json::from_str(&json).map_err(|_| bad())?).map_err(|()| bad())
+}
+
+/*
+ * A company's record in the cache: every part canonical, and consistent with
+ * the last roster, which is returned with its members in place when its
+ * statement says `same` (the web's checkCache does the same).
+ */
+fn check_org_cache(record: &OrgCache, cache: &GroupChainCache, roster: &Roster) -> CoreResult<Roster> {
+    let bad = || input("Invalid member list cache.");
+    let org = &record.chain;
+    let fields = org_of(roster)?;
+    let last = cache.roster_digests.len() as u64;
+    let introduced = |version: u64, signer: &str| -> CoreResult<()> {
+        if integer(version, "roster version")? > last {
+            return Err(bad());
+        }
+        uuid(signer, "user id").map(|_| ())
+    };
+    let in_order = |versions: Vec<u64>| versions.windows(2).all(|pair| pair[0] < pair[1]);
+    for at in &org.custody_keys {
+        bytes_of(&at.encryption_public_key, 32, "company key")?;
+        digest_of(&at.kem_public_key_digest, "company key digest")?;
+        introduced(at.roster_version, &at.signer_user_id)?;
+    }
+    for at in &org.kit_keys {
+        bytes_of(&at.encryption_public_key, 32, "recovery kit key")?;
+        digest_of(&at.kem_public_key_digest, "recovery kit key digest")?;
+        bytes_of(&at.signing_public_key, 32, "recovery kit key")?;
+        digest_of(&at.ml_dsa_public_key_digest, "recovery kit key digest")?;
+        introduced(at.roster_version, &at.signer_user_id)?;
+    }
+    if !in_order(org.custody_keys.iter().map(|at| at.roster_version).collect())
+        || !in_order(org.kit_keys.iter().map(|at| at.roster_version).collect())
+    {
+        return Err(bad());
+    }
+    // The last roster names the latest of each, by version and by key.
+    let custody = &fields.custody;
+    let (Some(key), Some(kit)) = (org.custody_keys.last(), org.kit_keys.last()) else {
+        return Err(bad());
+    };
+    if org.custody_keys.len() as u64 != custody.custody_key_version
+        || org.kit_keys.len() as u64 != custody.kit_version
+        || key.encryption_public_key != custody.custody_encryption_public_key
+        || key.kem_public_key_digest != custody.custody_kem_public_key_digest
+        || kit.encryption_public_key != custody.kit_encryption_public_key
+        || kit.kem_public_key_digest != custody.kit_kem_public_key_digest
+        || kit.signing_public_key != custody.kit_signing_public_key
+        || kit.ml_dsa_public_key_digest != custody.kit_ml_dsa_public_key_digest
+    {
+        return Err(bad());
+    }
+    if let Some(auto) = &org.last_auto {
+        // Canonical as a roster carries it: the statement's own check, on a copy of the last roster.
+        let mut probe = roster.clone();
+        probe.org = Some(RosterOrg { auto: Some(auto.clone()), ..fields.clone() });
+        roster_bytes(&probe)?;
+    }
+    if fields.auto.is_some() && fields.auto != org.last_auto {
+        return Err(bad());
+    }
+    let same_ids = |count: usize, has: &dyn Fn(&String) -> bool| {
+        count == cache.area_keys.len() && cache.area_keys.keys().all(has)
+    };
+    if !same_ids(org.area_kinds.len(), &|id| org.area_kinds.contains_key(id))
+        || !same_ids(org.area_lists.len(), &|id| org.area_lists.contains_key(id))
+        || !same_ids(org.area_rosters.len(), &|id| org.area_rosters.contains_key(id))
+    {
+        return Err(bad());
+    }
+    for (id, keys) in &cache.area_keys {
+        let (lists, rosters) = (&org.area_lists[id], &org.area_rosters[id]);
+        if lists.len() != keys.len() || rosters.len() != keys.len() {
+            return Err(bad());
+        }
+        for at in lists {
+            digest_of(at, "area list digest")?;
+        }
+        for at in rosters {
+            introduced(at.roster_version, &at.signer_user_id)?;
+        }
+        if !in_order(rosters.iter().map(|at| at.roster_version).collect()) {
+            return Err(bad());
+        }
+    }
+    // The last roster's rows are each its area's latest kind and list, listed by it.
+    for area in roster.areas.iter().filter(|area| !area.retired) {
+        let listed_at = org.area_rosters[&area.workspace_id].last().ok_or_else(bad)?;
+        if org.area_kinds.get(&area.workspace_id).copied() != area.area_kind
+            || org.area_lists[&area.workspace_id].last() != area.list_digest.as_ref()
+            || listed_at.roster_version != last
+            || listed_at.signer_user_id != roster.signer_user_id
+        {
+            return Err(bad());
+        }
+    }
+    for (user_id, spans) in &org.data_admins {
+        uuid(user_id, "user id")?;
+        if spans.is_empty() {
+            return Err(bad());
+        }
+        let mut floor = 0;
+        for (index, span) in spans.iter().enumerate() {
+            let from = integer(span.from, "roster version")?;
+            // In order, never overlapping, within the chain; only the last may be open.
+            let closed = match span.until {
+                None => index == spans.len() - 1,
+                Some(until) => integer(until, "roster version")? > from && until <= last,
+            };
+            if from <= floor || from > last || !closed {
+                return Err(bad());
+            }
+            floor = span.until.unwrap_or(from);
+        }
+    }
+    for at in &org.recoveries {
+        introduced(at.roster_version, &at.signer_user_id)?;
+    }
+    if !in_order(org.recoveries.iter().map(|at| at.roster_version).collect()) {
+        return Err(bad());
+    }
+    // The statement kept says `same`: the members kept beside it are that list, or refused.
+    let mut resolved = roster.clone();
+    match (&fields.members_same, &record.members) {
+        (None, None) => {}
+        (Some(same), Some(members)) => {
+            resolved.members = members.clone();
+            if members_digest(&resolved)? != *same {
+                return Err(bad());
+            }
+        }
+        _ => return Err(bad()),
+    }
+    // Who holds `data_admin` on the last roster is who has an open span.
+    for entry in &resolved.members {
+        let open = org
+            .data_admins
+            .get(&entry.user_id)
+            .and_then(|spans| spans.last())
+            .is_some_and(|span| span.until.is_none());
+        if open != entry.active_with(Some(GroupRole::DataAdmin)) {
+            return Err(bad());
+        }
+    }
+    Ok(resolved)
 }
 
 /*
@@ -1058,6 +1888,8 @@ struct State<'a> {
     signatures: std::cell::RefCell<HashMap<String, Result<(), &'static str>>>,
     /* What the held rosters listed of the areas (fold_areas): keys, roots, tombstones. */
     areas: AreaLedger,
+    /* What the held rosters of a company said beside (fold_org); empty for a family. */
+    org: OrgChain,
 }
 
 impl<'a> State<'a> {
@@ -1096,6 +1928,10 @@ impl<'a> State<'a> {
             waiting: BTreeMap::new(),
             signatures: std::cell::RefCell::new(HashMap::new()),
             areas: cached.map(|cached| AreaLedger::of(&cached.cache)).unwrap_or_default(),
+            org: cached
+                .and_then(|cached| cached.cache.org.as_ref())
+                .map(|org| org.chain.clone())
+                .unwrap_or_default(),
         }
     }
 
@@ -1135,11 +1971,13 @@ impl<'a> State<'a> {
         {
             return Err(input(OUT_OF_ORDER));
         }
-        if !last
-            .roster
-            .entry(&succession.signer_user_id)
-            .is_some_and(|e| e.active_with(Some(GroupRole::Members)))
-        {
+        // A family's succession is any `Members` holder's; a company's is an Owner's (rule 12).
+        let signer = last.roster.entry(&succession.signer_user_id);
+        if last.roster.kind == GroupKind::Org {
+            if !is_owner(signer) {
+                return Err(input(OWNER_KEYS));
+            }
+        } else if !holds(signer, GroupRole::Members) {
             return Err(input(NOT_HOLDER));
         }
         let known = self.signatures.borrow().get(&served.digest).copied();
@@ -1263,7 +2101,7 @@ impl<'a> State<'a> {
         statement: &[u8],
         copies: Option<&[SignedGroupStatement]>,
         previous: Option<&Held>,
-    ) -> Result<(), Stop> {
+    ) -> Result<bool, Stop> {
         if previous.is_some_and(|previous| roster.kind != previous.roster.kind) {
             return Err(input(NOT_FOLLOWING).into());
         }
@@ -1316,7 +2154,10 @@ impl<'a> State<'a> {
             return Err(input(REPLACED_KEY).into());
         }
         let authority = previous.map(|at| &at.roster).unwrap_or(roster);
-        if !authority.entry(&roster.signer_user_id).is_some_and(|e| e.active_with(Some(GroupRole::Members))) {
+        // A company's recovery roster is the one roster a member without `Members` signs: with
+        // the kit's signature, for their own promotion to Owner and nothing else (rule 11).
+        let recovery = is_recovery_roster(previous.map(|at| &at.roster), roster);
+        if !recovery && !holds(authority.entry(&roster.signer_user_id), GroupRole::Members) {
             return Err(input(NOT_HOLDER).into());
         }
         // The signer stays active on what they sign (a holder's departure is another holder's to
@@ -1331,21 +2172,30 @@ impl<'a> State<'a> {
             let key = &self.keys[version_index(roster.group_key_version)];
             let mut group_signed = false;
             let mut signed = false;
+            let mut kit_signed = false;
             for copy in copies {
                 if !verify_group(key, statement, &copy.signature) {
                     continue;
                 }
                 group_signed = true;
-                if signed_by_member(authority, &roster.signer_user_id, copy, self.ml_dsa_keys) {
-                    signed = true;
-                    break;
+                if !signed_by_member(authority, &roster.signer_user_id, copy, self.ml_dsa_keys) {
+                    continue;
                 }
+                signed = true;
+                if recovery && !signed_by_kit(authority, roster, statement, copy, self.ml_dsa_keys) {
+                    continue;
+                }
+                kit_signed = true;
+                break;
             }
             if !group_signed {
                 return Err(input(NOT_GROUP_SIGNED).into());
             }
             if !signed {
                 return Err(input(NOT_MEMBER).into());
+            }
+            if !kit_signed {
+                return Err(input(NOT_KIT_SIGNED).into());
             }
         }
         if let Some(previous) = previous.filter(|at| at.dropped_holder) {
@@ -1360,7 +2210,16 @@ impl<'a> State<'a> {
             check_entries(&previous.roster, roster)?;
         }
         check_areas(&self.areas, previous.map(|previous| &previous.roster), roster)?;
-        Ok(())
+        if roster.kind == GroupKind::Org {
+            check_roster_org(
+                &self.org,
+                &self.areas,
+                previous.map(|previous| &previous.roster),
+                roster,
+                recovery,
+            )?;
+        }
+        Ok(recovery)
     }
 }
 
@@ -1706,13 +2565,16 @@ fn accept(
     for version in bottom + 1..=head {
         let at = &path[&version];
         let previous = state.held.last().cloned();
-        state.roster_rules(&at.value, &at.statement, Some(&at.copies), previous.as_ref())?;
-        fold_areas(&mut state.areas, &at.value);
+        // A company's `same` stands for the members of the roster before: every rule reads them.
+        let roster = with_members(&at.value, previous.as_ref().map(|previous| &previous.roster))?;
+        let recovery = state.roster_rules(&roster, &at.statement, Some(&at.copies), previous.as_ref())?;
+        fold_areas(&mut state.areas, &roster);
+        fold_org(&mut state.org, &roster, recovery);
         state.held.push(Held {
-            roster: at.value.clone(),
+            dropped_holder: previous.as_ref().is_some_and(|p| drops_holder(&p.roster, &roster)),
+            roster,
             statement: at.statement.clone(),
             digest: at.digest.clone(),
-            dropped_holder: previous.as_ref().is_some_and(|p| drops_holder(&p.roster, &at.value)),
         });
         state.establish_all()?;
     }
@@ -1907,6 +2769,9 @@ fn accept(
         })
         .collect();
     let group_key = state.keys.last().expect("version 1").clone();
+    // A company's chain keeps its company state, and beside a `same` statement its members.
+    let org = (latest.roster.kind == GroupKind::Org).then(|| state.org.clone());
+    let same = latest.roster.org.as_ref().is_some_and(|org| org.members_same.is_some());
     let cache = GroupChainCache {
         group_id: group_id.into(),
         roster_digests: roster_digests.clone(),
@@ -1919,8 +2784,11 @@ fn accept(
         area_keys: area_keys.clone(),
         area_roots: area_roots.clone(),
         retired_areas: retired_areas.clone(),
-        cache_version: CACHE_VERSION,
+        cache_version: if org.is_some() { ORG_CACHE_VERSION } else { CACHE_VERSION },
         own_entry_wrong_at: own_entry_wrong_at.clone(),
+        org: org
+            .clone()
+            .map(|chain| OrgCache { chain, members: same.then(|| latest.roster.members.clone()) }),
     };
     let chain = AcceptedRosters {
         group_id: group_id.into(),
@@ -1942,6 +2810,7 @@ fn accept(
         area_keys,
         area_roots,
         retired_areas,
+        org,
         own_entry_wrong_at,
         own_entry_behind_at,
         dead_branches,
@@ -2320,7 +3189,7 @@ pub fn roster_entry_fold_in(
 /// let user_id = "00000001-abcd-4abc-8abc-abcdefabcdef".to_string();
 /// let envelope = identity_create(user_id.clone(), vec![7; 32], 1)?;
 /// let creator = roster_entry_own(user_id, public_identity(envelope)?, vec![GroupRole::Members])?;
-/// let area = AreaKey { workspace_id: "80558a81-8dfc-8914-8447-0417b55e2ec5".into(), workspace_key: vec![77; 32], root_key: None, };
+/// let area = AreaKey { workspace_id: "80558a81-8dfc-8914-8447-0417b55e2ec5".into(), workspace_key: vec![77; 32], root_key: None, area_kind: None, list_digest: None };
 /// let group_id = "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a".to_string();
 /// let roster = roster_first(group_id.clone(), GroupKind::Family, creator.clone(), Some(vec![area]), None)?;
 /// assert_eq!((roster.roster_version, roster.areas[0].workspace_key_version), (1, 1));
@@ -2337,13 +3206,172 @@ pub fn roster_first(
     area_keys: Option<Vec<crate::groups::AreaKey>>,
     format: Option<u8>,
 ) -> CoreResult<Roster> {
-    let format = format.unwrap_or(1);
+    // A company's first roster is `company_roster_first`'s: it needs its key, kit and heads.
+    if kind == GroupKind::Org || format == Some(3) {
+        return Err(input("Invalid roster format."));
+    }
+    first_roster(group_id, kind, creator, area_keys, format.unwrap_or(1), None)
+}
+
+/// A company key's public halves, base64url: X25519 and ML-KEM-768.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct CustodyPublicKey {
+    pub encryption_public_key: String,
+    pub kem_public_key: String,
+}
+
+/// A recovery kit's four public keys, base64url: X25519, ML-KEM-768, Ed25519
+/// and ML-DSA-65.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct KitPublicKeys {
+    pub encryption_public_key: String,
+    pub kem_public_key: String,
+    pub signing_public_key: String,
+    pub ml_dsa_public_key: String,
+}
+
+/// What a company's first roster says beside its creator and areas
+/// (companies-design 2.1, 3.1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct FirstOrgRoster {
+    pub custody_key: CustodyPublicKey,
+    pub kit: KitPublicKeys,
+    /// Auto-join off, ten a day, unless given.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub rules: Option<crate::groups::RosterRules>,
+    /// The digest over the heads of the roster's areas, as the creator's
+    /// device verified them (2.3).
+    pub heads_digest: String,
+}
+
+/// What a company's next roster says beside its members and areas
+/// (companies-design 2.1). The versions, the digests of the lattice keys, the
+/// automatic admission's count and the area count are computed by
+/// [`company_roster_next`]: a client hands in keys and a day, never a field of
+/// its own making.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct NextOrgRoster {
+    /// A new company key: the next version. Needed when a data admin is
+    /// dropped (rule 2), and with a new kit (rule 7).
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub custody_key: Option<CustodyPublicKey>,
+    /// A new recovery kit: the next version. Needed when `Recovery` is taken
+    /// from anyone (rule 7).
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub kit: Option<KitPublicKeys>,
+    /// The auto-join policy from this roster on; the chain's when absent.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub rules: Option<crate::groups::RosterRules>,
+    /// Set by a device admitting someone unattended (rule 9): the UTC day by
+    /// its own clock, `YYYY-MM-DD`.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub auto_utc_day: Option<String>,
+    /// The digest over every live area's heads as this device verified them (2.3).
+    pub heads_digest: String,
+    /// The fresh words checks this device holds (companies-design 2.2,
+    /// "Another Owner checks first"): a verified pin of each Owner or kit
+    /// holder whose entry this roster moves to new keys, made over those new
+    /// keys. Without one such an entry is folded in only on that person's own
+    /// roster: a signed link is not enough for someone who holds the company.
+    #[cfg_attr(feature = "uniffi", uniffi(default = []))]
+    pub checked: Vec<VerifiedPin>,
+}
+
+/// A company's first roster, for its creator to sign (companies-design 2.1,
+/// 3.1): format 3, version 1, the creator as its only entry (an Owner) and its
+/// signer, the company key and the kit at version 1 with their lattice keys by
+/// digest, auto-join off unless `org.rules` says otherwise, a row for each of
+/// `area_keys` (each with its kind and its base list's digest) and their
+/// count. Refused unless it keeps every rule acceptance holds roster 1 to.
+///
+/// ```
+/// use hushos_core::*;
+/// let user_id = "00000001-abcd-4abc-8abc-abcdefabcdef".to_string();
+/// let group_id = "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a".to_string();
+/// let envelope = identity_create(user_id.clone(), vec![7; 32], 1)?;
+/// let owner = vec![GroupRole::Billing, GroupRole::DataAdmin, GroupRole::Members, GroupRole::Recovery];
+/// let creator = roster_entry_own(user_id, public_identity(envelope)?, owner)?;
+/// let org = FirstOrgRoster {
+///     custody_key: custody_public_key(vec![1; 96])?,
+///     kit: kit_public_keys(vec![2; 32], group_id.clone())?,
+///     rules: None,
+///     heads_digest: roster_digest(b"heads".to_vec()),
+/// };
+/// let roster = company_roster_first(group_id.clone(), creator.clone(), None, org.clone())?;
+/// assert_eq!((roster.format, roster.kind), (3, GroupKind::Org));
+/// assert_eq!(roster.org.as_ref().unwrap().custody.custody_key_version, 1);
+/// // An Admin makes no company: only an Owner signs its first key.
+/// let admin = RosterMember { roles: vec![GroupRole::DataAdmin, GroupRole::Members], ..creator };
+/// assert!(company_roster_first(group_id, admin, None, org).is_err());
+/// # Ok::<(), hushos_core::CoreError>(())
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn company_roster_first(
+    group_id: String,
+    creator: RosterMember,
+    area_keys: Option<Vec<crate::groups::AreaKey>>,
+    org: FirstOrgRoster,
+) -> CoreResult<Roster> {
+    first_roster(group_id, GroupKind::Org, creator, area_keys, 3, Some(org))
+}
+
+fn first_roster(
+    group_id: String,
+    kind: GroupKind,
+    creator: RosterMember,
+    area_keys: Option<Vec<crate::groups::AreaKey>>,
+    format: u8,
+    org: Option<FirstOrgRoster>,
+) -> CoreResult<Roster> {
     let nothing = HashMap::new();
     let no_roots = HashMap::new();
-    let listed = crate::groups::ListedAreas { keys: &nothing, roots: &no_roots, retired: &[] };
+    let no_kinds = HashMap::new();
+    let listed =
+        crate::groups::ListedAreas { keys: &nothing, roots: &no_roots, retired: &[], kinds: &no_kinds };
     let areas = crate::groups::rows_after(listed, area_keys.unwrap_or_default(), format, vec![])?;
     let mut roles = creator.roles;
     roles.sort();
+    let org = org
+        .map(|org| -> CoreResult<RosterOrg> {
+            Ok(RosterOrg {
+                members_same: None,
+                custody: RosterCustody {
+                    custody_key_version: 1,
+                    custody_encryption_public_key: org.custody_key.encryption_public_key.clone(),
+                    custody_kem_public_key_digest: key_digest_of(
+                        &org.custody_key.kem_public_key,
+                        KEM_PUBLIC_KEY_BYTES,
+                        "company key",
+                    )?,
+                    kit_version: 1,
+                    kit_encryption_public_key: org.kit.encryption_public_key.clone(),
+                    kit_kem_public_key_digest: key_digest_of(
+                        &org.kit.kem_public_key,
+                        KEM_PUBLIC_KEY_BYTES,
+                        "recovery kit key",
+                    )?,
+                    kit_signing_public_key: org.kit.signing_public_key.clone(),
+                    kit_ml_dsa_public_key_digest: key_digest_of(
+                        &org.kit.ml_dsa_public_key,
+                        ML_DSA_PUBLIC_KEY_BYTES,
+                        "recovery kit key",
+                    )?,
+                },
+                rules: org
+                    .rules
+                    .unwrap_or(crate::groups::RosterRules { auto_join: false, auto_join_daily_limit: 10 }),
+                auto: None,
+                heads: crate::groups::RosterHeads {
+                    area_count: areas.len() as u64,
+                    heads_digest: org.heads_digest,
+                },
+            })
+        })
+        .transpose()?;
     let roster = Roster {
         group_id,
         kind,
@@ -2354,6 +3382,7 @@ pub fn roster_first(
         members: vec![RosterMember { roles, since_version: 1, ..creator }],
         areas,
         format,
+        org,
     };
     let statement = roster_bytes(&roster)?;
     // The very rules acceptance applies to version 1, signatures aside. Unsigned, the group key
@@ -2362,10 +3391,15 @@ pub fn roster_first(
     let mut state = State::of(&roster.group_id, &empty, None);
     state.keys.push(GroupPublicKey { ed25519_public_key: String::new(), ml_dsa_public_key: String::new() });
     match state.roster_rules(&roster, &statement, None, None) {
-        Ok(()) => Ok(roster),
+        Ok(_) => Ok(roster),
         Err(Stop::Refused(error)) => Err(error),
         Err(Stop::Fork(..)) => Err(input(NOT_FOLLOWING)),
     }
+}
+
+/* SHA-256 (base64url) of a served lattice key of exactly `length` bytes, canonical base64url. */
+fn key_digest_of(key: &str, length: usize, what: &str) -> CoreResult<String> {
+    Ok(digest(&decode(what, bytes_of(key, length, what)?, Some(length))?))
 }
 
 /// The roster after `chain`'s latest, for `signer_user_id` to sign: the next
@@ -2383,10 +3417,148 @@ pub fn roster_next(
     retire_areas: Option<Vec<String>>,
     format: Option<u8>,
 ) -> CoreResult<Roster> {
+    // A company's next roster is `company_roster_next`'s.
+    if chain.kind == GroupKind::Org || format == Some(3) {
+        return Err(input("Invalid roster format."));
+    }
+    next_roster(&chain, members, signer_user_id, area_keys, retire_areas, format, None)
+}
+
+/// A company's next roster (companies-design 2.1), for `signer_user_id` to
+/// sign: [`roster_next`] at format 3, with what [`NextOrgRoster`] says. The
+/// company key and the kit stay as they are unless a new one is given; the
+/// statement says `same` in place of the members when no entry changed; an
+/// automatic admission's count and the live area count are computed here. A
+/// kit holder builds their recovery roster with it too (their own promotion
+/// to Owner and nothing else), and signs it with [`recovery_roster_sign`].
+/// Refused unless every device holding the chain would accept it, and unless
+/// every Owner's or kit holder's entry it moves to new keys on someone else's
+/// roster comes with that signer's fresh words check (`org.checked`).
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn company_roster_next(
+    chain: Arc<AcceptedRosters>,
+    members: Vec<RosterMember>,
+    signer_user_id: String,
+    area_keys: Option<Vec<crate::groups::AreaKey>>,
+    retire_areas: Option<Vec<String>>,
+    org: NextOrgRoster,
+) -> CoreResult<Roster> {
+    if chain.kind != GroupKind::Org {
+        return Err(input("Invalid roster format."));
+    }
+    next_roster(&chain, members, signer_user_id, area_keys, retire_areas, Some(3), Some(org))
+}
+
+/* Whether `pin` is this person's own words check of exactly the keys `entry` names. */
+fn checked_keys(pin: &VerifiedPin, entry: &RosterMember) -> bool {
+    pin.user_id == entry.user_id
+        && pin.trusted_via.is_none()
+        && pin_trust(PinKeys {
+            key_version: Some(pin.key_version),
+            encryption_public_key: pin.encryption_public_key.clone(),
+            signing_public_key: pin.signing_public_key.clone(),
+            ml_dsa_public_key_hash: Some(pin.ml_dsa_public_key_hash.clone()),
+            kem_public_key_hash: Some(pin.kem_public_key_hash.clone()),
+            fingerprint: pin.fingerprint.clone(),
+        }) == PinTrust::Verified
+        && pin.key_version == entry.key_version
+        && pin.encryption_public_key == entry.encryption_public_key
+        && pin.signing_public_key == entry.signing_public_key
+        && same_key_digest(Some(pin.ml_dsa_public_key_hash.clone()), entry.ml_dsa_public_key_digest.clone())
+        && same_key_digest(Some(pin.kem_public_key_hash.clone()), entry.kem_public_key_digest.clone())
+}
+
+/* A company's next roster's own fields: custody, rules, auto, heads, and `same` when no entry changed. */
+fn company_fields(
+    chain: &AcceptedRosters,
+    members: &[RosterMember],
+    areas: &[crate::groups::RosterArea],
+    signer_user_id: &str,
+    options: NextOrgRoster,
+) -> CoreResult<RosterOrg> {
+    let previous = &chain.roster;
+    let before = org_of(previous)?;
+    let org = chain.org.as_ref().ok_or_else(|| input("Invalid roster format."))?;
+    // A guarded entry (one that holds `recovery` before or after) moves to new keys on another
+    // person's roster only with that signer's fresh check of the new keys. A device rule: the
+    // chain cannot see a words check (rule 8 is what it holds: only an Owner signs this at all).
+    for entry in members {
+        let Some(was) = previous.entry(&entry.user_id) else {
+            continue;
+        };
+        if same_keys(was, entry) || entry.user_id == signer_user_id {
+            continue;
+        }
+        if !holds(Some(was), GroupRole::Recovery) && !holds(Some(entry), GroupRole::Recovery) {
+            continue;
+        }
+        if !options.checked.iter().any(|pin| checked_keys(pin, entry)) {
+            return Err(input(GUARDED_FOLD_IN));
+        }
+    }
+    // The company key and the kit: kept as they are, or each replaced by a new one at the next
+    // version, its lattice keys by digest.
+    let mut custody = before.custody.clone();
+    if let Some(key) = &options.custody_key {
+        custody.custody_key_version += 1;
+        custody.custody_encryption_public_key = key.encryption_public_key.clone();
+        custody.custody_kem_public_key_digest =
+            key_digest_of(&key.kem_public_key, KEM_PUBLIC_KEY_BYTES, "company key")?;
+    }
+    if let Some(kit) = &options.kit {
+        custody.kit_version += 1;
+        custody.kit_encryption_public_key = kit.encryption_public_key.clone();
+        custody.kit_kem_public_key_digest =
+            key_digest_of(&kit.kem_public_key, KEM_PUBLIC_KEY_BYTES, "recovery kit key")?;
+        custody.kit_signing_public_key = kit.signing_public_key.clone();
+        custody.kit_ml_dsa_public_key_digest =
+            key_digest_of(&kit.ml_dsa_public_key, ML_DSA_PUBLIC_KEY_BYTES, "recovery kit key")?;
+    }
+    // An automatic admission's count: one more than the last one's on the same day, else 1.
+    let auto = options.auto_utc_day.map(|utc_day| {
+        let count_that_day = org
+            .last_auto
+            .as_ref()
+            .filter(|last| last.utc_day == utc_day)
+            .map_or(1, |last| last.count_that_day + 1);
+        RosterAuto { utc_day, count_that_day }
+    });
+    // The live areas after this roster: those listed and not retired, with its new ones, without
+    // the ones it retires.
+    let created = areas.iter().filter(|row| !chain.area_keys.contains_key(&row.workspace_id)).count();
+    let retiring = areas.iter().filter(|row| row.retired).count();
+    let live = (chain.area_keys.len() - chain.retired_areas.len() + created).saturating_sub(retiring);
+    // No entry changed: the statement says `same` and names the members of the roster before.
+    let unchanged = members.len() == previous.members.len()
+        && members
+            .iter()
+            .all(|entry| previous.entry(&entry.user_id).is_some_and(|was| same_entry(was, entry)));
+    Ok(RosterOrg {
+        members_same: if unchanged { Some(members_digest(previous)?) } else { None },
+        custody,
+        rules: options.rules.unwrap_or_else(|| before.rules.clone()),
+        auto,
+        heads: crate::groups::RosterHeads { area_count: live as u64, heads_digest: options.heads_digest },
+    })
+}
+
+fn next_roster(
+    chain: &AcceptedRosters,
+    members: Vec<RosterMember>,
+    signer_user_id: String,
+    area_keys: Option<Vec<crate::groups::AreaKey>>,
+    retire_areas: Option<Vec<String>>,
+    format: Option<u8>,
+    org: Option<NextOrgRoster>,
+) -> CoreResult<Roster> {
     // The chain's latest format unless a higher one is asked for (design 2.10); never a lower one.
     let format = format.unwrap_or(chain.roster.format);
     if format < chain.roster.format {
         return Err(input(DOWNGRADE));
+    }
+    // A company's chain is format 3 throughout, a family's never: neither switches to the other.
+    if (format == 3) != (chain.kind == GroupKind::Org) || (chain.kind == GroupKind::Org) != org.is_some() {
+        return Err(input("Invalid roster format."));
     }
     let version = chain.roster.roster_version + 1;
     let mut members: Vec<RosterMember> = members
@@ -2405,11 +3577,12 @@ pub fn roster_next(
     // removal needs): the rows are computed here, and refused when a key is any of the group's
     // earlier ones, so a client cannot hand in a row of its own making.
     let areas = crate::groups::area_rows(
-        &chain,
+        chain,
         area_keys.unwrap_or_default(),
         format,
         retire_areas.unwrap_or_default(),
     )?;
+    let org = org.map(|org| company_fields(chain, &members, &areas, &signer_user_id, org)).transpose()?;
     let roster = Roster {
         group_id: chain.group_id.clone(),
         kind: chain.kind,
@@ -2420,6 +3593,7 @@ pub fn roster_next(
         members,
         areas,
         format,
+        org,
     };
     let statement = roster_bytes(&roster)?;
     // The very rules acceptance applies, from the chain's cache, signatures aside.
@@ -2427,7 +3601,7 @@ pub fn roster_next(
     let empty = HashMap::new();
     let state = State::of(&chain.group_id, &empty, Some(&cached));
     match state.roster_rules(&roster, &statement, None, state.held.last()) {
-        Ok(()) => Ok(roster),
+        Ok(_) => Ok(roster),
         Err(Stop::Refused(error)) => Err(error),
         Err(Stop::Fork(..)) => Err(input(NOT_FOLLOWING)),
     }
@@ -3243,6 +4417,7 @@ mod tests {
                 None => vec![0; 3373],
             },
             statement,
+            kit_signature: None,
         }
     }
 
@@ -3403,6 +4578,7 @@ mod tests {
                 statement,
                 signature: GroupSignature { ed25519: vec![0; 64], ml_dsa: vec![0; 3309] },
                 signer_signature: vec![0; 3373],
+                kit_signature: None,
             });
         }
         refused(
@@ -4098,7 +5274,19 @@ mod tests {
                 sign(with(&|r| r.group_key_version = 1), k2.clone(), &f.organizer),
             ),
             ("names an unpublished key", sign(with(&|r| r.group_key_version = 3), k2.clone(), &f.organizer)),
-            ("another kind", sign(with(&|r| r.kind = GroupKind::Org), k2.clone(), &f.organizer)),
+            (
+                "another kind",
+                sign(
+                    with(&|r| {
+                        r.kind = GroupKind::Org;
+                        r.format = 3;
+                        r.areas = vec![];
+                        r.org = Some(crate::groups::tests::company_fields(GROUP, 1));
+                    }),
+                    k2.clone(),
+                    &f.organizer,
+                ),
+            ),
             (
                 "by a former holder",
                 sign(with(&|r| r.signer_user_id = f.holder.user_id.clone()), k2.clone(), &f.holder),
@@ -6643,7 +7831,13 @@ mod tests {
     }
 
     fn area_key(workspace_id: &str, key: Vec<u8>) -> crate::groups::AreaKey {
-        crate::groups::AreaKey { workspace_id: workspace_id.into(), workspace_key: key, root_key: None }
+        crate::groups::AreaKey {
+            workspace_id: workspace_id.into(),
+            workspace_key: key,
+            root_key: None,
+            area_kind: None,
+            list_digest: None,
+        }
     }
 
     #[test]
@@ -6727,14 +7921,28 @@ mod tests {
         assert_eq!(ids, [(AREA, 1), (SECOND_AREA, 1)]);
         assert_eq!(roster.areas[0].commitment, crate::groups::area_key_commitment(&AREA_KEY).unwrap());
         assert!(roster_first(GROUP.into(), GroupKind::Family, members, None, None).unwrap().areas.is_empty());
-        let org = roster_first(
+        // A company's first roster is format 3, from its own builder: its creator an Owner, its
+        // key and kit on it. `roster_first` builds none.
+        let owner = organizer.active(&[
+            GroupRole::Billing,
+            GroupRole::DataAdmin,
+            GroupRole::Members,
+            GroupRole::Recovery,
+        ]);
+        assert!(roster_first(GROUP.into(), GroupKind::Org, owner.clone(), None, None).is_err());
+        let org = company_roster_first(
             GROUP.into(),
-            GroupKind::Org,
-            organizer.active(&[GroupRole::DataAdmin, GroupRole::Members]),
+            owner,
             None,
-            None,
+            FirstOrgRoster {
+                custody_key: crate::custody::custody_public_key(vec![201; 96]).unwrap(),
+                kit: crate::custody::kit_public_keys(vec![221; 32], GROUP.into()).unwrap(),
+                rules: None,
+                heads_digest: digest(b"heads"),
+            },
         )
         .unwrap();
+        assert_eq!(org.format, 3);
         let signed = roster_sign(org, group_seed_at(1), organizer.keys.clone()).unwrap();
         assert_eq!(accepted(creator_accepts(&organizer, vec![signed])).kind, GroupKind::Org);
     }
@@ -6748,6 +7956,8 @@ mod tests {
             commitment: crate::groups::area_key_commitment(&[key; 32]).unwrap(),
             root_commitment: None,
             retired: false,
+            area_kind: None,
+            list_digest: None,
         };
         // Each with its creator and area keys, what roster_first says, then what acceptance says of
         // the same roster.

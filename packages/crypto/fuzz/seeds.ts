@@ -17,6 +17,8 @@ import {
     repository,
     web,
     webGroups,
+    company,
+    webCompany,
     webJoin,
     webLedger,
     type Json,
@@ -66,6 +68,13 @@ export function documents(target: Target): Uint8Array[] {
     const w = web();
     const wg = webGroups();
     const caseRosters = g.cases.flatMap((k: Json) => statementsOf(k.input.rosters));
+    // A company's rosters (format 3, companies-design 2.1): the core's own, and a spread of the
+    // web's rule cases (each case ends in the roster its rule is about).
+    const companyCases = webCompany().cases.filter((_: Json, index: number) => index % 4 === 0);
+    const companyRosters = unique([
+        ...statementsOf(company().history.input.rosters),
+        ...companyCases.map((k: Json) => bytes(k.input.rosters.at(-1).statement)),
+    ]);
     const caseSuccessions = g.cases.flatMap((k: Json) => statementsOf(k.input.successions));
     switch (target) {
         case 'canonical':
@@ -73,6 +82,7 @@ export function documents(target: Target): Uint8Array[] {
                 ...statementsOf(g.rosters),
                 ...statementsOf(g.successions),
                 ...statementsOf(wg.rosters),
+                ...companyRosters.slice(0, 6),
                 ...g.statementCases.map((k: Json) => bytes(k.statement)),
                 bytes(c.keys.statement),
                 bytes(c.succession.statement),
@@ -84,6 +94,7 @@ export function documents(target: Target): Uint8Array[] {
         case 'roster':
             // Format 2 rosters (design 2.10) first, so the cut keeps them.
             return unique([
+                ...companyRosters,
                 ...caseRosters.filter(isFormat2),
                 ...statementsOf(g.rosters),
                 ...statementsOf(wg.rosters),
@@ -102,6 +113,10 @@ export function documents(target: Target): Uint8Array[] {
                 ...caseRosters
                     .filter(isFormat2)
                     .slice(0, 8)
+                    .map((statement: Uint8Array) => json(parseRoster(statement))),
+                // Format 3 rosters, `same` and listed members both, as parseRoster reads them.
+                ...companyRosters
+                    .slice(0, 12)
                     .map((statement: Uint8Array) => json(parseRoster(statement))),
             ];
         case 'statements': {
@@ -809,7 +824,12 @@ export function documents(target: Target): Uint8Array[] {
             ];
         }
         case 'accept':
-            return g.cases.map((k: Json) => json(k.input));
+            return [
+                ...g.cases.map((k: Json) => json(k.input)),
+                // A company's histories: the core's own, and the web's rule cases.
+                json(company().history.input),
+                ...companyCases.map((k: Json) => json(k.input)),
+            ];
         case 'area_ledger':
             // Each scenario's steps, and its first half: a walk or a write cut short.
             return ledgerScenarios().scenarios.flatMap((k: Json) => [

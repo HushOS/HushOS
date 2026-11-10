@@ -57,6 +57,8 @@ fn row(f_areas: &[(String, String)], index: usize, version: u64) -> RosterArea {
         commitment: area_key_commitment(&area_key(index, version)).unwrap(),
         root_commitment: Some(area_root_commitment(&root_key(index, version)).unwrap()),
         retired: false,
+        area_kind: None,
+        list_digest: None,
     }
 }
 
@@ -91,6 +93,8 @@ pub fn family() -> &'static Family {
                 commitment: String::new(),
                 root_commitment: None,
                 retired: true,
+                area_kind: None,
+                list_digest: None,
             }]),
         );
         h.roster_with(&p[0], all.clone(), None, Some(vec![row(&areas, 2, 1)]));
@@ -788,6 +792,7 @@ pub fn junk_roster() -> SignedGroupStatement {
         statement: b"[\"junk\"]".to_vec(),
         signature: GroupSignature { ed25519: vec![0; 64], ml_dsa: vec![0; 3309] },
         signer_signature: vec![0; 3373],
+        kit_signature: None,
     }
 }
 

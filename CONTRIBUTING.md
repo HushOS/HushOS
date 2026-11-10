@@ -683,7 +683,7 @@ The crypto twins, `crates/hushos-core` and `packages/crypto`, are fuzzed on ever
 ### What is fuzzed
 
 - **Statements:** the statement grammar; seal and grant statements and their openers (the key seal under varied contexts and readers too); identity envelopes and keys statements; device statements; drive record statements in all four forms.
-- **Rosters and successions:** rosters and group key successions; acceptance of a whole roster history; succession links and consent; the links offered for successor consent and the consent signed for them.
+- **Rosters and successions:** rosters (a company's format 3 included) and group key successions; acceptance of a whole roster history, a family's or a company's; succession links and consent; the links offered for successor consent and the consent signed for them.
 - **Managers and admins:** a manager's roster calls (an admission with a served identity changed, role changes, the handover); the admin's join code over served rosters.
 - **Sharing and contacts:** shares; fingerprints and pins.
 - **Re-keying:** re-keyed record verdicts, personal and in a group's area; the re-keyed origin opener.

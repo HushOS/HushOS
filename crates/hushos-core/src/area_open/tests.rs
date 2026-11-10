@@ -27,6 +27,8 @@ fn row(workspace_id: &str, version: u64, key: &[u8], root: u8) -> RosterArea {
         commitment: area_key_commitment(key).unwrap(),
         root_commitment: Some(area_root_commitment(&[root; 32]).unwrap()),
         retired: false,
+        area_kind: None,
+        list_digest: None,
     }
 }
 

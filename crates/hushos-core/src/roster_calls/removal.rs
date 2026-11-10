@@ -365,6 +365,7 @@ fn signed_of(wire: &Value) -> CoreResult<SignedGroupStatement> {
             ml_dsa: text(signature.get("mlDsa"))?,
         },
         signer_signature: text(wire.get("signerSignature"))?,
+        kit_signature: None,
     })
 }
 

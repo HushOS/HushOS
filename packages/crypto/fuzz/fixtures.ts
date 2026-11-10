@@ -67,15 +67,23 @@ export const joinCheckCases = () => read('crates/hushos-core/fixtures/join-check
 export const joinSessionScenarios = () =>
     read('crates/hushos-core/fixtures/join-session-scenarios.json');
 
+/* packages/crypto/src/__fixtures__/core-company.json: a company the core made, with its seals. */
+export const company = () => read('packages/crypto/src/__fixtures__/core-company.json');
+/* crates/hushos-core/fixtures/web-company.json: the histories that keep or break each company rule. */
+export const webCompany = () => read('crates/hushos-core/fixtures/web-company.json');
+
 type Served = {
     statement: string;
     signature: { ed25519: string; mlDsa: string };
     signerSignature: string;
+    kitSignature?: string;
 };
 export const signed = (value: Served): SignedGroupStatement => ({
     statement: decode(value.statement),
     signature: { ed25519: decode(value.signature.ed25519), mlDsa: decode(value.signature.mlDsa) },
     signerSignature: decode(value.signerSignature),
+    // A company's recovery roster carries the kit's signature beside the other two.
+    ...(typeof value.kitSignature === 'string' ? { kitSignature: decode(value.kitSignature) } : {}),
 });
 
 function once<T>(make: () => Promise<T>) {

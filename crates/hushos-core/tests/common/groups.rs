@@ -162,6 +162,8 @@ pub fn standard_areas() -> Vec<RosterArea> {
         commitment: area_key_commitment(&pattern(32, AREA_KEY_SEED)).unwrap(),
         root_commitment: None,
         retired: false,
+        area_kind: None,
+        list_digest: None,
     }]
 }
 
@@ -186,6 +188,62 @@ pub fn tombstone_at(workspace_id: &str, version: u64) -> RosterArea {
         commitment: String::new(),
         root_commitment: None,
         retired: true,
+        area_kind: None,
+        list_digest: None,
+    }
+}
+
+/* A company's four roles together (an Owner), as the web's OWNER_ROLES. */
+pub const OWNER_ROLES: [GroupRole; 4] =
+    [GroupRole::Billing, GroupRole::DataAdmin, GroupRole::Members, GroupRole::Recovery];
+
+/* The heads digest every testkit company roster carries (pattern(32, 240)), as the web's HEADS_DIGEST. */
+pub fn heads_digest() -> String {
+    e(&pattern(32, 240))
+}
+
+/* The base list digest the testkit gives an area at a key version, as the web's listDigestAt. */
+pub fn list_digest_at(workspace_id: &str, version: u64) -> String {
+    e(&pattern(32, ((if workspace_id == AREA { 180 } else { 190 }) + version) as u8))
+}
+
+/* A format 3 key row: key_row_at, the area's kind and the testkit's list digest. */
+pub fn org_row_at(workspace_id: &str, version: u64) -> RosterArea {
+    RosterArea {
+        area_kind: Some(AreaKind::Shared),
+        list_digest: Some(list_digest_at(workspace_id, version)),
+        ..key_row_at(workspace_id, version)
+    }
+}
+
+/* The company key seed and the kit secret the testkit gives a company at `version`, as the web's. */
+pub fn custody_seed_at(version: u8) -> Vec<u8> {
+    pattern(96, 200 + version)
+}
+pub fn kit_secret_at(version: u8) -> Vec<u8> {
+    pattern(32, 220 + version)
+}
+
+/* A roster's company fields for the testkit's key and kit at version 1: auto-join off, the heads digest. */
+pub fn org_fields(group_id: &str, area_count: u64) -> RosterOrg {
+    let key = custody_public_key(custody_seed_at(1)).unwrap();
+    let kit = kit_public_keys(kit_secret_at(1), group_id.into()).unwrap();
+    let digest_of = |key: &str| roster_digest(base64url_decode(key.into()).unwrap());
+    RosterOrg {
+        members_same: None,
+        custody: RosterCustody {
+            custody_key_version: 1,
+            custody_encryption_public_key: key.encryption_public_key,
+            custody_kem_public_key_digest: digest_of(&key.kem_public_key),
+            kit_version: 1,
+            kit_encryption_public_key: kit.encryption_public_key,
+            kit_kem_public_key_digest: digest_of(&kit.kem_public_key),
+            kit_signing_public_key: kit.signing_public_key,
+            kit_ml_dsa_public_key_digest: digest_of(&kit.ml_dsa_public_key),
+        },
+        rules: RosterRules { auto_join: false, auto_join_daily_limit: 10 },
+        auto: None,
+        heads: RosterHeads { area_count, heads_digest: heads_digest() },
     }
 }
 
@@ -203,6 +261,8 @@ pub fn area_row(workspace_id: &str, version: u64) -> RosterArea {
         commitment: area_key_commitment(&area_key_at(workspace_id, version)).unwrap(),
         root_commitment: None,
         retired: false,
+        area_kind: None,
+        list_digest: None,
     }
 }
 
@@ -267,7 +327,8 @@ impl History {
             kind,
             area_versions: Default::default(),
             retired: Default::default(),
-            format: 1,
+            // A company's rosters are format 3 from the first.
+            format: if kind == GroupKind::Org { 3 } else { 1 },
             group_id: GROUP.into(),
         }
     }
@@ -316,12 +377,10 @@ impl History {
             })
         });
         let format = self.format;
-        let row_at = |workspace_id: &str, version: u64| {
-            if format == 2 {
-                key_row_at(workspace_id, version)
-            } else {
-                area_row(workspace_id, version)
-            }
+        let row_at = |workspace_id: &str, version: u64| match format {
+            3 => org_row_at(workspace_id, version),
+            2 => key_row_at(workspace_id, version),
+            _ => area_row(workspace_id, version),
         };
         let areas = areas.unwrap_or_else(|| match previous {
             None => vec![row_at(AREA, 1)],
@@ -369,6 +428,27 @@ impl History {
             members,
             areas,
             format,
+            org: None,
+        };
+        // A company's roster (format 3): the testkit's key and kit, no `auto`, the live area count,
+        // and `same` in place of the members when no entry changed, as the web's history writes it.
+        let roster = if format == 3 {
+            let live = self.area_versions.keys().filter(|id| !self.retired.contains(*id)).count() as u64;
+            let unchanged = previous.is_some_and(|previous| {
+                roster.members.len() == previous.members.len()
+                    && roster.members.iter().all(|entry| {
+                        previous
+                            .members
+                            .iter()
+                            .any(|before| before.user_id == entry.user_id && same_entry(before, entry))
+                    })
+            });
+            let members_same = previous
+                .filter(|_| unchanged)
+                .map(|previous| roster_members_digest(previous.clone()).unwrap());
+            Roster { org: Some(RosterOrg { members_same, ..org_fields(&self.group_id, live) }), ..roster }
+        } else {
+            roster
         };
         self.rosters.push(roster_sign(roster.clone(), group_seed(key_version), signer.keys.clone()).unwrap());
         self.statements.push(roster);
@@ -710,7 +790,7 @@ fn key_history_json(history: &HashMap<String, Vec<KeySet>>) -> Value {
 }
 
 pub fn cache_json(cache: &GroupChainCache) -> Value {
-    json!({
+    let mut value = json!({
         "groupId": cache.group_id,
         "rosterDigests": cache.roster_digests,
         "statement": cache.statement,
@@ -724,7 +804,12 @@ pub fn cache_json(cache: &GroupChainCache) -> Value {
         "retiredAreas": cache.retired_areas,
         "cacheVersion": cache.cache_version,
         "ownEntryWrongAt": cache.own_entry_wrong_at,
-    })
+    });
+    // A company's record, as the web's cache holds it.
+    if let Some(org) = &cache.org {
+        value["org"] = serde_json::from_str(&org_cache_json(org.clone())).unwrap();
+    }
+    value
 }
 
 /*
@@ -824,6 +909,10 @@ pub fn cache_of(value: &Value) -> Result<Option<GroupChainCache>, String> {
                 version.as_u64().and_then(|v| u8::try_from(v).ok()).ok_or_else(|| bad("cacheVersion"))?
             }
         },
+        org: match &value["org"] {
+            Value::Null => None,
+            org => Some(org_cache_from_json(org.to_string()).map_err(|_| bad("org"))?),
+        },
     }))
 }
 
@@ -888,6 +977,16 @@ pub fn judge(input: &CaseInput) -> Value {
                     "rosterVersion": checked.roster_version,
                 })),
             });
+            // A company's chain says who used the recovery kit (its other company state is in the cache).
+            if chain.kind() == GroupKind::Org {
+                verdict["recoveries"] = chain
+                    .recoveries()
+                    .iter()
+                    .map(
+                        |at| json!({ "rosterVersion": at.roster_version, "signerUserId": at.signer_user_id }),
+                    )
+                    .collect();
+            }
             if let Some(probe) = &input.record {
                 verdict["record"] = record_verdict(chain.clone(), probe);
             }
@@ -986,6 +1085,7 @@ fn signed_by(statement: Vec<u8>, seed: Vec<u8>, by: Option<&Person>) -> SignedGr
             None => vec![0; 3373],
         },
         statement,
+        kit_signature: None,
     }
 }
 
@@ -1007,6 +1107,17 @@ fn same_but_since(a: &RosterMember, b: &RosterMember) -> bool {
  * about; the fixture carries the full verdict.
  */
 pub fn group_cases() -> Vec<(&'static str, CaseInput, Value)> {
+    // Every case's histories are locals of one function: in a debug build its frame is past a
+    // test thread's 2 MiB, so it runs on a thread with room for it.
+    std::thread::Builder::new()
+        .stack_size(64 << 20)
+        .spawn(group_cases_built)
+        .expect("a thread")
+        .join()
+        .expect("the cases build")
+}
+
+fn group_cases_built() -> Vec<(&'static str, CaseInput, Value)> {
     let (organizer, adult, holder, child, outsider) = (person(1), person(2), person(3), person(4), person(5));
     let everyone = [&organizer, &adult, &holder, &child, &outsider];
     let roles_all = [GroupRole::Billing, GroupRole::Guardian, GroupRole::Members];
@@ -1841,6 +1952,7 @@ pub fn group_cases() -> Vec<(&'static str, CaseInput, Value)> {
             statement,
             signature: GroupSignature { ed25519: vec![0; 64], ml_dsa: vec![0; 3309] },
             signer_signature: vec![0; 3373],
+            kit_signature: None,
         };
         let mut fabricated = vec![];
         let mut previous = String::new();
@@ -2799,8 +2911,15 @@ pub fn group_cases() -> Vec<(&'static str, CaseInput, Value)> {
             },
             refused.clone(),
         ));
+        // A company's roster (format 3, as every company's is) after a family's first.
         let as_org = roster_sign(
-            Roster { kind: GroupKind::Org, ..h.statements[1].clone() },
+            Roster {
+                kind: GroupKind::Org,
+                format: 3,
+                areas: vec![],
+                org: Some(org_fields(GROUP, 1)),
+                ..h.statements[1].clone()
+            },
             group_seed(1),
             organizer.keys.clone(),
         )
@@ -3020,6 +3139,8 @@ pub fn group_cases() -> Vec<(&'static str, CaseInput, Value)> {
             commitment: area_key_commitment(&pattern(32, seed)).unwrap(),
             root_commitment: None,
             retired: false,
+            area_kind: None,
+            list_digest: None,
         };
         let members = || vec![owner.clone(), active(&adult, &[GroupRole::Members])];
         let mut after = |name: &'static str, areas: Vec<RosterArea>, expected: Value| {
@@ -3055,17 +3176,25 @@ pub fn group_cases() -> Vec<(&'static str, CaseInput, Value)> {
         let mut removal =
             |name: &'static str, kind: GroupKind, areas: Option<Vec<RosterArea>>, expected: Value| {
                 let mut h = History::of(kind);
-                let mut created = standard_areas();
-                created.push(area_row(SECOND_AREA, 1));
+                // A company's rosters are format 3, and its first entry an Owner's.
+                let org = kind == GroupKind::Org;
+                let first = if org { active(&organizer, &OWNER_ROLES) } else { owner.clone() };
+                let created = if org {
+                    vec![org_row_at(AREA, 1), org_row_at(SECOND_AREA, 1)]
+                } else {
+                    let mut created = standard_areas();
+                    created.push(area_row(SECOND_AREA, 1));
+                    created
+                };
                 h.roster_with(
                     &organizer,
-                    vec![owner.clone(), active(&adult, &[]), active(&child, &[])],
+                    vec![first.clone(), active(&adult, &[]), active(&child, &[])],
                     Some(1),
                     Some(created),
                 );
                 h.roster_with(
                     &organizer,
-                    vec![owner.clone(), adult.entry(&[], 1, MemberStatus::Left), active(&child, &[])],
+                    vec![first, adult.entry(&[], 1, MemberStatus::Left), active(&child, &[])],
                     Some(1),
                     areas,
                 );
@@ -4432,20 +4561,28 @@ pub fn roster_of(value: &Value) -> Roster {
                         commitment: s(a, "commitment"),
                         root_commitment: a["rootCommitment"].as_str().map(String::from),
                         retired: a["retired"] == json!(true),
+                        area_kind: None,
+                        list_digest: None,
                     })
                     .collect()
             })
             .unwrap_or_default(),
         format: value["format"].as_u64().map_or(1, |format| format as u8),
+        org: None,
     }
 }
 
 pub fn signed_json(signed: &SignedGroupStatement) -> Value {
-    json!({
+    let mut value = json!({
         "statement": e(&signed.statement),
         "signature": { "ed25519": e(&signed.signature.ed25519), "mlDsa": e(&signed.signature.ml_dsa) },
         "signerSignature": e(&signed.signer_signature),
-    })
+    });
+    // A company's recovery roster carries the kit's signature beside the other two.
+    if let Some(kit_signature) = &signed.kit_signature {
+        value["kitSignature"] = json!(e(kit_signature));
+    }
+    value
 }
 
 pub fn signed_of(value: &Value) -> SignedGroupStatement {
@@ -4456,6 +4593,7 @@ pub fn signed_of(value: &Value) -> SignedGroupStatement {
             ml_dsa: b(&value["signature"], "mlDsa"),
         },
         signer_signature: b(value, "signerSignature"),
+        kit_signature: value["kitSignature"].as_str().map(|_| b(value, "kitSignature")),
     }
 }
 
@@ -5170,6 +5308,8 @@ pub fn seal_cases() -> Vec<SealCase> {
                 commitment: area_key_commitment(&pattern(32, 78)).unwrap(),
                 root_commitment: None,
                 retired: false,
+                area_kind: None,
+                list_digest: None,
             }]),
         );
         let rotated = accepted_of(&r, &[&o, &a, &g]);
@@ -5658,6 +5798,9 @@ pub struct FirstRosterCase {
     pub creator: RosterMember,
     /* Each area's workspace id and key. */
     pub area_keys: Vec<(String, Vec<u8>)>,
+    /* A company's first roster only: its key, its kit and its heads digest, and each area's root key, kind and list digest. */
+    pub org: Option<FirstOrgRoster>,
+    pub org_areas: Vec<(Vec<u8>, AreaKind, String)>,
 }
 
 pub fn first_roster_cases() -> Vec<FirstRosterCase> {
@@ -5669,6 +5812,8 @@ pub fn first_roster_cases() -> Vec<FirstRosterCase> {
         kind: GroupKind::Family,
         creator,
         area_keys,
+        org: None,
+        org_areas: vec![],
     };
     let entry = |roles: &[GroupRole]| organizer.entry(roles, 1, MemberStatus::Active);
     let (billing, members, data_admin) = (GroupRole::Billing, GroupRole::Members, GroupRole::DataAdmin);
@@ -5685,9 +5830,21 @@ pub fn first_roster_cases() -> Vec<FirstRosterCase> {
             entry(&[members]),
             vec![key(SECOND_AREA, 101), key(AREA, AREA_KEY_SEED)],
         ),
+        // A company's first roster is format 3: its creator an Owner, its key, kit and heads on it.
         FirstRosterCase {
             kind: GroupKind::Org,
-            ..of("first-roster-org", entry(&[data_admin, members]), vec![key(AREA, AREA_KEY_SEED)])
+            org: Some(FirstOrgRoster {
+                custody_key: custody_public_key(custody_seed_at(1)).unwrap(),
+                kit: kit_public_keys(kit_secret_at(1), GROUP.into()).unwrap(),
+                rules: None,
+                heads_digest: heads_digest(),
+            }),
+            org_areas: vec![(root_key_at(AREA, 1), AreaKind::Shared, list_digest_at(AREA, 1))],
+            ..of(
+                "first-roster-org",
+                entry(&[GroupRole::Recovery, members, data_admin, billing]),
+                vec![key(AREA, AREA_KEY_SEED)],
+            )
         },
         of("first-roster-not-holder", entry(&[billing]), vec![key(AREA, AREA_KEY_SEED)]),
         of(
@@ -5715,27 +5872,59 @@ pub fn first_roster_verdict(c: &FirstRosterCase) -> Option<String> {
     let area_keys = c
         .area_keys
         .iter()
-        .map(|(workspace_id, key)| AreaKey {
-            workspace_id: workspace_id.clone(),
-            workspace_key: key.clone(),
-            root_key: None,
+        .enumerate()
+        .map(|(index, (workspace_id, key))| {
+            let company = c.org_areas.get(index);
+            AreaKey {
+                workspace_id: workspace_id.clone(),
+                workspace_key: key.clone(),
+                root_key: company.map(|(root, _, _)| root.clone()),
+                area_kind: company.map(|(_, kind, _)| *kind),
+                list_digest: company.map(|(_, _, list)| list.clone()),
+            }
         })
         .collect();
-    roster_first(c.group_id.clone(), c.kind, c.creator.clone(), Some(area_keys), None)
-        .and_then(roster_statement)
-        .ok()
-        .map(|statement| e(&statement))
+    match &c.org {
+        Some(org) => {
+            company_roster_first(c.group_id.clone(), c.creator.clone(), Some(area_keys), org.clone())
+        }
+        None => roster_first(c.group_id.clone(), c.kind, c.creator.clone(), Some(area_keys), None),
+    }
+    .and_then(roster_statement)
+    .ok()
+    .map(|statement| e(&statement))
 }
 
 pub fn first_roster_case_json(c: &FirstRosterCase, expected: &Option<String>) -> Value {
-    json!({
+    let mut case = json!({
         "name": c.name,
         "groupId": c.group_id,
         "kind": match c.kind { GroupKind::Family => "family", GroupKind::Org => "org" },
         "creator": member_json(&c.creator),
-        "areaKeys": c.area_keys.iter().map(|(id, key)| json!({ "workspaceId": id, "workspaceKey": e(key) })).collect::<Vec<_>>(),
+        "areaKeys": c.area_keys.iter().enumerate().map(|(index, (id, key))| {
+            let mut area = json!({ "workspaceId": id, "workspaceKey": e(key) });
+            if let Some((root, kind, list)) = c.org_areas.get(index) {
+                area["rootKey"] = json!(e(root));
+                area["areaKind"] = json!(match kind { AreaKind::Employee => "employee", AreaKind::Shared => "shared" });
+                area["listDigest"] = json!(list);
+            }
+            area
+        }).collect::<Vec<_>>(),
         "expected": expected,
-    })
+    });
+    if let Some(org) = &c.org {
+        case["org"] = json!({
+            "custodyKey": { "encryptionPublicKey": org.custody_key.encryption_public_key, "kemPublicKey": org.custody_key.kem_public_key },
+            "kit": {
+                "encryptionPublicKey": org.kit.encryption_public_key,
+                "kemPublicKey": org.kit.kem_public_key,
+                "signingPublicKey": org.kit.signing_public_key,
+                "mlDsaPublicKey": org.kit.ml_dsa_public_key,
+            },
+            "headsDigest": org.heads_digest,
+        });
+    }
+    case
 }
 
 pub fn first_roster_case_from(v: &Value) -> (FirstRosterCase, Option<String>) {
@@ -5750,6 +5939,34 @@ pub fn first_roster_case_from(v: &Value) -> (FirstRosterCase, Option<String>) {
                 .unwrap()
                 .iter()
                 .map(|k| (s(k, "workspaceId"), b(k, "workspaceKey")))
+                .collect(),
+            org: v["org"].as_object().map(|_| {
+                let org = &v["org"];
+                FirstOrgRoster {
+                    custody_key: CustodyPublicKey {
+                        encryption_public_key: s(&org["custodyKey"], "encryptionPublicKey"),
+                        kem_public_key: s(&org["custodyKey"], "kemPublicKey"),
+                    },
+                    kit: KitPublicKeys {
+                        encryption_public_key: s(&org["kit"], "encryptionPublicKey"),
+                        kem_public_key: s(&org["kit"], "kemPublicKey"),
+                        signing_public_key: s(&org["kit"], "signingPublicKey"),
+                        ml_dsa_public_key: s(&org["kit"], "mlDsaPublicKey"),
+                    },
+                    rules: None,
+                    heads_digest: s(org, "headsDigest"),
+                }
+            }),
+            org_areas: v["areaKeys"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|k| k["rootKey"].is_string())
+                .map(|k| {
+                    let kind =
+                        if s(k, "areaKind") == "employee" { AreaKind::Employee } else { AreaKind::Shared };
+                    (b(k, "rootKey"), kind, s(k, "listDigest"))
+                })
                 .collect(),
         },
         v["expected"].as_str().map(String::from),

@@ -288,10 +288,24 @@ function rosterOf(value: unknown): Roster | undefined {
             // Format 2 (design 2.10): a root commitment on a key row, or a tombstone. Left out
             // when absent (or false), as parseRoster leaves them out; anything else is no input.
             if (!row) return undefined;
-            const extra: { rootCommitment?: string; retired?: true } = {};
+            const extra: {
+                rootCommitment?: string;
+                retired?: true;
+                areaKind?: 'employee' | 'shared';
+                listDigest?: string;
+            } = {};
             if (a.rootCommitment !== undefined && a.rootCommitment !== null) {
                 if (typeof a.rootCommitment !== 'string') return undefined;
                 extra.rootCommitment = a.rootCommitment;
+            }
+            // Format 3 (companies-design 2.1): a key row's kind and base list digest.
+            if (a.areaKind !== undefined && a.areaKind !== null) {
+                if (a.areaKind !== 'employee' && a.areaKind !== 'shared') return undefined;
+                extra.areaKind = a.areaKind;
+            }
+            if (a.listDigest !== undefined && a.listDigest !== null) {
+                if (typeof a.listDigest !== 'string') return undefined;
+                extra.listDigest = a.listDigest;
             }
             if (a.retired !== undefined && a.retired !== null) {
                 if (typeof a.retired !== 'boolean') return undefined;
@@ -323,9 +337,60 @@ function rosterOf(value: unknown): Roster | undefined {
         members: members as Roster['members'],
         areas: areas as NonNullable<Roster['areas']>,
     });
-    return (
-        roster && (format === undefined ? roster : { ...roster, format: format as RosterFormat })
-    );
+    if (!roster) return undefined;
+    const company = companyOf(value);
+    if (company === undefined) return undefined;
+    return {
+        ...roster,
+        // `same` stands for the member list: a roster that says it is given none (the Rust twin
+        // drops them too), so what encodes parses back to the same roster.
+        ...(company?.membersSame !== undefined ? { members: [] } : {}),
+        ...(format === undefined ? {} : { format: format as RosterFormat }),
+        ...company,
+    };
+}
+
+/*
+ * A company roster's own fields (format 3) as the web types them: null when
+ * the object has none, undefined when one does not fit. Rust holds them as
+ * one record, so a partial set does not fit there, and is no input here.
+ */
+function companyOf(value: Doc) {
+    const given = (key: string) => value[key] !== undefined && value[key] !== null;
+    if (!['custody', 'rules', 'heads', 'auto', 'membersSame'].some(given)) return null;
+    const { custody, rules, heads, auto, membersSame } = value;
+    if (!isObject(custody) || !isObject(rules) || !isObject(heads)) return undefined;
+    if (typeof rules.autoJoin !== 'boolean') return undefined;
+    if (given('membersSame') && typeof membersSame !== 'string') return undefined;
+    if (given('auto') && !isObject(auto)) return undefined;
+    const fields = all({
+        custody: all({
+            custodyKeyVersion: number(custody, 'custodyKeyVersion'),
+            custodyEncryptionPublicKey: text(custody, 'custodyEncryptionPublicKey'),
+            custodyKemPublicKeyDigest: text(custody, 'custodyKemPublicKeyDigest'),
+            kitVersion: number(custody, 'kitVersion'),
+            kitEncryptionPublicKey: text(custody, 'kitEncryptionPublicKey'),
+            kitKemPublicKeyDigest: text(custody, 'kitKemPublicKeyDigest'),
+            kitSigningPublicKey: text(custody, 'kitSigningPublicKey'),
+            kitMlDsaPublicKeyDigest: text(custody, 'kitMlDsaPublicKeyDigest'),
+        }),
+        rules: all({
+            autoJoin: rules.autoJoin as boolean,
+            autoJoinDailyLimit: number(rules, 'autoJoinDailyLimit'),
+        }),
+        heads: all({
+            areaCount: number(heads, 'areaCount'),
+            headsDigest: text(heads, 'headsDigest'),
+        }),
+        auto: given('auto')
+            ? all({
+                  utcDay: text(auto as Doc, 'utcDay'),
+                  countThatDay: number(auto as Doc, 'countThatDay'),
+              })
+            : null,
+    });
+    if (!fields) return undefined;
+    return { ...fields, ...(given('membersSame') ? { membersSame: membersSame as string } : {}) };
 }
 
 const shareContextOf = (value: unknown): ShareContext | undefined =>
