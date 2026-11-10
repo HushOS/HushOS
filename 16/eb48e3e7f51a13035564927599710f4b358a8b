@@ -1,0 +1,21 @@
+docs/companies-design.md
+  s_1f3a9ec02d29ed::t_50ba114e591d77 466
+docs/groups-invariants.md
+  s_1f3a9ec02d29ed::t_0e51c351acc7fd 537
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "16eb48e3e7f51a13035564927599710f4b358a8b",
+  "prompts": {},
+  "sessions": {
+    "s_1f3a9ec02d29ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aef80487-cabb-455f-b2f1-acb7f8d96c4e",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
