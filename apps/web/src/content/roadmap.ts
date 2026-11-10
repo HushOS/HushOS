@@ -50,7 +50,7 @@ export type RoadmapSection = {
 };
 
 /* The day this file last changed what the page says (YYYY-MM-DD). */
-export const updated = '2026-11-10';
+export const updated = '2026-11-09';
 
 export const sections: RoadmapSection[] = [
     {
@@ -238,7 +238,7 @@ export const sections: RoadmapSection[] = [
                 status: 'now',
                 area: 'Teams',
                 title: 'HushOS for companies',
-                body: 'Folders that belong to the company, admins who add and remove people, with policies and an activity log, and a choice of where files are kept, including your own storage bucket. Admins of a company plan will be able to open the company’s folders, through a key the company holds. Single sign-on and your own domain come later.',
+                body: 'Folders that belong to the company, admins who add and remove people, with policies and an audit log, your own domain and single sign-on, and a choice of where files are kept, including your own storage bucket. Admins of a company plan will be able to open the company’s folders, through a key the company holds.',
                 links: [{ kind: 'page', to: '/teams', label: 'HushOS for teams today' }],
             },
             {
