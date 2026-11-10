@@ -23,6 +23,11 @@ export type TokenKind = 'session' | 'enrollment';
  * - `two-step-expired`: the step token is gone (five minutes, five wrong answers, a password
  *   change): start again, from the password at sign-in or from a new challenge at a change;
  * - `totp-frozen`: authenticator codes are paused here; another method still answers;
+ * - `not-a-code`: the answer was not a code at all (400): nothing was checked, counted or
+ *   spent, so a password proof sent with it still holds;
+ * - `code-budget`: too many wrong codes for now (429); the recovery phrase still answers;
+ * - `two-step-unavailable`: the server cannot check this kind of code just now (503: a key
+ *   it was made under is not set); the recovery phrase still answers;
  * - `unsupported`: this server does not offer two-step sign-in (TWO_STEP_ENABLED).
  */
 export type AuthErrorCode =
@@ -33,6 +38,9 @@ export type AuthErrorCode =
     | 'two-step'
     | 'two-step-expired'
     | 'totp-frozen'
+    | 'not-a-code'
+    | 'code-budget'
+    | 'two-step-unavailable'
     | 'unsupported';
 
 export class AuthError extends Error {

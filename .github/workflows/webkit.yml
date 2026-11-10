@@ -107,6 +107,8 @@ jobs:
                   brew install postgresql@18 mailpit garage
                   bun run setup
                   echo 'GROUPS_ENABLED=false' >> .env
+                  # Offered, so e2e/two-step.spec.ts runs its flows instead of only its off check.
+                  echo 'TWO_STEP_ENABLED=true' >> .env
                   scripts/infra-native.sh
               env:
                   HOMEBREW_NO_INSTALL_CLEANUP: 1

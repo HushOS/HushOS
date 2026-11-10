@@ -1058,6 +1058,7 @@ describe('identity succession', () => {
                 userId: user.id,
                 action: 'master-key',
                 sessionTokenHash,
+                replacement: { tokenHash: bytes(32), expiresAt: new Date(Date.now() + 3_600_000) },
                 credentialVersion: 1,
                 registrationRecord: 'record-2',
                 envelope: {
@@ -1113,7 +1114,7 @@ describe('identity succession', () => {
         // The keys statement binds the key version: a version 2 identity's never moves, up or down.
         expect(await change(rewrap(current, 1), [history])).toBe(false);
         expect(await change(rewrap(current, 3), [history])).toBe(false);
-        expect(await change(rewrap(current, 2), [history])).toBe(true);
+        expect(await change(rewrap(current, 2), [history])).toBeTruthy();
         const [after] = await auth.listIdentityHistory(user.id);
         expect(after!.encryptedMlDsaSeed!.equals(history.encryptedMlDsaSeed)).toBe(true);
         expect(after!.mlDsaPublicKey!.equals(old!.mlDsaPublicKey!)).toBe(true);
@@ -1143,6 +1144,7 @@ describe('the settings key in a master-key rotation', () => {
                 userId: user.id,
                 action,
                 sessionTokenHash,
+                replacement: { tokenHash: bytes(32), expiresAt: new Date(Date.now() + 3_600_000) },
                 credentialVersion: 1,
                 registrationRecord: 'record-2',
                 envelope: {
@@ -1202,7 +1204,7 @@ describe('the settings key in a master-key rotation', () => {
         expect(await change('master-key', undefined)).toBe(false);
         // A password change keeps the root, so it has no settings key to carry.
         expect(await change('password', rewrapped)).toBe(false);
-        expect(await change('master-key', rewrapped)).toBe(true);
+        expect(await change('master-key', rewrapped)).toBeTruthy();
         const now = await auth.getSettingsKey(user.id);
         expect(now?.ciphertext.equals(rewrapped.ciphertext)).toBe(true);
         expect(now?.nonce.equals(rewrapped.nonce)).toBe(true);
@@ -1253,6 +1255,7 @@ describe('a family folder’s self-grant in a master-key rotation', () => {
                 userId: user.id,
                 action: 'master-key',
                 sessionTokenHash,
+                replacement: { tokenHash: bytes(32), expiresAt: new Date(Date.now() + 3_600_000) },
                 credentialVersion: 1,
                 registrationRecord: 'record-2',
                 envelope: {
@@ -1289,7 +1292,7 @@ describe('a family folder’s self-grant in a master-key rotation', () => {
         // Carried at another folder version, it would name a key the member was not given.
         expect(await rotate([personal, { id: areaId!, grant: grant(2) }])).toBe(false);
         const family = { id: areaId!, grant: grant(3) };
-        expect(await rotate([personal, family])).toBe(true);
+        expect(await rotate([personal, family])).toBeTruthy();
         const rows = await db
             .select()
             .from(workspaceKeys)

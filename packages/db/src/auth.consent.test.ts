@@ -223,6 +223,7 @@ describe('successor consent on an identity succession', () => {
                 userId: user.id,
                 action: 'master-key',
                 sessionTokenHash,
+                replacement: { tokenHash: bytes(32), expiresAt: new Date(Date.now() + 3_600_000) },
                 credentialVersion: 1,
                 registrationRecord: 'record-2',
                 envelope: {
@@ -256,7 +257,7 @@ describe('successor consent on an identity succession', () => {
                     },
                 ],
             }),
-        ).toBe(true);
+        ).toBeTruthy();
         const [after] = await auth.listIdentityHistory(user.id);
         // The rotation did run on this row: its wrapped seed is the new one.
         expect(after!.encryptedMlDsaSeed!.equals(history.encryptedMlDsaSeed)).toBe(true);

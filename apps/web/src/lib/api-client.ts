@@ -54,7 +54,14 @@ export async function unwrap<R extends { data: unknown; error: unknown }>(pendin
             typeof (value as { code?: unknown }).code === 'string'
                 ? (value as { code: string }).code
                 : undefined;
-        throw Object.assign(new Error(message), code ? { code } : {});
+        // The status, for the refusals told apart by it alone (a code that was not a code is a
+        // 400, a spent budget a 429, a change on an account without a second step a 409).
+        const status = (error as { status?: unknown }).status;
+        throw Object.assign(
+            new Error(message),
+            code ? { code } : {},
+            typeof status === 'number' ? { status } : {},
+        );
     }
     return data as NonNullable<R['data']>;
 }

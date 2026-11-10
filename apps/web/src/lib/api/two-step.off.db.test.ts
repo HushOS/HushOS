@@ -114,6 +114,27 @@ describe('with two-step sign-in off', () => {
         });
         expect(done.status).toBe(200);
         expect(done.body.envelope).toBeDefined();
+        // The reply says this server lets nobody change their step, so a client suggests
+        // nothing it could not do; after a backup code it still says how many are left.
+        expect(done.body.twoStep).toEqual({ offered: false });
+        const again = await api.signIn(who);
+        const byCode = await api.call('POST', '/login/two-step', {
+            token: again.body.twoStep.token,
+            proof: { kind: 'backup', code: app.backupCodes[0] },
+        });
+        expect(byCode.body.twoStep).toEqual({ offered: false, backupCodesLeft: 9 });
+    });
+
+    test('a step token is still answered, and an account without the step is told it has none', async () => {
+        const plain = await api.account();
+        const { cookie } = await api.signIn(plain);
+        const none = await api.call(
+            'POST',
+            '/two-step/challenge',
+            { purpose: 'password' },
+            { cookie },
+        );
+        expect([none.status, none.body]).toEqual([200, { on: false }]);
     });
 
     test('and at the changes the step guards, which it can still answer', async () => {
@@ -178,6 +199,9 @@ describe('with two-step sign-in off', () => {
             proof: { kind: 'backup', code: app.backupCodes[0] },
         });
         expect(changed.status).toBe(200);
-        expect(await api.rows.sessionRows()).toEqual([]);
+        // The asking device carries on in the session opened with the change; no other is left.
+        expect((await api.rows.sessionRows()).map((row) => row.tokenHash)).toEqual([
+            api.sha256(changed.cookie as string),
+        ]);
     });
 });

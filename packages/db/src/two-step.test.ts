@@ -115,13 +115,17 @@ type Executor = Parameters<typeof auth.createSession>[1];
 function changePassword(
     userId: string,
     sessionTokenHash: Buffer,
-    options: { keyVersion?: number; executor?: Executor } = {},
+    options: { keyVersion?: number; executor?: Executor; replacement?: Buffer } = {},
 ) {
     return auth.changeAccountSecurity(
         {
             userId,
             action: 'password',
             sessionTokenHash,
+            replacement: {
+                tokenHash: options.replacement ?? bytes(32),
+                expiresAt: new Date(Date.now() + HOUR),
+            },
             credentialVersion: 1,
             registrationRecord: 'record-2',
             envelope: {
@@ -989,7 +993,7 @@ describe('step tokens', () => {
         const { codes: set } = await enrolTotp(user.id, { sessionTokenHash: current.tokenHash });
         const signIn = await stepToken(user.id);
         await stepToken(user.id, { purpose: 'delete', sessionTokenHash: current.tokenHash });
-        expect(await changePassword(user.id, current.tokenHash)).toBe(true);
+        expect(await changePassword(user.id, current.tokenHash)).toBeTruthy();
 
         expect(
             await db.select().from(twoStepAttempts).where(eq(twoStepAttempts.userId, user.id)),
@@ -1066,7 +1070,7 @@ describe('step tokens', () => {
             .update(accountDevices)
             .set({ twoStepFailures: 3 })
             .where(eq(accountDevices.id, laptop.deviceId));
-        expect(await changePassword(user.id, current.tokenHash)).toBe(true);
+        expect(await changePassword(user.id, current.tokenHash)).toBeTruthy();
 
         // Tokens a sign-in wrote just after the change, having read the credential just before it.
         const toPass = await stepToken(user.id);
@@ -2727,6 +2731,108 @@ describe('a change behind the step', () => {
  * passes the step itself, after the person's groups and under the account's
  * lock, so a deletion and a group write can never wait on each other.
  */
+/*
+ * A password change, a new recovery phrase and a rotation end every session of the account.
+ * The device that asked gets the session that replaces its own in the same transaction: with
+ * a second step, a sign-in after the change could be one the person cannot answer (the phrase
+ * just replaced, the last backup code just spent), and the account would be lost.
+ */
+describe('the session a security change leaves the asking device', () => {
+    async function asked(options: { twoStepAt?: Date } = {}) {
+        const user = await account();
+        const asking = await session(user.id, { twoStepAt: options.twoStepAt, keyed: true });
+        const other = await session(user.id, { twoStepAt: new Date() });
+        const app = await enrolTotp(user.id);
+        const binding = await stepToken(user.id, {
+            purpose: 'password',
+            sessionTokenHash: asking.tokenHash,
+        });
+        const step = {
+            tokenHash: binding.tokenHash,
+            proof: { method: 'totp' as const, factorId: app.factorId, step: STEP + 1 },
+        };
+        const change = (replacement: Buffer) =>
+            twoStep.steppedChange(
+                { userId: user.id, purpose: 'password', sessionTokenHash: asking.tokenHash, step },
+                async (tx) =>
+                    (await changePassword(user.id, asking.tokenHash, {
+                        executor: tx,
+                        replacement,
+                    })) || null,
+            );
+        return { user, asking, other, app, binding, change };
+    }
+    const credentialVersion = async (userId: string) =>
+        (
+            await db
+                .select({ version: opaqueCredentials.version })
+                .from(opaqueCredentials)
+                .where(eq(opaqueCredentials.userId, userId))
+        )[0]?.version;
+
+    test('is on the same device, on the new password, stepped, and begun when the old one began; every other session ends', async () => {
+        const { user, asking, other, change } = await asked();
+        const before = (await sessionRow(asking.tokenHash))!;
+        expect(before.twoStepAt).toBeNull();
+        const next = token('replacement');
+        const done = await change(next);
+        if (done.status !== 'ok') throw new Error(`The change was ${done.status}.`);
+        expect(done.value).toMatchObject({
+            user: { id: user.id },
+            key: { credentialVersion: 2 },
+            device: { id: asking.deviceId, registered: true },
+        });
+        expect(await sessionRow(asking.tokenHash)).toBeUndefined();
+        expect(await sessionRow(other.tokenHash)).toBeUndefined();
+        const replaced = (await sessionRow(next))!;
+        expect(replaced).toMatchObject({
+            userId: user.id,
+            deviceId: asking.deviceId,
+            credentialVersion: 2,
+        });
+        // The step was passed in this change: the session that carries on has passed it.
+        expect(replaced.twoStepAt?.getTime()).toBe(done.passed?.at.getTime());
+        // The same sign-in: a change does not buy another thirty days.
+        expect(replaced.createdAt.getTime()).toBe(before.createdAt.getTime());
+        expect(await db.select().from(sessions).where(eq(sessions.userId, user.id))).toHaveLength(
+            1,
+        );
+    });
+
+    test('keeps the time the step was passed before, so a change never extends it', async () => {
+        const passedAt = new Date(Date.now() - 10 * 24 * HOUR);
+        const { change } = await asked({ twoStepAt: passedAt });
+        const next = token('replacement');
+        expect(await change(next)).toMatchObject({ status: 'ok' });
+        expect((await sessionRow(next))?.twoStepAt?.getTime()).toBe(passedAt.getTime());
+    });
+
+    test('that cannot be opened undoes the change and the step with it', async () => {
+        const { user, asking, other, app, binding, change } = await asked();
+        // A token already in use cannot name the replacement: the insert fails.
+        const stranger = await session((await account()).id);
+        await expect(change(stranger.tokenHash)).rejects.toThrow();
+        expect(await credentialVersion(user.id)).toBe(1);
+        expect(await sessionRow(asking.tokenHash)).toBeDefined();
+        expect(await sessionRow(other.tokenHash)).toBeDefined();
+        // The step token and the code's time step are unspent, and the session is not marked.
+        expect((await twoStep.getStepAttempt(binding))?.failures).toBe(0);
+        expect((await factorRow(app.factorId))?.totpLastStep).toBe(STEP);
+        expect((await sessionRow(asking.tokenHash))?.twoStepAt).toBeNull();
+    });
+
+    test('is still held to the guard: a change that comes round the step is refused whole', async () => {
+        const { user, asking } = await asked();
+        // Straight to the repository, as code that skipped the step would: the asking session
+        // never passed it, so its replacement would be a session without the step.
+        await expect(
+            changePassword(user.id, asking.tokenHash, { replacement: token('replacement') }),
+        ).rejects.toThrow();
+        expect(await credentialVersion(user.id)).toBe(1);
+        expect(await sessionRow(asking.tokenHash)).toBeDefined();
+    });
+});
+
 describe('deleting an account behind the step', () => {
     async function inFamily() {
         const user = await account();

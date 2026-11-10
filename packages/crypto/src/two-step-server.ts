@@ -2,6 +2,7 @@ import { argon2id } from 'hash-wasm';
 import sodium from 'libsodium-wrappers';
 import { decryptKey, encryptKey } from './aead';
 import { encode } from './keys';
+import { BACKUP_CODE_LENGTH } from './two-step-codes';
 
 /*
  * Two-step sign-in, what only the server computes (docs/two-step-design.md 2):
@@ -12,6 +13,14 @@ import { encode } from './keys';
  * protect a copy of the database taken without the two-step key, and nothing
  * else. Never import this from client code.
  */
+
+/* How a typed code is read: shared with clients, which check an answer's shape before sending it. */
+export {
+    BACKUP_CODE_LENGTH,
+    formatBackupCode,
+    normalizeBackupCode,
+    normalizeTotpCode,
+} from './two-step-codes';
 
 /* RFC 6238 with the defaults every authenticator app assumes: SHA-1, six digits, 30 seconds. */
 export const TOTP_SECRET_BYTES = 20;
@@ -87,17 +96,6 @@ export async function totpCode(secret: Uint8Array, step: number, digits = TOTP_D
         (mac[offset + 2]! << 8) |
         mac[offset + 3]!;
     return String(binary % 10 ** digits).padStart(digits, '0');
-}
-
-/*
- * What a person typed, as the six digits it stands for: authenticator apps show
- * a code as `123 456`, and people type it that way, so spaces and hyphens are
- * ignored. Null when that is not six digits: not a code at all, which is a
- * mistyped field and never a guess.
- */
-export function normalizeTotpCode(input: string) {
-    const code = input.replace(/[\s-]/g, '');
-    return /^[0-9]{6}$/.test(code) ? code : null;
 }
 
 /* Equal or not, in time that depends on the length alone. */
@@ -196,7 +194,6 @@ export function totpUri(input: { issuer: string; email: string; secret: Uint8Arr
 
 /* Crockford base32: no I, L, O or U. */
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
-export const BACKUP_CODE_LENGTH = 10;
 /* The OWASP minimum for Argon2id: 19 MiB, two passes, one lane. */
 const BACKUP_HASH = { memorySize: 19 * 1024, iterations: 2, parallelism: 1 } as const;
 
@@ -205,21 +202,6 @@ export function generateBackupCode() {
     const random = crypto.getRandomValues(new Uint8Array(BACKUP_CODE_LENGTH));
     // 32 divides 256, so the low five bits of a random byte are an unbiased index.
     return Array.from(random, (byte) => CROCKFORD[byte & 31]).join('');
-}
-
-/* A code as a person reads it: `7KQ2M-9XD4P`. */
-export function formatBackupCode(code: string) {
-    return `${code.slice(0, 5)}-${code.slice(5)}`;
-}
-
-/*
- * What a person typed, as the code it stands for: case, spaces and hyphens are
- * ignored, I and L read as 1 and O as 0. Null when that is not ten characters
- * of the alphabet.
- */
-export function normalizeBackupCode(input: string) {
-    const code = input.toUpperCase().replace(/[\s-]/g, '').replace(/[IL]/g, '1').replace(/O/g, '0');
-    return /^[0-9A-HJKMNP-TV-Z]{10}$/.test(code) ? code : null;
 }
 
 /*
