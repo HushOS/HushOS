@@ -8,7 +8,6 @@ import {
     KEM_SECRET_KEY_BYTES,
     kemDecapsulate,
     kemEncapsulate,
-    kemEncapsulateWith,
 } from './pq';
 import {
     HYBRID_SIGNATURE_BYTES,
@@ -101,151 +100,45 @@ export async function sealHybrid(
     kind: HybridSealKind,
 ) {
     await sodium.ready;
-    const coins: SealCoins = {
-        ephemeralSecret: sodium.crypto_box_keypair().privateKey,
-        kemRandomness: null,
-        nonce: crypto.getRandomValues(new Uint8Array(24)),
-    };
-    try {
-        return await signSealed(await sealedWith(payload, recipient, kind, coins), sealer, kind);
-    } finally {
-        coins.ephemeralSecret.fill(0);
-    }
-}
-
-/*
- * The three values a suite 4 seal draws: the ephemeral X25519 secret (32),
- * the ML-KEM encapsulation randomness (32; null to let the library draw it)
- * and the nonce (24).
- */
-type SealCoins = {
-    ephemeralSecret: Uint8Array;
-    kemRandomness: Uint8Array | null;
-    nonce: Uint8Array;
-};
-
-/* The bytes of the coins a reproducible seal is made from: 32 + 32 + 24. */
-export const SEAL_COINS_BYTES = 88;
-
-/* An envelope's length before its signature, for a payload of `payloadBytes`. */
-export function hybridSealedBytes(payloadBytes: number) {
-    return 32 + KEM_CIPHERTEXT_BYTES + 24 + payloadBytes + 16;
-}
-
-/* Everything of an envelope before its signature, from `coins`. */
-async function sealedWith(
-    payload: Uint8Array,
-    recipient: GranteeKeys,
-    kind: HybridSealKind,
-    coins: SealCoins,
-) {
-    await sodium.ready;
     // Hybrid only: a key sealed to X25519 alone is a harvest-now, decrypt-later target,
     // and withholding the KEM key is all it would take.
     if (!recipient.kemPublicKey)
         throw new CryptoError('This person has no post-quantum key yet, so nothing was shared.');
     if (recipient.kemPublicKey.length !== KEM_PUBLIC_KEY_BYTES)
         throw new CryptoError('Invalid identity key.');
-    if (coins.ephemeralSecret.length !== 32 || coins.nonce.length !== 24)
-        throw new CryptoError('Invalid seal randomness.');
-    const ephemeralPublicKey = sodium.crypto_scalarmult_base(coins.ephemeralSecret);
+    const ephemeral = sodium.crypto_box_keypair();
     let dh: Uint8Array | undefined;
     try {
-        dh = agree(coins.ephemeralSecret, recipient.encryptionPublicKey);
-        const { ciphertext, sharedSecret } = coins.kemRandomness
-            ? kemEncapsulateWith(recipient.kemPublicKey, coins.kemRandomness)
-            : kemEncapsulate(recipient.kemPublicKey);
+        dh = agree(ephemeral.privateKey, recipient.encryptionPublicKey);
+        const { ciphertext, sharedSecret } = kemEncapsulate(recipient.kemPublicKey);
         const key = await hybridSealKey(
             dh,
             sharedSecret,
             ciphertext,
-            ephemeralPublicKey,
+            ephemeral.publicKey,
             recipient.encryptionPublicKey,
             kind.info,
         );
         sharedSecret.fill(0);
         try {
-            const body = await encryptKey(payload, key, coins.nonce, kind.associatedData);
-            const sealed = new Uint8Array(32 + KEM_CIPHERTEXT_BYTES + 24 + body.length);
-            sealed.set(ephemeralPublicKey);
-            sealed.set(ciphertext, 32);
-            sealed.set(coins.nonce, 32 + KEM_CIPHERTEXT_BYTES);
-            sealed.set(body, 32 + KEM_CIPHERTEXT_BYTES + 24);
-            return sealed;
+            const nonce = crypto.getRandomValues(new Uint8Array(24));
+            const body = await encryptKey(payload, key, nonce, kind.associatedData);
+            const signed = 32 + KEM_CIPHERTEXT_BYTES + 24 + body.length;
+            const envelope = new Uint8Array(signed + HYBRID_SIGNATURE_BYTES);
+            envelope.set(ephemeral.publicKey);
+            envelope.set(ciphertext, 32);
+            envelope.set(nonce, 32 + KEM_CIPHERTEXT_BYTES);
+            envelope.set(body, 32 + KEM_CIPHERTEXT_BYTES + 24);
+            const statement = await kind.statement(envelope.subarray(0, signed));
+            envelope.set(await signHybrid(statement, sealer), signed);
+            return envelope;
         } finally {
             key.fill(0);
         }
     } finally {
+        ephemeral.privateKey.fill(0);
         dh?.fill(0);
     }
-}
-
-/* The envelope: what was sealed, then the sealer's hybrid signature over its statement. */
-async function signSealed(sealed: Uint8Array, sealer: HybridSigningKey, kind: HybridSealKind) {
-    const envelope = new Uint8Array(sealed.length + HYBRID_SIGNATURE_BYTES);
-    envelope.set(sealed);
-    envelope.set(await signHybrid(await kind.statement(sealed), sealer), sealed.length);
-    return envelope;
-}
-
-/*
- * sealHybrid with the three values it would draw given instead
- * (companies-design 2.2, "Proving a kit seal"): `coins` is the ephemeral
- * X25519 secret (32), the ML-KEM-768 encapsulation randomness (32) and the
- * nonce (24), SEAL_COINS_BYTES in all. The same payload, recipient, kind and
- * coins give the same bytes up to the signature, which is hedged and differs.
- * For the recovery kit seal and its check, and for tests: a seal whose coins
- * anyone else learns is open to them.
- */
-export async function sealWithCoins(
-    payload: Uint8Array,
-    recipient: GranteeKeys,
-    sealer: HybridSigningKey,
-    kind: HybridSealKind,
-    coins: Uint8Array,
-) {
-    return signSealed(await sealedWithCoins(payload, recipient, kind, coins), sealer, kind);
-}
-
-/* What sealWithCoins seals, without its signature: what a check of a reproducible seal compares. */
-export async function sealedWithCoins(
-    payload: Uint8Array,
-    recipient: GranteeKeys,
-    kind: HybridSealKind,
-    coins: Uint8Array,
-) {
-    if (coins.length !== SEAL_COINS_BYTES) throw new CryptoError('Invalid seal randomness.');
-    return sealedWith(payload, recipient, kind, {
-        ephemeralSecret: coins.subarray(0, 32),
-        kemRandomness: coins.subarray(32, 64),
-        nonce: coins.subarray(64),
-    });
-}
-
-/*
- * Whether an envelope of `kind` has its length and carries the hybrid
- * signature of one of `sealers` over its statement: what openHybrid checks
- * before it opens anything, on its own, for a reader who then tells a seal
- * its sealer signed and that does not open (the sealer's doing) from one
- * nobody they trust signed. Refused as openHybrid refuses.
- */
-export async function requireSealedBy(
-    envelope: Uint8Array,
-    payloadBytes: number,
-    sealers: readonly HybridPublicKey[],
-    kind: HybridSealKind,
-) {
-    if (envelope.length !== hybridSealBytes(payloadBytes)) throw new CryptoError(kind.invalid);
-    const signed = envelope.length - HYBRID_SIGNATURE_BYTES;
-    const statement = await kind.statement(envelope.subarray(0, signed));
-    for (const sealer of sealers)
-        if (
-            sealer.signingPublicKey.length === 32 &&
-            sealer.mlDsaPublicKey.length === 1952 &&
-            (await verifyHybrid(statement, envelope.subarray(signed), sealer))
-        )
-            return;
-    throw new CryptoError(kind.unsigned);
 }
 
 /*

@@ -1,7 +1,6 @@
 //! Helpers shared by the integration tests and the fixture examples.
 
 pub mod area_ledger;
-pub mod company;
 pub mod device_records;
 pub mod groups;
 pub mod join;

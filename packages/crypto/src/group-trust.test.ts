@@ -73,11 +73,6 @@ import {
     recordVerdict,
     type History,
     type Person,
-    HEADS_DIGEST,
-    OWNER_ROLES,
-    custodyAt,
-    custodyFieldAt,
-    kitAt,
 } from './group-testkit';
 import { areaKeyCommitment } from './area-keys';
 import { keyDigest } from './fingerprint';
@@ -861,20 +856,7 @@ describe('the next roster and succession', () => {
             ],
             [
                 'another kind',
-                signRoster(
-                    {
-                        ...base,
-                        kind: 'org',
-                        format: 3,
-                        areas: [],
-                        custody: await custodyFieldAt(1, 1),
-                        rules: { autoJoin: false, autoJoinDailyLimit: 10 },
-                        auto: null,
-                        heads: { areaCount: 1, headsDigest: HEADS_DIGEST },
-                    },
-                    f.h.keys[1]!,
-                    f.organizer.signer,
-                ),
+                signRoster({ ...base, kind: 'org' }, f.h.keys[1]!, f.organizer.signer),
             ],
             [
                 'by a former holder',
@@ -3286,16 +3268,9 @@ describe('milestone 1c: creating a group', () => {
         expect(
             (await firstRoster(GROUP, organizer.entry(['members']), { kind: 'family' })).areas,
         ).toEqual([]);
-        // A company's first roster is format 3: its creator an Owner, its key and kit on it.
-        const org = await firstRoster(GROUP, organizer.entry(OWNER_ROLES), {
+        const org = await firstRoster(GROUP, organizer.entry(['data_admin', 'members']), {
             kind: 'org',
-            org: {
-                custodyKey: (await custodyAt(1)).publicKey,
-                kit: (await kitAt(1)).publicKeys,
-                headsDigest: HEADS_DIGEST,
-            },
         });
-        expect(org.format).toBe(3);
         const groupKey = await groupKeyAt(1);
         const chain = await accepted({
             ...creatorReading(organizer),

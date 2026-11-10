@@ -156,19 +156,6 @@ pub fn roster(value: &Value) -> Option<Roster> {
                         None | Some(Value::Null) => false,
                         Some(retired) => retired.as_bool()?,
                     },
-                    // Format 3 (companies-design 2.1): a key row's kind and base list digest.
-                    area_kind: match a.get("areaKind") {
-                        None | Some(Value::Null) => None,
-                        Some(kind) => Some(match kind.as_str()? {
-                            "employee" => AreaKind::Employee,
-                            "shared" => AreaKind::Shared,
-                            _ => return None,
-                        }),
-                    },
-                    list_digest: match a.get("listDigest") {
-                        None | Some(Value::Null) => None,
-                        Some(list) => Some(list.as_str()?.to_string()),
-                    },
                 })
             })
             .collect::<Option<Vec<_>>>()?,
@@ -177,7 +164,6 @@ pub fn roster(value: &Value) -> Option<Roster> {
         None | Some(Value::Null) => 1,
         Some(format) => u8::try_from(format.as_u64()?).ok()?,
     };
-    let org = roster_org(value)?;
     Some(Roster {
         group_id: text(value, "groupId")?,
         kind,
@@ -185,66 +171,10 @@ pub fn roster(value: &Value) -> Option<Roster> {
         previous_roster_digest: text(value, "previousRosterDigest")?,
         group_key_version: number(value, "groupKeyVersion")?,
         signer_user_id: text(value, "signerUserId")?,
-        // `same` stands for the member list: a roster that says it is given none (the web's twin
-        // drops them too), so what encodes parses back to the same roster.
-        members: if org.as_ref().is_some_and(|org| org.members_same.is_some()) { vec![] } else { members },
+        members,
         areas,
         format,
-        org,
     })
-}
-
-/*
- * A company roster's own fields as the web types them (`custody`, `rules`,
- * `auto`, `heads`, `membersSame`): Some(None) when the object has none of
- * them, None when one does not fit. The web's encoder refuses a company
- * field on a family's roster and a company's roster without them all; Rust
- * holds them as one, so a partial set does not fit.
- */
-fn roster_org(value: &Value) -> Option<Option<RosterOrg>> {
-    let given = |key: &str| !matches!(value.get(key), None | Some(Value::Null));
-    if !["custody", "rules", "heads"].iter().any(|key| given(key)) && !given("auto") && !given("membersSame")
-    {
-        return Some(None);
-    }
-    let (custody, rules, heads) = (value.get("custody")?, value.get("rules")?, value.get("heads")?);
-    object(custody)?;
-    object(rules)?;
-    object(heads)?;
-    Some(Some(RosterOrg {
-        members_same: match value.get("membersSame") {
-            None | Some(Value::Null) => None,
-            Some(same) => Some(same.as_str()?.to_string()),
-        },
-        custody: RosterCustody {
-            custody_key_version: number(custody, "custodyKeyVersion")?,
-            custody_encryption_public_key: text(custody, "custodyEncryptionPublicKey")?,
-            custody_kem_public_key_digest: text(custody, "custodyKemPublicKeyDigest")?,
-            kit_version: number(custody, "kitVersion")?,
-            kit_encryption_public_key: text(custody, "kitEncryptionPublicKey")?,
-            kit_kem_public_key_digest: text(custody, "kitKemPublicKeyDigest")?,
-            kit_signing_public_key: text(custody, "kitSigningPublicKey")?,
-            kit_ml_dsa_public_key_digest: text(custody, "kitMlDsaPublicKeyDigest")?,
-        },
-        rules: RosterRules {
-            auto_join: rules.get("autoJoin")?.as_bool()?,
-            auto_join_daily_limit: number(rules, "autoJoinDailyLimit")?,
-        },
-        auto: match value.get("auto") {
-            None | Some(Value::Null) => None,
-            Some(auto) => {
-                object(auto)?;
-                Some(RosterAuto {
-                    utc_day: text(auto, "utcDay")?,
-                    count_that_day: number(auto, "countThatDay")?,
-                })
-            }
-        },
-        heads: RosterHeads {
-            area_count: number(heads, "areaCount")?,
-            heads_digest: text(heads, "headsDigest")?,
-        },
-    }))
 }
 
 pub fn roster_json(roster: &Roster) -> Value {
@@ -278,42 +208,12 @@ pub fn roster_json(roster: &Roster) -> Value {
             if a.retired {
                 row["retired"] = json!(true);
             }
-            if let Some(kind) = a.area_kind {
-                row["areaKind"] = json!(match kind { AreaKind::Employee => "employee", AreaKind::Shared => "shared" });
-            }
-            if let Some(list) = &a.list_digest {
-                row["listDigest"] = json!(list);
-            }
             row
         }).collect::<Vec<_>>(),
     });
     // A format 1 roster's shape is what it always was (the web leaves the field out).
     if roster.format != 1 {
         value["format"] = json!(roster.format);
-    }
-    // A company's roster (format 3), as the web's parseRoster gives it.
-    if let Some(org) = &roster.org {
-        if let Some(same) = &org.members_same {
-            value["membersSame"] = json!(same);
-        }
-        let custody = &org.custody;
-        value["custody"] = json!({
-            "custodyKeyVersion": custody.custody_key_version,
-            "custodyEncryptionPublicKey": custody.custody_encryption_public_key,
-            "custodyKemPublicKeyDigest": custody.custody_kem_public_key_digest,
-            "kitVersion": custody.kit_version,
-            "kitEncryptionPublicKey": custody.kit_encryption_public_key,
-            "kitKemPublicKeyDigest": custody.kit_kem_public_key_digest,
-            "kitSigningPublicKey": custody.kit_signing_public_key,
-            "kitMlDsaPublicKeyDigest": custody.kit_ml_dsa_public_key_digest,
-        });
-        value["rules"] =
-            json!({ "autoJoin": org.rules.auto_join, "autoJoinDailyLimit": org.rules.auto_join_daily_limit });
-        value["auto"] = org.auto.as_ref().map_or(
-            Value::Null,
-            |auto| json!({ "utcDay": auto.utc_day, "countThatDay": auto.count_that_day }),
-        );
-        value["heads"] = json!({ "areaCount": org.heads.area_count, "headsDigest": org.heads.heads_digest });
     }
     value
 }

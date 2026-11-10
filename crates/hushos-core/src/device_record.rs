@@ -242,7 +242,7 @@ pub(crate) fn cache_json(cache: &GroupChainCache) -> Value {
             (user.clone(), Value::Array(sets))
         })
         .collect();
-    let mut value = json!({
+    json!({
         "groupId": cache.group_id,
         "rosterDigests": cache.roster_digests,
         "statement": cache.statement,
@@ -256,12 +256,7 @@ pub(crate) fn cache_json(cache: &GroupChainCache) -> Value {
         "retiredAreas": cache.retired_areas,
         "cacheVersion": cache.cache_version,
         "ownEntryWrongAt": cache.own_entry_wrong_at,
-    });
-    // A company's record (cache version 3), as the web keeps it; a family's cache has no such field.
-    if let Some(org) = &cache.org {
-        value["org"] = crate::group_trust::org_cache_value(org);
-    }
-    value
+    })
 }
 
 /*
@@ -358,7 +353,6 @@ pub(crate) fn cache_of(value: &Value) -> Result<GroupChainCache, ()> {
             .iter()
             .map(|at| unsigned(at).ok_or(()))
             .collect::<Result<_, ()>>()?,
-        org: cache.get("org").map(crate::group_trust::org_cache_of).transpose()?,
     })
 }
 

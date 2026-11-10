@@ -182,30 +182,6 @@ pub(crate) fn kem_encapsulate(public_key: &[u8]) -> CoreResult<(Vec<u8>, Zeroizi
     Ok((ciphertext.to_vec(), secret))
 }
 
-/*
- * ML-KEM.Encaps_internal (FIPS 203) with the 32 bytes of `randomness` chosen
- * by the caller: the same key and randomness give the same ciphertext and
- * secret, as noble's `encapsulate(publicKey, msg)` does for the web. Only for
- * a seal that must be reproducible (the recovery kit seal's proof,
- * companies-design 2.2); every other seal draws its own.
- */
-pub(crate) fn kem_encapsulate_with(
-    public_key: &[u8],
-    randomness: &[u8],
-) -> CoreResult<(Vec<u8>, Zeroizing<[u8; 32]>)> {
-    expect_len("kem public key", public_key, KEM_PUBLIC_KEY_BYTES)
-        .map_err(|_| input("Invalid identity key."))?;
-    expect_len("seal randomness", randomness, 32).map_err(|_| input("Invalid seal randomness."))?;
-    let key = ml_kem_768::EncapsulationKey::new(&Array::try_from(public_key).map_err(|_| input("kem key"))?)
-        .map_err(|_| input("Invalid identity key."))?;
-    let mut m: ml_kem::B32 = Array::try_from(randomness).expect("32 bytes");
-    let (ciphertext, mut shared) = key.encapsulate_deterministic(&m);
-    m.as_mut_slice().zeroize();
-    let secret = Zeroizing::new(shared.into());
-    shared.as_mut_slice().zeroize();
-    Ok((ciphertext.to_vec(), secret))
-}
-
 pub(crate) fn kem_decapsulate(seed: &[u8], ciphertext: &[u8]) -> CoreResult<Zeroizing<[u8; 32]>> {
     expect_len("kem ciphertext", ciphertext, KEM_CIPHERTEXT_BYTES)?;
     let key = decapsulation_key(seed)?;

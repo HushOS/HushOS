@@ -12,17 +12,18 @@ import {
 } from './canonical';
 import { requireAccepted } from './accepted';
 import { CryptoError } from './errors';
-import { fingerprintWords } from './fingerprint';
+import { digestHex, fingerprintWords } from './fingerprint';
 import { decode, encode } from './keys';
 import {
+    KEM_PUBLIC_KEY_BYTES,
     ML_DSA_PUBLIC_KEY_BYTES,
     ML_DSA_SIGNATURE_BYTES,
     mlDsaKeypair,
+    mlDsaPublicKeyOf,
     mlDsaSign,
     mlDsaVerify,
 } from './pq';
 import {
-    HYBRID_SIGNATURE_BYTES,
     SIGNATURE_BYTES,
     digest,
     signHybrid,
@@ -36,27 +37,15 @@ import {
     hybridSealBytes,
     openHybrid,
     sealHybrid,
+    type GranteeKeys,
     type GranteeSecrets,
     type HybridSealKind,
 } from './sealing';
 import type { AcceptedRosters } from './group-trust';
+import type { ServedKeys, SuccessionLink } from './identity';
+import { successionPath } from './succession-path';
 import { checkId } from './ids';
 import { RETIRED, areaKeyCommitment, areaRootCommitment, rowsAfter } from './area-keys';
-import {
-    NOT_LISTED,
-    NOT_LISTED_KEY,
-    areaCommitments,
-    listedArea,
-    memberRecipient,
-    sameGroup,
-    sealedAtLatest,
-    sealedOnChain,
-    sealerHolds,
-    signersThrough,
-    type SignerHistory,
-} from './seal-rules';
-
-export type { SignerHistory } from './seal-rules';
 
 /*
  * The group core's cryptography (docs/groups-design.md 2): the group key and
@@ -255,78 +244,26 @@ export type Roster = {
     /*
      * The statement's format (design 2.10): 1, rows of three fields, as
      * shipped; or 2, rows that also commit to the area root's key, and
-     * retirement rows; or 3, a company's (companies-design 2.1). Absent
-     * means 1 (parseRoster always gives it). A chain never goes back to a
-     * lower format. Format 3 is a company's and only a company's: kind `org`
-     * is format 3, and formats 1 and 2 are a family's.
+     * retirement rows. Absent means 1 (parseRoster always gives it). A chain
+     * never goes back from 2 to 1.
      */
     format?: RosterFormat;
-    /*
-     * Format 3 only: the statement carries `["same",membersDigest]` in place
-     * of the member list, on a roster that changes no entry. The digest is
-     * rosterMembersDigest of the roster before. parseRoster then gives no
-     * members; acceptance puts the previous roster's in their place, so an
-     * accepted chain's roster always holds them. Never at version 1.
-     */
-    membersSame?: string;
-    /* Format 3 only, and always there: the company key and the recovery kit. */
-    custody?: RosterCustody;
-    /* Format 3 only, and always there: the auto-join policy. */
-    rules?: RosterRules;
-    /* Format 3 only: set on a roster an Admin's device signed unattended under auto-join; null or absent for none. */
-    auto?: RosterAuto | null;
-    /* Format 3 only, and always there: the live area count and the heads digest. */
-    heads?: RosterHeads;
 };
-export type RosterFormat = 1 | 2 | 3;
-export const ROSTER_FORMATS: readonly RosterFormat[] = [1, 2, 3];
-/* A company area's kind (companies-design 1.3), fixed at the area's first row. */
-export type AreaKind = 'employee' | 'shared';
-export const AREA_KINDS: readonly AreaKind[] = ['employee', 'shared'];
+export type RosterFormat = 1 | 2;
+export const ROSTER_FORMATS: readonly RosterFormat[] = [1, 2];
 export type RosterArea = {
     workspaceId: string;
     workspaceKeyVersion: number;
     /* areaKeyCommitment of the area key at that version, base64url; "" on a retirement row. */
     commitment: string;
     /*
-     * Format 2 and 3 key rows only: areaRootCommitment of the area root's node key
+     * Format 2 key rows only: areaRootCommitment of the area root's node key
      * at that version (design 2.10), base64url.
      */
     rootCommitment?: string;
-    /* Format 2 and 3 only: the area's tombstone, at its next version, with no key. */
+    /* Format 2 only: the area's tombstone, at its next version, with no key. */
     retired?: true;
-    /* Format 3 key rows only: the area's kind. */
-    areaKind?: AreaKind;
-    /* Format 3 key rows only: SHA-256 of the area's base list statement at that key version, base64url. */
-    listDigest?: string;
 };
-/*
- * The `custody` field of a format 3 roster (companies-design 2.1): the
- * company key and the recovery kit, each by version, X25519 public key and
- * the SHA-256 of its ML-KEM-768 public key, and the kit's signing keys by
- * its Ed25519 public key and the SHA-256 of its ML-DSA-65 public key.
- */
-export type RosterCustody = {
-    custodyKeyVersion: number;
-    custodyEncryptionPublicKey: string;
-    custodyKemPublicKeyDigest: string;
-    kitVersion: number;
-    kitEncryptionPublicKey: string;
-    kitKemPublicKeyDigest: string;
-    kitSigningPublicKey: string;
-    kitMlDsaPublicKeyDigest: string;
-};
-/* The `rules` field: whether auto-join is on, and how many a day (1 to 50). */
-export type RosterRules = { autoJoin: boolean; autoJoinDailyLimit: number };
-/* The `auto` field of an automatic admission: the UTC day ("YYYY-MM-DD") and that day's count (1 to 50). */
-export type RosterAuto = { utcDay: string; countThatDay: number };
-/* The `heads` field: the live areas after this roster, and the digest over every area's list and share log head. */
-export type RosterHeads = { areaCount: number; headsDigest: string };
-
-/* The most automatic admissions a day a roster's rules may allow (companies-design 2.1). */
-export const MAX_AUTO_JOIN_DAILY = 50;
-/* The most key rows of one company roster that rotate an existing area (companies-design 2.1, rule 6). */
-export const MAX_ORG_ROTATIONS_PER_ROSTER = 8;
 
 const ROSTER_DOMAIN = 'hushos/group/roster';
 
@@ -357,13 +294,8 @@ function areaParts(areas: readonly RosterArea[] | undefined, format: RosterForma
             integer(area.workspaceKeyVersion, 'workspace key version'),
         ] as const;
         if (format === 1) {
-            // Format 1 has neither root commitments nor retirement rows, nor a company's fields.
-            if (
-                area.rootCommitment !== undefined ||
-                area.retired !== undefined ||
-                area.areaKind !== undefined ||
-                area.listDigest !== undefined
-            )
+            // Format 1 has neither root commitments nor retirement rows.
+            if (area.rootCommitment !== undefined || area.retired !== undefined)
                 throw new CryptoError('Invalid roster area.');
             return [...head, digestOf(area.commitment, 'area key commitment')];
         }
@@ -371,29 +303,16 @@ function areaParts(areas: readonly RosterArea[] | undefined, format: RosterForma
             if (
                 area.retired !== true ||
                 area.commitment !== '' ||
-                area.rootCommitment !== undefined ||
-                area.areaKind !== undefined ||
-                area.listDigest !== undefined
+                area.rootCommitment !== undefined
             )
                 throw new CryptoError('Invalid roster area.');
             return [...head, RETIRED_ROW];
         }
-        const row = [
+        return [
             ...head,
             KEY_ROW,
             digestOf(area.commitment, 'area key commitment'),
             digestOf(area.rootCommitment, 'area root commitment'),
-        ];
-        if (format === 2) {
-            // Only a company's rows say an area's kind and commit to its list.
-            if (area.areaKind !== undefined || area.listDigest !== undefined)
-                throw new CryptoError('Invalid roster area.');
-            return row;
-        }
-        return [
-            ...row,
-            oneOf(area.areaKind, AREA_KINDS, 'area kind'),
-            digestOf(area.listDigest, 'area list digest'),
         ];
     });
     // One row per area, sorted by workspace id.
@@ -449,12 +368,14 @@ function memberParts(member: RosterMember, kind: GroupKind, rosterVersion: numbe
 /* The most entries a roster may have (design 2.4); the Rust core holds rosters to the same. */
 export const MAX_ROSTER_MEMBERS = 10_000;
 
-/* The canonical `members` array: every entry's parts, sorted by user id. */
-function membersParts(
-    roster: Pick<Roster, 'members'>,
-    kind: GroupKind,
-    version: number,
-): unknown[][] {
+export function rosterStatement(roster: Roster) {
+    const format = rosterFormat(roster);
+    const kind = oneOf(roster.kind, GROUP_KINDS, 'group kind');
+    const version = integer(roster.rosterVersion, 'roster version');
+    // Version 1 has no previous roster: its digest is the empty string, and only then.
+    if (version === 1 && roster.previousRosterDigest !== '')
+        throw new CryptoError('Invalid roster digest.');
+    const previous = version === 1 ? '' : digestOf(roster.previousRosterDigest, 'roster digest');
     if (
         !Array.isArray(roster.members) ||
         roster.members.length === 0 ||
@@ -466,72 +387,7 @@ function membersParts(
         members.map((member) => member[0] as string),
         'roster members',
     );
-    return members;
-}
-
-/* A day as a roster's `auto` field carries it: "YYYY-MM-DD", UTC, compared as text. */
-const UTC_DAY = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
-
-/* A count from 1 to MAX_AUTO_JOIN_DAILY, or refused. */
-function dailyCount(value: unknown, what: string) {
-    if (integer(value, what) > MAX_AUTO_JOIN_DAILY) throw new CryptoError(`Invalid ${what}.`);
-    return value as number;
-}
-
-/* [custodyKeyVersion,custodyEncryptionPublicKey,custodyKemPublicKeyDigest,kitVersion,kitEncryptionPublicKey,kitKemPublicKeyDigest,kitSigningPublicKey,kitMlDsaPublicKeyDigest] */
-function custodyParts(custody: RosterCustody | undefined) {
-    if (typeof custody !== 'object' || custody === null)
-        throw new CryptoError('Invalid roster custody.');
-    return [
-        integer(custody.custodyKeyVersion, 'company key version'),
-        bytesOf(custody.custodyEncryptionPublicKey, 32, 'company key'),
-        digestOf(custody.custodyKemPublicKeyDigest, 'company key digest'),
-        integer(custody.kitVersion, 'recovery kit version'),
-        bytesOf(custody.kitEncryptionPublicKey, 32, 'recovery kit key'),
-        digestOf(custody.kitKemPublicKeyDigest, 'recovery kit key digest'),
-        bytesOf(custody.kitSigningPublicKey, 32, 'recovery kit key'),
-        digestOf(custody.kitMlDsaPublicKeyDigest, 'recovery kit key digest'),
-    ];
-}
-
-/* [autoJoin,autoJoinDailyLimit]: 0 or 1, and 1 to 50. */
-function rulesParts(rules: RosterRules | undefined) {
-    if (typeof rules !== 'object' || rules === null || typeof rules.autoJoin !== 'boolean')
-        throw new CryptoError('Invalid roster rules.');
-    return [rules.autoJoin ? 1 : 0, dailyCount(rules.autoJoinDailyLimit, 'auto-join limit')];
-}
-
-/* [] | [utcDay,countThatDay] */
-function autoParts(auto: RosterAuto | null | undefined) {
-    if (auto === null || auto === undefined) return [];
-    if (typeof auto !== 'object' || typeof auto.utcDay !== 'string' || !UTC_DAY.test(auto.utcDay))
-        throw new CryptoError('Invalid automatic admission.');
-    return [auto.utcDay, dailyCount(auto.countThatDay, 'automatic admission')];
-}
-
-/* [areaCount,headsDigest]: the count from 0. */
-function headsParts(heads: RosterHeads | undefined) {
-    if (
-        typeof heads !== 'object' ||
-        heads === null ||
-        !Number.isSafeInteger(heads.areaCount) ||
-        heads.areaCount < 0
-    )
-        throw new CryptoError('Invalid roster heads.');
-    return [heads.areaCount, digestOf(heads.headsDigest, 'heads digest')];
-}
-
-export function rosterStatement(roster: Roster) {
-    const format = rosterFormat(roster);
-    const kind = oneOf(roster.kind, GROUP_KINDS, 'group kind');
-    // Format 3 is a company's and only a company's (companies-design 2.1).
-    if ((format === 3) !== (kind === 'org')) throw new CryptoError('Invalid roster format.');
-    const version = integer(roster.rosterVersion, 'roster version');
-    // Version 1 has no previous roster: its digest is the empty string, and only then.
-    if (version === 1 && roster.previousRosterDigest !== '')
-        throw new CryptoError('Invalid roster digest.');
-    const previous = version === 1 ? '' : digestOf(roster.previousRosterDigest, 'roster digest');
-    const head = [
+    return encodeStatement([
         ROSTER_DOMAIN,
         format,
         uuid(roster.groupId, 'group id'),
@@ -540,57 +396,12 @@ export function rosterStatement(roster: Roster) {
         previous,
         integer(roster.groupKeyVersion, 'group key version'),
         uuid(roster.signerUserId, 'user id'),
-    ];
-    if (format !== 3) {
-        if (
-            roster.membersSame !== undefined ||
-            roster.custody !== undefined ||
-            roster.rules !== undefined ||
-            (roster.auto !== undefined && roster.auto !== null) ||
-            roster.heads !== undefined
-        )
-            throw new CryptoError('Invalid roster format.');
-        return encodeStatement([
-            ...head,
-            membersParts(roster, kind, version),
-            areaParts(roster.areas, format),
-        ]);
-    }
-    // `same` stands for the list of the roster before: there is none before version 1. The
-    // members a resolved roster holds beside it are not in the statement.
-    if (roster.membersSame !== undefined && version === 1)
-        throw new CryptoError('Invalid roster members.');
-    return encodeStatement([
-        ...head,
-        roster.membersSame !== undefined
-            ? [SAME_MEMBERS, digestOf(roster.membersSame, 'members digest')]
-            : membersParts(roster, kind, version),
+        members,
         areaParts(roster.areas, format),
-        custodyParts(roster.custody),
-        rulesParts(roster.rules),
-        autoParts(roster.auto),
-        headsParts(roster.heads),
     ]);
 }
 
-/* What a format 3 roster carries in place of its member list when no entry changed. */
-const SAME_MEMBERS = 'same';
-
-/*
- * SHA-256 of the canonical `members` array of `roster` (the compact JSON its
- * statement carries, or would carry: a roster whose statement says `same`
- * must be given resolved, as an accepted chain holds it), base64url: what the
- * next roster's `["same",membersDigest]` names (companies-design 2.1).
- */
-export async function rosterMembersDigest(
-    roster: Pick<Roster, 'kind' | 'rosterVersion' | 'members'>,
-) {
-    const kind = oneOf(roster.kind, GROUP_KINDS, 'group kind');
-    const version = integer(roster.rosterVersion, 'roster version');
-    return digest(encodeStatement(membersParts(roster, kind, version)));
-}
-
-/* A roster's format: 1 when absent, else 1, 2 or 3. */
+/* A roster's format: 1 when absent, else 1 or 2. */
 export function rosterFormat(roster: Pick<Roster, 'format'>): RosterFormat {
     if (roster.format === undefined) return 1;
     if (!ROSTER_FORMATS.includes(roster.format)) throw new CryptoError('Invalid roster format.');
@@ -600,11 +411,13 @@ export function rosterFormat(roster: Pick<Roster, 'format'>): RosterFormat {
 /* The roster a statement's bytes hold, refused unless the bytes are its canonical encoding. */
 export function parseRoster(statement: Uint8Array): Roster {
     const parts = parseStatement(statement, 'roster');
-    if (parts[0] !== ROSTER_DOMAIN || !ROSTER_FORMATS.includes(parts[1] as RosterFormat))
+    if (
+        parts.length !== 10 ||
+        parts[0] !== ROSTER_DOMAIN ||
+        !ROSTER_FORMATS.includes(parts[1] as RosterFormat)
+    )
         throw new CryptoError('Invalid roster.');
     const format = parts[1] as RosterFormat;
-    // Ten parts in formats 1 and 2, fourteen in format 3: neither parses as the other.
-    if (parts.length !== (format === 3 ? 14 : 10)) throw new CryptoError('Invalid roster.');
     if (!Array.isArray(parts[9])) throw new CryptoError('Invalid roster areas.');
     const areas = (parts[9] as unknown[]).map((row) => {
         if (!Array.isArray(row)) throw new CryptoError('Invalid roster area.');
@@ -622,25 +435,13 @@ export function parseRoster(statement: Uint8Array): Roster {
                 retired: true,
             } as RosterArea;
         }
-        if (row.length !== (format === 3 ? 7 : 5) || row[2] !== KEY_ROW)
-            throw new CryptoError('Invalid roster area.');
+        if (row.length !== 5 || row[2] !== KEY_ROW) throw new CryptoError('Invalid roster area.');
         const [workspaceId, workspaceKeyVersion, , commitment, rootCommitment] = row;
-        return {
-            workspaceId,
-            workspaceKeyVersion,
-            commitment,
-            rootCommitment,
-            ...(format === 3 ? { areaKind: row[5], listDigest: row[6] } : {}),
-        } as RosterArea;
+        return { workspaceId, workspaceKeyVersion, commitment, rootCommitment } as RosterArea;
     });
     if (!Array.isArray(parts[8]) || parts[8].length > MAX_ROSTER_MEMBERS)
         throw new CryptoError('Invalid roster members.');
-    // Format 3 only: `["same",membersDigest]` in place of the list (an entry is an array, never a string).
-    const same =
-        format === 3 && parts[8].length === 2 && parts[8][0] === SAME_MEMBERS
-            ? (parts[8][1] as string)
-            : undefined;
-    const members = (same !== undefined ? [] : (parts[8] as unknown[])).map((entry) => {
+    const members = (parts[8] as unknown[]).map((entry) => {
         if (!Array.isArray(entry) || entry.length !== 9)
             throw new CryptoError('Invalid roster entry.');
         const [userId, keyVersion, enc, sig, mlDsa, kem, status, roles, since] = entry;
@@ -666,44 +467,10 @@ export function parseRoster(statement: Uint8Array): Roster {
         members,
         areas,
         // Format 1 rosters parse to exactly what they always did.
-        ...(format !== 1 ? { format } : {}),
-        ...(format === 3 ? company(parts, same) : {}),
+        ...(format === 2 ? { format } : {}),
     } as Roster;
     requireCanonical(statement, rosterStatement(roster), 'roster');
     return roster;
-}
-
-/* The fields only a format 3 statement carries, as parsed: checked by the re-encoding. */
-function company(parts: unknown[], same: string | undefined) {
-    const [custody, rules, auto, heads] = parts.slice(10) as unknown[];
-    if (
-        !Array.isArray(custody) ||
-        custody.length !== 8 ||
-        !Array.isArray(rules) ||
-        rules.length !== 2 ||
-        (rules[0] !== 0 && rules[0] !== 1) ||
-        !Array.isArray(auto) ||
-        (auto.length !== 0 && auto.length !== 2) ||
-        !Array.isArray(heads) ||
-        heads.length !== 2
-    )
-        throw new CryptoError('Invalid roster.');
-    return {
-        ...(same !== undefined ? { membersSame: same } : {}),
-        custody: {
-            custodyKeyVersion: custody[0],
-            custodyEncryptionPublicKey: custody[1],
-            custodyKemPublicKeyDigest: custody[2],
-            kitVersion: custody[3],
-            kitEncryptionPublicKey: custody[4],
-            kitKemPublicKeyDigest: custody[5],
-            kitSigningPublicKey: custody[6],
-            kitMlDsaPublicKeyDigest: custody[7],
-        },
-        rules: { autoJoin: rules[0] === 1, autoJoinDailyLimit: rules[1] },
-        auto: auto.length === 0 ? null : { utcDay: auto[0], countThatDay: auto[1] },
-        heads: { areaCount: heads[0], headsDigest: heads[1] },
-    };
 }
 
 /* The member's entry on `roster`, if any. */
@@ -716,13 +483,7 @@ export function activeWith(entry: RosterMember | undefined, role?: GroupRole) {
     return !!entry && entry.status === 'active' && (!role || entry.roles.includes(role));
 }
 
-/*
- * Whether `entry` is an Owner of a company (companies-design 1.2): active,
- * with all four capabilities. Roles are sorted in every roster.
- */
-export function isOwner(entry: RosterMember | undefined) {
-    return activeWith(entry) && entry!.roles.join() === 'billing,data_admin,members,recovery';
-}
+const NOT_LISTED = 'This person’s keys are not the ones on the group’s member list.';
 
 /* A member's hybrid signature keys through a roster: the entry's Ed25519 key, and the served ML-DSA key only if the entry names it. */
 async function signerOnRoster(roster: Roster, userId: string, servedMlDsaPublicKey: Uint8Array) {
@@ -754,6 +515,130 @@ export async function memberSigner(
     return signerOnRoster(chain.roster, userId, servedMlDsaPublicKey);
 }
 
+/* A member's served identity and every succession link they signed, as the server serves them. */
+export type SignerHistory = { served: ServedKeys; links: SuccessionLink[] };
+
+/*
+ * Every key a seal's or grant's signer may have signed it with, checked
+ * through the accepted chain: the keys their entry names now (the served
+ * ML-DSA key only if the entry names it), and, with their history, the
+ * keys on their own verified succession path (succession-path.ts; every link
+ * before the entry's keys carrying the successor's consent) from the first set
+ * of keys their entries named on the chain (the one a words check admitted) up
+ * to and including the keys their entry names now, so a seal
+ * made before a fold-in, or under the entry's keys after the member moved on,
+ * still opens. Keys after the entry's (an identity no roster has folded in
+ * yet) never count: a member seals only with the keys their entry names. Keys
+ * a holder wrote into an entry later never start a path, and an identity fork
+ * of the signer lends nothing.
+ */
+async function signersThrough(
+    chain: AcceptedRosters,
+    userId: string,
+    servedMlDsaPublicKey: Uint8Array | null,
+    history: SignerHistory | null,
+) {
+    const entry = rosterEntry(chain.roster, userId);
+    if (!entry) throw new CryptoError('This person is not on the group’s member list.');
+    const signers: HybridPublicKey[] = [];
+    if (
+        servedMlDsaPublicKey &&
+        servedMlDsaPublicKey.length === ML_DSA_PUBLIC_KEY_BYTES &&
+        (await digest(servedMlDsaPublicKey)) === entry.mlDsaPublicKeyDigest
+    )
+        signers.push({
+            signingPublicKey: decode(entry.signingPublicKey, 32),
+            mlDsaPublicKey: servedMlDsaPublicKey,
+        });
+    if (history) {
+        const own = signers.length;
+        const first = chain.keyHistory[userId]?.[0] ?? entry;
+        const found = await successionPath(
+            userId,
+            {
+                keyVersion: null,
+                encryptionPublicKey: first.encryptionPublicKey,
+                signingPublicKey: first.signingPublicKey,
+                mlDsaPublicKeyHash: digestHex(first.mlDsaPublicKeyDigest),
+            },
+            history.served,
+            history.links,
+            {
+                // Up to the entry's keys, only links the successor consented to: keys planted as
+                // the member's first entry never bridge to the real identity.
+                consentUntil: {
+                    keyVersion: null,
+                    encryptionPublicKey: entry.encryptionPublicKey,
+                    signingPublicKey: entry.signingPublicKey,
+                    mlDsaPublicKeyHash: digestHex(entry.mlDsaPublicKeyDigest),
+                },
+            },
+        );
+        const isEntry = async (keys: { enc: string; signing: string; mlDsa: string }) =>
+            keys.enc === entry.encryptionPublicKey &&
+            keys.signing === entry.signingPublicKey &&
+            (await digest(decode(keys.mlDsa, ML_DSA_PUBLIC_KEY_BYTES))) ===
+                entry.mlDsaPublicKeyDigest;
+        let reached = false;
+        if (found.status === 'path') {
+            for (const link of found.links) {
+                signers.push({
+                    signingPublicKey: decode(link.oldSigningPublicKey, 32),
+                    mlDsaPublicKey: decode(link.oldMlDsaPublicKey, ML_DSA_PUBLIC_KEY_BYTES),
+                });
+                // Up to the entry's own keys, never past them.
+                reached = await isEntry({
+                    enc: link.oldEncryptionPublicKey,
+                    signing: link.oldSigningPublicKey,
+                    mlDsa: link.oldMlDsaPublicKey,
+                });
+                if (reached) break;
+            }
+            reached ||= await isEntry({
+                enc: history.served.encryptionPublicKey,
+                signing: history.served.signingPublicKey,
+                mlDsa: history.served.mlDsaPublicKey,
+            });
+        }
+        // A path that never reaches the entry's keys vouches for none of its keys.
+        if (!reached) signers.length = own;
+    }
+    return signers.length ? signers : refuse();
+}
+function refuse(): never {
+    throw new CryptoError(NOT_LISTED);
+}
+
+/*
+ * Refuses to seal with keys other than the ones the sealer's entry names
+ * (Ed25519, and ML-DSA by digest): a member seals only once their current
+ * identity is folded into the roster, so every seal opens under the entry.
+ */
+async function sealerHolds(chain: AcceptedRosters, userId: string, sealer: HybridSigningKey) {
+    await sodium.ready;
+    const refused = () =>
+        new CryptoError('These are not the sealer’s keys on the group’s member list.');
+    // Ed25519 from the seed, as the Rust core derives it; a libsodium secret key whose public
+    // half is not the seed's would sign nothing that verifies.
+    if (sealer.signingKey.length !== 64) throw refused();
+    const derived = sodium.crypto_sign_seed_keypair(sealer.signingKey.subarray(0, 32)).publicKey;
+    if (!sodium.memcmp(sealer.signingKey.subarray(32), derived)) throw refused();
+    const ed25519 = encode(derived);
+    let mlDsa: Uint8Array;
+    try {
+        mlDsa = mlDsaPublicKeyOf(sealer.mlDsaSecretKey);
+    } catch {
+        throw refused();
+    }
+    const entry = rosterEntry(chain.roster, userId);
+    if (
+        !entry ||
+        entry.signingPublicKey !== ed25519 ||
+        entry.mlDsaPublicKeyDigest !== (await digest(mlDsa))
+    )
+        throw refused();
+}
+
 /* Whether `signature` is the member's hybrid signature over `message`, checked through the accepted roster. */
 export async function verifyMemberSignature(
     chain: AcceptedRosters,
@@ -774,6 +659,19 @@ export async function verifyMemberSignature(
     }
 }
 
+/* What a seal is sealed to: the entry's X25519 key, and the served ML-KEM key only if the entry names it. */
+async function memberRecipient(
+    entry: RosterMember,
+    kemPublicKey: Uint8Array,
+): Promise<GranteeKeys> {
+    if (
+        kemPublicKey.length !== KEM_PUBLIC_KEY_BYTES ||
+        (await digest(kemPublicKey)) !== entry.kemPublicKeyDigest
+    )
+        throw new CryptoError(NOT_LISTED);
+    return { encryptionPublicKey: decode(entry.encryptionPublicKey, 32), kemPublicKey };
+}
+
 /* SHA-256 of a roster's statement, base64url: the next roster's previous digest, and what a pin keeps. */
 export async function rosterDigest(statement: Uint8Array) {
     return digest(statement);
@@ -784,12 +682,6 @@ export type SignedGroupStatement = {
     statement: Uint8Array;
     signature: GroupSignature;
     signerSignature: Uint8Array;
-    /*
-     * A recovery roster only (companies-design 2.1, rule 11): the recovery
-     * kit's hybrid signature over the recovery-roster statement, stored and
-     * served beside the other two.
-     */
-    kitSignature?: Uint8Array;
 };
 
 /*
@@ -808,111 +700,6 @@ export async function signRoster(
         signature: await signGroup(statement, groupKey),
         signerSignature: await signHybrid(statement, signer),
     };
-}
-
-/*
- * Signs a company's recovery roster (companies-design 2.1, rule 11): the
- * group signature and the signer's own, as signRoster makes them, and the
- * recovery kit's signature over the recovery-roster statement of this
- * roster's group, version, kit version and statement digest. `kit` is the
- * kit's signing keys (kitKeys in custody.ts), which sign nothing else.
- */
-export async function signRecoveryRoster(
-    roster: Roster,
-    groupKey: GroupKeyPair,
-    signer: HybridSigningKey,
-    kit: HybridSigningKey,
-): Promise<SignedGroupStatement & { kitSignature: Uint8Array }> {
-    if (rosterFormat(roster) !== 3 || !roster.custody) throw new CryptoError('Invalid roster.');
-    const signed = await signRoster(roster, groupKey, signer);
-    const kitSignature = await signKit(
-        recoveryRosterStatement({
-            groupId: roster.groupId,
-            rosterVersion: roster.rosterVersion,
-            kitVersion: roster.custody.kitVersion,
-            rosterDigest: await rosterDigest(signed.statement),
-        }),
-        kit,
-    );
-    return { ...signed, kitSignature };
-}
-
-/* The recovery roster's kit signature (companies-design 2.1, rule 11) ------- */
-
-/*
- * The FIPS 204 context of the recovery kit's ML-DSA half: the kit's own and
- * no other key's, so a kit signature never stands for a group signature
- * (`hushos/group/v1`) or a person's (`hushos/identity/v1`), nor the reverse.
- */
-export const KIT_SIGNATURE_CONTEXT = 'hushos/group/recovery-kit/v1';
-
-/* What the kit signs: the roster it promotes its holder on, by group, version, kit version and digest. */
-export type RecoveryRoster = {
-    groupId: string;
-    rosterVersion: number;
-    kitVersion: number;
-    /* SHA-256 of the roster's statement, base64url. */
-    rosterDigest: string;
-};
-
-const RECOVERY_ROSTER_DOMAIN = 'hushos/group/recovery-roster';
-
-/* ["hushos/group/recovery-roster",1,groupId,rosterVersion,kitVersion,sha256(rosterStatement)] */
-export function recoveryRosterStatement(recovery: RecoveryRoster) {
-    return encodeStatement([
-        RECOVERY_ROSTER_DOMAIN,
-        1,
-        uuid(recovery.groupId, 'group id'),
-        integer(recovery.rosterVersion, 'roster version'),
-        integer(recovery.kitVersion, 'recovery kit version'),
-        digestOf(recovery.rosterDigest, 'roster digest'),
-    ]);
-}
-
-/* The recovery-roster statement a kit signed, refused unless the bytes are its canonical encoding. */
-export function parseRecoveryRoster(statement: Uint8Array): RecoveryRoster {
-    const parts = parseStatement(statement, 'recovery roster');
-    if (parts.length !== 6 || parts[0] !== RECOVERY_ROSTER_DOMAIN || parts[1] !== 1)
-        throw new CryptoError('Invalid recovery roster.');
-    const recovery = {
-        groupId: parts[2],
-        rosterVersion: parts[3],
-        kitVersion: parts[4],
-        rosterDigest: parts[5],
-    } as RecoveryRoster;
-    requireCanonical(statement, recoveryRosterStatement(recovery), 'recovery roster');
-    return recovery;
-}
-
-/*
- * The kit's hybrid signature (3,373 bytes): Ed25519 over `message`, then
- * ML-DSA-65 over the same bytes under KIT_SIGNATURE_CONTEXT. The kit's
- * signing keys sign one thing only, a recovery-roster statement
- * (signRecoveryRoster in custody.ts is its one caller).
- */
-async function signKit(message: Uint8Array, kit: HybridSigningKey) {
-    const signature = new Uint8Array(HYBRID_SIGNATURE_BYTES);
-    signature.set(await signStatement(message, kit.signingKey));
-    signature.set(mlDsaSign(message, kit.mlDsaSecretKey, KIT_SIGNATURE_CONTEXT), SIGNATURE_BYTES);
-    return signature;
-}
-
-/* Whether both halves of `signature` hold under the kit's signing keys; anything malformed is not valid. */
-export async function verifyKit(message: Uint8Array, signature: Uint8Array, kit: HybridPublicKey) {
-    if (signature.length !== HYBRID_SIGNATURE_BYTES) return false;
-    return (
-        (await verifyStatement(
-            message,
-            signature.subarray(0, SIGNATURE_BYTES),
-            kit.signingPublicKey,
-        )) &&
-        mlDsaVerify(
-            signature.subarray(SIGNATURE_BYTES),
-            message,
-            kit.mlDsaPublicKey,
-            KIT_SIGNATURE_CONTEXT,
-        )
-    );
 }
 
 /* Key succession (2.5) --------------------------------------------------- */
@@ -1109,6 +896,30 @@ function areaGrantKind(ctx: AreaGrantContext): HybridSealKind {
     };
 }
 
+function sameGroup(chain: AcceptedRosters, groupId: string) {
+    requireAccepted(chain);
+    if (uuid(groupId, 'group id') !== chain.groupId || chain.roster.groupId !== chain.groupId)
+        throw new CryptoError('This is for another group.');
+}
+
+/* A seal is made at the sealer's latest accepted roster, named in its context. */
+function sealedAtLatest(
+    chain: AcceptedRosters,
+    ctx: { rosterVersion: number; rosterDigest: string },
+) {
+    if (ctx.rosterVersion !== chain.roster.rosterVersion || ctx.rosterDigest !== chain.rosterDigest)
+        throw new CryptoError('A seal names the latest member list this device accepted.');
+}
+
+/* An opener takes a seal only if the roster it was made at is on its own accepted chain. */
+function sealedOnChain(
+    chain: AcceptedRosters,
+    ctx: { rosterVersion: number; rosterDigest: string },
+) {
+    if (chain.rosterDigests[integer(ctx.rosterVersion, 'roster version') - 1] !== ctx.rosterDigest)
+        throw new CryptoError('This was sealed on a member list this device does not have.');
+}
+
 /*
  * An area is a workspace whose id was derived under the group (the
  * `workspace` id kind, scoped to the group id): a grant naming a group for a
@@ -1255,6 +1066,32 @@ export async function sealAreaGrant(
     return sealHybrid(workspaceKey, recipient, options.granter, areaGrantKind(ctx));
 }
 
+const NOT_LISTED_KEY = 'This area key is not the one the group’s member list names.';
+
+/*
+ * The commitment the chain listed for an area at a key version: the current
+ * key, or an earlier one a reader needs for older files. Never a version no
+ * roster on the chain listed.
+ */
+/*
+ * Every commitment the chain lists for an area, version 1 first, or null:
+ * only for a canonical workspace id the chain holds as its own property, so
+ * no inherited name ('constructor', 'toString') reads as an area.
+ */
+function areaCommitments(chain: AcceptedRosters, workspaceId: string) {
+    try {
+        uuid(workspaceId, 'workspace id');
+    } catch {
+        return null;
+    }
+    return Object.hasOwn(chain.areaKeys, workspaceId) ? chain.areaKeys[workspaceId]! : null;
+}
+
+function listedArea(chain: AcceptedRosters, workspaceId: string, workspaceKeyVersion: number) {
+    if (!Number.isSafeInteger(workspaceKeyVersion) || workspaceKeyVersion < 1) return undefined;
+    return areaCommitments(chain, workspaceId)?.[workspaceKeyVersion - 1];
+}
+
 /*
  * The key version a member writes an area under: the latest the accepted
  * chain lists for it, or null when it lists none (not an area of the
@@ -1313,11 +1150,7 @@ export async function nextAreaKey(
 ): Promise<RosterArea> {
     return (
         await areaRows(chain, [{ workspaceId, workspaceKey, ...(rootKey ? { rootKey } : {}) }], {
-            format: rootKey
-                ? rosterFormat(chain.roster) === 3
-                    ? 3
-                    : 2
-                : rosterFormat(chain.roster),
+            format: rootKey ? 2 : rosterFormat(chain.roster),
         })
     )[0]!;
 }
@@ -1326,18 +1159,7 @@ export async function nextAreaKey(
  * An area's new key, for nextRoster to turn into its row, and in format 2 the
  * node key its root folder gets at that version (design 2.10).
  */
-export type AreaKey = {
-    workspaceId: string;
-    workspaceKey: Uint8Array;
-    rootKey?: Uint8Array;
-    /*
-     * Format 3 (a company's): the area's kind, needed for a new area (a
-     * rotation keeps the chain's), and the digest of its base list statement
-     * at this key version (companies-design 2.3), which the row commits to.
-     */
-    areaKind?: AreaKind;
-    listDigest?: string;
-};
+export type AreaKey = { workspaceId: string; workspaceKey: Uint8Array; rootKey?: Uint8Array };
 
 /*
  * The rows a roster carries for new area keys (2.4, 2.6): each at its area's
@@ -1356,12 +1178,7 @@ export async function areaRows(
 ): Promise<RosterArea[]> {
     requireAccepted(chain);
     return rowsAfter(
-        {
-            keys: chain.areaKeys,
-            roots: chain.areaRoots,
-            retired: chain.retiredAreas,
-            kinds: chain.org?.areaKinds ?? {},
-        },
+        { keys: chain.areaKeys, roots: chain.areaRoots, retired: chain.retiredAreas },
         keys,
         options.format ?? rosterFormat(chain.roster),
         options.retire ?? [],

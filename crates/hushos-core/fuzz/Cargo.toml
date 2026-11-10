@@ -140,10 +140,3 @@ path = "fuzz_targets/area_ledger.rs"
 test = false
 doc = false
 bench = false
-
-[[bin]]
-name = "company_next"
-path = "fuzz_targets/company_next.rs"
-test = false
-doc = false
-bench = false

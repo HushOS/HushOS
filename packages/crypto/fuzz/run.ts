@@ -60,8 +60,6 @@ const MAX_LEN: Record<Target, number> = {
     // Chain records ride in join_preview and device_record inputs: whole, with room to grow.
     pins: 32768,
     accept: 4096,
-    // A member list of a dozen entries, new keys and a kit's four public keys.
-    company_next: 16384,
     record_integrity: 32768,
     origin_open: 8192,
     area_ledger: 16384,

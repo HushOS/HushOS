@@ -44,7 +44,6 @@ fn main() {
             members,
             areas,
             format: 1,
-            org: None,
         };
         let signed =
             roster_sign(roster.clone(), group_seed(key_version as u8), organizer.keys.clone()).unwrap();

@@ -32,7 +32,6 @@ export const key_seal_context = plain('key_seal_context');
 export const pins = plain('pins');
 export const record_integrity = plain('record_integrity');
 export const origin_open = plain('origin_open');
-export const company_next = plain('company_next');
 export const area_ledger = plain('area_ledger');
 
 const USERS = [

@@ -67,14 +67,9 @@ pub struct SignedGroupStatement {
     pub statement: Vec<u8>,
     pub signature: GroupSignature,
     pub signer_signature: Vec<u8>,
-    /// A company's recovery roster only (companies-design 2.1, rule 11): the
-    /// recovery kit's hybrid signature (3373 bytes) over the recovery-roster
-    /// statement, stored and served beside the other two.
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub kit_signature: Option<Vec<u8>>,
 }
 
-pub(crate) fn group_seed(seed: &[u8]) -> CoreResult<()> {
+fn group_seed(seed: &[u8]) -> CoreResult<()> {
     if seed.len() != GROUP_SEED_BYTES {
         return Err(input("Invalid group key."));
     }
@@ -330,109 +325,10 @@ pub struct Roster {
     pub areas: Vec<RosterArea>,
     /// The statement's format (design 2.10): 1, rows of three fields, as
     /// shipped; or 2, rows that also commit to the area root's key, and
-    /// retirement rows; or 3, a company's (companies-design 2.1). A chain
-    /// never goes back to a lower format. Format 3 is a company's and only a
-    /// company's: kind `Org` is format 3, and formats 1 and 2 are a family's.
+    /// retirement rows. A chain never goes back from 2 to 1.
     #[cfg_attr(feature = "uniffi", uniffi(default = 1))]
     pub format: u8,
-    /// What only a company's roster (format 3) says: there, always; in a
-    /// family's, never.
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub org: Option<RosterOrg>,
 }
-
-/// A company area's kind (companies-design 1.3), fixed at the area's first row.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum AreaKind {
-    Employee,
-    Shared,
-}
-
-impl AreaKind {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            AreaKind::Employee => "employee",
-            AreaKind::Shared => "shared",
-        }
-    }
-
-    pub(crate) fn parse(value: &str) -> CoreResult<Self> {
-        match value {
-            "employee" => Ok(AreaKind::Employee),
-            "shared" => Ok(AreaKind::Shared),
-            _ => Err(input("Invalid area kind.")),
-        }
-    }
-}
-
-/// The fields a format 3 roster carries beside its members and areas
-/// (companies-design 2.1).
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct RosterOrg {
-    /// The statement carries `["same",membersDigest]` in place of the member
-    /// list, on a roster that changes no entry: the digest is
-    /// [`roster_members_digest`] of the roster before. [`roster_parse`] then
-    /// gives no members; acceptance puts the previous roster's in their place,
-    /// so an accepted chain's roster always holds them. Never at version 1.
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub members_same: Option<String>,
-    pub custody: RosterCustody,
-    pub rules: RosterRules,
-    /// Set on a roster an Admin's device signed unattended under auto-join.
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub auto: Option<RosterAuto>,
-    pub heads: RosterHeads,
-}
-
-/// The `custody` field: the company key and the recovery kit, each by
-/// version, X25519 public key and the SHA-256 of its ML-KEM-768 public key,
-/// and the kit's signing keys by its Ed25519 public key and the SHA-256 of its
-/// ML-DSA-65 public key (all base64url).
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct RosterCustody {
-    pub custody_key_version: u64,
-    pub custody_encryption_public_key: String,
-    pub custody_kem_public_key_digest: String,
-    pub kit_version: u64,
-    pub kit_encryption_public_key: String,
-    pub kit_kem_public_key_digest: String,
-    pub kit_signing_public_key: String,
-    pub kit_ml_dsa_public_key_digest: String,
-}
-
-/// The `rules` field: whether auto-join is on, and how many a day (1 to 50).
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct RosterRules {
-    pub auto_join: bool,
-    pub auto_join_daily_limit: u64,
-}
-
-/// The `auto` field of an automatic admission: the UTC day (`YYYY-MM-DD`) and
-/// that day's count (1 to 50).
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct RosterAuto {
-    pub utc_day: String,
-    pub count_that_day: u64,
-}
-
-/// The `heads` field: the live areas after this roster, and the digest over
-/// every area's list and share log head.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct RosterHeads {
-    pub area_count: u64,
-    pub heads_digest: String,
-}
-
-/// The most automatic admissions a day a roster's rules may allow (companies-design 2.1).
-pub(crate) const MAX_AUTO_JOIN_DAILY: u64 = 50;
-/// The most key rows of one company roster that rotate an existing area (companies-design 2.1, rule 6).
-pub(crate) const MAX_ORG_ROTATIONS_PER_ROSTER: usize = 8;
 
 /// One area row a roster lists: a key (a new area or a rotation) or, in
 /// format 2, the area's tombstone.
@@ -448,20 +344,13 @@ pub struct RosterArea {
     /// that version (design 2.10), base64url.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub root_commitment: Option<String>,
-    /// Formats 2 and 3 only: the area's tombstone, at its next version, with no key.
+    /// Format 2 only: the area's tombstone, at its next version, with no key.
     #[cfg_attr(feature = "uniffi", uniffi(default = false))]
     pub retired: bool,
-    /// Format 3 key rows only: the area's kind.
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub area_kind: Option<AreaKind>,
-    /// Format 3 key rows only: SHA-256 of the area's base list statement at
-    /// that key version, base64url.
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub list_digest: Option<String>,
 }
 
-/// The formats a roster statement may have (design 2.10; companies-design 2.1).
-pub(crate) const ROSTER_FORMATS: [u8; 3] = [1, 2, 3];
+/// The formats a roster statement may have (design 2.10).
+pub(crate) const ROSTER_FORMATS: [u8; 2] = [1, 2];
 /* The tags of a format 2 area row. */
 const KEY_ROW: &str = "key";
 const RETIRED_ROW: &str = "retired";
@@ -524,41 +413,26 @@ fn area_parts(areas: &[RosterArea], format: u8) -> CoreResult<Value> {
         .map(|area| {
             let id = uuid(&area.workspace_id, "workspace id")?;
             let version = integer(area.workspace_key_version, "workspace key version")?;
-            // Only a company's key rows (format 3) say an area's kind and commit to its list.
-            let company = area.area_kind.is_some() || area.list_digest.is_some();
             if format == 1 {
                 // Format 1 has neither root commitments nor retirement rows.
-                if area.root_commitment.is_some() || area.retired || company {
+                if area.root_commitment.is_some() || area.retired {
                     return Err(input("Invalid roster area."));
                 }
                 return Ok(json!([id, version, digest_of(&area.commitment, "area key commitment")?]));
             }
             if area.retired {
-                if !area.commitment.is_empty() || area.root_commitment.is_some() || company {
+                if !area.commitment.is_empty() || area.root_commitment.is_some() {
                     return Err(input("Invalid roster area."));
                 }
                 return Ok(json!([id, version, RETIRED_ROW]));
             }
             let root = area.root_commitment.as_deref().ok_or_else(|| input("Invalid roster area."))?;
-            let commitment = digest_of(&area.commitment, "area key commitment")?;
-            let root = digest_of(root, "area root commitment")?;
-            if format == 2 {
-                if company {
-                    return Err(input("Invalid roster area."));
-                }
-                return Ok(json!([id, version, KEY_ROW, commitment, root]));
-            }
-            let (Some(kind), Some(list)) = (area.area_kind, area.list_digest.as_deref()) else {
-                return Err(input("Invalid roster area."));
-            };
             Ok(json!([
                 id,
                 version,
                 KEY_ROW,
-                commitment,
-                root,
-                kind.as_str(),
-                digest_of(list, "area list digest")?
+                digest_of(&area.commitment, "area key commitment")?,
+                digest_of(root, "area root commitment")?,
             ]))
         })
         .collect::<CoreResult<Vec<_>>>()?;
@@ -567,7 +441,7 @@ fn area_parts(areas: &[RosterArea], format: u8) -> CoreResult<Value> {
     Ok(Value::Array(rows))
 }
 
-/* A roster's format, checked: 1, 2 or 3. */
+/* A roster's format, checked: 1 or 2. */
 pub(crate) fn roster_format(roster: &Roster) -> CoreResult<u8> {
     if ROSTER_FORMATS.contains(&roster.format) {
         Ok(roster.format)
@@ -644,11 +518,16 @@ pub(crate) fn roster_bytes(roster: &Roster) -> CoreResult<Vec<u8>> {
     } else {
         digest_of(&roster.previous_roster_digest, "roster digest")?
     };
-    // Format 3 is a company's and only a company's (companies-design 2.1).
-    if (format == 3) != (roster.kind == GroupKind::Org) || (format == 3) != roster.org.is_some() {
-        return Err(input("Invalid roster format."));
+    if roster.members.is_empty() || roster.members.len() > MAX_ROSTER_MEMBERS {
+        return Err(input("Invalid roster members."));
     }
-    let mut parts = vec![
+    let members = roster
+        .members
+        .iter()
+        .map(|m| member_parts(m, roster.kind, version))
+        .collect::<CoreResult<Vec<_>>>()?;
+    ascending(&roster.members.iter().map(|m| m.user_id.as_str()).collect::<Vec<_>>(), "roster members")?;
+    encode_statement(&[
         json!(ROSTER_DOMAIN),
         json!(format),
         json!(uuid(&roster.group_id, "group id")?),
@@ -657,106 +536,9 @@ pub(crate) fn roster_bytes(roster: &Roster) -> CoreResult<Vec<u8>> {
         json!(previous),
         json!(integer(roster.group_key_version, "group key version")?),
         json!(uuid(&roster.signer_user_id, "user id")?),
-    ];
-    let Some(org) = &roster.org else {
-        parts.push(members_parts(&roster.members, roster.kind, version)?);
-        parts.push(area_parts(&roster.areas, format)?);
-        return encode_statement(&parts);
-    };
-    // `same` stands for the list of the roster before: there is none before version 1. The
-    // members a resolved roster holds beside it are not in the statement.
-    parts.push(match &org.members_same {
-        Some(_) if version == 1 => return Err(input("Invalid roster members.")),
-        Some(same) => json!([SAME_MEMBERS, digest_of(same, "members digest")?]),
-        None => members_parts(&roster.members, roster.kind, version)?,
-    });
-    parts.push(area_parts(&roster.areas, format)?);
-    let custody = &org.custody;
-    parts.push(json!([
-        integer(custody.custody_key_version, "company key version")?,
-        bytes_of(&custody.custody_encryption_public_key, 32, "company key")?,
-        digest_of(&custody.custody_kem_public_key_digest, "company key digest")?,
-        integer(custody.kit_version, "recovery kit version")?,
-        bytes_of(&custody.kit_encryption_public_key, 32, "recovery kit key")?,
-        digest_of(&custody.kit_kem_public_key_digest, "recovery kit key digest")?,
-        bytes_of(&custody.kit_signing_public_key, 32, "recovery kit key")?,
-        digest_of(&custody.kit_ml_dsa_public_key_digest, "recovery kit key digest")?,
-    ]));
-    parts.push(json!([
-        u8::from(org.rules.auto_join),
-        daily_count(org.rules.auto_join_daily_limit, "auto-join limit")?
-    ]));
-    parts.push(match &org.auto {
-        None => json!([]),
-        Some(auto) => {
-            json!([utc_day(&auto.utc_day)?, daily_count(auto.count_that_day, "automatic admission")?])
-        }
-    });
-    // The area count runs from 0, within the web's safe integers.
-    if org.heads.area_count > crate::signatures::MAX_SAFE_INTEGER {
-        return Err(input("Invalid roster heads."));
-    }
-    parts.push(json!([org.heads.area_count, digest_of(&org.heads.heads_digest, "heads digest")?]));
-    encode_statement(&parts)
-}
-
-/* What a format 3 roster carries in place of its member list when no entry changed. */
-const SAME_MEMBERS: &str = "same";
-
-/* The canonical `members` array: every entry's parts, sorted by user id. */
-fn members_parts(members: &[RosterMember], kind: GroupKind, version: u64) -> CoreResult<Value> {
-    if members.is_empty() || members.len() > MAX_ROSTER_MEMBERS {
-        return Err(input("Invalid roster members."));
-    }
-    let parts = members.iter().map(|m| member_parts(m, kind, version)).collect::<CoreResult<Vec<_>>>()?;
-    ascending(&members.iter().map(|m| m.user_id.as_str()).collect::<Vec<_>>(), "roster members")?;
-    Ok(Value::Array(parts))
-}
-
-/* A count from 1 to MAX_AUTO_JOIN_DAILY. */
-fn daily_count(value: u64, what: &str) -> CoreResult<u64> {
-    if integer(value, what)? > MAX_AUTO_JOIN_DAILY {
-        return Err(input(format!("Invalid {what}.")));
-    }
-    Ok(value)
-}
-
-/* A day as a roster's `auto` field carries it: "YYYY-MM-DD", UTC, compared as text (the web's UTC_DAY). */
-fn utc_day(value: &str) -> CoreResult<&str> {
-    let bytes = value.as_bytes();
-    let number = |range: std::ops::Range<usize>| -> Option<u32> {
-        let digits = &bytes[range];
-        digits
-            .iter()
-            .all(u8::is_ascii_digit)
-            .then(|| digits.iter().fold(0u32, |n, digit| n * 10 + u32::from(digit - b'0')))
-    };
-    let shaped = bytes.len() == 10 && bytes[4] == b'-' && bytes[7] == b'-';
-    let valid = shaped
-        && number(0..4).is_some()
-        && number(5..7).is_some_and(|month| (1..=12).contains(&month))
-        && number(8..10).is_some_and(|day| (1..=31).contains(&day));
-    if valid {
-        Ok(value)
-    } else {
-        Err(input("Invalid automatic admission."))
-    }
-}
-
-/// SHA-256 of the canonical `members` array of `roster` (the compact JSON its
-/// statement carries, or would carry: a roster whose statement says `same`
-/// must be given resolved, as an accepted chain holds it), base64url: what the
-/// next roster's `["same",membersDigest]` names (companies-design 2.1).
-#[cfg_attr(feature = "uniffi", uniffi::export)]
-pub fn roster_members_digest(roster: Roster) -> CoreResult<String> {
-    members_digest(&roster)
-}
-
-pub(crate) fn members_digest(roster: &Roster) -> CoreResult<String> {
-    let version = integer(roster.roster_version, "roster version")?;
-    Ok(digest(&encode_statement(
-        members_parts(&roster.members, roster.kind, version)?.as_array().expect("an array"),
-    )?))
+        Value::Array(members),
+        area_parts(&roster.areas, format)?,
+    ])
 }
 
 /// The roster a statement's bytes hold, refused unless the bytes are its
@@ -771,11 +553,9 @@ pub(crate) fn parse_roster(statement: &[u8]) -> CoreResult<Roster> {
     let format = match parts.get(1).and_then(Value::as_u64) {
         Some(1) => 1u8,
         Some(2) => 2u8,
-        Some(3) => 3u8,
         _ => return Err(input("Invalid roster.")),
     };
-    // Ten parts in formats 1 and 2, fourteen in format 3: neither parses as the other.
-    if parts.len() != if format == 3 { 14 } else { 10 } || parts[0] != json!(ROSTER_DOMAIN) {
+    if parts.len() != 10 || parts[0] != json!(ROSTER_DOMAIN) {
         return Err(input("Invalid roster."));
     }
     let areas = parts[9]
@@ -798,8 +578,6 @@ pub(crate) fn parse_roster(statement: &[u8]) -> CoreResult<Roster> {
                     commitment: text(&fields[2], "area key commitment")?.into(),
                     root_commitment: None,
                     retired: false,
-                    area_kind: None,
-                    list_digest: None,
                 });
             }
             if fields.len() == 3 && fields[2] == json!(RETIRED_ROW) {
@@ -810,30 +588,18 @@ pub(crate) fn parse_roster(statement: &[u8]) -> CoreResult<Roster> {
                     commitment: String::new(),
                     root_commitment: None,
                     retired: true,
-                    area_kind: None,
-                    list_digest: None,
                 });
             }
-            if fields.len() != if format == 3 { 7 } else { 5 } || fields[2] != json!(KEY_ROW) {
+            if fields.len() != 5 || fields[2] != json!(KEY_ROW) {
                 return Err(input("Invalid roster area."));
             }
             let (workspace_id, workspace_key_version) = head(fields)?;
-            let (area_kind, list_digest) = if format == 3 {
-                (
-                    Some(AreaKind::parse(text(&fields[5], "area kind")?)?),
-                    Some(text(&fields[6], "area list digest")?.to_string()),
-                )
-            } else {
-                (None, None)
-            };
             Ok(RosterArea {
                 workspace_id,
                 workspace_key_version,
                 commitment: text(&fields[3], "area key commitment")?.into(),
                 root_commitment: Some(text(&fields[4], "area root commitment")?.into()),
                 retired: false,
-                area_kind,
-                list_digest,
             })
         })
         .collect::<CoreResult<Vec<_>>>()?;
@@ -842,12 +608,7 @@ pub(crate) fn parse_roster(statement: &[u8]) -> CoreResult<Roster> {
         .as_array()
         .filter(|entries| entries.len() <= MAX_ROSTER_MEMBERS)
         .ok_or_else(|| input("Invalid roster members."))?;
-    // Format 3 only: `["same",membersDigest]` in place of the list (an entry is an array, never a string).
-    let same = (format == 3 && entries.len() == 2 && entries[0] == json!(SAME_MEMBERS))
-        .then(|| text(&entries[1], "members digest").map(String::from))
-        .transpose()?;
-    let listed: &[Value] = if same.is_some() { &[] } else { entries };
-    let members = listed
+    let members = entries
         .iter()
         .map(|entry| {
             let fields =
@@ -886,55 +647,9 @@ pub(crate) fn parse_roster(statement: &[u8]) -> CoreResult<Roster> {
         members,
         areas,
         format,
-        org: if format == 3 { Some(parse_org(&parts[10..], same)?) } else { None },
     };
     require_canonical(statement, &roster_bytes(&roster)?, "roster")?;
     Ok(roster)
-}
-
-/* The fields only a format 3 statement carries, as parsed: checked by the re-encoding. */
-fn parse_org(parts: &[Value], members_same: Option<String>) -> CoreResult<RosterOrg> {
-    let bad = || input("Invalid roster.");
-    let list = |value: &Value, lengths: &[usize]| -> CoreResult<Vec<Value>> {
-        value.as_array().filter(|list| lengths.contains(&list.len())).cloned().ok_or_else(bad)
-    };
-    let custody = list(&parts[0], &[8])?;
-    let rules = list(&parts[1], &[2])?;
-    let auto = list(&parts[2], &[0, 2])?;
-    let heads = list(&parts[3], &[2])?;
-    let string = |value: &Value, what: &str| text(value, what).map(String::from);
-    let auto_join = match rules[0].as_u64() {
-        Some(0) => false,
-        Some(1) => true,
-        _ => return Err(bad()),
-    };
-    Ok(RosterOrg {
-        members_same,
-        custody: RosterCustody {
-            custody_key_version: number(&custody[0], "company key version")?,
-            custody_encryption_public_key: string(&custody[1], "company key")?,
-            custody_kem_public_key_digest: string(&custody[2], "company key digest")?,
-            kit_version: number(&custody[3], "recovery kit version")?,
-            kit_encryption_public_key: string(&custody[4], "recovery kit key")?,
-            kit_kem_public_key_digest: string(&custody[5], "recovery kit key digest")?,
-            kit_signing_public_key: string(&custody[6], "recovery kit key")?,
-            kit_ml_dsa_public_key_digest: string(&custody[7], "recovery kit key digest")?,
-        },
-        rules: RosterRules { auto_join, auto_join_daily_limit: number(&rules[1], "auto-join limit")? },
-        auto: match auto.as_slice() {
-            [] => None,
-            [day, count] => Some(RosterAuto {
-                utc_day: string(day, "automatic admission")?,
-                count_that_day: number(count, "automatic admission")?,
-            }),
-            _ => return Err(bad()),
-        },
-        heads: RosterHeads {
-            // From 0: `number` is the statement's integers from 1.
-            area_count: heads[0].as_u64().ok_or_else(bad)?,
-            heads_digest: string(&heads[1], "heads digest")?,
-        },
-    })
 }
 
 /// SHA-256 of a roster's statement, base64url: the next roster's previous
@@ -969,126 +684,7 @@ fn sign_group_statement(
         signature: group_sign(group_seed, statement.clone())?,
         signer_signature: sign_hybrid(&signer.signing_seed, &signer.ml_dsa_seed, &statement)?,
         statement,
-        kit_signature: None,
     })
-}
-
-/* The recovery roster's kit signature (companies-design 2.1, rule 11) */
-
-/*
- * The FIPS 204 context of the recovery kit's ML-DSA half: the kit's own and
- * no other key's, so a kit signature never stands for a group signature
- * (`hushos/group/v1`) or a person's (`hushos/identity/v1`), nor the reverse.
- */
-pub(crate) const KIT_SIGNATURE_CONTEXT: &[u8] = b"hushos/group/recovery-kit/v1";
-
-const RECOVERY_ROSTER_DOMAIN: &str = "hushos/group/recovery-roster";
-
-/// What the recovery kit signs: the roster it promotes its holder on, by
-/// group, version, kit version and the SHA-256 of its statement (base64url).
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct RecoveryRoster {
-    pub group_id: String,
-    pub roster_version: u64,
-    pub kit_version: u64,
-    pub roster_digest: String,
-}
-
-/// `["hushos/group/recovery-roster",1,groupId,rosterVersion,kitVersion,sha256(rosterStatement)]`
-///
-/// ```
-/// use hushos_core::*;
-/// let recovery = RecoveryRoster {
-///     group_id: "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a".into(),
-///     roster_version: 7,
-///     kit_version: 2,
-///     roster_digest: roster_digest(b"a roster".to_vec()),
-/// };
-/// let statement = recovery_roster_statement(recovery.clone())?;
-/// assert!(statement.starts_with(b"[\"hushos/group/recovery-roster\",1,"));
-/// assert_eq!(recovery_roster_parse(statement)?, recovery);
-/// # Ok::<(), hushos_core::CoreError>(())
-/// ```
-#[cfg_attr(feature = "uniffi", uniffi::export)]
-pub fn recovery_roster_statement(recovery: RecoveryRoster) -> CoreResult<Vec<u8>> {
-    recovery_roster_bytes(&recovery)
-}
-
-pub(crate) fn recovery_roster_bytes(recovery: &RecoveryRoster) -> CoreResult<Vec<u8>> {
-    encode_statement(&[
-        json!(RECOVERY_ROSTER_DOMAIN),
-        json!(1),
-        json!(uuid(&recovery.group_id, "group id")?),
-        json!(integer(recovery.roster_version, "roster version")?),
-        json!(integer(recovery.kit_version, "recovery kit version")?),
-        json!(digest_of(&recovery.roster_digest, "roster digest")?),
-    ])
-}
-
-/// The recovery-roster statement a kit signed, refused unless the bytes are
-/// its canonical encoding.
-#[cfg_attr(feature = "uniffi", uniffi::export)]
-pub fn recovery_roster_parse(statement: Vec<u8>) -> CoreResult<RecoveryRoster> {
-    let parts = parse_statement(&statement, "recovery roster")?;
-    if parts.len() != 6 || parts[0] != json!(RECOVERY_ROSTER_DOMAIN) || parts[1] != json!(1) {
-        return Err(input("Invalid recovery roster."));
-    }
-    let recovery = RecoveryRoster {
-        group_id: text(&parts[2], "group id")?.into(),
-        roster_version: number(&parts[3], "roster version")?,
-        kit_version: number(&parts[4], "recovery kit version")?,
-        roster_digest: text(&parts[5], "roster digest")?.into(),
-    };
-    require_canonical(&statement, &recovery_roster_bytes(&recovery)?, "recovery roster")?;
-    Ok(recovery)
-}
-
-/*
- * The kit's hybrid signature (3,373 bytes): Ed25519 over `message`, then
- * ML-DSA-65 over the same bytes under KIT_SIGNATURE_CONTEXT, from the kit's
- * two signing seeds. They sign one thing only, a recovery-roster statement.
- */
-fn sign_kit(signing_seed: &[u8], ml_dsa_seed: &[u8], message: &[u8]) -> CoreResult<Vec<u8>> {
-    let mut signature = sign(signing_seed, message)?;
-    signature.extend(ml_dsa_sign(ml_dsa_seed, message, KIT_SIGNATURE_CONTEXT)?);
-    Ok(signature)
-}
-
-/* Whether both halves of `signature` hold under the kit's signing keys; anything malformed is not valid. */
-pub(crate) fn verify_kit(kit: &HybridPublicKey, message: &[u8], signature: &[u8]) -> bool {
-    if signature.len() != SIGNATURE_BYTES + ML_DSA_SIGNATURE_BYTES {
-        return false;
-    }
-    let (classical, lattice) = signature.split_at(SIGNATURE_BYTES);
-    verify(&kit.signing_public_key, message, classical)
-        && ml_dsa_verify(&kit.ml_dsa_public_key, message, lattice, KIT_SIGNATURE_CONTEXT)
-}
-
-/// Signs a company's recovery roster (companies-design 2.1, rule 11): the
-/// group signature and the signer's own, as [`roster_sign`] makes them, and
-/// the recovery kit's signature over the recovery-roster statement of this
-/// roster's group, version, kit version and statement digest. `kit_secret` is
-/// the kit's 32-byte secret, whose signing keys sign nothing else.
-#[cfg_attr(feature = "uniffi", uniffi::export)]
-pub fn recovery_roster_sign(
-    roster: Roster,
-    group_seed: Vec<u8>,
-    signer: IdentityKeys,
-    kit_secret: Vec<u8>,
-) -> CoreResult<SignedGroupStatement> {
-    let kit_secret = Zeroizing::new(kit_secret);
-    let kit_version = roster.org.as_ref().ok_or_else(|| input("Invalid roster."))?.custody.kit_version;
-    let seeds = crate::custody::kit_seed(&kit_secret, &roster.group_id)?;
-    let mut signed = sign_group_statement(roster_bytes(&roster)?, group_seed, &signer)?;
-    let statement = recovery_roster_bytes(&RecoveryRoster {
-        group_id: roster.group_id,
-        roster_version: roster.roster_version,
-        kit_version,
-        roster_digest: digest(&signed.statement),
-    })?;
-    signed.kit_signature = Some(sign_kit(&seeds[96..128], &seeds[128..], &statement)?);
-    Ok(signed)
 }
 
 /// The keys a member's hybrid signature is checked under through the roster
@@ -1104,7 +700,7 @@ pub fn roster_member_signer(
     member_signer(&chain.roster, &user_id, &served_ml_dsa_public_key)
 }
 
-pub(crate) const NOT_LISTED: &str = "This person’s keys are not the ones on the group’s member list.";
+const NOT_LISTED: &str = "This person’s keys are not the ones on the group’s member list.";
 
 fn member_signer(roster: &Roster, user_id: &str, served_ml_dsa: &[u8]) -> CoreResult<HybridPublicKey> {
     let entry =
@@ -1144,7 +740,7 @@ pub struct SignerHistory {
  * wrote into an entry later never start a path, and an identity fork of the
  * signer lends nothing.
  */
-pub(crate) fn signers_through(
+fn signers_through(
     chain: &AcceptedRosters,
     user_id: &str,
     served_ml_dsa: Option<&[u8]>,
@@ -1247,7 +843,7 @@ pub(crate) fn signers_through(
  * once their current identity is folded into the roster, so every seal opens
  * under the entry.
  */
-pub(crate) fn sealer_holds(chain: &AcceptedRosters, user_id: &str, sealer: &IdentityKeys) -> CoreResult<()> {
+fn sealer_holds(chain: &AcceptedRosters, user_id: &str, sealer: &IdentityKeys) -> CoreResult<()> {
     let refused = || input("These are not the sealer’s keys on the group’s member list.");
     let entry = chain.roster.entry(user_id).ok_or_else(refused)?;
     let ed25519 = signing_public_key(sealer.signing_seed.to_vec()).map_err(|_| refused())?;
@@ -1273,7 +869,7 @@ pub fn roster_member_verify(
 }
 
 /* What a seal is sealed to: the entry's X25519 key, and the served ML-KEM key only if the entry names it. */
-pub(crate) fn member_recipient(entry: &RosterMember, kem_public_key: &[u8]) -> CoreResult<Vec<u8>> {
+fn member_recipient(entry: &RosterMember, kem_public_key: &[u8]) -> CoreResult<Vec<u8>> {
     if kem_public_key.len() != KEM_PUBLIC_KEY_BYTES || digest(kem_public_key) != entry.kem_public_key_digest {
         return Err(input(NOT_LISTED));
     }
@@ -1463,7 +1059,7 @@ fn area_grant_parts(ctx: &AreaGrantContext) -> CoreResult<Vec<Value>> {
     ])
 }
 
-pub(crate) fn with_digest(mut parts: Vec<Value>, sealed: &[u8]) -> CoreResult<Vec<u8>> {
+fn with_digest(mut parts: Vec<Value>, sealed: &[u8]) -> CoreResult<Vec<u8>> {
     parts.push(json!(digest(sealed)));
     encode_statement(&parts)
 }
@@ -1489,7 +1085,7 @@ pub(crate) fn area_grant_context(ctx: &AreaGrantContext) -> CoreResult<Vec<u8>> 
     encode_statement(&area_grant_parts(ctx)?)
 }
 
-pub(crate) fn same_group(chain: &Arc<AcceptedRosters>, group_id: &str) -> CoreResult<()> {
+fn same_group(chain: &Arc<AcceptedRosters>, group_id: &str) -> CoreResult<()> {
     if uuid(group_id, "group id")? != chain.group_id || chain.roster.group_id != chain.group_id {
         return Err(input("This is for another group."));
     }
@@ -1497,11 +1093,7 @@ pub(crate) fn same_group(chain: &Arc<AcceptedRosters>, group_id: &str) -> CoreRe
 }
 
 /* A seal is made at the sealer's latest accepted roster, named in its context. */
-pub(crate) fn sealed_at_latest(
-    chain: &AcceptedRosters,
-    roster_version: u64,
-    roster_digest: &str,
-) -> CoreResult<()> {
+fn sealed_at_latest(chain: &AcceptedRosters, roster_version: u64, roster_digest: &str) -> CoreResult<()> {
     if roster_version != chain.roster.roster_version || roster_digest != chain.roster_digest {
         return Err(input("A seal names the latest member list this device accepted."));
     }
@@ -1509,11 +1101,7 @@ pub(crate) fn sealed_at_latest(
 }
 
 /* An opener takes a seal only if the roster it was made at is on its own accepted chain. */
-pub(crate) fn sealed_on_chain(
-    chain: &AcceptedRosters,
-    roster_version: u64,
-    roster_digest: &str,
-) -> CoreResult<()> {
+fn sealed_on_chain(chain: &AcceptedRosters, roster_version: u64, roster_digest: &str) -> CoreResult<()> {
     integer(roster_version, "roster version")?;
     let index = usize::try_from(roster_version - 1).unwrap_or(usize::MAX);
     if chain.roster_digests.get(index).map(String::as_str) != Some(roster_digest) {
@@ -1749,14 +1337,14 @@ pub fn area_grant_open(
     Ok(workspace_key.to_vec())
 }
 
-pub(crate) const NOT_LISTED_KEY: &str = "This area key is not the one the group’s member list names.";
+const NOT_LISTED_KEY: &str = "This area key is not the one the group’s member list names.";
 
 /*
  * The commitment the chain listed for an area at a key version: the current
  * key, or an earlier one a reader needs for older files. Never a version no
  * roster on the chain listed.
  */
-pub(crate) fn listed_area<'a>(
+fn listed_area<'a>(
     chain: &'a AcceptedRosters,
     workspace_id: &str,
     workspace_key_version: u64,
@@ -1830,9 +1418,9 @@ pub fn next_area_key(
     workspace_key: Vec<u8>,
     root_key: Option<Vec<u8>>,
 ) -> CoreResult<RosterArea> {
-    let format = if root_key.is_some() { chain.roster.format.max(2) } else { chain.roster.format };
-    let key = AreaKey { workspace_id, workspace_key, root_key, area_kind: None, list_digest: None };
-    let mut rows = area_rows(&chain, vec![key], format, vec![])?;
+    let format = if root_key.is_some() { 2 } else { chain.roster.format };
+    let mut rows =
+        area_rows(&chain, vec![AreaKey { workspace_id, workspace_key, root_key }], format, vec![])?;
     Ok(rows.remove(0))
 }
 
@@ -1845,14 +1433,6 @@ pub struct AreaKey {
     pub workspace_key: Vec<u8>,
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub root_key: Option<Vec<u8>>,
-    /// Format 3 (a company's): the area's kind, needed for a new area (a
-    /// rotation keeps the chain's).
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub area_kind: Option<AreaKind>,
-    /// Format 3: the digest of the area's base list statement at this key
-    /// version (companies-design 2.3), which the row commits to.
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub list_digest: Option<String>,
 }
 
 impl std::fmt::Debug for AreaKey {
@@ -1866,9 +1446,6 @@ const EARLIER_ROOT: &str = "This folder key was used before: a rotation needs a 
 const NO_ROOT_KEY: &str = "A new area key needs its folder’s key beside it.";
 const OLD_FORMAT: &str = "This member list format has no folder keys or deleted folders.";
 const NOT_AN_AREA: &str = "This folder is not one of the group’s.";
-const NOT_A_COMPANY: &str = "Only a company’s member list says a folder’s kind and list.";
-const NO_LIST: &str = "A company folder’s key needs its list beside it.";
-pub(crate) const KIND_FIXED: &str = "A company folder keeps the kind it was made with.";
 
 /// The rows a roster carries for new area keys and retirements (2.4, 2.6,
 /// 2.10): each key at its area's next version (1 for a new area), with the
@@ -1887,13 +1464,8 @@ pub(crate) fn area_rows(
     format: u8,
     retire: Vec<String>,
 ) -> CoreResult<Vec<RosterArea>> {
-    let none = HashMap::new();
-    let listed = ListedAreas {
-        keys: &chain.area_keys,
-        roots: &chain.area_roots,
-        retired: &chain.retired_areas,
-        kinds: chain.org.as_ref().map_or(&none, |org| &org.area_kinds),
-    };
+    let listed =
+        ListedAreas { keys: &chain.area_keys, roots: &chain.area_roots, retired: &chain.retired_areas };
     rows_after(listed, keys, format, retire)
 }
 
@@ -1902,8 +1474,6 @@ pub(crate) struct ListedAreas<'a> {
     pub(crate) keys: &'a HashMap<String, Vec<String>>,
     pub(crate) roots: &'a HashMap<String, Vec<Option<String>>>,
     pub(crate) retired: &'a [String],
-    /* A company's areas by kind (format 3); empty for a family. */
-    pub(crate) kinds: &'a HashMap<String, AreaKind>,
 }
 
 /*
@@ -1945,10 +1515,6 @@ pub(crate) fn rows_after(
         if (format == 1) != root_key.is_none() {
             return Err(input(if format == 1 { OLD_FORMAT } else { NO_ROOT_KEY }));
         }
-        // Only a company's rows (format 3) say an area's kind and commit to its base list.
-        if format != 3 && (key.area_kind.is_some() || key.list_digest.is_some()) {
-            return Err(input(NOT_A_COMPANY));
-        }
         let commitment = area_key_commitment(&workspace_key)?;
         if before.contains(&commitment) || !fresh.insert(commitment.clone()) {
             return Err(input(EARLIER_KEY));
@@ -1963,17 +1529,6 @@ pub(crate) fn rows_after(
             }
             None => None,
         };
-        // An area's kind is fixed at its first row: a rotation carries the one the chain lists,
-        // whatever was passed must agree with it, and a new area must say its own.
-        let (area_kind, list_digest) = if format == 3 {
-            let kind = listed.kinds.get(&key.workspace_id).copied().or(key.area_kind);
-            let Some(kind) = kind.filter(|kind| key.area_kind.is_none_or(|given| given == *kind)) else {
-                return Err(input(KIND_FIXED));
-            };
-            (Some(kind), Some(key.list_digest.ok_or_else(|| input(NO_LIST))?))
-        } else {
-            (None, None)
-        };
         let version = versions(&key.workspace_id) + 1;
         rows.push(RosterArea {
             workspace_id: key.workspace_id,
@@ -1981,8 +1536,6 @@ pub(crate) fn rows_after(
             commitment,
             root_commitment,
             retired: false,
-            area_kind,
-            list_digest,
         });
     }
     for workspace_id in retire {
@@ -1996,8 +1549,6 @@ pub(crate) fn rows_after(
             commitment: String::new(),
             root_commitment: None,
             retired: true,
-            area_kind: None,
-            list_digest: None,
         });
     }
     rows.sort_by(|a, b| a.workspace_id.cmp(&b.workspace_id));
@@ -2042,29 +1593,6 @@ pub(crate) mod tests {
     pub(crate) const AREA_SEED: &str = "pMrxFz5ki7HY_iVLcpi_5Q";
     pub(crate) const OTHER_AREA: &str = "8479e412-cae8-8d7c-8357-63caa0c518a9";
     pub(crate) const OTHER_AREA_SEED: &str = "q9H4HkVskrngBi1TeqHH7g";
-
-    /* A company roster's own fields for tests: a key and a kit from fixed seeds, auto-join off. */
-    pub(crate) fn company_fields(group_id: &str, area_count: u64) -> RosterOrg {
-        let key = crate::custody::custody_public_key(vec![201; 96]).unwrap();
-        let kit = crate::custody::kit_public_keys(vec![221; 32], group_id.into()).unwrap();
-        let digest_of = |key: &str| digest(&decode("key", key, None).unwrap());
-        RosterOrg {
-            members_same: None,
-            custody: RosterCustody {
-                custody_key_version: 1,
-                custody_encryption_public_key: key.encryption_public_key,
-                custody_kem_public_key_digest: digest_of(&key.kem_public_key),
-                kit_version: 1,
-                kit_encryption_public_key: kit.encryption_public_key,
-                kit_kem_public_key_digest: digest_of(&kit.kem_public_key),
-                kit_signing_public_key: kit.signing_public_key,
-                kit_ml_dsa_public_key_digest: digest_of(&kit.ml_dsa_public_key),
-            },
-            rules: RosterRules { auto_join: false, auto_join_daily_limit: 10 },
-            auto: None,
-            heads: RosterHeads { area_count, heads_digest: digest(b"heads") },
-        }
-    }
 
     /* A person with a fresh version 2 identity, and the parts a roster and a seal take of it. */
     #[derive(Clone)]
@@ -2192,7 +1720,6 @@ pub(crate) mod tests {
             members,
             areas: vec![],
             format: 1,
-            org: None,
         }
     }
 
@@ -2205,8 +1732,6 @@ pub(crate) mod tests {
             commitment: area_key_commitment(&AREA_KEY).unwrap(),
             root_commitment: None,
             retired: false,
-            area_kind: None,
-            list_digest: None,
         }]
     }
 
@@ -2293,14 +1818,9 @@ pub(crate) mod tests {
         ] {
             assert!(roster_bytes(&roster).is_err(), "{what}");
         }
-        // A company has them, in a statement of its own format; and only there.
         let mut org = base.clone();
         org.kind = GroupKind::Org;
         org.members[0].roles = vec![GroupRole::DataAdmin, GroupRole::Members, GroupRole::Recovery];
-        assert!(roster_bytes(&org).is_err());
-        org.format = 3;
-        org.areas = vec![];
-        org.org = Some(company_fields(GROUP, 0));
         assert!(roster_bytes(&org).is_ok());
         let _ = child;
     }
@@ -2463,8 +1983,6 @@ pub(crate) mod tests {
                             workspace_key_version: at + 1,
                             root_commitment: None,
                             retired: false,
-                            area_kind: None,
-                            list_digest: None,
                         })
                         .collect()
                 }
@@ -2507,7 +2025,6 @@ pub(crate) mod tests {
                         members,
                         areas: areas.clone(),
                         format: self.format,
-                        org: None,
                     }
                 }
                 _ => {
@@ -2524,7 +2041,6 @@ pub(crate) mod tests {
                         members,
                         areas: areas.clone(),
                         format: self.format,
-                        org: None,
                     }
                 }
             };
@@ -3489,7 +3005,7 @@ pub(crate) mod tests {
             .collect();
         let roster = Roster {
             group_id: GROUP.into(),
-            kind: GroupKind::Family,
+            kind: GroupKind::Org,
             roster_version: 1,
             previous_roster_digest: String::new(),
             group_key_version: 1,
@@ -3497,7 +3013,6 @@ pub(crate) mod tests {
             members: members[..MAX_ROSTER_MEMBERS].to_vec(),
             areas: vec![],
             format: 1,
-            org: None,
         };
         let bytes = roster_statement(roster.clone()).unwrap();
         assert_eq!(roster_parse(bytes.clone()).unwrap().members.len(), MAX_ROSTER_MEMBERS);
@@ -3533,8 +3048,6 @@ pub(crate) mod tests {
             commitment: area_key_commitment(&[79; 32]).unwrap(),
             root_commitment: None,
             retired: false,
-            area_kind: None,
-            list_digest: None,
         };
         let listed = Roster { areas: vec![standard[0].clone(), second.clone()], ..roster.clone() };
         let statement = String::from_utf8(roster_statement(listed.clone()).unwrap()).unwrap();
@@ -3694,8 +3207,6 @@ pub(crate) mod tests {
             workspace_id: workspace_id.into(),
             workspace_key: vec![byte; 32],
             root_key: None,
-            area_kind: None,
-            list_digest: None,
         };
         let refused = |result: CoreResult<Roster>, what: &str| {
             let error = result.unwrap_err().to_string();
@@ -3755,8 +3266,6 @@ pub(crate) mod tests {
                 commitment: area_key_commitment(&key(i, 1)).unwrap(),
                 root_commitment: None,
                 retired: false,
-                area_kind: None,
-                list_digest: None,
             })
             .collect();
         let members = vec![own.clone(), a.active(&[]), h_.active(&[GroupRole::Members])];
@@ -3765,13 +3274,7 @@ pub(crate) mod tests {
         let chain = accepted_of(&h, &[&o, &a, &h_]);
         assert_eq!(chain.area_keys.len(), MAX_FAMILY_AREAS);
         // No 1,025th area, as roster_next builds it or as a hand-built roster carries it.
-        let extra = AreaKey {
-            workspace_id: SECOND_AREA.into(),
-            workspace_key: vec![79; 32],
-            root_key: None,
-            area_kind: None,
-            list_digest: None,
-        };
+        let extra = AreaKey { workspace_id: SECOND_AREA.into(), workspace_key: vec![79; 32], root_key: None };
         let error = crate::group_trust::roster_next(
             chain.clone(),
             members.clone(),
@@ -3804,13 +3307,7 @@ pub(crate) mod tests {
             .into_iter()
             .map(|workspace_id| {
                 let i = usize::from_str_radix(&workspace_id[..8], 16).unwrap();
-                AreaKey {
-                    workspace_id,
-                    workspace_key: key(i, 2),
-                    root_key: None,
-                    area_kind: None,
-                    list_digest: None,
-                }
+                AreaKey { workspace_id, workspace_key: key(i, 2), root_key: None }
             })
             .collect();
         let removal = crate::group_trust::roster_next(
@@ -3891,8 +3388,6 @@ pub(crate) mod tests {
             workspace_id: workspace_id.into(),
             workspace_key: area_key_at(workspace_id, version),
             root_key: Some(root_key_at(workspace_id, version)),
-            area_kind: None,
-            list_digest: None,
         }
     }
 
@@ -3938,8 +3433,6 @@ pub(crate) mod tests {
                 workspace_id: AREA.into(),
                 workspace_key: area_key_at(AREA, 1),
                 root_key: None,
-                area_kind: None,
-                list_digest: None,
             }]),
             None,
         )
@@ -3957,8 +3450,6 @@ pub(crate) mod tests {
             commitment: String::new(),
             root_commitment: None,
             retired: true,
-            area_kind: None,
-            list_digest: None,
         };
         let two = Roster { format: 2, areas: vec![key_row.clone(), tombstone.clone()], ..one.clone() };
         assert_eq!(roster_parse(roster_statement(two.clone()).unwrap()).unwrap(), two);
@@ -3985,13 +3476,8 @@ pub(crate) mod tests {
     fn format_2_builders_take_a_root_key_with_every_key_and_never_build_a_lower_format() {
         let (o, a) = (Person::new(1), Person::new(2));
         let members = vec![owner(&o), a.active(&[])];
-        let plain = AreaKey {
-            workspace_id: AREA.into(),
-            workspace_key: area_key_at(AREA, 1),
-            root_key: None,
-            area_kind: None,
-            list_digest: None,
-        };
+        let plain =
+            AreaKey { workspace_id: AREA.into(), workspace_key: area_key_at(AREA, 1), root_key: None };
         let first = |keys: Vec<AreaKey>, format: Option<u8>| {
             crate::group_trust::roster_first(GROUP.into(), GroupKind::Family, owner(&o), Some(keys), format)
         };
@@ -4161,8 +3647,6 @@ pub(crate) mod tests {
                     commitment: area_key_commitment(&area_key_at(AREA, 3)).unwrap(),
                     root_commitment: Some(area_root_commitment(&root_key_at(AREA, 3)).unwrap()),
                     retired: false,
-                    area_kind: None,
-                    list_digest: None,
                 }],
                 ..retired.roster.clone()
             },
@@ -4223,8 +3707,6 @@ pub(crate) mod tests {
                 commitment: area_key_commitment(&key(i, 1, 0)).unwrap(),
                 root_commitment: Some(area_root_commitment(&key(i, 1, 1)).unwrap()),
                 retired: false,
-                area_kind: None,
-                list_digest: None,
             })
             .collect();
         let members = vec![owner(&o), a.active(&[])];
@@ -4234,8 +3716,6 @@ pub(crate) mod tests {
             workspace_id: SECOND_AREA.into(),
             workspace_key: vec![79; 32],
             root_key: Some(vec![80; 32]),
-            area_kind: None,
-            list_digest: None,
         };
         let next = |chain: &Arc<AcceptedRosters>,
                     members: Vec<RosterMember>,
@@ -4269,13 +3749,7 @@ pub(crate) mod tests {
                 } else {
                     usize::from_str_radix(&workspace_id[..8], 16).unwrap()
                 };
-                AreaKey {
-                    workspace_id,
-                    workspace_key: key(i, 2, 0),
-                    root_key: Some(key(i, 2, 1)),
-                    area_kind: None,
-                    list_digest: None,
-                }
+                AreaKey { workspace_id, workspace_key: key(i, 2, 0), root_key: Some(key(i, 2, 1)) }
             })
             .collect();
         let removal = next(&after, removing, keys, vec![]).unwrap();

@@ -14,7 +14,7 @@ use crate::bytes::{expect_len, random, KEY_BYTES, NONCE_BYTES, TAG_BYTES};
 use crate::envelope::{context, open_with_nonce, seal_with_nonce};
 use crate::error::{input, CoreError, CoreResult};
 use crate::identity::{
-    kem_decapsulate, kem_encapsulate_with, IdentityKeys, KEM_CIPHERTEXT_BYTES, KEM_PUBLIC_KEY_BYTES,
+    kem_decapsulate, kem_encapsulate, IdentityKeys, KEM_CIPHERTEXT_BYTES, KEM_PUBLIC_KEY_BYTES,
     KEM_SEED_BYTES,
 };
 use crate::pq::{ML_DSA_PUBLIC_KEY_BYTES, ML_DSA_SEED_BYTES};
@@ -163,32 +163,6 @@ pub(crate) fn seal_hybrid(
     if sealer.ml_dsa_seed.len() != ML_DSA_SEED_BYTES {
         return Err(input("Your keys need upgrading first. Unlock again and retry."));
     }
-    let coins = Zeroizing::new(random(SEAL_COINS_BYTES));
-    let sealed = sealed_with_coins(payload, recipient_public_key, recipient_kem_public_key, kind, &coins)?;
-    sign_sealed(sealed, sealer, kind)
-}
-
-/* The bytes of the coins a seal is made from: the ephemeral X25519 secret (32), the ML-KEM encapsulation randomness (32) and the nonce (24). */
-pub(crate) const SEAL_COINS_BYTES: usize = 32 + 32 + NONCE_BYTES;
-
-/* An envelope's length before its signature, for a payload of `payload_len` bytes. */
-pub(crate) const fn hybrid_sealed_bytes(payload_len: usize) -> usize {
-    32 + KEM_CIPHERTEXT_BYTES + NONCE_BYTES + payload_len + TAG_BYTES
-}
-
-/*
- * Everything of an envelope before its signature, from the three values a
- * seal draws given instead (companies-design 2.2, "Proving a kit seal"; the
- * web's sealedWithCoins): the same payload, recipient, kind and coins give
- * the same bytes. A seal whose coins anyone else learns is open to them.
- */
-pub(crate) fn sealed_with_coins(
-    payload: &[u8],
-    recipient_public_key: &[u8],
-    recipient_kem_public_key: &[u8],
-    kind: &SealKind,
-    coins: &[u8],
-) -> CoreResult<Vec<u8>> {
     expect_len("identity public key", recipient_public_key, 32)
         .map_err(|_| input("Invalid identity key."))?;
     // Hybrid only: a key sealed to X25519 alone is a harvest-now, decrypt-later target.
@@ -197,13 +171,12 @@ pub(crate) fn sealed_with_coins(
     }
     expect_len("kem public key", recipient_kem_public_key, KEM_PUBLIC_KEY_BYTES)
         .map_err(|_| input("Invalid identity key."))?;
-    expect_len("seal randomness", coins, SEAL_COINS_BYTES).map_err(|_| input("Invalid seal randomness."))?;
-    let (ephemeral, rest) = coins.split_at(32);
-    let (kem_randomness, nonce) = rest.split_at(32);
+    let ephemeral = Zeroizing::new(random(32));
     let ephemeral_public =
-        PublicKey::from(&StaticSecret::from(<[u8; 32]>::try_from(ephemeral).expect("32 bytes"))).to_bytes();
-    let dh = agree(ephemeral, recipient_public_key)?;
-    let (ciphertext, secret) = kem_encapsulate_with(recipient_kem_public_key, kem_randomness)?;
+        PublicKey::from(&StaticSecret::from(<[u8; 32]>::try_from(ephemeral.as_slice()).expect("32 bytes")))
+            .to_bytes();
+    let dh = agree(&ephemeral, recipient_public_key)?;
+    let (ciphertext, secret) = kem_encapsulate(recipient_kem_public_key)?;
     let key = hybrid_seal_key(
         dh.as_slice(),
         secret.as_slice(),
@@ -212,65 +185,16 @@ pub(crate) fn sealed_with_coins(
         recipient_public_key,
         kind.info,
     )?;
+    let nonce = random(NONCE_BYTES);
     let mut out = Vec::with_capacity(hybrid_seal_bytes(payload.len()));
     out.extend_from_slice(&ephemeral_public);
     out.extend_from_slice(&ciphertext);
-    out.extend_from_slice(nonce);
-    out.extend(seal_with_nonce(key.as_slice(), nonce, payload, &kind.associated_data)?);
-    debug_assert_eq!(out.len(), hybrid_sealed_bytes(payload.len()));
+    out.extend_from_slice(&nonce);
+    out.extend(seal_with_nonce(key.as_slice(), &nonce, payload, &kind.associated_data)?);
+    let signature = sign_hybrid(&sealer.signing_seed, &sealer.ml_dsa_seed, &(kind.statement)(&out)?)?;
+    out.extend_from_slice(&signature);
+    debug_assert_eq!(out.len(), hybrid_seal_bytes(payload.len()));
     Ok(out)
-}
-
-/* The envelope: what was sealed, then the sealer's hybrid signature over its statement. */
-fn sign_sealed(mut sealed: Vec<u8>, sealer: &IdentityKeys, kind: &SealKind) -> CoreResult<Vec<u8>> {
-    if sealer.ml_dsa_seed.len() != ML_DSA_SEED_BYTES {
-        return Err(input("Your keys need upgrading first. Unlock again and retry."));
-    }
-    let signature = sign_hybrid(&sealer.signing_seed, &sealer.ml_dsa_seed, &(kind.statement)(&sealed)?)?;
-    sealed.extend_from_slice(&signature);
-    Ok(sealed)
-}
-
-/* seal_hybrid with its coins given (the web's sealWithCoins): for the recovery kit seal and tests. */
-pub(crate) fn seal_with_coins(
-    payload: &[u8],
-    recipient_public_key: &[u8],
-    recipient_kem_public_key: &[u8],
-    sealer: &IdentityKeys,
-    kind: &SealKind,
-    coins: &[u8],
-) -> CoreResult<Vec<u8>> {
-    let sealed = sealed_with_coins(payload, recipient_public_key, recipient_kem_public_key, kind, coins)?;
-    sign_sealed(sealed, sealer, kind)
-}
-
-/*
- * Whether an envelope of `kind` has its length and carries the hybrid
- * signature of one of `sealers` over its statement: what open_hybrid checks
- * before it opens anything, on its own (the web's requireSealedBy).
- */
-pub(crate) fn require_sealed_by(
-    envelope: &[u8],
-    payload_len: usize,
-    sealers: &[HybridPublicKey],
-    kind: &SealKind,
-) -> CoreResult<()> {
-    if envelope.len() != hybrid_seal_bytes(payload_len) {
-        return Err(input(kind.invalid));
-    }
-    let (sealed, signature) = envelope.split_at(envelope.len() - HYBRID_SIGNATURE_BYTES);
-    let statement = (kind.statement)(sealed)?;
-    // Any one of the sealer's keys the caller trusts will do (a member's earlier keys, 2.4).
-    let holds = sealers.iter().any(|sealer| {
-        sealer.signing_public_key.len() == 32
-            && sealer.ml_dsa_public_key.len() == ML_DSA_PUBLIC_KEY_BYTES
-            && verify_hybrid(sealer, &statement, signature)
-    });
-    if holds {
-        Ok(())
-    } else {
-        Err(CoreError::Sealed(kind.unsigned.into()))
-    }
 }
 
 /*
@@ -285,67 +209,40 @@ pub(crate) fn open_hybrid(
     recipient: &IdentityKeys,
     kind: &SealKind,
 ) -> CoreResult<Vec<u8>> {
-    require_sealed_by(envelope, payload_len, sealers, kind)?;
+    if envelope.len() != hybrid_seal_bytes(payload_len) {
+        return Err(input(kind.invalid));
+    }
+    let (sealed, signature) = envelope.split_at(envelope.len() - HYBRID_SIGNATURE_BYTES);
+    let statement = (kind.statement)(sealed)?;
+    // Any one of the sealer's keys the caller trusts will do (a member's earlier keys, 2.4).
+    let holds = sealers.iter().any(|sealer| {
+        sealer.signing_public_key.len() == 32
+            && sealer.ml_dsa_public_key.len() == ML_DSA_PUBLIC_KEY_BYTES
+            && verify_hybrid(sealer, &statement, signature)
+    });
+    if !holds {
+        return Err(CoreError::Sealed(kind.unsigned.into()));
+    }
     if recipient.kem_seed.len() != KEM_SEED_BYTES {
         return Err(input(format!(
             "This {} was sealed to a key this account does not hold yet. Unlock again and retry.",
             kind.noun
         )));
     }
-    let recipient_public =
-        crate::bytes::decode("identity public key", &recipient.encryption_public_key, Some(32))?;
-    open_sealed(
-        envelope,
-        payload_len,
-        &recipient.encryption_private_key,
-        &recipient.kem_seed,
-        &recipient_public,
-        kind,
-    )
-}
-
-/*
- * open_hybrid for a recipient that is not a person's identity (a company key,
- * a recovery kit): its X25519 secret, its ML-KEM seed and its X25519 public
- * key, after the same signature check.
- */
-pub(crate) fn open_hybrid_with(
-    envelope: &[u8],
-    payload_len: usize,
-    sealers: &[HybridPublicKey],
-    private_key: &[u8],
-    kem_seed: &[u8],
-    kind: &SealKind,
-) -> CoreResult<Vec<u8>> {
-    require_sealed_by(envelope, payload_len, sealers, kind)?;
-    let secret =
-        Zeroizing::new(<[u8; 32]>::try_from(private_key).map_err(|_| input("Invalid identity key."))?);
-    let public = PublicKey::from(&StaticSecret::from(*secret)).to_bytes();
-    open_sealed(envelope, payload_len, private_key, kem_seed, &public, kind)
-}
-
-/* The payload of an envelope whose signature was checked. */
-fn open_sealed(
-    envelope: &[u8],
-    payload_len: usize,
-    private_key: &[u8],
-    kem_seed: &[u8],
-    recipient_public: &[u8],
-    kind: &SealKind,
-) -> CoreResult<Vec<u8>> {
-    let sealed = &envelope[..envelope.len() - HYBRID_SIGNATURE_BYTES];
     let ephemeral_public = &sealed[..32];
     let ciphertext = &sealed[32..32 + KEM_CIPHERTEXT_BYTES];
     let nonce = &sealed[32 + KEM_CIPHERTEXT_BYTES..32 + KEM_CIPHERTEXT_BYTES + NONCE_BYTES];
     let body = &sealed[32 + KEM_CIPHERTEXT_BYTES + NONCE_BYTES..];
-    let dh = agree(private_key, ephemeral_public)?;
-    let secret = kem_decapsulate(kem_seed, ciphertext)?;
+    let dh = agree(&recipient.encryption_private_key, ephemeral_public)?;
+    let secret = kem_decapsulate(&recipient.kem_seed, ciphertext)?;
+    let recipient_public =
+        crate::bytes::decode("identity public key", &recipient.encryption_public_key, Some(32))?;
     let key = hybrid_seal_key(
         dh.as_slice(),
         secret.as_slice(),
         ciphertext,
         ephemeral_public,
-        recipient_public,
+        &recipient_public,
         kind.info,
     )?;
     let payload = open_with_nonce(key.as_slice(), nonce, body, &kind.associated_data)?;
@@ -438,7 +335,6 @@ pub fn share_open(
 mod tests {
     use super::*;
     use crate::bytes::{decode, random};
-    use crate::identity::kem_encapsulate;
     use crate::identity::{identity_create, identity_open, identity_succeed};
     use crate::signatures::sign;
 

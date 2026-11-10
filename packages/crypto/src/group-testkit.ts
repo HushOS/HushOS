@@ -1,7 +1,6 @@
 import { areaKeyCommitment, areaRootCommitment } from './area-keys';
 import sodium from 'libsodium-wrappers';
 import { parseStatement } from './canonical';
-import { custodyKeyPair, kitKeys } from './custody';
 import { fingerprint } from './fingerprint';
 import {
     checkAreaRoot,
@@ -15,25 +14,18 @@ import {
     sealGroupKey,
     signGroup,
     rosterDigest,
-    rosterMembersDigest,
     rosterStatement,
     signGroupSuccession,
-    signRecoveryRoster,
     signRoster,
     type AreaGrantContext,
-    type AreaKind,
     type GroupKeyPair,
     type GroupKeySealContext,
     type GroupKind,
     type GroupRole,
     type Roster,
     type RosterArea,
-    type RosterAuto,
-    type RosterCustody,
     type RosterFormat,
-    type RosterHeads,
     type RosterMember,
-    type RosterRules,
     type SignedGroupStatement,
 } from './groups';
 import {
@@ -51,9 +43,7 @@ import {
     type AcceptInput,
     type GroupAnchor,
     type AcceptedRosters,
-    type CustodyPublicKey,
     type GroupChainCache,
-    type KitPublicKeys,
     type ServedIdentity,
 } from './group-trust';
 import {
@@ -108,17 +98,15 @@ export function areaKeyAt(workspaceId: string, version: number) {
 }
 
 export async function standardAreas(format: RosterFormat = 1): Promise<RosterArea[]> {
-    return format === 3
-        ? [await orgRowAt(AREA, 1)]
-        : format === 2
-          ? [await keyRowAt(AREA, 1)]
-          : [
-                {
-                    workspaceId: AREA,
-                    workspaceKeyVersion: 1,
-                    commitment: await areaKeyCommitment(pattern(32, AREA_KEY_SEED)),
-                },
-            ];
+    return format === 2
+        ? [await keyRowAt(AREA, 1)]
+        : [
+              {
+                  workspaceId: AREA,
+                  workspaceKeyVersion: 1,
+                  commitment: await areaKeyCommitment(pattern(32, AREA_KEY_SEED)),
+              },
+          ];
 }
 
 /* The node key the testkit gives an area's root at an area version (design 2.10). */
@@ -135,85 +123,6 @@ export async function keyRowAt(workspaceId: string, version: number): Promise<Ro
         rootCommitment: await areaRootCommitment(rootKeyAt(workspaceId, version)),
     };
 }
-
-/* A company's four roles together (an Owner), and an Admin's two. */
-export const OWNER_ROLES: GroupRole[] = ['billing', 'data_admin', 'members', 'recovery'];
-export const ADMIN_ROLES: GroupRole[] = ['data_admin', 'members'];
-
-/* The heads digest every testkit company roster carries unless told otherwise (pattern(32, 240)). */
-export const HEADS_DIGEST = encode(pattern(32, 240));
-
-/* The base list digest the testkit gives an area at a key version (companies-design 2.3). */
-export function listDigestAt(workspaceId: string, version: number) {
-    return encode(pattern(32, (workspaceId === AREA ? 180 : 190) + version));
-}
-
-/* A format 3 key row: keyRowAt, the area's kind and the testkit's list digest. */
-export async function orgRowAt(
-    workspaceId: string,
-    version: number,
-    areaKind: AreaKind = 'shared',
-): Promise<RosterArea> {
-    return {
-        ...(await keyRowAt(workspaceId, version)),
-        areaKind,
-        listDigest: listDigestAt(workspaceId, version),
-    };
-}
-
-/* The company key the testkit gives a company at `version`: its seed (pattern(96, 200 + v)) and what it expands to. */
-export async function custodyAt(version: number) {
-    const seed = pattern(96, 200 + version);
-    return { seed, ...(await custodyKeyPair(seed)) };
-}
-
-/* The recovery kit at `version`: its secret (pattern(32, 220 + v)) and its key pairs under `groupId`. */
-export async function kitAt(version: number, groupId = GROUP) {
-    const secret = pattern(32, 220 + version);
-    return { secret, ...(await kitKeys(secret, groupId)) };
-}
-
-/* A roster's `custody` field for the testkit's company key and kit at those versions. */
-export async function custodyFieldAt(
-    custodyKeyVersion: number,
-    kitVersion: number,
-    groupId = GROUP,
-): Promise<RosterCustody> {
-    const key = (await custodyAt(custodyKeyVersion)).publicKey;
-    const kit = (await kitAt(kitVersion, groupId)).publicKeys;
-    return {
-        custodyKeyVersion,
-        custodyEncryptionPublicKey: key.encryptionPublicKey,
-        custodyKemPublicKeyDigest: await digest(decode(key.kemPublicKey)),
-        kitVersion,
-        kitEncryptionPublicKey: kit.encryptionPublicKey,
-        kitKemPublicKeyDigest: await digest(decode(kit.kemPublicKey)),
-        kitSigningPublicKey: kit.signingPublicKey,
-        kitMlDsaPublicKeyDigest: await digest(decode(kit.mlDsaPublicKey)),
-    };
-}
-
-/*
- * What a testkit company roster says beside its members and areas, where the
- * defaults (the company key and kit kept, the rules kept, no `auto`, the live
- * area count, `same` when no entry changed) are not what a case wants.
- */
-export type OrgRosterOptions = {
-    /* Moves the history to the testkit's company key or kit at that version from this roster on. */
-    custodyVersion?: number;
-    kitVersion?: number;
-    /* Fields written over the `custody` field as it would be. */
-    custody?: Partial<RosterCustody>;
-    rules?: RosterRules;
-    auto?: RosterAuto | null;
-    heads?: Partial<RosterHeads>;
-    /* Whether the statement says `same` (by default, exactly when no entry changed). */
-    same?: boolean;
-    /* A digest to carry as `["same", digest]`, whatever the members are. */
-    membersSame?: string;
-    /* Signs as a recovery roster, with the testkit's kit at this version. */
-    kit?: number;
-};
 
 /* A format 2 tombstone at `version`. */
 export function tombstoneAt(workspaceId: string, version: number): RosterArea {
@@ -486,11 +395,8 @@ export async function history(
     const areaVersions = new Map<string, number>();
     const retired = new Set<string>();
     return {
-        /* The format the next roster is signed in (design 2.10); a case may switch it. A company's is 3. */
-        format: options.format ?? ((kind === 'org' ? 3 : 1) as RosterFormat),
-        /* A company's key and kit versions as its latest roster names them. */
-        custodyVersion: 1,
-        kitVersion: 1,
+        /* The format the next roster is signed in (design 2.10); a case may switch it. */
+        format: options.format ?? (1 as RosterFormat),
         groupId,
         rosters,
         successions,
@@ -508,7 +414,6 @@ export async function history(
             members: RosterMember[],
             keyVersion = keys.length,
             areas?: RosterArea[],
-            org: OrgRosterOptions = {},
         ) {
             const previous = statements.at(-1);
             const version = statements.length + 1;
@@ -539,7 +444,7 @@ export async function history(
                                             keyOf(workspaceId, next),
                                         ),
                                     };
-                                    if (format !== 1)
+                                    if (format === 2)
                                         row.rootCommitment = await areaRootCommitment(
                                             rootOf(workspaceId, next),
                                         );
@@ -551,55 +456,6 @@ export async function history(
                 areaVersions.set(row.workspaceId, row.workspaceKeyVersion);
                 if (row.retired) retired.add(row.workspaceId);
             }
-            // Each entry's sinceVersion as nextRoster sets it, whatever the caller passed.
-            const listed = sortedMembers(
-                members.map((member) => {
-                    const entry = { ...member, roles: [...member.roles].sort() };
-                    const before = previous?.members.find((m) => m.userId === member.userId);
-                    return {
-                        ...entry,
-                        sinceVersion: !previous
-                            ? 1
-                            : before && sameEntry(before, entry)
-                              ? before.sinceVersion
-                              : version,
-                    };
-                }),
-            );
-            // A company's roster (format 3): the company key and kit, rules, auto and heads, and
-            // `same` in place of the members when no entry changed, as nextRoster writes it.
-            let company: Partial<Roster> = {};
-            if (format === 3) {
-                this.custodyVersion = org.custodyVersion ?? this.custodyVersion;
-                this.kitVersion = org.kitVersion ?? this.kitVersion;
-                const unchanged =
-                    previous !== undefined &&
-                    listed.length === previous.members.length &&
-                    listed.every((entry) => {
-                        const before = previous.members.find((m) => m.userId === entry.userId);
-                        return before !== undefined && sameEntry(before, entry);
-                    });
-                const same =
-                    org.membersSame ??
-                    ((org.same ?? unchanged) && previous
-                        ? await rosterMembersDigest(previous)
-                        : undefined);
-                company = {
-                    custody: {
-                        ...(await custodyFieldAt(this.custodyVersion, this.kitVersion, groupId)),
-                        ...org.custody,
-                    },
-                    rules: org.rules ??
-                        previous?.rules ?? { autoJoin: false, autoJoinDailyLimit: 10 },
-                    auto: org.auto ?? null,
-                    heads: {
-                        areaCount: [...areaVersions.keys()].filter((id) => !retired.has(id)).length,
-                        headsDigest: HEADS_DIGEST,
-                        ...org.heads,
-                    },
-                    ...(same !== undefined ? { membersSame: same } : {}),
-                };
-            }
             const roster: Roster = {
                 groupId,
                 kind,
@@ -607,21 +463,25 @@ export async function history(
                 previousRosterDigest: previous ? await rosterDigest(rosters.at(-1)!.statement) : '',
                 groupKeyVersion: keyVersion,
                 signerUserId: signer.userId,
-                // A `same` roster keeps its members here, resolved: its statement does not carry them.
-                members: listed,
+                // Each entry's sinceVersion as nextRoster sets it, whatever the caller passed.
+                members: sortedMembers(
+                    members.map((member) => {
+                        const entry = { ...member, roles: [...member.roles].sort() };
+                        const before = previous?.members.find((m) => m.userId === member.userId);
+                        return {
+                            ...entry,
+                            sinceVersion: !previous
+                                ? 1
+                                : before && sameEntry(before, entry)
+                                  ? before.sinceVersion
+                                  : version,
+                        };
+                    }),
+                ),
                 areas: rows,
-                ...(format !== 1 ? { format } : {}),
-                ...company,
+                ...(format === 2 ? { format } : {}),
             };
-            const signed =
-                org.kit !== undefined
-                    ? await signRecoveryRoster(
-                          roster,
-                          keys[keyVersion - 1]!,
-                          signer.signer,
-                          (await kitAt(org.kit, groupId)).signer,
-                      )
-                    : await signRoster(roster, keys[keyVersion - 1]!, signer.signer);
+            const signed = await signRoster(roster, keys[keyVersion - 1]!, signer.signer);
             rosters.push(signed);
             statements.push(roster);
             return signed;
@@ -2621,18 +2481,8 @@ export async function groupCases(): Promise<GroupCase[]> {
             },
             expected: refused,
         });
-        // A company's roster (format 3, as every company's is) after a family's first.
         const asOrg = await signRoster(
-            {
-                ...h.statements[1]!,
-                kind: 'org',
-                format: 3,
-                areas: [],
-                custody: await custodyFieldAt(1, 1),
-                rules: { autoJoin: false, autoJoinDailyLimit: 10 },
-                auto: null,
-                heads: { areaCount: 1, headsDigest: HEADS_DIGEST },
-            },
+            { ...h.statements[1]!, kind: 'org' },
             h.keys[0]!,
             organizer.signer,
         );
@@ -2877,26 +2727,17 @@ export async function groupCases(): Promise<GroupCase[]> {
             expected: CaseVerdict,
         ) => {
             const h = await history(kind);
-            // A company's rosters are format 3, and its first entry an Owner's.
-            const first = kind === 'org' ? organizer.entry(OWNER_ROLES) : owner;
+            await h.roster(organizer, [owner, adult.entry([]), child.entry([])], 1, [
+                ...(await standardAreas()),
+                {
+                    workspaceId: SECOND_AREA,
+                    workspaceKeyVersion: 1,
+                    commitment: await areaKeyCommitment(areaKeyAt(SECOND_AREA, 1)),
+                },
+            ]);
             await h.roster(
                 organizer,
-                [first, adult.entry([]), child.entry([])],
-                1,
-                kind === 'org'
-                    ? [await orgRowAt(AREA, 1), await orgRowAt(SECOND_AREA, 1)]
-                    : [
-                          ...(await standardAreas()),
-                          {
-                              workspaceId: SECOND_AREA,
-                              workspaceKeyVersion: 1,
-                              commitment: await areaKeyCommitment(areaKeyAt(SECOND_AREA, 1)),
-                          },
-                      ],
-            );
-            await h.roster(
-                organizer,
-                [first, adult.entry([], 1, 'left'), child.entry([])],
+                [owner, adult.entry([], 1, 'left'), child.entry([])],
                 1,
                 areas,
             );
@@ -3697,8 +3538,6 @@ export async function verdictOf(
             deadBranches: chain.deadBranches,
             cache: chain.cache,
             checked: chain.checked,
-            // A company's chain says who used the recovery kit (its other company state is in the cache).
-            ...(chain.org ? { recoveries: chain.recoveries } : {}),
             ...(record ? { record: await recordVerdict(chain, record) } : {}),
             ...(next ? { next: await nextVerdict(chain, next, input.mlDsaKeys) } : {}),
             ...(root ? { root: await rootVerdict(chain, root) } : {}),
@@ -3778,18 +3617,8 @@ export type FirstRosterCase = {
     groupId: string;
     kind: GroupKind;
     creator: RosterMember;
-    areaKeys: FirstRosterKey[];
-    /* A company's first roster only: its key, its kit and its heads digest. */
-    org?: { custodyKey: CustodyPublicKey; kit: KitPublicKeys; headsDigest: string };
+    areaKeys: { workspaceId: string; workspaceKey: string }[];
     expected: string | null;
-};
-/* An area key of a first roster case; a company's carries its root key, kind and list digest too. */
-export type FirstRosterKey = {
-    workspaceId: string;
-    workspaceKey: string;
-    rootKey?: string;
-    areaKind?: AreaKind;
-    listDigest?: string;
 };
 
 export async function firstRosterCases(): Promise<Omit<FirstRosterCase, 'expected'>[]> {
@@ -3801,15 +3630,10 @@ export async function firstRosterCases(): Promise<Omit<FirstRosterCase, 'expecte
     const of = (
         name: string,
         creator: RosterMember,
-        areaKeys: FirstRosterKey[],
+        areaKeys: { workspaceId: string; workspaceKey: string }[],
         kind: GroupKind = 'family',
         groupId = GROUP,
     ) => ({ name, groupId, kind, creator, areaKeys });
-    const org = {
-        custodyKey: (await custodyAt(1)).publicKey,
-        kit: (await kitAt(1)).publicKeys,
-        headsDigest: HEADS_DIGEST,
-    };
     return [
         // Roles out of order and a stale sinceVersion: firstRoster sets both.
         of('first-roster', { ...organizer.entry(['members', 'billing']), sinceVersion: 7 }, [
@@ -3820,23 +3644,12 @@ export async function firstRosterCases(): Promise<Omit<FirstRosterCase, 'expecte
             key(SECOND_AREA, 101),
             key(AREA, AREA_KEY_SEED),
         ]),
-        // A company's first roster is format 3: its creator an Owner, its key, kit and heads on it.
-        {
-            ...of(
-                'first-roster-org',
-                organizer.entry(['recovery', 'members', 'data_admin', 'billing']),
-                [
-                    {
-                        ...key(AREA, AREA_KEY_SEED),
-                        rootKey: encode(rootKeyAt(AREA, 1)),
-                        areaKind: 'shared',
-                        listDigest: listDigestAt(AREA, 1),
-                    },
-                ],
-                'org',
-            ),
-            org,
-        },
+        of(
+            'first-roster-org',
+            organizer.entry(['data_admin', 'members']),
+            [key(AREA, AREA_KEY_SEED)],
+            'org',
+        ),
         of('first-roster-not-holder', organizer.entry(['billing']), [key(AREA, AREA_KEY_SEED)]),
         of('first-roster-left', organizer.entry(['members'], 1, 'left'), [
             key(AREA, AREA_KEY_SEED),
@@ -3869,11 +3682,7 @@ export async function firstRosterVerdict(c: Omit<FirstRosterCase, 'expected'>) {
             areaKeys: c.areaKeys.map((k) => ({
                 workspaceId: k.workspaceId,
                 workspaceKey: decode(k.workspaceKey),
-                ...(k.rootKey !== undefined ? { rootKey: decode(k.rootKey) } : {}),
-                ...(k.areaKind !== undefined ? { areaKind: k.areaKind } : {}),
-                ...(k.listDigest !== undefined ? { listDigest: k.listDigest } : {}),
             })),
-            ...(c.org ? { org: c.org } : {}),
         });
         return encode(rosterStatement(roster));
     } catch (error) {

@@ -922,8 +922,6 @@ impl AreaLedger {
                 workspace_id: workspace_id.clone(),
                 workspace_key: at.area.to_vec(),
                 root_key: Some(at.root.to_vec()),
-                area_kind: None,
-                list_digest: None,
             })
             .collect();
         let roster = roster_next(
