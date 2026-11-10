@@ -1,0 +1,21 @@
+apps/web/src/components/account-two-step.tsx
+  s_1f3a9ec02d29ed::t_39930b40c86890 231-234,236
+  s_1f3a9ec02d29ed::t_a6b8ec9ba6ad34 251,253
+  s_1f3a9ec02d29ed::t_5ed2f72e69a3f7 254-257
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "aceaef386a6129e51b7df54b3e7e01521b8601eb",
+  "prompts": {},
+  "sessions": {
+    "s_1f3a9ec02d29ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aef80487-cabb-455f-b2f1-acb7f8d96c4e",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
