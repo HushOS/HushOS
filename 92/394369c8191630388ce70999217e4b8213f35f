@@ -1,0 +1,115 @@
+packages/crypto/src/share-log.ts
+  s_1f3a9ec02d29ed::t_68153047043b35 1-2338,2340,2342
+  s_1f3a9ec02d29ed::t_d537cfe17fdcca 2339,2341,2343-2360
+crates/hushos-core/src/share_marks.rs
+  s_1f3a9ec02d29ed::t_480f88323f3929 1-473
+  s_1f3a9ec02d29ed::t_9d51de8410fbd5 474-483
+crates/hushos-core/src/share_log.rs
+  s_1f3a9ec02d29ed::t_7b968f5b48c29a 1-2816,2820-2822
+  s_1f3a9ec02d29ed::t_5192aab49e7110 2817-2819,2823-2886
+packages/crypto/src/share-marks.ts
+  s_1f3a9ec02d29ed::t_99867b14e2c11b 1-316
+packages/crypto/src/share-log-testkit.ts
+  s_1f3a9ec02d29ed::t_87b0541083095b 1-2372,2374,2376-2379
+  s_1f3a9ec02d29ed::t_0502fb2c779f87 2373,2375,2380-2641
+packages/crypto/src/share-log.test.ts
+  s_1f3a9ec02d29ed::t_a6c27c8dc53076 1-276
+  s_1f3a9ec02d29ed::t_b6fa928085ffb3 277-333
+packages/crypto/src/share-log.property.test.ts
+  s_1f3a9ec02d29ed::t_16d4ccef98af97 1-142
+  s_1f3a9ec02d29ed::t_d7c86717f43d43 143
+CONTRIBUTING.md
+  s_1f3a9ec02d29ed::t_144fa2d01979e8 699
+apps/android/app/src/test/kotlin/com/hushos/app/data/SettingsKeyTest.kt
+  s_1f3a9ec02d29ed::t_c7ddad95847f2b 115-138
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SettingsTests.swift
+  s_1f3a9ec02d29ed::t_856ad5cb06864b 50-79
+crates/hushos-core/AGENTS.md
+  s_1f3a9ec02d29ed::t_764143939860fb 62,91-92,533,544-560,1414,1436
+crates/hushos-core/examples/share_fixtures.rs
+  s_1f3a9ec02d29ed::t_29b117fdceb03d 1-39
+crates/hushos-core/fixtures/web-shares.json
+  s_1f3a9ec02d29ed::t_4b187f22b904ad 1-23578
+crates/hushos-core/fuzz/Cargo.toml
+  s_1f3a9ec02d29ed::t_56c0b9c15faa77 150-156
+crates/hushos-core/fuzz/fuzz_targets/share_log.rs
+  s_1f3a9ec02d29ed::t_da45296b44031e 1-3
+crates/hushos-core/fuzz/src/fixtures.rs
+  s_1f3a9ec02d29ed::t_473aad2a9e565f 35-40
+crates/hushos-core/fuzz/src/lib.rs
+  s_1f3a9ec02d29ed::t_92355247a84445 8,52-66
+crates/hushos-core/fuzz/src/share_log.rs
+  s_1f3a9ec02d29ed::t_32ec6296c15818 1-374
+crates/hushos-core/fuzz/src/targets.rs
+  s_1f3a9ec02d29ed::t_a9e6a526b1d35a 40,63
+crates/hushos-core/src/area_lists.rs
+  s_1f3a9ec02d29ed::t_a07c4b6c808d03 423-456,800,2518-2527,2532,2545,2563-2572,2574-2591,2594
+crates/hushos-core/src/lib.rs
+  s_1f3a9ec02d29ed::t_248702b14127e1 47-48,84-85
+crates/hushos-core/tests/common/company_lists.rs
+  s_1f3a9ec02d29ed::t_0971af94380e99 15,23,39,48,138,149,158,269,473,816,865
+crates/hushos-core/tests/common/mod.rs
+  s_1f3a9ec02d29ed::t_e2aad9a3950c4d 14
+crates/hushos-core/tests/common/shares.rs
+  s_1f3a9ec02d29ed::t_54eb6b66ebc807 1-924
+crates/hushos-core/tests/web_share_fixtures.rs
+  s_1f3a9ec02d29ed::t_43e322d7c08b45 1-254
+docs/companies-design.md
+  s_1f3a9ec02d29ed::t_57a93514a1a672 3,645,676-694,1617-1618
+docs/groups-invariants.md
+  s_1f3a9ec02d29ed::t_e5d9c0e5dc9e4b 3,465,480,503,513-603,629-632,635
+package.json
+  s_1f3a9ec02d29ed::t_44737bd881c7b9 29
+packages/crypto/fuzz/arbitraries.ts
+  s_1f3a9ec02d29ed::t_e62e273bb99b7f 5,392-398
+packages/crypto/fuzz/differential.test.ts
+  s_1f3a9ec02d29ed::t_f515e235956fc9 43-49
+packages/crypto/fuzz/fixtures.ts
+  s_1f3a9ec02d29ed::t_0e7e2797ab56f2 75-76
+packages/crypto/fuzz/jazzer.ts
+  s_1f3a9ec02d29ed::t_ff57cfd18e590d 36
+packages/crypto/fuzz/run.ts
+  s_1f3a9ec02d29ed::t_af6299ffd9f632 65-66
+packages/crypto/fuzz/seeds.ts
+  s_1f3a9ec02d29ed::t_7fd5df3a2486fb 28,979-980
+packages/crypto/fuzz/share-log.ts
+  s_1f3a9ec02d29ed::t_c7619f13fd62b6 1-568
+packages/crypto/fuzz/verdicts.ts
+  s_1f3a9ec02d29ed::t_9df67fdca9cd06 167,200,2580-2581
+packages/crypto/package.json
+  s_1f3a9ec02d29ed::t_5580235768a8bb 45
+packages/crypto/scripts/share-fixtures.ts
+  s_1f3a9ec02d29ed::t_aac9d9b8bb6f6b 1-107
+packages/crypto/src/__fixtures__/core-shares.json
+  s_1f3a9ec02d29ed::t_50d73f9b1ab622 1-126
+packages/crypto/src/area-lists.ts
+  s_1f3a9ec02d29ed::t_19569c62840639 15,252-268,559-560,1888-1895,1904,1923-1931,1934-1945,2197-2201,2244-2254
+packages/crypto/src/company-lists-testkit.ts
+  s_1f3a9ec02d29ed::t_765c78b71e2674 166-167,206,291-292,297-299
+packages/crypto/src/contacts.test.ts
+  s_1f3a9ec02d29ed::t_cebf186e447381 22,31-37,437-438,440-444,452-534
+packages/crypto/src/contacts.ts
+  s_1f3a9ec02d29ed::t_7458bea1b3b92f 29,155-163
+packages/crypto/src/pins.ts
+  s_1f3a9ec02d29ed::t_628f27c959c90c 397-411,449-450,453,465-469,472-474,476-479
+packages/crypto/src/share-fixtures.test.ts
+  s_1f3a9ec02d29ed::t_b11044b0cccdb1 1-79
+packages/crypto/src/share-log-read.ts
+  s_1f3a9ec02d29ed::t_fa54f5ff68a3f2 1-30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "92394369c8191630388ce70999217e4b8213f35f",
+  "prompts": {},
+  "sessions": {
+    "s_1f3a9ec02d29ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aef80487-cabb-455f-b2f1-acb7f8d96c4e",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
