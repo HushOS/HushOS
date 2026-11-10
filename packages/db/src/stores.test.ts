@@ -493,6 +493,74 @@ describe('what follows an object’s row', () => {
         });
     });
 
+    test('the audit has a page of each store’s own, and the stores it asks are the ones that hold objects', async () => {
+        const second = await createTestStore();
+        // A store nothing is at, and the replica, which holds only backups: neither is asked.
+        await createTestStore();
+        const here = [await published(), await published(), await published()];
+        await db.update(driveObjects).set({ createdAt: sql`now() - interval '1 day'` });
+        await pointDefaultRegionAt(second);
+        const there = [await published(), await published()];
+        expect(await stores.listStoresHoldingObjects()).toEqual(
+            [ENVIRONMENT_PRIMARY_STORE_ID, second].sort(),
+        );
+
+        const ids = async (rows: Promise<{ objectId: string }[]>) =>
+            (await rows).map((row) => row.objectId).sort();
+        const hereIds = here.map((file) => file.ids.objectId);
+        // Never audited and older, the first store's objects fill a page shared by both.
+        const shared = await ids(drive.listObjectsForAudit('primary', 2));
+        expect(shared.every((id) => hereIds.includes(id))).toBe(true);
+        // A page of the second store's own is its objects, whatever waits elsewhere.
+        expect(await ids(drive.listObjectsForAudit('primary', 2, second))).toEqual(
+            there.map((file) => file.ids.objectId).sort(),
+        );
+        const own = await ids(
+            drive.listObjectsForAudit('primary', 2, ENVIRONMENT_PRIMARY_STORE_ID),
+        );
+        expect(own).toHaveLength(2);
+        expect(own.every((id) => hereIds.includes(id))).toBe(true);
+    });
+
+    test('a backup copy is told the size on the object’s row, and nothing once that row is gone', async () => {
+        const live = await published();
+        const purged = await published();
+        await drive.trashNode({ workspaceId: account.workspaceId, nodeId: purged.node.id });
+        await drive.purgeNode({ workspaceId: account.workspaceId, nodeId: purged.node.id });
+        const sizes = Object.fromEntries(
+            (await drive.listUnreplicatedObjects(ENVIRONMENT_PRIMARY_STORE_ID)).map((row) => [
+                row.objectId,
+                row.ciphertextSize,
+            ]),
+        );
+        // What bounds the copy's reads: the row's size, or the fact that no row holds one.
+        expect(sizes).toEqual({ [live.ids.objectId]: MiB, [purged.ids.objectId]: null });
+    });
+
+    test('expired uploads are listed store by store in turn: one store’s many do not fill the page', async () => {
+        const second = await createTestStore();
+        const here: string[] = [];
+        for (let i = 0; i < 6; i++) here.push((await began({ multipartId: `mp-${i}` })).uploadId);
+        await pointDefaultRegionAt(second);
+        const there = [
+            (await began({ multipartId: 'mp-a' })).uploadId,
+            (await began({ multipartId: 'mp-b' })).uploadId,
+        ];
+        // All past their expiry, the first store's by longer.
+        await db.update(driveUploads).set({ expiresAt: sql`now() - interval '1 minute'` });
+        for (const [index, id] of here.entries())
+            await db
+                .update(driveUploads)
+                .set({ expiresAt: sql`now() - make_interval(hours => ${6 - index})` })
+                .where(eq(driveUploads.id, id));
+        const page = (await drive.listExpiredUploads(4)).map((row) => row.id);
+        expect(page.filter((id) => there.includes(id)).sort()).toEqual([...there].sort());
+        expect(page.filter((id) => here.includes(id))).toEqual(here.slice(0, 2));
+        // A store alone has the whole page, oldest first.
+        await db.delete(driveUploads).where(eq(driveUploads.storeId, second));
+        expect((await drive.listExpiredUploads(4)).map((row) => row.id)).toEqual(here.slice(0, 4));
+    });
+
     test('tiering only considers objects in the environment’s primary store', async () => {
         const second = await createTestStore();
         const here = await published();

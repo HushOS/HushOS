@@ -714,6 +714,8 @@ export async function listReportObjectsToCopy(reportId: string) {
             nodeId: driveReportItems.nodeId,
             objectId: driveReportItems.objectId,
             objectKey: driveReportItems.objectKey,
+            // The size the report's snapshot took from the version's row: what bounds the copy's reads.
+            ciphertextSize: driveReportItems.ciphertextSize,
         })
         .from(driveReportItems)
         .where(

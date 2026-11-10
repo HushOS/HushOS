@@ -86,3 +86,18 @@ export async function listSweepStores() {
         .orderBy(asc(objectStores.id));
     return rows.map((row) => row.id);
 }
+
+/*
+ * The stores that hold some object's own copy, whatever their kind or status:
+ * the audit confirms each store's objects apart, a page a store (2.4). Asked of
+ * the objects themselves, by the store index, so a store nothing is at costs
+ * one probe.
+ */
+export async function listStoresHoldingObjects() {
+    const rows = await db
+        .select({ id: objectStores.id })
+        .from(objectStores)
+        .where(sql`exists (select 1 from drive_objects o where o.store_id = ${objectStores.id})`)
+        .orderBy(asc(objectStores.id));
+    return rows.map((row) => row.id);
+}

@@ -1320,3 +1320,83 @@ describe('a workspace deleted whole', () => {
         expect(queued.map((entry) => entry.objectId)).not.toContain(bystander.object.id);
     });
 });
+
+describe('each store’s rows in turn', () => {
+    /* `count` purged copies queued at `storeId`, the first `agoSeconds` back and the rest after it. */
+    async function queuedAt(
+        storeId: string,
+        count: number,
+        agoSeconds: number,
+        set: Partial<typeof driveObjectDeletions.$inferInsert> = {},
+    ) {
+        const ids: string[] = [];
+        for (let index = 0; index < count; index++) {
+            const objectId = randomUUID();
+            ids.push(objectId);
+            await db.insert(driveObjectDeletions).values({
+                objectId,
+                workspaceId: account.workspaceId,
+                objectKey: `ws/${account.workspaceId}/${objectId}`,
+                storeId,
+                reason: 'purged',
+                published: false,
+                createdAt: new Date(Date.now() - (agoSeconds - index) * 1000),
+                ...set,
+            });
+        }
+        return ids;
+    }
+
+    test('a store with far more waiting, all of it older, takes no more of a page than the others', async () => {
+        const many = await queuedAt(second, 40, 10_000);
+        const few = await queuedAt(PRIMARY, 3, 100);
+        const third = await createTestStore();
+        const one = await queuedAt(third, 1, 50);
+
+        const page = await drive.listPendingObjectDeletions(8);
+        const of = (storeId: string) =>
+            page.filter((row) => row.storeId === storeId).map((row) => row.objectId);
+        // Every row of the stores with little waiting, and the oldest of the store with much.
+        expect(of(PRIMARY)).toEqual(few);
+        expect(of(third)).toEqual(one);
+        expect(of(second)).toEqual(many.slice(0, 4));
+        // The first row of each store before the second of any.
+        expect(new Set(page.slice(0, 3).map((row) => row.storeId)).size).toBe(3);
+    });
+
+    test('within a store the least recently failed still come first', async () => {
+        const [failed, fresh] = await queuedAt(second, 2, 1_000);
+        await drive.recordObjectDeletionFailure({ objectId: failed!, storeId: second });
+        const page = await drive.listPendingObjectDeletions(10);
+        expect(page.map((row) => row.objectId)).toEqual([fresh, failed]);
+    });
+
+    test('a store alone gets the whole page, as it always did', async () => {
+        const rows = await queuedAt(PRIMARY, 12, 1_000);
+        expect((await drive.listPendingObjectDeletions(10)).map((row) => row.objectId)).toEqual(
+            rows.slice(0, 10),
+        );
+    });
+
+    test('backup deletions that are due are taken by the backup store they go to, in turn', async () => {
+        const otherBackup = await createTestStore();
+        const due = {
+            primaryDeletedAt: new Date(Date.now() - 1000),
+            deleteReplicaAfter: new Date(Date.now() - 1000),
+            replicated: true,
+        };
+        // Thirty at one backup, older; two at another. A row of the release before the
+        // column names no backup and means the replica.
+        const many = await queuedAt(PRIMARY, 30, 10_000, { ...due, backupStoreId: REPLICA });
+        const few = await queuedAt(second, 2, 100, { ...due, backupStoreId: otherBackup });
+        const [legacy] = await queuedAt(PRIMARY, 1, 20_000, due);
+
+        const page = await drive.listBackupDeletionsDue(6);
+        const at = (backup: string | null) =>
+            page.filter((row) => row.backupStoreId === backup).map((row) => row.objectId);
+        expect(at(otherBackup)).toEqual(few);
+        // The replica's line is the legacy row, the oldest, and then the rows that name it.
+        expect(at(null)).toEqual([legacy]);
+        expect(at(REPLICA)).toEqual(many.slice(0, 3));
+    });
+});

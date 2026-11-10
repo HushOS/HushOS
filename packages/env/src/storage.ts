@@ -65,6 +65,29 @@ export const storageEnv = createEnv({
                 'Use name/version pairs separated by commas, for example web/1.2.0.',
             )
             .optional(),
+        // The slowest transfer a store call still waits for, in bytes a second: every call to
+        // a store gets 60 seconds and one more for each this many bytes it expects to move
+        // (docs/company-storage-design.md 2.4). 256 KiB/s by default; lower it for a store
+        // behind a slow link, whose large copies would otherwise be cut off.
+        STORAGE_MIN_BYTES_PER_SECOND: z
+            .string()
+            .regex(/^[0-9]{1,10}$/)
+            .default(String(256 * 1024))
+            .transform(Number)
+            .refine((value) => value >= 1024 && value <= 1024 * 1024 * 1024, {
+                message: 'STORAGE_MIN_BYTES_PER_SECOND must be between 1024 and 1073741824.',
+            }),
+        // How many seconds of one run of one worker job a single store may use before the
+        // rest of its work waits for the next run, so that a slow store cannot hold up the
+        // others. 60 by default; at most 1500, under the 30 minutes a run is given.
+        STORAGE_STORE_RUN_SECONDS: z
+            .string()
+            .regex(/^[0-9]{1,4}$/)
+            .default('60')
+            .transform(Number)
+            .refine((value) => value >= 1 && value <= 1500, {
+                message: 'STORAGE_STORE_RUN_SECONDS must be between 1 and 1500.',
+            }),
         DRIVE_MAX_FILE_BYTES: z
             .string()
             .regex(/^[0-9]{1,16}$/)

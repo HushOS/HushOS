@@ -2,7 +2,8 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { driveRepository, scopedId, type IdKind } from '@hushos/db';
 import { db } from '../../db/src/client';
 import { workspaceKeys } from '../../db/src/schema';
-import { createTestAccount, createTestIdentity } from '../../db/test/helpers';
+import { metadataStatement, versionStatement } from '../../db/src/signatures';
+import { createTestAccount, createTestIdentity, signerFor } from '../../db/test/helpers';
 import * as signed from '../../db/test/signed';
 
 /*
@@ -174,4 +175,64 @@ export function keysOf(value: unknown): Set<string> {
     };
     visit(value);
     return keys;
+}
+
+const b64 = (bytes: Buffer) => bytes.toString('base64url');
+
+/* A begin as a client sends it: fresh ids for the owner's workspace, signed by the owner, for a new file under `parent`. */
+export async function beginInput(
+    owner: Account,
+    parent: { id: string; keyEpoch: number },
+    framing: { chunkCount: number; ciphertextSize: number },
+) {
+    const node = minted('node', owner.workspaceId);
+    const version = minted('version', owner.workspaceId);
+    const object = minted('object', owner.workspaceId);
+    const metadata = randomBytes(24 + 256 + 16);
+    const content = randomBytes(84);
+    const sign = signerFor(owner.userId).sign;
+    return {
+        node: {
+            existing: false as const,
+            id: node.id,
+            idSeed: node.seed,
+            parentId: parent.id,
+            keyEpoch: await epoch(owner.workspaceId),
+            parentKeyEpoch: parent.keyEpoch,
+            keyEnvelope: b64(randomBytes(72)),
+            metadataEnvelope: b64(metadata),
+            metadataSignature: b64(
+                sign(
+                    metadataStatement({
+                        workspaceId: owner.workspaceId,
+                        nodeId: node.id,
+                        kind: 'file',
+                        metadataVersion: 1,
+                        metadataEnvelope: metadata,
+                    }),
+                ),
+            ),
+        },
+        versionId: version.id,
+        versionIdSeed: version.seed,
+        objectId: object.id,
+        objectIdSeed: object.seed,
+        contentKeyEnvelope: b64(content),
+        versionSignature: b64(
+            sign(
+                versionStatement({
+                    workspaceId: owner.workspaceId,
+                    nodeId: node.id,
+                    versionId: version.id,
+                    objectId: object.id,
+                    contentSuite: 3,
+                    contentKeyEnvelope: content,
+                }),
+            ),
+        ),
+        contentNonce: b64(randomBytes(16)),
+        contentSuite: 3,
+        chunkCount: framing.chunkCount,
+        ciphertextSize: String(framing.ciphertextSize),
+    };
 }

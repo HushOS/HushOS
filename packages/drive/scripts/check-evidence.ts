@@ -27,15 +27,7 @@ async function step(name: string, work: () => Promise<string | void>) {
     }
 }
 await step('write', async () => {
-    const { PutObjectCommand } = await import('@aws-sdk/client-s3');
-    await store.client.send(
-        new PutObjectCommand({
-            Bucket: store.bucket,
-            Key: key,
-            Body: body,
-            ContentLength: body.length,
-        }),
-    );
+    await store.put(key, body);
 });
 await step('head', async () => {
     const found = await store.head(key);

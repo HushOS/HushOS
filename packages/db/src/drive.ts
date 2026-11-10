@@ -2834,15 +2834,22 @@ export const UPLOAD_START_SECONDS = 60;
  * finished ones the table keeps. The query is apart so a test can ask the planner.
  */
 export function expiredUploadsQuery(limit: number) {
-    return db
-        .select(uploadColumns)
-        .from(driveUploads)
-        .leftJoin(driveObjects, eq(driveObjects.id, driveUploads.objectId))
-        .where(
-            sql`(${driveUploads.status} in ('open', 'conflicted') and ${driveUploads.expiresAt} <= now()) or (${driveUploads.status} = 'completing' and ${driveUploads.completingAt} <= now() - interval '1 hour') or (${driveUploads.status} = 'open' and ${driveUploads.multipartId} is null and ${driveUploads.createdAt} <= now() - make_interval(secs => ${UPLOAD_START_SECONDS}))`,
-        )
-        .orderBy(asc(driveUploads.expiresAt))
-        .limit(limit);
+    return (
+        db
+            .select(uploadColumns)
+            .from(driveUploads)
+            .leftJoin(driveObjects, eq(driveObjects.id, driveUploads.objectId))
+            .where(
+                sql`(${driveUploads.status} in ('open', 'conflicted') and ${driveUploads.expiresAt} <= now()) or (${driveUploads.status} = 'completing' and ${driveUploads.completingAt} <= now() - interval '1 hour') or (${driveUploads.status} = 'open' and ${driveUploads.multipartId} is null and ${driveUploads.createdAt} <= now() - make_interval(secs => ${UPLOAD_START_SECONDS}))`,
+            )
+            // Each store's uploads in turn, the oldest of each first: a store whose uploads cannot
+            // be resolved (it does not answer) takes no more of a page than any other (2.4).
+            .orderBy(
+                sql`row_number() over (partition by ${driveUploads.storeId} order by ${driveUploads.expiresAt} asc)`,
+                asc(driveUploads.expiresAt),
+            )
+            .limit(limit)
+    );
 }
 
 export async function listExpiredUploads(limit = 100) {
@@ -3728,8 +3735,11 @@ export type AuditTarget = 'primary' | 'replica';
 export async function listObjectsForAudit(
     target: AuditTarget,
     limit = 200,
-    /* The replica audit: the backup store whose copies are confirmed. */
-    backupStoreId: string = ENVIRONMENT_REPLICA_STORE_ID,
+    /*
+     * The replica audit: the backup store whose copies are confirmed. The primary audit: the
+     * store the objects are at, so each store has a page of its own; without one, every store's.
+     */
+    storeId: string | undefined = target === 'replica' ? ENVIRONMENT_REPLICA_STORE_ID : undefined,
 ) {
     // A mark with no store named is the release before the column's, and means the environment's replica.
     const backup = sql<
@@ -3750,7 +3760,11 @@ export async function listObjectsForAudit(
         .where(
             and(
                 inArray(driveObjects.status, ['ready', 'missing']),
-                target === 'replica' ? sql`${backup} = ${backupStoreId}` : sql`true`,
+                target === 'replica'
+                    ? sql`${backup} = ${storeId}`
+                    : storeId === undefined
+                      ? sql`true`
+                      : eq(driveObjects.storeId, storeId),
             ),
         )
         .orderBy(sql`${driveObjects.auditedAt} asc nulls first`, asc(driveObjects.createdAt))
@@ -3806,7 +3820,12 @@ export async function setSweepCursor(name: string, cursor: string | null) {
  */
 export async function listTierCandidates(idleDays: number, limit = 200) {
     return db
-        .select({ objectId: driveObjects.id, objectKey: driveObjects.objectKey })
+        .select({
+            objectId: driveObjects.id,
+            objectKey: driveObjects.objectKey,
+            // What the store rewrites: the rewrite's deadline allows for it.
+            ciphertextSize: driveObjects.ciphertextSize,
+        })
         .from(driveObjects)
         .where(
             and(
@@ -3822,7 +3841,12 @@ export async function listTierCandidates(idleDays: number, limit = 200) {
 
 export async function listWarmCandidates(idleDays: number, limit = 200) {
     return db
-        .select({ objectId: driveObjects.id, objectKey: driveObjects.objectKey })
+        .select({
+            objectId: driveObjects.id,
+            objectKey: driveObjects.objectKey,
+            // What the store rewrites: the rewrite's deadline allows for it.
+            ciphertextSize: driveObjects.ciphertextSize,
+        })
         .from(driveObjects)
         .where(
             and(

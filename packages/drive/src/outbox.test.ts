@@ -164,7 +164,9 @@ async function move(file: File, fromStoreId: string, toStoreId: string, moveId: 
         if (taken.status !== 'copy-needed') return taken;
     }
     const copiedSince = await outbox.databaseNow();
-    await target.copyFrom(await open(fromStoreId), file.key);
+    await target.copyFrom(await open(fromStoreId), file.key, file.key, {
+        size: file.bytes.length,
+    });
     return flip(copiedSince);
 }
 

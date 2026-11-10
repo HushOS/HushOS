@@ -91,58 +91,8 @@ afterAll(async () => {
 });
 
 /* A begin as a client sends it: fresh ids for this workspace, signed by the owner. */
-async function beginInput(framing: { chunkCount: number; ciphertextSize: number }) {
-    const node = fixtures.minted('node', owner.workspaceId);
-    const version = fixtures.minted('version', owner.workspaceId);
-    const object = fixtures.minted('object', owner.workspaceId);
-    const metadata = randomBytes(24 + 256 + 16);
-    const content = randomBytes(84);
-    const sign = signerFor(owner.userId).sign;
-    return {
-        node: {
-            existing: false as const,
-            id: node.id,
-            idSeed: node.seed,
-            parentId: root.id,
-            keyEpoch: await fixtures.epoch(owner.workspaceId),
-            parentKeyEpoch: root.keyEpoch,
-            keyEnvelope: b64(randomBytes(72)),
-            metadataEnvelope: b64(metadata),
-            metadataSignature: b64(
-                sign(
-                    metadataStatement({
-                        workspaceId: owner.workspaceId,
-                        nodeId: node.id,
-                        kind: 'file',
-                        metadataVersion: 1,
-                        metadataEnvelope: metadata,
-                    }),
-                ),
-            ),
-        },
-        versionId: version.id,
-        versionIdSeed: version.seed,
-        objectId: object.id,
-        objectIdSeed: object.seed,
-        contentKeyEnvelope: b64(content),
-        versionSignature: b64(
-            sign(
-                versionStatement({
-                    workspaceId: owner.workspaceId,
-                    nodeId: node.id,
-                    versionId: version.id,
-                    objectId: object.id,
-                    contentSuite: 3,
-                    contentKeyEnvelope: content,
-                }),
-            ),
-        ),
-        contentNonce: b64(randomBytes(16)),
-        contentSuite: 3,
-        chunkCount: framing.chunkCount,
-        ciphertextSize: String(framing.ciphertextSize),
-    };
-}
+const beginInput = (framing: { chunkCount: number; ciphertextSize: number }) =>
+    fixtures.beginInput(owner, root, framing);
 
 const keyOf = (objectId: string) => `ws/${owner.workspaceId}/${objectId}`;
 
@@ -616,7 +566,7 @@ describe('the worker follows each row', () => {
                 open: async (storeId) => (storeId === secondId ? unanswering : open(storeId)),
                 backups: [],
             }),
-        ).toEqual({ examined: 4, aborted: 1, finalised: 1, skipped: 2, failed: 0 });
+        ).toEqual({ examined: 4, aborted: 1, finalised: 1, skipped: 2, failed: 0, deferred: 0 });
 
         const rows = Object.fromEntries((await uploadRows()).map((row) => [row.id, row.status]));
         // Neither was aborted: their objects and reservations stand until a store answers.
@@ -670,6 +620,146 @@ describe('the worker follows each row', () => {
         expect(copyOf(held)).toEqual(held.bytes);
         // Not guessed at from the primary, where a key of the same name sits.
         expect(copyOf(gone)).toBeNull();
+    });
+
+    /* The third store again, with bounds a test can wait out: a 100 ms deadline for the 60 s. */
+    const impatient = (callMs = 100) =>
+        createObjectStore({
+            endpoint: s3.url,
+            region: 'auto',
+            bucket: SECOND,
+            forcePathStyle: true,
+            bounds: { callMs, connectMs: 200, bytesPerSecond: 1024 * 1024 * 1024 },
+            ...credentials,
+        });
+    const evidenceBucket = () =>
+        createObjectStore({
+            endpoint: s3.url,
+            region: 'auto',
+            bucket: EVIDENCE,
+            forcePathStyle: true,
+            ...credentials,
+        });
+
+    test('a store that never answers does not keep another store’s expired uploads from being resolved, and takes its share of the run and no more', async () => {
+        const mine = [await begin(), await begin()];
+        const theirs = [await begin(), await begin(), await begin()];
+        const unstarted = await begin();
+        for (const upload of [...theirs, unstarted])
+            await run(`update drive_uploads set store_id = $1 where id = $2`, [
+                secondId,
+                upload.begun.upload.id,
+            ]);
+        // Theirs expired first: a page taken oldest first, store after store, starts with them.
+        await run(`update drive_uploads set expires_at = now() - interval '1 minute'`);
+        await run(
+            `update drive_uploads set expires_at = now() - interval '1 hour' where store_id = $1`,
+            [secondId],
+        );
+        // One the store never started: it has no multipart id, and nothing to abort there.
+        await run(
+            `update drive_uploads set multipart_id = null, created_at = now() - interval '5 minutes' where id = $1`,
+            [unstarted.begun.upload.id],
+        );
+        const silent = impatient(100);
+        s3.hooks.hostile = (request) => request.bucket === SECOND;
+        const sent = () => s3.requests.filter((request) => request.bucket === SECOND).length;
+        const before = sent();
+
+        const started = performance.now();
+        const result = await jobs.expireUploads({
+            open: async (storeId) => (storeId === secondId ? silent : open(storeId)),
+            backups: [],
+            budgetMs: 180,
+        });
+        const took = performance.now() - started;
+
+        // Both of ours, the one nobody started, and the two of theirs the share had room for.
+        expect(result).toEqual({
+            examined: 6,
+            aborted: 5,
+            finalised: 0,
+            skipped: 0,
+            failed: 0,
+            deferred: 1,
+        });
+        expect(
+            s3
+                .openUploads(PRIMARY)
+                .map((upload) => upload.key)
+                .sort(),
+        ).toEqual([...theirs, unstarted].map((upload) => upload.key).sort());
+        for (const upload of mine)
+            expect(s3.openUploads(PRIMARY).map((open) => open.key)).not.toContain(upload.key);
+        // Two aborts were sent to the silent store, each given up at its deadline; the
+        // unstarted upload asked it nothing.
+        expect(sent() - before).toBe(2);
+        expect(took).toBeLessThan(2 * 100 + 1_000);
+        // The bytes of everything resolved are no longer reserved, the silent store's included.
+        expect(await reserved()).toBe(4096n);
+    });
+
+    test('an evidence copy is bounded by the size the report recorded, whatever the store holds under that key now', async () => {
+        const evidence = evidenceBucket();
+        const bytes = randomBytes(1500);
+        const swapped = await storedFile(secondId, SECOND, bytes);
+        const swappedReport = await reported(swapped);
+        const kept = await storedFile(secondId, SECOND, bytes);
+        const keptReport = await reported(kept);
+        // After the report, whoever runs that store puts something far larger under the key.
+        s3.put(SECOND, swapped.key, randomBytes(64 * 1024));
+
+        const result = await jobs.copyEvidence({ open, evidence });
+        expect(result).toMatchObject({ reports: 2, copied: 1, failed: 1 });
+        expect(result.failures).toEqual([
+            { report: swappedReport, object: swapped.objectId, error: 'size-mismatch' },
+        ]);
+        // Refused before a byte of it was read.
+        expect(
+            s3.requests.filter(
+                (request) =>
+                    request.method === 'GET' &&
+                    request.bucket === SECOND &&
+                    request.key === swapped.key,
+            ),
+        ).toEqual([]);
+        expect(s3.keys(EVIDENCE)).toEqual([`reports/${keptReport}/${kept.objectId}`]);
+    });
+
+    test('a slow store’s reported files keep to its share of an evidence run: the rest are copied, and its report comes round again', async () => {
+        const evidence = evidenceBucket();
+        const slow = impatient(300);
+        const openSlow = async (storeId: string) => (storeId === secondId ? slow : open(storeId));
+        const first = await storedFile(secondId, SECOND, randomBytes(800));
+        const firstReport = await reported(first);
+        const second = await storedFile(secondId, SECOND, randomBytes(800));
+        const secondReport = await reported(second);
+        const ours = await storedFile(ENVIRONMENT_PRIMARY_STORE_ID, PRIMARY, randomBytes(800));
+        const oursReport = await reported(ours);
+        // Each call to the slow store takes 100 ms: a copy from it is a HEAD and a GET.
+        s3.hooks.hostile = async (request) => {
+            if (request.bucket === SECOND) await new Promise((resolve) => setTimeout(resolve, 100));
+            return false;
+        };
+        const status = async (reportId: string) =>
+            (await run('select evidence_status from drive_reports where id = $1', [reportId]))
+                .rows[0].evidence_status;
+
+        const result = await jobs.copyEvidence({ open: openSlow, evidence, budgetMs: 150 });
+        expect(result).toMatchObject({ reports: 3, copied: 2, failed: 0, deferred: 1 });
+        expect(await status(firstReport)).toBe('copied');
+        expect(await status(oursReport)).toBe('copied');
+        // Not failed: it was not tried. It is still waiting, and the next run takes it.
+        expect(await status(secondReport)).toBe('pending');
+
+        s3.hooks.hostile = undefined;
+        expect(await jobs.copyEvidence({ open: openSlow, evidence })).toMatchObject({
+            reports: 1,
+            copied: 1,
+            deferred: 0,
+        });
+        expect(await status(secondReport)).toBe('copied');
+        expect(s3.keys(EVIDENCE)).toHaveLength(3);
     });
 
     test('the outbox deletes each copy from the store its row names, and only there', async () => {
@@ -779,7 +869,7 @@ describe('the worker follows each row', () => {
         s3.put(PRIMARY, there.key, randomBytes(64));
         await run("update drive_objects set ready_at = now() - interval '100 days'");
         expect(await jobs.tierObjects({ open, backups: [] }, { coldClass: 'STANDARD_IA' })).toEqual(
-            { cooled: 1, warmed: 0, failed: 0, failures: {} },
+            { cooled: 1, warmed: 0, failed: 0, avoided: 0, deferred: 0, failures: {} },
         );
         expect(s3.storageClass(PRIMARY, here.key)).toBe('STANDARD_IA');
         expect(s3.storageClass(PRIMARY, there.key)).toBe('STANDARD');

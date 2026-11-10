@@ -9,11 +9,25 @@ import type { AddressInfo } from 'node:net';
  * CopyObject) through the real SDK and real presigned URLs. It checks no
  * signature. What it holds is plain to read from the test, so a test can say
  * which bucket a byte went to, which is the point of having more than one.
+ *
+ * It can also misbehave on purpose (`hooks.hostile`): a test is handed the
+ * response of any request and may never answer it, answer late, lie about a
+ * size, or send bytes for ever (docs/company-storage-design.md 15, "a hostile
+ * store").
  */
 
 type Stored = { body: Buffer; modified: Date; storageClass: string };
 type Upload = { bucket: string; key: string; parts: Map<number, Buffer> };
-export type S3Request = { method: string; bucket: string; key: string; query: string };
+export type S3Request = {
+    method: string;
+    bucket: string;
+    key: string;
+    query: string;
+    /* When it arrived, by `performance.now()`. */
+    at: number;
+    /* The `Range` header, when there was one. */
+    range?: string;
+};
 
 const xml = (body: string) => `<?xml version="1.0" encoding="UTF-8"?>${body}`;
 const etagOf = (body: Buffer) => `"${createHash('md5').update(body).digest('hex')}"`;
@@ -27,6 +41,17 @@ export async function startS3() {
         beforeCreateMultipart?: (bucket: string, key: string) => Promise<void> | void;
         /* Runs before any request is served: return an HTTP status to have the store answer with that error instead. */
         refuse?: (request: S3Request) => number | undefined;
+        /*
+         * Runs before any request is served, with its response in hand. Return true (now or
+         * later) and the store does nothing more with the request: whatever is or is not
+         * written to `res` is the answer. Return false and the request is served honestly,
+         * which after a wait is a store that is slow and right.
+         */
+        hostile?: (
+            request: S3Request,
+            res: ServerResponse,
+            req: IncomingMessage,
+        ) => boolean | Promise<boolean>;
     } = {};
 
     function fail(res: ServerResponse, status: number, code: string) {
@@ -46,8 +71,16 @@ export async function startS3() {
         const key = decodeURIComponent(rest.join('/'));
         const query = url.searchParams;
         const method = req.method ?? 'GET';
-        const request = { method, bucket: bucketName, key, query: url.search };
+        const request: S3Request = {
+            method,
+            bucket: bucketName,
+            key,
+            query: url.search,
+            at: performance.now(),
+            ...(req.headers.range ? { range: String(req.headers.range) } : {}),
+        };
         requests.push(request);
+        if (await hooks.hostile?.(request, res, req)) return;
         const refused = hooks.refuse?.(request);
         if (refused) {
             await bodyOf(req);
@@ -247,6 +280,7 @@ export async function startS3() {
             requests.length = 0;
             hooks.beforeCreateMultipart = undefined;
             hooks.refuse = undefined;
+            hooks.hostile = undefined;
         },
         async stop() {
             server.closeAllConnections();

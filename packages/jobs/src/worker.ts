@@ -29,6 +29,7 @@ import {
     drivePurge,
     driveReplicate,
     driveTier,
+    leftForNextRun,
     reportsEvidence,
     reportsRequests,
 } from './jobs/drive';
@@ -198,7 +199,9 @@ if (billingEnabled()) {
  * until expiry's next run), the purge sweep every fifteen, the accounting and object
  * audits and tiering nightly, the replica audit weekly, and the orphan sweep a
  * bounded number of pages of every region's bucket every night. Each also runs once at start so a
- * backlog after downtime clears.
+ * backlog after downtime clears. A run takes its stores in turn and gives each a share of
+ * itself (STORAGE_STORE_RUN_SECONDS); one that left work only for that reason is sent again
+ * at once.
  */
 const replica = replicaConfigured();
 // The replica's row holds no settings, only whether this worker's environment has them: the
@@ -250,7 +253,9 @@ for (const [queue, cron, handler] of driveJobs) {
     await boss.schedule(queue, cron, {}, { tz: 'UTC' });
     await boss.send(queue, {});
     await boss.work(queue, { batchSize: 1, pollingIntervalSeconds: 10 }, async ([job]) => {
-        if (job) await handler(job);
+        if (!job) return;
+        // A run that stopped at a store's share of it goes on in the next one, now.
+        if (leftForNextRun(await handler(job))) await boss.send(queue, {});
     });
 }
 

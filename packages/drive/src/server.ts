@@ -1697,6 +1697,8 @@ export async function completeUpload(
         row.objectKey,
         row.multipartId,
         [...parts].sort((a, b) => a.partNumber - b.partNumber),
+        // What the store is asked to assemble: its deadline allows for it.
+        { size: Number(row.ciphertextSize) },
     );
     const finished = await driveRepository.finishCompleting(
         workspaceId,

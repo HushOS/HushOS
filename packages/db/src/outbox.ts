@@ -206,8 +206,19 @@ const fairly = [
     sql`${driveObjectDeletions.failedAt} asc nulls first`,
     asc(driveObjectDeletions.createdAt),
 ];
+/*
+ * A row's place in its own store's line. Ordered by it first, a page holds the
+ * first row of every store, then the second of each, and so on: a store with
+ * ten thousand rows waiting takes no more of a page than a store with ten
+ * (2.4). `store` is the store the row's next call goes to.
+ */
+const turnAt = (store: SQL) =>
+    sql`row_number() over (partition by ${store} order by ${driveObjectDeletions.failedAt} asc nulls first, ${driveObjectDeletions.createdAt} asc)`;
 
-/* Rows whose copy at their own store is still there and may go now: not held by a report, not waiting on a move. */
+/*
+ * Rows whose copy at their own store is still there and may go now: not held by
+ * a report, not waiting on a move. Each store's rows in turn.
+ */
 export async function listPendingObjectDeletions(limit = 200) {
     return db
         .select()
@@ -221,11 +232,11 @@ export async function listPendingObjectDeletions(limit = 200) {
                 heldObjectCondition(driveObjectDeletions.objectId),
             ),
         )
-        .orderBy(...fairly)
+        .orderBy(turnAt(sql`${driveObjectDeletions.storeId}`), ...fairly)
         .limit(limit);
 }
 
-/* Rows whose backup copy has outlived its undo window. */
+/* Rows whose backup copy has outlived its undo window, each backup store's rows in turn. */
 export async function listBackupDeletionsDue(limit = 200) {
     return db
         .select()
@@ -237,7 +248,12 @@ export async function listBackupDeletionsDue(limit = 200) {
                 sql`${driveObjectDeletions.deleteReplicaAfter} <= now()`,
             ),
         )
-        .orderBy(...fairly)
+        .orderBy(
+            turnAt(
+                sql`coalesce(${driveObjectDeletions.backupStoreId}, ${ENVIRONMENT_REPLICA_STORE_ID}::uuid)`,
+            ),
+            ...fairly,
+        )
         .limit(limit);
 }
 
@@ -289,17 +305,15 @@ async function lockRow(tx: Tx, key: DeletionKey) {
 
 /*
  * How long Postgres lets a removal sit idle inside its transaction, which is
- * what it does while it waits for the store. Three minutes: twice the 60
- * seconds one body-less store call will be allowed once every call has a total
- * deadline (2.4), with room, since a removal may make two in a row (the look,
- * then the delete) with no statement between them; and under the five minutes
- * between runs, so a store that accepts a request and never answers has given
- * the row back by the time the row is next due. Until those deadlines exist
- * this is the only bound: without it such a store would hold the row's lock,
- * hold back vacuum for the whole database, and block whoever needs the row or
- * a lock on the table behind it, for as long as it liked. When it fires the
- * session is ended, the transaction with it, nothing is marked, and the row is
- * tried again.
+ * what it does while it waits for the store. Every store call has a total
+ * deadline now (2.4), and the worker gives one removal's calls a single
+ * deadline of 60 seconds between them, so this is the second bound and not the
+ * first: three times that, and under the five minutes between runs. It is what
+ * holds if a call ever outlives its deadline, or the worker stalls with the
+ * row locked: without it such a removal would hold the row's lock, hold back
+ * vacuum for the whole database, and block whoever needs the row or a lock on
+ * the table behind it. When it fires the session is ended, the transaction
+ * with it, nothing is marked, and the row is tried again.
  */
 export const REMOVAL_IDLE_SECONDS = 180;
 
@@ -330,8 +344,9 @@ const rowIs = (key: DeletionKey) =>
  *   it, where this worker keeps a backup of that store.
  *
  * A store that throws rolls everything back: the caller records the failure
- * and the row is tried again. So does a store that never answers: Postgres ends
- * the transaction after `REMOVAL_IDLE_SECONDS` (`idleMs` is for tests).
+ * and the row is tried again. A store that never answers throws too, at its
+ * call's deadline; were that ever to fail, Postgres ends the transaction after
+ * `REMOVAL_IDLE_SECONDS` (`idleMs` is for tests).
  */
 export async function removeQueuedCopy(
     key: DeletionKey,
@@ -525,10 +540,17 @@ export async function deleteFinishedObjectDeletions(
  * purged before the copy job caught up, whose only copy must reach the backup
  * before the primary may go. Objects that have failed least come first, and
  * one that has failed `COPY_FAILURE_LIMIT` times in a row is left alone.
+ *
+ * `ciphertextSize` is what bounds the copy's reads (2.4). An object purged
+ * since has no row left to say it, and none is kept on its outbox row: null.
  */
 export async function listUnreplicatedObjects(storeId: string, limit = 100) {
     const live = await db
-        .select({ objectId: driveObjects.id, objectKey: driveObjects.objectKey })
+        .select({
+            objectId: driveObjects.id,
+            objectKey: driveObjects.objectKey,
+            ciphertextSize: driveObjects.ciphertextSize,
+        })
         .from(driveObjects)
         .where(
             and(
@@ -558,7 +580,10 @@ export async function listUnreplicatedObjects(storeId: string, limit = 100) {
         )
         .orderBy(...fairly)
         .limit(Math.max(0, limit - live.length));
-    return [...live, ...retired].map((row) => ({ ...row, storeId }));
+    return [
+        ...live.map((row) => ({ ...row, ciphertextSize: row.ciphertextSize as bigint | null })),
+        ...retired.map((row) => ({ ...row, ciphertextSize: null })),
+    ].map((row) => ({ ...row, storeId }));
 }
 
 /* How many ready objects at `storeId` the copy job has given up on for now. */

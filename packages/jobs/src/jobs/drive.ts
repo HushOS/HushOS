@@ -5,6 +5,7 @@ import {
     copyEvidence,
     deleteObjects,
     expireUploads,
+    leftForNextRun,
     purgeDue,
     replicateObjects,
     sweepOrphans,
@@ -32,6 +33,7 @@ import type { Job } from 'pg-boss';
 function stores(): Stores {
     return {
         open: storeFor,
+        budgetMs: storageEnv.STORAGE_STORE_RUN_SECONDS * 1000,
         backups: replicaStore()
             ? [
                   {
@@ -91,6 +93,15 @@ export const driveOrphanSweep = (job: Job<unknown>) =>
 export const driveTier = (job: Job<unknown>) =>
     run(job, () => tierObjects(stores(), { coldClass: storageEnv.STORAGE_COLD_CLASS ?? null }));
 export const reportsEvidence = (job: Job<unknown>) =>
-    run(job, () => copyEvidence({ open: storeFor, evidence: evidenceStore() }));
+    run(job, () =>
+        copyEvidence({
+            open: storeFor,
+            evidence: evidenceStore(),
+            budgetMs: storageEnv.STORAGE_STORE_RUN_SECONDS * 1000,
+        }),
+    );
 export const reportsRequests = (job: Job<unknown>) =>
     run(job, () => answerEvidenceRequests({ evidence: evidenceStore() }));
+
+/* Whether the run a handler just finished stopped at a store's share and should go on at once. */
+export { leftForNextRun };

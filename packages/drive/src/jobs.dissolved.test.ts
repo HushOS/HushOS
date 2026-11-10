@@ -27,6 +27,8 @@ afterAll(closeDatabase);
 function recordingStore() {
     const deleted: string[] = [];
     const store = {
+        // The outbox asks before each row whether the store is well.
+        health: () => 'ok',
         delete: async (key: string) => {
             deleted.push(key);
         },
