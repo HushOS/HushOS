@@ -1,4 +1,4 @@
-import type { AffiliateView } from '@hushos/billing/api';
+import type { OwnAffiliateView } from '@hushos/billing/api';
 import { createFileRoute } from '@tanstack/react-router';
 import { cn } from 'cn';
 import { CheckIcon, CopyIcon, RotateCcwIcon, Share2Icon } from 'lucide-react';
@@ -257,7 +257,7 @@ function CreatorCode({
     plain,
     children,
 }: {
-    affiliate: AffiliateView;
+    affiliate: OwnAffiliateView;
     /* Under a section's own heading: no rule above the name. */
     plain?: boolean;
     children: React.ReactNode;
@@ -282,8 +282,31 @@ function CreatorCode({
                 </Fact>
                 <Fact label="Sign-ups">{affiliate.stats.signups}</Fact>
                 <Fact label="Paid orders">{affiliate.stats.orders}</Fact>
-                <Fact label="Owed to you">{money(affiliate.stats.earnings, 'unpaid')}</Fact>
-                <Fact label="Paid out">{money(affiliate.stats.earnings, 'paid')}</Fact>
+                {affiliate.totals ? (
+                    // Commission safety is on: what can be paid now is apart from what waits.
+                    <>
+                        <Fact label="Owed to you">{total(affiliate.totals, 'payable')}</Fact>
+                        <Fact label="Held until it can be paid">
+                            {total(affiliate.totals, 'held')}
+                        </Fact>
+                        {total(affiliate.totals, 'underReview') !== '–' && (
+                            <Fact label="Under review">
+                                {total(affiliate.totals, 'underReview')}
+                            </Fact>
+                        )}
+                        {total(affiliate.totals, 'toReturn') !== '–' && (
+                            <Fact label="Taken from later payouts, for orders refunded or charged back">
+                                {total(affiliate.totals, 'toReturn')}
+                            </Fact>
+                        )}
+                        <Fact label="Paid out">{total(affiliate.totals, 'paidOut')}</Fact>
+                    </>
+                ) : (
+                    <>
+                        <Fact label="Owed to you">{money(affiliate.stats.earnings, 'unpaid')}</Fact>
+                        <Fact label="Paid out">{money(affiliate.stats.earnings, 'paid')}</Fact>
+                    </>
+                )}
             </dl>
         </>
     );
@@ -296,6 +319,17 @@ function Fact({ label, children }: { label: string; children: React.ReactNode })
             <dd className="min-w-0 font-medium tabular-nums wrap-anywhere">{children}</dd>
         </div>
     );
+}
+
+/* One of a creator's own totals in every currency that has any, or a dash when nothing. */
+function total(
+    totals: NonNullable<OwnAffiliateView['totals']>,
+    key: keyof NonNullable<OwnAffiliateView['totals']>[string],
+) {
+    const parts = Object.entries(totals)
+        .filter(([, of]) => BigInt(of[key]) > 0n)
+        .map(([currency, of]) => formatMoney(Number(of[key]), currency));
+    return parts.length ? parts.join(' · ') : '–';
 }
 
 /* Totals per currency on one line: "$12.00 · ₹900.00", or a dash when nothing. */

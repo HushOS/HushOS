@@ -1,6 +1,7 @@
 import {
     cancelDissolvedPlan,
     endPersonalPlans,
+    reconcileAffiliateEarnings,
     reconcileCustomer,
     reconcileGroup,
     reconcilePlanEndings,
@@ -66,10 +67,23 @@ export async function reconcileBilling(job: Job<JobPayloads[typeof queues.reconc
             failed += 1;
             if (error instanceof Error) event.error(error);
         }
+        // Commission safety, where it is on: Polar's disputes read, and the refunds of every
+        // earning that could still be paid or that a refund changed lately read again. Disputes
+        // that can't be read are said by that read itself, once a run, and fail nothing here:
+        // refunds are still handled.
+        let commission: Awaited<ReturnType<typeof reconcileAffiliateEarnings>> = null;
+        try {
+            commission = await reconcileAffiliateEarnings();
+            if (commission?.refundsFailed) failed += 1;
+        } catch (error) {
+            failed += 1;
+            if (error instanceof Error) event.error(error);
+        }
         event.set({
             reconciled,
             failed,
             endingsQueued: endings,
+            ...(commission ? { commission } : {}),
             durationMs: Math.round(performance.now() - started),
         });
         if (failed) throw new Error('Some customers could not be reconciled.');

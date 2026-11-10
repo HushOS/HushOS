@@ -5,6 +5,9 @@ import type * as growth from '@hushos/billing/growth';
 import type * as billing from '@hushos/billing/server';
 import {
     affiliateDeletedResponse,
+    affiliateDoneResponse,
+    affiliateEarningsResponse,
+    affiliateLedgerStatusResponse,
     affiliatePaidResponse,
     affiliateResponse,
     affiliatesResponse,
@@ -294,6 +297,135 @@ const pending: Affiliate = {
     stats: { signups: 0, orders: 0, earnings: {} },
 };
 
+/* With commission safety on (AFFILIATE_V2_ENABLED): the operators' view gains the ledger. */
+const usdLedger = {
+    earned: '56000',
+    payable: '14000',
+    held: '9000',
+    flagged: '14000',
+    paidOut: '2000',
+    voided: '12000',
+    lowered: '5000',
+    clawbackOpen: '2000',
+    clawbackUnconfirmed: '0',
+    netted: '2000',
+    payout: '12000',
+};
+const safeCreator: Affiliate = {
+    ...creator,
+    pausedAt: null,
+    removedAt: null,
+    // A total past 2^53 goes out digit for digit: it is a string, never a number.
+    ledger: { usd: usdLedger, inr: { ...usdLedger, earned: '90071992547409935' } },
+};
+const removedCreator: Affiliate = {
+    ...pending,
+    pausedAt: '2026-11-01T12:00:00.000Z',
+    removedAt: '2026-11-02T12:00:00.000Z',
+    ledger: {},
+};
+
+/* The affiliate's own view with commission safety on: nothing an operator wrote, and totals. */
+type Own = Reply<typeof growth.getReferralSummary>['affiliates'][number];
+const ownCreator: Own = {
+    id: affiliateId,
+    name: 'Ada Reviews',
+    slug: 'ada',
+    code: 'ADA20',
+    url: 'http://localhost:5173/go/ada',
+    percentOff: 20,
+    duration: 'repeating',
+    durationMonths: 3,
+    commissionBps: 2500,
+    active: true,
+    createdAt: '2026-10-01T12:00:00.000Z',
+    stats: { signups: 12, orders: 3, earnings: { usd: { unpaid: 37000, paid: 2000 } } },
+    totals: {
+        usd: {
+            earned: '56000',
+            paidOut: '2000',
+            payable: '14000',
+            held: '9000',
+            underReview: '14000',
+            reversed: '17000',
+            toReturn: '2000',
+        },
+    },
+};
+
+type Earnings = Reply<typeof growth.listAffiliateEarnings>;
+const earnings: Earnings = [
+    {
+        id: '4f9c4b50-ae8c-4085-9e87-6f5d8bcd3c54',
+        orderId: 'order_held',
+        userId: otherId,
+        currency: 'usd',
+        recordedAt: '2026-11-08T09:00:00.000Z',
+        net: '20000',
+        pot: '4000',
+        left: '4000',
+        state: 'held',
+        payableAt: '2026-12-08T09:00:00.000Z',
+        paidAt: null,
+        paid: null,
+        refunded: '0',
+        dispute: null,
+        flag: null,
+        clawback: null,
+        voidedAt: null,
+        voidReason: null,
+    },
+    {
+        id: '5a0d5c61-bf9d-4196-8f98-7a6e9cde4d65',
+        orderId: 'order_clawed',
+        userId: null,
+        currency: 'usd',
+        recordedAt: '2026-07-01T09:00:00.000Z',
+        net: '10000',
+        pot: '2000',
+        left: '0',
+        state: 'paid',
+        payableAt: '2026-07-01T09:00:00.000Z',
+        paidAt: '2026-08-01T09:00:00.000Z',
+        paid: '2000',
+        refunded: '10000',
+        dispute: 'lost',
+        flag: null,
+        clawback: {
+            amount: '2000',
+            open: '1400',
+            settled: '600',
+            writtenOff: '0',
+            cutover: true,
+            confirmed: false,
+            settledAt: null,
+            note: 'Repaid 6.00 by transfer',
+        },
+        voidedAt: null,
+        voidReason: null,
+    },
+    {
+        id: '6b1e6d72-c0ae-42a7-90a9-8b7fadef5e76',
+        orderId: 'order_voided',
+        userId: otherId,
+        currency: 'inr',
+        recordedAt: '2026-11-08T09:00:00.000Z',
+        net: '90071992547409935',
+        pot: '18014398509481987',
+        left: '18014398509481987',
+        state: 'voided',
+        payableAt: '2026-12-08T09:00:00.000Z',
+        paidAt: null,
+        paid: null,
+        refunded: '0',
+        dispute: 'needs_response',
+        flag: 'dispute',
+        clawback: null,
+        voidedAt: '2026-11-09T09:00:00.000Z',
+        voidReason: 'Card testing',
+    },
+];
+
 /*
  * Per route: the replies the package can give, the object a new column would surface in (a stray
  * field is planted there and at the top), and a field the reply cannot go out without.
@@ -477,6 +609,14 @@ const cases: Record<string, Case> = {
                 paid: { count: 1, bytes: GiB(5), bonusBytes: GiB(5), capBytes: GiB(50) },
                 affiliates: [creator],
             } satisfies Reply<typeof growth.getReferralSummary>,
+            'runs a creator, with commission safety on': {
+                code: 'k3x9q2',
+                url: 'http://localhost:5173/r/k3x9q2',
+                joined: 4,
+                signup: { count: 3, bytes: GiB(3), bonusBytes: GiB(1), capBytes: GiB(10) },
+                paid: { count: 1, bytes: GiB(5), bonusBytes: GiB(5), capBytes: GiB(50) },
+                affiliates: [ownCreator],
+            } satisfies Reply<typeof growth.getReferralSummary>,
             'nothing yet': {
                 code: 'k3x9q2',
                 url: 'http://localhost:5173/r/k3x9q2',
@@ -487,18 +627,21 @@ const cases: Record<string, Case> = {
             } satisfies Reply<typeof growth.getReferralSummary>,
         },
         stray: (v) => v.affiliates[0]?.stats ?? v.signup,
-        required: ['runs a creator', (v) => delete v.affiliates[0].providerDiscountId],
+        required: ['runs a creator', (v) => delete v.affiliates[0].commissionBps],
     },
     'GET /billing/affiliates': {
         schema: affiliatesResponse,
         samples: {
             two: [creator, pending] satisfies Reply<typeof growth.listAffiliates>,
+            'two, with commission safety on': [safeCreator, removedCreator] satisfies Reply<
+                typeof growth.listAffiliates
+            >,
             none: [] satisfies Reply<typeof growth.listAffiliates>,
         },
         top: (v) => v[0] ?? {},
         stray: (v) => v[1].stats,
         // The empty list has nothing to plant a field in.
-        strayIn: ['two'],
+        strayIn: ['two', 'two, with commission safety on'],
         required: ['two', (v) => delete v[1].pendingEmail],
     },
     'POST /billing/affiliates and PATCH /billing/affiliates/:id': {
@@ -506,6 +649,12 @@ const cases: Record<string, Case> = {
         samples: {
             created: pending satisfies Reply<typeof growth.createAffiliate>,
             updated: creator satisfies Reply<typeof growth.updateAffiliate>,
+            'paused, and Polar kept the discount live': {
+                ...safeCreator,
+                active: false,
+                pausedAt: '2026-11-10T08:00:00.000Z',
+                discountNotice: 'still-live',
+            } satisfies Reply<typeof growth.updateAffiliate>,
         },
         stray: (v) => v.stats,
         required: ['updated', (v) => delete v.stats.earnings],
@@ -527,9 +676,51 @@ const cases: Record<string, Case> = {
         samples: {
             paid: { paid: 3 } satisfies Reply<typeof growth.markAffiliatePaid>,
             'nothing owed': { paid: 0 } satisfies Reply<typeof growth.markAffiliatePaid>,
+            'with commission safety on': {
+                paid: 2,
+                payouts: {
+                    usd: { owed: '5000', netted: '5000', payout: '0' },
+                    inr: { owed: '90071992547409935', netted: '0', payout: '90071992547409935' },
+                },
+            } satisfies Reply<typeof growth.markAffiliatePaid>,
         },
-        stray: (v) => v,
+        stray: (v) => v.payouts?.usd ?? v,
         required: ['paid', (v) => delete v.paid],
+    },
+    'GET /billing/affiliates/ledger': {
+        schema: affiliateLedgerStatusResponse,
+        samples: {
+            off: { enabled: false } satisfies Reply<typeof growth.affiliateLedgerStatus>,
+            on: {
+                enabled: true,
+                holdDays: 30,
+                disputes: { readAt: '2026-11-10T04:00:00.000Z', failure: null },
+            } satisfies Reply<typeof growth.affiliateLedgerStatus>,
+            'on, disputes unreadable': {
+                enabled: true,
+                holdDays: 30,
+                disputes: { readAt: null, failure: 'scope' },
+            } satisfies Reply<typeof growth.affiliateLedgerStatus>,
+        },
+        stray: (v) => v.disputes ?? v,
+        required: ['on', (v) => delete v.disputes.failure],
+    },
+    'GET /billing/affiliates/:id/earnings': {
+        schema: affiliateEarningsResponse,
+        samples: {
+            three: earnings satisfies Reply<typeof growth.listAffiliateEarnings>,
+            none: [] satisfies Reply<typeof growth.listAffiliateEarnings>,
+        },
+        top: (v) => v[0] ?? {},
+        stray: (v) => v[1].clawback,
+        strayIn: ['three'],
+        required: ['three', (v) => delete v[1].clawback.confirmed],
+    },
+    'the operators’ changes to one earning': {
+        schema: affiliateDoneResponse,
+        samples: { done: { done: true } satisfies Reply<typeof growth.voidAffiliateEarning> },
+        stray: (v) => v,
+        required: ['done', (v) => delete v.done],
     },
 };
 
@@ -602,6 +793,52 @@ test('drops a field planted inside a per-currency price or earning', async () =>
     const earnings = clone(creator) as any;
     earnings.stats.earnings.usd.orderIds = ['order_x'];
     expect(await serve(affiliateResponse, earnings)).toEqual({ status: 200, body: creator });
+});
+
+/*
+ * A creator's own page never gets what the operators' list carries, whatever the handler hands
+ * the schema: the ledger names what was flagged and voided, and the pause and removal times and
+ * the notice about Polar are the operators' too.
+ */
+test('the affiliate’s own view drops the operators’ ledger even when it is planted', async () => {
+    const summary = clone(cases['GET /billing/referrals']!.samples['nothing yet']) as any;
+    summary.affiliates = [
+        {
+            ...clone(ownCreator),
+            ledger: { usd: usdLedger },
+            pausedAt: '2026-11-01T12:00:00.000Z',
+            removedAt: null,
+            discountNotice: 'still-live',
+            earnings,
+        },
+    ];
+    const { status, body } = await serve(referralsResponse, summary);
+    expect(status).toBe(200);
+    expect((body as any).affiliates).toEqual([ownCreator]);
+    expect(JSON.stringify(body)).not.toMatch(
+        /ledger|flagged|voided|pausedAt|removedAt|discountNotice|order_|Card testing|notes|providerDiscountId|pendingEmail|userId/,
+    );
+});
+
+/* A ledger amount is whole minor units as digits: anything else is a bug upstream, never sent. */
+test('refuses a ledger amount that is not a string of digits', async () => {
+    for (const bad of [2000, '20.00', '-2000', '2e3', '', null]) {
+        const ledger = clone(safeCreator) as any;
+        ledger.ledger.usd.payable = bad;
+        expect((await serve(affiliateResponse, ledger)).status, String(bad)).toBe(500);
+        const row = clone(earnings) as any;
+        row[1].clawback.open = bad;
+        expect((await serve(affiliateEarningsResponse, row)).status, String(bad)).toBe(500);
+        const payout = { paid: 1, payouts: { usd: { owed: '1', netted: '0', payout: bad } } };
+        expect((await serve(affiliatePaidResponse, payout)).status, String(bad)).toBe(500);
+        const own = clone(cases['GET /billing/referrals']!.samples['nothing yet']) as any;
+        own.affiliates = [{ ...clone(ownCreator) }];
+        own.affiliates[0].totals.usd.toReturn = bad;
+        expect((await serve(referralsResponse, own)).status, String(bad)).toBe(500);
+    }
+    const state = clone(earnings) as any;
+    state[0].state = 'owed';
+    expect((await serve(affiliateEarningsResponse, state)).status).toBe(500);
 });
 
 /* A price is whole minor units: a decimal amount is a bug upstream, never sent as a price. */
@@ -681,6 +918,13 @@ const expectedSchemas: Record<string, AnySchema> = {
     'PATCH /api/billing/affiliates/:id': affiliateResponse,
     'DELETE /api/billing/affiliates/:id': affiliateDeletedResponse,
     'POST /api/billing/affiliates/:id/paid': affiliatePaidResponse,
+    'GET /api/billing/affiliates/ledger': affiliateLedgerStatusResponse,
+    'GET /api/billing/affiliates/:id/earnings': affiliateEarningsResponse,
+    'POST /api/billing/affiliates/:id/earnings/:earning/void': affiliateDoneResponse,
+    'POST /api/billing/affiliates/:id/earnings/:earning/release': affiliateDoneResponse,
+    'POST /api/billing/affiliates/:id/earnings/:earning/clawback/confirm': affiliateDoneResponse,
+    'POST /api/billing/affiliates/:id/earnings/:earning/clawback/settle': affiliateDoneResponse,
+    'DELETE /api/billing/affiliates/:id/record': affiliateDeletedResponse,
 };
 
 test('each billing route carries its reply schema', async () => {

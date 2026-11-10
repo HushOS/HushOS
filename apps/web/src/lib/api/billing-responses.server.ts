@@ -201,7 +201,32 @@ export const groupPlanResponse = t.Object({
 
 const duration = t.Union([t.Literal('once'), t.Literal('forever'), t.Literal('repeating')]);
 
-/* AffiliateView: commission earned per currency, minor units, paid out or still owed. */
+const affiliateStats = t.Object({
+    signups: t.Integer(),
+    orders: t.Integer(),
+    earnings: t.Record(t.String(), t.Object({ unpaid: t.Integer(), paid: t.Integer() })),
+});
+
+/* LedgerTotals: with commission safety on. Minor units as decimal strings, so no total is rounded. */
+const amount = t.String({ pattern: '^[0-9]+$' });
+const ledgerTotals = t.Object({
+    earned: amount,
+    payable: amount,
+    held: amount,
+    flagged: amount,
+    paidOut: amount,
+    voided: amount,
+    lowered: amount,
+    clawbackOpen: amount,
+    clawbackUnconfirmed: amount,
+    netted: amount,
+    payout: amount,
+});
+
+/*
+ * AffiliateView: commission earned per currency, minor units, paid out or still owed. The last
+ * four fields exist only with commission safety on (AFFILIATE_V2_ENABLED).
+ */
 const affiliate = t.Object({
     id: t.String(),
     name: t.String(),
@@ -218,11 +243,51 @@ const affiliate = t.Object({
     notes: t.Nullable(t.String()),
     providerDiscountId: t.Nullable(t.String()),
     createdAt: t.String(),
-    stats: t.Object({
-        signups: t.Integer(),
-        orders: t.Integer(),
-        earnings: t.Record(t.String(), t.Object({ unpaid: t.Integer(), paid: t.Integer() })),
-    }),
+    stats: affiliateStats,
+    pausedAt: t.Optional(t.Nullable(t.String())),
+    removedAt: t.Optional(t.Nullable(t.String())),
+    ledger: t.Optional(t.Record(t.String(), ledgerTotals)),
+    discountNotice: t.Optional(t.Union([t.Literal('still-live'), t.Literal('still-ended')])),
+});
+
+/*
+ * A creator on their own Invite friends page. Without commission safety it is the operators'
+ * view, as it always was. With it, the affiliate's own (OwnAffiliateView): the four fields an
+ * operator keeps about them are left out by the handler, so they are optional here, and `totals`
+ * says what is held, under review, reversed and to be returned. Never `ledger`, which names what
+ * an operator flagged or voided.
+ */
+const ownAffiliate = t.Object({
+    id: t.String(),
+    name: t.String(),
+    slug: t.String(),
+    code: t.String(),
+    url: t.String(),
+    percentOff: t.Integer(),
+    duration,
+    durationMonths: t.Nullable(t.Integer()),
+    commissionBps: t.Integer(),
+    active: t.Boolean(),
+    userId: t.Optional(t.Nullable(t.String())),
+    pendingEmail: t.Optional(t.Nullable(t.String())),
+    notes: t.Optional(t.Nullable(t.String())),
+    providerDiscountId: t.Optional(t.Nullable(t.String())),
+    createdAt: t.String(),
+    stats: affiliateStats,
+    totals: t.Optional(
+        t.Record(
+            t.String(),
+            t.Object({
+                earned: amount,
+                paidOut: amount,
+                payable: amount,
+                held: amount,
+                underReview: amount,
+                reversed: amount,
+                toReturn: amount,
+            }),
+        ),
+    ),
 });
 
 const rewards = t.Object({
@@ -239,7 +304,7 @@ export const referralsResponse = t.Object({
     joined: t.Integer(),
     signup: rewards,
     paid: rewards,
-    affiliates: t.Array(affiliate),
+    affiliates: t.Array(ownAffiliate),
 });
 
 /* GET /billing/affiliates: newest first. */
@@ -254,5 +319,71 @@ export const handleResponse = t.Object({ free: t.Boolean() });
 /* DELETE /billing/affiliates/:id. */
 export const affiliateDeletedResponse = t.Object({ deleted: t.Literal(true) });
 
-/* POST /billing/affiliates/:id/paid: how many earnings were marked paid. */
-export const affiliatePaidResponse = t.Object({ paid: t.Integer() });
+/*
+ * POST /billing/affiliates/:id/paid: how many earnings were marked paid. With commission safety
+ * on, also what each currency's payout came to: owed, taken by open clawbacks, and sent.
+ */
+export const affiliatePaidResponse = t.Object({
+    paid: t.Integer(),
+    payouts: t.Optional(
+        t.Record(t.String(), t.Object({ owed: amount, netted: amount, payout: amount })),
+    ),
+});
+
+/* GET /billing/affiliates/ledger (AffiliateLedgerStatus): whether commission safety is on, and the disputes read. */
+export const affiliateLedgerStatusResponse = t.Union([
+    t.Object({ enabled: t.Literal(false) }),
+    t.Object({
+        enabled: t.Literal(true),
+        holdDays: t.Integer(),
+        disputes: t.Object({
+            readAt: t.Nullable(t.String()),
+            failure: t.Nullable(t.Union([t.Literal('scope'), t.Literal('failed')])),
+        }),
+    }),
+]);
+
+/* GET /billing/affiliates/:id/earnings (AffiliateEarningView[]): one affiliate's ledger, newest first. */
+export const affiliateEarningsResponse = t.Array(
+    t.Object({
+        id: t.String(),
+        orderId: t.String(),
+        userId: t.Nullable(t.String()),
+        currency: t.String(),
+        recordedAt: t.String(),
+        net: amount,
+        pot: amount,
+        left: amount,
+        state: t.Union([
+            t.Literal('payable'),
+            t.Literal('held'),
+            t.Literal('flagged'),
+            t.Literal('paid'),
+            t.Literal('voided'),
+        ]),
+        payableAt: t.Nullable(t.String()),
+        paidAt: t.Nullable(t.String()),
+        paid: t.Nullable(amount),
+        refunded: amount,
+        // Polar's status, a plain string: Polar may add one, and an unknown one reads as open.
+        dispute: t.Nullable(t.String()),
+        flag: t.Nullable(t.Union([t.Literal('self'), t.Literal('member'), t.Literal('dispute')])),
+        clawback: t.Nullable(
+            t.Object({
+                amount,
+                open: amount,
+                settled: amount,
+                writtenOff: amount,
+                cutover: t.Boolean(),
+                confirmed: t.Boolean(),
+                settledAt: t.Nullable(t.String()),
+                note: t.Nullable(t.String()),
+            }),
+        ),
+        voidedAt: t.Nullable(t.String()),
+        voidReason: t.Nullable(t.String()),
+    }),
+);
+
+/* The operators' changes to one earning: void, release, confirm and settle. */
+export const affiliateDoneResponse = t.Object({ done: t.Literal(true) });

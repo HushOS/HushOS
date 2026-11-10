@@ -13,6 +13,9 @@ import {
 } from '@/lib/api/shared.server';
 import {
     affiliateDeletedResponse,
+    affiliateDoneResponse,
+    affiliateEarningsResponse,
+    affiliateLedgerStatusResponse,
     affiliatePaidResponse,
     affiliateResponse,
     affiliatesResponse,
@@ -29,6 +32,10 @@ import {
     summaryResponse,
     urlResponse,
 } from '@/lib/api/billing-responses.server';
+
+/* An amount in a currency's smallest unit, as a decimal string: a number would round a large one. */
+const minorUnits = t.String({ pattern: '^(0|[1-9][0-9]{0,17})$' });
+const earningParams = t.Object({ id: uuidSchema, earning: uuidSchema });
 
 /* Plans, checkout, families' billing, referrals and affiliates (/api/billing). */
 export const billingApi = new Elysia()
@@ -309,11 +316,109 @@ export const billingApi = new Elysia()
                 '/billing/affiliates/:id/paid',
                 {
                     params: t.Object({ id: uuidSchema }),
-                    body: t.Object({}),
+                    // `expected`, with commission safety on: the payout the operator was shown,
+                    // per currency. If the ledger has moved since, nothing is marked (409).
+                    body: t.Object({
+                        expected: t.Optional(
+                            t.Record(
+                                t.String({ pattern: '^[a-z]{3}$' }),
+                                t.Object({ owed: minorUnits, netted: minorUnits }),
+                            ),
+                        ),
+                    }),
                     response: { 200: affiliatePaidResponse },
                 },
-                async ({ params }) => {
-                    return growth.markAffiliatePaid(params.id);
+                async ({ params, body, operator }) => {
+                    return growth.markAffiliatePaid(params.id, {
+                        by: operator.id,
+                        expected: body.expected,
+                    });
                 },
+            )
+            // Everything below is commission safety (AFFILIATE_V2_ENABLED): the status answers
+            // `enabled: false` without it, and the rest answer 404.
+            .get(
+                '/billing/affiliates/ledger',
+                { response: { 200: affiliateLedgerStatusResponse } },
+                async ({ set }) => {
+                    set.headers['Cache-Control'] = 'no-store';
+                    return growth.affiliateLedgerStatus();
+                },
+            )
+            .get(
+                '/billing/affiliates/:id/earnings',
+                {
+                    params: t.Object({ id: uuidSchema }),
+                    response: { 200: affiliateEarningsResponse },
+                },
+                async ({ params, set }) => {
+                    set.headers['Cache-Control'] = 'no-store';
+                    return growth.listAffiliateEarnings(params.id);
+                },
+            )
+            .post(
+                '/billing/affiliates/:id/earnings/:earning/void',
+                {
+                    params: earningParams,
+                    body: t.Object({ reason: t.String({ minLength: 1, maxLength: 500 }) }),
+                    response: { 200: affiliateDoneResponse },
+                },
+                async ({ params, body, operator }) =>
+                    growth.voidAffiliateEarning(params.id, params.earning, {
+                        by: operator.id,
+                        reason: body.reason,
+                    }),
+            )
+            .post(
+                '/billing/affiliates/:id/earnings/:earning/release',
+                {
+                    params: earningParams,
+                    body: t.Object({}),
+                    response: { 200: affiliateDoneResponse },
+                },
+                async ({ params, operator }) =>
+                    growth.releaseAffiliateEarning(params.id, params.earning, operator.id),
+            )
+            .post(
+                '/billing/affiliates/:id/earnings/:earning/clawback/confirm',
+                {
+                    params: earningParams,
+                    body: t.Object({}),
+                    response: { 200: affiliateDoneResponse },
+                },
+                async ({ params, operator }) =>
+                    growth.confirmAffiliateClawback(params.id, params.earning, operator.id),
+            )
+            .post(
+                '/billing/affiliates/:id/earnings/:earning/clawback/settle',
+                {
+                    params: earningParams,
+                    body: t.Union([
+                        t.Object({
+                            kind: t.Literal('repaid'),
+                            amount: minorUnits,
+                            note: t.Optional(t.Nullable(t.String({ maxLength: 500 }))),
+                        }),
+                        t.Object({
+                            kind: t.Literal('written-off'),
+                            note: t.String({ minLength: 1, maxLength: 500 }),
+                        }),
+                    ]),
+                    response: { 200: affiliateDoneResponse },
+                },
+                async ({ params, body, operator }) =>
+                    growth.settleAffiliateClawback(params.id, params.earning, {
+                        ...body,
+                        by: operator.id,
+                    }),
+            )
+            .delete(
+                '/billing/affiliates/:id/record',
+                {
+                    params: t.Object({ id: uuidSchema }),
+                    body: t.Object({}),
+                    response: { 200: affiliateDeletedResponse },
+                },
+                async ({ params }) => growth.deleteAffiliateRecord(params.id),
             ),
     );

@@ -1,19 +1,28 @@
 import { growthRepository } from '@hushos/db';
 import { appEnv } from '@hushos/env/app';
 import type {
+    AffiliateEarningView,
     AffiliateInput,
+    AffiliateLedgerStatus,
     AffiliateView,
+    ClawbackSettlement,
+    ExpectedPayouts,
+    LedgerTotals,
     OfferLanding,
+    OwnAffiliateView,
     ReferralLanding,
     ReferralSummary,
 } from './api';
+import { affiliateV2, ensureCutover } from './commission';
 import {
     BillingError,
     billingEnabled,
     createProviderDiscount,
     deleteProviderDiscount,
+    endProviderDiscount,
     findProviderDiscount,
     listCatalogue,
+    reopenProviderDiscount,
     updateProviderDiscount,
 } from './server';
 
@@ -69,9 +78,60 @@ function affiliateUrl(slug: string) {
     return `${appEnv.APP_ORIGIN}/go/${slug}`;
 }
 
-async function view(row: Awaited<ReturnType<typeof growthRepository.getAffiliate>>) {
+type AffiliateRow = NonNullable<Awaited<ReturnType<typeof growthRepository.getAffiliate>>>;
+
+/* The whole number a total is, for the figures older clients read; the ledger's strings are exact. */
+const asNumber = (value: bigint) => Number(value);
+
+/* A currency's totals as the API carries them, with what the next payout comes to. */
+function ledgerView(ledger: Record<string, growthRepository.LedgerTotals>) {
+    const view: Record<string, LedgerTotals> = {};
+    for (const [currency, totals] of Object.entries(ledger)) {
+        const { netted, payout } = growthRepository.payoutOf(totals);
+        view[currency] = {
+            earned: totals.earned.toString(),
+            payable: totals.payable.toString(),
+            held: totals.held.toString(),
+            flagged: totals.flagged.toString(),
+            paidOut: totals.paidOut.toString(),
+            voided: totals.voided.toString(),
+            lowered: totals.lowered.toString(),
+            clawbackOpen: totals.clawbackOpen.toString(),
+            clawbackUnconfirmed: totals.clawbackUnconfirmed.toString(),
+            netted: netted.toString(),
+            payout: payout.toString(),
+        };
+    }
+    return view;
+}
+
+/*
+ * Sign-ups, orders and money. With commission safety on the money comes from the ledger: unpaid
+ * is everything recorded and not yet paid (payable, held and flagged; never a voided earning),
+ * and paid is what was paid out.
+ */
+async function statsFor(
+    row: AffiliateRow,
+    known?: Awaited<ReturnType<typeof growthRepository.affiliateStats>>,
+) {
+    const stats = known ?? (await growthRepository.affiliateStats(row.id));
+    if (!affiliateV2()) return { stats, ledger: null };
+    const ledger = await growthRepository.affiliateLedger(row.id);
+    const earnings: typeof stats.earnings = {};
+    for (const [currency, totals] of Object.entries(ledger))
+        earnings[currency] = {
+            unpaid: asNumber(totals.payable + totals.held + totals.flagged),
+            paid: asNumber(totals.paidOut),
+        };
+    return { stats: { ...stats, earnings }, ledger };
+}
+
+async function view(
+    row: Awaited<ReturnType<typeof growthRepository.getAffiliate>>,
+    known?: Awaited<ReturnType<typeof growthRepository.affiliateStats>>,
+) {
     if (!row) throw new BillingError('That affiliate does not exist.', 404);
-    const stats = await growthRepository.affiliateStats(row.id);
+    const { stats, ledger } = await statsFor(row, known);
     return {
         id: row.id,
         name: row.name,
@@ -89,7 +149,50 @@ async function view(row: Awaited<ReturnType<typeof growthRepository.getAffiliate
         providerDiscountId: row.providerDiscountId,
         createdAt: row.createdAt.toISOString(),
         stats,
+        ...(ledger
+            ? {
+                  pausedAt: row.pausedAt?.toISOString() ?? null,
+                  removedAt: row.removedAt?.toISOString() ?? null,
+                  ledger: ledgerView(ledger),
+              }
+            : {}),
     } satisfies AffiliateView;
+}
+
+/*
+ * The affiliate's own view, with commission safety on: built field by field, so nothing an
+ * operator keeps about them (notes, the discount's id at Polar, a pending email) can reach it,
+ * and in totals only, so no order, customer, flag or reason does either. A cut-over clawback no
+ * operator has confirmed is not theirs to see yet.
+ */
+async function ownView(row: AffiliateRow) {
+    const { stats, ledger } = await statsFor(row);
+    const totals: NonNullable<OwnAffiliateView['totals']> = {};
+    for (const [currency, of] of Object.entries(ledger ?? {}))
+        totals[currency] = {
+            earned: of.earned.toString(),
+            paidOut: of.paidOut.toString(),
+            payable: of.payable.toString(),
+            held: of.held.toString(),
+            underReview: of.flagged.toString(),
+            reversed: (of.lowered + of.voided).toString(),
+            toReturn: of.clawbackOpen.toString(),
+        };
+    return {
+        id: row.id,
+        name: row.name,
+        slug: row.slug,
+        code: row.code,
+        url: affiliateUrl(row.slug),
+        percentOff: row.percentOff,
+        duration: row.duration,
+        durationMonths: row.durationMonths,
+        commissionBps: row.commissionBps,
+        active: row.active,
+        createdAt: row.createdAt.toISOString(),
+        stats,
+        totals,
+    } satisfies OwnAffiliateView;
 }
 
 export async function getReferralSummary(userId: string): Promise<ReferralSummary> {
@@ -97,7 +200,9 @@ export async function getReferralSummary(userId: string): Promise<ReferralSummar
     const summary = await growthRepository.getReferralSummary(userId);
     // A creator enrolled under this account's email before it existed becomes its own here.
     await growthRepository.linkPendingAffiliates(userId);
-    const affiliates = await growthRepository.listAffiliatesForUser(userId);
+    const all = await growthRepository.listAffiliatesForUser(userId);
+    // A removed creator has no page or code left to show: their ledger is the operators'.
+    const affiliates = affiliateV2() ? all.filter((row) => !row.removedAt) : all;
     return {
         code: summary.code,
         url: `${appEnv.APP_ORIGIN}/r/${summary.code}`,
@@ -114,7 +219,9 @@ export async function getReferralSummary(userId: string): Promise<ReferralSummar
             bonusBytes: settings.paidBonusBytes.toString(),
             capBytes: settings.paidCapBytes.toString(),
         },
-        affiliates: await Promise.all(affiliates.map(view)),
+        affiliates: await Promise.all(
+            affiliates.map((row) => (affiliateV2() ? ownView(row) : view(row))),
+        ),
     };
 }
 
@@ -225,27 +332,12 @@ export async function rememberCoupon(userId: string, code: string) {
 }
 
 export async function listAffiliates() {
+    // The first thing an operator does with commission safety on is the cut-over, if nothing was yet.
+    if (affiliateV2()) await ensureCutover();
     // Pending emails whose accounts now exist are linked before the operator sees them.
     await growthRepository.linkAllPendingAffiliates();
     const rows = await growthRepository.listAffiliates();
-    return rows.map((row) => ({
-        id: row.id,
-        name: row.name,
-        slug: row.slug,
-        code: row.code,
-        url: affiliateUrl(row.slug),
-        percentOff: row.percentOff,
-        duration: row.duration,
-        durationMonths: row.durationMonths,
-        commissionBps: row.commissionBps,
-        active: row.active,
-        userId: row.userId,
-        pendingEmail: row.pendingEmail,
-        notes: row.notes,
-        providerDiscountId: row.providerDiscountId,
-        createdAt: row.createdAt.toISOString(),
-        stats: row.stats,
-    })) satisfies AffiliateView[];
+    return Promise.all(rows.map((row) => view(row, row.stats))) satisfies Promise<AffiliateView[]>;
 }
 
 /*
@@ -372,19 +464,24 @@ const TERMS = [
 export async function updateAffiliate(
     id: string,
     patch: Partial<AffiliateInput> & { active?: boolean },
-) {
+): Promise<AffiliateView> {
     // Pause, unlink and notes name no term: they write their own columns only, outside
     // the lock, and cannot put back terms a save changed while they ran.
     if (!TERMS.some((key) => patch[key] !== undefined)) {
-        if (!(await growthRepository.getAffiliate(id)))
-            throw new BillingError('That affiliate does not exist.', 404);
-        return view(await growthRepository.updateAffiliate(id, await otherChanges(patch)));
+        const current = await growthRepository.getAffiliate(id);
+        if (!current) throw new BillingError('That affiliate does not exist.', 404);
+        refuseRemoved(current);
+        const row = await growthRepository.updateAffiliate(id, await otherChanges(patch, current));
+        return withDiscountNotice(await view(row), current, patch);
     }
     // A change of terms holds the affiliate's lock from its read to its write, so the
     // provider and the row end on the same terms whichever of two saves came first.
+    let before: AffiliateRow | null = null;
     const row = await underAffiliateLock(id, async (tx) => {
         const row = await growthRepository.getAffiliate(id, tx);
         if (!row) throw new BillingError('That affiliate does not exist.', 404);
+        refuseRemoved(row);
+        before = row;
         const merged: AffiliateInput = {
             name: patch.name ?? row.name,
             slug: patch.slug ?? row.slug,
@@ -427,12 +524,39 @@ export async function updateAffiliate(
                 duration: merged.duration,
                 durationMonths,
                 commissionBps: merged.commissionBps,
-                ...(await otherChanges(patch, tx)),
+                ...(await otherChanges(patch, row, tx)),
             },
             tx,
         );
     });
-    return view(row);
+    return withDiscountNotice(await view(row), before, patch);
+}
+
+/* With commission safety on a removed affiliate's record is kept, and is not to be changed or resumed. */
+function refuseRemoved(row: AffiliateRow) {
+    if (affiliateV2() && row.removedAt)
+        throw new BillingError('That affiliate was removed. Their record can’t be changed.', 409);
+}
+
+/*
+ * After a pause or a resume with commission safety on: Polar is asked to end the discount now, or
+ * to take that end off again, and the answer says when it would not. The pause itself has
+ * already been written and stands either way: it is what stops the earning.
+ */
+async function withDiscountNotice(
+    answer: AffiliateView,
+    before: AffiliateRow | null,
+    patch: { active?: boolean },
+): Promise<AffiliateView> {
+    if (!affiliateV2() || patch.active === undefined || !before) return answer;
+    if (before.active === patch.active || !before.providerDiscountId) return answer;
+    if (patch.active)
+        return (await reopenProviderDiscount(before.providerDiscountId))
+            ? answer
+            : { ...answer, discountNotice: 'still-ended' };
+    return (await endProviderDiscount(before.providerDiscountId))
+        ? answer
+        : { ...answer, discountNotice: 'still-live' };
 }
 
 /*
@@ -454,16 +578,25 @@ async function underAffiliateLock<T>(
     }
 }
 
-/* The columns a patch sets besides the terms: notes, the account, and whether it is live. */
+/*
+ * The columns a patch sets besides the terms: notes, the account, and whether it is live. With
+ * commission safety on a pause is written with its time, and a resume clears it; pausing someone
+ * already paused keeps the time they were first paused.
+ */
 async function otherChanges(
     patch: Partial<AffiliateInput> & { active?: boolean },
+    current: AffiliateRow,
     executor?: growthRepository.Executor,
 ) {
     const changes: Parameters<typeof growthRepository.updateAffiliate>[1] = {};
     if (patch.notes !== undefined) changes.notes = patch.notes?.trim() || null;
     if (patch.userEmail !== undefined)
         Object.assign(changes, await accountForEmail(patch.userEmail, executor));
-    if (patch.active !== undefined) changes.active = patch.active;
+    if (patch.active !== undefined) {
+        changes.active = patch.active;
+        if (affiliateV2())
+            changes.pausedAt = patch.active ? null : (current.pausedAt ?? new Date());
+    }
     return changes;
 }
 
@@ -471,8 +604,11 @@ async function otherChanges(
  * Removes an affiliate: the discount at the provider first, so the code stops
  * applying at checkout even if the row outlives it, then the row, with the
  * attributions and the ledger of what was paid. Commission still owed blocks it.
+ *
+ * With commission safety on the record and its ledger are kept instead (`removeAffiliate`).
  */
 export async function deleteAffiliate(id: string) {
+    if (affiliateV2()) return removeAffiliate(id);
     // Under the affiliate's lock: a removal never interleaves with a change of terms.
     return underAffiliateLock(id, async (tx) => {
         // Locked before anything owed is counted: an earning recorded while Polar deletes the
@@ -492,10 +628,249 @@ export async function deleteAffiliate(id: string) {
     });
 }
 
-export async function markAffiliatePaid(id: string) {
+const LEDGER_OPEN =
+    'This affiliate still has commission that is owed, held or flagged, or a clawback that is not settled. Pay, void or settle each one first, or pause them instead.';
+
+/*
+ * Removes an affiliate with commission safety on: their page and code go, the discount is ended
+ * at Polar as a pause ends it (never deleted), nothing ties or earns from then on, and the row
+ * and its ledger stay, with its dispute records and settled clawbacks. Refused while anything is
+ * owed, held or flagged, or a clawback is not settled.
+ */
+async function removeAffiliate(id: string) {
+    return underAffiliateLock(id, async (tx) => {
+        // Locked first, as above: an earning recorded meanwhile waits, then finds them removed.
+        const row = await growthRepository.getAffiliate(id, tx, { forUpdate: true });
+        if (!row) throw new BillingError('That affiliate does not exist.', 404);
+        if (row.removedAt) throw new BillingError('That affiliate was already removed.', 409);
+        const now = new Date();
+        if (
+            growthRepository.ledgerBlocksRemoval(
+                await growthRepository.affiliateLedger(id, now, tx),
+            )
+        )
+            throw new BillingError(LEDGER_OPEN, 409);
+        await growthRepository.updateAffiliate(
+            id,
+            { active: false, pausedAt: row.pausedAt ?? now, removedAt: now },
+            tx,
+        );
+        if (row.providerDiscountId) await endProviderDiscount(row.providerDiscountId);
+        return { deleted: true as const };
+    });
+}
+
+/*
+ * Deletes a removed affiliate's record for good, with the attributions and the ledger. Only once
+ * they were removed and nothing on the ledger is owed, held, flagged or unsettled; the operators'
+ * page downloads the ledger first. The discount at Polar is left ended, never deleted.
+ */
+export async function deleteAffiliateRecord(id: string) {
+    requireV2();
+    return underAffiliateLock(id, async (tx) => {
+        const row = await growthRepository.getAffiliate(id, tx, { forUpdate: true });
+        if (!row) throw new BillingError('That affiliate does not exist.', 404);
+        if (!row.removedAt)
+            throw new BillingError(
+                'Remove this affiliate first. Then their record can be deleted.',
+                409,
+            );
+        if (
+            growthRepository.ledgerBlocksRemoval(
+                await growthRepository.affiliateLedger(id, new Date(), tx),
+            )
+        )
+            throw new BillingError(LEDGER_OPEN, 409);
+        await growthRepository.deleteAffiliate(id, tx);
+        return { deleted: true as const };
+    });
+}
+
+/*
+ * An operator has paid the affiliate. Without commission safety, everything unpaid is marked.
+ * With it, only what may be paid (past its hold, not flagged, not voided), and what open
+ * clawbacks took of the payout is applied to them by amount. `expected` is what the operator was
+ * shown; if the ledger has moved since, nothing is marked and they are told to look again.
+ */
+export async function markAffiliatePaid(
+    id: string,
+    input: { by?: string | null; expected?: ExpectedPayouts } = {},
+) {
     if (!(await growthRepository.getAffiliate(id)))
         throw new BillingError('That affiliate does not exist.', 404);
-    return { paid: await growthRepository.markEarningsPaid(id) };
+    if (!affiliateV2()) return { paid: await growthRepository.markEarningsPaid(id) };
+    try {
+        const result = await growthRepository.settlePayout(id, {
+            by: input.by ?? null,
+            expected: input.expected,
+        });
+        return {
+            paid: result.paid,
+            payouts: Object.fromEntries(
+                Object.entries(result.payouts).map(([currency, payout]) => [
+                    currency,
+                    {
+                        owed: payout.owed.toString(),
+                        netted: payout.netted.toString(),
+                        payout: payout.payout.toString(),
+                    },
+                ]),
+            ),
+        };
+    } catch (error) {
+        if (error instanceof growthRepository.PayoutChangedError)
+            throw new BillingError(
+                'The amounts changed since this page loaded. Check the figures, then mark it paid again.',
+                409,
+                { cause: error },
+            );
+        throw error;
+    }
+}
+
+/* The routes below exist only with commission safety on. */
+function requireV2() {
+    if (!affiliateV2()) throw new BillingError('That is not available on this server.', 404);
+}
+
+/* Whether commission safety is on, how long a new earning is held, and how the last read of Polar's disputes went. */
+export async function affiliateLedgerStatus(): Promise<AffiliateLedgerStatus> {
+    if (!affiliateV2()) return { enabled: false };
+    const state = await ensureCutover();
+    return {
+        enabled: true,
+        holdDays: growthRepository.AFFILIATE_HOLD_DAYS,
+        disputes: {
+            readAt: state.disputesReadAt?.toISOString() ?? null,
+            failure: state.disputesFailure,
+        },
+    };
+}
+
+/* One affiliate's earnings, newest first, as the operators' ledger and its download show them. */
+export async function listAffiliateEarnings(id: string): Promise<AffiliateEarningView[]> {
+    requireV2();
+    if (!(await growthRepository.getAffiliate(id)))
+        throw new BillingError('That affiliate does not exist.', 404);
+    const now = new Date();
+    const rows = await growthRepository.listLedgerRows(id);
+    return rows.map((row) => ({
+        id: row.id,
+        orderId: row.orderId,
+        userId: row.userId,
+        currency: row.currency,
+        recordedAt: row.createdAt.toISOString(),
+        net: row.netAmount.toString(),
+        pot: (row.potAmount ?? row.commissionAmount).toString(),
+        left: row.commissionAmount.toString(),
+        state: growthRepository.earningState(row, now),
+        payableAt: row.payableAt?.toISOString() ?? null,
+        paidAt: row.paidAt?.toISOString() ?? null,
+        paid: row.paidAt ? (row.paidAmount ?? row.commissionAmount).toString() : null,
+        refunded: row.refundedAmount.toString(),
+        dispute: row.disputeStatus,
+        flag:
+            row.flag && !row.flagReleasedAt
+                ? row.flag
+                : growthRepository.disputeOpen(row.disputeStatus)
+                  ? 'dispute'
+                  : null,
+        clawback:
+            row.clawbackAmount > 0n || row.clawbackSettledAmount > 0n
+                ? {
+                      amount: row.clawbackAmount.toString(),
+                      open: growthRepository.clawbackOpen(row).toString(),
+                      settled: row.clawbackSettledAmount.toString(),
+                      writtenOff: row.clawbackWrittenOffAmount.toString(),
+                      cutover: row.clawbackOrigin === 'cutover',
+                      confirmed:
+                          row.clawbackOrigin !== 'cutover' || Boolean(row.clawbackConfirmedAt),
+                      settledAt: row.clawbackSettledAt?.toISOString() ?? null,
+                      note: row.clawbackNote,
+                  }
+                : null,
+        voidedAt: row.voidedAt?.toISOString() ?? null,
+        voidReason: row.voidReason,
+    }));
+}
+
+const NO_EARNING = 'That earning does not exist.';
+
+/* An operator voids one earning, with a reason: for fraud that neither a refund nor a dispute shows. */
+export async function voidAffiliateEarning(
+    id: string,
+    earningId: string,
+    input: { by: string; reason: string },
+) {
+    requireV2();
+    const reason = input.reason.trim();
+    if (!reason || reason.length > 500)
+        throw new BillingError('Say why this earning is voided, in up to 500 characters.');
+    const outcome = await growthRepository.voidEarning(id, earningId, { by: input.by, reason });
+    if (outcome === 'missing') throw new BillingError(NO_EARNING, 404);
+    if (outcome === 'paid')
+        throw new BillingError(
+            'This earning was already paid, so it can’t be voided. Money paid out is taken back as a clawback, after a refund or a lost dispute.',
+            409,
+        );
+    return { done: true as const };
+}
+
+/* An operator has looked at a flagged earning and lets it be paid. */
+export async function releaseAffiliateEarning(id: string, earningId: string, by: string) {
+    requireV2();
+    const outcome = await growthRepository.releaseEarningFlag(id, earningId, { by });
+    if (outcome === 'missing') throw new BillingError(NO_EARNING, 404);
+    if (outcome === 'unflagged')
+        throw new BillingError(
+            'Nothing on this earning is yours to release. One held for a dispute is released when the dispute closes.',
+            409,
+        );
+    return { done: true as const };
+}
+
+/* An operator says yes to one clawback the cut-over made. */
+export async function confirmAffiliateClawback(id: string, earningId: string, by: string) {
+    requireV2();
+    const outcome = await growthRepository.confirmClawback(id, earningId, { by });
+    if (outcome === 'missing') throw new BillingError(NO_EARNING, 404);
+    if (outcome === 'none')
+        throw new BillingError('This earning has no clawback waiting to be confirmed.', 409);
+    return { done: true as const };
+}
+
+/* An operator settles a clawback by hand: an amount repaid, or what is open written off with a note. */
+export async function settleAffiliateClawback(
+    id: string,
+    earningId: string,
+    input: ClawbackSettlement & { by: string },
+) {
+    requireV2();
+    const note = input.note?.trim() || null;
+    if (note && note.length > 500) throw new BillingError('A note is up to 500 characters.');
+    let outcome: Awaited<ReturnType<typeof growthRepository.settleClawback>>;
+    if (input.kind === 'written-off') {
+        if (!note) throw new BillingError('Say why this is written off.');
+        outcome = await growthRepository.settleClawback(id, earningId, {
+            kind: 'written-off',
+            note,
+            by: input.by,
+        });
+    } else {
+        if (!/^[1-9][0-9]{0,17}$/.test(input.amount))
+            throw new BillingError('Give the amount repaid, in the currency’s smallest unit.');
+        outcome = await growthRepository.settleClawback(id, earningId, {
+            kind: 'repaid',
+            amount: BigInt(input.amount),
+            note,
+            by: input.by,
+        });
+    }
+    if (outcome === 'missing') throw new BillingError(NO_EARNING, 404);
+    if (outcome === 'none') throw new BillingError('Nothing is open on this clawback.', 409);
+    if (outcome === 'amount')
+        throw new BillingError('That is more than is open on this clawback.', 409);
+    return { done: true as const };
 }
 
 export { billingEnabled };

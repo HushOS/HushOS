@@ -8,6 +8,17 @@ export const billingEnv = createEnv({
         POLAR_WEBHOOK_SECRET: z.string().min(1).optional(),
         POLAR_ENVIRONMENT: z.enum(['sandbox', 'production']).default('production'),
         BILLING_GRACE_DAYS: z.coerce.number().int().min(0).max(30).default(3),
+        /*
+         * Commission safety (docs/company-billing-design.md 8.4, 8.5): refunds and disputes lower
+         * an affiliate's earning, new earnings are held before they can be paid, money paid on an
+         * order that was later refunded is taken back by amount, and removing an affiliate keeps
+         * their ledger. Off, affiliates work exactly as before it existed. Turning it on changes
+         * what affiliates already enrolled are owed (docs/self-hosting.md, Affiliates).
+         */
+        AFFILIATE_V2_ENABLED: z
+            .enum(['true', 'false'])
+            .default('false')
+            .transform((value) => value === 'true'),
     },
     runtimeEnv: process.env,
     emptyStringAsUndefined: true,
