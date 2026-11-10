@@ -1,9 +1,12 @@
 import {
     AFTER_LEAVING,
     EMPLOYEE_LIST,
+    HEADS_INCOMPLETE,
     HEADS_MISMATCH,
     HEAD_BEHIND,
     HEAD_FORKED,
+    KEYS_REPLACED,
+    LIST_RIVAL,
     LIST_STALE,
     NARROWS,
     NOT_ACTIVE,
@@ -22,6 +25,7 @@ import {
     folderStanding,
     forkDismissalStatement,
     headsDigest,
+    headsToCommit,
     parseAreaList,
     parseForkDismissal,
     readAreaLists,
@@ -49,8 +53,13 @@ import { CryptoError } from './errors';
 import {
     ADMIN_ROLES,
     AREA,
+    AREA_SEED,
+    ENVELOPE,
     GROUP,
     OWNER_ROLES,
+    RECORD,
+    areaKeyAt,
+    recordSignature,
     history,
     orgRowAt,
     pattern,
@@ -63,20 +72,25 @@ import {
 import {
     acceptRosters,
     folderIntegrityOf,
+    groupIntegrityOf,
+    groupWriterTrust,
     type AcceptInput,
     type AcceptedRosters,
     type GroupIntegrity,
     type GroupWriterTrust,
 } from './group-trust';
 import {
+    openAreaGrant,
     parseGroupSuccession,
     rosterDigest,
+    sealAreaGrant,
+    type AreaGrantContext,
     type AreaKind,
     type RosterArea,
     type RosterMember,
 } from './groups';
 import { decode, encode } from './keys';
-import { signHybrid } from './signatures';
+import { metadataStatements, signHybrid } from './signatures';
 
 /*
  * A company's folders for the list tests and the shared company fixtures
@@ -104,6 +118,9 @@ export const LIST_REFUSALS = {
     notSigned: NOT_LIST_SIGNED,
     notOnChain: NOT_ON_CHAIN,
     notTheBase: NOT_THE_BASE,
+    keysReplaced: KEYS_REPLACED,
+    rival: LIST_RIVAL,
+    incomplete: HEADS_INCOMPLETE,
     record: 'Invalid list record.',
     headsRecord: 'Invalid heads record.',
 } as const;
@@ -313,6 +330,10 @@ export async function listWorld(options: { folders?: boolean } = {}) {
             return list;
         },
         /* What the server serves of folder `n` now. */
+        /* The base list of folder `n`'s next key version, as its rotator would sign it now. */
+        baseList(n: number, signer: Person, o: BaseOptions) {
+            return base(n, (folders.get(n)?.keyVersion ?? 0) + 1, signer, o);
+        },
         served(n: number) {
             return [...folders.get(n)!.lists];
         },
@@ -368,6 +389,16 @@ export type ListProbes = {
     standing?: { writerUserId: string; sharedEditors?: string[] }[];
     writable?: boolean;
     dismissals?: { statement: string; signature: string; signer: number; keyVersion?: number }[];
+    /*
+     * Builds the heads a roster's signer would commit now (headsToCommit): `others` is what the
+     * server serves of every other live folder, `changed` the base lists of the folders the
+     * roster would create or rotate, `retire` those it would retire.
+     */
+    commit?: {
+        others: Record<string, SignedAreaList[]>;
+        changed?: SignedAreaList[];
+        retire?: string[];
+    };
 };
 
 /* One step of a device's life: accept the chain through a roster, read the heads, read (or settle) a folder's list. */
@@ -393,6 +424,7 @@ export type ListStepVerdict = {
     standing?: FolderStanding[];
     writable?: string;
     dismissals?: string[];
+    commit?: { headsDigest: string; rows: HeadRow[] } | { error: string };
 };
 
 export type ListCase = {
@@ -518,6 +550,34 @@ export async function listCaseVerdict(
                 }
             }
         }
+        if (probes?.commit && lists) {
+            const { others, changed, retire } = probes.commit;
+            try {
+                const all = [lists];
+                for (const [workspaceId, served] of Object.entries(others))
+                    all.push(
+                        await readAreaLists({
+                            chain,
+                            heads: headsRecord,
+                            workspaceId,
+                            record: null,
+                            served,
+                            mlDsaKeys: c.input.mlDsaKeys,
+                        }),
+                    );
+                const built = await headsToCommit({
+                    chain,
+                    groupId: chain.groupId,
+                    heads: headsRecord,
+                    lists: all,
+                    changed,
+                    retire,
+                });
+                verdict.commit = { headsDigest: built.headsDigest, rows: [...built.rows] };
+            } catch (error) {
+                verdict.commit = refusal(error);
+            }
+        }
         if (probes?.standing)
             verdict.standing = probes.standing.map((probe) =>
                 folderStanding({ chain, lists, workspaceId: step.workspaceId, ...probe }),
@@ -620,7 +680,8 @@ export async function listCases(): Promise<ListCase[]> {
                     { userId: member.userId, suspended: true },
                     { userId: admin.userId, suspended: true, session: 'browse' },
                     { userId: newcomer.userId, suspended: true, share: 'editor' },
-                    // A request made in an admin's session is that session's, list or no list.
+                    // An admin who is on the list is one of the folder's people, not browsing; a
+                    // session is no basis for someone who is no admin.
                     { userId: admin2.userId, session: 'browse' },
                     { userId: member.userId, session: 'browse' },
                 ],
@@ -651,7 +712,7 @@ export async function listCases(): Promise<ListCase[]> {
                         sorted([manager(member), editor(keeper), viewer(biller), viewer(admin2)]),
                     ) &&
                 access.join(' ') ===
-                    'list:manager list:editor list:viewer list:viewer - browse: - - - - share:viewer share:editor - - - browse: list:manager' &&
+                    'list:manager list:editor list:viewer list:viewer - browse: - - - - share:viewer share:editor - - - list:viewer list:manager' &&
                 last.access![0]!.allows === 'read,download,write,share,manage' &&
                 last.access![1]!.allows === 'read,download,write,share' &&
                 last.access![5]!.allows === 'read,download,write,manage' &&
@@ -884,7 +945,110 @@ export async function listCases(): Promise<ListCase[]> {
                 await w.add(FOLDER, member, [editor(keeper)], { names: before });
                 return fresh(w);
             },
-            state('ahead', 2),
+            refuses('keysReplaced'),
+        );
+        await add(
+            // Signed before the key change and within the heads the roster that made it committed.
+            'addition-under-replaced-keys-within-the-heads',
+            async (w) => {
+                await w.add(FOLDER, member, [editor(keeper)]);
+                w.extra.push(member2);
+                await w.roster(admin, withEntry(w, member2.entry([])));
+                return fresh(w);
+            },
+            state('level', 2),
+        );
+        await add(
+            // A device took it while the keys were the entry's; the fold-in's heads lack it.
+            'addition-under-replaced-keys-racing-the-fold-in',
+            async (w) => {
+                const raced = await w.add(FOLDER, member, [editor(keeper)], { hidden: true });
+                const mine = [...w.served(FOLDER), raced];
+                await moved(w);
+                return [
+                    { through: 3, folder: FOLDER, served: mine },
+                    { through: 4, folder: FOLDER, served: w.served(FOLDER) },
+                ];
+            },
+            (v) =>
+                state('ahead', 2)([v[0]!]) &&
+                state('level', 1)(v) &&
+                reasons(v[1]!).join() === LIST_REFUSALS.keysReplaced &&
+                ids(listed(v[1]!).lost) === keeper.userId,
+        );
+        await add(
+            // Their keys were replaced, and later they left: the earlier roster is the bound on
+            // what the old keys signed, though the roster that removed them committed the list.
+            'addition-under-replaced-keys-by-someone-who-then-left',
+            async (w) => {
+                const before = await moved(w);
+                await w.add(FOLDER, member, [editor(keeper)], { names: before });
+                await w.roster(admin, withEntry(w, left(member2.entry([]))));
+                return fresh(w);
+            },
+            (v) =>
+                listed(v[0]!).state === 'forked' &&
+                reasons(v[0]!).join() === LIST_REFUSALS.keysReplaced,
+        );
+        await add(
+            // An Admin on no list signs by role alone: their old keys sign nothing past the
+            // heads of the roster that replaced them, on any folder.
+            'addition-under-an-admins-replaced-keys',
+            async (w) => {
+                const { next: admin3 } = await succeed(admin);
+                const before = await w.position();
+                w.extra.push(admin3);
+                await w.roster(admin, withEntry(w, admin3.entry(ADMIN_ROLES)));
+                await w.add(FOLDER, admin, [editor(admin)], { names: before });
+                return fresh(w);
+            },
+            refuses('keysReplaced'),
+        );
+        await add(
+            'dismissal-under-replaced-keys',
+            async (w) => {
+                const { next: admin3 } = await succeed(admin);
+                const names = {
+                    groupId: GROUP,
+                    workspaceId: folderId(FOLDER),
+                    kind: 'list' as const,
+                    committedPosition: 2,
+                    committedDigest: encode(pattern(32, 1)),
+                    reportedPosition: 2,
+                    reportedDigest: encode(pattern(32, 2)),
+                    signerUserId: admin.userId,
+                };
+                const old = await dismissal(admin, {
+                    ...names,
+                    signerKeyVersion: 1,
+                    ...(await w.position()),
+                });
+                w.extra.push(admin3);
+                await w.roster(admin, withEntry(w, admin3.entry(ADMIN_ROLES)));
+                const again = await dismissal(admin3, {
+                    ...names,
+                    signerKeyVersion: 2,
+                    ...(await w.position()),
+                });
+                return [
+                    {
+                        through: 3,
+                        folder: FOLDER,
+                        served: w.served(FOLDER),
+                        probes: { dismissals: [old] },
+                    },
+                    {
+                        through: 4,
+                        folder: FOLDER,
+                        served: w.served(FOLDER),
+                        probes: { dismissals: [old, again] },
+                    },
+                ];
+            },
+            // Old keys clear no note once the entry has moved on: the Admin signs it again.
+            (v) =>
+                v[0]!.dismissals!.join() === 'verified' &&
+                v[1]!.dismissals!.join() === 'refused,verified',
         );
         await add(
             'addition-under-keys-the-entry-took-later',
@@ -1438,32 +1602,169 @@ export async function listCases(): Promise<ListCase[]> {
             async (w) => {
                 const head = await start(w);
                 const first = w.served(FOLDER);
+                const others = { [folderId(0)]: w.served(0), [folderId(OWN)]: w.served(OWN) };
                 // A roster commits a list the server never serves; the next commits what exists.
                 await w.roster(admin, w.all, {
                     commit: {
                         [FOLDER]: { listVersion: base + 1, listDigest: encode(pattern(32, 9)) },
                     },
                 });
+                // The way out an honest signer has: the folder's key change, numbered past it.
+                const next = await w.baseList(FOLDER, admin, {
+                    people: [manager(member)],
+                    listVersion: base + 2,
+                });
+                const low = await w.baseList(FOLDER, admin, {
+                    people: [manager(member)],
+                    listVersion: base + 1,
+                });
                 await w.roster(admin, w.all, { commit: { [FOLDER]: base } });
-                const probes: ListProbes = { writable: true };
+                const probes: ListProbes = { writable: true, commit: { others } };
                 return [
-                    { through: head, folder: FOLDER, served: first },
+                    { through: head, folder: FOLDER, served: first, probes },
                     { through: head + 1, folder: FOLDER, served: null, probes },
                     { through: head + 1, folder: FOLDER, served: first, probes },
+                    {
+                        through: head + 1,
+                        folder: FOLDER,
+                        served: first,
+                        probes: { commit: { others, changed: [next] } },
+                    },
+                    {
+                        through: head + 1,
+                        folder: FOLDER,
+                        served: first,
+                        probes: { commit: { others, changed: [low] } },
+                    },
                     { through: head + 2, folder: FOLDER, served: first, probes },
+                    { through: head + 2, folder: FOLDER, served: first, probes },
+                    // Another device, reading for the first time after both rosters.
+                    {
+                        through: head + 2,
+                        folder: FOLDER,
+                        served: first,
+                        record: null,
+                        headsRecord: null,
+                    },
+                ];
+            },
+            (v) => {
+                const error = (at: ListStepVerdict) =>
+                    at.commit && 'error' in at.commit ? at.commit.error : null;
+                const passed = listed(v[5]!);
+                return (
+                    // Level, a signer's heads are what it verified.
+                    v[0]!.commit !== undefined &&
+                    'rows' in v[0]!.commit &&
+                    v[0]!.commit.rows.length === 3 &&
+                    // Asked and not yet answered, it is behind; answered with nothing that
+                    // reaches the head, it is forked: it never stays behind. Neither signs
+                    // heads: a roster from this device would bury a list it was not served.
+                    state('behind', base)([v[1]!]) &&
+                    error(v[1]!) === LIST_REFUSALS.behind &&
+                    state('forked', base)([v[2]!]) &&
+                    v[2]!.writable === LIST_REFUSALS.forked &&
+                    listed(v[2]!).fork !== null &&
+                    error(v[2]!) === LIST_REFUSALS.forked &&
+                    // Unless the roster changes that folder's key, with a base list past the head.
+                    v[3]!.commit !== undefined &&
+                    'rows' in v[3]!.commit &&
+                    error(v[4]!) ===
+                        'A member list’s heads never fall below what an earlier one committed.' &&
+                    // A later roster whose head the record reaches lets it go on: the head it
+                    // passed over is noted and reported, once, and never committed below.
+                    passed.state === 'level' &&
+                    passed.listVersion === base &&
+                    passed.report === 'fork' &&
+                    passed.fork !== null &&
+                    passed.fork.settled &&
+                    passed.fork.committed.position === base + 1 &&
+                    passed.record!.forks.length === 1 &&
+                    passed.head!.listVersion === base &&
+                    v[5]!.writable === 'ok' &&
+                    error(v[5]!) === LIST_REFUSALS.forked &&
+                    listed(v[6]!).report === null &&
+                    listed(v[6]!).fork === null &&
+                    listed(v[6]!).record!.forks.length === 1 &&
+                    listed(v[7]!).state === 'level' &&
+                    listed(v[7]!).report === 'fork' &&
+                    listed(v[7]!).record!.forks.length === 1
+                );
+            },
+        );
+        await add(
+            `a-true-fork-is-not-cleared-by-a-later-lower-row${at}`,
+            async (w) => {
+                const head = await start(w);
+                const hidden = await w.add(FOLDER, member, [editor(keeper)], { hidden: true });
+                const mine = [...w.served(FOLDER), hidden];
+                await w.add(FOLDER, admin, [viewer(admin2)]);
+                await w.roster(admin, w.all);
+                // A later roster commits a lower point, which this device does hold.
+                await w.roster(admin, w.all, { commit: { [FOLDER]: base } });
+                return [
+                    { through: head, folder: FOLDER, served: mine },
+                    { through: head + 1, folder: FOLDER, served: w.served(FOLDER) },
+                    {
+                        through: head + 2,
+                        folder: FOLDER,
+                        served: w.served(FOLDER),
+                        probes: { writable: true },
+                    },
                 ];
             },
             (v) =>
-                // Asked and not yet answered, it is behind; answered with nothing that reaches
-                // the head, it is forked: it never stays behind. A later roster whose head its
-                // record reaches clears it.
-                state('behind', base)([v[1]!]) &&
-                state('forked', base)([v[2]!]) &&
-                v[2]!.writable === LIST_REFUSALS.forked &&
+                state('forked', base + 1)([v[1]!]) &&
+                state('forked', base + 1)(v) &&
                 listed(v[2]!).fork !== null &&
-                state('level', base)(v) &&
-                listed(v[3]!).record!.forks.length === 0 &&
-                v[3]!.writable === 'ok',
+                !listed(v[2]!).fork!.settled &&
+                listed(v[2]!).fork!.committed.position === base + 1 &&
+                v[2]!.writable === LIST_REFUSALS.forked,
+        );
+        await add(
+            `two-lists-at-one-version${at}`,
+            async (w) => {
+                const head = await start(w);
+                const first = w.served(FOLDER);
+                const one = await w.add(FOLDER, member, [editor(keeper)], { hidden: true });
+                const other = await w.add(FOLDER, admin, [viewer(admin2)], { hidden: true });
+                return [
+                    { through: head, folder: FOLDER, served: [...first, one, other] },
+                    // The same two, served the other way round, to a device with no record.
+                    {
+                        through: head,
+                        folder: FOLDER,
+                        served: [...first, other, one],
+                        record: null,
+                        headsRecord: null,
+                    },
+                    // And twice, one copy with its signature damaged: no copy stands in another's way.
+                    {
+                        through: head,
+                        folder: FOLDER,
+                        served: [
+                            ...first,
+                            { ...one, signature: other.signature },
+                            one,
+                            other,
+                            other,
+                        ],
+                        record: null,
+                        headsRecord: null,
+                    },
+                ];
+            },
+            (v) =>
+                // The server does not choose by order: the same list is taken each time, the
+                // other refused as a rival and reported.
+                state('ahead', base + 1)([v[0]!]) &&
+                listed(v[1]!).listDigest === listed(v[0]!).listDigest &&
+                listed(v[2]!).listDigest === listed(v[0]!).listDigest &&
+                reasons(v[0]!).join() === LIST_REFUSALS.rival &&
+                reasons(v[1]!).join() === LIST_REFUSALS.rival &&
+                reasons(v[2]!).join() === LIST_REFUSALS.rival &&
+                listed(v[0]!).report === 'fork' &&
+                listed(v[0]!).refused[0]!.listDigest === listed(v[1]!).refused[0]!.listDigest,
         );
         await add(
             `the-furthest-head-wins${at}`,
@@ -1551,7 +1852,9 @@ export async function listCases(): Promise<ListCase[]> {
             state('level', 3)(v) &&
             listed(v[2]!).workspaceKeyVersion === 2 &&
             listed(v[2]!).report === null &&
-            listed(v[2]!).lost.length === 0 &&
+            // The addition this device held is gone with the old key: stale, its person lost.
+            ids(listed(v[2]!).lost) === keeper.userId &&
+            reasons(v[2]!).join() === LIST_REFUSALS.stale &&
             v[2]!.standing![0] === 'not-on-this-folder' &&
             v[2]!.access![0]!.access === null,
     );
@@ -1602,6 +1905,91 @@ export async function listCases(): Promise<ListCase[]> {
             state('level', 2)(v) &&
             listed(v[2]!).workspaceKeyVersion === 2 &&
             listed(v[2]!).record!.forks[0]!.settled,
+    );
+    await add(
+        // The base list is numbered above what the device held, and names the person it had
+        // added: the held list is stale all the same, and nobody is lost.
+        'key-change-that-kept-the-person-added',
+        async (w) => {
+            const hidden = await w.add(FOLDER, member, [editor(keeper)], { hidden: true });
+            const mine = [...w.served(FOLDER), hidden];
+            await w.roster(admin, w.all, {
+                rotate: { [FOLDER]: { people: [...people, editor(keeper)], listVersion: 5 } },
+            });
+            return [
+                { through: 3, folder: FOLDER, served: mine },
+                { through: 4, folder: FOLDER, served: w.served(FOLDER) },
+            ];
+        },
+        (v) =>
+            state('level', 5)(v) &&
+            listed(v[1]!).report === null &&
+            listed(v[1]!).lost.length === 0 &&
+            reasons(v[1]!).join() === LIST_REFUSALS.stale,
+    );
+    await add(
+        // Numbered above what the device held, without the person it had added offline: told.
+        'key-change-numbered-above-a-hidden-addition',
+        async (w) => {
+            const hidden = await w.add(FOLDER, member, [editor(keeper)], { hidden: true });
+            const mine = [...w.served(FOLDER), hidden];
+            await w.roster(admin, w.all, {
+                rotate: { [FOLDER]: { people, listVersion: 7 } },
+            });
+            return [
+                { through: 3, folder: FOLDER, served: mine },
+                { through: 4, folder: FOLDER, served: w.served(FOLDER) },
+            ];
+        },
+        (v) =>
+            state('level', 7)(v) &&
+            ids(listed(v[1]!).lost) === keeper.userId &&
+            reasons(v[1]!).join() === LIST_REFUSALS.stale,
+    );
+    await add(
+        // List versions count up through every folder key: key version 2's base is not list 1.
+        'key-change-with-a-base-list-numbered-below-its-key',
+        async (w) => {
+            await w.roster(admin, w.all, { rotate: { [FOLDER]: { people, listVersion: 1 } } });
+            return fresh(w);
+        },
+        noList('notTheBase'),
+    );
+    await add(
+        // Heads are built only from every folder read, and never over one left unread.
+        'heads-need-every-folder-read',
+        async (w) => {
+            const others = { [folderId(0)]: w.served(0) };
+            const all = { ...others, [folderId(OWN)]: w.served(OWN) };
+            return [
+                {
+                    through: 3,
+                    folder: FOLDER,
+                    served: w.served(FOLDER),
+                    probes: { commit: { others } },
+                },
+                {
+                    through: 3,
+                    folder: FOLDER,
+                    served: w.served(FOLDER),
+                    probes: { commit: { others: all, retire: [folderId(OWN)] } },
+                },
+                {
+                    through: 3,
+                    folder: FOLDER,
+                    served: w.served(FOLDER),
+                    probes: { commit: { others: { ...all, [folderId(OWN)]: [] } } },
+                },
+            ];
+        },
+        (v) =>
+            'error' in v[0]!.commit! &&
+            v[0]!.commit.error === LIST_REFUSALS.incomplete &&
+            'rows' in v[1]!.commit! &&
+            v[1]!.commit.rows.length === 2 &&
+            // A folder whose list was not served is forked: no heads over it.
+            'error' in v[2]!.commit! &&
+            v[2]!.commit.error === LIST_REFUSALS.forked,
     );
     await add(
         'key-change-with-no-base-list-served',
@@ -1983,4 +2371,247 @@ export function folderVerdict(
     standing: FolderStanding,
 ) {
     return folderIntegrityOf({ integrity, via }, { trust } as GroupWriterTrust, standing);
+}
+
+/* One grant of the company's first folder, sealed or to be sealed, and who reads it with which list. */
+export type GrantItem = {
+    name: string;
+    kind: 'open' | 'sealing';
+    through: number;
+    /* What the device was served of the folder's lists: all of them, the base list alone, or it read none. */
+    lists: 'full' | 'base' | 'none';
+    ctx: AreaGrantContext;
+    envelope?: string;
+    granter: number;
+    reader: number;
+    expected?: string;
+};
+
+/* One record in the company's first folder, and the reader who judges its writer. */
+export type RecordItem = {
+    name: string;
+    through: number;
+    lists: 'full' | 'base' | 'none';
+    writer: number;
+    signedBy: number;
+    pinned: boolean;
+    sharedEditors: string[];
+    expected?: { integrity: string; via: string | null };
+};
+
+/*
+ * A company's first folder (its area derived under the group, so its grants
+ * open) with a list, for the grants and the writer verdicts that go by it
+ * (2.3, "Grants", "Who writes"): the Owner, its manager, adds a Member as a
+ * viewer and the kit holder as an editor; roster 3 commits that; grants are
+ * made there; and roster 4 removes the Admin who made one of them.
+ */
+export async function folderItems() {
+    const w = await listWorld({ folders: false });
+    const { owner, admin, member, keeper, biller, another } = w.cast;
+    const base = w.served(0);
+    await w.add(0, owner, [
+        { userId: member.userId, role: 'viewer' },
+        { userId: keeper.userId, role: 'editor' },
+    ]);
+    const full = w.served(0);
+    await w.roster(admin, w.all);
+    const input3 = await w.input();
+    const folder: FolderData = { input: input3, heads: w.heads, served: { full, base } };
+    const chain = await chainThrough(input3, 3);
+    const lists = (await listsAt(folder, 3, 'full'))!;
+    const at = { rosterVersion: 3, rosterDigest: chain.rosterDigest };
+    const grant = (granter: Person, reader: Person): AreaGrantContext => ({
+        groupId: GROUP,
+        workspaceId: AREA,
+        workspaceKeyVersion: 1,
+        granteeUserId: reader.userId,
+        granteeKeyVersion: 1,
+        granterUserId: granter.userId,
+        ...at,
+    });
+    const sealed = async (granter: Person, reader: Person) =>
+        encode(
+            await sealAreaGrant(areaKeyAt(AREA, 1), grant(granter, reader), {
+                chain,
+                areaIdSeed: AREA_SEED,
+                granteeKemPublicKey: reader.kemPublicKey,
+                granter: granter.signer,
+                lists,
+            }),
+        );
+    const toMember = await sealed(owner, member);
+    const byAdmin = await sealed(admin, keeper);
+    // The Owner removes the Admin (a new company key with it): the Admin's grant is from before.
+    await w.roster(
+        owner,
+        [
+            ...w.all.filter((entry) => entry.userId !== admin.userId),
+            { ...w.e.admin, status: 'left', roles: [] },
+        ],
+        { org: { custodyVersion: 2 } },
+    );
+    const open = (
+        name: string,
+        through: number,
+        which: GrantItem['lists'],
+        envelope: string,
+        granter: Person,
+        reader: Person,
+    ): GrantItem => ({
+        name,
+        kind: 'open',
+        through,
+        lists: which,
+        ctx: grant(granter, reader),
+        envelope,
+        granter: granter.n,
+        reader: reader.n,
+    });
+    const sealing = (name: string, which: GrantItem['lists'], reader: Person): GrantItem => ({
+        name,
+        kind: 'sealing',
+        through: 3,
+        lists: which,
+        ctx: grant(owner, reader),
+        granter: owner.n,
+        reader: reader.n,
+    });
+    const grants: GrantItem[] = [
+        open('grant-to-someone-on-the-list', 3, 'full', toMember, owner, member),
+        // The reader's device was not served the addition that names them: nothing opens.
+        open('grant-read-without-the-addition', 3, 'base', toMember, owner, member),
+        open('grant-read-without-a-list', 3, 'none', toMember, owner, member),
+        open('grant-by-an-admin-read-while-they-are-one', 3, 'full', byAdmin, admin, keeper),
+        // Judged at the roster it names: it opens after the Admin who made it is removed.
+        open('grant-by-an-admin-since-removed', 4, 'full', byAdmin, admin, keeper),
+        // The Owner's grant with another granter's name on it opens nothing.
+        open('grant-renamed-to-another-granter', 4, 'full', toMember, admin, member),
+        sealing('sealing-to-someone-on-the-list', 'full', member),
+        // A colleague the list does not name is sealed nothing, and nothing is sealed without a list.
+        sealing('sealing-to-a-colleague-off-the-list', 'full', another),
+        sealing('sealing-without-a-list', 'none', member),
+        sealing('sealing-without-the-addition-that-names-them', 'base', member),
+    ];
+    const record = (name: string, writer: Person, over: Partial<RecordItem> = {}): RecordItem => ({
+        name,
+        through: 3,
+        lists: 'full',
+        writer: writer.n,
+        signedBy: writer.n,
+        pinned: false,
+        sharedEditors: [],
+        ...over,
+    });
+    const records: RecordItem[] = [
+        record('record-by-an-editor-on-the-list', keeper),
+        record('record-by-an-admin-on-no-list', admin),
+        record('record-by-a-viewer', member),
+        record('record-by-a-colleague-on-no-list', another),
+        // The reader's own words check says whose keys these are, not that they are on the folder.
+        record('record-by-a-colleague-the-reader-checked', another, { pinned: true }),
+        record('record-by-an-editor-the-reader-checked', keeper, { pinned: true }),
+        record('record-by-a-colleague-who-edits-by-a-share', another, {
+            sharedEditors: [another.userId],
+        }),
+        record('record-read-with-no-list', keeper, { lists: 'none' }),
+        record('record-read-with-the-list-forked', keeper, { lists: 'base' }),
+        record('record-with-a-bad-signature-on-the-folder', keeper, { signedBy: biller.n }),
+        record('record-with-a-bad-signature-off-the-folder', another, { signedBy: biller.n }),
+        record('record-by-a-checked-colleague-with-the-list-forked', another, {
+            pinned: true,
+            lists: 'base',
+        }),
+    ];
+    const data: FolderData = { ...folder, input: await w.input(), heads: w.heads };
+    for (const item of grants) item.expected = await grantItemVerdict(data, item);
+    for (const item of records) item.expected = await recordItemVerdict(data, item);
+    return { ...data, grants, records };
+}
+export type FolderData = {
+    input: AcceptInput;
+    heads: { rosterVersion: number; rows: HeadRow[] }[];
+    served: { full: SignedAreaList[]; base: SignedAreaList[] };
+};
+
+/* The folder's list as a device served `which` of its lists reads it at `through`; null when it read none. */
+async function listsAt(folder: FolderData, through: number, which: GrantItem['lists']) {
+    if (which === 'none') return null;
+    const chain = await chainThrough(folder.input, through);
+    const heads = await readHeads({ chain, record: null, served: folder.heads });
+    return readAreaLists({
+        chain,
+        heads: heads.record,
+        workspaceId: AREA,
+        record: null,
+        served: folder.served[which],
+        mlDsaKeys: folder.input.mlDsaKeys,
+    });
+}
+
+/* What this twin says of a grant item: `opened:<key>`, `sealed` or `refused`. */
+export async function grantItemVerdict(folder: FolderData, item: GrantItem): Promise<string> {
+    const chain = await chainThrough(folder.input, item.through);
+    const lists = await listsAt(folder, item.through, item.lists);
+    const granter = await person(item.granter);
+    const reader = await person(item.reader);
+    try {
+        if (item.kind === 'sealing') {
+            await sealAreaGrant(areaKeyAt(AREA, 1), item.ctx, {
+                chain,
+                areaIdSeed: AREA_SEED,
+                granteeKemPublicKey: reader.kemPublicKey,
+                granter: granter.signer,
+                lists,
+            });
+            return 'sealed';
+        }
+        const key = await openAreaGrant(decode(item.envelope!), item.ctx, {
+            chain,
+            areaIdSeed: AREA_SEED,
+            granterMlDsaPublicKey: granter.mlDsaPublicKey,
+            reader: { userId: reader.userId, keyVersion: 1 },
+            grantee: reader.secrets,
+            lists,
+        });
+        return `opened:${encode(key)}`;
+    } catch (error) {
+        refusal(error);
+        return 'refused';
+    }
+}
+
+/* What this twin says of a record item: the verdict of design 2.8, then the folder's own rows. */
+export async function recordItemVerdict(folder: FolderData, item: RecordItem) {
+    const chain = await chainThrough(folder.input, item.through);
+    const lists = await listsAt(folder, item.through, item.lists);
+    const writer = await person(item.writer);
+    const signer = await person(item.signedBy);
+    const trust = await groupWriterTrust({
+        groupId: GROUP,
+        areas: { [AREA]: 1 },
+        reading: { status: 'accepted', chain },
+        workspaceId: AREA,
+        writerUserId: writer.userId,
+        pinned: item.pinned ? await writer.pinned() : null,
+        served: writer.served,
+        links: [],
+    });
+    const verdict = await groupIntegrityOf(
+        () => metadataStatements(RECORD, ENVELOPE),
+        await recordSignature(signer.signer.signingKey),
+        trust,
+        null,
+    );
+    return folderIntegrityOf(
+        verdict,
+        trust,
+        folderStanding({
+            chain,
+            lists,
+            workspaceId: AREA,
+            writerUserId: writer.userId,
+            sharedEditors: item.sharedEditors,
+        }),
+    );
 }

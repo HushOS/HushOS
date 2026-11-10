@@ -1,3 +1,4 @@
+import { unverifiedHeads } from './committed-heads';
 import { describe, expect, test } from 'vitest';
 import {
     companyCases,
@@ -236,7 +237,7 @@ describe('what the chain keeps of a company', () => {
 });
 
 describe('nextRoster for a company', () => {
-    const heads = { headsDigest: HEADS_DIGEST };
+    const heads = { heads: unverifiedHeads(HEADS_DIGEST) };
 
     test('builds what acceptance takes: `same` when nothing changed, versions and digests computed, the count kept', async () => {
         const cast = await companyCast();

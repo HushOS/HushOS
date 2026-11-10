@@ -7,6 +7,7 @@ import {
     sealItemVerdict,
 } from '../src/company-testkit';
 import {
+    folderItems,
     folderVerdictCases,
     listCaseVerdict,
     listCases,
@@ -97,6 +98,9 @@ for (const c of await listCases()) {
     });
 }
 const statements = await listStatementCases();
+// One folder's grants and records (2.3, "Grants", "Who writes"), each with the web's verdict.
+const folder = await folderItems();
+Object.assign(listKeys, folder.input.mlDsaKeys);
 
 const out = new URL('../../../crates/hushos-core/fixtures/', import.meta.url);
 await mkdir(out, { recursive: true });
@@ -119,6 +123,7 @@ await writeFile(
                 heads: statements.heads,
                 shareLogStart: statements.shareLogStart,
                 folderVerdicts: folderVerdictCases(),
+                folder: { ...folder, input: { ...inputJson(folder.input), mlDsaKeys: {} } },
             },
         },
         null,

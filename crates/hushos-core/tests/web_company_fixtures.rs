@@ -146,7 +146,12 @@ fn the_web_s_lists_and_heads_read_here_step_by_step_as_on_the_web() {
             for refusal in ours["lists"]["refused"].as_array().into_iter().flatten() {
                 said.insert(s(refusal, "reason"));
             }
-            for error in [&ours["lists"]["error"], &ours["heads"]["error"], &ours["writable"]] {
+            for error in [
+                &ours["lists"]["error"],
+                &ours["heads"]["error"],
+                &ours["writable"],
+                &ours["commit"]["error"],
+            ] {
                 said.extend(error.as_str().map(str::to_string));
             }
         }
@@ -159,9 +164,148 @@ fn the_web_s_lists_and_heads_read_here_step_by_step_as_on_the_web() {
         HEADS_MISMATCH,
         "Invalid list record.",
         "Invalid heads record.",
+        // Keys since replaced sign nothing past what the roster that replaced them committed.
+        "This was signed with keys its signer has since replaced, past what the member list that replaced them records: it has to be signed again.",
+        // Two valid lists at one version: one is taken, the same on every device, the other reported.
+        "Another list stands at this version of the folder’s record.",
+        // The heads a roster commits are built over every folder read, and never fall.
+        "This device has not read every folder’s record at its latest member list.",
+        "A member list’s heads never fall below what an earlier one committed.",
     ] {
         assert!(said.contains(refusal), "{refusal}");
     }
+}
+
+#[test]
+fn a_folder_s_grants_and_records_read_here_as_on_the_web() {
+    let fixture = fixture();
+    let lists = &fixture["lists"];
+    let keys: std::collections::HashMap<String, String> = lists["mlDsaKeys"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(digest, key)| (digest.clone(), key.as_str().unwrap().to_string()))
+        .collect();
+    let folder = &lists["folder"];
+    let mut said = std::collections::BTreeMap::new();
+    for item in folder["grants"].as_array().unwrap() {
+        let ours = grant_item_verdict(folder, item, &keys);
+        assert_eq!(json!(ours), item["expected"], "{}", s(item, "name"));
+        said.insert(s(item, "name"), ours.split(':').next().unwrap().to_string());
+    }
+    for item in folder["records"].as_array().unwrap() {
+        let ours = record_item_verdict(folder, item, &keys);
+        assert_eq!(ours, item["expected"], "{}", s(item, "name"));
+        said.insert(s(item, "name"), s(&ours, "integrity"));
+    }
+    // Stated here, not read from the fixture: a company's grant is sealed and opened only for
+    // someone the verified list entitles (`area_grant_open`, which takes no list, opens none),
+    // its granter is judged at the roster the grant names, and a record reads by the roster
+    // first and then the folder's list, whatever the reader's own check says of its writer.
+    let stated = [
+        ("grant-to-someone-on-the-list", "opened"),
+        ("grant-read-without-the-addition", "refused"),
+        ("grant-read-without-a-list", "refused"),
+        ("grant-by-an-admin-read-while-they-are-one", "opened"),
+        ("grant-by-an-admin-since-removed", "opened"),
+        ("grant-renamed-to-another-granter", "refused"),
+        ("sealing-to-someone-on-the-list", "sealed"),
+        ("sealing-to-a-colleague-off-the-list", "refused"),
+        ("sealing-without-a-list", "refused"),
+        ("sealing-without-the-addition-that-names-them", "refused"),
+        ("record-by-an-editor-on-the-list", "verified"),
+        ("record-by-an-admin-on-no-list", "verified"),
+        ("record-by-a-viewer", "not-on-this-folder"),
+        ("record-by-a-colleague-on-no-list", "not-on-this-folder"),
+        ("record-by-a-colleague-the-reader-checked", "not-on-this-folder"),
+        ("record-by-an-editor-the-reader-checked", "verified"),
+        ("record-by-a-colleague-who-edits-by-a-share", "verified"),
+        ("record-read-with-no-list", "unchecked"),
+        ("record-read-with-the-list-forked", "unchecked"),
+        ("record-with-a-bad-signature-on-the-folder", "bad-signature"),
+        ("record-with-a-bad-signature-off-the-folder", "bad-signature"),
+        ("record-by-a-checked-colleague-with-the-list-forked", "unchecked"),
+    ];
+    let stated: std::collections::BTreeMap<String, String> =
+        stated.iter().map(|(name, verdict)| (name.to_string(), verdict.to_string())).collect();
+    assert_eq!(said, stated);
+    // What opened is the folder's key itself.
+    let opened = folder["grants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| s(item, "name") == "grant-by-an-admin-since-removed");
+    assert_eq!(opened.unwrap()["expected"], json!(format!("opened:{}", e(&area_key_at(AREA, 1)))));
+}
+
+#[test]
+fn the_furthest_head_is_read_at_the_folder_s_current_key_and_a_note_is_cleared_only_once_settled() {
+    let digest = |text: &str| roster_digest(text.as_bytes().to_vec());
+    let row = |roster_version, workspace_key_version, list_version, share_log_index| CommittedHead {
+        roster_version,
+        workspace_key_version,
+        list_version,
+        list_digest: digest(&format!("list {list_version} at key {workspace_key_version}")),
+        share_log_index,
+        share_log_digest: digest(&format!("log {share_log_index}")),
+    };
+    let heads = |rows: Vec<CommittedHead>| HeadsRecord {
+        group_id: GROUP.into(),
+        roster_version: rows.last().unwrap().roster_version,
+        roster_digest: digest("the latest roster"),
+        areas: [(AREA.to_string(), rows)].into(),
+    };
+    // A later roster signed from a stale read lowers the row: the furthest head stays where an
+    // earlier roster put it, for the list and for the share log each on its own.
+    let head =
+        committed_head(heads(vec![row(3, 1, 1, 0), row(4, 1, 3, 1), row(5, 1, 2, 2)]), AREA.into()).unwrap();
+    assert_eq!((head.list_version, head.list_roster_version), (3, 4));
+    assert_eq!(head.list_digest, digest("list 3 at key 1"));
+    assert_eq!((head.share_log_index, head.share_log_roster_version), (2, 5));
+    // A key change starts the list's record again: the furthest list is the furthest at the
+    // latest key, though an earlier key's row stood higher; the share log runs on through.
+    let head =
+        committed_head(heads(vec![row(3, 1, 7, 4), row(4, 2, 5, 2), row(5, 2, 6, 3)]), AREA.into()).unwrap();
+    assert_eq!((head.workspace_key_version, head.list_version, head.list_roster_version), (2, 6, 5));
+    assert_eq!((head.share_log_index, head.share_log_roster_version), (4, 3));
+    // An area no roster in the record names has no head.
+    assert!(
+        committed_head(heads(vec![row(3, 1, 1, 0)]), "a0558a81-8dfc-4914-8447-0417b55e2ec5".into()).is_none()
+    );
+
+    let note = |reported: &str, settled| ForkNote {
+        kind: ForkKind::List,
+        committed_position: 2,
+        committed_digest: digest("the list the roster committed"),
+        reported_position: 2,
+        reported_digest: digest(reported),
+        roster_version: 4,
+        settled,
+    };
+    let record = |forks: Vec<ForkNote>| AreaListRecord {
+        group_id: GROUP.into(),
+        workspace_id: AREA.into(),
+        workspace_key_version: 1,
+        base_list_version: 1,
+        digests: vec![digest("the base list")],
+        committed_roster_version: 1,
+        committed_list_version: 1,
+        lists: vec![],
+        since: Default::default(),
+        judged_through: 4,
+        forks,
+    };
+    // An open fork is the device's state: clearing its note clears nothing.
+    let open = record(vec![note("held", false), note("another", true)]);
+    assert_eq!(fork_note_clear(open.clone(), note("held", false)), open);
+    assert_eq!(fork_note_clear(open.clone(), note("held", true)), open);
+    // Settled, that note alone goes; one this record does not hold changes nothing.
+    let settled = record(vec![note("held", true), note("another", true)]);
+    assert_eq!(fork_note_clear(settled.clone(), note("held", true)).forks, vec![note("another", true)]);
+    assert_eq!(fork_note_clear(settled.clone(), note("a third", true)), settled);
+    // Nothing else of the record moves.
+    let cleared = fork_note_clear(settled.clone(), note("another", true));
+    assert_eq!(cleared, AreaListRecord { forks: vec![note("held", true)], ..settled });
 }
 
 #[test]
@@ -219,7 +363,7 @@ fn heads(
         kit,
         rules: None,
         auto_utc_day: None,
-        heads_digest: testkit_heads_digest(),
+        heads: heads_unverified(testkit_heads_digest()),
         checked,
     }
 }

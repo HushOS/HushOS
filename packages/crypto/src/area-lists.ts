@@ -11,6 +11,7 @@ import {
     uuid,
 } from './canonical';
 import { RETIRED } from './area-keys';
+import { markCommittedHeads, type CommittedHeads } from './committed-heads';
 import { CryptoError } from './errors';
 import type { AcceptedRosters, OrgChain, RosterSpan, SignerKeysAt } from './group-trust';
 import { activeWith, rosterEntry, type AreaKind, type RosterMember } from './groups';
@@ -448,10 +449,15 @@ export async function readHeads(input: {
  */
 export function committedHead(record: HeadsRecord, workspaceId: string) {
     const rows = own(record.areas, workspaceId) ?? [];
+    // A folder's list is judged at its current key (a new base list starts a new record), so the
+    // furthest list is the furthest at the latest key the rows name; the share log runs through
+    // the life of the area.
+    const keyVersion = rows.at(-1)?.workspaceKeyVersion;
     let list: CommittedHead | undefined;
     let shareLog: CommittedHead | undefined;
     for (const row of rows) {
-        if (!list || row.listVersion > list.listVersion) list = row;
+        if (row.workspaceKeyVersion === keyVersion && (!list || row.listVersion > list.listVersion))
+            list = row;
         if (!shareLog || row.shareLogIndex > shareLog.shareLogIndex) shareLog = row;
     }
     if (!list || !shareLog) return null;
@@ -522,6 +528,16 @@ export const NOT_ACTIVE = 'A list names only active members of the company.';
 export const EMPLOYEE_LIST = 'An employee’s folder is listed for its assignee alone.';
 export const LIST_STALE =
     'This list was built on one the company’s record does not have: add the person again.';
+export const KEYS_REPLACED =
+    'This was signed with keys its signer has since replaced, past what the member list that replaced them records: it has to be signed again.';
+export const LIST_RIVAL = 'Another list stands at this version of the folder’s record.';
+export const NOTHING_ADDED = 'This adds nobody and raises no role on the folder’s list.';
+export const ENTRY_FROM_BEFORE =
+    'This person’s place on the list is from before they left: they are back on the folder at a higher role, or at its next key change.';
+export const HEADS_INCOMPLETE =
+    'This device has not read every folder’s record at its latest member list.';
+export const HEADS_NOT_BELOW =
+    'A member list’s heads never fall below what an earlier one committed.';
 const BAD_RECORD = 'Invalid list record.';
 
 const RANK: Record<string, number> = { '': 0, viewer: 1, editor: 2, manager: 3 };
@@ -592,6 +608,10 @@ type Ctx = {
     mlDsaKeys: Record<string, string>;
 };
 
+/* The highest list version any roster committed for the area, at any folder key; 0 for none. */
+const furthestVersion = (ctx: Ctx) =>
+    (ctx.rows ?? []).reduce((most, row) => Math.max(most, row.listVersion), 0);
+
 /* Whoever held `members` at a roster: rule 3 gives `members` and `data_admin` together or not at all. */
 function membersSpanAt(org: OrgChain, userId: string, at: number) {
     return spanAt(own(org.dataAdmins, userId), at);
@@ -601,6 +621,25 @@ function membersSpanAt(org: OrgChain, userId: string, at: number) {
 function keysAt(org: OrgChain, userId: string, rosterVersion: number): SignerKeysAt | undefined {
     const spans = own(org.signerKeys, userId) ?? [];
     return spans.filter((span) => span.from <= Math.max(rosterVersion, 1)).at(-1);
+}
+
+/*
+ * The first roster after `rosterVersion` on which the signer's entry names
+ * other signing keys than it did there; null while it never has.
+ */
+function keysReplacedAt(org: OrgChain, userId: string, rosterVersion: number) {
+    const spans = own(org.signerKeys, userId) ?? [];
+    const at = spans.filter((span) => span.from <= Math.max(rosterVersion, 1)).length - 1;
+    const named = spans[at];
+    if (!named) return null;
+    const next = spans
+        .slice(at + 1)
+        .find(
+            (span) =>
+                span.signingPublicKey !== named.signingPublicKey ||
+                span.mlDsaPublicKeyDigest !== named.mlDsaPublicKeyDigest,
+        );
+    return next ? next.from : null;
 }
 
 async function signedAt(
@@ -665,8 +704,9 @@ async function checkBase(ctx: Ctx, at: Parsed, verify: boolean): Promise<Step> {
         list.signerUserId !== ctx.committedBy ||
         list.rosterVersion !== before ||
         list.rosterDigest !== (before === 0 ? '' : ctx.chain.rosterDigests[before - 1]) ||
-        // An area's first list is list 1: the version counts up from there.
-        (ctx.keyVersion === 1 && list.listVersion !== 1)
+        // An area's first list is list 1, and the version counts up through every folder key:
+        // the base list of key version n is list n at the least.
+        (ctx.keyVersion === 1 ? list.listVersion !== 1 : list.listVersion < ctx.keyVersion)
     )
         throw new CryptoError(NOT_THE_BASE);
     if (
@@ -748,9 +788,14 @@ async function checkAddition(ctx: Ctx, prev: Step, at: Parsed, verify: boolean):
         throw new CryptoError(NOT_LIST_SIGNED);
     // After leaving: the roster that ended the standing it was signed with bounds it. A manager's
     // ends when they are marked left; someone who signed as an admin alone, when `members` goes.
-    const ended = manager ? active.until : (holder!.until ?? active.until);
+    // And a key change is treated like leaving: the roster that moved the signer's entry to
+    // other signing keys bounds what the earlier keys signed, or whoever holds a manager's old
+    // keys could add anyone under any earlier roster's name. The earlier of the two decides.
+    const left = manager ? active.until : (holder!.until ?? active.until);
+    const rekeyed = keysReplacedAt(org, list.signerUserId, named);
+    const ended = left !== null && (rekeyed === null || left <= rekeyed) ? left : rekeyed;
     if (ended !== null && committedThrough(ctx, ended) < list.listVersion)
-        throw new CryptoError(AFTER_LEAVING);
+        throw new CryptoError(ended === left ? AFTER_LEAVING : KEYS_REPLACED);
     return { ...at, since };
 }
 
@@ -781,8 +826,20 @@ export type AreaLists = {
     readonly refused: readonly { listVersion: number; listDigest: string; reason: string }[];
     /* People a dropped or passed-over list had added: "Add them again." */
     readonly lost: readonly ListPerson[];
-    /* The fork this device is in and has not settled; null otherwise. */
+    /*
+     * The fork this reading found: the one the device is in and has not
+     * settled; or, settled as it is noted, a committed head it passed over
+     * because nothing reaches it and a later roster's head is on its record.
+     */
     readonly fork: ForkNote | null;
+    /*
+     * The committed head this was judged against: the furthest any roster
+     * committed at this folder key, or the latest roster's where nothing
+     * reaches the furthest. Null while the heads are not read.
+     */
+    readonly head: { rosterVersion: number; listVersion: number; listDigest: string } | null;
+    /* The highest list version any roster committed for the area, at any folder key: a later base list is numbered past it. */
+    readonly furthestListVersion: number;
 };
 
 const read = new WeakSet<object>();
@@ -944,62 +1001,89 @@ function beyond(list: AreaList, than: AreaList): ListPerson[] {
     return list.people.filter((person) => RANK[person.role]! > RANK[was.get(person.userId) ?? '']!);
 }
 
+type Refusal = AreaLists['refused'][number];
+
+/*
+ * The first of a list's served copies that `check` takes. A server may serve
+ * one list twice, or once with its signature damaged: no copy stands in the
+ * way of another. When none is taken, the first copy's refusal is recorded.
+ */
+async function firstTaken(
+    copies: Parsed[],
+    check: (at: Parsed) => Promise<Step>,
+    refused: Refusal[],
+) {
+    let why: CryptoError | null = null;
+    for (const at of copies)
+        try {
+            return await check(at);
+        } catch (error) {
+            if (!(error instanceof CryptoError)) throw error;
+            why ??= error;
+        }
+    refused.push({
+        listVersion: copies[0]!.list.listVersion,
+        listDigest: copies[0]!.digest,
+        reason: why!.message,
+    });
+    return null;
+}
+
 /* The base list among what was served, and every addition that follows it in turn. */
-async function fromBase(ctx: Ctx, served: Parsed[], refused: AreaLists['refused'][number][]) {
-    const base = served.find((at) => at.digest === ctx.baseDigest);
-    if (!base) return null;
-    let first: Step;
-    try {
-        first = await checkBase(ctx, base, true);
-    } catch (error) {
-        if (!(error instanceof CryptoError)) throw error;
-        refused.push({
-            listVersion: base.list.listVersion,
-            listDigest: base.digest,
-            reason: error.message,
-        });
-        return null;
-    }
+async function fromBase(ctx: Ctx, served: Parsed[], refused: Refusal[]) {
+    const copies = served.filter((at) => at.digest === ctx.baseDigest);
+    if (copies.length === 0) return null;
+    const first = await firstTaken(copies, (at) => checkBase(ctx, at, true), refused);
+    if (!first) return null;
     const steps = [first];
     await extend(ctx, steps, served, refused);
     return steps;
 }
 
-/* Takes, in turn, each served list that follows the last step; stops at the first that is refused. */
-async function extend(
-    ctx: Ctx,
-    steps: Step[],
-    served: Parsed[],
-    refused: AreaLists['refused'][number][],
-) {
+/*
+ * Takes, in turn, the served list that follows the last step; stops where
+ * none does. Where two lists that both verify stand at one version, the one
+ * with the lower digest is taken, whatever order they were served in, and the
+ * other is refused as a rival (LIST_RIVAL): the server does not choose, and
+ * the device reports it as a fork.
+ */
+async function extend(ctx: Ctx, steps: Step[], served: Parsed[], refused: Refusal[]) {
     for (;;) {
         const end = steps.at(-1)!;
-        const candidates = served.filter(
-            (at) =>
+        const copies = new Map<string, Parsed[]>();
+        for (const at of served)
+            if (
                 at.list.workspaceKeyVersion === ctx.keyVersion &&
-                at.list.listVersion === end.list.listVersion + 1,
-        );
-        const next = candidates.find((at) => at.list.previousListDigest === end.digest);
-        // A served list at the next version that does not follow this record is never taken.
-        for (const at of candidates)
-            if (at !== next)
+                at.list.listVersion === end.list.listVersion + 1
+            )
+                copies.set(at.digest, [...(copies.get(at.digest) ?? []), at]);
+        const valid: Step[] = [];
+        for (const group of copies.values()) {
+            // A served list at the next version that does not follow this record is never taken.
+            if (group[0]!.list.previousListDigest !== end.digest) {
                 refused.push({
-                    listVersion: at.list.listVersion,
-                    listDigest: at.digest,
+                    listVersion: group[0]!.list.listVersion,
+                    listDigest: group[0]!.digest,
                     reason: NOT_FOLLOWING_LIST,
                 });
-        if (!next) return;
-        try {
-            steps.push(await checkAddition(ctx, end, next, true));
-        } catch (error) {
-            if (!(error instanceof CryptoError)) throw error;
-            refused.push({
-                listVersion: next.list.listVersion,
-                listDigest: next.digest,
-                reason: error.message,
-            });
-            return;
+                continue;
+            }
+            const step = await firstTaken(
+                group,
+                (at) => checkAddition(ctx, end, at, true),
+                refused,
+            );
+            if (step) valid.push(step);
         }
+        if (valid.length === 0) return;
+        valid.sort((x, y) => (x.digest < y.digest ? -1 : 1));
+        for (const rival of valid.slice(1))
+            refused.push({
+                listVersion: rival.list.listVersion,
+                listDigest: rival.digest,
+                reason: LIST_RIVAL,
+            });
+        steps.push(valid[0]!);
     }
 }
 
@@ -1011,10 +1095,11 @@ const signedOf = (at: { statement: string; signature: string }): SignedAreaList 
 /*
  * The heads to judge this area's list by, at this key version: the furthest
  * any roster committed, and after it the latest roster's when that is
- * another. A device goes by the furthest; only where nothing reaches the
- * furthest does it judge by the latest roster, so a later roster whose head
- * its record reaches clears the fork (2.3, "A committed head nothing
- * reaches").
+ * another. A device goes by the furthest. Only where nothing served reaches a
+ * furthest head that lies past the end of its record does it judge by the
+ * latest roster's, noting the head it passed over (2.3, "A committed head
+ * nothing reaches"); a furthest head at a version the record holds, with
+ * another digest, is a fork whatever a later roster says.
  */
 function headsOf(ctx: Ctx) {
     let head: CommittedHead | undefined;
@@ -1028,27 +1113,67 @@ function headsOf(ctx: Ctx) {
     return latest === head ? [head] : [head, latest];
 }
 
-/* The first of `heads` that is a step of `steps`, with its place; null when none is. */
+/*
+ * The head `steps` reach, with its place: the furthest, or, where the
+ * furthest lies past their end, the latest roster's (the furthest is then
+ * `passedOver`). Null when they reach neither.
+ */
 function reached(steps: Step[] | null, heads: CommittedHead[]) {
-    for (const head of heads) {
-        const anchor = (steps ?? []).findIndex(
+    const place = (head: CommittedHead) =>
+        (steps ?? []).findIndex(
             (step) => step.list.listVersion === head.listVersion && step.digest === head.listDigest,
         );
-        if (anchor >= 0) return { head, anchor };
+    const anchor = place(heads[0]!);
+    if (anchor >= 0) return { head: heads[0]!, anchor, passedOver: null };
+    const end = steps?.at(-1)?.list.listVersion ?? 0;
+    if (heads[1] && heads[0]!.listVersion > end) {
+        const later = place(heads[1]);
+        if (later >= 0) return { head: heads[1], anchor: later, passedOver: heads[0]! };
     }
     return null;
 }
+
+/*
+ * The notes a record carries once the device is no longer forked: every one
+ * settled, none dropped (only its person clears a note); and a head it passed
+ * over noted, and handed back to be reported, the first time.
+ */
+function notesAfter(forks: readonly ForkNote[], passedOver: CommittedHead | null, end: Step) {
+    const notes: ForkNote[] = forks.map((note) => ({ ...note, settled: true }));
+    if (!passedOver) return { notes, found: null };
+    const at = notes.findIndex(
+        (note) =>
+            note.committed.position === passedOver.listVersion &&
+            note.committed.digest === passedOver.listDigest,
+    );
+    if (at >= 0) return { notes, found: forks[at]!.settled ? null : notes[at]! };
+    const note: ForkNote = {
+        kind: 'list',
+        committed: { position: passedOver.listVersion, digest: passedOver.listDigest },
+        reported: { position: end.list.listVersion, digest: end.digest },
+        rosterVersion: passedOver.rosterVersion,
+        settled: true,
+    };
+    return { notes: [...notes, note], found: note };
+}
+
+/* Whether a list gives someone at least what an entry would. */
+const covers = (list: AreaList, person: ListPerson) =>
+    RANK[list.people.find((at) => at.userId === person.userId)?.role ?? '']! >=
+        RANK[person.role]! || RANK[list.everyone]! >= RANK[person.role]!;
 
 function result(
     ctx: Ctx,
     state: HeadState,
     steps: Step[] | null,
     record: AreaListRecord | null,
+    head: CommittedHead | null,
     more: Partial<Pick<AreaLists, 'report' | 'missing' | 'refused' | 'lost' | 'fork'>> & {
         repost?: readonly SignedAreaList[];
     } = {},
 ): AreaLists {
     const end = steps?.at(-1);
+    const refused = more.refused ?? [];
     const lists: AreaLists = {
         groupId: ctx.chain.groupId,
         workspaceId: ctx.workspaceId,
@@ -1066,11 +1191,21 @@ function result(
         })),
         record,
         repost: more.repost ?? [],
-        report: more.report ?? null,
+        // A fork found, or two lists at one version: reported as a fork, before anything else.
+        report:
+            more.fork || refused.some((at) => at.reason === LIST_RIVAL)
+                ? 'fork'
+                : (more.report ?? null),
         missing: more.missing ?? false,
-        refused: more.refused ?? [],
+        refused,
         lost: more.lost ?? [],
         fork: more.fork ?? null,
+        head: head && {
+            rosterVersion: head.rosterVersion,
+            listVersion: head.listVersion,
+            listDigest: head.listDigest,
+        },
+        furthestListVersion: furthestVersion(ctx),
     };
     read.add(freeze(lists));
     return lists;
@@ -1132,11 +1267,11 @@ function recordOf(
 export async function readAreaLists(input: Input): Promise<AreaLists> {
     const ctx = await contextOf(input);
     const kept = input.record ? await recordSteps(ctx, input.record) : null;
-    const refused: AreaLists['refused'][number][] = [];
+    const refused: Refusal[] = [];
     const lost: ListPerson[] = [];
     // The record at this key version, judged again by the chain as it is now: an addition whose
-    // signer has since lost the standing it was signed with, past the heads that ended it, goes,
-    // with every list built on it.
+    // signer has since lost the standing, or the keys, it was signed with, past the heads that
+    // ended them, goes, with every list built on it.
     let steps: Step[] | null = null;
     if (kept && kept.keyVersion === ctx.keyVersion) {
         steps = [kept.first];
@@ -1182,7 +1317,7 @@ export async function readAreaLists(input: Input): Promise<AreaLists> {
         }
     }
     // Without the heads read through the latest roster nothing is judged: behind, the record kept.
-    if (!ctx.rows) return result(ctx, 'behind', steps, input.record);
+    if (!ctx.rows) return result(ctx, 'behind', steps, input.record, null);
     const heads = headsOf(ctx);
     let head = heads[0]!;
     const through = ctx.chain.roster.rosterVersion;
@@ -1205,8 +1340,6 @@ export async function readAreaLists(input: Input): Promise<AreaLists> {
                 : { heldAt: through, reportedAt: null };
         };
     };
-    // (A note not yet settled goes when the latest roster's head is one this record reaches.)
-    const settledNotes = (kept?.forks ?? []).filter((note) => note.settled);
     const forked = (reported: Step | null, record: AreaListRecord | null, now: Step[] | null) => {
         // The record kept as it was, with the note; nothing is adopted until the fork is settled.
         const note: ForkNote | null = reported
@@ -1225,9 +1358,8 @@ export async function readAreaLists(input: Input): Promise<AreaLists> {
                       forks: [...record.forks.filter((at) => !sameNote(at, note)), note],
                   }
                 : record;
-        return result(ctx, 'forked', now, noted, {
+        return result(ctx, 'forked', now, noted, head, {
             repost: (noted?.lists ?? []).slice(1).map(signedOf),
-            report: note ? 'fork' : null,
             refused,
             lost,
             fork: note,
@@ -1237,7 +1369,7 @@ export async function readAreaLists(input: Input): Promise<AreaLists> {
     // A new folder key (or a first read): the list is the base list the roster row commits to.
     if (!steps) {
         const oldEnd = kept ? (kept.later.at(-1) ?? kept.first) : null;
-        if (input.served === null) return result(ctx, 'behind', null, input.record);
+        if (input.served === null) return result(ctx, 'behind', null, input.record, head);
         const fresh = await fromBase(ctx, served, refused);
         const at = reached(fresh, heads);
         // Nothing served reaches the committed head: forked, whatever the device held before.
@@ -1247,31 +1379,30 @@ export async function readAreaLists(input: Input): Promise<AreaLists> {
         const { anchor } = at;
         const base = fresh[0]!.list.listVersion;
         if (kept && base <= kept.committed.listVersion)
-            // The new base list stands below a head an earlier roster committed: not on this
-            // device's record. Settled like any fork.
+            // The new base list stands at or below a head an earlier roster committed: not on
+            // this device's record. Settled like any fork.
             return forked({ ...oldEnd!, since: new Map() }, input.record, null);
         let report: AreaLists['report'] = null;
-        if (kept && base <= oldEnd!.list.listVersion) {
-            // The rotator had seen less than this device: what it held from the new base's
-            // version on is replaced, and whoever those lists added is no longer on the folder.
-            const seen = kept.later.find((at) => at.list.listVersion === base - 1) ?? kept.first;
+        if (kept && kept.later.length > 0) {
+            // The key change replaced every list this device held past its committed head,
+            // whatever the new base list is numbered: they are stale, and whoever they added
+            // that the new list does not cover is no longer on the folder ("add them again").
             const newest = fresh.at(-1)!.list;
-            const now = new Map(newest.people.map((person) => [person.userId, person.role]));
-            for (const person of beyond(oldEnd!.list, seen.list))
-                if (
-                    RANK[now.get(person.userId) ?? '']! < RANK[person.role]! &&
-                    RANK[newest.everyone]! < RANK[person.role]!
-                )
-                    lost.push(person);
-            for (const at of kept.later)
-                if (at.list.listVersion >= base)
-                    refused.push({
-                        listVersion: at.list.listVersion,
-                        listDigest: at.digest,
-                        reason: LIST_STALE,
-                    });
-            report = 'ahead';
+            lost.push(
+                ...beyond(oldEnd!.list, kept.first.list).filter(
+                    (person) => !covers(newest, person),
+                ),
+            );
+            for (const held of kept.later)
+                refused.push({
+                    listVersion: held.list.listVersion,
+                    listDigest: held.digest,
+                    reason: LIST_STALE,
+                });
+            // Numbered at or below what this device held, the rotator had seen less of it.
+            if (base <= oldEnd!.list.listVersion) report = 'ahead';
         }
+        const { notes, found } = notesAfter(kept?.forks ?? [], at.passedOver, fresh.at(-1)!);
         const record = recordOf(
             ctx,
             fresh,
@@ -1281,13 +1412,14 @@ export async function readAreaLists(input: Input): Promise<AreaLists> {
             head.rosterVersion,
             () => ({ heldAt: through, reportedAt: null }),
             through,
-            settledNotes,
+            notes,
         );
-        return result(ctx, anchor === fresh.length - 1 ? 'level' : 'ahead', fresh, record, {
+        return result(ctx, anchor === fresh.length - 1 ? 'level' : 'ahead', fresh, record, head, {
             repost: fresh.slice(anchor + 1).map(signedOf),
             report,
             refused,
             lost,
+            fork: found,
         });
     }
 
@@ -1296,18 +1428,22 @@ export async function readAreaLists(input: Input): Promise<AreaLists> {
     const first = steps[0]!.list.listVersion;
     let digests = kept!.digests.slice(0, first - base + steps.length);
     // A served list at a version this device holds, with another digest, is never taken.
+    const others = new Set<string>();
     for (const at of served) {
         const index = at.list.listVersion - base;
-        if (index >= 0 && index < digests.length && digests[index] !== at.digest)
-            refused.push({
-                listVersion: at.list.listVersion,
-                listDigest: at.digest,
-                reason: NOT_FOLLOWING_LIST,
-            });
+        if (index < 0 || index >= digests.length || digests[index] === at.digest) continue;
+        if (others.has(at.digest)) continue;
+        others.add(at.digest);
+        refused.push({
+            listVersion: at.list.listVersion,
+            listDigest: at.digest,
+            reason: NOT_FOLLOWING_LIST,
+        });
     }
     const before = steps.length;
     await extend(ctx, steps, served, refused);
     digests = [...digests, ...steps.slice(before).map((step) => step.digest)];
+    const end = steps.at(-1)!;
     const judge = (at: CommittedHead) =>
         headState(
             { first: base, digests },
@@ -1315,8 +1451,17 @@ export async function readAreaLists(input: Input): Promise<AreaLists> {
             input.served === null ? null : false,
         );
     let state = judge(head);
-    // Nothing reaches the furthest head: the latest roster's, where the record reaches that.
-    if (state === 'forked' && heads[1] && ['level', 'ahead'].includes(judge(heads[1]))) {
+    // Nothing served reaches a furthest head past the end of this record: the latest roster's,
+    // where the record reaches that, and the head passed over is noted and reported. A furthest
+    // head at a version the record holds, with another digest, stays a fork.
+    let passedOver: CommittedHead | null = null;
+    if (
+        state === 'forked' &&
+        heads[1] &&
+        head.listVersion > end.list.listVersion &&
+        ['level', 'ahead'].includes(judge(heads[1]))
+    ) {
+        passedOver = head;
         head = heads[1];
         state = judge(head);
     }
@@ -1329,21 +1474,23 @@ export async function readAreaLists(input: Input): Promise<AreaLists> {
             'behind',
             steps,
             keep(0, kept!.committed.rosterVersion, kept!.forks, kept!.judgedThrough),
+            head,
             { refused, lost },
         );
     if (state === 'forked')
         return forked(
-            steps.at(-1)!,
+            end,
             keep(0, kept!.committed.rosterVersion, kept!.forks, kept!.judgedThrough),
             steps,
         );
     // The committed head is on the record: it becomes the head this device keeps, if further.
     const anchor = Math.max(0, head.listVersion - first);
     const committedAt = anchor > 0 ? head.rosterVersion : kept!.committed.rosterVersion;
+    const { notes, found } = notesAfter(kept!.forks, passedOver, end);
     // A later roster whose row fell back: on the record it moves nothing and is reported; off it,
     // two rosters committed to different records, which is a fork.
-    const notes = [...settledNotes];
     let report: AreaLists['report'] = null;
+    let fork = found;
     for (const row of ctx.rows)
         if (
             row.workspaceKeyVersion === ctx.keyVersion &&
@@ -1357,13 +1504,15 @@ export async function readAreaLists(input: Input): Promise<AreaLists> {
                 const note: ForkNote = {
                     kind: 'list',
                     committed: { position: row.listVersion, digest: row.listDigest },
-                    reported: { position: steps.at(-1)!.list.listVersion, digest: digests.at(-1)! },
+                    reported: { position: end.list.listVersion, digest: end.digest },
                     rosterVersion: row.rosterVersion,
                     // Nothing to adopt: this device is on the furthest committed record already.
                     settled: true,
                 };
-                if (!notes.some((at) => sameNote(at, note))) notes.push(note);
-                report = 'fork';
+                if (!notes.some((at) => sameNote(at, note))) {
+                    notes.push(note);
+                    fork ??= note;
+                }
             }
         }
     // What it holds past the committed head: posted again at the first roster that lacks it, and
@@ -1380,12 +1529,13 @@ export async function readAreaLists(input: Input): Promise<AreaLists> {
         return at;
     };
     const record = recordOf(ctx, steps, base, digests, anchor, committedAt, marked, through, notes);
-    return result(ctx, state, steps, record, {
+    return result(ctx, state, steps, record, head, {
         repost: steps.slice(anchor + 1).map(signedOf),
         report,
         missing,
         refused,
         lost,
+        fork,
     });
 }
 
@@ -1404,7 +1554,7 @@ export async function settleAreaFork(input: Input): Promise<AreaLists> {
     const kept = input.record ? await recordSteps(ctx, input.record) : null;
     if (!kept || !ctx.rows || !kept.forks.some((note) => !note.settled) || input.served === null)
         throw new CryptoError(HEAD_FORKED);
-    const refused: AreaLists['refused'][number][] = [];
+    const refused: Refusal[] = [];
     const served: Parsed[] = [];
     for (const signed of input.served) {
         const at = await parsed(ctx, signed);
@@ -1437,21 +1587,17 @@ export async function settleAreaFork(input: Input): Promise<AreaLists> {
         }
     }
     const newest = steps.at(-1)!.list;
-    const now = new Map(newest.people.map((person) => [person.userId, person.role]));
     const oldEnd = kept.later.at(-1) ?? kept.first;
     // Whoever the lists this device held past its committed head had added, and is not there now.
     for (const person of beyond(oldEnd.list, kept.first.list))
-        if (
-            RANK[now.get(person.userId) ?? '']! < RANK[person.role]! &&
-            RANK[newest.everyone]! < RANK[person.role]!
-        )
-            lost.push(person);
+        if (!covers(newest, person)) lost.push(person);
     const stored = new Map(
-        kept.stored.map((at, index) => [
+        kept.stored.map((entry, index) => [
             (index === 0 ? kept.first : kept.later[index - 1]!).digest,
-            at,
+            entry,
         ]),
     );
+    const { notes } = notesAfter(kept.forks, at.passedOver, steps.at(-1)!);
     const record = recordOf(
         ctx,
         steps,
@@ -1466,9 +1612,9 @@ export async function settleAreaFork(input: Input): Promise<AreaLists> {
                 : { heldAt: through, reportedAt: null };
         },
         through,
-        kept.forks.map((note) => ({ ...note, settled: true })),
+        notes,
     );
-    return result(ctx, anchor === steps.length - 1 ? 'level' : 'ahead', steps, record, {
+    return result(ctx, anchor === steps.length - 1 ? 'level' : 'ahead', steps, record, head, {
         repost: steps.slice(anchor + 1).map(signedOf),
         refused,
         lost,
@@ -1504,17 +1650,25 @@ function newNonce() {
  * whose row commits it: by the member who will sign that roster, naming
  * their latest accepted roster (the one before it), with a fresh nonce.
  * `chain` is null only for the areas of roster 1, before the company exists.
- * Everyone named must be active on the roster that will commit it
- * (`members`, the chain's latest by default), and an employee area's list is
- * its assignee alone, as manager. The digest goes on the roster row
- * (AreaKey.listDigest).
+ *
+ * For a new area the list is list 1 and `lists` is null. For a key change
+ * `lists` is the folder's list as this device read it at its latest roster:
+ * nothing is signed while it is behind (HEAD_BEHIND) or forked from a head it
+ * holds another list for (HEAD_FORKED: settle first). Forked only because
+ * nothing served reaches the committed head, a key change is the way out, and
+ * is signed. The list is numbered one past the furthest of what this device
+ * verified and what any roster committed for the area, so a committed head
+ * never moves back. Everyone named must be active on the roster that will
+ * commit it (`members`, the chain's latest by default), and an employee
+ * area's list is its assignee alone, as manager. The digest goes on the
+ * roster row (AreaKey.listDigest) and the list to headsToCommit.
  */
 export async function signBaseAreaList(input: {
     chain: AcceptedRosters | null;
+    lists: AreaLists | null;
     groupId: string;
     workspaceId: string;
-    workspaceKeyVersion: number;
-    listVersion: number;
+    /* A new area's kind; a key change keeps the folder's. */
     areaKind: AreaKind;
     everyone: EveryoneRole;
     people: readonly ListPerson[];
@@ -1525,10 +1679,36 @@ export async function signBaseAreaList(input: {
     members?: readonly RosterMember[];
     nonce?: string;
 }): Promise<SignedAreaList & { digest: string }> {
-    const { chain } = input;
+    const { chain, lists } = input;
     const people = sortedPeople(input.people);
+    let keyVersion = 1;
+    let listVersion = 1;
+    let kind = input.areaKind;
+    if (chain) {
+        companyOf(chain, input.groupId);
+        const entry = rosterEntry(chain.roster, input.signerUserId);
+        if (!activeWith(entry, 'members') || entry!.keyVersion !== input.signerKeyVersion)
+            throw new CryptoError(NOT_ENTITLED);
+        await sealerHolds(chain, input.signerUserId, input.signer);
+        const listed = own(chain.areaKeys, input.workspaceId)?.length ?? 0;
+        if (listed > 0) {
+            if (chain.retiredAreas.includes(input.workspaceId)) throw new CryptoError(RETIRED);
+            if (!lists) throw new CryptoError(HEAD_BEHIND);
+            requireRead(chain, lists);
+            if (lists.workspaceId !== input.workspaceId) throw new CryptoError(NOT_THE_BASE);
+            if (lists.state === 'behind') throw new CryptoError(HEAD_BEHIND);
+            if (
+                lists.state === 'forked' &&
+                !(lists.head && lists.head.listVersion > lists.listVersion)
+            )
+                throw new CryptoError(HEAD_FORKED);
+            keyVersion = listed + 1;
+            listVersion = Math.max(lists.listVersion, lists.furthestListVersion) + 1;
+            kind = lists.areaKind;
+        } else if (lists) throw new CryptoError(NOT_THE_BASE);
+    } else if (lists) throw new CryptoError(NOT_THE_BASE);
     if (
-        input.areaKind === 'employee' &&
+        kind === 'employee' &&
         (input.everyone !== '' || people.length !== 1 || people[0]!.role !== 'manager')
     )
         throw new CryptoError(EMPLOYEE_LIST);
@@ -1537,23 +1717,12 @@ export async function signBaseAreaList(input: {
     for (const person of people)
         if (!activeWith(members.find((entry) => entry.userId === person.userId)))
             throw new CryptoError(NOT_ACTIVE);
-    if (chain) {
-        companyOf(chain, input.groupId);
-        const entry = rosterEntry(chain.roster, input.signerUserId);
-        if (!activeWith(entry, 'members') || entry!.keyVersion !== input.signerKeyVersion)
-            throw new CryptoError(NOT_ENTITLED);
-        await sealerHolds(chain, input.signerUserId, input.signer);
-        const listed = own(chain.areaKeys, input.workspaceId)?.length ?? 0;
-        if (input.workspaceKeyVersion !== listed + 1) throw new CryptoError(NOT_THE_BASE);
-    } else if (input.workspaceKeyVersion !== 1) throw new CryptoError(NOT_THE_BASE);
-    if (input.workspaceKeyVersion === 1 && input.listVersion !== 1)
-        throw new CryptoError(NOT_THE_BASE);
     const statement = areaListStatement({
         groupId: input.groupId,
         workspaceId: input.workspaceId,
-        listVersion: input.listVersion,
+        listVersion,
         previousListDigest: '',
-        workspaceKeyVersion: input.workspaceKeyVersion,
+        workspaceKeyVersion: keyVersion,
         signerUserId: input.signerUserId,
         signerKeyVersion: input.signerKeyVersion,
         rosterVersion: chain ? chain.roster.rosterVersion : 0,
@@ -1575,7 +1744,11 @@ export async function signBaseAreaList(input: {
  * it) and `everyone` raised when given. Signed only at the signer's latest
  * accepted roster, with the keys their entry names there, on a list that is
  * level or ahead (HEAD_BEHIND, HEAD_FORKED otherwise), and only when it
- * would verify: what verification refuses is never signed.
+ * would verify: what verification refuses is never signed. One that would
+ * change nothing is refused too (NOTHING_ADDED), and, where `add` names
+ * someone whose place on the list is from before they left and came back,
+ * with ENTRY_FROM_BEFORE: the same role adds nothing a device counts, so the
+ * app says so instead of signing a list that helps nobody.
  */
 export async function signAreaListAddition(input: {
     chain: AcceptedRosters;
@@ -1602,12 +1775,23 @@ export async function signAreaListAddition(input: {
     if (!activeWith(entry)) throw new CryptoError(NOT_ENTITLED);
     await sealerHolds(chain, input.signerUserId, input.signer);
     const people = new Map(lists.people.map((person) => [person.userId, person.role]));
+    const everyone = input.everyone ?? lists.everyone;
+    let changed = RANK[everyone]! > RANK[lists.everyone]!;
+    let stale = false;
     for (const person of input.add) {
-        if (RANK[person.role]! < RANK[people.get(person.userId) ?? '']!)
-            throw new CryptoError(NARROWS);
+        const had = people.get(person.userId) ?? '';
+        if (RANK[person.role]! < RANK[had]!) throw new CryptoError(NARROWS);
+        if (RANK[person.role]! > RANK[had]!) changed = true;
+        else {
+            // On the list at that role already. Where the entry is from before they last came
+            // back it counts for nothing, and signing it again changes nothing.
+            const admitted = own(ctx.org.active, person.userId)?.at(-1)?.from ?? 0;
+            const since = lists.people.find((at) => at.userId === person.userId)?.since ?? 0;
+            stale ||= since < admitted;
+        }
         people.set(person.userId, person.role);
     }
-    const everyone = input.everyone ?? lists.everyone;
+    if (!changed) throw new CryptoError(stale ? ENTRY_FROM_BEFORE : NOTHING_ADDED);
     const kept = await recordSteps(ctx, lists.record);
     const end = kept.later.at(-1) ?? kept.first;
     const list: AreaList = {
@@ -1645,6 +1829,133 @@ export async function signAreaListAddition(input: {
     };
 }
 
+/* The heads a roster commits to (2.3, "Heads") -------------------------------- */
+
+/*
+ * The heads rows a roster's signer commits (2.3: "A signer's device commits
+ * the heads it verified, never ones the server merely reported"), and their
+ * digest, as nextRoster and firstRoster take them and from nowhere else.
+ *
+ * `lists` is every live area's list as this device read it at its latest
+ * roster, but for the areas the roster creates or rotates, whose base lists
+ * are `changed`, and those it retires. Nothing is built while any of them is
+ * unread (HEADS_INCOMPLETE), behind (HEAD_BEHIND) or forked (HEAD_FORKED),
+ * and no row is ever below the furthest head an earlier roster committed for
+ * its area: a device from which the server withheld a list cannot sign a
+ * roster that buries it. Where nothing reaches a committed head, the way out
+ * is that folder's key change, whose base list is numbered past it.
+ *
+ * The share log's half of a row is the furthest a roster committed, carried
+ * on, or `shareLogs` where the device verified further (the log is PR 3's;
+ * never below the committed position).
+ */
+export async function headsToCommit(input: {
+    chain: AcceptedRosters | null;
+    groupId: string;
+    heads: HeadsRecord | null;
+    lists: readonly AreaLists[];
+    changed?: readonly SignedAreaList[];
+    retire?: readonly string[];
+    shareLogs?: Readonly<Record<string, { index: number; digest: string }>>;
+}): Promise<CommittedHeads> {
+    const { chain } = input;
+    const groupId = uuid(input.groupId, 'group id');
+    const retired = [...(input.retire ?? [])].sort();
+    const rows: HeadRow[] = [];
+    const changed: CommittedHeads['changed'][number][] = [];
+    let org: OrgChain | null = null;
+    let record: HeadsRecord | null = null;
+    if (chain) {
+        org = companyOf(chain, groupId);
+        if (!input.heads) throw new CryptoError(HEAD_BEHIND);
+        record = await checkHeadsRecord(chain, org, input.heads);
+        if (record.rosterVersion !== chain.roster.rosterVersion) throw new CryptoError(HEAD_BEHIND);
+    }
+    const committedLog = (workspaceId: string) => {
+        const at = record && committedHead(record, workspaceId)?.shareLog;
+        return at ? { index: at.shareLogIndex, digest: at.shareLogDigest } : null;
+    };
+    const logOf = async (workspaceId: string) => {
+        const committed = committedLog(workspaceId);
+        const verified = own(input.shareLogs ?? {}, workspaceId);
+        if (verified && committed && verified.index < committed.index)
+            throw new CryptoError(HEADS_NOT_BELOW);
+        const at = verified ??
+            committed ?? { index: 0, digest: await shareLogStart(groupId, workspaceId) };
+        return { shareLogIndex: at.index, shareLogDigest: at.digest };
+    };
+    // The areas this roster creates or rotates: their base lists, as it will list them.
+    for (const signed of input.changed ?? []) {
+        const list = parseAreaList(decode(signed.statement));
+        const listed = chain ? (own(chain.areaKeys, list.workspaceId)?.length ?? 0) : 0;
+        if (
+            list.groupId !== groupId ||
+            list.previousListDigest !== '' ||
+            list.workspaceKeyVersion !== listed + 1 ||
+            retired.includes(list.workspaceId) ||
+            changed.some((at) => at.workspaceId === list.workspaceId)
+        )
+            throw new CryptoError(NOT_THE_BASE);
+        // Never below what a roster committed for the area before.
+        const furthest = (own(record?.areas ?? {}, list.workspaceId) ?? []).reduce(
+            (most, row) => Math.max(most, row.listVersion),
+            0,
+        );
+        if (list.listVersion <= furthest) throw new CryptoError(HEADS_NOT_BELOW);
+        const listDigest = await digest(decode(signed.statement));
+        changed.push({
+            workspaceId: list.workspaceId,
+            workspaceKeyVersion: list.workspaceKeyVersion,
+            listDigest,
+        });
+        rows.push({
+            workspaceId: list.workspaceId,
+            workspaceKeyVersion: list.workspaceKeyVersion,
+            listVersion: list.listVersion,
+            listDigest,
+            ...(await logOf(list.workspaceId)),
+        });
+    }
+    // Every other live area: its head as this device verified it.
+    for (const workspaceId of chain && org ? liveAreasAt(org, chain.roster.rosterVersion) : []) {
+        if (retired.includes(workspaceId) || changed.some((at) => at.workspaceId === workspaceId))
+            continue;
+        const lists = input.lists.find((at) => at.workspaceId === workspaceId);
+        if (!lists) throw new CryptoError(HEADS_INCOMPLETE);
+        requireRead(chain!, lists);
+        if (lists.state === 'forked') throw new CryptoError(HEAD_FORKED);
+        if (lists.state === 'behind' || lists.listVersion === 0) throw new CryptoError(HEAD_BEHIND);
+        const furthest = committedHead(record!, workspaceId)?.list;
+        // Level only with a later roster's head, the furthest passed over: this device does not
+        // hold the committed record, and commits to nothing less.
+        if (
+            !furthest ||
+            furthest.workspaceKeyVersion !== lists.workspaceKeyVersion ||
+            lists.listVersion < furthest.listVersion
+        )
+            throw new CryptoError(HEAD_FORKED);
+        rows.push({
+            workspaceId,
+            workspaceKeyVersion: lists.workspaceKeyVersion,
+            listVersion: lists.listVersion,
+            listDigest: lists.listDigest,
+            ...(await logOf(workspaceId)),
+        });
+    }
+    for (const workspaceId of retired)
+        if (!org || !liveAreasAt(org, chain!.roster.rosterVersion).includes(workspaceId))
+            throw new CryptoError(NOT_AN_AREA);
+    rows.sort((x, y) => (x.workspaceId < y.workspaceId ? -1 : 1));
+    return markCommittedHeads({
+        groupId,
+        rosterVersion: chain ? chain.roster.rosterVersion : 0,
+        rows,
+        headsDigest: await headsDigest(groupId, rows),
+        changed,
+        retired,
+    });
+}
+
 /* The signed dismissal (2.3, "The note, and who clears it") ------------------- */
 
 export type ForkKind = 'list' | 'share-log';
@@ -1668,6 +1979,8 @@ export type ForkDismissal = {
 
 const FORK_DISMISSAL_DOMAIN = 'hushos/group/fork-dismissal';
 export const NOT_AN_ADMIN = 'Only an admin dismisses a fork for the admins.';
+export const DISMISSAL_KEYS_REPLACED =
+    'This dismissal is signed with keys its signer has since replaced: it has to be signed again.';
 
 /* ["hushos/group/fork-dismissal",1,groupId,workspaceId,kind,committedPosition,committedDigest,reportedPosition,reportedDigest,signerUserId,signerKeyVersion,rosterVersion,rosterDigest] */
 export function forkDismissalStatement(dismissal: ForkDismissal) {
@@ -1761,6 +2074,10 @@ export async function verifyForkDismissal(
     if (chain.rosterDigests[dismissal.rosterVersion - 1] !== dismissal.rosterDigest)
         throw new CryptoError(NOT_ON_CHAIN);
     if (!dismissalHolds(chain, org, dismissal)) throw new CryptoError(NOT_AN_ADMIN);
+    // A key change is treated like leaving: a dismissal has no head to be within, so one signed
+    // under keys its signer's entry has since moved off hides nothing. They sign it again.
+    if (keysReplacedAt(org, dismissal.signerUserId, dismissal.rosterVersion) !== null)
+        throw new CryptoError(DISMISSAL_KEYS_REPLACED);
     const named = keysAt(org, dismissal.signerUserId, dismissal.rosterVersion)!;
     const key = options.signerMlDsaPublicKey;
     if (
@@ -1847,12 +2164,13 @@ export function areaOwed(chain: AcceptedRosters, lists: AreaLists) {
  * The one resolver (2.3): what `userId` may do in the area `lists` is of, on
  * the device's own chain and the list it verified. `suspended` is the
  * server's word (a pause changes no key and is on no roster): a paused
- * member reaches nothing. `session` is the data admin's live session the
- * request is made in, if any (it then decides, and a session of someone who
- * is no data admin, or a key-change session for an area that is owed none,
- * is no basis at all); `share` the role of a live share whose record
- * verifies and that covers the node asked for, if any (the share log is PR
- * 3's).
+ * member reaches nothing. Someone the list names is one of the folder's
+ * people, whatever session the request came in: an admin who is on a folder
+ * is not browsing it (3.7). `session` is a data admin's live session, which
+ * is a basis only for an admin the list does not name (and a key-change
+ * session only for an area that is owed a key change); `share` the role of a
+ * live share whose record verifies and that covers the node asked for, if
+ * any (the share log is PR 3's).
  */
 export function areaAccess(input: {
     chain: AcceptedRosters;
@@ -1866,14 +2184,15 @@ export function areaAccess(input: {
     requireRead(chain, lists);
     const org = companyOf(chain);
     if (input.suspended) return null;
-    // A request made in a data admin's session is that session's, whatever else they are here.
+    // Someone the list names is one of the folder's people: an admin who is on it is not
+    // browsing (3.7), whatever session the request came in.
+    const role = listRole(chain, org, lists, input.userId);
+    if (role) return { basis: 'list', role };
     if (activeWith(rosterEntry(chain.roster, input.userId), 'data_admin')) {
         if (input.session === 'browse') return { basis: 'browse' };
         if (input.session === 'key-change' && areaOwed(chain, lists))
             return { basis: 'key-change' };
     }
-    const role = listRole(chain, org, lists, input.userId);
-    if (role) return { basis: 'list', role };
     if (input.share) return { basis: 'share', role: input.share };
     return null;
 }
@@ -1947,6 +2266,38 @@ export function grantAllowed(
         workspaceKeyVersion <= lists.workspaceKeyVersion &&
         listRole(chain, companyOf(chain), lists, userId) !== null
     );
+}
+
+/*
+ * The keys a company area's grant is checked under (2.3, "Grants"): the ones
+ * its granter's entry named at the roster the grant names, where the granter
+ * was active. Judged there and not on the latest roster, so a grant an Admin
+ * made opens after that Admin is removed, as a list they signed still stands.
+ * (What it opens to is the key the chain commits to, for a reader the list
+ * entitles: an old grant, or old keys, deliver nothing else.)
+ */
+export async function granterAt(
+    chain: AcceptedRosters,
+    granterUserId: string,
+    rosterVersion: number,
+    servedMlDsaPublicKey: Uint8Array,
+) {
+    const org = companyOf(chain);
+    if (!spanAt(own(org.active, granterUserId), rosterVersion))
+        throw new CryptoError('This grant is not from an active member of the group.');
+    const named = keysAt(org, granterUserId, rosterVersion);
+    if (
+        !named ||
+        servedMlDsaPublicKey.length !== ML_DSA_PUBLIC_KEY_BYTES ||
+        (await digest(servedMlDsaPublicKey)) !== named.mlDsaPublicKeyDigest
+    )
+        throw new CryptoError('This person’s keys are not the ones on the group’s member list.');
+    return [
+        {
+            signingPublicKey: decode(named.signingPublicKey, 32),
+            mlDsaPublicKey: servedMlDsaPublicKey,
+        },
+    ];
 }
 
 /* Who writes (2.3) ------------------------------------------------------------ */

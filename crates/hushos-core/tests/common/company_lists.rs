@@ -135,6 +135,26 @@ pub fn list_record_of(value: &Value) -> Option<AreaListRecord> {
     })
 }
 
+fn head_row_json(row: &HeadRow) -> Value {
+    json!({
+        "workspaceId": row.workspace_id,
+        "workspaceKeyVersion": row.workspace_key_version,
+        "listVersion": row.list_version,
+        "listDigest": row.list_digest,
+        "shareLogIndex": row.share_log_index,
+        "shareLogDigest": row.share_log_digest,
+    })
+}
+
+fn signed_lists(value: &Value) -> Vec<SignedAreaList> {
+    value.as_array().map_or(Vec::new(), |lists| {
+        lists
+            .iter()
+            .map(|at| SignedAreaList { statement: b(at, "statement"), signature: b(at, "signature") })
+            .collect()
+    })
+}
+
 fn head_row_of(row: &Value) -> HeadRow {
     HeadRow {
         workspace_id: s(row, "workspaceId"),
@@ -199,6 +219,10 @@ fn lists_json(view: &AreaListsView) -> Value {
         })).collect::<Vec<_>>(),
         "lost": view.lost.iter().map(|person| json!({ "userId": person.user_id, "role": role_name(person.role) })).collect::<Vec<_>>(),
         "fork": view.fork.as_ref().map(note_json),
+        "head": view.head.as_ref().map(|head| json!({
+            "rosterVersion": head.roster_version, "listVersion": head.list_version, "listDigest": head.list_digest,
+        })),
+        "furthestListVersion": view.furthest_list_version,
     })
 }
 
@@ -424,6 +448,42 @@ pub fn list_case_verdict(case: &Value, ml_dsa_keys: &HashMap<String, String>) ->
                 verdict.insert("dismissals".into(), json!(said));
             }
         }
+        if let (Some(lists), true) = (&lists, probes["commit"].is_object()) {
+            // The heads a roster's signer would commit now, every other live folder read afresh.
+            let commit = &probes["commit"];
+            let built = (|| -> CoreResult<Arc<CommittedHeads>> {
+                let mut all = vec![lists.clone()];
+                for (other, served) in commit["others"].as_object().unwrap() {
+                    all.push(area_lists_read(
+                        chain.clone(),
+                        heads_record.clone().unwrap_or(None),
+                        other.clone(),
+                        None,
+                        Some(signed_lists(served)),
+                        ml_dsa_keys.clone(),
+                    )?);
+                }
+                heads_to_commit(
+                    Some(chain.clone()),
+                    chain.group_id(),
+                    heads_record.clone().unwrap_or(None),
+                    all,
+                    signed_lists(&commit["changed"]),
+                    strings(&commit["retire"]),
+                    HashMap::new(),
+                )
+            })();
+            verdict.insert(
+                "commit".into(),
+                match built {
+                    Ok(built) => json!({
+                        "headsDigest": built.heads_digest(),
+                        "rows": built.rows().iter().map(head_row_json).collect::<Vec<_>>(),
+                    }),
+                    Err(error) => json!({ "error": error.to_string() }),
+                },
+            );
+        }
         if let Some(standing) = probes["standing"].as_array() {
             let said: Vec<&str> = standing
                 .iter()
@@ -510,13 +570,150 @@ pub fn folder_verdict(case: &Value) -> Value {
     json!({ "integrity": integrity, "via": said.via })
 }
 
+/* The folder's list as a device served `which` of its lists reads it at `through`; None when it read none. */
+fn folder_lists(folder: &Value, input: &CaseInput, through: u64, which: &str) -> Option<Arc<AreaLists>> {
+    if which == "none" {
+        return None;
+    }
+    let chain = chain_through(input, through);
+    let served: Vec<ServedHeads> = folder["heads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|at| ServedHeads {
+            roster_version: n(at, "rosterVersion"),
+            rows: at["rows"].as_array().unwrap().iter().map(head_row_of).collect(),
+        })
+        .collect();
+    let heads = heads_read(chain.clone(), None, served).unwrap().record;
+    let lists = area_lists_read(
+        chain,
+        Some(heads),
+        AREA.into(),
+        None,
+        Some(signed_lists(&folder["served"][which])),
+        input.ml_dsa_keys.clone(),
+    );
+    Some(lists.unwrap())
+}
+
+fn folder_input(folder: &Value, ml_dsa_keys: &HashMap<String, String>) -> CaseInput {
+    let mut input = case_from(&json!({ "name": "", "input": folder["input"], "expected": null })).1;
+    input.ml_dsa_keys = ml_dsa_keys.clone();
+    input
+}
+
+/* What this core says of a grant item (the web's grantItemVerdict): `opened:<key>`, `sealed` or `refused`. */
+pub fn grant_item_verdict(folder: &Value, item: &Value, ml_dsa_keys: &HashMap<String, String>) -> String {
+    let input = folder_input(folder, ml_dsa_keys);
+    let through = n(item, "through");
+    let chain = chain_through(&input, through);
+    let lists = folder_lists(folder, &input, through, &s(item, "lists"));
+    let (granter, reader) = (person(n(item, "granter") as u8), person(n(item, "reader") as u8));
+    let ctx = &item["ctx"];
+    let ctx = AreaGrantContext {
+        group_id: s(ctx, "groupId"),
+        workspace_id: s(ctx, "workspaceId"),
+        workspace_key_version: n(ctx, "workspaceKeyVersion"),
+        grantee_user_id: s(ctx, "granteeUserId"),
+        grantee_key_version: n(ctx, "granteeKeyVersion"),
+        granter_user_id: s(ctx, "granterUserId"),
+        roster_version: n(ctx, "rosterVersion"),
+        roster_digest: s(ctx, "rosterDigest"),
+    };
+    if s(item, "kind") == "sealing" {
+        let key = area_key_at(AREA, 1);
+        let sealed = match lists {
+            Some(lists) => company_area_grant_seal(
+                key,
+                ctx,
+                chain,
+                AREA_SEED.into(),
+                reader.kem(),
+                granter.keys.clone(),
+                lists,
+            ),
+            // Without a list a company's folder key is sealed to nobody.
+            None => area_grant_seal(key, ctx, chain, AREA_SEED.into(), reader.kem(), granter.keys.clone()),
+        };
+        return if sealed.is_ok() { "sealed".into() } else { "refused".into() };
+    }
+    let envelope = b(item, "envelope");
+    let opened = match lists {
+        Some(lists) => company_area_grant_open(
+            envelope,
+            ctx,
+            chain,
+            AREA_SEED.into(),
+            granter.ml_dsa(),
+            None,
+            reader.user_id.clone(),
+            1,
+            reader.keys.clone(),
+            lists,
+        ),
+        // Without a list a company's grant opens through nothing: the family opener refuses it.
+        None => area_grant_open(
+            envelope,
+            ctx,
+            chain,
+            AREA_SEED.into(),
+            granter.ml_dsa(),
+            None,
+            reader.user_id.clone(),
+            1,
+            reader.keys.clone(),
+        ),
+    };
+    opened.map_or("refused".into(), |key| format!("opened:{}", e(&key)))
+}
+
+/* What this core says of a record item: the verdict of design 2.8, then the folder's own rows. */
+pub fn record_item_verdict(folder: &Value, item: &Value, ml_dsa_keys: &HashMap<String, String>) -> Value {
+    let input = folder_input(folder, ml_dsa_keys);
+    let through = n(item, "through");
+    let chain = chain_through(&input, through);
+    let lists = folder_lists(folder, &input, through, &s(item, "lists"));
+    let (writer, signer) = (person(n(item, "writer") as u8), person(n(item, "signedBy") as u8));
+    let pin = (item["pinned"] == json!(true)).then(|| WriterPin::of(pinned(&writer), None));
+    let trust = group_writer_trust(
+        GROUP.into(),
+        HashMap::from([(AREA.to_string(), 1)]),
+        GroupReading::Accepted { chain: chain.clone() },
+        AREA.into(),
+        writer.user_id.clone(),
+        pin,
+        Some(served_keys(&writer)),
+        Some(vec![]),
+        None,
+    );
+    let integrity = group_metadata_integrity(
+        trust.clone(),
+        None,
+        record_statement(),
+        record_envelope(),
+        Some(base64url_decode(record_signature(&signer)).unwrap()),
+    );
+    let standing =
+        folder_standing(chain, lists, AREA.into(), writer.user_id.clone(), strings(&item["sharedEditors"]));
+    let said = folder_integrity(integrity, trust, standing);
+    let integrity = match said.verdict {
+        FolderVerdict::Group { verdict } => group_verdict_name(verdict),
+        FolderVerdict::NotOnThisFolder => "not-on-this-folder",
+    };
+    json!({ "integrity": integrity, "via": said.via })
+}
+
 /*
  * A company's folder written with this core's own builders, for the web to
  * read (`examples/company_fixtures.rs`): its Owner makes it with its first
  * folder and that folder's base list (roster 1), lets two Members in (2),
- * adds one to the folder as a manager, who adds the other as a viewer, and a
- * third roster commits the folder's head. A device reads it before and after
- * that roster. Returned as a list case, its expected verdict this core's own.
+ * adds one to the folder as a manager, who adds the other as a viewer, a
+ * third roster commits the folder's head, and a fourth changes the folder's
+ * key, with a base list that leaves the viewer out. Every roster's heads come
+ * from `heads_to_commit`, over what a device read. A device reads it before
+ * and after each of those rosters. Returned as a list case, its expected
+ * verdict this core's own.
  */
 pub fn lists_made_here() -> Value {
     let (owner, member, biller) = (person(1), person(4), person(6));
@@ -543,79 +740,55 @@ pub fn lists_made_here() -> Value {
         raw_marks: None,
     };
     let manager = |who: &Person| ListPerson { user_id: who.user_id.clone(), role: ListRole::Manager };
-    // The base list, before the company exists: it names no roster.
+    let base_of = |people: Vec<ListPerson>, members: Vec<RosterMember>| BaseAreaList {
+        group_id: GROUP.into(),
+        workspace_id: AREA.into(),
+        area_kind: AreaKind::Shared,
+        everyone: None,
+        people,
+        signer_user_id: owner.user_id.clone(),
+        signer_key_version: 1,
+        members,
+    };
+    let signed_of = |at: &SignedListWithDigest| SignedAreaList {
+        statement: at.statement.clone(),
+        signature: at.signature.clone(),
+    };
+    let area_key = |version: u64, list_digest: &str| AreaKey {
+        workspace_id: AREA.into(),
+        workspace_key: area_key_at(AREA, version),
+        root_key: Some(root_key_at(AREA, version)),
+        area_kind: Some(AreaKind::Shared),
+        list_digest: Some(list_digest.into()),
+    };
+    // The base list, before the company exists: it names no roster. The first roster's heads
+    // are built from it.
     let base = area_list_base_sign(
-        BaseAreaList {
-            group_id: GROUP.into(),
-            workspace_id: AREA.into(),
-            workspace_key_version: 1,
-            list_version: 1,
-            area_kind: AreaKind::Shared,
-            everyone: None,
-            people: vec![manager(&owner)],
-            signer_user_id: owner.user_id.clone(),
-            signer_key_version: 1,
-            members: vec![entry(1, &OWNER_ROLES)],
-        },
+        base_of(vec![manager(&owner)], vec![entry(1, &OWNER_ROLES)]),
+        None,
         None,
         owner.keys.clone(),
     )
     .unwrap();
-    let row = |list_version: u64, list_digest: &str| HeadRow {
-        workspace_id: AREA.into(),
-        workspace_key_version: 1,
-        list_version,
-        list_digest: list_digest.into(),
-        share_log_index: 0,
-        share_log_digest: share_log_start(GROUP.into(), AREA.into()).unwrap(),
-    };
-    let first_rows = vec![row(1, &base.digest)];
+    let first_heads =
+        heads_to_commit(None, GROUP.into(), None, vec![], vec![signed_of(&base)], vec![], HashMap::new())
+            .unwrap();
+    let mut served_heads = vec![ServedHeads { roster_version: 1, rows: first_heads.rows() }];
     let first = company_roster_first(
         GROUP.into(),
         entry(1, &OWNER_ROLES),
-        Some(vec![AreaKey {
-            workspace_id: AREA.into(),
-            workspace_key: area_key_at(AREA, 1),
-            root_key: Some(root_key_at(AREA, 1)),
-            area_kind: Some(AreaKind::Shared),
-            list_digest: Some(base.digest.clone()),
-        }]),
-        FirstOrgRoster {
-            custody_key: key,
-            kit,
-            rules: None,
-            heads_digest: heads_digest(GROUP.into(), first_rows.clone()).unwrap(),
-        },
+        Some(vec![area_key(1, &base.digest)]),
+        FirstOrgRoster { custody_key: key, kit, rules: None, heads: first_heads.clone() },
     )
     .unwrap();
     input.rosters.push(roster_sign(first, group_seed(1), owner.keys.clone()).unwrap());
     let all = vec![entry(1, &OWNER_ROLES), entry(4, &[]), entry(6, &[GroupRole::Billing])];
-    let next = |input: &CaseInput, rows: Vec<HeadRow>| {
+    let mut served = vec![signed_of(&base)];
+    // What a device reads at the latest roster: the heads, and the folder's list.
+    let read = |input: &CaseInput, served_heads: &[ServedHeads], served: &[SignedAreaList]| {
         let chain = chain_through(input, input.rosters.len() as u64);
-        let org = NextOrgRoster {
-            custody_key: None,
-            kit: None,
-            rules: None,
-            auto_utc_day: None,
-            heads_digest: heads_digest(GROUP.into(), rows).unwrap(),
-            checked: vec![],
-        };
-        let roster = company_roster_next(chain, all.clone(), owner.user_id.clone(), None, None, org).unwrap();
-        roster_sign(roster, group_seed(1), owner.keys.clone()).unwrap()
-    };
-    // Roster 2 lets the two Members in; the folder's head is the base list still.
-    let second = next(&input, first_rows.clone());
-    input.rosters.push(second);
-    let mut served =
-        vec![SignedAreaList { statement: base.statement.clone(), signature: base.signature.clone() }];
-    let chain = chain_through(&input, 2);
-    let rows_served =
-        |through: u64, rows: &[HeadRow]| ServedHeads { roster_version: through, rows: rows.to_vec() };
-    let heads = heads_read(chain.clone(), None, vec![rows_served(1, &first_rows), rows_served(2, &[])])
-        .unwrap()
-        .record;
-    let read = |served: &[SignedAreaList]| {
-        area_lists_read(
+        let heads = heads_read(chain.clone(), None, served_heads.to_vec()).unwrap().record;
+        let lists = area_lists_read(
             chain.clone(),
             Some(heads.clone()),
             AREA.into(),
@@ -623,50 +796,99 @@ pub fn lists_made_here() -> Value {
             Some(served.to_vec()),
             ml_dsa_keys.clone(),
         )
-        .unwrap()
-    };
-    // The Owner, an Admin on the list, adds a Member as a manager; that manager adds a viewer.
-    let mut add = |who: &Person, person: ListPerson| {
-        let signed = area_list_addition_sign(
-            chain.clone(),
-            heads.clone(),
-            read(&served),
-            vec![person],
-            None,
-            who.user_id.clone(),
-            who.keys.clone(),
-        )
         .unwrap();
-        served.push(SignedAreaList { statement: signed.statement, signature: signed.signature });
-        signed.digest
+        (chain, heads, lists)
     };
-    add(&owner, manager(&member));
-    let head = add(&member, ListPerson { user_id: biller.user_id.clone(), role: ListRole::Viewer });
-    // What verification refuses is never signed: a viewer adds nobody, and nobody is taken off.
-    let lists = read(&served);
-    let refused = |who: &Person, person: ListPerson| {
+    let next = |chain: Arc<AcceptedRosters>, keys: Option<Vec<AreaKey>>, heads: Arc<CommittedHeads>| {
+        let org = NextOrgRoster {
+            custody_key: None,
+            kit: None,
+            rules: None,
+            auto_utc_day: None,
+            heads,
+            checked: vec![],
+        };
+        company_roster_next(chain, all.clone(), owner.user_id.clone(), keys, None, org)
+    };
+    let commit = |chain: &Arc<AcceptedRosters>,
+                  heads: &HeadsRecord,
+                  lists: Vec<Arc<AreaLists>>,
+                  changed: Vec<SignedAreaList>| {
+        heads_to_commit(
+            Some(chain.clone()),
+            GROUP.into(),
+            Some(heads.clone()),
+            lists,
+            changed,
+            vec![],
+            HashMap::new(),
+        )
+    };
+    // Roster 2 lets the two Members in; the folder's head is the base list still.
+    let (chain, heads, lists) = read(&input, &served_heads, &served);
+    // Heads are built only over every folder read, and a roster takes only heads built for it.
+    assert!(commit(&chain, &heads, vec![], vec![]).is_err(), "no heads over a folder left unread");
+    assert!(next(chain.clone(), None, first_heads.clone()).is_err(), "heads built on another roster");
+    assert!(next(chain.clone(), None, heads_unverified(first_heads.heads_digest())).is_ok());
+    let second_heads = commit(&chain, &heads, vec![lists], vec![]).unwrap();
+    served_heads.push(ServedHeads { roster_version: 2, rows: second_heads.rows() });
+    let second = next(chain, None, second_heads).unwrap();
+    input.rosters.push(roster_sign(second, group_seed(1), owner.keys.clone()).unwrap());
+    // The Owner, an Admin on the list, adds a Member as a manager; that manager adds a viewer.
+    let (chain, heads, _) = read(&input, &served_heads, &served);
+    let sign = |served: &[SignedAreaList], who: &Person, person: ListPerson| {
+        let (_, _, lists) = read(&input, &served_heads, served);
         area_list_addition_sign(
             chain.clone(),
             heads.clone(),
-            lists.clone(),
+            lists,
             vec![person],
             None,
             who.user_id.clone(),
             who.keys.clone(),
         )
-        .is_err()
     };
-    assert!(refused(&biller, manager(&person(5))), "a viewer signs no addition");
-    assert!(
-        refused(&member, ListPerson { user_id: owner.user_id.clone(), role: ListRole::Viewer }),
-        "an addition lowers no role"
-    );
-    assert!(refused(&member, manager(&person(5))), "an addition names only active members");
+    let viewer = |who: &Person| ListPerson { user_id: who.user_id.clone(), role: ListRole::Viewer };
+    served.push(signed_of(&sign(&served, &owner, manager(&member)).unwrap()));
+    let head = sign(&served, &member, viewer(&biller)).unwrap();
+    served.push(signed_of(&head));
+    // What verification refuses is never signed: a viewer adds nobody, nobody is taken off,
+    // nobody outside the company is added, and an addition that changes nothing is none.
+    assert!(sign(&served, &biller, manager(&person(5))).is_err(), "a viewer signs no addition");
+    assert!(sign(&served, &member, viewer(&owner)).is_err(), "an addition lowers no role");
+    assert!(sign(&served, &member, manager(&person(5))).is_err(), "an addition names only active members");
+    let nothing = sign(&served, &member, viewer(&biller)).unwrap_err();
+    assert_eq!(nothing.to_string(), "This adds nobody and raises no role on the folder’s list.");
     // Roster 3 commits the folder's head as the Owner's device verified it.
-    let third_rows = vec![row(3, &head)];
-    let third = next(&input, third_rows.clone());
-    input.rosters.push(third);
-    let latest = chain_through(&input, 3);
+    let (chain, heads, lists) = read(&input, &served_heads, &served);
+    let third_heads = commit(&chain, &heads, vec![lists], vec![]).unwrap();
+    served_heads.push(ServedHeads { roster_version: 3, rows: third_heads.rows() });
+    input.rosters.push(
+        roster_sign(next(chain, None, third_heads).unwrap(), group_seed(1), owner.keys.clone()).unwrap(),
+    );
+    // Roster 4 changes the folder's key: a base list without the viewer, numbered past the head.
+    let (chain, heads, lists) = read(&input, &served_heads, &served);
+    let rotated = area_list_base_sign(
+        base_of(vec![manager(&owner), manager(&member)], vec![]),
+        Some(chain.clone()),
+        Some(lists.clone()),
+        owner.keys.clone(),
+    )
+    .unwrap();
+    let parsed = area_list_parse(rotated.statement.clone()).unwrap();
+    assert_eq!(
+        (parsed.list_version, parsed.workspace_key_version),
+        (4, 2),
+        "one past the head, at the next key"
+    );
+    // The heads for a key change are built with its base list, and fit that roster alone.
+    let unchanged = commit(&chain, &heads, vec![lists], vec![]).unwrap();
+    assert!(next(chain.clone(), Some(vec![area_key(2, &rotated.digest)]), unchanged).is_err());
+    let fourth_heads = commit(&chain, &heads, vec![], vec![signed_of(&rotated)]).unwrap();
+    served_heads.push(ServedHeads { roster_version: 4, rows: fourth_heads.rows() });
+    let fourth = next(chain, Some(vec![area_key(2, &rotated.digest)]), fourth_heads).unwrap();
+    input.rosters.push(roster_sign(fourth, group_seed(1), owner.keys.clone()).unwrap());
+    let latest = chain_through(&input, 4);
     let digest_of = |text: &str| roster_digest(text.as_bytes().to_vec());
     let dismissal = fork_dismissal_sign(
         ForkDismissal {
@@ -674,55 +896,48 @@ pub fn lists_made_here() -> Value {
             workspace_id: AREA.into(),
             kind: ForkKind::List,
             committed_position: 3,
-            committed_digest: head.clone(),
+            committed_digest: head.digest.clone(),
             reported_position: 3,
             reported_digest: digest_of("a list this device held"),
             signer_user_id: owner.user_id.clone(),
             signer_key_version: 1,
-            roster_version: 3,
+            roster_version: 4,
             roster_digest: latest.roster_digest(),
         },
         latest,
         owner.keys.clone(),
     )
     .unwrap();
-    let lists_json: Vec<Value> = served.iter().map(|at| signed_json(&at.statement, &at.signature)).collect();
-    let rows_json = |rows: &[HeadRow]| {
-        rows.iter()
-            .map(|row| {
-                json!({
-                    "workspaceId": row.workspace_id,
-                    "workspaceKeyVersion": row.workspace_key_version,
-                    "listVersion": row.list_version,
-                    "listDigest": row.list_digest,
-                    "shareLogIndex": row.share_log_index,
-                    "shareLogDigest": row.share_log_digest,
-                })
-            })
-            .collect::<Vec<_>>()
+    let lists_json = |served: &[SignedAreaList]| {
+        served.iter().map(|at| signed_json(&at.statement, &at.signature)).collect::<Vec<_>>()
     };
-    let probes = json!({
-        "access": [
-            { "userId": owner.user_id }, { "userId": member.user_id }, { "userId": biller.user_id },
-            { "userId": person(5).user_id }, { "userId": owner.user_id, "session": "browse" },
-        ],
-        "owed": true,
-        "grants": {},
-        "writable": true,
-        "standing": [{ "writerUserId": member.user_id }, { "writerUserId": biller.user_id }],
-        "dismissals": [{
-            "statement": e(&dismissal.statement), "signature": e(&dismissal.signature), "signer": 1, "keyVersion": 1,
-        }],
-    });
+    let probes = |dismissed: bool| {
+        let mut probes = json!({
+            "access": [
+                { "userId": owner.user_id }, { "userId": member.user_id }, { "userId": biller.user_id },
+                { "userId": person(5).user_id }, { "userId": owner.user_id, "session": "browse" },
+            ],
+            "owed": true,
+            "grants": {},
+            "writable": true,
+            "standing": [{ "writerUserId": member.user_id }, { "writerUserId": biller.user_id }],
+        });
+        if dismissed {
+            probes["dismissals"] = json!([{
+                "statement": e(&dismissal.statement), "signature": e(&dismissal.signature), "signer": 1, "keyVersion": 1,
+            }]);
+        }
+        probes
+    };
     let mut case = case_json("lists-made-by-the-core", &input, &Value::Null);
-    case["heads"] = json!([
-        { "rosterVersion": 1, "rows": rows_json(&first_rows) },
-        { "rosterVersion": 2, "rows": [] },
-        { "rosterVersion": 3, "rows": rows_json(&third_rows) },
-    ]);
+    case["heads"] = json!(served_heads
+        .iter()
+        .map(|at| json!({ "rosterVersion": at.roster_version, "rows": at.rows.iter().map(head_row_json).collect::<Vec<_>>() }))
+        .collect::<Vec<_>>());
     case["steps"] = json!([
-        { "through": 2, "workspaceId": AREA, "served": lists_json, "probes": probes },
-        { "through": 3, "workspaceId": AREA, "served": lists_json, "probes": probes },
+        { "through": 2, "workspaceId": AREA, "served": lists_json(&served), "probes": probes(false) },
+        { "through": 3, "workspaceId": AREA, "served": lists_json(&served), "probes": probes(false) },
+        { "through": 4, "workspaceId": AREA, "served": lists_json(&[signed_of(&rotated)]), "probes": probes(true) },
     ]);
     case["expected"] = list_case_verdict(&case, &input.ml_dsa_keys);
     assert_eq!(
@@ -731,5 +946,7 @@ pub fn lists_made_here() -> Value {
         "two lists past the base the roster committed"
     );
     assert_eq!(case["expected"][1]["lists"]["state"], json!("level"), "the third roster commits them");
+    assert_eq!(case["expected"][2]["lists"]["state"], json!("level"), "the fourth changes the key");
+    assert_eq!(case["expected"][2]["lists"]["listVersion"], json!(4));
     case
 }

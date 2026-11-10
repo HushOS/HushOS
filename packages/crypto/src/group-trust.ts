@@ -8,6 +8,7 @@ import {
 } from './accepted';
 import { KIND_FIXED, NOTHING_LISTED, RETIRED, rowsAfter } from './area-keys';
 import type { FolderStanding } from './area-lists';
+import { requireCommittedHeads, type CommittedHeads } from './committed-heads';
 import { ascending, bytesOf, digestOf, integer, uuid } from './canonical';
 import { CryptoError } from './errors';
 import {
@@ -48,6 +49,7 @@ import {
     type GroupPublicKey,
     type GroupRole,
     type Roster,
+    type RosterArea,
     type RosterMember,
     type SignedGroupStatement,
 } from './groups';
@@ -2958,7 +2960,10 @@ export async function firstRoster(
                   custody: await custodyField(1, options.org.custodyKey, 1, options.org.kit),
                   rules: options.org.rules ?? { autoJoin: false, autoJoinDailyLimit: 10 },
                   auto: null,
-                  heads: { areaCount: areas.length, headsDigest: options.org.headsDigest },
+                  heads: {
+                      areaCount: areas.length,
+                      headsDigest: headsFor(options.org.heads, null, groupId, areas),
+                  },
               }
             : {}),
     };
@@ -3060,9 +3065,48 @@ export type FirstOrgRoster = {
     kit: KitPublicKeys;
     /* Auto-join off, ten a day, unless given. */
     rules?: RosterRules;
-    /* The digest over the heads of the roster's areas, as the creator's device verified them (2.3). */
-    headsDigest: string;
+    /* The heads of the roster's areas, built by headsToCommit from their base lists (2.3). */
+    heads: CommittedHeads;
 };
+
+const HEADS_NOT_FOR_THIS = 'These heads were not built for this member list.';
+
+/*
+ * The digest a roster carries for its heads: only of heads headsToCommit
+ * built (area-lists.ts), on the roster this one follows, for exactly the
+ * areas it creates, rotates and retires, each with the base list its row
+ * commits to.
+ */
+function headsFor(
+    heads: unknown,
+    chain: AcceptedRosters | null,
+    groupId: string,
+    areas: readonly RosterArea[],
+) {
+    const built = requireCommittedHeads(heads);
+    // (Heads no device verified, in tests and fuzzers: a digest and nothing to hold it to.)
+    if (built.rosterVersion === null) return built.headsDigest;
+    const rows = areas.filter((row) => !row.retired);
+    const retired = areas.filter((row) => row.retired).map((row) => row.workspaceId);
+    if (
+        built.groupId !== groupId ||
+        built.rosterVersion !== (chain ? chain.roster.rosterVersion : 0) ||
+        rows.length !== built.changed.length ||
+        rows.some(
+            (row) =>
+                !built.changed.some(
+                    (at) =>
+                        at.workspaceId === row.workspaceId &&
+                        at.workspaceKeyVersion === row.workspaceKeyVersion &&
+                        at.listDigest === row.listDigest,
+                ),
+        ) ||
+        retired.length !== built.retired.length ||
+        retired.some((id) => !built.retired.includes(id))
+    )
+        throw new CryptoError(HEADS_NOT_FOR_THIS);
+    return built.headsDigest;
+}
 
 /*
  * What a company's next roster says beside its members and areas
@@ -3079,8 +3123,8 @@ export type NextOrgRoster = {
     rules?: RosterRules;
     /* Set by a device admitting someone unattended (rule 9): the UTC day by its own clock. */
     auto?: { utcDay: string };
-    /* The digest over every live area's heads as this device verified them (2.3). */
-    headsDigest: string;
+    /* Every live area's heads as this device verified them, built by headsToCommit (2.3). */
+    heads: CommittedHeads;
     /*
      * The fresh words checks this device holds (companies-design 1.2, and 2.2
      * "Another Owner checks first"): a verified pin of each Owner or kit
@@ -3226,7 +3270,7 @@ async function companyFields(
     roster.heads = {
         areaCount:
             Object.keys(chain.areaKeys).length - chain.retiredAreas.length + created - retiring,
-        headsDigest: options.headsDigest,
+        headsDigest: headsFor(options.heads, chain, roster.groupId, rows),
     };
     // No entry changed: the statement says `same` and names the members of the roster before.
     if (

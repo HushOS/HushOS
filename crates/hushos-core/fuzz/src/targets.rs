@@ -472,7 +472,14 @@ pub fn company_next(value: &Value) -> Option<Value> {
         signer_user_id,
         Some(area_keys),
         retire_areas,
-        NextOrgRoster { custody_key, kit, rules, auto_utc_day, heads_digest, checked },
+        NextOrgRoster {
+            custody_key,
+            kit,
+            rules,
+            auto_utc_day,
+            heads: heads_unverified(heads_digest),
+            checked,
+        },
     )
     .and_then(roster_statement);
     // A refusal with its sentence: the twins share them for a company's rules, so "refused by

@@ -123,8 +123,20 @@ describe('a folder’s list under whatever the server serves', () => {
                         }
                         expect(lists.repost.length).toBeLessThanOrEqual(record.lists.length - 1);
                     }
+                    // A device that goes on carries no open fork: what it returns beside a level
+                    // or ahead reading is the note of one it settled, or of a head it passed over.
                     if (lists.state === 'level' || lists.state === 'ahead')
-                        expect(lists.fork).toBeNull();
+                        expect(lists.fork?.settled ?? true).toBe(true);
+                    if (lists.state === 'forked') expect(lists.fork?.settled ?? false).toBe(false);
+                    // No note is dropped by reading: every one the device held is still held.
+                    const last = index > 0 ? listed(verdict[index - 1]!)?.record : null;
+                    if (
+                        last &&
+                        lists.record &&
+                        c.steps[index]!.record === undefined &&
+                        last.workspaceId === lists.record.workspaceId
+                    )
+                        expect(lists.record.forks.length).toBeGreaterThanOrEqual(last.forks.length);
                     // Nobody who is not an active member is entitled by a list, on any reading.
                     for (const at of step.access ?? [])
                         if (at.access?.basis === 'list') {

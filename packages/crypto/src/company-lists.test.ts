@@ -3,7 +3,9 @@ import {
     EMPLOYEE_LIST,
     HEAD_BEHIND,
     HEAD_FORKED,
+    ENTRY_FROM_BEFORE,
     NARROWS,
+    NOTHING_ADDED,
     NOT_ACTIVE,
     NOT_AN_ADMIN,
     NOT_ENTITLED,
@@ -13,6 +15,7 @@ import {
     clearForkNote,
     committedHead,
     headState,
+    headsToCommit,
     parseAreaList,
     readAreaLists,
     readHeads,
@@ -29,12 +32,15 @@ import {
     LIST_REFUSALS,
     OWN,
     folderId,
+    folderItems,
     folderVerdict,
+    grantItemVerdict,
     listCaseVerdict,
     listCases,
     listStatementCases,
     listStatementVerdict,
     listWorld,
+    recordItemVerdict,
     type ListCase,
     type ListWorld,
 } from './company-lists-testkit';
@@ -45,14 +51,21 @@ import {
     ENVELOPE,
     GROUP,
     RECORD,
+    OWNER_ROLES,
     areaKeyAt,
     atRoster,
+    custodyAt,
+    groupKeyAt,
+    kitAt,
     pattern,
+    person,
+    rootKeyAt,
     type Person,
 } from './group-testkit';
-import { acceptRosters, type AcceptedRosters } from './group-trust';
+import { kitMlDsaKeys } from './company-testkit';
+import { acceptRosters, firstRoster, nextRoster, type AcceptedRosters } from './group-trust';
 import { folderRecordVerdicts, recordVerdicts } from './group-verdicts';
-import { NOT_ON_LIST, openAreaGrant, sealAreaGrant } from './groups';
+import { sealAreaGrant, signRoster } from './groups';
 import { decode, encode } from './keys';
 import { metadataStatement, metadataStatements, signStatement } from './signatures';
 
@@ -101,6 +114,7 @@ describe('the cases of 2.3', () => {
                 else for (const at of step.lists.refused) said.add(at.reason);
                 if (step.heads && 'error' in step.heads) said.add(step.heads.error);
                 if (step.writable && step.writable !== 'ok') said.add(step.writable);
+                if (step.commit && 'error' in step.commit) said.add(step.commit.error);
             }
         }
         // Each refusal the module words is given by some case.
@@ -294,10 +308,9 @@ describe('signing lists', () => {
         type Base = Parameters<typeof signBaseAreaList>[0];
         const base: Base = {
             chain,
+            lists: null,
             groupId: GROUP,
             workspaceId: folderId(3),
-            workspaceKeyVersion: 1,
-            listVersion: 1,
             areaKind: 'shared',
             everyone: '',
             people: [{ userId: member.userId, role: 'manager' }],
@@ -308,7 +321,11 @@ describe('signing lists', () => {
         const signed = await signBaseAreaList(base);
         const list = parseAreaList(decode(signed.statement));
         expect([list.rosterVersion, list.rosterDigest]).toEqual([3, chain.rosterDigest]);
-        expect(list.previousListDigest).toBe('');
+        expect([list.previousListDigest, list.listVersion, list.workspaceKeyVersion]).toEqual([
+            '',
+            1,
+            1,
+        ]);
         expect(signed.digest).toBe(await areaListDigest(decode(signed.statement)));
         // A fresh nonce each time.
         expect((await signBaseAreaList(base)).digest).not.toBe(signed.digest);
@@ -325,7 +342,7 @@ describe('signing lists', () => {
             people: withNewcomer,
             members: [...chain.roster.members, newcomer.entry([])],
         });
-        // An employee folder is its assignee's alone; a Member signs no roster; versions follow.
+        // An employee folder is its assignee's alone; a Member signs no roster.
         await refused({ areaKind: 'employee', everyone: 'viewer' }, EMPLOYEE_LIST);
         await refused(
             {
@@ -336,9 +353,10 @@ describe('signing lists', () => {
         );
         await refused({ signerUserId: member.userId, signer: member.signer }, NOT_ENTITLED);
         await refused({ signer: member.signer }, 'These are not the sealer’s keys');
-        await refused({ workspaceKeyVersion: 2 }, NOT_THE_BASE);
-        await refused({ listVersion: 2 }, NOT_THE_BASE);
-        await refused({ workspaceId: folderId(FOLDER) }, NOT_THE_BASE);
+        // A folder the chain has takes a key change only from its list as this device read it.
+        await refused({ workspaceId: folderId(FOLDER) }, HEAD_BEHIND);
+        const { lists } = await reading(w);
+        await refused({ lists }, NOT_THE_BASE);
         // Roster 1's own folders: no roster to name yet.
         const first = await signBaseAreaList({
             ...base,
@@ -347,6 +365,74 @@ describe('signing lists', () => {
             people: [{ userId: admin.userId, role: 'manager' }],
         });
         expect(parseAreaList(decode(first.statement)).rosterVersion).toBe(0);
+    });
+
+    test('a key change’s base list is numbered past everything verified or committed, and is not signed behind or over a fork it has not settled', async () => {
+        const w = await listWorld();
+        const { admin, member, keeper } = w.cast;
+        const hidden = await w.add(FOLDER, member, [{ userId: keeper.userId, role: 'editor' }], {
+            hidden: true,
+        });
+        await w.add(FOLDER, admin, [{ userId: w.cast.admin2.userId, role: 'viewer' }]);
+        const theirs = w.served(FOLDER);
+        await w.roster(admin, w.all);
+        // A roster commits a list the server never serves.
+        await w.roster(admin, w.all, {
+            commit: { [FOLDER]: { listVersion: 6, listDigest: encode(pattern(32, 9)) } },
+        });
+        const keys = (await w.input()).mlDsaKeys;
+        const at = async (
+            through: number,
+            record: AreaLists['record'],
+            served: SignedAreaList[] | null,
+        ) => {
+            const chain = await chainOf(w, through);
+            const heads = (await readHeads({ chain, record: null, served: w.heads })).record;
+            const lists = await readAreaLists({
+                chain,
+                heads,
+                workspaceId: folderId(FOLDER),
+                record,
+                served,
+                mlDsaKeys: keys,
+            });
+            const sign = () =>
+                signBaseAreaList({
+                    chain,
+                    lists,
+                    groupId: GROUP,
+                    workspaceId: folderId(FOLDER),
+                    areaKind: 'employee',
+                    everyone: '',
+                    people: [{ userId: member.userId, role: 'manager' }],
+                    signerUserId: admin.userId,
+                    signerKeyVersion: 1,
+                    signer: admin.signer,
+                });
+            return { lists, sign };
+        };
+        // Level at roster 4, two lists verified: the next key's base list is list 3, and keeps
+        // the folder's kind whatever the caller says.
+        const level = await at(4, null, theirs);
+        const next = parseAreaList(decode((await level.sign()).statement));
+        expect([level.lists.state, next.listVersion, next.workspaceKeyVersion]).toEqual([
+            'level',
+            3,
+            2,
+        ]);
+        // Behind (not yet answered), nothing is signed.
+        const early = (await at(3, null, [theirs[0]!])).lists.record;
+        await expect((await at(4, early, null)).sign()).rejects.toThrow(HEAD_BEHIND);
+        const mine = (await at(3, null, [theirs[0]!, hidden])).lists.record;
+        // Forked from a list it holds another of, nothing is signed until that is settled.
+        const forked = await at(4, mine, theirs);
+        expect(forked.lists.state).toBe('forked');
+        await expect(forked.sign()).rejects.toThrow(HEAD_FORKED);
+        // Forked only because nothing reaches the committed head: the key change is the way out,
+        // numbered past that head.
+        const stuck = await at(5, level.lists.record, theirs);
+        expect([stuck.lists.state, stuck.lists.head!.listVersion]).toEqual(['forked', 6]);
+        expect(parseAreaList(decode((await stuck.sign()).statement)).listVersion).toBe(7);
     });
 
     test('an addition is signed only when it would verify, and what it signs then does', async () => {
@@ -376,12 +462,23 @@ describe('signing lists', () => {
         const refused = async (
             over: Partial<Parameters<typeof signAreaListAddition>[0]>,
             reason: string,
-        ) => expect(signAreaListAddition({ ...input, add: [], ...over })).rejects.toThrow(reason);
+        ) =>
+            expect(
+                signAreaListAddition({
+                    ...input,
+                    add: [{ userId: w.cast.admin2.userId, role: 'viewer' }],
+                    ...over,
+                }),
+            ).rejects.toThrow(reason);
         // A viewer signs nothing; nobody lowers a role; nobody outside the company is added.
         await refused({ signerUserId: biller.userId, signer: biller.signer }, NOT_ENTITLED);
         await refused({ add: [{ userId: member.userId, role: 'viewer' }] }, NARROWS);
         await refused({ add: [{ userId: newcomer.userId, role: 'viewer' }] }, NOT_ACTIVE);
         await refused({ signer: biller.signer }, 'These are not the sealer’s keys');
+        // One that changes nothing is not signed: nobody added, nobody raised.
+        await refused({ add: [] }, NOTHING_ADDED);
+        await refused({ add: [{ userId: member.userId, role: 'manager' }] }, NOTHING_ADDED);
+        await refused({ add: [], everyone: '' }, NOTHING_ADDED);
         // An Admin on no list adds, and raises `everyone`; never lowers it.
         const open = await signAreaListAddition({
             ...input,
@@ -576,47 +673,257 @@ describe('the signed dismissal', () => {
     });
 });
 
-describe('a company folder’s grant', () => {
-    test('opens only for someone the list this device verified entitles', async () => {
+describe('a company folder’s grants and records', () => {
+    test('a grant is sealed and opened only for someone the verified list entitles, and a record reads by the roster and then the list', async () => {
+        const folder = await folderItems();
+        const said = new Map<string, string>();
+        for (const item of folder.grants)
+            said.set(item.name, (await grantItemVerdict(folder, item)).split(':')[0]!);
+        for (const item of folder.records)
+            said.set(item.name, (await recordItemVerdict(folder, item)).integrity);
+        expect(Object.fromEntries(said)).toEqual({
+            'grant-to-someone-on-the-list': 'opened',
+            'grant-read-without-the-addition': 'refused',
+            'grant-read-without-a-list': 'refused',
+            'grant-by-an-admin-read-while-they-are-one': 'opened',
+            'grant-by-an-admin-since-removed': 'opened',
+            'grant-renamed-to-another-granter': 'refused',
+            'sealing-to-someone-on-the-list': 'sealed',
+            'sealing-to-a-colleague-off-the-list': 'refused',
+            'sealing-without-a-list': 'refused',
+            'sealing-without-the-addition-that-names-them': 'refused',
+            'record-by-an-editor-on-the-list': 'verified',
+            'record-by-an-admin-on-no-list': 'verified',
+            'record-by-a-viewer': 'not-on-this-folder',
+            'record-by-a-colleague-on-no-list': 'not-on-this-folder',
+            'record-by-a-colleague-the-reader-checked': 'not-on-this-folder',
+            'record-by-an-editor-the-reader-checked': 'verified',
+            'record-by-a-colleague-who-edits-by-a-share': 'verified',
+            'record-read-with-no-list': 'unchecked',
+            'record-read-with-the-list-forked': 'unchecked',
+            'record-with-a-bad-signature-on-the-folder': 'bad-signature',
+            'record-with-a-bad-signature-off-the-folder': 'bad-signature',
+            'record-by-a-checked-colleague-with-the-list-forked': 'unchecked',
+        });
+        // What opened is the folder's key, and the stored verdicts are these.
+        const opened = folder.grants.find(
+            (item) => item.name === 'grant-by-an-admin-since-removed',
+        )!;
+        expect(opened.expected).toBe(`opened:${encode(areaKeyAt(AREA, 1))}`);
+        // A list this device did not read entitles nobody.
         const w = await listWorld({ folders: false });
-        const { owner, member, keeper } = w.cast;
-        await w.add(0, owner, [{ userId: member.userId, role: 'viewer' }]);
         const { chain, lists } = await reading(w, 0);
-        const key = areaKeyAt(AREA, 1);
-        const grantTo = async (who: Person) => {
-            const ctx = {
-                groupId: GROUP,
-                workspaceId: AREA,
-                workspaceKeyVersion: 1,
-                granteeUserId: who.userId,
-                granteeKeyVersion: 1,
-                granterUserId: owner.userId,
-                ...atRoster(chain),
-            };
-            const envelope = await sealAreaGrant(key, ctx, {
+        const ctx = {
+            groupId: GROUP,
+            workspaceId: AREA,
+            workspaceKeyVersion: 1,
+            granteeUserId: w.cast.owner.userId,
+            granteeKeyVersion: 1,
+            granterUserId: w.cast.owner.userId,
+            ...atRoster(chain),
+        };
+        const seal = (given: AreaLists) =>
+            sealAreaGrant(areaKeyAt(AREA, 1), ctx, {
                 chain,
                 areaIdSeed: AREA_SEED,
-                granteeKemPublicKey: who.kemPublicKey,
-                granter: owner.signer,
+                granteeKemPublicKey: w.cast.owner.kemPublicKey,
+                granter: w.cast.owner.signer,
+                lists: given,
             });
-            return (given: AreaLists | null | undefined) =>
-                openAreaGrant(envelope, ctx, {
-                    chain,
-                    areaIdSeed: AREA_SEED,
-                    granterMlDsaPublicKey: owner.mlDsaPublicKey,
-                    reader: { userId: who.userId, keyVersion: 1 },
-                    grantee: who.secrets,
-                    lists: given,
-                });
+        await seal(lists);
+        await expect(seal(structuredClone(lists) as AreaLists)).rejects.toThrow(CryptoError);
+    });
+});
+
+describe('the heads a roster commits', () => {
+    test('a company is built on heads the device verified, and a roster takes no others', async () => {
+        const owner = await person(1);
+        const keys = {
+            [owner.mlDsaDigest]: owner.served.mlDsaPublicKey,
+            ...(await kitMlDsaKeys([1])),
         };
-        const forMember = await grantTo(member);
-        expect(encode(await forMember(lists))).toBe(encode(key));
-        // Without the list, or with one this device did not read, nothing opens.
-        await expect(forMember(undefined)).rejects.toThrow(NOT_ON_LIST);
-        await expect(forMember(null)).rejects.toThrow(NOT_ON_LIST);
-        await expect(forMember(structuredClone(lists) as AreaLists)).rejects.toThrow(CryptoError);
-        // A member of the company the list does not name: the grant is well made, and opens nothing.
-        const forKeeper = await grantTo(keeper);
-        await expect(forKeeper(lists)).rejects.toThrow(NOT_ON_LIST);
+        const entry = owner.entry(OWNER_ROLES);
+        const signer = {
+            signerUserId: owner.userId,
+            signerKeyVersion: 1,
+            signer: owner.signer,
+        };
+        // Roster 1: the folder's base list, the heads over it, and the roster that commits both.
+        const base = await signBaseAreaList({
+            chain: null,
+            lists: null,
+            groupId: GROUP,
+            workspaceId: AREA,
+            areaKind: 'shared',
+            everyone: '',
+            people: [{ userId: owner.userId, role: 'manager' }],
+            members: [entry],
+            ...signer,
+        });
+        const firstHeads = await headsToCommit({
+            chain: null,
+            groupId: GROUP,
+            heads: null,
+            lists: [],
+            changed: [base],
+        });
+        const areaKey = (version: number, listDigest: string) => ({
+            workspaceId: AREA,
+            workspaceKey: areaKeyAt(AREA, version),
+            rootKey: rootKeyAt(AREA, version),
+            areaKind: 'shared' as const,
+            listDigest,
+        });
+        const org = {
+            custodyKey: (await custodyAt(1)).publicKey,
+            kit: (await kitAt(1)).publicKeys,
+        };
+        const first = await firstRoster(GROUP, entry, {
+            kind: 'org',
+            areaKeys: [areaKey(1, base.digest)],
+            org: { ...org, heads: firstHeads },
+        });
+        expect(first.heads!.headsDigest).toBe(firstHeads.headsDigest);
+        // Heads built for another base list, and a digest of the caller's own, sign no roster.
+        const other = await signBaseAreaList({
+            chain: null,
+            lists: null,
+            groupId: GROUP,
+            workspaceId: AREA,
+            areaKind: 'shared',
+            everyone: '',
+            people: [{ userId: owner.userId, role: 'manager' }],
+            members: [entry],
+            ...signer,
+        });
+        const otherHeads = await headsToCommit({
+            chain: null,
+            groupId: GROUP,
+            heads: null,
+            lists: [],
+            changed: [other],
+        });
+        const build = (heads: unknown) =>
+            firstRoster(GROUP, entry, {
+                kind: 'org',
+                areaKeys: [areaKey(1, base.digest)],
+                org: { ...org, heads: heads as typeof firstHeads },
+            });
+        await expect(build(otherHeads)).rejects.toThrow('not built for this member list');
+        await expect(build({ ...firstHeads })).rejects.toThrow('this device built');
+        const rosters = [await signRoster(first, await groupKeyAt(1), owner.signer)];
+        const accept = async () => {
+            const chain = await acceptRosters({
+                groupId: GROUP,
+                firstKeys: (await groupKeyAt(1)).publicKey,
+                rosters,
+                successions: [],
+                mlDsaKeys: keys,
+                me: { userId: owner.userId, identities: [owner.served] },
+                anchor: 'created',
+                pins: [],
+                cache: null,
+            });
+            if (chain.status !== 'accepted') throw new Error('not accepted');
+            return chain;
+        };
+        const served = [{ rosterVersion: 1, rows: [...firstHeads.rows] }];
+        const read = async (lists: SignedAreaList[]) => {
+            const chain = await accept();
+            const heads = (await readHeads({ chain, record: null, served })).record;
+            return {
+                chain,
+                heads,
+                lists: await readAreaLists({
+                    chain,
+                    heads,
+                    workspaceId: AREA,
+                    record: null,
+                    served: lists,
+                    mlDsaKeys: keys,
+                }),
+            };
+        };
+        // Roster 2 changes the folder's key: its base list is list 2, its heads say so, and a
+        // device reads the new list level with them.
+        const one = await read([base]);
+        expect(one.lists.state).toBe('level');
+        const rotated = await signBaseAreaList({
+            chain: one.chain,
+            lists: one.lists,
+            groupId: GROUP,
+            workspaceId: AREA,
+            areaKind: 'shared',
+            everyone: 'viewer',
+            people: [{ userId: owner.userId, role: 'manager' }],
+            ...signer,
+        });
+        const heads = { chain: one.chain, groupId: GROUP, heads: one.heads };
+        const nextHeads = await headsToCommit({ ...heads, lists: [], changed: [rotated] });
+        const next = (given: unknown, listDigest = rotated.digest) =>
+            nextRoster(one.chain, [entry], {
+                signerUserId: owner.userId,
+                areaKeys: [areaKey(2, listDigest)],
+                org: { heads: given as typeof nextHeads },
+            });
+        // Heads that leave the key change out, or were built on another roster, are not this roster's.
+        const unchanged = await headsToCommit({ ...heads, lists: [one.lists] });
+        await expect(next(unchanged)).rejects.toThrow('not built for this member list');
+        await expect(next(firstHeads)).rejects.toThrow('not built for this member list');
+        await expect(next(nextHeads, base.digest)).rejects.toThrow(CryptoError);
+        // A base list numbered at what a roster already committed never reaches the heads.
+        await expect(
+            headsToCommit({
+                ...heads,
+                lists: [],
+                changed: [{ ...other, statement: base.statement }],
+            }),
+        ).rejects.toThrow(CryptoError);
+        rosters.push(await signRoster(await next(nextHeads), await groupKeyAt(1), owner.signer));
+        served.push({ rosterVersion: 2, rows: [...nextHeads.rows] });
+        const two = await read([rotated]);
+        expect([two.lists.state, two.lists.workspaceKeyVersion, two.lists.listVersion]).toEqual([
+            'level',
+            2,
+            2,
+        ]);
+        // The row is the list's, and the log's start for a folder nobody shared from.
+        expect(nextHeads.rows).toEqual([
+            {
+                workspaceId: AREA,
+                workspaceKeyVersion: 2,
+                listVersion: 2,
+                listDigest: rotated.digest,
+                shareLogIndex: 0,
+                shareLogDigest: firstHeads.rows[0]!.shareLogDigest,
+            },
+        ]);
+    });
+
+    test('an addition for someone back from leaving, at the role their old entry names, is not signed', async () => {
+        const w = await listWorld();
+        const { admin, biller } = w.cast;
+        await w.roster(admin, [
+            ...w.all.filter((entry) => entry.userId !== biller.userId),
+            { ...w.e.biller, status: 'left', roles: [] },
+        ]);
+        await w.roster(admin, w.all);
+        const { chain, heads, lists } = await reading(w);
+        const add = (role: 'viewer' | 'editor') =>
+            signAreaListAddition({
+                chain,
+                heads,
+                lists,
+                add: [{ userId: biller.userId, role }],
+                signerUserId: admin.userId,
+                signer: admin.signer,
+            });
+        // The entry is from before they left: the same role again changes nothing a device counts.
+        await expect(add('viewer')).rejects.toThrow(ENTRY_FROM_BEFORE);
+        // A higher role is a new entry, from the roster that let them back in.
+        const raised = parseAreaList(decode((await add('editor')).statement));
+        expect(raised.people.find((person) => person.userId === biller.userId)!.role).toBe(
+            'editor',
+        );
     });
 });

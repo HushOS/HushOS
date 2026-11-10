@@ -641,11 +641,20 @@ pub struct FurthestHead {
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn committed_head(record: HeadsRecord, workspace_id: String) -> Option<FurthestHead> {
-    let rows = record.areas.get(&workspace_id)?;
+    furthest_of(record.areas.get(&workspace_id)?)
+}
+
+fn furthest_of(rows: &[CommittedHead]) -> Option<FurthestHead> {
+    // A folder's list is judged at its current key (a new base list starts a new record), so the
+    // furthest list is the furthest at the latest key the rows name; the share log runs through
+    // the life of the area.
+    let key_version = rows.last()?.workspace_key_version;
     let mut list: Option<&CommittedHead> = None;
     let mut log: Option<&CommittedHead> = None;
     for row in rows {
-        if list.is_none_or(|at| row.list_version > at.list_version) {
+        if row.workspace_key_version == key_version
+            && list.is_none_or(|at| row.list_version > at.list_version)
+        {
             list = Some(row);
         }
         if log.is_none_or(|at| row.share_log_index > at.share_log_index) {
@@ -747,6 +756,12 @@ const NOT_ACTIVE: &str = "A list names only active members of the company.";
 const EMPLOYEE_LIST: &str = "An employee’s folder is listed for its assignee alone.";
 const LIST_STALE: &str =
     "This list was built on one the company’s record does not have: add the person again.";
+const KEYS_REPLACED: &str = "This was signed with keys its signer has since replaced, past what the member list that replaced them records: it has to be signed again.";
+const LIST_RIVAL: &str = "Another list stands at this version of the folder’s record.";
+const NOTHING_ADDED: &str = "This adds nobody and raises no role on the folder’s list.";
+const ENTRY_FROM_BEFORE: &str = "This person’s place on the list is from before they left: they are back on the folder at a higher role, or at its next key change.";
+const HEADS_INCOMPLETE: &str = "This device has not read every folder’s record at its latest member list.";
+const HEADS_NOT_BELOW: &str = "A member list’s heads never fall below what an earlier one committed.";
 const BAD_RECORD: &str = "Invalid list record.";
 const NOT_READ: &str = "This is not a list this device read at its latest member list.";
 
@@ -846,6 +861,23 @@ fn keys_at<'a>(org: &'a OrgChain, user_id: &str, roster_version: u64) -> Option<
     org.signer_keys.get(user_id)?.iter().rfind(|span| span.from <= roster_version.max(1))
 }
 
+/*
+ * The first roster after `roster_version` on which the signer's entry names
+ * other signing keys than it did there; None while it never has.
+ */
+fn keys_replaced_at(org: &OrgChain, user_id: &str, roster_version: u64) -> Option<u64> {
+    let spans = org.signer_keys.get(user_id)?;
+    let at = spans.iter().rposition(|span| span.from <= roster_version.max(1))?;
+    let named = &spans[at];
+    spans[at + 1..]
+        .iter()
+        .find(|span| {
+            span.signing_public_key != named.signing_public_key
+                || span.ml_dsa_public_key_digest != named.ml_dsa_public_key_digest
+        })
+        .map(|span| span.from)
+}
+
 fn signed_at(ctx: &Ctx, list: &AreaList, statement: &[u8], signature: &[u8]) -> bool {
     let Some(named) = keys_at(ctx.org, &list.signer_user_id, list.roster_version) else {
         return false;
@@ -903,8 +935,9 @@ fn check_base(ctx: &Ctx, at: &Parsed, verify: bool) -> CoreResult<Step> {
         || list.signer_user_id != ctx.committed_by
         || list.roster_version != before
         || list.roster_digest != named
-        // An area's first list is list 1: the version counts up from there.
-        || (ctx.key_version == 1 && list.list_version != 1)
+        // An area's first list is list 1, and the version counts up through every folder key:
+        // the base list of key version n is list n at the least.
+        || (if ctx.key_version == 1 { list.list_version != 1 } else { list.list_version < ctx.key_version })
     {
         return Err(input(NOT_THE_BASE));
     }
@@ -1003,9 +1036,18 @@ fn check_addition(ctx: &Ctx, prev: &Step, at: &Parsed, verify: bool) -> CoreResu
     }
     // After leaving: the roster that ended the standing it was signed with bounds it. A manager's
     // ends when they are marked left; someone who signed as an admin alone, when `members` goes.
-    let ended = if manager { active.until } else { holder.and_then(|span| span.until).or(active.until) };
+    // And a key change is treated like leaving: the roster that moved the signer's entry to
+    // other signing keys bounds what the earlier keys signed, or whoever holds a manager's old
+    // keys could add anyone under any earlier roster's name. The earlier of the two decides.
+    let left = if manager { active.until } else { holder.and_then(|span| span.until).or(active.until) };
+    let rekeyed = keys_replaced_at(org, &list.signer_user_id, named);
+    let (ended, why) = match (left, rekeyed) {
+        (Some(left), Some(rekeyed)) if rekeyed < left => (Some(rekeyed), KEYS_REPLACED),
+        (Some(left), _) => (Some(left), AFTER_LEAVING),
+        (None, rekeyed) => (rekeyed, KEYS_REPLACED),
+    };
     if ended.is_some_and(|ended| committed_through(ctx, ended) < list.list_version) {
-        return Err(input(AFTER_LEAVING));
+        return Err(input(why));
     }
     Ok(Step { at: at.clone(), since })
 }
@@ -1050,7 +1092,14 @@ pub enum HeadReport {
 ///   lacks a list it holds ("An admin needs to look.");
 /// - `refused` lists what was not taken or was dropped, and `lost` the people
 ///   a dropped or passed-over list had added ("Add them again.");
-/// - `fork` is the fork the device is in and has not settled.
+/// - `fork` is the fork this reading found: the one the device is in and has
+///   not settled; or, settled as it is noted, a committed head it passed over
+///   because nothing reaches it and a later roster's head is on its record;
+/// - `head` is the committed head this was judged against (the furthest any
+///   roster committed at this folder key, or the latest roster's where
+///   nothing reaches the furthest; `None` while the heads are not read), and
+///   `furthest_list_version` the highest list version any roster committed
+///   for the area at any folder key: a later base list is numbered past it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct AreaListsView {
@@ -1072,6 +1121,18 @@ pub struct AreaListsView {
     pub refused: Vec<ListRefusal>,
     pub lost: Vec<ListPerson>,
     pub fork: Option<ForkNote>,
+    pub head: Option<ListHead>,
+    pub furthest_list_version: u64,
+}
+
+/// A committed head of a folder's list: the roster that committed it, and the
+/// list's version and digest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ListHead {
+    pub roster_version: u64,
+    pub list_version: u64,
+    pub list_digest: String,
 }
 
 /// An area's list as this device read it at its latest roster: what
@@ -1276,47 +1337,80 @@ fn reason_of(error: &CoreError) -> String {
     error.to_string()
 }
 
-/* Takes, in turn, each served list that follows the last step; stops at the first that is refused. */
+/*
+ * The first of a list's served copies that `check` takes. A server may serve
+ * one list twice, or once with its signature damaged: no copy stands in the
+ * way of another. When none is taken, the first copy's refusal is recorded.
+ */
+fn first_taken(
+    copies: &[&Parsed],
+    check: &dyn Fn(&Parsed) -> CoreResult<Step>,
+    refused: &mut Vec<ListRefusal>,
+) -> Option<Step> {
+    let mut why: Option<String> = None;
+    for at in copies {
+        match check(at) {
+            Ok(step) => return Some(step),
+            Err(error) => {
+                why.get_or_insert_with(|| reason_of(&error));
+            }
+        }
+    }
+    refused.push(refusal(copies[0], &why.unwrap_or_default()));
+    None
+}
+
+/*
+ * Takes, in turn, the served list that follows the last step; stops where
+ * none does. Where two lists that both verify stand at one version, the one
+ * with the lower digest is taken, whatever order they were served in, and the
+ * other is refused as a rival (LIST_RIVAL): the server does not choose, and
+ * the device reports it as a fork.
+ */
 fn extend(ctx: &Ctx, steps: &mut Vec<Step>, served: &[Parsed], refused: &mut Vec<ListRefusal>) {
     loop {
-        let end = steps.last().expect("a record has a first step");
+        let end = steps.last().expect("a record has a first step").clone();
         let next_version = end.at.list.list_version + 1;
-        let candidates: Vec<&Parsed> = served
-            .iter()
-            .filter(|at| {
-                at.list.workspace_key_version == ctx.key_version && at.list.list_version == next_version
-            })
-            .collect();
-        let next = candidates.iter().position(|at| at.list.previous_list_digest == end.at.digest);
-        // A served list at the next version that does not follow this record is never taken.
-        for (index, at) in candidates.iter().enumerate() {
-            if Some(index) != next {
-                refused.push(refusal(at, NOT_FOLLOWING_LIST));
+        // Each list's copies, in the order first served.
+        let mut groups: Vec<Vec<&Parsed>> = Vec::new();
+        for at in served.iter().filter(|at| {
+            at.list.workspace_key_version == ctx.key_version && at.list.list_version == next_version
+        }) {
+            match groups.iter_mut().find(|group| group[0].digest == at.digest) {
+                Some(group) => group.push(at),
+                None => groups.push(vec![at]),
             }
         }
-        let Some(next) = next.map(|index| candidates[index]) else {
+        let mut valid: Vec<Step> = Vec::new();
+        for group in &groups {
+            // A served list at the next version that does not follow this record is never taken.
+            if group[0].list.previous_list_digest != end.at.digest {
+                refused.push(refusal(group[0], NOT_FOLLOWING_LIST));
+                continue;
+            }
+            if let Some(step) = first_taken(group, &|at| check_addition(ctx, &end, at, true), refused) {
+                valid.push(step);
+            }
+        }
+        if valid.is_empty() {
             return;
-        };
-        match check_addition(ctx, end, next, true) {
-            Ok(step) => steps.push(step),
-            Err(error) => {
-                refused.push(refusal(next, &reason_of(&error)));
-                return;
-            }
         }
+        valid.sort_by(|x, y| x.at.digest.cmp(&y.at.digest));
+        let taken = valid.remove(0);
+        for rival in &valid {
+            refused.push(refusal(&rival.at, LIST_RIVAL));
+        }
+        steps.push(taken);
     }
 }
 
 /* The base list among what was served, and every addition that follows it in turn. */
 fn from_base(ctx: &Ctx, served: &[Parsed], refused: &mut Vec<ListRefusal>) -> Option<Vec<Step>> {
-    let base = served.iter().find(|at| at.digest == ctx.base_digest)?;
-    let first = match check_base(ctx, base, true) {
-        Ok(step) => step,
-        Err(error) => {
-            refused.push(refusal(base, &reason_of(&error)));
-            return None;
-        }
-    };
+    let copies: Vec<&Parsed> = served.iter().filter(|at| at.digest == ctx.base_digest).collect();
+    if copies.is_empty() {
+        return None;
+    }
+    let first = first_taken(&copies, &|at| check_base(ctx, at, true), refused)?;
     let mut steps = vec![first];
     extend(ctx, &mut steps, served, refused);
     Some(steps)
@@ -1325,9 +1419,11 @@ fn from_base(ctx: &Ctx, served: &[Parsed], refused: &mut Vec<ListRefusal>) -> Op
 /*
  * The heads to judge this area's list by, at this key version: the furthest
  * any roster committed, and after it the latest roster's when that is
- * another. A device goes by the furthest; only where nothing reaches the
- * furthest does it judge by the latest roster, so a later roster whose head
- * its record reaches clears the fork (2.3, "A committed head nothing reaches").
+ * another. A device goes by the furthest. Only where nothing served reaches a
+ * furthest head that lies past the end of its record does it judge by the
+ * latest roster's, noting the head it passed over (2.3, "A committed head
+ * nothing reaches"); a furthest head at a version the record holds, with
+ * another digest, is a fork whatever a later roster says.
  */
 fn heads_of(ctx: &Ctx) -> CoreResult<Vec<CommittedHead>> {
     let mut head: Option<&CommittedHead> = None;
@@ -1344,16 +1440,65 @@ fn heads_of(ctx: &Ctx) -> CoreResult<Vec<CommittedHead>> {
     Ok(if latest == head { vec![head.clone()] } else { vec![head.clone(), latest.clone()] })
 }
 
-/* The first of `heads` that is a step of `steps`, with its place. */
-fn reached(steps: &[Step], heads: &[CommittedHead]) -> Option<(CommittedHead, usize)> {
-    heads.iter().find_map(|head| {
-        steps
-            .iter()
-            .position(|step| {
-                step.at.list.list_version == head.list_version && step.at.digest == head.list_digest
-            })
-            .map(|anchor| (head.clone(), anchor))
-    })
+/* The head a run of steps reaches, with its place, and the furthest head when that was passed over. */
+struct Reached {
+    head: CommittedHead,
+    anchor: usize,
+    passed_over: Option<CommittedHead>,
+}
+
+/*
+ * The head `steps` reach: the furthest, or, where the furthest lies past
+ * their end, the latest roster's. None when they reach neither.
+ */
+fn reached(steps: &[Step], heads: &[CommittedHead]) -> Option<Reached> {
+    let place = |head: &CommittedHead| {
+        steps.iter().position(|step| {
+            step.at.list.list_version == head.list_version && step.at.digest == head.list_digest
+        })
+    };
+    if let Some(anchor) = place(&heads[0]) {
+        return Some(Reached { head: heads[0].clone(), anchor, passed_over: None });
+    }
+    let end = steps.last().map_or(0, |step| step.at.list.list_version);
+    let later = heads.get(1).filter(|_| heads[0].list_version > end)?;
+    place(later).map(|anchor| Reached { head: later.clone(), anchor, passed_over: Some(heads[0].clone()) })
+}
+
+/*
+ * The notes a record carries once the device is no longer forked: every one
+ * settled, none dropped (only its person clears a note); and a head it passed
+ * over noted, and handed back to be reported, the first time.
+ */
+fn notes_after(
+    forks: &[ForkNote],
+    passed_over: Option<&CommittedHead>,
+    end: &Step,
+) -> (Vec<ForkNote>, Option<ForkNote>) {
+    let mut notes: Vec<ForkNote> =
+        forks.iter().cloned().map(|note| ForkNote { settled: true, ..note }).collect();
+    let Some(passed_over) = passed_over else {
+        return (notes, None);
+    };
+    let at = notes.iter().position(|note| {
+        note.committed_position == passed_over.list_version
+            && note.committed_digest == passed_over.list_digest
+    });
+    if let Some(at) = at {
+        let found = (!forks[at].settled).then(|| notes[at].clone());
+        return (notes, found);
+    }
+    let note = ForkNote {
+        kind: ForkKind::List,
+        committed_position: passed_over.list_version,
+        committed_digest: passed_over.list_digest.clone(),
+        reported_position: end.at.list.list_version,
+        reported_digest: end.at.digest.clone(),
+        roster_version: passed_over.roster_version,
+        settled: true,
+    };
+    notes.push(note.clone());
+    (notes, Some(note))
 }
 
 fn signed_of(at: &Parsed) -> SignedAreaList {
@@ -1375,9 +1520,16 @@ fn result(
     state: HeadState,
     steps: Option<&[Step]>,
     record: Option<AreaListRecord>,
+    head: Option<&CommittedHead>,
     more: More,
 ) -> Arc<AreaLists> {
     let end = steps.and_then(<[Step]>::last);
+    // A fork found, or two lists at one version: reported as a fork, before anything else.
+    let report = if more.fork.is_some() || more.refused.iter().any(|at| at.reason == LIST_RIVAL) {
+        Some(HeadReport::Fork)
+    } else {
+        more.report
+    };
     Arc::new(AreaLists {
         view: AreaListsView {
             group_id: ctx.chain.group_id.clone(),
@@ -1404,11 +1556,18 @@ fn result(
             }),
             record,
             repost: more.repost,
-            report: more.report,
+            report,
             missing: more.missing,
             refused: more.refused,
             lost: more.lost,
             fork: more.fork,
+            head: head.map(|head| ListHead {
+                roster_version: head.roster_version,
+                list_version: head.list_version,
+                list_digest: head.list_digest.clone(),
+            }),
+            // The highest list version any roster committed for the area, at any folder key.
+            furthest_list_version: ctx.rows.iter().flatten().map(|row| row.list_version).max().unwrap_or(0),
         },
     })
 }
@@ -1532,8 +1691,8 @@ pub fn area_lists_read(
     let mut refused: Vec<ListRefusal> = Vec::new();
     let mut lost: Vec<ListPerson> = Vec::new();
     // The record at this key version, judged again by the chain as it is now: an addition whose
-    // signer has since lost the standing it was signed with, past the heads that ended it, goes,
-    // with every list built on it.
+    // signer has since lost the standing, or the keys, it was signed with, past the heads that
+    // ended them, goes, with every list built on it.
     let mut steps: Option<Vec<Step>> = None;
     if let Some(kept) = kept.as_ref().filter(|kept| kept.key_version == ctx.key_version) {
         let mut run = vec![kept.first.clone()];
@@ -1574,16 +1733,13 @@ pub fn area_lists_read(
     }
     // Without the heads read through the latest roster nothing is judged: behind, the record kept.
     if ctx.rows.is_none() {
-        return Ok(result(&ctx, HeadState::Behind, steps.as_deref(), record, More::default()));
+        return Ok(result(&ctx, HeadState::Behind, steps.as_deref(), record, None, More::default()));
     }
     let heads = heads_of(&ctx)?;
     let mut head = heads[0].clone();
     let through = chain.roster.roster_version;
     let parsed_served = served_of(&ctx, served.as_ref());
     let held = held_of(kept.as_ref());
-    let settled_notes: Vec<ForkNote> = kept
-        .as_ref()
-        .map_or(Vec::new(), |kept| kept.forks.iter().filter(|note| note.settled).cloned().collect());
     // The record kept as it was, with the note; nothing is adopted until the fork is settled.
     let forked = |head: &CommittedHead,
                   reported: Option<&Parsed>,
@@ -1623,52 +1779,51 @@ pub fn area_lists_read(
             HeadState::Forked,
             now,
             noted,
-            More {
-                repost,
-                report: note.as_ref().map(|_| HeadReport::Fork),
-                refused,
-                lost,
-                fork: note,
-                ..More::default()
-            },
+            Some(head),
+            More { repost, refused, lost, fork: note, ..More::default() },
         )
     };
 
     // A new folder key (or a first read): the list is the base list the roster row commits to.
     let Some(mut steps) = steps else {
         if served.is_none() {
-            return Ok(result(&ctx, HeadState::Behind, None, record, More::default()));
+            return Ok(result(&ctx, HeadState::Behind, None, record, Some(&head), More::default()));
         }
         let old_end = kept.as_ref().map(Kept::end);
         let fresh = from_base(&ctx, &parsed_served, &mut refused);
         // Nothing served reaches the committed head: forked, whatever the device held before.
-        let Some((fresh, (at, anchor))) =
-            fresh.and_then(|fresh| reached(&fresh, &heads).map(|at| (fresh, at)))
-        else {
+        let Some((fresh, at)) = fresh.and_then(|fresh| reached(&fresh, &heads).map(|at| (fresh, at))) else {
             return Ok(forked(&head, old_end, record, None, refused, lost));
         };
-        head = at;
+        head = at.head.clone();
+        let anchor = at.anchor;
         let base = fresh[0].at.list.list_version;
         if kept.as_ref().is_some_and(|kept| base <= kept.committed_list_version) {
-            // The new base list stands below a head an earlier roster committed: not on this
-            // device's record. Settled like any fork.
+            // The new base list stands at or below a head an earlier roster committed: not on
+            // this device's record. Settled like any fork.
             return Ok(forked(&head, old_end, record, None, refused, lost));
         }
+        let newest = fresh.last().expect("the base is there");
         let mut report = None;
-        if let Some(kept) = kept.as_ref().filter(|kept| base <= kept.end().list.list_version) {
-            // The rotator had seen less than this device: what it held from the new base's
-            // version on is replaced, and whoever those lists added is no longer on the folder.
-            let seen =
-                kept.later.iter().find(|at| at.list.list_version == base - 1).unwrap_or(&kept.first.at);
-            let newest = &fresh.last().expect("the base is there").at.list;
+        if let Some(kept) = kept.as_ref().filter(|kept| !kept.later.is_empty()) {
+            // The key change replaced every list this device held past its committed head,
+            // whatever the new base list is numbered: they are stale, and whoever they added
+            // that the new list does not cover is no longer on the folder ("add them again").
             lost.extend(
-                beyond(&kept.end().list, &seen.list).into_iter().filter(|person| !covered(newest, person)),
+                beyond(&kept.end().list, &kept.first.at.list)
+                    .into_iter()
+                    .filter(|person| !covered(&newest.at.list, person)),
             );
-            for at in kept.later.iter().filter(|at| at.list.list_version >= base) {
-                refused.push(refusal(at, LIST_STALE));
+            for held in &kept.later {
+                refused.push(refusal(held, LIST_STALE));
             }
-            report = Some(HeadReport::Ahead);
+            // Numbered at or below what this device held, the rotator had seen less of it.
+            if base <= kept.end().list.list_version {
+                report = Some(HeadReport::Ahead);
+            }
         }
+        let forks = kept.as_ref().map_or(&[][..], |kept| kept.forks.as_slice());
+        let (notes, found) = notes_after(forks, at.passed_over.as_ref(), newest);
         let record = record_of(
             &ctx,
             &fresh,
@@ -1678,7 +1833,7 @@ pub fn area_lists_read(
             head.roster_version,
             &mut |_| (through, None),
             through,
-            settled_notes,
+            notes,
         );
         let state = if anchor == fresh.len() - 1 { HeadState::Level } else { HeadState::Ahead };
         let repost = fresh[anchor + 1..].iter().map(|step| signed_of(&step.at)).collect();
@@ -1687,7 +1842,8 @@ pub fn area_lists_read(
             state,
             Some(&fresh),
             Some(record),
-            More { repost, report, refused, lost, ..More::default() },
+            Some(&head),
+            More { repost, report, refused, lost, fork: found, ..More::default() },
         ));
     };
 
@@ -1697,23 +1853,29 @@ pub fn area_lists_read(
     let first = steps[0].at.list.list_version;
     let mut digests: Vec<String> = kept.digests[..(first - base) as usize + steps.len()].to_vec();
     // A served list at a version this device holds, with another digest, is never taken.
+    let mut others: HashSet<&str> = HashSet::new();
     for at in &parsed_served {
-        let held = at.list.list_version.checked_sub(base).and_then(|index| digests.get(index as usize));
-        if held.is_some_and(|held| *held != at.digest) {
+        let on_record = at.list.list_version.checked_sub(base).and_then(|index| digests.get(index as usize));
+        if on_record.is_some_and(|on_record| *on_record != at.digest) && others.insert(at.digest.as_str()) {
             refused.push(refusal(at, NOT_FOLLOWING_LIST));
         }
     }
     let before = steps.len();
     extend(&ctx, &mut steps, &parsed_served, &mut refused);
     digests.extend(steps[before..].iter().map(|step| step.at.digest.clone()));
+    let end = steps.last().expect("a record has a first step").clone();
     let reaches = served.as_ref().map(|_| false);
     let judge = |at: &CommittedHead| state_of(base, &digests, at.list_version, &at.list_digest, reaches);
     let mut state = judge(&head);
-    // Nothing reaches the furthest head: the latest roster's, where the record reaches that.
-    if state == HeadState::Forked {
+    // Nothing served reaches a furthest head past the end of this record: the latest roster's,
+    // where the record reaches that, and the head passed over is noted and reported. A furthest
+    // head at a version the record holds, with another digest, stays a fork.
+    let mut passed_over: Option<CommittedHead> = None;
+    if state == HeadState::Forked && head.list_version > end.at.list.list_version {
         if let Some(latest) =
             heads.get(1).filter(|at| matches!(judge(at), HeadState::Level | HeadState::Ahead))
         {
+            passed_over = Some(head.clone());
             head = latest.clone();
             state = judge(&head);
         }
@@ -1737,20 +1899,20 @@ pub fn area_lists_read(
                 HeadState::Behind,
                 Some(&steps),
                 Some(record),
+                Some(&head),
                 More { refused, lost, ..More::default() },
             ));
         }
-        let end = steps.last().expect("a record has a first step").at.clone();
-        return Ok(forked(&head, Some(&end), Some(record), Some(&steps), refused, lost));
+        return Ok(forked(&head, Some(&end.at), Some(record), Some(&steps), refused, lost));
     }
     // The committed head is on the record: it becomes the head this device keeps, if further.
     let anchor = head.list_version.saturating_sub(first) as usize;
     let committed_at = if anchor > 0 { head.roster_version } else { kept.committed_roster_version };
+    let (mut notes, found) = notes_after(&kept.forks, passed_over.as_ref(), &end);
     // A later roster whose row fell back: on the record it moves nothing and is reported; off it,
     // two rosters committed to different records, which is a fork.
-    let mut notes = settled_notes;
     let mut report = None;
-    let end = steps.last().expect("a record has a first step");
+    let mut fork = found;
     for row in ctx.rows.iter().flatten() {
         if row.workspace_key_version != ctx.key_version
             || row.roster_version <= kept.judged_through.max(head.roster_version)
@@ -1774,9 +1936,9 @@ pub fn area_lists_read(
                 settled: true,
             };
             if !notes.iter().any(|at| same_note(at, &note)) {
-                notes.push(note);
+                notes.push(note.clone());
+                fork = fork.or(Some(note));
             }
-            report = Some(HeadReport::Fork);
         }
     }
     // What it holds past the committed head: posted again at the first roster that lacks it, and
@@ -1806,7 +1968,8 @@ pub fn area_lists_read(
         state,
         Some(&steps),
         Some(record),
-        More { repost, report, missing, refused, lost, ..More::default() },
+        Some(&head),
+        More { repost, report, missing, refused, lost, fork },
     ))
 }
 
@@ -1839,42 +2002,43 @@ pub fn area_fork_settle(
     let mut refused = Vec::new();
     let parsed_served = served_of(&ctx, served.as_ref());
     let mut steps = from_base(&ctx, &parsed_served, &mut refused).ok_or_else(forked)?;
-    let (head, anchor) = reached(&steps, &heads_of(&ctx)?).ok_or_else(forked)?;
+    let at = reached(&steps, &heads_of(&ctx)?).ok_or_else(forked)?;
     let through = chain.roster.roster_version;
     // What this device held and the committed record lacks: kept where it still follows.
     let committed: HashSet<String> = steps.iter().map(|step| step.at.digest.clone()).collect();
     let mut mine = HashSet::new();
-    for at in &kept.later {
-        if committed.contains(&at.digest) {
+    for held in &kept.later {
+        if committed.contains(&held.digest) {
             continue;
         }
         let end = steps.last().expect("the base is there");
-        let follows = kept.key_version == ctx.key_version && at.list.previous_list_digest == end.at.digest;
-        match if follows { check_addition(&ctx, end, at, false) } else { Err(input(LIST_STALE)) } {
+        let follows = kept.key_version == ctx.key_version && held.list.previous_list_digest == end.at.digest;
+        match if follows { check_addition(&ctx, end, held, false) } else { Err(input(LIST_STALE)) } {
             Ok(step) => {
-                mine.insert(at.digest.clone());
+                mine.insert(held.digest.clone());
                 steps.push(step);
             }
             Err(error) => {
                 let reason = reason_of(&error);
-                refused.push(refusal(at, if reason == NOT_FOLLOWING_LIST { LIST_STALE } else { &reason }));
+                refused.push(refusal(held, if reason == NOT_FOLLOWING_LIST { LIST_STALE } else { &reason }));
             }
         }
     }
     // Whoever the lists this device held past its committed head had added, and is not there now.
-    let newest = &steps.last().expect("the base is there").at.list;
+    let newest = steps.last().expect("the base is there");
     let lost: Vec<ListPerson> = beyond(&kept.end().list, &kept.first.at.list)
         .into_iter()
-        .filter(|person| !covered(newest, person))
+        .filter(|person| !covered(&newest.at.list, person))
         .collect();
     let held = held_of(Some(&kept));
+    let (notes, _) = notes_after(&kept.forks, at.passed_over.as_ref(), newest);
     let record = record_of(
         &ctx,
         &steps,
         steps[0].at.list.list_version,
         steps.iter().map(|step| step.at.digest.clone()).collect(),
-        anchor,
-        head.roster_version,
+        at.anchor,
+        at.head.roster_version,
         &mut |step| {
             if mine.contains(&step.at.digest) {
                 held.get(&step.at.digest).copied().unwrap_or((through, None))
@@ -1883,15 +2047,55 @@ pub fn area_fork_settle(
             }
         },
         through,
-        kept.forks.iter().cloned().map(|note| ForkNote { settled: true, ..note }).collect(),
+        notes,
     );
-    let state = if anchor == steps.len() - 1 { HeadState::Level } else { HeadState::Ahead };
-    let repost = steps[anchor + 1..].iter().map(|step| signed_of(&step.at)).collect();
-    Ok(result(&ctx, state, Some(&steps), Some(record), More { repost, refused, lost, ..More::default() }))
+    let state = if at.anchor == steps.len() - 1 { HeadState::Level } else { HeadState::Ahead };
+    let repost = steps[at.anchor + 1..].iter().map(|step| signed_of(&step.at)).collect();
+    Ok(result(
+        &ctx,
+        state,
+        Some(&steps),
+        Some(record),
+        Some(&at.head),
+        More { repost, refused, lost, ..More::default() },
+    ))
 }
 
 /// The person clears their own note, on their own device, after reading it
 /// (2.3): only once the fork is settled. Nobody else can.
+///
+/// ```
+/// use hushos_core::*;
+/// let digest = |text: &str| roster_digest(text.as_bytes().to_vec());
+/// let note = |settled| ForkNote {
+///     kind: ForkKind::List,
+///     committed_position: 2,
+///     committed_digest: digest("the list the roster committed"),
+///     reported_position: 2,
+///     reported_digest: digest("the list this device held"),
+///     roster_version: 4,
+///     settled,
+/// };
+/// let record = |forks: Vec<ForkNote>| AreaListRecord {
+///     group_id: "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a".into(),
+///     workspace_id: "80558a81-8dfc-8914-8447-0417b55e2ec5".into(),
+///     workspace_key_version: 1,
+///     base_list_version: 1,
+///     digests: vec![digest("the base list")],
+///     committed_roster_version: 1,
+///     committed_list_version: 1,
+///     lists: vec![],
+///     since: Default::default(),
+///     judged_through: 4,
+///     forks,
+/// };
+/// // A fork still unsettled is the device's state, not a note to wave away.
+/// assert_eq!(fork_note_clear(record(vec![note(false)]), note(false)).forks.len(), 1);
+/// // Settled, its person clears it; another fork's note stays.
+/// let other = ForkNote { reported_digest: digest("another list"), ..note(true) };
+/// let cleared = fork_note_clear(record(vec![note(true), other.clone()]), note(true));
+/// assert_eq!(cleared.forks, vec![other]);
+/// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn fork_note_clear(record: AreaListRecord, note: ForkNote) -> AreaListRecord {
     let mut record = record;
@@ -1919,13 +2123,12 @@ fn sorted_people(people: &[ListPerson]) -> Vec<ListPerson> {
 }
 
 /// What the base list of an area's next key version says ([`area_list_base_sign`]).
+/// `area_kind` is a new area's kind; a key change keeps the folder's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct BaseAreaList {
     pub group_id: String,
     pub workspace_id: String,
-    pub workspace_key_version: u64,
-    pub list_version: u64,
     pub area_kind: AreaKind,
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub everyone: Option<ListRole>,
@@ -1952,17 +2155,64 @@ pub struct SignedListWithDigest {
 /// whose row commits it: by the member who will sign that roster, naming
 /// their latest accepted roster (the one before it), with a fresh nonce.
 /// `chain` is `None` only for the areas of roster 1, before the company
-/// exists. Everyone named must be active on the roster that will commit it,
-/// and an employee area's list is its assignee alone, as manager. The digest
-/// goes on the roster row (`AreaKey::list_digest`).
+/// exists.
+///
+/// For a new area the list is list 1 and `lists` is `None`. For a key change
+/// `lists` is the folder's list as this device read it at its latest roster:
+/// nothing is signed while it is behind ([`HEAD_BEHIND`]) or forked from a
+/// head it holds another list for ([`HEAD_FORKED`]: settle first). Forked only
+/// because nothing served reaches the committed head, a key change is the way
+/// out, and is signed. The list is numbered one past the furthest of what
+/// this device verified and what any roster committed for the area, so a
+/// committed head never moves back. Everyone named must be active on the
+/// roster that will commit it, and an employee area's list is its assignee
+/// alone, as manager. The digest goes on the roster row
+/// (`AreaKey::list_digest`) and the list to [`heads_to_commit`].
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn area_list_base_sign(
     base: BaseAreaList,
     chain: Option<Arc<AcceptedRosters>>,
+    lists: Option<Arc<AreaLists>>,
     signer: IdentityKeys,
 ) -> CoreResult<SignedListWithDigest> {
     let people = sorted_people(&base.people);
-    if base.area_kind == AreaKind::Employee
+    let (mut key_version, mut list_version, mut kind) = (1, 1, base.area_kind);
+    if let Some(chain) = &chain {
+        same_group(chain, &base.group_id)?;
+        company_of(chain)?;
+        let entitled = chain.roster.entry(&base.signer_user_id).is_some_and(|entry| {
+            entry.active_with(Some(GroupRole::Members)) && entry.key_version == base.signer_key_version
+        });
+        if !entitled {
+            return Err(input(NOT_ENTITLED));
+        }
+        sealer_holds(chain, &base.signer_user_id, &signer)?;
+        let listed = chain.area_keys.get(&base.workspace_id).map_or(0, Vec::len) as u64;
+        if listed > 0 {
+            if chain.retired_areas.contains(&base.workspace_id) {
+                return Err(input(RETIRED));
+            }
+            let lists = lists.as_ref().ok_or_else(|| input(HEAD_BEHIND))?;
+            let view = require_read(chain, lists)?;
+            if view.workspace_id != base.workspace_id {
+                return Err(input(NOT_THE_BASE));
+            }
+            let past = view.head.as_ref().is_some_and(|head| head.list_version > view.list_version);
+            match view.state {
+                HeadState::Behind => return Err(input(HEAD_BEHIND)),
+                HeadState::Forked if !past => return Err(input(HEAD_FORKED)),
+                _ => {}
+            }
+            key_version = listed + 1;
+            list_version = view.list_version.max(view.furthest_list_version) + 1;
+            kind = view.area_kind;
+        } else if lists.is_some() {
+            return Err(input(NOT_THE_BASE));
+        }
+    } else if lists.is_some() {
+        return Err(input(NOT_THE_BASE));
+    }
+    if kind == AreaKind::Employee
         && (base.everyone.is_some() || people.len() != 1 || people[0].role != ListRole::Manager)
     {
         return Err(input(EMPLOYEE_LIST));
@@ -1977,32 +2227,12 @@ pub fn area_list_base_sign(
     if people.iter().any(|person| !active(&person.user_id)) {
         return Err(input(NOT_ACTIVE));
     }
-    if let Some(chain) = &chain {
-        same_group(chain, &base.group_id)?;
-        company_of(chain)?;
-        let entitled = chain.roster.entry(&base.signer_user_id).is_some_and(|entry| {
-            entry.active_with(Some(GroupRole::Members)) && entry.key_version == base.signer_key_version
-        });
-        if !entitled {
-            return Err(input(NOT_ENTITLED));
-        }
-        sealer_holds(chain, &base.signer_user_id, &signer)?;
-        let listed = chain.area_keys.get(&base.workspace_id).map_or(0, Vec::len) as u64;
-        if base.workspace_key_version != listed + 1 {
-            return Err(input(NOT_THE_BASE));
-        }
-    } else if base.workspace_key_version != 1 {
-        return Err(input(NOT_THE_BASE));
-    }
-    if base.workspace_key_version == 1 && base.list_version != 1 {
-        return Err(input(NOT_THE_BASE));
-    }
     let statement = area_list_bytes(&AreaList {
         group_id: base.group_id,
         workspace_id: base.workspace_id,
-        list_version: base.list_version,
+        list_version,
         previous_list_digest: String::new(),
-        workspace_key_version: base.workspace_key_version,
+        workspace_key_version: key_version,
         signer_user_id: base.signer_user_id,
         signer_key_version: base.signer_key_version,
         roster_version: chain.as_ref().map_or(0, |chain| chain.roster.roster_version),
@@ -2020,7 +2250,10 @@ pub fn area_list_base_sign(
 /// it) and `everyone` raised when given. Signed only at the signer's latest
 /// accepted roster, with the keys their entry names there, on a list that is
 /// level or ahead ([`HEAD_BEHIND`], [`HEAD_FORKED`] otherwise), and only when
-/// it would verify: what verification refuses is never signed.
+/// it would verify: what verification refuses is never signed. One that would
+/// change nothing is refused too, and, where `add` names someone whose place
+/// on the list is from before they left and came back, with a sentence that
+/// says so: the same role adds nothing a device counts.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn area_list_addition_sign(
     chain: Arc<AcceptedRosters>,
@@ -2049,12 +2282,37 @@ pub fn area_list_addition_sign(
         .iter()
         .map(|person| ListPerson { user_id: person.user_id.clone(), role: person.role })
         .collect();
+    let everyone = everyone.or(view.everyone);
+    let mut changed = rank(everyone) > rank(view.everyone);
+    let mut stale = false;
     for person in &add {
         match people.iter_mut().find(|at| at.user_id == person.user_id) {
             Some(at) if rank(Some(person.role)) < rank(Some(at.role)) => return Err(input(NARROWS)),
-            Some(at) => at.role = person.role,
-            None => people.push(person.clone()),
+            Some(at) if rank(Some(person.role)) > rank(Some(at.role)) => {
+                changed = true;
+                at.role = person.role;
+            }
+            Some(_) => {
+                // On the list at that role already. Where the entry is from before they last
+                // came back it counts for nothing, and signing it again changes nothing.
+                let admitted = ctx
+                    .org
+                    .active
+                    .get(&person.user_id)
+                    .and_then(|spans| spans.last())
+                    .map_or(0, |span| span.from);
+                let since =
+                    view.people.iter().find(|at| at.user_id == person.user_id).map_or(0, |at| at.since);
+                stale |= since < admitted;
+            }
+            None => {
+                changed = true;
+                people.push(person.clone());
+            }
         }
+    }
+    if !changed {
+        return Err(input(if stale { ENTRY_FROM_BEFORE } else { NOTHING_ADDED }));
     }
     let kept = record_steps(&ctx, record)?;
     let list = AreaList {
@@ -2068,7 +2326,7 @@ pub fn area_list_addition_sign(
         roster_version: chain.roster.roster_version,
         roster_digest: chain.roster_digest.clone(),
         nonce: encode(&random(LIST_NONCE_BYTES)),
-        everyone: everyone.or(view.everyone),
+        everyone,
         people: sorted_people(&people),
     };
     let statement = area_list_bytes(&list)?;
@@ -2081,6 +2339,218 @@ pub fn area_list_addition_sign(
     check_addition(&ctx, &end, &at, false)?;
     let signature = sign_hybrid(&signer.signing_seed, &signer.ml_dsa_seed, &at.statement)?;
     Ok(SignedListWithDigest { statement: at.statement, signature, digest: at.digest })
+}
+
+/* The heads a roster commits to (2.3, "Heads") */
+
+/// The heads a roster's signer commits to, as [`heads_to_commit`] builds them
+/// from the folders the device read, and as `company_roster_first` and
+/// `company_roster_next` take them. It has no constructor: a digest of a
+/// caller's own making signs no roster.
+#[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
+pub struct CommittedHeads {
+    pub(crate) group_id: String,
+    /* The roster they were built on (0 before roster 1); None for heads no device verified. */
+    pub(crate) roster_version: Option<u64>,
+    pub(crate) rows: Vec<HeadRow>,
+    pub(crate) heads_digest: String,
+    /* The areas the roster creates or rotates (id, key version, base list digest) and those it retires. */
+    pub(crate) changed: Vec<(String, u64, String)>,
+    pub(crate) retired: Vec<String>,
+}
+
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+impl CommittedHeads {
+    /// Every live area's row after the roster, sorted by workspace id: what
+    /// the roster call uploads (those that differ from the roster before).
+    pub fn rows(&self) -> Vec<HeadRow> {
+        self.rows.clone()
+    }
+
+    /// The digest the roster's `heads` field carries.
+    pub fn heads_digest(&self) -> String {
+        self.heads_digest.clone()
+    }
+}
+
+/// Heads no device verified, by their digest alone: for the tests and fuzzers
+/// that build rosters over histories whose folders have no lists. Not exported
+/// to the apps: a roster signed over them commits to nothing anyone read.
+#[doc(hidden)]
+pub fn heads_unverified(heads_digest: String) -> Arc<CommittedHeads> {
+    Arc::new(CommittedHeads {
+        group_id: String::new(),
+        roster_version: None,
+        rows: Vec::new(),
+        heads_digest,
+        changed: Vec::new(),
+        retired: Vec::new(),
+    })
+}
+
+/// A share log's head as this device verified it (2.4): its length and digest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ShareLogHead {
+    pub index: u64,
+    pub digest: String,
+}
+
+/// The heads rows a roster's signer commits (2.3: "A signer's device commits
+/// the heads it verified, never ones the server merely reported"), and their
+/// digest, as `company_roster_first` and `company_roster_next` take them and
+/// from nowhere else.
+///
+/// `lists` is every live area's list as this device read it at its latest
+/// roster, but for the areas the roster creates or rotates, whose base lists
+/// are `changed`, and those it retires (`retire`). Nothing is built while any
+/// of them is unread, behind ([`HEAD_BEHIND`]) or forked ([`HEAD_FORKED`]),
+/// and no row is ever below the furthest head an earlier roster committed for
+/// its area: a device from which the server withheld a list cannot sign a
+/// roster that buries it. Where nothing reaches a committed head, the way out
+/// is that folder's key change, whose base list is numbered past it.
+///
+/// The share log's half of a row is the furthest a roster committed, carried
+/// on, or `share_logs` where the device verified further (never below the
+/// committed position). `chain` and `heads` are `None` only for roster 1.
+///
+/// ```no_run
+/// use hushos_core::*;
+/// # fn build(chain: std::sync::Arc<AcceptedRosters>, heads: HeadsRecord, lists: Vec<std::sync::Arc<AreaLists>>) -> CoreResult<()> {
+/// let committed = heads_to_commit(Some(chain.clone()), chain.group_id(), Some(heads), lists, vec![], vec![], Default::default())?;
+/// // `committed` goes into `NextOrgRoster::heads`; its rows are uploaded with the roster.
+/// assert_eq!(committed.heads_digest(), heads_digest(chain.group_id(), committed.rows())?);
+/// # Ok(()) }
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn heads_to_commit(
+    chain: Option<Arc<AcceptedRosters>>,
+    group_id: String,
+    heads: Option<HeadsRecord>,
+    lists: Vec<Arc<AreaLists>>,
+    changed: Vec<SignedAreaList>,
+    retire: Vec<String>,
+    share_logs: HashMap<String, ShareLogHead>,
+) -> CoreResult<Arc<CommittedHeads>> {
+    uuid(&group_id, "group id")?;
+    let mut retired = retire;
+    retired.sort();
+    let mut org: Option<&OrgChain> = None;
+    let mut record: Option<&HeadsRecord> = None;
+    if let Some(chain) = &chain {
+        same_group(chain, &group_id)?;
+        let company = company_of(chain)?;
+        let heads = heads.as_ref().ok_or_else(|| input(HEAD_BEHIND))?;
+        check_heads_record(chain, company, heads)?;
+        if heads.roster_version != chain.roster.roster_version {
+            return Err(input(HEAD_BEHIND));
+        }
+        (org, record) = (Some(company), Some(heads));
+    }
+    let rows_of = |workspace_id: &str| record.and_then(|record| record.areas.get(workspace_id));
+    let log_of = |workspace_id: &str| -> CoreResult<(u64, String)> {
+        let committed = rows_of(workspace_id).and_then(|rows| furthest_of(rows));
+        let verified = share_logs.get(workspace_id);
+        if let (Some(verified), Some(committed)) = (verified, &committed) {
+            if verified.index < committed.share_log_index {
+                return Err(input(HEADS_NOT_BELOW));
+            }
+        }
+        Ok(match (verified, committed) {
+            (Some(verified), _) => (verified.index, verified.digest.clone()),
+            (None, Some(committed)) => (committed.share_log_index, committed.share_log_digest),
+            (None, None) => (0, log_start(&group_id, workspace_id)?),
+        })
+    };
+    let mut rows: Vec<HeadRow> = Vec::new();
+    let mut built: Vec<(String, u64, String)> = Vec::new();
+    // The areas this roster creates or rotates: their base lists, as it will list them.
+    for signed in &changed {
+        let list = parse_list(&signed.statement)?;
+        let listed =
+            chain.as_ref().and_then(|chain| chain.area_keys.get(&list.workspace_id)).map_or(0, Vec::len)
+                as u64;
+        if list.group_id != group_id
+            || !list.previous_list_digest.is_empty()
+            || list.workspace_key_version != listed + 1
+            || retired.contains(&list.workspace_id)
+            || built.iter().any(|at| at.0 == list.workspace_id)
+        {
+            return Err(input(NOT_THE_BASE));
+        }
+        // Never below what a roster committed for the area before.
+        let furthest =
+            rows_of(&list.workspace_id).into_iter().flatten().map(|row| row.list_version).max().unwrap_or(0);
+        if list.list_version <= furthest {
+            return Err(input(HEADS_NOT_BELOW));
+        }
+        let list_digest = digest(&signed.statement);
+        let (share_log_index, share_log_digest) = log_of(&list.workspace_id)?;
+        built.push((list.workspace_id.clone(), list.workspace_key_version, list_digest.clone()));
+        rows.push(HeadRow {
+            workspace_id: list.workspace_id,
+            workspace_key_version: list.workspace_key_version,
+            list_version: list.list_version,
+            list_digest,
+            share_log_index,
+            share_log_digest,
+        });
+    }
+    // Every other live area: its head as this device verified it.
+    let live: Vec<String> = match (&chain, org) {
+        (Some(chain), Some(org)) => {
+            live_areas_at(org, chain.roster.roster_version).into_iter().cloned().collect()
+        }
+        _ => Vec::new(),
+    };
+    for workspace_id in &live {
+        if retired.contains(workspace_id) || built.iter().any(|at| at.0 == *workspace_id) {
+            continue;
+        }
+        let chain = chain.as_ref().expect("live areas come from a chain");
+        let lists = lists
+            .iter()
+            .find(|at| at.view.workspace_id == *workspace_id)
+            .ok_or_else(|| input(HEADS_INCOMPLETE))?;
+        let view = require_read(chain, lists)?;
+        if view.state == HeadState::Forked {
+            return Err(input(HEAD_FORKED));
+        }
+        if view.state == HeadState::Behind || view.list_version == 0 {
+            return Err(input(HEAD_BEHIND));
+        }
+        // Level only with a later roster's head, the furthest passed over: this device does not
+        // hold the committed record, and commits to nothing less.
+        let furthest = rows_of(workspace_id).and_then(|rows| furthest_of(rows));
+        if !furthest.is_some_and(|furthest| {
+            furthest.workspace_key_version == view.workspace_key_version
+                && view.list_version >= furthest.list_version
+        }) {
+            return Err(input(HEAD_FORKED));
+        }
+        let (share_log_index, share_log_digest) = log_of(workspace_id)?;
+        rows.push(HeadRow {
+            workspace_id: workspace_id.clone(),
+            workspace_key_version: view.workspace_key_version,
+            list_version: view.list_version,
+            list_digest: view.list_digest.clone(),
+            share_log_index,
+            share_log_digest,
+        });
+    }
+    if retired.iter().any(|workspace_id| !live.contains(workspace_id)) {
+        return Err(input(NOT_AN_AREA));
+    }
+    rows.sort_by(|x, y| x.workspace_id.cmp(&y.workspace_id));
+    Ok(Arc::new(CommittedHeads {
+        group_id: group_id.clone(),
+        roster_version: Some(chain.as_ref().map_or(0, |chain| chain.roster.roster_version)),
+        heads_digest: digest_of_rows(&group_id, &rows)?,
+        rows,
+        changed: built,
+        retired,
+    }))
 }
 
 /* The signed dismissal (2.3, "The note, and who clears it") */
@@ -2123,6 +2593,8 @@ pub struct ForkDismissal {
 
 const FORK_DISMISSAL_DOMAIN: &str = "hushos/group/fork-dismissal";
 const NOT_AN_ADMIN: &str = "Only an admin dismisses a fork for the admins.";
+const DISMISSAL_KEYS_REPLACED: &str =
+    "This dismissal is signed with keys its signer has since replaced: it has to be signed again.";
 
 /// The bytes of a fork dismissal:
 /// `["hushos/group/fork-dismissal",1,groupId,workspaceId,kind,committedPosition,committedDigest,reportedPosition,reportedDigest,signerUserId,signerKeyVersion,rosterVersion,rosterDigest]`.
@@ -2287,6 +2759,11 @@ pub fn fork_dismissal_verify(
     if !dismissal_holds(&chain, org, &dismissal) {
         return Err(input(NOT_AN_ADMIN));
     }
+    // A key change is treated like leaving: a dismissal has no head to be within, so one signed
+    // under keys its signer's entry has since moved off hides nothing. They sign it again.
+    if keys_replaced_at(org, &dismissal.signer_user_id, dismissal.roster_version).is_some() {
+        return Err(input(DISMISSAL_KEYS_REPLACED));
+    }
     let unsigned = || input("This dismissal is not signed by the admin it names.");
     let named = keys_at(org, &dismissal.signer_user_id, dismissal.roster_version).ok_or_else(unsigned)?;
     if signature.len() != HYBRID_SIGNATURE_BYTES
@@ -2437,16 +2914,17 @@ pub fn area_access(
     if suspended {
         return Ok(None);
     }
-    // A request made in a data admin's session is that session's, whatever else they are here.
+    // Someone the list names is one of the folder's people: an admin who is on it is not
+    // browsing (3.7), whatever session the request came in.
+    if let Some(role) = list_role(&chain, org, view, &user_id) {
+        return Ok(Some(AreaAccess::List { role }));
+    }
     if chain.roster.entry(&user_id).is_some_and(|entry| entry.active_with(Some(GroupRole::DataAdmin))) {
         match session {
             Some(AreaSession::Browse) => return Ok(Some(AreaAccess::Browse)),
             Some(AreaSession::KeyChange) if owed(org, view) => return Ok(Some(AreaAccess::KeyChange)),
             _ => {}
         }
-    }
-    if let Some(role) = list_role(&chain, org, view, &user_id) {
-        return Ok(Some(AreaAccess::List { role }));
     }
     Ok(match share {
         Some(ListRole::Manager) => return Err(input("Invalid list role.")),
@@ -2533,6 +3011,36 @@ pub(crate) fn grant_allowed(
         && view.list_version > 0
         && workspace_key_version <= view.workspace_key_version
         && list_role(chain, company_of(chain)?, view, user_id).is_some())
+}
+
+/*
+ * The keys a company area's grant is checked under (2.3, "Grants"): the ones
+ * its granter's entry named at the roster the grant names, where the granter
+ * was active. Judged there and not on the latest roster, so a grant an Admin
+ * made opens after that Admin is removed, as a list they signed still stands.
+ * (What it opens to is the key the chain commits to, for a reader the list
+ * entitles: an old grant, or old keys, deliver nothing else.)
+ */
+pub(crate) fn granter_at(
+    chain: &AcceptedRosters,
+    granter_user_id: &str,
+    roster_version: u64,
+    served_ml_dsa_public_key: &[u8],
+) -> CoreResult<Vec<HybridPublicKey>> {
+    let org = company_of(chain)?;
+    if active_at(org, granter_user_id, roster_version).is_none() {
+        return Err(input("This grant is not from an active member of the group."));
+    }
+    let named = keys_at(org, granter_user_id, roster_version)
+        .filter(|named| {
+            served_ml_dsa_public_key.len() == ML_DSA_PUBLIC_KEY_BYTES
+                && digest(served_ml_dsa_public_key) == named.ml_dsa_public_key_digest
+        })
+        .ok_or_else(|| input(crate::groups::NOT_LISTED))?;
+    Ok(vec![HybridPublicKey {
+        signing_public_key: decode("signingPublicKey", &named.signing_public_key, Some(32))?,
+        ml_dsa_public_key: served_ml_dsa_public_key.to_vec(),
+    }])
 }
 
 /* Who writes (2.3) */

@@ -315,7 +315,7 @@ pub fn company_made_here() -> (Value, Vec<Value>) {
         kit: None,
         rules: None,
         auto_utc_day: None,
-        heads_digest: testkit_heads_digest(),
+        heads: heads_unverified(testkit_heads_digest()),
         checked: vec![],
     };
     let mut ml_dsa_keys = served_ml_dsa(&people.iter().collect::<Vec<_>>());
@@ -352,7 +352,7 @@ pub fn company_made_here() -> (Value, Vec<Value>) {
             custody_key: key_at(1),
             kit: kit.clone(),
             rules: None,
-            heads_digest: testkit_heads_digest(),
+            heads: heads_unverified(testkit_heads_digest()),
         },
     )
     .unwrap();

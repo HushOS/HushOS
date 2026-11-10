@@ -1,3 +1,4 @@
+import { unverifiedHeads } from '../src/committed-heads';
 import { isDeepStrictEqual } from 'node:util';
 import { encodeStatement, parseStatement } from '../src/canonical';
 import {
@@ -1009,7 +1010,7 @@ async function companyNext(value: Doc): Promise<Verdict | undefined> {
                 areaKeys,
                 ...(retireAreas.length ? { retireAreas } : {}),
                 org: {
-                    headsDigest,
+                    heads: unverifiedHeads(headsDigest),
                     checked,
                     ...(custodyKey ? { custodyKey: custodyKey as never } : {}),
                     ...(kit ? { kit: kit as never } : {}),

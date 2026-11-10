@@ -1,3 +1,4 @@
+import { unverifiedHeads } from './committed-heads';
 import { describe, expect, test } from 'vitest';
 import { listCaseVerdict, type ListCase, type ListStepVerdict } from './company-lists-testkit';
 import { companyKeys, sealItemVerdict, type SealItem } from './company-testkit';
@@ -119,7 +120,7 @@ describe('a company made by the Rust core', () => {
             org: {
                 custodyKey: (await custodyAt(1)).publicKey,
                 kit: (await kitAt(1)).publicKeys,
-                headsDigest: HEADS_DIGEST,
+                heads: unverifiedHeads(HEADS_DIGEST),
             },
         });
         expect(encode(rosterStatement(first))).toBe(encode(input.rosters[0]!.statement));
@@ -127,7 +128,10 @@ describe('a company made by the Rust core', () => {
         const two = await chainAt(2);
         const third = await nextRoster(two, [...two.roster.members], {
             signerUserId: owner.userId,
-            org: { headsDigest: HEADS_DIGEST, custodyKey: (await custodyAt(2)).publicKey },
+            org: {
+                heads: unverifiedHeads(HEADS_DIGEST),
+                custodyKey: (await custodyAt(2)).publicKey,
+            },
         });
         expect(encode(rosterStatement(third))).toBe(encode(input.rosters[2]!.statement));
         expect(parseRoster(input.rosters[2]!.statement).membersSame).toBeDefined();
@@ -139,7 +143,7 @@ describe('a company made by the Rust core', () => {
             three.roster.members.map((entry) =>
                 entry.userId === keeper.userId ? { ...entry, roles: [...OWNER_ROLES] } : entry,
             ),
-            { signerUserId: keeper.userId, org: { headsDigest: HEADS_DIGEST } },
+            { signerUserId: keeper.userId, org: { heads: unverifiedHeads(HEADS_DIGEST) } },
         );
         expect(encode(rosterStatement(fourth))).toBe(encode(input.rosters[3]!.statement));
     });
@@ -190,8 +194,9 @@ describe('a company made by the Rust core', () => {
     });
 
     test('a folder’s lists and heads the core signed read here, step by step, as the core read them', async () => {
-        // A base list, two additions, the heads three rosters commit and a dismissal, all made
-        // with the core's builders (companies-design 2.3): the same states, the same record.
+        // A base list, two additions, a key change's base list, the heads four rosters commit
+        // (each built by the core over what a device read) and a dismissal, all made with the
+        // core's builders (companies-design 2.3): the same states, the same record.
         const made = core.lists as unknown as ListCase & { expected: ListStepVerdict[] };
         const served = (served: typeof made.input) => ({
             ...served,
@@ -201,15 +206,24 @@ describe('a company made by the Rust core', () => {
         });
         const verdict = await listCaseVerdict({ ...made, input: served(made.input) });
         expect(verdict).toEqual(made.expected);
-        const [before, after] = verdict as [ListStepVerdict, ListStepVerdict];
-        if ('error' in before.lists || 'error' in after.lists) throw new Error('refused');
+        const [before, after, rotated] = verdict as ListStepVerdict[] as [
+            ListStepVerdict,
+            ListStepVerdict,
+            ListStepVerdict,
+        ];
+        if ('error' in before.lists || 'error' in after.lists || 'error' in rotated.lists)
+            throw new Error('refused');
         expect([before.lists.state, after.lists.state]).toEqual(['ahead', 'level']);
         expect(after.lists.people.map((person) => person.role)).toEqual([
             'manager',
             'manager',
             'viewer',
         ]);
-        expect(after.dismissals).toEqual(['verified']);
+        // The key change's base list is numbered past the head, and leaves the viewer out.
+        expect([rotated.lists.state, rotated.lists.workspaceKeyVersion]).toEqual(['level', 2]);
+        expect(rotated.lists.listVersion).toBe(4);
+        expect(rotated.lists.people.map((person) => person.role)).toEqual(['manager', 'manager']);
+        expect(rotated.dismissals).toEqual(['verified']);
         // One byte of the core's addition moved: this twin refuses it, and nothing reaches the head.
         const step = made.steps[1]!;
         const moved = decode(step.served![1]!.signature);

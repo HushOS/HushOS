@@ -3471,9 +3471,47 @@ pub struct FirstOrgRoster {
     /// Auto-join off, ten a day, unless given.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub rules: Option<crate::groups::RosterRules>,
-    /// The digest over the heads of the roster's areas, as the creator's
-    /// device verified them (2.3).
-    pub heads_digest: String,
+    /// The heads of the roster's areas, built by `heads_to_commit` from their
+    /// base lists (2.3).
+    pub heads: Arc<crate::area_lists::CommittedHeads>,
+}
+
+const HEADS_NOT_FOR_THIS: &str = "These heads were not built for this member list.";
+
+/*
+ * The digest a roster carries for its heads: only of heads `heads_to_commit`
+ * built, on the roster this one follows, for exactly the areas it creates,
+ * rotates and retires, each with the base list its row commits to.
+ */
+fn heads_for(
+    built: &crate::area_lists::CommittedHeads,
+    on_roster: u64,
+    group_id: &str,
+    areas: &[crate::groups::RosterArea],
+) -> CoreResult<String> {
+    // (Heads no device verified, in tests and fuzzers: a digest and nothing to hold it to.)
+    let Some(roster_version) = built.roster_version else {
+        return Ok(built.heads_digest.clone());
+    };
+    let rows: Vec<&crate::groups::RosterArea> = areas.iter().filter(|row| !row.retired).collect();
+    let retired: Vec<&String> = areas.iter().filter(|row| row.retired).map(|row| &row.workspace_id).collect();
+    let listed = |row: &&crate::groups::RosterArea| {
+        built.changed.iter().any(|at| {
+            at.0 == row.workspace_id
+                && at.1 == row.workspace_key_version
+                && Some(&at.2) == row.list_digest.as_ref()
+        })
+    };
+    if built.group_id != group_id
+        || roster_version != on_roster
+        || rows.len() != built.changed.len()
+        || !rows.iter().all(listed)
+        || retired.len() != built.retired.len()
+        || !retired.iter().all(|id| built.retired.contains(id))
+    {
+        return Err(input(HEADS_NOT_FOR_THIS));
+    }
+    Ok(built.heads_digest.clone())
 }
 
 /// What a company's next roster says beside its members and areas
@@ -3499,8 +3537,9 @@ pub struct NextOrgRoster {
     /// its own clock, `YYYY-MM-DD`.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub auto_utc_day: Option<String>,
-    /// The digest over every live area's heads as this device verified them (2.3).
-    pub heads_digest: String,
+    /// Every live area's heads as this device verified them, built by
+    /// `heads_to_commit` (2.3).
+    pub heads: Arc<crate::area_lists::CommittedHeads>,
     /// The fresh words checks this device holds (companies-design 1.2, and 2.2
     /// "Another Owner checks first"): a verified pin of each Owner or kit
     /// holder whose entry this roster moves to new keys, and of everyone it
@@ -3531,7 +3570,8 @@ pub struct NextOrgRoster {
 ///     custody_key: custody_public_key(vec![1; 96])?,
 ///     kit: kit_public_keys(vec![2; 32], group_id.clone())?,
 ///     rules: None,
-///     heads_digest: roster_digest(b"heads".to_vec()),
+///     // The heads of its folders, from their base lists: none here, so none to list.
+///     heads: heads_to_commit(None, group_id.clone(), None, vec![], vec![], vec![], Default::default())?,
 /// };
 /// let roster = company_roster_first(group_id.clone(), creator.clone(), None, org.clone())?;
 /// assert_eq!((roster.format, roster.kind), (3, GroupKind::Org));
@@ -3599,7 +3639,7 @@ fn first_roster(
                 auto: None,
                 heads: crate::groups::RosterHeads {
                     area_count: areas.len() as u64,
-                    heads_digest: org.heads_digest,
+                    heads_digest: heads_for(&org.heads, 0, &group_id, &areas)?,
                 },
             })
         })
@@ -3788,7 +3828,10 @@ fn company_fields(
         custody,
         rules: options.rules.unwrap_or_else(|| before.rules.clone()),
         auto,
-        heads: crate::groups::RosterHeads { area_count: live as u64, heads_digest: options.heads_digest },
+        heads: crate::groups::RosterHeads {
+            area_count: live as u64,
+            heads_digest: heads_for(&options.heads, previous.roster_version, &chain.group_id, areas)?,
+        },
     })
 }
 
@@ -8273,7 +8316,7 @@ mod tests {
                 custody_key: crate::custody::custody_public_key(vec![201; 96]).unwrap(),
                 kit: crate::custody::kit_public_keys(vec![221; 32], GROUP.into()).unwrap(),
                 rules: None,
-                heads_digest: digest(b"heads"),
+                heads: crate::area_lists::heads_unverified(digest(b"heads")),
             },
         )
         .unwrap();
