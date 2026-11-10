@@ -21,6 +21,7 @@ import {
     areaListDigest,
     areaListStatement,
     areaOwed,
+    carriedHeads,
     dismisses,
     folderStanding,
     forkDismissalStatement,
@@ -71,6 +72,7 @@ import {
 } from './group-testkit';
 import {
     acceptRosters,
+    nextRoster,
     folderIntegrityOf,
     groupIntegrityOf,
     groupWriterTrust,
@@ -82,7 +84,9 @@ import {
 import {
     openAreaGrant,
     parseGroupSuccession,
+    parseRoster,
     rosterDigest,
+    rosterStatement,
     sealAreaGrant,
     type AreaGrantContext,
     type AreaKind,
@@ -148,6 +152,8 @@ type BaseOptions = {
     signedBy?: Person;
     signerUserId?: string;
     names?: { rosterVersion: number; rosterDigest: string };
+    /* The base list itself, where a case made it beforehand (baseList). */
+    signed?: SignedAreaList;
 };
 
 /* What a roster of the world does beside its members. */
@@ -157,6 +163,8 @@ type RosterOptions = {
     retire?: number[];
     /* The list version the signer commits for a folder, where it saw less than the server holds. */
     commit?: Record<number, number | { listVersion: number; listDigest: string }>;
+    /* Commits the rows of the roster before, as they stand (a recovery roster's heads, rule 11). */
+    carry?: boolean;
     /* The rows the digest is over, written over what the signer would commit. */
     rows?: (rows: HeadRow[]) => HeadRow[];
     /* The rows the server serves with the roster: those that changed (the default), all, or its own. */
@@ -246,7 +254,7 @@ export async function listWorld(options: { folders?: boolean } = {}) {
                 const n = Number(key);
                 const keyVersion = (folders.get(n)?.keyVersion ?? 0) + 1;
                 const kind = options.kind ?? folders.get(n)?.kind ?? 'shared';
-                const list = await base(n, keyVersion, signer, options);
+                const list = options.signed ?? (await base(n, keyVersion, signer, options));
                 const row = n === 0 ? await orgRowAt(AREA, keyVersion) : await rowOf(n, keyVersion);
                 rows.push({ ...row, areaKind: kind, listDigest: await digestOfList(list) });
                 folders.set(n, { workspaceId: folderId(n), kind, keyVersion, lists: [list] });
@@ -286,6 +294,7 @@ export async function listWorld(options: { folders?: boolean } = {}) {
                 });
             }
             all.sort((x, y) => (x.workspaceId < y.workspaceId ? -1 : 1));
+            if (o.carry) all = committed;
             if (o.rows) all = o.rows(all);
             const signed = await h.roster(signer, members, undefined, rows, {
                 ...o.org,
@@ -399,6 +408,13 @@ export type ListProbes = {
         changed?: SignedAreaList[];
         retire?: string[];
     };
+    /*
+     * Builds three rosters after the step's chain (nextRoster): the recovery roster of `signer`
+     * (their own promotion) on the heads of the roster before, restated (carriedHeads); the same
+     * on the heads the `commit` probe builds; and `admin`'s roster that changes nothing, on the
+     * restated heads. Each is the digest of the unsigned statement, or the refusal's sentence.
+     */
+    recovery?: { signer: number; admin: number };
 };
 
 /* One step of a device's life: accept the chain through a roster, read the heads, read (or settle) a folder's list. */
@@ -425,6 +441,7 @@ export type ListStepVerdict = {
     writable?: string;
     dismissals?: string[];
     commit?: { headsDigest: string; rows: HeadRow[] } | { error: string };
+    recovery?: { carried: string; built: string; onAnother: string };
 };
 
 export type ListCase = {
@@ -550,10 +567,10 @@ export async function listCaseVerdict(
                 }
             }
         }
-        if (probes?.commit && lists) {
-            const { others, changed, retire } = probes.commit;
-            try {
-                const all = [lists];
+        const build = async (read: AreaLists) => {
+            const { others, changed, retire } = probes!.commit!;
+            {
+                const all = [read];
                 for (const [workspaceId, served] of Object.entries(others))
                     all.push(
                         await readAreaLists({
@@ -565,7 +582,7 @@ export async function listCaseVerdict(
                             mlDsaKeys: c.input.mlDsaKeys,
                         }),
                     );
-                const built = await headsToCommit({
+                return headsToCommit({
                     chain,
                     groupId: chain.groupId,
                     heads: headsRecord,
@@ -573,10 +590,45 @@ export async function listCaseVerdict(
                     changed,
                     retire,
                 });
+            }
+        };
+        if (probes?.commit && lists) {
+            try {
+                const built = await build(lists);
                 verdict.commit = { headsDigest: built.headsDigest, rows: [...built.rows] };
             } catch (error) {
                 verdict.commit = refusal(error);
             }
+        }
+        if (probes?.recovery && probes.commit && lists) {
+            const read = lists;
+            const signer = await person(probes.recovery.signer);
+            const admin = await person(probes.recovery.admin);
+            const promoted = chain.roster.members.map((entry) =>
+                entry.userId === signer.userId ? { ...entry, roles: [...OWNER_ROLES] } : entry,
+            );
+            const carried = () =>
+                carriedHeads({ chain, groupId: chain.groupId, heads: headsRecord });
+            const said = async (
+                members: RosterMember[],
+                signerUserId: string,
+                heads: () => ReturnType<typeof carriedHeads>,
+            ) => {
+                try {
+                    const roster = await nextRoster(chain, members, {
+                        signerUserId,
+                        org: { heads: await heads() },
+                    });
+                    return `statement:${await rosterDigest(rosterStatement(roster))}`;
+                } catch (error) {
+                    return refusal(error).error;
+                }
+            };
+            verdict.recovery = {
+                carried: await said(promoted, signer.userId, carried),
+                built: await said(promoted, signer.userId, () => build(read)),
+                onAnother: await said([...chain.roster.members], admin.userId, carried),
+            };
         }
         if (probes?.standing)
             verdict.standing = probes.standing.map((probe) =>
@@ -1651,21 +1703,32 @@ export async function listCases(): Promise<ListCase[]> {
             (v) => {
                 const error = (at: ListStepVerdict) =>
                     at.commit && 'error' in at.commit ? at.commit.error : null;
+                /* The heads built there carry FOLDER's row at the head nothing reaches. */
+                const carried = (at: ListStepVerdict) => {
+                    const row =
+                        at.commit && 'rows' in at.commit
+                            ? at.commit.rows.find((r) => r.workspaceId === folderId(FOLDER))
+                            : undefined;
+                    return (
+                        row?.listVersion === base + 1 && row.listDigest === encode(pattern(32, 9))
+                    );
+                };
                 const passed = listed(v[5]!);
                 return (
                     // Level, a signer's heads are what it verified.
                     v[0]!.commit !== undefined &&
                     'rows' in v[0]!.commit &&
                     v[0]!.commit.rows.length === 3 &&
-                    // Asked and not yet answered, it is behind; answered with nothing that
-                    // reaches the head, it is forked: it never stays behind. Neither signs
-                    // heads: a roster from this device would bury a list it was not served.
+                    // Asked and not yet answered, it is behind, and signs no heads; answered
+                    // with nothing that reaches the head, it is forked: it never stays behind,
+                    // and writes nothing there. A roster it signs carries the committed row as
+                    // the chain has it, never its own lower one.
                     state('behind', base)([v[1]!]) &&
                     error(v[1]!) === LIST_REFUSALS.behind &&
                     state('forked', base)([v[2]!]) &&
                     v[2]!.writable === LIST_REFUSALS.forked &&
                     listed(v[2]!).fork !== null &&
-                    error(v[2]!) === LIST_REFUSALS.forked &&
+                    carried(v[2]!) &&
                     // Unless the roster changes that folder's key, with a base list past the head.
                     v[3]!.commit !== undefined &&
                     'rows' in v[3]!.commit &&
@@ -1682,7 +1745,7 @@ export async function listCases(): Promise<ListCase[]> {
                     passed.record!.forks.length === 1 &&
                     passed.head!.listVersion === base &&
                     v[5]!.writable === 'ok' &&
-                    error(v[5]!) === LIST_REFUSALS.forked &&
+                    carried(v[5]!) &&
                     listed(v[6]!).report === null &&
                     listed(v[6]!).fork === null &&
                     listed(v[6]!).record!.forks.length === 1 &&
@@ -1709,13 +1772,24 @@ export async function listCases(): Promise<ListCase[]> {
                         through: head + 2,
                         folder: FOLDER,
                         served: w.served(FOLDER),
-                        probes: { writable: true },
+                        probes: {
+                            writable: true,
+                            commit: {
+                                others: {
+                                    [folderId(0)]: w.served(0),
+                                    [folderId(OWN)]: w.served(OWN),
+                                },
+                            },
+                        },
                     },
                 ];
             },
             (v) =>
                 state('forked', base + 1)([v[1]!]) &&
                 state('forked', base + 1)(v) &&
+                // Two things at one version: no row is carried over it, and no heads are built.
+                'error' in v[2]!.commit! &&
+                v[2]!.commit.error === LIST_REFUSALS.forked &&
                 listed(v[2]!).fork !== null &&
                 !listed(v[2]!).fork!.settled &&
                 listed(v[2]!).fork!.committed.position === base + 1 &&
@@ -1765,6 +1839,61 @@ export async function listCases(): Promise<ListCase[]> {
                 reasons(v[2]!).join() === LIST_REFUSALS.rival &&
                 listed(v[0]!).report === 'fork' &&
                 listed(v[0]!).refused[0]!.listDigest === listed(v[1]!).refused[0]!.listDigest,
+        );
+        await add(
+            // Where a roster committed one of the two, that one stands, whichever digest is lower.
+            `a-roster-committed-one-of-two-lists-at-one-version${at}`,
+            async (w) => {
+                const head = await start(w);
+                const first = w.served(FOLDER);
+                const one = await w.add(FOLDER, member, [editor(keeper)], { hidden: true });
+                const other = await w.add(FOLDER, admin, [viewer(admin2)], { hidden: true });
+                const [low, high] =
+                    (await w.digestOfList(one)) < (await w.digestOfList(other))
+                        ? [one, other]
+                        : [other, one];
+                await w.roster(admin, w.all, {
+                    commit: {
+                        [FOLDER]: {
+                            listVersion: base + 1,
+                            listDigest: await w.digestOfList(high),
+                        },
+                    },
+                });
+                const served = [...first, low, high];
+                return [
+                    // Before any roster names the version, the lower digest is taken.
+                    { through: head, folder: FOLDER, served },
+                    // The roster commits the other: this device holds a list in its place.
+                    { through: head + 1, folder: FOLDER, served },
+                    { through: head + 1, call: 'settle', folder: FOLDER, served },
+                    // A device with no record takes the committed one outright.
+                    {
+                        through: head + 1,
+                        folder: FOLDER,
+                        served,
+                        record: null,
+                        headsRecord: null,
+                        probes: { writable: true },
+                    },
+                ];
+            },
+            (v) => {
+                const lower = listed(v[0]!).listDigest;
+                const higher = listed(v[0]!).refused[0]!.listDigest;
+                return (
+                    state('ahead', base + 1)([v[0]!]) &&
+                    lower < higher &&
+                    state('forked', base + 1)([v[1]!]) &&
+                    state('level', base + 1)([v[2]!]) &&
+                    listed(v[2]!).listDigest === higher &&
+                    state('level', base + 1)(v) &&
+                    listed(v[3]!).listDigest === higher &&
+                    reasons(v[3]!).join() === LIST_REFUSALS.rival &&
+                    listed(v[3]!).refused[0]!.listDigest === lower &&
+                    v[3]!.writable === 'ok'
+                );
+            },
         );
         await add(
             `the-furthest-head-wins${at}`,
@@ -1987,9 +2116,207 @@ export async function listCases(): Promise<ListCase[]> {
             v[0]!.commit.error === LIST_REFUSALS.incomplete &&
             'rows' in v[1]!.commit! &&
             v[1]!.commit.rows.length === 2 &&
-            // A folder whose list was not served is forked: no heads over it.
-            'error' in v[2]!.commit! &&
-            v[2]!.commit.error === LIST_REFUSALS.forked,
+            // A folder the server served nothing of is forked on this device; its row is carried
+            // as the chain has it, never lower.
+            'rows' in v[2]!.commit! &&
+            v[2]!.commit.rows.length === 3 &&
+            v[2]!.commit.rows.find((row) => row.workspaceId === folderId(OWN))!.listVersion === 1,
+    );
+    {
+        // Rule 11: the kit promotes its holder and commits nothing. The recovery roster carries
+        // the heads of the roster before, restated, whatever was added since.
+        let recovery = '';
+        await add(
+            'a-recovery-roster-carries-the-heads-of-the-roster-before',
+            async (w) => {
+                const at = w.h.rosters.length;
+                const others = { [folderId(0)]: w.served(0), [folderId(OWN)]: w.served(OWN) };
+                const probes: ListProbes = {
+                    commit: { others },
+                    recovery: { signer: keeper.n, admin: admin.n },
+                };
+                const before = w.served(FOLDER);
+                // An addition since the last roster: the heads this device would build moved on.
+                await w.add(FOLDER, member, [editor(admin2)]);
+                const since = w.served(FOLDER);
+                // The kit holder's own promotion, signed with the kit.
+                await w.roster(keeper, withEntry(w, { ...w.e.keeper, roles: [...OWNER_ROLES] }), {
+                    carry: true,
+                    org: { kit: 1 },
+                });
+                recovery = await rosterDigest(w.h.rosters.at(-1)!.statement);
+                return [
+                    { through: at, folder: FOLDER, served: before, probes },
+                    { through: at, folder: FOLDER, served: since, probes },
+                    // After it, its signer is an Owner and builds heads as any signer does.
+                    {
+                        through: at + 1,
+                        folder: FOLDER,
+                        served: since,
+                        probes: { commit: { others } },
+                    },
+                ];
+            },
+            (v) => {
+                const notRecovery =
+                    'The recovery kit makes its holder an owner and changes nothing else.';
+                const built = v[2]!.commit!;
+                return (
+                    // With nothing added since, and with an addition since: the roster is the one
+                    // the chain then accepts, byte for byte.
+                    v[0]!.recovery!.carried === `statement:${recovery}` &&
+                    v[1]!.recovery!.carried === `statement:${recovery}` &&
+                    state('ahead', 2)([v[1]!]) &&
+                    // Heads built from a read are not a recovery roster's, though they hash the same.
+                    v[0]!.recovery!.built === notRecovery &&
+                    v[1]!.recovery!.built === notRecovery &&
+                    // And no other roster restates the heads before it.
+                    v[1]!.recovery!.onAnother ===
+                        'These heads were not built for this member list.' &&
+                    state('ahead', 2)(v) &&
+                    'rows' in built &&
+                    built.rows.find((row) => row.workspaceId === folderId(FOLDER))!.listVersion ===
+                        2
+                );
+            },
+        );
+    }
+    {
+        // Ten folders whose heads nothing reaches: more than a roster can rotate (rule 6). The
+        // company still signs its rosters, a removal first, and clears them eight at a time.
+        const TEN = Array.from({ length: 10 }, (_, i) => 10 + i);
+        const lost = (n: number) => ({ listVersion: 2, listDigest: encode(pattern(32, 40 + n)) });
+        let removal = '';
+        let rotation = '';
+        await add(
+            'ten-folders-whose-heads-nothing-reaches',
+            async (w) => {
+                const people = [manager(member)];
+                const make = (ns: number[]) => Object.fromEntries(ns.map((n) => [n, { people }]));
+                await w.roster(admin, w.all, { create: make(TEN.slice(0, 5)) });
+                await w.roster(admin, w.all, { create: make(TEN.slice(5)) });
+                // A roster commits, for each of them, a list the server never serves.
+                const unreached = Object.fromEntries(TEN.map((n) => [n, lost(n)]));
+                await w.roster(admin, w.all, { commit: unreached });
+                const head = w.h.rosters.length;
+                const servedOf = (ns: number[]) =>
+                    Object.fromEntries(ns.map((n) => [folderId(n), w.served(n)]));
+                const others = servedOf([0, OWN, ...TEN]);
+                const headsOf = () => parseRoster(w.h.rosters.at(-1)!.statement).heads!.headsDigest;
+                // A Member is removed: the roster carries the ten rows as the chain has them.
+                const gone = withEntry(w, left(w.e.another));
+                await w.roster(admin, gone, { commit: unreached });
+                removal = headsOf();
+                // A roster from a client that lowers a head: one folder's row is its base list.
+                await w.roster(admin, gone, { commit: { ...unreached, [TEN[9]!]: 1 } });
+                // Eight key changes, each base list numbered past its head: all one roster carries.
+                const eight = TEN.slice(0, 8);
+                const bases: SignedAreaList[] = [];
+                for (const n of eight)
+                    bases.push(await w.baseList(n, admin, { people, listVersion: 3 }));
+                const rest = servedOf([0, OWN, FOLDER, ...TEN.slice(0, 9)]);
+                const last = w.served(TEN[9]!);
+                await w.roster(admin, gone, {
+                    rotate: Object.fromEntries(
+                        eight.map((n, i) => [n, { people, signed: bases[i]! }]),
+                    ),
+                    commit: { [TEN[8]!]: lost(TEN[8]!), [TEN[9]!]: lost(TEN[9]!) },
+                });
+                rotation = headsOf();
+                return [
+                    {
+                        through: head,
+                        folder: FOLDER,
+                        served: w.served(FOLDER),
+                        probes: { commit: { others } },
+                    },
+                    // The folder whose row a later roster lowered: the device goes on there by
+                    // that row, and the heads it builds still carry the furthest.
+                    {
+                        through: head + 2,
+                        folder: TEN[9]!,
+                        served: last,
+                        record: null,
+                        probes: { writable: true, commit: { others: rest, changed: bases } },
+                    },
+                    // One of the eight, after its key change: level on its new base list.
+                    { through: head + 3, folder: TEN[0]!, served: [bases[0]!], record: null },
+                    {
+                        through: head + 3,
+                        folder: TEN[8]!,
+                        served: rest[folderId(TEN[8]!)]!,
+                        record: null,
+                    },
+                ];
+            },
+            (v) => {
+                const rowsOf = (at: ListStepVerdict) =>
+                    at.commit && 'rows' in at.commit ? at.commit.rows : [];
+                const row = (at: ListStepVerdict, n: number) =>
+                    rowsOf(at).find((r) => r.workspaceId === folderId(n));
+                const carried = (at: ListStepVerdict, ns: number[]) =>
+                    ns.every((n) => {
+                        const r = row(at, n);
+                        return (
+                            r?.workspaceKeyVersion === 1 &&
+                            r.listVersion === 2 &&
+                            r.listDigest === lost(n).listDigest
+                        );
+                    });
+                return (
+                    // The removal's heads: thirteen folders, ten of them carried, and exactly
+                    // what the roster the chain accepted commits to.
+                    rowsOf(v[0]!).length === 13 &&
+                    carried(v[0]!, TEN) &&
+                    'headsDigest' in v[0]!.commit! &&
+                    v[0]!.commit.headsDigest === removal &&
+                    // Gone on by the lower row, its row is still the furthest; eight rotate.
+                    state('level', 1)([v[1]!]) &&
+                    listed(v[1]!).fork?.settled === true &&
+                    v[1]!.writable === 'ok' &&
+                    carried(v[1]!, TEN.slice(8)) &&
+                    TEN.slice(0, 8).every((n) => {
+                        const r = row(v[1]!, n);
+                        return r?.workspaceKeyVersion === 2 && r.listVersion === 3;
+                    }) &&
+                    'headsDigest' in v[1]!.commit! &&
+                    v[1]!.commit.headsDigest === rotation &&
+                    state('level', 3)([v[2]!]) &&
+                    listed(v[2]!).workspaceKeyVersion === 2 &&
+                    // The two left over are forked still, until their own key change.
+                    listed(v[3]!).state === 'forked'
+                );
+            },
+        );
+    }
+    await add(
+        // An Admin who is on a folder's list is one of its people, whatever session is open.
+        'an-admin-on-the-list-in-a-session-acts-by-the-list',
+        async (w) => {
+            await w.add(FOLDER, member, [viewer(admin2)]);
+            // Someone the list names leaves: the folder is owed a key change, which is what a
+            // key-change session opens for an Admin on no list.
+            await w.roster(admin, withEntry(w, left(w.e.biller)));
+            return fresh(w, {
+                owed: true,
+                access: [
+                    { userId: admin2.userId },
+                    { userId: admin2.userId, session: 'browse' },
+                    { userId: admin2.userId, session: 'key-change' },
+                    { userId: admin.userId, session: 'browse' },
+                    { userId: admin.userId, session: 'key-change' },
+                ],
+            });
+        },
+        (v) =>
+            v[0]!.owed === true &&
+            v[0]!
+                .access!.map(
+                    (at) =>
+                        `${at.access?.basis}:${at.access && 'role' in at.access ? at.access.role : ''}=${at.allows}`,
+                )
+                .join(' ') ===
+                'list:viewer=read,download list:viewer=read,download list:viewer=read,download browse:=read,download,write,manage key-change:=rotate',
     );
     await add(
         'key-change-with-no-base-list-served',

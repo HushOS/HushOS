@@ -3075,17 +3075,22 @@ const HEADS_NOT_FOR_THIS = 'These heads were not built for this member list.';
  * The digest a roster carries for its heads: only of heads headsToCommit
  * built (area-lists.ts), on the roster this one follows, for exactly the
  * areas it creates, rotates and retires, each with the base list its row
- * commits to.
+ * commits to. A recovery roster commits nothing new (rule 11): it takes only
+ * the heads of the roster before, restated (carriedHeads), and no other
+ * roster takes those.
  */
 function headsFor(
     heads: unknown,
     chain: AcceptedRosters | null,
     groupId: string,
     areas: readonly RosterArea[],
+    recovery = false,
 ) {
     const built = requireCommittedHeads(heads);
     // (Heads no device verified, in tests and fuzzers: a digest and nothing to hold it to.)
     if (built.rosterVersion === null) return built.headsDigest;
+    if (built.carried !== recovery)
+        throw new CryptoError(recovery ? NOT_A_RECOVERY : HEADS_NOT_FOR_THIS);
     const rows = areas.filter((row) => !row.retired);
     const retired = areas.filter((row) => row.retired).map((row) => row.workspaceId);
     if (
@@ -3123,7 +3128,10 @@ export type NextOrgRoster = {
     rules?: RosterRules;
     /* Set by a device admitting someone unattended (rule 9): the UTC day by its own clock. */
     auto?: { utcDay: string };
-    /* Every live area's heads as this device verified them, built by headsToCommit (2.3). */
+    /*
+     * Every live area's heads as this device verified them, built by headsToCommit (2.3); for
+     * a recovery roster, the heads of the roster before, restated by carriedHeads (rule 11).
+     */
     heads: CommittedHeads;
     /*
      * The fresh words checks this device holds (companies-design 1.2, and 2.2
@@ -3270,7 +3278,13 @@ async function companyFields(
     roster.heads = {
         areaCount:
             Object.keys(chain.areaKeys).length - chain.retiredAreas.length + created - retiring,
-        headsDigest: headsFor(options.heads, chain, roster.groupId, rows),
+        headsDigest: headsFor(
+            options.heads,
+            chain,
+            roster.groupId,
+            rows,
+            isRecoveryRoster(previous, { ...roster, signerUserId }),
+        ),
     };
     // No entry changed: the statement says `same` and names the members of the roster before.
     if (

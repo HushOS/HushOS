@@ -1,3 +1,4 @@
+import { carriedHeads } from './area-lists';
 import { unverifiedHeads } from './committed-heads';
 import { describe, expect, test } from 'vitest';
 import { listCaseVerdict, type ListCase, type ListStepVerdict } from './company-lists-testkit';
@@ -143,7 +144,10 @@ describe('a company made by the Rust core', () => {
             three.roster.members.map((entry) =>
                 entry.userId === keeper.userId ? { ...entry, roles: [...OWNER_ROLES] } : entry,
             ),
-            { signerUserId: keeper.userId, org: { heads: unverifiedHeads(HEADS_DIGEST) } },
+            {
+                signerUserId: keeper.userId,
+                org: { heads: await carriedHeads({ chain: three, groupId: GROUP, heads: null }) },
+            },
         );
         expect(encode(rosterStatement(fourth))).toBe(encode(input.rosters[3]!.statement));
     });

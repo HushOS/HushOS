@@ -238,6 +238,172 @@ fn a_folder_s_grants_and_records_read_here_as_on_the_web() {
     assert_eq!(opened.unwrap()["expected"], json!(format!("opened:{}", e(&area_key_at(AREA, 1)))));
 }
 
+/* One list case of the web's fixture, by name, with this core's verdict at every step. */
+fn list_case(name: &str) -> (Value, Vec<Value>) {
+    let (case, ours, _) = list_case_with_keys(name);
+    (case, ours)
+}
+
+fn list_case_with_keys(name: &str) -> (Value, Vec<Value>, std::collections::HashMap<String, String>) {
+    let fixture = fixture();
+    let lists = &fixture["lists"];
+    let keys: std::collections::HashMap<String, String> = lists["mlDsaKeys"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(digest, key)| (digest.clone(), key.as_str().unwrap().to_string()))
+        .collect();
+    let case = lists["cases"].as_array().unwrap().iter().find(|case| s(case, "name") == name).expect(name);
+    let ours = list_case_verdict(case, &keys);
+    (case.clone(), ours.as_array().unwrap().clone(), keys)
+}
+
+/* The heads digest roster `version` of a case's history carries. */
+fn heads_of_roster(case: &Value, version: usize) -> String {
+    let roster = roster_parse(b(&case["input"]["rosters"][version - 1], "statement")).unwrap();
+    roster.org.unwrap().heads.heads_digest
+}
+
+#[test]
+fn a_recovery_roster_is_built_on_the_heads_before_it_restated_and_on_no_others() {
+    // Stated here, not read from the fixture's verdicts (rule 11, design 2.3).
+    let (case, ours, keys) = list_case_with_keys("a-recovery-roster-carries-the-heads-of-the-roster-before");
+    let through = n(&case["steps"][0], "through") as usize;
+    let recovery = &case["input"]["rosters"][through];
+    let accepted = format!("statement:{}", roster_digest(b(recovery, "statement")));
+    assert!(
+        recovery["kitSignature"].is_string(),
+        "the roster after is the kit holder's, signed with the kit"
+    );
+    // With nothing added since the last roster, and with an addition since: this core builds the
+    // very roster the chain then accepts, though the heads it would build from a read moved on.
+    for step in &ours[..2] {
+        assert_eq!(step["recovery"]["carried"], json!(accepted));
+        assert_eq!(
+            step["recovery"]["built"],
+            json!("The recovery kit makes its holder an owner and changes nothing else.")
+        );
+        assert_eq!(step["recovery"]["onAnother"], json!("These heads were not built for this member list."));
+    }
+    assert_eq!(ours[1]["lists"]["state"], json!("ahead"));
+    assert_ne!(ours[1]["commit"]["headsDigest"], json!(heads_of_roster(&case, through)));
+    assert_eq!(heads_of_roster(&case, through + 1), heads_of_roster(&case, through));
+    // A record that stops short of the latest roster restates nothing, and a family has no heads.
+    let (_, mut input, _) = case_from(&json!({ "name": "", "input": case["input"], "expected": null }));
+    input.ml_dsa_keys = keys;
+    let chain = chain_through(&input, through as u64);
+    let rows = |at: &Value| ServedHeads {
+        roster_version: n(at, "rosterVersion"),
+        rows: at["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| HeadRow {
+                workspace_id: s(row, "workspaceId"),
+                workspace_key_version: n(row, "workspaceKeyVersion"),
+                list_version: n(row, "listVersion"),
+                list_digest: s(row, "listDigest"),
+                share_log_index: row["shareLogIndex"].as_u64().unwrap(),
+                share_log_digest: s(row, "shareLogDigest"),
+            })
+            .collect(),
+    };
+    let served: Vec<ServedHeads> = case["heads"].as_array().unwrap().iter().map(rows).collect();
+    let short = heads_read(chain_through(&input, 2), None, served.clone()).unwrap().record;
+    let refused = heads_carried(chain.clone(), GROUP.into(), Some(short)).expect_err("a record behind");
+    assert_eq!(refused.to_string(), HEAD_BEHIND);
+    let whole = heads_read(chain.clone(), None, served).unwrap().record;
+    let carried = heads_carried(chain.clone(), GROUP.into(), Some(whole)).unwrap();
+    assert_eq!(carried.heads_digest(), heads_of_roster(&case, through));
+    assert_eq!(heads_digest(GROUP.into(), carried.rows()).unwrap(), carried.heads_digest());
+    assert_eq!(carried.rows().len(), 3);
+    assert!(heads_carried(chain.clone(), GROUP.into(), None).unwrap().rows().is_empty());
+}
+
+#[test]
+fn heads_nothing_reaches_are_carried_and_a_true_fork_is_not() {
+    let (case, ours) = list_case("ten-folders-whose-heads-nothing-reaches");
+    let through = n(&case["steps"][0], "through") as usize;
+    let rows = |step: &Value| step["commit"]["rows"].as_array().expect("heads were built").clone();
+    let at = |rows: &[Value], key: u64, list: u64| {
+        rows.iter()
+            .filter(|row| n(row, "workspaceKeyVersion") == key && n(row, "listVersion") == list)
+            .count()
+    };
+    // Ten folders whose committed head (list 2) the server serves nothing of: more than one
+    // roster can rotate. The heads still build, each of the ten carried at list 2, and they are
+    // the heads of the roster that then removes a member.
+    let removal = rows(&ours[0]);
+    assert_eq!(removal.len(), 13);
+    assert_eq!(at(&removal, 1, 2), 10);
+    assert_eq!(ours[0]["commit"]["headsDigest"], json!(heads_of_roster(&case, through + 1)));
+    let left = roster_parse(b(&case["input"]["rosters"][through], "statement")).unwrap();
+    assert!(left.members.iter().any(|entry| entry.status == MemberStatus::Left));
+    // After a later roster lowered one folder's row, the device goes on there by that row and
+    // still commits the furthest; eight key changes go on one roster, numbered past their heads.
+    assert_eq!(ours[1]["lists"]["state"], json!("level"));
+    assert_eq!(ours[1]["lists"]["listVersion"], json!(1));
+    let rotation = rows(&ours[1]);
+    assert_eq!((at(&rotation, 2, 3), at(&rotation, 1, 2)), (8, 2));
+    assert_eq!(ours[1]["commit"]["headsDigest"], json!(heads_of_roster(&case, through + 3)));
+    assert_eq!(ours[2]["lists"]["state"], json!("level"));
+    assert_eq!(ours[3]["lists"]["state"], json!("forked"));
+    // Two things at one version are a fork no row is carried over.
+    for name in [
+        "a-true-fork-is-not-cleared-by-a-later-lower-row",
+        "a-true-fork-is-not-cleared-by-a-later-lower-row-after-a-key-change",
+    ] {
+        let (_, ours) = list_case(name);
+        assert_eq!(ours[2]["lists"]["state"], json!("forked"), "{name}");
+        assert_eq!(ours[2]["commit"]["error"], json!(HEAD_FORKED), "{name}");
+    }
+}
+
+#[test]
+fn a_committed_list_beats_its_rival_and_an_admin_on_the_list_acts_by_the_list() {
+    for name in [
+        "a-roster-committed-one-of-two-lists-at-one-version",
+        "a-roster-committed-one-of-two-lists-at-one-version-after-a-key-change",
+    ] {
+        let (_, ours) = list_case(name);
+        let digest = |step: &Value| s(&step["lists"], "listDigest");
+        // Uncommitted, the lower digest stands; once a roster commits the higher one, that one
+        // does, for a device that settles and for one that reads afresh.
+        let (lower, higher) = (digest(&ours[0]), s(&ours[0]["lists"]["refused"][0], "listDigest"));
+        assert!(lower < higher, "{name}");
+        assert_eq!(ours[1]["lists"]["state"], json!("forked"), "{name}");
+        for step in &ours[2..] {
+            assert_eq!(step["lists"]["state"], json!("level"), "{name}");
+            assert_eq!(digest(step), higher, "{name}");
+        }
+        assert_eq!(s(&ours[3]["lists"]["refused"][0], "listDigest"), lower, "{name}");
+        assert_eq!(ours[3]["writable"], json!("ok"), "{name}");
+    }
+    // An Admin who is a viewer on the folder's list, with no session, browsing, and in a
+    // key-change session on a folder that is owed one; then an Admin on no list in each session.
+    let (_, ours) = list_case("an-admin-on-the-list-in-a-session-acts-by-the-list");
+    assert_eq!(ours[0]["owed"], json!(true));
+    let said: Vec<String> = ours[0]["access"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|at| {
+            let role = at["access"]["role"].as_str().unwrap_or("");
+            format!("{}:{}={}", s(&at["access"], "basis"), role, s(at, "allows"))
+        })
+        .collect();
+    assert_eq!(
+        said,
+        [
+            "list:viewer=read,download",
+            "list:viewer=read,download",
+            "list:viewer=read,download",
+            "browse:=read,download,write,manage",
+            "key-change:=rotate",
+        ]
+    );
+}
+
 #[test]
 fn the_furthest_head_is_read_at_the_folder_s_current_key_and_a_note_is_cleared_only_once_settled() {
     let digest = |text: &str| roster_digest(text.as_bytes().to_vec());

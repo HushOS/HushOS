@@ -3481,18 +3481,25 @@ const HEADS_NOT_FOR_THIS: &str = "These heads were not built for this member lis
 /*
  * The digest a roster carries for its heads: only of heads `heads_to_commit`
  * built, on the roster this one follows, for exactly the areas it creates,
- * rotates and retires, each with the base list its row commits to.
+ * rotates and retires, each with the base list its row commits to. A
+ * recovery roster commits nothing new (rule 11): it takes only the heads of
+ * the roster before, restated (`heads_carried`), and no other roster takes
+ * those.
  */
 fn heads_for(
     built: &crate::area_lists::CommittedHeads,
     on_roster: u64,
     group_id: &str,
     areas: &[crate::groups::RosterArea],
+    recovery: bool,
 ) -> CoreResult<String> {
     // (Heads no device verified, in tests and fuzzers: a digest and nothing to hold it to.)
     let Some(roster_version) = built.roster_version else {
         return Ok(built.heads_digest.clone());
     };
+    if built.carried != recovery {
+        return Err(input(if recovery { NOT_A_RECOVERY } else { HEADS_NOT_FOR_THIS }));
+    }
     let rows: Vec<&crate::groups::RosterArea> = areas.iter().filter(|row| !row.retired).collect();
     let retired: Vec<&String> = areas.iter().filter(|row| row.retired).map(|row| &row.workspace_id).collect();
     let listed = |row: &&crate::groups::RosterArea| {
@@ -3538,7 +3545,8 @@ pub struct NextOrgRoster {
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub auto_utc_day: Option<String>,
     /// Every live area's heads as this device verified them, built by
-    /// `heads_to_commit` (2.3).
+    /// `heads_to_commit` (2.3); for a recovery roster, the heads of the roster
+    /// before, restated by `heads_carried` (rule 11).
     pub heads: Arc<crate::area_lists::CommittedHeads>,
     /// The fresh words checks this device holds (companies-design 1.2, and 2.2
     /// "Another Owner checks first"): a verified pin of each Owner or kit
@@ -3639,7 +3647,7 @@ fn first_roster(
                 auto: None,
                 heads: crate::groups::RosterHeads {
                     area_count: areas.len() as u64,
-                    heads_digest: heads_for(&org.heads, 0, &group_id, &areas)?,
+                    heads_digest: heads_for(&org.heads, 0, &group_id, &areas, false)?,
                 },
             })
         })
@@ -3751,6 +3759,11 @@ fn company_fields(
     let previous = &chain.roster;
     let before = org_of(previous)?;
     let org = chain.org.as_ref().ok_or_else(|| input("Invalid roster format."))?;
+    // A recovery roster (rule 11): its signer holds `recovery` and not `members` on the roster before.
+    let recovery = {
+        let signer = previous.entry(signer_user_id);
+        holds(signer, GroupRole::Recovery) && !holds(signer, GroupRole::Members)
+    };
     // A guarded entry (one that holds `recovery` before or after) moves to new keys on another
     // person's roster only with that signer's fresh check of the new keys. A device rule: the
     // chain cannot see a words check (rule 8 is what it holds: only an Owner signs this at all).
@@ -3830,7 +3843,13 @@ fn company_fields(
         auto,
         heads: crate::groups::RosterHeads {
             area_count: live as u64,
-            heads_digest: heads_for(&options.heads, previous.roster_version, &chain.group_id, areas)?,
+            heads_digest: heads_for(
+                &options.heads,
+                previous.roster_version,
+                &chain.group_id,
+                areas,
+                recovery,
+            )?,
         },
     })
 }

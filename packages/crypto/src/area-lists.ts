@@ -1043,8 +1043,11 @@ async function fromBase(ctx: Ctx, served: Parsed[], refused: Refusal[]) {
 /*
  * Takes, in turn, the served list that follows the last step; stops where
  * none does. Where two lists that both verify stand at one version, the one
- * with the lower digest is taken, whatever order they were served in, and the
- * other is refused as a rival (LIST_RIVAL): the server does not choose, and
+ * a roster committed at that version is taken (the first roster's to name
+ * the version, as headsOf reads the rows); where no roster committed either,
+ * the one with the lower digest, whatever order they were served in. The
+ * other is refused as a rival (LIST_RIVAL): the server does not choose, a
+ * rival a signer made later does not displace what the chain committed, and
  * the device reports it as a fork.
  */
 async function extend(ctx: Ctx, steps: Step[], served: Parsed[], refused: Refusal[]) {
@@ -1077,13 +1080,21 @@ async function extend(ctx: Ctx, steps: Step[], served: Parsed[], refused: Refusa
         }
         if (valid.length === 0) return;
         valid.sort((x, y) => (x.digest < y.digest ? -1 : 1));
-        for (const rival of valid.slice(1))
-            refused.push({
-                listVersion: rival.list.listVersion,
-                listDigest: rival.digest,
-                reason: LIST_RIVAL,
-            });
-        steps.push(valid[0]!);
+        const committed = (ctx.rows ?? []).find(
+            (row) =>
+                row.workspaceKeyVersion === ctx.keyVersion &&
+                row.listVersion === end.list.listVersion + 1 &&
+                valid.some((at) => at.digest === row.listDigest),
+        );
+        const taken = valid.find((at) => at.digest === committed?.listDigest) ?? valid[0]!;
+        for (const rival of valid)
+            if (rival !== taken)
+                refused.push({
+                    listVersion: rival.list.listVersion,
+                    listDigest: rival.digest,
+                    reason: LIST_RIVAL,
+                });
+        steps.push(taken);
     }
 }
 
@@ -1842,8 +1853,17 @@ export async function signAreaListAddition(input: {
  * unread (HEADS_INCOMPLETE), behind (HEAD_BEHIND) or forked (HEAD_FORKED),
  * and no row is ever below the furthest head an earlier roster committed for
  * its area: a device from which the server withheld a list cannot sign a
- * roster that buries it. Where nothing reaches a committed head, the way out
- * is that folder's key change, whose base list is numbered past it.
+ * roster that buries it.
+ *
+ * Where nothing this device holds or was served reaches a head a roster
+ * committed past the end of its record, the furthest committed row is
+ * carried on as it stands, from the device's heads record: never the
+ * server's word, never lower. The folder stays forked on this device, and its
+ * way out is its key change, whose base list is numbered past that head; a
+ * roster rotates at most 8 folders (2.1, rule 6), and a company with more
+ * such folders than that still signs its rosters, a removal among them. A
+ * true fork, a committed head at a version the record holds with another
+ * digest, is refused still.
  *
  * The share log's half of a row is the furthest a roster committed, carried
  * on, or `shareLogs` where the device verified further (the log is PR 3's;
@@ -1923,22 +1943,21 @@ export async function headsToCommit(input: {
         const lists = input.lists.find((at) => at.workspaceId === workspaceId);
         if (!lists) throw new CryptoError(HEADS_INCOMPLETE);
         requireRead(chain!, lists);
-        if (lists.state === 'forked') throw new CryptoError(HEAD_FORKED);
-        if (lists.state === 'behind' || lists.listVersion === 0) throw new CryptoError(HEAD_BEHIND);
+        if (lists.state === 'behind') throw new CryptoError(HEAD_BEHIND);
         const furthest = committedHead(record!, workspaceId)?.list;
-        // Level only with a later roster's head, the furthest passed over: this device does not
-        // hold the committed record, and commits to nothing less.
-        if (
-            !furthest ||
-            furthest.workspaceKeyVersion !== lists.workspaceKeyVersion ||
-            lists.listVersion < furthest.listVersion
-        )
+        if (!furthest || furthest.workspaceKeyVersion !== lists.workspaceKeyVersion)
             throw new CryptoError(HEAD_FORKED);
+        // A head past the end of everything this device holds, which nothing served reaches
+        // (it is forked, or went on by a later roster's lower row): the furthest committed row
+        // is carried on, as the chain has it.
+        const unreached = furthest.listVersion > lists.listVersion;
+        if (lists.state === 'forked' && !unreached) throw new CryptoError(HEAD_FORKED);
+        if (lists.listVersion === 0 && !unreached) throw new CryptoError(HEAD_BEHIND);
         rows.push({
             workspaceId,
             workspaceKeyVersion: lists.workspaceKeyVersion,
-            listVersion: lists.listVersion,
-            listDigest: lists.listDigest,
+            listVersion: unreached ? furthest.listVersion : lists.listVersion,
+            listDigest: unreached ? furthest.listDigest : lists.listDigest,
             ...(await logOf(workspaceId)),
         });
     }
@@ -1953,6 +1972,42 @@ export async function headsToCommit(input: {
         headsDigest: await headsDigest(groupId, rows),
         changed,
         retired,
+        carried: false,
+    });
+}
+
+/*
+ * The heads a recovery roster carries (2.1, rule 11: the `heads` of the
+ * roster before): the latest roster's own, restated, and nothing this device
+ * read since. nextRoster takes them for a recovery roster and for no other,
+ * and a recovery roster takes no others: the kit promotes its holder and
+ * commits nothing, so it needs no folder read, and an addition made since
+ * the last roster does not stand in its way. The digest is the chain's; the
+ * rows are the heads record's at that roster (checked against the digest),
+ * or none where the device holds no record: a recovery roster uploads none.
+ */
+export async function carriedHeads(input: {
+    chain: AcceptedRosters;
+    groupId: string;
+    heads: HeadsRecord | null;
+}): Promise<CommittedHeads> {
+    const { chain } = input;
+    const groupId = uuid(input.groupId, 'group id');
+    const org = companyOf(chain, groupId);
+    let rows: HeadRow[] = [];
+    if (input.heads) {
+        const record = await checkHeadsRecord(chain, org, input.heads);
+        if (record.rosterVersion !== chain.roster.rosterVersion) throw new CryptoError(HEAD_BEHIND);
+        rows = rowsAt(org, record.areas, record.rosterVersion);
+    }
+    return markCommittedHeads({
+        groupId,
+        rosterVersion: chain.roster.rosterVersion,
+        rows,
+        headsDigest: chain.roster.heads!.headsDigest,
+        changed: [],
+        retired: [],
+        carried: true,
     });
 }
 

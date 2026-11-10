@@ -23,6 +23,11 @@ export type CommittedHeads = {
         listDigest: string;
     }[];
     readonly retired: readonly string[];
+    /*
+     * Whether these are the heads of the roster before, restated (carriedHeads): what a recovery
+     * roster carries (2.1, rule 11), and no other roster does.
+     */
+    readonly carried: boolean;
 };
 
 export const NOT_BUILT =
@@ -54,5 +59,6 @@ export function unverifiedHeads(headsDigest: string): CommittedHeads {
         headsDigest,
         changed: [],
         retired: [],
+        carried: false,
     });
 }

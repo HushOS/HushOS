@@ -12,9 +12,11 @@ import {
     NOT_THE_BASE,
     areaListDigest,
     areaListStatement,
+    carriedHeads,
     clearForkNote,
     committedHead,
     headState,
+    headsDigest,
     headsToCommit,
     parseAreaList,
     readAreaLists,
@@ -898,6 +900,37 @@ describe('the heads a roster commits', () => {
                 shareLogDigest: firstHeads.rows[0]!.shareLogDigest,
             },
         ]);
+    });
+
+    test('a recovery roster’s heads are the roster before’s, restated from the record, and nothing read since', async () => {
+        const w = await listWorld();
+        const { chain, heads } = await reading(w);
+        const carried = await carriedHeads({ chain, groupId: GROUP, heads });
+        // The digest is the chain's, and the rows are every live folder's as that roster committed them.
+        expect(carried.headsDigest).toBe(chain.roster.heads!.headsDigest);
+        expect(await headsDigest(GROUP, [...carried.rows])).toBe(carried.headsDigest);
+        expect(carried.rows.map((row) => row.workspaceId)).toEqual(
+            [AREA, folderId(FOLDER), folderId(OWN)].sort(),
+        );
+        // A device with no heads record carries the same digest, and has no rows to upload.
+        const bare = await carriedHeads({ chain, groupId: GROUP, heads: null });
+        expect([bare.headsDigest, bare.rows]).toEqual([carried.headsDigest, []]);
+        // A record that stops short of the latest roster restates nothing of it.
+        const short = await readHeads({ chain, record: null, served: w.heads.slice(0, 2) });
+        expect(short.record.rosterVersion).toBe(2);
+        await expect(carriedHeads({ chain, groupId: GROUP, heads: short.record })).rejects.toThrow(
+            HEAD_BEHIND,
+        );
+        // And only heads made here are taken: a copy of them signs nothing.
+        const promoted = chain.roster.members.map((entry) =>
+            entry.userId === w.cast.keeper.userId ? { ...entry, roles: [...OWNER_ROLES] } : entry,
+        );
+        await expect(
+            nextRoster(chain, promoted, {
+                signerUserId: w.cast.keeper.userId,
+                org: { heads: { ...carried } },
+            }),
+        ).rejects.toThrow('this device built');
     });
 
     test('an addition for someone back from leaving, at the role their old entry names, is not signed', async () => {

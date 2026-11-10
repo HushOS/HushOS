@@ -1363,8 +1363,11 @@ fn first_taken(
 /*
  * Takes, in turn, the served list that follows the last step; stops where
  * none does. Where two lists that both verify stand at one version, the one
- * with the lower digest is taken, whatever order they were served in, and the
- * other is refused as a rival (LIST_RIVAL): the server does not choose, and
+ * a roster committed at that version is taken (the first roster's to name
+ * the version, as heads_of reads the rows); where no roster committed either,
+ * the one with the lower digest, whatever order they were served in. The
+ * other is refused as a rival (LIST_RIVAL): the server does not choose, a
+ * rival a signer made later does not displace what the chain committed, and
  * the device reports it as a fork.
  */
 fn extend(ctx: &Ctx, steps: &mut Vec<Step>, served: &[Parsed], refused: &mut Vec<ListRefusal>) {
@@ -1396,7 +1399,12 @@ fn extend(ctx: &Ctx, steps: &mut Vec<Step>, served: &[Parsed], refused: &mut Vec
             return;
         }
         valid.sort_by(|x, y| x.at.digest.cmp(&y.at.digest));
-        let taken = valid.remove(0);
+        let committed = ctx.rows.iter().flatten().find_map(|row| {
+            (row.workspace_key_version == ctx.key_version && row.list_version == next_version)
+                .then(|| valid.iter().position(|at| at.at.digest == row.list_digest))
+                .flatten()
+        });
+        let taken = valid.remove(committed.unwrap_or(0));
         for rival in &valid {
             refused.push(refusal(&rival.at, LIST_RIVAL));
         }
@@ -2358,6 +2366,8 @@ pub struct CommittedHeads {
     /* The areas the roster creates or rotates (id, key version, base list digest) and those it retires. */
     pub(crate) changed: Vec<(String, u64, String)>,
     pub(crate) retired: Vec<String>,
+    /* Whether these are the heads of the roster before, restated (`heads_carried`): a recovery roster's. */
+    pub(crate) carried: bool,
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export)]
@@ -2386,7 +2396,66 @@ pub fn heads_unverified(heads_digest: String) -> Arc<CommittedHeads> {
         heads_digest,
         changed: Vec::new(),
         retired: Vec::new(),
+        carried: false,
     })
+}
+
+/// The heads a recovery roster carries (2.1, rule 11: the `heads` of the
+/// roster before): the latest roster's own, restated, and nothing this device
+/// read since. `company_roster_next` takes them for a recovery roster and for
+/// no other, and a recovery roster takes no others: the kit promotes its
+/// holder and commits nothing, so it needs no folder read, and an addition
+/// made since the last roster does not stand in its way.
+///
+/// The digest is the chain's. The rows are the heads record's at that roster
+/// (checked against the digest; [`HEAD_BEHIND`] for a record that stops short
+/// of it), or none where the device holds no record: a recovery roster
+/// uploads none.
+///
+/// ```no_run
+/// use hushos_core::*;
+/// # fn recover(chain: std::sync::Arc<AcceptedRosters>, heads: Option<HeadsRecord>, members: Vec<RosterMember>, me: String) -> CoreResult<()> {
+/// let carried = heads_carried(chain.clone(), chain.group_id(), heads)?;
+/// let org = NextOrgRoster { custody_key: None, kit: None, rules: None, auto_utc_day: None, heads: carried, checked: vec![] };
+/// // `members` is the roster's, with the kit holder's own entry given all four roles.
+/// let roster = company_roster_next(chain, members, me, None, None, org)?;
+/// # let _ = roster;
+/// # Ok(()) }
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn heads_carried(
+    chain: Arc<AcceptedRosters>,
+    group_id: String,
+    heads: Option<HeadsRecord>,
+) -> CoreResult<Arc<CommittedHeads>> {
+    uuid(&group_id, "group id")?;
+    same_group(&chain, &group_id)?;
+    let org = company_of(&chain)?;
+    let rows = match &heads {
+        Some(record) => {
+            check_heads_record(&chain, org, record)?;
+            if record.roster_version != chain.roster.roster_version {
+                return Err(input(HEAD_BEHIND));
+            }
+            rows_at(org, &record.areas, record.roster_version)?
+        }
+        None => Vec::new(),
+    };
+    let heads_digest = chain
+        .roster
+        .org
+        .as_ref()
+        .map(|org| org.heads.heads_digest.clone())
+        .ok_or_else(|| input(NOT_A_COMPANY))?;
+    Ok(Arc::new(CommittedHeads {
+        group_id,
+        roster_version: Some(chain.roster.roster_version),
+        rows,
+        heads_digest,
+        changed: Vec::new(),
+        retired: Vec::new(),
+        carried: true,
+    }))
 }
 
 /// A share log's head as this device verified it (2.4): its length and digest.
@@ -2408,8 +2477,17 @@ pub struct ShareLogHead {
 /// of them is unread, behind ([`HEAD_BEHIND`]) or forked ([`HEAD_FORKED`]),
 /// and no row is ever below the furthest head an earlier roster committed for
 /// its area: a device from which the server withheld a list cannot sign a
-/// roster that buries it. Where nothing reaches a committed head, the way out
-/// is that folder's key change, whose base list is numbered past it.
+/// roster that buries it.
+///
+/// Where nothing this device holds or was served reaches a head a roster
+/// committed past the end of its record, the furthest committed row is
+/// carried on as it stands, from the device's heads record: never the
+/// server's word, never lower. The folder stays forked on this device, and
+/// its way out is its key change, whose base list is numbered past that head;
+/// a roster rotates at most 8 folders (2.1, rule 6), and a company with more
+/// such folders than that still signs its rosters, a removal among them. A
+/// true fork, a committed head at a version the record holds with another
+/// digest, is refused still.
 ///
 /// The share log's half of a row is the furthest a roster committed, carried
 /// on, or `share_logs` where the device verified further (never below the
@@ -2514,27 +2592,34 @@ pub fn heads_to_commit(
             .find(|at| at.view.workspace_id == *workspace_id)
             .ok_or_else(|| input(HEADS_INCOMPLETE))?;
         let view = require_read(chain, lists)?;
-        if view.state == HeadState::Forked {
-            return Err(input(HEAD_FORKED));
-        }
-        if view.state == HeadState::Behind || view.list_version == 0 {
+        if view.state == HeadState::Behind {
             return Err(input(HEAD_BEHIND));
         }
-        // Level only with a later roster's head, the furthest passed over: this device does not
-        // hold the committed record, and commits to nothing less.
-        let furthest = rows_of(workspace_id).and_then(|rows| furthest_of(rows));
-        if !furthest.is_some_and(|furthest| {
-            furthest.workspace_key_version == view.workspace_key_version
-                && view.list_version >= furthest.list_version
-        }) {
+        let furthest = rows_of(workspace_id)
+            .and_then(|rows| furthest_of(rows))
+            .filter(|furthest| furthest.workspace_key_version == view.workspace_key_version)
+            .ok_or_else(|| input(HEAD_FORKED))?;
+        // A head past the end of everything this device holds, which nothing served reaches
+        // (it is forked, or went on by a later roster's lower row): the furthest committed row
+        // is carried on, as the chain has it.
+        let unreached = furthest.list_version > view.list_version;
+        if view.state == HeadState::Forked && !unreached {
             return Err(input(HEAD_FORKED));
         }
+        if view.list_version == 0 && !unreached {
+            return Err(input(HEAD_BEHIND));
+        }
+        let (list_version, list_digest) = if unreached {
+            (furthest.list_version, furthest.list_digest)
+        } else {
+            (view.list_version, view.list_digest.clone())
+        };
         let (share_log_index, share_log_digest) = log_of(workspace_id)?;
         rows.push(HeadRow {
             workspace_id: workspace_id.clone(),
             workspace_key_version: view.workspace_key_version,
-            list_version: view.list_version,
-            list_digest: view.list_digest.clone(),
+            list_version,
+            list_digest,
             share_log_index,
             share_log_digest,
         });
@@ -2550,6 +2635,7 @@ pub fn heads_to_commit(
         rows,
         changed: built,
         retired,
+        carried: false,
     }))
 }
 

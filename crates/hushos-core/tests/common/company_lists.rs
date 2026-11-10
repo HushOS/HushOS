@@ -451,7 +451,7 @@ pub fn list_case_verdict(case: &Value, ml_dsa_keys: &HashMap<String, String>) ->
         if let (Some(lists), true) = (&lists, probes["commit"].is_object()) {
             // The heads a roster's signer would commit now, every other live folder read afresh.
             let commit = &probes["commit"];
-            let built = (|| -> CoreResult<Arc<CommittedHeads>> {
+            let build = || -> CoreResult<Arc<CommittedHeads>> {
                 let mut all = vec![lists.clone()];
                 for (other, served) in commit["others"].as_object().unwrap() {
                     all.push(area_lists_read(
@@ -472,10 +472,52 @@ pub fn list_case_verdict(case: &Value, ml_dsa_keys: &HashMap<String, String>) ->
                     strings(&commit["retire"]),
                     HashMap::new(),
                 )
-            })();
+            };
+            if probes["recovery"].is_object() {
+                // Three rosters after this chain: the kit holder's own promotion on the heads of
+                // the roster before, restated; the same on freshly built heads; and an Admin's
+                // roster that changes nothing, on the restated heads.
+                let signer = person(n(&probes["recovery"], "signer") as u8);
+                let admin = person(n(&probes["recovery"], "admin") as u8);
+                let mut promoted = chain.roster().members;
+                for entry in promoted.iter_mut().filter(|entry| entry.user_id == signer.user_id) {
+                    entry.roles = OWNER_ROLES.to_vec();
+                }
+                let carried =
+                    || heads_carried(chain.clone(), chain.group_id(), heads_record.clone().unwrap_or(None));
+                let said = |members: Vec<RosterMember>,
+                            by: &Person,
+                            heads: CoreResult<Arc<CommittedHeads>>| {
+                    heads
+                        .and_then(|heads| {
+                            let org = NextOrgRoster {
+                                custody_key: None,
+                                kit: None,
+                                rules: None,
+                                auto_utc_day: None,
+                                heads,
+                                checked: vec![],
+                            };
+                            company_roster_next(chain.clone(), members, by.user_id.clone(), None, None, org)
+                        })
+                        .and_then(roster_statement)
+                        .map_or_else(
+                            |error| error.to_string(),
+                            |statement| format!("statement:{}", roster_digest(statement)),
+                        )
+                };
+                verdict.insert(
+                    "recovery".into(),
+                    json!({
+                        "carried": said(promoted.clone(), &signer, carried()),
+                        "built": said(promoted, &signer, build()),
+                        "onAnother": said(chain.roster().members, &admin, carried()),
+                    }),
+                );
+            }
             verdict.insert(
                 "commit".into(),
-                match built {
+                match build() {
                     Ok(built) => json!({
                         "headsDigest": built.heads_digest(),
                         "rows": built.rows().iter().map(head_row_json).collect::<Vec<_>>(),

@@ -370,7 +370,9 @@ pub fn company_made_here() -> (Value, Vec<Value>) {
     assert!(third.org.as_ref().unwrap().members_same.is_some(), "a roster that changes no entry says `same`");
     input.rosters.push(roster_sign(third, group_seed(1), owner.keys.clone()).unwrap());
     // Roster 4: the kit holder's recovery roster, signed with the kit.
-    let fourth = next(&input, all(&OWNER_ROLES), &keeper, heads(None));
+    // It carries the heads of the roster before, restated: the kit commits nothing (rule 11).
+    let carried = heads_carried(chain_through(&input, 3), GROUP.into(), None).unwrap();
+    let fourth = next(&input, all(&OWNER_ROLES), &keeper, NextOrgRoster { heads: carried, ..heads(None) });
     input
         .rosters
         .push(recovery_roster_sign(fourth, group_seed(1), keeper.keys.clone(), kit_secret_at(1)).unwrap());
