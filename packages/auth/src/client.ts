@@ -223,6 +223,8 @@ export function createAuthClient(
     let exchanging = false;
     let channel: BroadcastChannel | undefined;
     let listening = false;
+    /* A write of this client's own to the saved unlock that must not lock (see `listen`). */
+    let quiet = false;
     function lock() {
         epoch += 1;
         const active = transport;
@@ -239,6 +241,7 @@ export function createAuthClient(
             store.setState({ device: null });
         });
         store.subscribe((state, previous) => {
+            if (quiet) return;
             if (
                 state.lockRevision !== previous.lockRevision ||
                 (previous.device && state.device?.userId !== previous.device.userId)
@@ -593,6 +596,9 @@ export function createAuthClient(
         result: { user: Pick<AuthUser, 'id'>; envelope: SignedIn['envelope'] },
         loginEpoch: number,
     ) {
+        // A lock while the server answered (the sign-in's finish, its second step, the change
+        // itself) ended the worker that holds the export key: a new one has none to unlock with.
+        stillHeld(loginEpoch, 'Your account was locked. Please sign in again.');
         try {
             await rpc('unlock', { userId: result.user.id, envelope: result.envelope });
         } catch {
@@ -961,8 +967,17 @@ export function createAuthClient(
                         sessionUser.id !== device.userId ||
                         sessionUser.credentialVersion !== device.credentialVersion
                     ) {
-                        lock();
-                        store.setState({ device: null });
+                        // The saved unlock is dead either way. The lock is not this restore's
+                        // to make while a sign-in or a change owns the worker: it would end
+                        // their exchange, for a password changed in another tab. Nor is the
+                        // one a saved unlock going away brings with it.
+                        if (!busy) lock();
+                        quiet = busy;
+                        try {
+                            store.setState({ device: null });
+                        } finally {
+                            quiet = false;
+                        }
                         return stop('it no longer matches the session');
                     }
                     if (epoch !== restoringEpoch) return stop('locked while checking the session');

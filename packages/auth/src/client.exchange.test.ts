@@ -20,7 +20,7 @@ import type { SessionUser } from './protocol';
  * worker itself. A person then reads "Security change expired" or "Sign-in expired" on a first
  * try, for something they did not do.
  *
- * The worker here is the real one, run in process: the transport, worker.ts's handler and the
+ * The worker here is the real one, run in process: the transport, the worker's handler and the
  * crypto session, one per worker the client starts, with a real OPAQUE server behind the API
  * stand-in. So each test fails on what the person would meet, not on a copy of the rule.
  */
@@ -43,13 +43,13 @@ Object.defineProperty(globalThis, 'window', {
         removeEventListener() {},
     },
 });
-// worker.ts answers its own scope's messages as it loads; the workers below are given theirs.
-// The scope is the global one, as in a worker: the OPAQUE module reads its randomness there.
+// As in a worker, `self` is the global scope: the OPAQUE module looks for its randomness there
+// first, and would otherwise take the `window` stand-in above, which has none.
 vi.stubGlobal('self', globalThis);
 
-const { serve } = await import('./worker');
+const { serve } = await import('./worker-handler');
 const { createBrowserCryptoTransport } = await import('./crypto-transport');
-const { createAuthClient } = await import('./client');
+const { createAuthClient, StepCancelled } = await import('./client');
 
 const PASSWORD = 'correct horse battery staple 9';
 const NEXT = 'a new password for the account 4';
@@ -152,7 +152,10 @@ function deviceKeys() {
 
 type Moment =
     | 'twoStepChallenge'
+    | 'session'
     | 'loginStart'
+    | 'loginFinish'
+    | 'loginTwoStep'
     | 'securityStart'
     | 'deleteStart'
     | 'registerStart'
@@ -163,7 +166,7 @@ type Moment =
  * real OPAQUE messages for the account above. `during` runs while the client waits for the
  * server's answer to that request: the moment something else gets its turn.
  */
-function browser(options: { step?: StepChallenge } = {}) {
+function browser(options: { step?: StepChallenge; session?: SessionUser } = {}) {
     let record = made.registrationRecord;
     let envelope = made.envelope;
     let credentialVersion = 1;
@@ -195,8 +198,19 @@ function browser(options: { step?: StepChallenge } = {}) {
             await during.loginStart?.();
             return reply;
         },
-        loginFinish: async () => (options.step ? { twoStep: options.step } : signedIn()),
-        loginTwoStep: async () => ({ ...signedIn(), twoStep: { offered: true } }),
+        loginFinish: async () => {
+            await during.loginFinish?.();
+            return options.step ? { twoStep: options.step } : signedIn();
+        },
+        loginTwoStep: async () => {
+            await during.loginTwoStep?.();
+            return { ...signedIn(), twoStep: { offered: true } };
+        },
+        /* The live session, as another tab's password change left it when `session` says so. */
+        session: async () => {
+            await during.session?.();
+            return { user: options.session ?? { ...user, credentialVersion }, device: null };
+        },
         securityStart: async (input: {
             action: 'password';
             startLoginRequest: string;
@@ -265,7 +279,7 @@ function browser(options: { step?: StepChallenge } = {}) {
         );
     /* The page is left, or another tab locks: the auth client's own lock, as its listener runs it. */
     const lockNow = () => listeners.get('pagehide')!();
-    return { auth, during, crypto, keys, backgroundRead, lockNow };
+    return { auth, during, crypto, keys, backgroundRead, lockNow, options };
 }
 
 const changed = { signedIn: true, uncertain: false };
@@ -321,6 +335,46 @@ describe('a background read that arrives while an exchange waits for the server'
         await auth.login(user.email, PASSWORD);
         during.deleteStart = backgroundRead;
         await expect(auth.deleteAccount(PASSWORD)).resolves.toBeUndefined();
+    });
+
+    test('of Drive’s reaches the worker all the same, and its refusal there ends nothing', async () => {
+        const { auth, during } = browser();
+        let read: string | undefined;
+        during.securityStart = async () => {
+            read = await auth
+                .rpc('driveOpenWorkspace', { userId: user.id, grant: made.workspace.grant })
+                .then(
+                    () => 'opened',
+                    (error: Error) => error.message,
+                );
+        };
+        await expect(auth.changeSecurity(user, 'password', PASSWORD, NEXT)).resolves.toEqual(
+            changed,
+        );
+        // The worker's own words for it, not the client's refusal: a visitor's link, which
+        // needs no account, is opened by the same road.
+        expect(read).toBe('Unlock your account to open Drive.');
+    });
+
+    test('is answered again after the second step was backed out of, once the saved unlock has opened the account', async () => {
+        const here = browser();
+        const { auth } = here;
+        await auth.login(user.email, PASSWORD);
+        auth.resync();
+        here.options.step = {
+            token: 'step-1',
+            methods: ['totp'],
+            expiresAt: new Date(Date.now() + 300_000).toISOString(),
+            expiresIn: 300,
+        };
+        // Null is also what a step screen that has gone away answers (two-step-prompt.tsx).
+        await expect(
+            auth.login(user.email, PASSWORD, { step: async () => null }),
+        ).rejects.toBeInstanceOf(StepCancelled);
+        await auth.restore(user, { validated: true });
+        expect(auth.store.getState().unlockedUserId).toBe(user.id);
+        const { phrase } = await auth.recoveryBackup(user);
+        expect(phrase.split(' ')).toHaveLength(24);
     });
 
     test('is answered as soon as a sign-in shows the account as open, while it still saves the unlock', async () => {
@@ -395,6 +449,28 @@ describe('the saved unlock', () => {
         expect(open).toBeNull();
     });
 
+    test('that finds the password changed in another tab erases itself, and leaves a sign-in under way alone', async () => {
+        const here = await lockedWithSavedUnlock();
+        const { auth, during } = here;
+        // The session now carries the other tab's new credentials; this tab is asked while
+        // the person is already signing in here.
+        here.options.session = { ...user, credentialVersion: 2 } as SessionUser;
+        let answer!: () => void;
+        during.session = () => new Promise<void>((resolve) => (answer = resolve));
+        const restored = auth.restore(user);
+        let kept: unknown = 'not asked';
+        during.loginStart = async () => {
+            answer();
+            await restored;
+            kept = auth.store.getState().device;
+        };
+        await expect(auth.login(user.email, PASSWORD)).resolves.toMatchObject({
+            user: { id: user.id },
+        });
+        expect(kept).toBeNull();
+        expect(auth.store.getState().unlockedUserId).toBe(user.id);
+    });
+
     test('that the change’s own lock cut short does not lock the change in turn', async () => {
         const { auth, during, crypto } = await lockedWithSavedUnlock();
         // The worker is still opening the saved key when the change locks it and begins.
@@ -416,24 +492,58 @@ describe('the saved unlock', () => {
  * began (which is where "expired" came from).
  */
 describe('a lock while an exchange waits for the server', () => {
-    const run: Record<string, (here: ReturnType<typeof browser>) => Promise<unknown>> = {
-        'a password change': ({ auth }) => auth.changeSecurity(user, 'password', PASSWORD, NEXT),
-        'a sign-in': ({ auth }) => auth.login(user.email, PASSWORD),
-        'a registration': ({ auth }) => auth.register(user.email, 'Maya', PASSWORD),
-        'a recovery': ({ auth }) => auth.recover(user.email, NEXT, 'a phrase never read'),
-        'an account deletion': ({ auth }) => auth.deleteAccount(PASSWORD),
+    const step: StepChallenge = {
+        token: 'step-1',
+        methods: ['totp'],
+        expiresAt: new Date(Date.now() + 300_000).toISOString(),
+        expiresIn: 300,
     };
+    const code = { step: async () => ({ kind: 'totp' as const, code: '123456' }) };
+    type Here = ReturnType<typeof browser>;
+    const change = ({ auth }: Here) => auth.changeSecurity(user, 'password', PASSWORD, NEXT);
+    const signIn = ({ auth }: Here) => auth.login(user.email, PASSWORD, code);
+    const again = 'Your account was locked. Please try again.';
+    const signInAgain = 'Your account was locked. Please sign in again.';
     test.each([
-        ['a password change', 'securityStart', 'Your account was locked. Please try again.'],
-        ['a sign-in', 'loginStart', 'Your account was locked. Please sign in again.'],
-        ['a registration', 'registerStart', 'Your account was locked. Please try again.'],
-        ['a recovery', 'recoverStart', 'Your account was locked. Please try again.'],
-        ['an account deletion', 'deleteStart', 'Your account was locked. Please try again.'],
-    ] as const)('ends %s as a lock, with no second worker', async (flow, moment, message) => {
-        const here = browser();
-        here.during[moment] = here.lockNow;
-        await expect(run[flow]!(here)).rejects.toThrow(message);
-        expect(here.crypto.started()).toBe(1);
-        expect(here.auth.store.getState().unlockedUserId).toBeNull();
-    });
+        ['a password change', 'securityStart', change, again, {}],
+        ['a sign-in', 'loginStart', signIn, signInAgain, {}],
+        ['a sign-in whose password the server is checking', 'loginFinish', signIn, signInAgain, {}],
+        [
+            'a sign-in whose second step the server is checking',
+            'loginTwoStep',
+            signIn,
+            signInAgain,
+            { step },
+        ],
+        [
+            'a registration',
+            'registerStart',
+            ({ auth }: Here) => auth.register(user.email, 'Maya', PASSWORD),
+            again,
+            {},
+        ],
+        [
+            'a recovery',
+            'recoverStart',
+            ({ auth }: Here) => auth.recover(user.email, NEXT, 'a phrase never read'),
+            again,
+            {},
+        ],
+        [
+            'an account deletion',
+            'deleteStart',
+            ({ auth }: Here) => auth.deleteAccount(PASSWORD),
+            again,
+            {},
+        ],
+    ] as const)(
+        'ends %s as a lock, with no second worker',
+        async (_flow, moment, run, message, options) => {
+            const here = browser(options);
+            here.during[moment] = here.lockNow;
+            await expect(run(here)).rejects.toThrow(message);
+            expect(here.crypto.started()).toBe(1);
+            expect(here.auth.store.getState().unlockedUserId).toBeNull();
+        },
+    );
 });
