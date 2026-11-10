@@ -121,27 +121,6 @@ fn the_web_s_company_seals_open_or_are_refused_here_as_on_the_web() {
     assert_eq!(seal_item_verdict(&moved, &chain_at)["check"], json!("refused"));
 }
 
-/* A verified pin of a testkit person's keys, as comparing words with them writes it. */
-fn verified_pin(who: &Person) -> VerifiedPin {
-    let key = |text: &str| base64url_decode(text.to_string()).unwrap();
-    VerifiedPin {
-        user_id: who.user_id.clone(),
-        key_version: who.served.key_version,
-        encryption_public_key: who.served.encryption_public_key.clone(),
-        signing_public_key: who.served.signing_public_key.clone(),
-        ml_dsa_public_key_hash: key_digest(who.ml_dsa()),
-        kem_public_key_hash: key_digest(who.kem()),
-        fingerprint: identity_fingerprint_of_keys(
-            key(&who.served.encryption_public_key),
-            key(&who.served.signing_public_key),
-            who.ml_dsa(),
-            who.kem(),
-        )
-        .unwrap(),
-        trusted_via: None,
-    }
-}
-
 /* The company of the seal fixtures after roster 2: two Owners, two Admins, a Member, a kit holder, a Billing holder. */
 fn company_of_seven() -> std::sync::Arc<AcceptedRosters> {
     let fixture = fixture();
@@ -330,4 +309,51 @@ fn giving_members_or_recovery_to_someone_on_the_list_needs_a_check_of_the_keys_t
     entry.ml_dsa_public_key_digest = other.ml_dsa_public_key_digest;
     entry.kem_public_key_digest = other.kem_public_key_digest;
     assert_eq!(refused(build(&planted, &owner, vec![pin])), needs_check);
+}
+
+#[test]
+fn letting_someone_in_with_members_or_recovery_needs_a_check_of_the_keys_their_entry_names() {
+    let chain = company_of_seven();
+    let (owner, admin, member, newcomer) = (person(1), person(3), person(4), person(7));
+    assert!(chain.roster().members.iter().all(|entry| entry.user_id != newcomer.user_id));
+    let let_in = |roles: &[GroupRole]| -> Vec<RosterMember> {
+        let mut members = chain.roster().members;
+        members.push(newcomer.entry(roles, 3, MemberStatus::Active));
+        members
+    };
+    let build = |members: &[RosterMember], signer: &Person, checked: Vec<VerifiedPin>| {
+        company_roster_next(
+            chain.clone(),
+            members.to_vec(),
+            signer.user_id.clone(),
+            None,
+            None,
+            heads(None, None, checked),
+        )
+    };
+    let needs_check =
+        "Giving someone the member list or the recovery kit needs a fresh words check of their keys.";
+    let refused = |result: CoreResult<Roster>| result.expect_err("unchecked").to_string();
+    let admin_roles = [GroupRole::DataAdmin, GroupRole::Members];
+    let owner_roles = [GroupRole::Billing, GroupRole::DataAdmin, GroupRole::Members, GroupRole::Recovery];
+    let pin = verified_pin(&newcomer);
+    // Straight in as an Admin, or with the kit: the keys are only what the server served.
+    assert_eq!(refused(build(&let_in(&admin_roles), &admin, vec![])), needs_check);
+    assert_eq!(refused(build(&let_in(&[GroupRole::Recovery]), &owner, vec![])), needs_check);
+    assert_eq!(refused(build(&let_in(&owner_roles), &owner, vec![])), needs_check);
+    // A check of someone else, or of other keys of theirs, is no check of these.
+    for other in [
+        verified_pin(&member),
+        VerifiedPin { key_version: 2, ..pin.clone() },
+        VerifiedPin { signing_public_key: member.served.signing_public_key.clone(), ..pin.clone() },
+    ] {
+        assert_eq!(refused(build(&let_in(&admin_roles), &admin, vec![other])), needs_check);
+    }
+    let admitted = build(&let_in(&admin_roles), &admin, vec![pin.clone()]).expect("checked");
+    let entry = admitted.members.iter().find(|entry| entry.user_id == newcomer.user_id).expect("let in");
+    assert_eq!(entry.roles, admin_roles);
+    assert!(build(&let_in(&[GroupRole::Recovery]), &owner, vec![pin]).is_ok());
+    // A Member, or a Billing holder, comes in as before: first-seen keys, no check.
+    assert!(build(&let_in(&[]), &admin, vec![]).is_ok());
+    assert!(build(&let_in(&[GroupRole::Billing]), &admin, vec![]).is_ok());
 }

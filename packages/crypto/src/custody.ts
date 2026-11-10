@@ -942,7 +942,11 @@ export async function keyEscrowStatement(ctx: KeyEscrowContext, sealed: Uint8Arr
  * Who makes an escrow (2.2): the signer of the call that made the group key
  * or the company key it joins. The creator for the first of each; the signer
  * of the succession into that group key; the signer of the roster that
- * introduced that company key. Each is an Owner (rule 12).
+ * introduced that company key. Each is an Owner (rule 12), and must have held
+ * `data_admin` on the roster the escrow names: the chain guards the keys of
+ * an entry only while it holds a role, so "who made the key" alone would let
+ * keys written later into an entry its Owner left sign an escrow in that
+ * Owner's name.
  */
 function escrowSealer(chain: AcceptedRosters, org: OrgChain, ctx: KeyEscrowContext) {
     const key = custodyAt(org, ctx.custodyKeyVersion);
@@ -950,13 +954,13 @@ function escrowSealer(chain: AcceptedRosters, org: OrgChain, ctx: KeyEscrowConte
     if (!chain.groupKeys[ctx.groupKeyVersion - 1])
         throw new CryptoError('This group key is not one the group has published.');
     const into = chain.cache.successions[ctx.groupKeyVersion - 2];
-    return (
+    const made =
         (ctx.groupKeyVersion === 1 &&
             ctx.custodyKeyVersion === 1 &&
             ctx.sealerUserId === chain.creatorUserId) ||
         (into !== undefined && into.signerUserId === ctx.sealerUserId) ||
-        (ctx.custodyKeyVersion > 1 && key.signerUserId === ctx.sealerUserId)
-    );
+        (ctx.custodyKeyVersion > 1 && key.signerUserId === ctx.sealerUserId);
+    return made && wasDataAdmin(org, ctx.sealerUserId, ctx.rosterVersion);
 }
 
 const NOT_ESCROW_SEALER =
@@ -1006,7 +1010,8 @@ async function groupSeedIs(seed: Uint8Array, chain: AcceptedRosters, groupKeyVer
 /*
  * Opens the escrow with the company key: the group seed. Refused unless it
  * names this company, a roster on the chain, versions the chain published and
- * a sealer who made one of them, signed under their keys; `custodySeed` must
+ * a sealer who made one of them and held `data_admin` on the roster named,
+ * signed under the keys their entry named there; `custodySeed` must
  * be the chain's company key at the version named. Then the seed, or `bad`
  * with the sealer when it does not open or its public keys are not the
  * chain's group key at that version.

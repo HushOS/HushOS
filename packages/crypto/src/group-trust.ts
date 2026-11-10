@@ -1973,7 +1973,9 @@ async function rosterRules(
             signed = true;
             // The kit signs a recovery roster and nothing else: a copy of any other roster that
             // carries a kit signature is not taken.
-            if (!recovery && copy.kitSignature !== undefined) {
+            // (None is `undefined` or, from a store that maps an empty column so, `null`, as
+            // `signedByKit` and `byDigest` read it.)
+            if (!recovery && copy.kitSignature !== undefined && copy.kitSignature !== null) {
                 strayKit = true;
                 continue;
             }
@@ -2990,9 +2992,9 @@ export type NextOrgRoster = {
     /*
      * The fresh words checks this device holds (companies-design 1.2, and 2.2
      * "Another Owner checks first"): a verified pin of each Owner or kit
-     * holder whose entry this roster moves to new keys, and of everyone
-     * already on the list whom it gives `members` or `recovery`, each made
-     * over exactly the keys the entry names on this roster. Without one such
+     * holder whose entry this roster moves to new keys, and of everyone it
+     * gives `members` or `recovery` (already on the list or let in with the
+     * role), each made over exactly the keys the entry names on this roster. Without one such
      * an entry changes only on that person's own roster: a signed link, or
      * keys a holder wrote in earlier, are not enough for someone who holds
      * the company.
@@ -3068,13 +3070,14 @@ async function companyFields(
         for (const pin of options.checked ?? []) checked ||= await checkedKeys(pin, entry);
         if (!checked) throw new CryptoError(GUARDED_FOLD_IN);
     }
-    // Giving `members` or `recovery` to someone already on the list needs the same check, over
-    // exactly the keys their entry names: keys planted in a Member's entry first are not then
-    // promoted on the roster's word alone. The signer's own promotion (a recovery roster) is
-    // their own entry.
+    // Giving `members` or `recovery` to anyone needs the same check, over exactly the keys their
+    // entry names: keys planted in a Member's entry first are not then promoted on the roster's
+    // word alone, and someone let in with either role (no entry before, or one that had left)
+    // is not let in on keys this device only saw served. The signer's own promotion (a recovery
+    // roster) is their own entry.
     for (const entry of roster.members) {
+        if (entry.userId === signerUserId) continue;
         const was = rosterEntry(previous, entry.userId);
-        if (!was || entry.userId === signerUserId) continue;
         const gains = (role: GroupRole) => activeWith(entry, role) && !activeWith(was, role);
         if (!gains('members') && !gains('recovery')) continue;
         let checked = false;

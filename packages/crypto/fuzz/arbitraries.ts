@@ -1,4 +1,5 @@
 import fc from 'fast-check';
+import { CHANGES, basesWhere, companyNextDocument, type Change } from './company-next';
 import { acceptDocument, rosterDocument } from './jazzer';
 import { documents } from './seeds';
 import type { Target } from './verdicts';
@@ -323,6 +324,37 @@ const ledgerSteps = fc
     .array(ledgerStep, { minLength: 1, maxLength: 24 })
     .map((steps) => ({ target: 'area_ledger' as Target, data: utf8(JSON.stringify({ steps })) }));
 
+/*
+ * A company's next roster, asked of the builder from a company both twins
+ * hold: a base and up to four changes a device could ask for (company-next.ts).
+ * The first change is drawn from all of them alike; a company key, a kit and
+ * an automatic admission are drawn more often after it, since each is a rule
+ * of its own only together with something else.
+ */
+const companyChange = fc.tuple(
+    fc.constantFrom<Change[0]>(...CHANGES, 'custody', 'kit', 'auto-admit', 'rotate', 'roles'),
+    fc.nat(1000),
+    fc.nat(1000),
+);
+const companyNext = fc
+    .tuple(
+        // Any company; the ones with many folders and with auto-join on drawn again beside.
+        fc.oneof(
+            { weight: 5, arbitrary: fc.nat() },
+            { weight: 1, arbitrary: fc.constantFrom(...basesWhere('wide')) },
+            { weight: 2, arbitrary: fc.constantFrom(...basesWhere('auto')) },
+        ),
+        fc.array(companyChange, { maxLength: 4 }),
+        // A device that checked everyone, most of the time.
+        fc.integer({ min: 0, max: 5 }).map((n) => n !== 0),
+        // Signed by an Owner, by an Admin, or by anyone on the list.
+        fc.constantFrom(0, 0, 0, 0, 1, 1, 1, 1, 2, 5),
+    )
+    .map(([at, changes, vouch, by]) => ({
+        target: 'company_next' as Target,
+        data: utf8(JSON.stringify(companyNextDocument(at, changes, vouch, by))),
+    }));
+
 export function inputs(target: Target): fc.Arbitrary<{ target: Target; data: Uint8Array }> {
     const seeds = documents(target);
     switch (target) {
@@ -349,6 +381,13 @@ export function inputs(target: Target): fc.Arbitrary<{ target: Target; data: Uin
             return fc.oneof(structured(target), edited(target, seeds));
         case 'area_ledger':
             return fc.oneof(ledgerSteps, edited(target, seeds));
+        case 'company_next':
+            // Mostly documents inside the grammar, which a rule refuses or the builder takes;
+            // some edits of the seeds' JSON, which mostly the grammar refuses.
+            return fc.oneof(
+                { weight: 5, arbitrary: companyNext },
+                { weight: 1, arbitrary: edited(target, seeds) },
+            );
         default:
             return edited(target, seeds);
     }

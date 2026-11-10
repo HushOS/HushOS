@@ -185,7 +185,7 @@ export const TARGETS = [
 ] as const;
 export type Target = (typeof TARGETS)[number];
 
-export type Verdict = { ok: true; out: unknown } | { ok: false } | { skip: true };
+export type Verdict = { ok: true; out: unknown } | { ok: false; why?: string } | { skip: true };
 
 /* A broken invariant: never a refusal, always a finding. */
 export class InvariantError extends Error {
@@ -214,6 +214,20 @@ async function either<T>(run: () => T | Promise<T>, out: (value: T) => unknown) 
     }
     return ok(await out(value));
 }
+
+/* `either`, with the refusal's sentence beside it. */
+async function eitherWhy<T>(run: () => T | Promise<T>, out: (value: T) => unknown) {
+    let value: T;
+    try {
+        value = await run();
+    } catch (error) {
+        if (error instanceof CryptoError) return { ok: false, why: error.message } as Verdict;
+        throw error;
+    }
+    return ok(await out(value));
+}
+
+const isText = (value: unknown): value is string => typeof value === 'string';
 
 /* Whether a call throws only a CryptoError (false), or returns (true). */
 async function holds(run: () => unknown) {
@@ -789,8 +803,7 @@ async function companyNext(value: Doc): Promise<Verdict | undefined> {
     const through = number(value, 'through');
     const signerUserId = text(value, 'signerUserId');
     const org = value.org;
-    if ((which !== 'core' && which !== 'web') || through === undefined || !signerUserId)
-        return undefined;
+    if (which === undefined || through === undefined || !signerUserId) return undefined;
     if (!isObject(org) || typeof value.vouch !== 'boolean') return undefined;
     const members = rosterOf({
         groupId: GROUP,
@@ -859,6 +872,11 @@ async function companyNext(value: Doc): Promise<Verdict | undefined> {
         if (read.includes(undefined)) return undefined;
         areaKeys = read as AreaKey[];
     }
+    let retireAreas: string[] = [];
+    if (value.retireAreas !== undefined && value.retireAreas !== null) {
+        if (!Array.isArray(value.retireAreas) || !value.retireAreas.every(isText)) return undefined;
+        retireAreas = value.retireAreas as string[];
+    }
     const chain = await companyChain(which, through);
     if (!chain) return undefined;
     // A verified pin of every entry's keys as given, where they make one at all.
@@ -889,11 +907,14 @@ async function companyNext(value: Doc): Promise<Verdict | undefined> {
                 if (!(error instanceof CryptoError)) throw error;
             }
         }
-    return either(
+    // A refusal with its sentence: the twins share them for a company's rules, so "refused by
+    // which rule" is compared, not only "refused".
+    return eitherWhy(
         () =>
             nextRoster(chain, members, {
                 signerUserId,
                 areaKeys,
+                ...(retireAreas.length ? { retireAreas } : {}),
                 org: {
                     headsDigest,
                     checked,

@@ -979,7 +979,11 @@ const NOT_ESCROW_SEALER: &str = "The group key is sealed to the company key by t
  * Who makes an escrow (2.2): the signer of the call that made the group key
  * or the company key it joins. The creator for the first of each; the signer
  * of the succession into that group key; the signer of the roster that
- * introduced that company key. Each is an Owner (rule 12).
+ * introduced that company key. Each is an Owner (rule 12), and must have held
+ * `data_admin` on the roster the escrow names: the chain guards the keys of
+ * an entry only while it holds a role, so "who made the key" alone would let
+ * keys written later into an entry its Owner left sign an escrow in that
+ * Owner's name.
  */
 fn escrow_sealer(chain: &AcceptedRosters, org: &OrgChain, ctx: &KeyEscrowContext) -> CoreResult<bool> {
     let key = custody_at(org, ctx.custody_key_version)?;
@@ -989,11 +993,12 @@ fn escrow_sealer(chain: &AcceptedRosters, org: &OrgChain, ctx: &KeyEscrowContext
         return Err(input("This group key is not one the group has published."));
     }
     let into = index.checked_sub(1).and_then(|at| chain.cache.successions.get(at));
-    Ok((ctx.group_key_version == 1
+    let made = (ctx.group_key_version == 1
         && ctx.custody_key_version == 1
         && ctx.sealer_user_id == chain.creator_user_id)
         || into.is_some_and(|into| into.signer_user_id == ctx.sealer_user_id)
-        || (ctx.custody_key_version > 1 && key.signer_user_id == ctx.sealer_user_id))
+        || (ctx.custody_key_version > 1 && key.signer_user_id == ctx.sealer_user_id);
+    Ok(made && was_data_admin(org, &ctx.sealer_user_id, ctx.roster_version))
 }
 
 fn group_seed_is(seed: &[u8], chain: &AcceptedRosters, group_key_version: u64) -> bool {
@@ -1051,8 +1056,9 @@ pub fn key_escrow_seal(
 
 /// Opens the escrow with the company key: the group seed. Refused unless it
 /// names this company, a roster on the chain, versions the chain published
-/// and a sealer who made one of them, signed under their keys; `custody_seed`
-/// must be the chain's company key at the version named. Then the seed, or
+/// and a sealer who made one of them and held `DataAdmin` on the roster
+/// named, signed under the keys their entry named there; `custody_seed` must
+/// be the chain's company key at the version named. Then the seed, or
 /// `Bad` with the sealer when it does not open or its public keys are not the
 /// chain's group key at that version.
 #[cfg_attr(feature = "uniffi", uniffi::export)]

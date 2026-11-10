@@ -270,9 +270,6 @@ pub fn company_next(value: &Value) -> Option<Value> {
     let which = text(value, "chain")?;
     let through = number(value, "through")?;
     let signer_user_id = text(value, "signerUserId").filter(|id| !id.is_empty())?;
-    if which != "core" && which != "web" {
-        return None;
-    }
     let org = value.get("org").filter(|org| org.is_object())?;
     let vouch = value.get("vouch")?.as_bool()?;
     let members = shape::roster(&json!({
@@ -338,6 +335,17 @@ pub fn company_next(value: &Value) -> Option<Value> {
             })
             .collect::<Option<Vec<_>>>()?,
     };
+    let retire_areas = match value.get("retireAreas").filter(|areas| !areas.is_null()) {
+        None => None,
+        Some(areas) => Some(
+            areas
+                .as_array()?
+                .iter()
+                .map(|area| area.as_str().map(str::to_string))
+                .collect::<Option<Vec<_>>>()?,
+        )
+        .filter(|areas| !areas.is_empty()),
+    };
     let chain = fixtures::company_chain(&which, through)?;
     // A verified pin of every entry's keys as given, where they make one at all.
     let checked: Vec<VerifiedPin> = if vouch {
@@ -374,15 +382,20 @@ pub fn company_next(value: &Value) -> Option<Value> {
         members,
         signer_user_id,
         Some(area_keys),
-        None,
+        retire_areas,
         NextOrgRoster { custody_key, kit, rules, auto_utc_day, heads_digest, checked },
     )
     .and_then(roster_statement);
-    Some(either(built, |statement| {
-        let parsed = roster_parse(statement.clone()).expect("a built roster parses");
-        assert_eq!(parsed.roster_version, version, "the next roster is the next version");
-        ok_bytes(&statement)
-    }))
+    // A refusal with its sentence: the twins share them for a company's rules, so "refused by
+    // which rule" is compared, not only "refused".
+    Some(match built {
+        Ok(statement) => {
+            let parsed = roster_parse(statement.clone()).expect("a built roster parses");
+            assert_eq!(parsed.roster_version, version, "the next roster is the next version");
+            ok(ok_bytes(&statement))
+        }
+        Err(error) => json!({ "ok": false, "why": error.to_string() }),
+    })
 }
 
 /* The statements every signature in the protocol covers, built from their fields. */

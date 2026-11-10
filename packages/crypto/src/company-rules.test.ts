@@ -32,10 +32,12 @@ import {
 } from './group-trust';
 import {
     parseRoster,
+    rosterEntry,
     rosterMembersDigest,
     rosterStatement,
     signRecoveryRoster,
     signRoster,
+    type GroupRole,
     type RosterMember,
 } from './groups';
 
@@ -480,6 +482,95 @@ describe('nextRoster for a company', () => {
             needsCheck,
         );
         await expect(nextRoster(after, promoted, by(cast.owner))).rejects.toThrow(needsCheck);
+    });
+
+    test('letting someone in with `members` or `recovery` needs a check of exactly the keys their entry names, and a Member needs none', async () => {
+        const cast = await companyCast();
+        const c = await companyStart(cast);
+        const chain = await accepted(c);
+        expect(rosterEntry(chain.roster, cast.newcomer.userId)).toBeUndefined();
+        const by = (who: { userId: string }, checked: unknown[] = []) => ({
+            signerUserId: who.userId,
+            org: { ...heads, checked: checked as never },
+        });
+        const needsCheck = 'needs a fresh words check of their keys';
+        const letIn = (roles: GroupRole[]) => [...c.all, cast.newcomer.entry(roles)];
+        const pin = await cast.newcomer.pin();
+        // Straight in as an Admin, or with the kit: the keys are only what the server served.
+        await expect(nextRoster(chain, letIn([...ADMIN_ROLES]), by(cast.admin))).rejects.toThrow(
+            needsCheck,
+        );
+        await expect(nextRoster(chain, letIn(['recovery']), by(cast.owner))).rejects.toThrow(
+            needsCheck,
+        );
+        await expect(nextRoster(chain, letIn([...OWNER_ROLES]), by(cast.owner))).rejects.toThrow(
+            needsCheck,
+        );
+        // A check of someone else, or of other keys of theirs, is no check of these.
+        for (const other of [
+            await cast.member.pin(),
+            { ...pin, keyVersion: 2 },
+            { ...pin, signingPublicKey: cast.member.entry([]).signingPublicKey },
+        ]) {
+            await expect(
+                nextRoster(chain, letIn([...ADMIN_ROLES]), by(cast.admin, [other])),
+            ).rejects.toThrow(needsCheck);
+        }
+        const admitted = await nextRoster(chain, letIn([...ADMIN_ROLES]), by(cast.admin, [pin]));
+        expect(rosterEntry(admitted, cast.newcomer.userId)?.roles).toEqual([...ADMIN_ROLES]);
+        await expect(
+            nextRoster(chain, letIn(['recovery']), by(cast.owner, [pin])),
+        ).resolves.toBeDefined();
+        // A Member, or a Billing holder, comes in as before: first-seen keys, no check.
+        await expect(nextRoster(chain, letIn([]), by(cast.admin))).resolves.toBeDefined();
+        await expect(nextRoster(chain, letIn(['billing']), by(cast.admin))).resolves.toBeDefined();
+        // Someone who had left is let back in with a role on the same terms.
+        await c.h.roster(cast.owner, withEntry(c, { ...c.e.member, status: 'left', roles: [] }));
+        const after = await accepted(c);
+        const back = withEntry(c, { ...c.e.member, roles: [...ADMIN_ROLES] });
+        await expect(nextRoster(after, back, by(cast.admin))).rejects.toThrow(needsCheck);
+        await expect(
+            nextRoster(after, back, by(cast.admin, [await cast.member.pin()])),
+        ).resolves.toBeDefined();
+    });
+
+    test('a roster served with a null kit signature is one without: ordinary rosters are taken, a recovery roster is not', async () => {
+        const cast = await companyCast();
+        const c = await companyStart(cast);
+        const input = await companyInput(c.h, cast);
+        // What a client reading an empty database column hands over.
+        const nulled = input.rosters.map((roster) => ({ ...roster, kitSignature: null as never }));
+        const plain = await acceptRosters(input);
+        const served = await acceptRosters({ ...input, rosters: nulled });
+        expect(served.status).toBe('accepted');
+        expect((served as AcceptedRosters).rosterDigest).toBe(
+            (plain as AcceptedRosters).rosterDigest,
+        );
+        // Each next roster alike, one at a time.
+        const first = await acceptRosters({ ...input, rosters: nulled.slice(0, 1) });
+        await expect(
+            checkNextRoster(first as AcceptedRosters, nulled[1]!, input.mlDsaKeys, null),
+        ).resolves.toBeDefined();
+        // And null is no signature where one is needed.
+        const promoted = withEntry(c, { ...c.e.keeper, roles: [...OWNER_ROLES] });
+        const roster = await nextRoster(plain as AcceptedRosters, promoted, {
+            signerUserId: cast.keeper.userId,
+            org: heads,
+        });
+        const signed = await signRecoveryRoster(
+            roster,
+            c.h.keys[0]!,
+            cast.keeper.signer,
+            (await kitAt(1)).signer,
+        );
+        await expect(
+            checkNextRoster(
+                plain as AcceptedRosters,
+                { ...signed, kitSignature: null as never },
+                input.mlDsaKeys,
+                null,
+            ),
+        ).rejects.toThrow('not signed with the company’s recovery kit');
     });
 
     test('a recovery roster is built only for the kit holder’s own promotion, and signed with the kit', async () => {

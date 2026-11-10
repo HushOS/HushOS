@@ -3393,9 +3393,9 @@ pub struct NextOrgRoster {
     pub heads_digest: String,
     /// The fresh words checks this device holds (companies-design 1.2, and 2.2
     /// "Another Owner checks first"): a verified pin of each Owner or kit
-    /// holder whose entry this roster moves to new keys, and of everyone
-    /// already on the list whom it gives `Members` or `Recovery`, each made
-    /// over exactly the keys the entry names on this roster. Without one such
+    /// holder whose entry this roster moves to new keys, and of everyone it
+    /// gives `Members` or `Recovery` (already on the list or let in with the
+    /// role), each made over exactly the keys the entry names on this roster. Without one such
     /// an entry changes only on that person's own roster: a signed link, or
     /// keys a holder wrote in earlier, are not enough for someone who holds
     /// the company.
@@ -3618,15 +3618,17 @@ fn company_fields(
             return Err(input(GUARDED_FOLD_IN));
         }
     }
-    // Giving `members` or `recovery` to someone already on the list needs the same check, over
-    // exactly the keys their entry names: keys planted in a Member's entry first are not then
-    // promoted on the roster's word alone. The signer's own promotion (a recovery roster) is
-    // their own entry.
+    // Giving `members` or `recovery` to anyone needs the same check, over exactly the keys their
+    // entry names: keys planted in a Member's entry first are not then promoted on the roster's
+    // word alone, and someone let in with either role (no entry before, or one that had left)
+    // is not let in on keys this device only saw served. The signer's own promotion (a recovery
+    // roster) is their own entry.
     for entry in members {
-        let Some(was) = previous.entry(&entry.user_id).filter(|_| entry.user_id != signer_user_id) else {
+        if entry.user_id == signer_user_id {
             continue;
-        };
-        let gains = |role: GroupRole| holds(Some(entry), role) && !holds(Some(was), role);
+        }
+        let was = previous.entry(&entry.user_id);
+        let gains = |role: GroupRole| holds(Some(entry), role) && !holds(was, role);
         if !gains(GroupRole::Members) && !gains(GroupRole::Recovery) {
             continue;
         }

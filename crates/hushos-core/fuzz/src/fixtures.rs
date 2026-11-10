@@ -121,18 +121,24 @@ pub fn web_company() -> &'static Value {
 }
 
 /// A fixture company's chain, accepted through its first `through` rosters:
-/// `core` is the one this crate made, `web` the one whose seals the web made.
-/// `None` when the fixture has no such roster. The web's `companyChain`
-/// accepts the same.
+/// `core` is the one this crate made, `web` the one whose seals the web made,
+/// `case:<name>` a rule case of the web's that starts from version 1. `None`
+/// when the fixture has no such roster, or the history is not accepted so
+/// far. The web's `companyChain` accepts the same.
 pub fn company_chain(which: &str, through: u64) -> Option<Arc<AcceptedRosters>> {
     use std::collections::HashMap;
     use std::sync::Mutex;
-    type Chains = Mutex<HashMap<(String, u64), Arc<AcceptedRosters>>>;
+    type Chains = Mutex<HashMap<(String, u64), Option<Arc<AcceptedRosters>>>>;
     static CHAINS: OnceLock<Chains> = OnceLock::new();
     let history = match which {
         "core" => &company()["history"]["input"],
         "web" => &web_company()["seals"]["history"],
-        _ => return None,
+        _ => {
+            let name = which.strip_prefix("case:")?;
+            let found = web_company()["cases"].as_array()?.iter().find(|case| case["name"] == name)?;
+            // A case that starts from a cache has no rosters to cut.
+            Some(&found["input"]).filter(|input| input["cache"].is_null())?
+        }
     };
     let count = history["rosters"].as_array()?.len() as u64;
     if through < 1 || through > count {
@@ -141,7 +147,7 @@ pub fn company_chain(which: &str, through: u64) -> Option<Arc<AcceptedRosters>> 
     let chains = CHAINS.get_or_init(Default::default);
     let key = (which.to_string(), through);
     if let Some(chain) = chains.lock().expect("chains").get(&key) {
-        return Some(chain.clone());
+        return chain.clone();
     }
     let (_, input, _) = crate::groups::case_from(&serde_json::json!({
         "name": "company", "input": history, "expected": null,
@@ -157,10 +163,11 @@ pub fn company_chain(which: &str, through: u64) -> Option<Arc<AcceptedRosters>> 
         input.me.clone(),
         None,
     )
-    .expect("a fixture company is accepted");
-    let RosterChain::Accepted { chain } = accepted else {
-        panic!("a fixture company forked");
+    .ok();
+    let chain = match accepted {
+        Some(RosterChain::Accepted { chain }) => Some(chain),
+        _ => None,
     };
     chains.lock().expect("chains").insert(key, chain.clone());
-    Some(chain)
+    chain
 }

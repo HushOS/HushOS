@@ -261,6 +261,27 @@ fn entry(n: u8, roles: &[GroupRole]) -> RosterMember {
     person(n).entry(roles, 1, MemberStatus::Active)
 }
 
+/* A verified pin of a testkit person's keys, as comparing words with them writes it. */
+pub fn verified_pin(who: &Person) -> VerifiedPin {
+    let key = |text: &str| base64url_decode(text.to_string()).unwrap();
+    VerifiedPin {
+        user_id: who.user_id.clone(),
+        key_version: who.served.key_version,
+        encryption_public_key: who.served.encryption_public_key.clone(),
+        signing_public_key: who.served.signing_public_key.clone(),
+        ml_dsa_public_key_hash: key_digest(who.ml_dsa()),
+        kem_public_key_hash: key_digest(who.kem()),
+        fingerprint: identity_fingerprint_of_keys(
+            key(&who.served.encryption_public_key),
+            key(&who.served.signing_public_key),
+            who.ml_dsa(),
+            who.kem(),
+        )
+        .unwrap(),
+        trusted_via: None,
+    }
+}
+
 /*
  * A company written with this core's own builders, for the web to judge
  * (`examples/company_fixtures.rs`): created by its Owner (roster 1), who lets
@@ -341,7 +362,9 @@ pub fn company_made_here() -> (Value, Vec<Value>) {
         let chain = chain_through(input, input.rosters.len() as u64);
         company_roster_next(chain, members, signer.user_id.clone(), None, None, org).unwrap()
     };
-    let second = next(&input, all(&[GroupRole::Recovery]), &owner, heads(None));
+    // (The Owner's device compared words with everyone it gives the member list or the kit.)
+    let checked = people.iter().map(verified_pin).collect();
+    let second = next(&input, all(&[GroupRole::Recovery]), &owner, NextOrgRoster { checked, ..heads(None) });
     input.rosters.push(roster_sign(second, group_seed(1), owner.keys.clone()).unwrap());
     let third = next(&input, all(&[GroupRole::Recovery]), &owner, heads(Some(key_at(2))));
     assert!(third.org.as_ref().unwrap().members_same.is_some(), "a roster that changes no entry says `same`");

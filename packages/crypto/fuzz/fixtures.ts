@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { CryptoError } from '../src/errors';
 import { acceptRosters, type AcceptedRosters } from '../src/group-trust';
 import type { SignedGroupStatement } from '../src/groups';
 import { READER, mlDsaKeysOf, person, GROUP, type Person } from '../src/group-testkit';
@@ -132,34 +133,55 @@ export const settingsAreaCases = () => read('crates/hushos-core/fixtures/setting
  * whose seals this twin made (web-company.json). Null when the fixture has
  * no such roster. The Rust twin's `company_chain` accepts the same.
  */
+/*
+ * A company's served history by the name the `company_next` target gives it:
+ * `core` (the one the core made), `web` (the one whose seals the web made), or
+ * `case:<name>`, a rule case of the web's that starts from version 1.
+ */
+export function companyHistory(chain: string): any {
+    if (chain === 'core') return company().history.input;
+    if (chain === 'web') return webCompany().seals.history;
+    if (!chain.startsWith('case:')) return undefined;
+    const found = webCompany().cases.find(
+        (k: { name: string }) => k.name === chain.slice('case:'.length),
+    );
+    // A case that starts from a cache has no rosters to cut.
+    return found && found.input.cache === null ? found.input : undefined;
+}
+
 const companyChains = new Map<string, Promise<AcceptedRosters | null>>();
-export function companyChain(which: 'core' | 'web', through: number) {
+/* That history accepted through its first `through` rosters; null when it has no such roster or is not accepted so far. */
+export function companyChain(which: string, through: number) {
     const key = `${which}:${through}`;
     if (!companyChains.has(key))
         companyChains.set(
             key,
             (async () => {
-                const history =
-                    which === 'core' ? company().history.input : webCompany().seals.history;
+                const history = companyHistory(which);
                 if (
+                    !history ||
                     !Number.isSafeInteger(through) ||
                     through < 1 ||
                     through > history.rosters.length
                 )
                     return null;
-                const accepted = await acceptRosters({
-                    groupId: GROUP,
-                    firstKeys: history.firstKeys,
-                    anchor: 'created',
-                    pins: [],
-                    rosters: history.rosters.slice(0, through).map(signed),
-                    successions: history.successions.map(signed),
-                    mlDsaKeys: history.mlDsaKeys,
-                    me: history.me,
-                    cache: null,
-                });
-                if (accepted.status !== 'accepted') throw new Error('a fixture company forked');
-                return accepted as AcceptedRosters;
+                try {
+                    const accepted = await acceptRosters({
+                        groupId: GROUP,
+                        firstKeys: history.firstKeys,
+                        anchor: 'created',
+                        pins: [],
+                        rosters: history.rosters.slice(0, through).map(signed),
+                        successions: history.successions.map(signed),
+                        mlDsaKeys: history.mlDsaKeys,
+                        me: history.me,
+                        cache: null,
+                    });
+                    return accepted.status === 'accepted' ? (accepted as AcceptedRosters) : null;
+                } catch (error) {
+                    if (error instanceof CryptoError) return null;
+                    throw error;
+                }
             })(),
         );
     return companyChains.get(key)!;

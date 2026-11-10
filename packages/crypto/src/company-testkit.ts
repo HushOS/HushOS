@@ -1727,9 +1727,12 @@ async function kindFrom(
  * after it, by the second Owner; the company key and the kit replaced by the
  * second Owner, who also deletes the second folder (4); and the second Owner
  * writing a new identity, with no link to the old, into the first Owner's
- * entry (5: the first Owner started over and was let back in). `history` is
- * what acceptance takes for all five rosters; each item says how far its
- * opener has accepted.
+ * entry (5: the first Owner started over and was let back in); the first
+ * Owner leaving, so the company key and the kit replaced again (6) and the
+ * group key after them; and an
+ * Admin, as only the server's help allows, writing keys of their own into the
+ * entry the first Owner left (7). `history` is what acceptance takes for all
+ * seven rosters; each item says how far its opener has accepted.
  */
 export async function companySeals() {
     const cast = await companyCast();
@@ -1752,14 +1755,23 @@ export async function companySeals() {
             entry.userId === owner.userId ? owner2nd.entry(OWNER_ROLES) : entry,
         ),
     );
-    const input = await companyInput(c.h, cast, { extra: [owner2nd] });
+    const gone = demoted.filter((entry) => entry.userId !== owner.userId);
+    await c.h.roster(second, [...gone, left(owner2nd.entry(OWNER_ROLES))], undefined, undefined, {
+        custodyVersion: 4,
+        kitVersion: 3,
+    });
+    // (Someone who held the group key left, so it is replaced before anything else is signed.)
+    await c.h.succession(second);
+    const ownerPlanted = await person(1, 3);
+    await c.h.roster(admin, [...gone, left(ownerPlanted.entry([]))]);
+    const input = await companyInput(c.h, cast, { extra: [owner2nd, ownerPlanted] });
     const chainAt = async (through: number) => {
         const chain = await acceptRosters({ ...input, rosters: input.rosters.slice(0, through) });
         if (chain.status !== 'accepted') throw new Error('not accepted');
         return chain;
     };
     const chains: AcceptedRosters[] = [];
-    for (const through of [1, 2, 3, 4, 5]) chains.push(await chainAt(through));
+    for (const through of [1, 2, 3, 4, 5, 6, 7]) chains.push(await chainAt(through));
     const at = (through: number) => ({
         rosterVersion: through,
         rosterDigest: chains[through - 1]!.rosterDigest,
@@ -1924,16 +1936,12 @@ export async function companySeals() {
         sealer,
         expected,
     });
-    add(
-        'escrow-at-creation',
-        4,
-        escrow(escrowAt1, 1, opened(groupSeeds[0]!)),
-        await sealKeyEscrow(groupSeeds[0]!, escrowAt1, {
-            chain: chains[0]!,
-            custodyKemPublicKey: kem(1),
-            sealer: owner.signer,
-        }),
-    );
+    const escrow1 = await sealKeyEscrow(groupSeeds[0]!, escrowAt1, {
+        chain: chains[0]!,
+        custodyKemPublicKey: kem(1),
+        sealer: owner.signer,
+    });
+    add('escrow-at-creation', 4, escrow(escrowAt1, 1, opened(groupSeeds[0]!)), escrow1);
     add(
         // The Owner's app escrows another seed: it opens, and is not the chain's group key.
         'escrow-of-another-seed',
@@ -1944,6 +1952,31 @@ export async function companySeals() {
             1,
             owner,
             (sealed) => keyEscrowStatement(escrowAt1, sealed),
+            'hushos/group/key-escrow/v1',
+        ),
+    );
+    // The creator has left and their entry names other keys (roster 7): the escrow they made
+    // as an Owner still opens, as nobody's word now.
+    add(
+        'escrow-at-creation-after-its-sealer-left',
+        7,
+        escrow(escrowAt1, 1, unattributed(groupSeeds[0]!)),
+        escrow1,
+    );
+    // And one "by" the creator that names roster 7, signed with the keys an Admin wrote into
+    // the entry they left: the creator held nothing on that roster, so it is nobody's escrow
+    // and says nothing of them. (Were the sealer only "who made the key", it would read as
+    // the departed Owner's bad escrow.)
+    const escrowAt7: KeyEscrowContext = { ...escrowAt1, ...at(7) };
+    add(
+        'escrow-by-keys-planted-in-a-departed-owners-entry',
+        7,
+        { ...escrow(escrowAt7, 1, 'refused'), sealerKeyVersion: 3 },
+        await byHand(
+            groupSeeds[1]!,
+            1,
+            ownerPlanted,
+            (sealed) => keyEscrowStatement(escrowAt7, sealed),
             'hushos/group/key-escrow/v1',
         ),
     );

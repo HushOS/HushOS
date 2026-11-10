@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { GROUP } from '../src/group-testkit';
 import { parseRoster } from '../src/groups';
 import { encode } from '../src/keys';
+import { companyNextSeeds } from './company-next';
 import {
     core,
     coreJoin,
@@ -980,6 +981,8 @@ export function documents(target: Target): Uint8Array[] {
                     areaKeys: [],
                     org: { headsDigest: core[0].heads.headsDigest },
                 }),
+                // Every company the generator starts from, unchanged, and a fixed walk of changes.
+                ...companyNextSeeds().map(json),
             ];
         }
         case 'area_ledger':
