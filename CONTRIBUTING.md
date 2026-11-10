@@ -371,6 +371,13 @@ The schema files in `packages/db/src/schema`:
 
 Drizzle Kit reads `packages/db/drizzle.config.ts`. It uses `MIGRATION_DATABASE_URL` when set, otherwise `DATABASE_URL`.
 
+Drizzle applies every pending migration in one transaction. Two things therefore never go in a migration's SQL, and go in `packages/db/src/after-migrate.ts` instead, which `bun run db:migrate` runs right after drizzle-kit:
+
+- **Validating a constraint on a table that can be large.** Add it `NOT VALID` in the migration and list it in `AFTER_MIGRATE`. `constraints.test.ts` fails otherwise.
+- **An index on a table that can be large.** Declare it in the schema, delete its `CREATE INDEX` from the generated SQL, and list it in `AFTER_MIGRATE`, where it is built `CONCURRENTLY`.
+
+Each step must be safe to run again, and nothing may depend on one having run. Every migration gets a release note in docs/self-hosting.md: what it adds, the locks, what happens beside containers of the previous release, and how to roll back.
+
 ## Background jobs
 
 `@hushos/jobs` is the background worker, pg-boss on the same Postgres. It sweeps expired auth rows, reconciles billing, and runs Drive's expiry, purge, replication, deletion, audit, orphan-sweep and tiering jobs.
@@ -578,7 +585,7 @@ Tests are required where a mistake costs money or data: billing, crypto, and tra
 ### Database tests
 
 - They run against a throwaway database: `DATABASE_URL`'s name with `_test` appended.
-- `packages/db/test/global-setup.ts` creates and migrates it on each run. Set `TEST_DATABASE_URL` (in the shell or `.env`) to use another.
+- `packages/db/test/global-setup.ts` creates and migrates it on each run, and runs the step after the migration. Set `TEST_DATABASE_URL` (in the shell or `.env`) to use another.
 - Tables are truncated before every test. The development database is never touched.
 - The web app's database tests are named `*.db.test.ts` and run in its `db` Vitest project (`<name>_test_web`), through the real API routes. Use one where only real rows show the defect, such as raw SQL's types meeting a response schema. A file may truncate once in `beforeAll` and share its rows across its tests.
 - If the test database's migration ledger names a migration this checkout lacks (another branch migrated it), it is dropped and created again.

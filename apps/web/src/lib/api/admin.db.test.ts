@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, expect, test } from 'vitest';
 import { authRepository, billingRepository, db } from '@hushos/db';
-import { driveObjects } from '@hushos/db/schema';
+import { ENVIRONMENT_PRIMARY_STORE_ID, driveObjects } from '@hushos/db/schema';
 import { registered, sha256 } from '../../../../../packages/db/test/accounts';
 import {
     closeDatabase,
@@ -78,6 +78,7 @@ beforeAll(async () => {
             id,
             workspaceId,
             objectKey: `ws/${workspaceId}/${id}`,
+            storeId: ENVIRONMENT_PRIMARY_STORE_ID,
             contentSuite: 2,
             chunkSize: 8 * 1024 * 1024,
             chunkCount: 1,

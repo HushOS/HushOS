@@ -728,8 +728,11 @@ export async function listReportObjectsToCopy(reportId: string) {
 
 /*
  * Where each reported object's primary copy is: the store its own row names
- * or, once its owner has purged it, the store its outbox row names, which is
- * the copy the hold keeps. An object no row names any more is absent.
+ * or, once its owner has purged it, the store of the outbox row whose copy the
+ * hold keeps. An object can have more than one outbox row (a copy a move left
+ * behind, and the purge of where it lived): a row whose copy is already deleted
+ * holds nothing, and the purge's row is where the object last lived. An object
+ * no row names any more is absent.
  */
 export async function storesOfReportObjects(objectIds: string[]) {
     const stores = new Map<string, string>();
@@ -740,7 +743,15 @@ export async function storesOfReportObjects(objectIds: string[]) {
             storeId: driveObjectDeletions.storeId,
         })
         .from(driveObjectDeletions)
-        .where(inArray(driveObjectDeletions.objectId, objectIds));
+        .where(
+            and(
+                inArray(driveObjectDeletions.objectId, objectIds),
+                isNull(driveObjectDeletions.primaryDeletedAt),
+                isNull(driveObjectDeletions.doneAt),
+            ),
+        )
+        // Last wins below: the purge's row after any other.
+        .orderBy(sql`(${driveObjectDeletions.reason} = 'purged') asc`);
     for (const row of retired) stores.set(row.objectId, row.storeId);
     const live = await db
         .select({ objectId: driveObjects.id, storeId: driveObjects.storeId })

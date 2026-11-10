@@ -25,6 +25,8 @@ export async function startS3() {
     const hooks: {
         /* Runs before a multipart upload is created: wait in it, or throw to have the store refuse. */
         beforeCreateMultipart?: (bucket: string, key: string) => Promise<void> | void;
+        /* Runs before any request is served: return an HTTP status to have the store answer with that error instead. */
+        refuse?: (request: S3Request) => number | undefined;
     } = {};
 
     function fail(res: ServerResponse, status: number, code: string) {
@@ -44,7 +46,17 @@ export async function startS3() {
         const key = decodeURIComponent(rest.join('/'));
         const query = url.searchParams;
         const method = req.method ?? 'GET';
-        requests.push({ method, bucket: bucketName, key, query: url.search });
+        const request = { method, bucket: bucketName, key, query: url.search };
+        requests.push(request);
+        const refused = hooks.refuse?.(request);
+        if (refused) {
+            await bodyOf(req);
+            if (method === 'HEAD') {
+                res.writeHead(refused);
+                return res.end();
+            }
+            return fail(res, refused, refused === 403 ? 'AccessDenied' : 'InternalError');
+        }
         const bucket = buckets.get(bucketName);
         if (!bucket) return fail(res, 404, 'NoSuchBucket');
         const uploadId = query.get('uploadId');
@@ -234,6 +246,7 @@ export async function startS3() {
             uploads.clear();
             requests.length = 0;
             hooks.beforeCreateMultipart = undefined;
+            hooks.refuse = undefined;
         },
         async stop() {
             server.closeAllConnections();

@@ -458,7 +458,7 @@ describe('what follows an object’s row', () => {
                 contentNonce: randomBytes(16),
                 ciphertextSize: 17n,
                 status: 'ready' as const,
-                ...(index === 1 && { storeId: second }),
+                storeId: index === 1 ? second : ENVIRONMENT_PRIMARY_STORE_ID,
             })),
         );
         await db
@@ -473,19 +473,24 @@ describe('what follows an object’s row', () => {
         });
     });
 
-    test('replication and the audit are handed each object’s store', async () => {
+    test('replication is asked store by store, and the audit is handed each object’s store', async () => {
         const second = await createTestStore();
         const here = await published();
         await pointDefaultRegionAt(second);
         const there = await published();
-        const expected = {
-            [here.ids.objectId]: ENVIRONMENT_PRIMARY_STORE_ID,
-            [there.ids.objectId]: second,
-        };
         const byObject = (rows: { objectId: string; storeId: string }[]) =>
             Object.fromEntries(rows.map((row) => [row.objectId, row.storeId]));
-        expect(byObject(await drive.listUnreplicatedObjects())).toEqual(expected);
-        expect(byObject(await drive.listObjectsForAudit('primary'))).toEqual(expected);
+        // A backup is of one store: what is waiting at another store is not its work.
+        expect(byObject(await drive.listUnreplicatedObjects(ENVIRONMENT_PRIMARY_STORE_ID))).toEqual(
+            { [here.ids.objectId]: ENVIRONMENT_PRIMARY_STORE_ID },
+        );
+        expect(byObject(await drive.listUnreplicatedObjects(second))).toEqual({
+            [there.ids.objectId]: second,
+        });
+        expect(byObject(await drive.listObjectsForAudit('primary'))).toEqual({
+            [here.ids.objectId]: ENVIRONMENT_PRIMARY_STORE_ID,
+            [there.ids.objectId]: second,
+        });
     });
 
     test('tiering only considers objects in the environment’s primary store', async () => {

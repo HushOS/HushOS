@@ -1,0 +1,628 @@
+{
+    "type": "diff",
+    "version": "9",
+    "dialect": "postgres",
+    "id": "7c916c1f-109d-44d2-8947-80e753940ed0",
+    "prevIds": ["720d6af5-763a-4dd2-9a38-b73c70a2c84b"],
+    "footprints": [
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "drive_object_deletions", "reason"],
+            "writes": [
+                "s|col|public.drive_object_deletions.reason",
+                "n|col|public.drive_object_deletions.reason",
+                "e|col|public.drive_object_deletions.reason"
+            ],
+            "reads": ["n|tbl|public.drive_object_deletions", "n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "drive_object_deletions", "backup_store_id"],
+            "writes": [
+                "s|col|public.drive_object_deletions.backup_store_id",
+                "n|col|public.drive_object_deletions.backup_store_id",
+                "e|col|public.drive_object_deletions.backup_store_id"
+            ],
+            "reads": ["n|tbl|public.drive_object_deletions", "n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "drive_object_deletions", "export_store_id"],
+            "writes": [
+                "s|col|public.drive_object_deletions.export_store_id",
+                "n|col|public.drive_object_deletions.export_store_id",
+                "e|col|public.drive_object_deletions.export_store_id"
+            ],
+            "reads": ["n|tbl|public.drive_object_deletions", "n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "drive_object_deletions", "export_last_seq"],
+            "writes": [
+                "s|col|public.drive_object_deletions.export_last_seq",
+                "n|col|public.drive_object_deletions.export_last_seq",
+                "e|col|public.drive_object_deletions.export_last_seq"
+            ],
+            "reads": ["n|tbl|public.drive_object_deletions", "n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "drive_object_deletions", "held_by_move"],
+            "writes": [
+                "s|col|public.drive_object_deletions.held_by_move",
+                "n|col|public.drive_object_deletions.held_by_move",
+                "e|col|public.drive_object_deletions.held_by_move"
+            ],
+            "reads": ["n|tbl|public.drive_object_deletions", "n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "drive_object_deletions", "not_before"],
+            "writes": [
+                "s|col|public.drive_object_deletions.not_before",
+                "n|col|public.drive_object_deletions.not_before",
+                "e|col|public.drive_object_deletions.not_before"
+            ],
+            "reads": ["n|tbl|public.drive_object_deletions", "n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "drive_object_deletions", "backup_left"],
+            "writes": [
+                "s|col|public.drive_object_deletions.backup_left",
+                "n|col|public.drive_object_deletions.backup_left",
+                "e|col|public.drive_object_deletions.backup_left"
+            ],
+            "reads": ["n|tbl|public.drive_object_deletions", "n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "drive_object_deletions", "attention"],
+            "writes": [
+                "s|col|public.drive_object_deletions.attention",
+                "n|col|public.drive_object_deletions.attention",
+                "e|col|public.drive_object_deletions.attention"
+            ],
+            "reads": ["n|tbl|public.drive_object_deletions", "n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "drive_object_deletions", "failures"],
+            "writes": [
+                "s|col|public.drive_object_deletions.failures",
+                "n|col|public.drive_object_deletions.failures",
+                "e|col|public.drive_object_deletions.failures"
+            ],
+            "reads": ["n|tbl|public.drive_object_deletions", "n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "drive_object_deletions", "failed_at"],
+            "writes": [
+                "s|col|public.drive_object_deletions.failed_at",
+                "n|col|public.drive_object_deletions.failed_at",
+                "e|col|public.drive_object_deletions.failed_at"
+            ],
+            "reads": ["n|tbl|public.drive_object_deletions", "n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "drive_objects", "backup_store_id"],
+            "writes": [
+                "s|col|public.drive_objects.backup_store_id",
+                "n|col|public.drive_objects.backup_store_id",
+                "e|col|public.drive_objects.backup_store_id"
+            ],
+            "reads": ["n|tbl|public.drive_objects", "n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "drive_objects", "copy_failures"],
+            "writes": [
+                "s|col|public.drive_objects.copy_failures",
+                "n|col|public.drive_objects.copy_failures",
+                "e|col|public.drive_objects.copy_failures"
+            ],
+            "reads": ["n|tbl|public.drive_objects", "n|sch|public"]
+        },
+        {
+            "statementType": "alter_pk",
+            "statementTarget": ["table", "public", "drive_object_deletions"],
+            "writes": ["s|pk|public.drive_object_deletions"],
+            "reads": [
+                "n|tbl|public.drive_object_deletions",
+                "n|sch|public",
+                "n|col|public.drive_object_deletions.object_id",
+                "n|col|public.drive_object_deletions.store_id"
+            ],
+            "sharedWrites": ["e|uniqueness|public.drive_object_deletions.object_id"],
+            "sqlHash": "a6e5f5c6b840190a"
+        },
+        {
+            "statementType": "alter_column",
+            "statementTarget": ["column", "public", "drive_object_deletions", "store_id"],
+            "writes": ["s|colprop|public.drive_object_deletions.store_id.default"],
+            "reads": [
+                "n|tbl|public.drive_object_deletions",
+                "n|sch|public",
+                "n|col|public.drive_object_deletions.store_id"
+            ],
+            "sqlHash": "0417d63581ba2d3c"
+        },
+        {
+            "statementType": "alter_column",
+            "statementTarget": ["column", "public", "drive_objects", "store_id"],
+            "writes": ["s|colprop|public.drive_objects.store_id.default"],
+            "reads": [
+                "n|tbl|public.drive_objects",
+                "n|sch|public",
+                "n|col|public.drive_objects.store_id"
+            ],
+            "sqlHash": "ee3954b9f7e1331e"
+        },
+        {
+            "statementType": "alter_column",
+            "statementTarget": ["column", "public", "drive_uploads", "store_id"],
+            "writes": ["s|colprop|public.drive_uploads.store_id.default"],
+            "reads": [
+                "n|tbl|public.drive_uploads",
+                "n|sch|public",
+                "n|col|public.drive_uploads.store_id"
+            ],
+            "sqlHash": "b7a12820ace04a89"
+        },
+        {
+            "statementType": "create_index",
+            "statementTarget": [
+                "index",
+                "public",
+                "drive_object_deletions",
+                "drive_object_deletions_key_idx"
+            ],
+            "writes": [
+                "s|idx|public.drive_object_deletions_key_idx",
+                "n|idx|public.drive_object_deletions_key_idx",
+                "e|idx|public.drive_object_deletions_key_idx",
+                "n|rel|public.drive_object_deletions_key_idx"
+            ],
+            "reads": [
+                "n|tbl|public.drive_object_deletions",
+                "n|sch|public",
+                "n|col|public.drive_object_deletions.object_key"
+            ]
+        },
+        {
+            "statementType": "create_index",
+            "statementTarget": ["index", "public", "drive_objects", "drive_objects_store_idx"],
+            "writes": [
+                "s|idx|public.drive_objects_store_idx",
+                "n|idx|public.drive_objects_store_idx",
+                "e|idx|public.drive_objects_store_idx",
+                "n|rel|public.drive_objects_store_idx"
+            ],
+            "reads": [
+                "n|tbl|public.drive_objects",
+                "n|sch|public",
+                "n|col|public.drive_objects.store_id"
+            ]
+        },
+        {
+            "statementType": "create_fk",
+            "statementTarget": ["table", "public", "drive_object_deletions"],
+            "writes": [
+                "s|fk|public.drive_object_deletions.drive_object_deletions_backup_store_id_object_stores_id_fkey",
+                "n|fk|public.drive_object_deletions.drive_object_deletions_backup_store_id_object_stores_id_fkey",
+                "e|fk|public.drive_object_deletions.drive_object_deletions_backup_store_id_object_stores_id_fkey",
+                "n|con|public.drive_object_deletions.drive_object_deletions_backup_store_id_object_stores_id_fkey"
+            ],
+            "reads": [
+                "n|tbl|public.drive_object_deletions",
+                "n|sch|public",
+                "n|tbl|public.object_stores",
+                "n|sch|public",
+                "n|col|public.drive_object_deletions.backup_store_id",
+                "n|col|public.object_stores.id",
+                "e|uniqueness|public.object_stores.id"
+            ]
+        },
+        {
+            "statementType": "create_fk",
+            "statementTarget": ["table", "public", "drive_objects"],
+            "writes": [
+                "s|fk|public.drive_objects.drive_objects_backup_store_id_object_stores_id_fkey",
+                "n|fk|public.drive_objects.drive_objects_backup_store_id_object_stores_id_fkey",
+                "e|fk|public.drive_objects.drive_objects_backup_store_id_object_stores_id_fkey",
+                "n|con|public.drive_objects.drive_objects_backup_store_id_object_stores_id_fkey"
+            ],
+            "reads": [
+                "n|tbl|public.drive_objects",
+                "n|sch|public",
+                "n|tbl|public.object_stores",
+                "n|sch|public",
+                "n|col|public.drive_objects.backup_store_id",
+                "n|col|public.object_stores.id",
+                "e|uniqueness|public.object_stores.id"
+            ]
+        },
+        {
+            "statementType": "add_check",
+            "statementTarget": ["table", "public", "drive_object_deletions"],
+            "writes": [
+                "s|ck|public.drive_object_deletions.drive_object_deletions_reason_valid",
+                "n|ck|public.drive_object_deletions.drive_object_deletions_reason_valid",
+                "e|ck|public.drive_object_deletions.drive_object_deletions_reason_valid",
+                "n|con|public.drive_object_deletions.drive_object_deletions_reason_valid"
+            ],
+            "reads": [
+                "n|tbl|public.drive_object_deletions",
+                "n|sch|public",
+                "n|col|public.drive_object_deletions.reason"
+            ]
+        },
+        {
+            "statementType": "add_check",
+            "statementTarget": ["table", "public", "drive_object_deletions"],
+            "writes": [
+                "s|ck|public.drive_object_deletions.drive_object_deletions_hold_valid",
+                "n|ck|public.drive_object_deletions.drive_object_deletions_hold_valid",
+                "e|ck|public.drive_object_deletions.drive_object_deletions_hold_valid",
+                "n|con|public.drive_object_deletions.drive_object_deletions_hold_valid"
+            ],
+            "reads": [
+                "n|tbl|public.drive_object_deletions",
+                "n|sch|public",
+                "n|col|public.drive_object_deletions.held_by_move",
+                "n|col|public.drive_object_deletions.reason"
+            ]
+        },
+        {
+            "statementType": "add_check",
+            "statementTarget": ["table", "public", "drive_object_deletions"],
+            "writes": [
+                "s|ck|public.drive_object_deletions.drive_object_deletions_values_valid",
+                "n|ck|public.drive_object_deletions.drive_object_deletions_values_valid",
+                "e|ck|public.drive_object_deletions.drive_object_deletions_values_valid",
+                "n|con|public.drive_object_deletions.drive_object_deletions_values_valid"
+            ],
+            "reads": [
+                "n|tbl|public.drive_object_deletions",
+                "n|sch|public",
+                "n|col|public.drive_object_deletions.failures",
+                "n|col|public.drive_object_deletions.backup_left",
+                "n|col|public.drive_object_deletions.done_at"
+            ]
+        }
+    ],
+    "deltas": [
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "drive_object_deletions",
+                "name": "reason",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "'purged'",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "drive_object_deletions",
+                "name": "backup_store_id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "drive_object_deletions",
+                "name": "export_store_id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "drive_object_deletions",
+                "name": "export_last_seq",
+                "type": "bigint",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "drive_object_deletions",
+                "name": "held_by_move",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "drive_object_deletions",
+                "name": "not_before",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "drive_object_deletions",
+                "name": "backup_left",
+                "type": "boolean",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "false",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "drive_object_deletions",
+                "name": "attention",
+                "type": "boolean",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "false",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "drive_object_deletions",
+                "name": "failures",
+                "type": "integer",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "0",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "drive_object_deletions",
+                "name": "failed_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "drive_objects",
+                "name": "backup_store_id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "drive_objects",
+                "name": "copy_failures",
+                "type": "integer",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "0",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "drive_object_deletions",
+                "name": "drive_object_deletions_key_idx",
+                "nameExplicit": true,
+                "columns": [
+                    {
+                        "value": "object_key",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": false,
+                        "opclass": null
+                    }
+                ],
+                "isUnique": false,
+                "where": "done_at is null",
+                "with": "",
+                "method": "btree",
+                "concurrently": false,
+                "entityType": "indexes"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "drive_objects",
+                "name": "drive_objects_store_idx",
+                "nameExplicit": true,
+                "columns": [
+                    {
+                        "value": "store_id",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": false,
+                        "opclass": null
+                    }
+                ],
+                "isUnique": false,
+                "where": null,
+                "with": "",
+                "method": "btree",
+                "concurrently": false,
+                "entityType": "indexes"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "drive_object_deletions",
+                "name": "drive_object_deletions_backup_store_id_object_stores_id_fkey",
+                "nameExplicit": false,
+                "columns": ["backup_store_id"],
+                "schemaTo": "public",
+                "tableTo": "object_stores",
+                "columnsTo": ["id"],
+                "onUpdate": "NO ACTION",
+                "onDelete": "NO ACTION",
+                "entityType": "fks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "drive_objects",
+                "name": "drive_objects_backup_store_id_object_stores_id_fkey",
+                "nameExplicit": false,
+                "columns": ["backup_store_id"],
+                "schemaTo": "public",
+                "tableTo": "object_stores",
+                "columnsTo": ["id"],
+                "onUpdate": "NO ACTION",
+                "onDelete": "NO ACTION",
+                "entityType": "fks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "drive_object_deletions",
+                "name": "drive_object_deletions_reason_valid",
+                "value": "\"reason\" in ('purged', 'moved', 'stray')",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "drive_object_deletions",
+                "name": "drive_object_deletions_hold_valid",
+                "value": "\"held_by_move\" is null or \"reason\" = 'moved'",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "drive_object_deletions",
+                "name": "drive_object_deletions_values_valid",
+                "value": "\"failures\" >= 0 and (not \"backup_left\" or \"done_at\" is not null)",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "alter",
+            "key": "columns\u0000[\"public\",\"drive_object_deletions\",\"store_id\"]",
+            "set": {
+                "default": null
+            }
+        },
+        {
+            "op": "alter",
+            "key": "columns\u0000[\"public\",\"drive_objects\",\"store_id\"]",
+            "set": {
+                "default": null
+            }
+        },
+        {
+            "op": "alter",
+            "key": "columns\u0000[\"public\",\"drive_uploads\",\"store_id\"]",
+            "set": {
+                "default": null
+            }
+        },
+        {
+            "op": "alter",
+            "key": "pks\u0000[\"public\",\"drive_object_deletions\",\"drive_object_deletions_pkey\"]",
+            "set": {
+                "columns": ["object_id", "store_id"]
+            }
+        }
+    ]
+}

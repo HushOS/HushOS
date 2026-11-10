@@ -158,6 +158,14 @@ export function databaseSetup(suffix: string) {
         });
         if (migrate.status !== 0)
             throw new Error(`Test database migration failed:\n${migrate.stderr}`);
+        // The second half of `db:migrate`: what cannot run inside drizzle's transaction.
+        const after = spawnSync('bun', ['scripts/after-migrate.ts'], {
+            cwd: new URL('packages/db/', root).pathname,
+            env: { ...process.env, DATABASE_URL: testUrl, MIGRATION_DATABASE_URL: '' },
+            encoding: 'utf8',
+        });
+        if (after.status !== 0)
+            throw new Error(`Test database after-migrate step failed:\n${after.stderr}`);
 
         project.provide('databaseUrl', testUrl);
     };

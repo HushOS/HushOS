@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { groupsRepository } from '@hushos/db';
 import { afterAll, beforeEach, expect, test } from 'vitest';
 import { db } from '../../db/src/client';
-import { driveObjects } from '../../db/src/schema';
+import { ENVIRONMENT_PRIMARY_STORE_ID, driveObjects } from '../../db/src/schema';
 import {
     closeDatabase,
     createTestAccount,
@@ -41,6 +41,7 @@ async function storedObject(workspaceId: string) {
         id,
         workspaceId,
         objectKey,
+        storeId: ENVIRONMENT_PRIMARY_STORE_ID,
         chunkSize: 1,
         chunkCount: 1,
         contentNonce: randomBytes(16),
@@ -79,7 +80,7 @@ test('a purged family’s objects are deleted from the store through the outbox,
 
     // Before the purge the drain has nothing to delete.
     const { store, deleted } = recordingStore();
-    expect(await deleteObjects({ open: async () => store, replica: null })).toMatchObject({
+    expect(await deleteObjects({ open: async () => store, backups: [] })).toMatchObject({
         primaries: 0,
     });
 
@@ -89,7 +90,7 @@ test('a purged family’s objects are deleted from the store through the outbox,
             groupsRepository.DISSOLVED_FAMILY_RETENTION_DAYS,
         ),
     ).toEqual({ retired: 0, families: 1, busy: 0 });
-    expect(await deleteObjects({ open: async () => store, replica: null })).toMatchObject({
+    expect(await deleteObjects({ open: async () => store, backups: [] })).toMatchObject({
         primaries: 3,
     });
     expect([...deleted].sort()).toEqual([...familyKeys].sort());
@@ -97,7 +98,7 @@ test('a purged family’s objects are deleted from the store through the outbox,
     expect(deleted).not.toContain(liveKey);
 
     // Drained once: a second pass deletes nothing more.
-    expect(await deleteObjects({ open: async () => store, replica: null })).toMatchObject({
+    expect(await deleteObjects({ open: async () => store, backups: [] })).toMatchObject({
         primaries: 0,
     });
     expect(deleted).toHaveLength(3);

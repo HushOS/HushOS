@@ -6,7 +6,9 @@ import {
 } from '@hushos/billing/server';
 import {
     LATEST_MIGRATION,
+    driveRepository,
     missingTablePrivileges,
+    pendingSchemaSteps,
     schemaState,
     storesRepository,
 } from '@hushos/db';
@@ -73,6 +75,17 @@ if (missing.length)
     refuse(
         `The worker's role lacks SELECT, INSERT, UPDATE or DELETE on: ${missing.join(', ')}. See docs/self-hosting.md.`,
     );
+
+// What `db:migrate` does after the migration (constraint validations, an index built without
+// blocking writes). Nothing waits for it and nothing is wrong without it; it is named here so a
+// step that failed is not forgotten.
+const pendingSteps = await pendingSchemaSteps();
+if (pendingSteps.length)
+    log.warn({
+        message:
+            'Schema steps that run after the migration are still pending: run db:migrate again (docs/self-hosting.md, "After the migration")',
+        steps: pendingSteps,
+    });
 
 const boss = createBoss('worker');
 boss.on('error', (error) => log.error(error));
@@ -180,17 +193,27 @@ if (billingEnabled()) {
 } else await boss.unschedule(queues.reconcileBilling);
 
 /*
- * Drive: uploads past their expiry, the deletion outbox and replication every
- * five minutes (an upload whose store never started it holds its reserved bytes
+ * Drive: uploads past their expiry, the deletion outbox (which also removes its
+ * own finished rows after 30 days) and replication every five minutes (an upload whose store never started it holds its reserved bytes
  * until expiry's next run), the purge sweep every fifteen, the accounting and object
  * audits and tiering nightly, the replica audit weekly, and the orphan sweep a
- * bounded page of the bucket every night. Each also runs once at start so a
+ * bounded number of pages of every region's bucket every night. Each also runs once at start so a
  * backlog after downtime clears.
  */
 const replica = replicaConfigured();
 // The replica's row holds no settings, only whether this worker's environment has them: the
 // default region has a working backup exactly when it does (docs/company-storage-design.md 2.1).
 await storesRepository.recordEnvironmentReplica(replica);
+// A worker of the release before this one marked an object as backed up without naming the
+// backup; it knew only the replica. Such a worker may have run until a moment ago, so every
+// start rewrites what it left (docs/company-storage-design.md 11.1).
+const adopted = await driveRepository.adoptLegacyBackupMarks();
+if (adopted.objects || adopted.outbox)
+    log.info({
+        message: 'Backup marks of the previous release now name the replica',
+        schema: 'drive',
+        ...adopted,
+    });
 log.info({
     message: replica
         ? 'Object replication is on'

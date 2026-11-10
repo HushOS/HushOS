@@ -22,6 +22,7 @@ import { scopedId } from './ids';
 import * as rotations from './rotations';
 import { metadataStatement } from './signatures';
 import {
+    ENVIRONMENT_PRIMARY_STORE_ID,
     accountIdentities,
     accountKeys,
     areaGrants,
@@ -3949,6 +3950,7 @@ describe('deleting a family folder (groups design 2.10)', () => {
             id: objectId,
             workspaceId: photos,
             objectKey: `ws/${photos}/${objectId}`,
+            storeId: ENVIRONMENT_PRIMARY_STORE_ID,
             chunkSize: 1,
             chunkCount: 1,
             contentNonce: randomBytes(16),

@@ -14,6 +14,7 @@ import {
 import { ENDED_SUBSCRIPTION_STATUSES } from './billing';
 import { recordDissolveNotices } from './dissolve-notices';
 import { madeFor } from './ids';
+import { queueWorkspaceObjects } from './outbox';
 import { admissionFits, lockPool } from './pool';
 import { pgCode } from './readiness';
 import { unheldWorkspaceCondition } from './reports';
@@ -31,8 +32,6 @@ import {
     areaGrants,
     driveLinks,
     driveNodes,
-    driveObjectDeletions,
-    driveObjects,
     driveRotations,
     driveShares,
     groupAreaCommitments,
@@ -3551,14 +3550,8 @@ export async function purgeDeletedAreas(days: number, limit = 20) {
                 )
                 .for('update');
             if (!area) return false;
-            await tx.execute(sql`
-                insert into ${driveObjectDeletions}
-                    (object_id, workspace_id, object_key, store_id, published, replicated)
-                select o.id, o.workspace_id, o.object_key, o.store_id, o.status = 'ready', o.replicated_at is not null
-                from ${driveObjects} o
-                where o.workspace_id = ${id}
-                on conflict do nothing
-            `);
+            // Every object the folder holds, at the store its row names, before the rows go.
+            await queueWorkspaceObjects(tx, id);
             await tx.delete(workspaces).where(eq(workspaces.id, id));
             return true;
         });
