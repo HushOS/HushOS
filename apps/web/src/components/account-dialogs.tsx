@@ -28,6 +28,7 @@ import { driveClient, driveError, driveOpenQueryOptions } from '@/lib/drive';
 import { authError } from '@/lib/form';
 import { cue } from '@/lib/sounds';
 import { forgetDevice } from '@/lib/sign-out';
+import { holdPhrase } from '@/lib/unconfirmed-phrase';
 
 /*
  * The account's heavy actions, each a dialog that asks once: change the
@@ -505,9 +506,18 @@ export function NewKeyDialog({
             cue('success');
             router.options.context.queryClient.clear();
             if (!result.signedIn) {
+                // The reply never arrived. The phrase this device made for the change is the
+                // only copy, and the next sign-in's second step may ask for it: it is shown
+                // before the sign-in page, from this tab's memory alone.
+                if (result.kit) {
+                    holdPhrase({ account: { id: user.id, email: user.email }, ...result.kit });
+                    await router.navigate({ to: '/new-phrase', replace: true });
+                    return;
+                }
+                // No phrase to show (the worker had locked): the password is what it was.
                 await router.navigate({
                     to: '/login',
-                    search: { securityChanged: 'uncertain' },
+                    search: { securityChanged: 'uncertain-phrase' },
                     replace: true,
                 });
                 return;

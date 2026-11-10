@@ -1,4 +1,4 @@
-import type { SecurityAction } from '@hushos/crypto';
+import type { SecurityAction, SecurityUpdate } from '@hushos/crypto';
 /* Shown on the contacts page; re-exported so the app needs no direct crypto dependency. */
 export {
     fingerprint,
@@ -9,6 +9,7 @@ export {
 } from '@hushos/crypto/fingerprint';
 export { pinVerified, settingsRolledBack } from '@hushos/crypto/pins';
 import type { IdentityEnvelope } from '@hushos/crypto/identity';
+import type { RecoveryEnvelope } from '@hushos/crypto/recovery';
 import { normalizeBackupCode, normalizeTotpCode } from '@hushos/crypto/two-step/codes';
 import type {
     AuthApi,
@@ -125,6 +126,36 @@ export type StepRequest = {
 export type AskStep = (request: StepRequest) => Promise<StepAnswer | null>;
 /* A flow that asks for the second step, where the caller may not have one to give. */
 export type StepOptions = { step?: AskStep };
+
+/*
+ * A recovery phrase this device made for a change whose reply never arrived
+ * (docs/two-step-design.md 4, "When the reply is lost"): the words, and the envelope they
+ * open, for the kit. Shown once and kept nowhere: whether the server took the change is not
+ * known, so this may be the account's phrase now, or one that was never used.
+ */
+export type UnconfirmedPhrase = { phrase: string; recovery: RecoveryEnvelope };
+
+/*
+ * How a security change ended. `signedIn`: made, and this device carries on in the session
+ * the server opened with it. `uncertain`: the reply never arrived, this device is locked, and
+ * the person signs in again; `kit` is then the new phrase a new-phrase change or a rotation
+ * made, for the person to save before they do.
+ */
+export type SecurityChangeResult =
+    | { signedIn: true; uncertain: false }
+    | { signedIn: false; uncertain: true; kit?: UnconfirmedPhrase };
+
+/*
+ * Whether the server answered a request with a refusal of its own: one of its codes, or a 4xx
+ * (the API adapter attaches both). Then nothing was done. Anything else (no answer at all, a
+ * timeout, a gateway's 5xx without a code) says nothing about what the server did with it.
+ */
+function answeredNo(error: unknown) {
+    const { code, status } = (error ?? {}) as { code?: unknown; status?: unknown };
+    return (
+        typeof code === 'string' || (typeof status === 'number' && status >= 400 && status < 500)
+    );
+}
 
 /* The person backed out of the second step: nothing was changed, and nothing needs saying. */
 export class StepCancelled extends Error {
@@ -1047,10 +1078,11 @@ export function createAuthClient(
             password: string,
             newPassword?: string,
             options: StepOptions = {},
-        ) =>
+        ): Promise<SecurityChangeResult> =>
             exclusive(async () => {
-                // What the server answered the change itself, as against the password or the step.
-                let sent: { error: unknown } | undefined;
+                // What the server answered the change itself, as against the password or the
+                // step, and the update that was sent to it.
+                let sent: { error: unknown; update: SecurityUpdate } | undefined;
                 // The lock the last password proof began with: the worker holds the new
                 // password's key from there, until the change is made or something locks.
                 let changeEpoch = epoch;
@@ -1083,7 +1115,7 @@ export function createAuthClient(
                                     ...(twoStep ? { twoStep } : {}),
                                 });
                             } catch (error) {
-                                sent = { error };
+                                sent = { error, update: proof };
                                 throw error;
                             }
                         },
@@ -1092,7 +1124,31 @@ export function createAuthClient(
                 } catch (error) {
                     // Before the change was sent (a wrong password, the step backed out of):
                     // nothing happened, and the failure is the caller's as it is.
-                    if (sent?.error !== error) throw error;
+                    if (!sent || sent.error !== error) throw error;
+                    /*
+                     * A new phrase or a rotation the server may have made without this device
+                     * hearing of it: the phrase it made is the only copy there is, and the
+                     * second step may ask for it at the next sign-in. So before the lock drops
+                     * the new password's key, the worker opens the account from the envelope
+                     * that was sent and reads the phrase out of the recovery envelope sent
+                     * with it, for the person to save (docs/two-step-design.md 4). Not after a
+                     * refusal: the server said no, and the old phrase stands. A worker that
+                     * locked meanwhile reads nothing, and the change ends as it did before.
+                     */
+                    let kit: UnconfirmedPhrase | undefined;
+                    const recovery = action === 'password' ? undefined : sent.update.recovery;
+                    if (recovery && !answeredNo(error) && epoch === changeEpoch)
+                        try {
+                            await rpc('unlock', {
+                                userId: user.id,
+                                envelope: sent.update.envelope,
+                            });
+                            const { phrase } = await rpc('backup', { userId: user.id, recovery });
+                            // A lock while the worker read drops the words with the key.
+                            if (epoch === changeEpoch) kit = { phrase, recovery };
+                        } catch {
+                            /* Locked, or a worker that died: no phrase to show. */
+                        }
                     // A lost response leaves the outcome unknown: the server may have
                     // replaced the credentials and ended every session, and the one it
                     // opened for this device never arrived. Clean up as if it had, then let
@@ -1110,8 +1166,12 @@ export function createAuthClient(
                     } catch {
                         /* Unknown either way. */
                     }
-                    if (live && live.credentialVersion === user.credentialVersion) throw error;
-                    return { signedIn: false, uncertain: true };
+                    // Still the old credentials: not made. With a phrase in hand that is only
+                    // "not yet": a server still at work when the wait ran out makes the change
+                    // after this answer, so the phrase is shown all the same.
+                    if (live && live.credentialVersion === user.credentialVersion && !kit)
+                        throw error;
+                    return { signedIn: false, uncertain: true, ...(kit ? { kit } : {}) };
                 }
                 /*
                  * The change is made. The server ended every session of the account and, in

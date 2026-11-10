@@ -24,6 +24,7 @@ describe('analytics', () => {
             '/register/complete',
             '/setup/recovery-key',
             '/recover',
+            '/new-phrase',
             '/s/abcdef',
             '/account-deleted',
             '/api/drive/workspace',

@@ -53,11 +53,16 @@ export function useRecoveryBackup(user: SessionUser) {
     };
 }
 
-type Backup = NonNullable<ReturnType<typeof useRecoveryBackup>['backup']>;
-
 /* The kit as a text file, downloaded. */
-export function downloadKit(user: SessionUser, backup: Backup) {
-    const content = kitText({ email: user.email, id: user.id }, backup.phrase, backup.recovery);
+export function downloadKit(
+    account: { email: string; id: string },
+    backup: { phrase: string; recovery: unknown },
+) {
+    const content = kitText(
+        { email: account.email, id: account.id },
+        backup.phrase,
+        backup.recovery,
+    );
     saveBlob(new Blob([content], { type: 'text/plain;charset=utf-8' }), 'hushos-recovery-kit.txt');
     cue('success', { volume: 0.4 });
 }
@@ -85,6 +90,67 @@ export function PhraseGrid({ phrase }: { phrase: string }) {
     );
 }
 
+/*
+ * The words and every way to keep them: the grid, the kit as a file or on paper, a copy, and
+ * the code the phone app scans. `onError` is handed what could not be done here, and '' once
+ * something could.
+ */
+export function PhraseKit({
+    account,
+    phrase,
+    recovery,
+    onError,
+}: {
+    account: { email: string; id: string };
+    phrase: string;
+    recovery: unknown;
+    onError: (message: string) => void;
+}) {
+    const [copied, setCopied] = useState(false);
+    useEffect(() => {
+        if (!copied) return;
+        const timer = window.setTimeout(() => setCopied(false), 2_000);
+        return () => window.clearTimeout(timer);
+    }, [copied]);
+    async function copy() {
+        onError('');
+        try {
+            await copySecret(phrase);
+            cue('success', { volume: 0.4 });
+            setCopied(true);
+        } catch {
+            cue('error');
+            onError('Copying isn’t available here. Download the kit instead.');
+        }
+    }
+    return (
+        <>
+            <PhraseGrid phrase={phrase} />
+            <KitSheet email={account.email} phrase={phrase} />
+            <PhraseQr phrase={phrase}>
+                <Button
+                    variant="outline"
+                    onClick={() => {
+                        downloadKit(account, { phrase, recovery });
+                        onError('');
+                    }}
+                >
+                    <DownloadIcon />
+                    Download kit
+                </Button>
+                <Button variant="outline" onClick={() => window.print()}>
+                    <PrinterIcon />
+                    Print
+                </Button>
+                <Button variant="ghost" onClick={() => void copy()}>
+                    <CopyIcon />
+                    {copied ? 'Copied' : 'Copy words'}
+                </Button>
+            </PhraseQr>
+        </>
+    );
+}
+
 export function RecoveryPhrase({
     user,
     setup = false,
@@ -107,32 +173,9 @@ export function RecoveryPhrase({
     const [error, setError] = useState('');
     const [savedAt, setSavedAt] = useState<number | null>(null);
     const saved = savedAt === lockRevision;
-    const [copied, setCopied] = useState(false);
     const [pending, setPending] = useState(false);
     /* After the kit, three words picked back out of it, before the first save is confirmed. */
     const [checking, setChecking] = useState(false);
-    useEffect(() => {
-        if (!copied) return;
-        const timer = window.setTimeout(() => setCopied(false), 2_000);
-        return () => window.clearTimeout(timer);
-    }, [copied]);
-    async function copy() {
-        if (!backup) return;
-        setError('');
-        try {
-            await copySecret(backup.phrase);
-            cue('success', { volume: 0.4 });
-            setCopied(true);
-        } catch {
-            cue('error');
-            setError('Copying isn’t available here. Download the kit instead.');
-        }
-    }
-    function download() {
-        if (!backup) return;
-        downloadKit(user, backup);
-        setError('');
-    }
     async function finish() {
         if (!backup || (!backup.confirmed && !saved)) return;
         setPending(true);
@@ -181,22 +224,12 @@ export function RecoveryPhrase({
                         </AuthNote>
                     )}
                     {error && <AuthNote tone="danger">{error}</AuthNote>}
-                    <PhraseGrid phrase={backup.phrase} />
-                    <KitSheet email={user.email} phrase={backup.phrase} />
-                    <PhraseQr phrase={backup.phrase}>
-                        <Button variant="outline" onClick={download}>
-                            <DownloadIcon />
-                            Download kit
-                        </Button>
-                        <Button variant="outline" onClick={() => window.print()}>
-                            <PrinterIcon />
-                            Print
-                        </Button>
-                        <Button variant="ghost" onClick={() => void copy()}>
-                            <CopyIcon />
-                            {copied ? 'Copied' : 'Copy words'}
-                        </Button>
-                    </PhraseQr>
+                    <PhraseKit
+                        account={user}
+                        phrase={backup.phrase}
+                        recovery={backup.recovery}
+                        onError={setError}
+                    />
                     {!confirmed || setup ? (
                         <>
                             {!confirmed && (
@@ -247,6 +280,84 @@ export function RecoveryPhrase({
                     Opening your recovery phrase
                 </output>
             )}
+        </AuthLayout>
+    );
+}
+
+/*
+ * A new phrase from a change whose reply never arrived (docs/two-step-design.md 4, "When the
+ * reply is lost"): made on this device and shown before the person signs in again, since the
+ * second step of that sign-in may ask for it. Whether the server made the change is not known
+ * here, so the page says both: this phrase if it did, the old one if it did not. Saved and
+ * checked as any new phrase is; nothing is confirmed to the server, there being no session to
+ * confirm it in.
+ */
+export function LostReplyPhrase({
+    account,
+    phrase,
+    recovery,
+    onDone,
+}: {
+    account: { email: string; id: string };
+    phrase: string;
+    recovery: unknown;
+    onDone: () => void;
+}) {
+    const [error, setError] = useState('');
+    const [saved, setSaved] = useState(false);
+    const [checking, setChecking] = useState(false);
+    if (checking)
+        return (
+            <CheckWords
+                phrase={phrase}
+                pending={false}
+                error=""
+                onBack={() => setChecking(false)}
+                onDone={onDone}
+            />
+        );
+    return (
+        <AuthLayout
+            wide
+            title="Save your new recovery phrase"
+            art="24"
+            description="We lost the connection while making this change. If it went through, this is your new recovery phrase. Save it, then sign in."
+        >
+            <div className="flex flex-col gap-5">
+                <AuthNote tone="info">
+                    If it didn’t go through, your old phrase still works, so keep that one too.
+                    After you sign in, the Recovery phrase page shows which one is yours now.
+                </AuthNote>
+                {error && <AuthNote tone="danger">{error}</AuthNote>}
+                <PhraseKit
+                    account={account}
+                    phrase={phrase}
+                    recovery={recovery}
+                    onError={setError}
+                />
+                <label
+                    htmlFor="saved"
+                    className="flex cursor-pointer items-start gap-2.5 border-t border-rule pt-4 text-sm leading-snug"
+                >
+                    <Checkbox
+                        id="saved"
+                        checked={saved}
+                        onCheckedChange={(value) => setSaved(value === true)}
+                        className="mt-px"
+                    />
+                    I’ve saved my kit or written the words down, somewhere private.
+                </label>
+                <div className="flex justify-end">
+                    <Button
+                        size="lg"
+                        className="max-sm:w-full"
+                        disabled={!saved}
+                        onClick={() => setChecking(true)}
+                    >
+                        Continue
+                    </Button>
+                </div>
+            </div>
         </AuthLayout>
     );
 }

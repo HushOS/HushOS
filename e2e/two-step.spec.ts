@@ -20,7 +20,8 @@ import {
  * step (a code, a backup code, the recovery phrase) and every way it does not
  * (a slip, a wrong code, a step that ran out, a client too old to answer), a
  * password change and a new recovery phrase behind the step (each leaving the
- * browser signed in, on one answer), new backup codes, removing the method,
+ * browser signed in, on one answer), a new phrase whose reply never arrived
+ * (shown before the sign-in page), new backup codes, removing the method,
  * deleting the account, and the unlock of a browser that was left signed in.
  *
  * Whether the server offers it is this run's TWO_STEP_ENABLED (from the
@@ -742,6 +743,101 @@ test.describe('an account with two-step sign-in', () => {
         await expect(other).toHaveURL(/\/app\/account#two-step$/, { timeout: 60_000 });
         phrase = fresh;
         await other.context().close();
+    });
+
+    test('a new phrase whose reply is lost is shown before the sign-in page, kept nowhere, and answers the step there', async () => {
+        test.setTimeout(300_000);
+        await openAccount(a);
+        // The server makes the change and answers; the answer never reaches the browser. What a
+        // dropped connection leaves behind: the old session's cookie, which the change ended,
+        // and none of the new one's (the request the test made in the browser's place kept it).
+        let made = 0;
+        const finish = '**/api/auth/security/finish';
+        await a.route(finish, async (route) => {
+            const before = await a.context().cookies();
+            const response = await route.fetch();
+            if (response.ok()) made++;
+            await a.context().clearCookies();
+            await a.context().addCookies(before);
+            await route.abort('connectionreset');
+        });
+        await a.getByRole('button', { name: 'Make a new phrase' }).click();
+        const make = dialog(a);
+        await make.getByLabel('Password', { exact: true }).fill(password);
+        await make.getByRole('button', { name: 'Make a new phrase' }).click();
+        await expect(make).toContainText('Confirm it’s you with your second step.', {
+            timeout: 60_000,
+        });
+        // No app to hand: the phrase is the answer, and the change is about to replace it.
+        await make.getByRole('button', { name: 'Use your recovery phrase' }).click();
+        await make.getByLabel('Recovery phrase', { exact: true }).fill(phrase);
+        await make.getByRole('button', { name: 'Make a new phrase' }).click();
+
+        // Not the sign-in page: the words this browser made, with what is and is not known.
+        await expect(a).toHaveURL(/\/new-phrase$/, { timeout: 120_000 });
+        await expect(
+            a.getByRole('heading', { name: 'Save your new recovery phrase' }),
+        ).toBeVisible();
+        await expect(a.getByRole('main')).toContainText(
+            'We lost the connection while making this change. If it went through, this is your new recovery phrase. Save it, then sign in.',
+        );
+        await expect(a.getByRole('main')).toContainText(
+            'If it didn’t go through, your old phrase still works',
+        );
+        expect(made).toBe(1);
+        await a.unroute(finish);
+        const words = a.getByRole('list', { name: 'Recovery phrase' });
+        await expect(words).toBeVisible();
+        const fresh = (await words.getByRole('listitem').allInnerTexts())
+            .map((item) => item.split(/\s+/).at(-1))
+            .join(' ');
+        expect(fresh.split(' ')).toHaveLength(24);
+        expect(fresh).not.toBe(phrase);
+        // Held in this tab's memory alone: nothing a later visitor to this browser could read.
+        const kept = () =>
+            a.evaluate(() =>
+                JSON.stringify([
+                    Object.entries(localStorage),
+                    Object.entries(sessionStorage),
+                    history.state,
+                    location.href,
+                ]),
+            );
+        const start = fresh.split(' ').slice(0, 4).join(' ');
+        expect(await kept()).not.toContain(start);
+
+        // Saved and checked as any new phrase is, then on to the sign-in page, which has
+        // nothing more to say; the page that showed the words has none left to show.
+        await saveKit(a);
+        await expect(a).toHaveURL(/\/login$/, { timeout: 60_000 });
+        await expect(a.getByRole('heading', { name: 'Welcome back' })).toBeVisible();
+        expect(await kept()).not.toContain(start);
+        await a.goto('/new-phrase', { waitUntil: 'networkidle' });
+        await expect(a).toHaveURL(/\/login\?securityChanged=uncertain-phrase$/);
+        // Said for a phrase, not a password: the password never changed.
+        await expect(a.getByRole('main')).toContainText(
+            'We couldn’t confirm the change to your recovery phrase. Sign in with your password as usual. After you sign in, the Recovery phrase page shows your current phrase.',
+        );
+        await expect(a.getByRole('main')).not.toContainText('new password');
+        await expect(a.getByRole('list', { name: 'Recovery phrase' })).toHaveCount(0);
+
+        // The change was made: the old phrase answers nothing now, and the one this browser
+        // showed signs in. Without that page the account would be out of reach.
+        await enterPassword(a, email, password);
+        await a.getByRole('button', { name: 'Use your recovery phrase' }).click();
+        const field = a.getByLabel('Recovery phrase', { exact: true });
+        await field.fill(phrase);
+        await Promise.all([
+            a.waitForResponse((response) => response.url().endsWith('/api/auth/login/two-step')),
+            a.getByRole('button', { name: 'Sign in', exact: true }).click(),
+        ]);
+        await expect(a.getByRole('alert')).toHaveText(
+            'That recovery phrase doesn’t match this account. Check each word and try again.',
+        );
+        await field.fill(fresh);
+        await a.getByRole('button', { name: 'Sign in', exact: true }).click();
+        await expect(a).toHaveURL(/\/app\/account#two-step$/, { timeout: 60_000 });
+        phrase = fresh;
     });
 
     test('removing the method takes the password and the step, and turns two-step sign-in off', async () => {
