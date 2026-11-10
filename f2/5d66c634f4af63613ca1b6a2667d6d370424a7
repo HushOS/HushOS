@@ -1,0 +1,78 @@
+packages/crypto/src/session.security-change.test.ts
+  s_1f3a9ec02d29ed::t_3cdc503f8ec3cf 1-164
+e2e/security-change.spec.ts
+  s_1f3a9ec02d29ed::t_184f2bb7250df8 1-260
+apps/web/src/lib/api/security-change.db.test.ts
+  s_1f3a9ec02d29ed::t_76ac46542180fb 1-226
+packages/auth/src/client.security-change.test.ts
+  s_1f3a9ec02d29ed::t_34221a68b2b54f 1-517
+  s_1f3a9ec02d29ed::t_f397cf224289e7 518-548
+apps/web/src/components/account-dialogs.tsx
+  s_1f3a9ec02d29ed::t_26f81d83d195b5 23-24,124-125,339-352,356-358,361
+apps/web/src/components/brand.tsx
+  s_1f3a9ec02d29ed::t_1b29a8faeda96a 15,153,196-204
+apps/web/src/components/held-phrase.test.tsx
+  s_1f3a9ec02d29ed::t_eec230728e1a09 1-100
+apps/web/src/components/held-phrase.tsx
+  s_1f3a9ec02d29ed::t_5f97170c1d5f74 1-113
+apps/web/src/components/recovery-phrase.tsx
+  s_1f3a9ec02d29ed::t_efc5edae62779e 24,58-66,94-154,228-233,288-351
+apps/web/src/lib/api-client.ts
+  s_1f3a9ec02d29ed::t_28d76db0bc4829 57-64
+apps/web/src/lib/api/auth-responses.server.ts
+  s_1f3a9ec02d29ed::t_96e3ffa675fbe4 263-274
+apps/web/src/lib/api/auth-responses.test.ts
+  s_1f3a9ec02d29ed::t_7bfb42228ec3ad 29,561-574,748-761,894
+apps/web/src/lib/api/auth.server.ts
+  s_1f3a9ec02d29ed::t_998a61699320b8 51,302,305-310,312,315
+apps/web/src/lib/unconfirmed-phrase.ts
+  s_1f3a9ec02d29ed::t_7587b0d7d35bf3 1-55
+apps/web/src/routes/__root.tsx
+  s_1f3a9ec02d29ed::t_e00dd7016a6e5d 14,48,52,206-207,227,229,259-292
+apps/web/src/routes/login/route.tsx
+  s_1f3a9ec02d29ed::t_281e17f4fdec7a 23-35,295-299
+apps/web/src/test/auth-api.server.ts
+  s_1f3a9ec02d29ed::t_2ed25df26a3cf8 1-210
+docs/opaque-auth-design.md
+  s_1f3a9ec02d29ed::t_24f5535e77774d 210-226
+packages/auth/src/api.ts
+  s_1f3a9ec02d29ed::t_13194dee6958fb 35-44,280
+packages/auth/src/client.test.ts
+  s_1f3a9ec02d29ed::t_2f4d05897be26c 339-343,443-444,451-452,454-455
+packages/auth/src/client.ts
+  s_1f3a9ec02d29ed::t_af9e5434a183fc 12-13,87-118,445-456,773,780-781,783,786,788,791,793-796,798-818,820-834,841-843,845-854,856-865,867
+packages/auth/src/server.ts
+  s_1f3a9ec02d29ed::t_f3c6f929bea1af 2167-2168,2173-2176,2202-2217
+packages/crypto/src/security.ts
+  s_1f3a9ec02d29ed::t_66f4a3dc5b8801 131-140,195,228-230
+packages/crypto/src/session.ts
+  s_1f3a9ec02d29ed::t_b0f48e43d39754 1510-1516
+packages/db/src/auth.consent.test.ts
+  s_1f3a9ec02d29ed::t_6052a0866f0c87 226,260
+packages/db/src/auth.devices.test.ts
+  s_1f3a9ec02d29ed::t_dd78c94bc36829 579-602,606-620,624-632,643-691
+packages/db/src/auth.test.ts
+  s_1f3a9ec02d29ed::t_1d9794607b1b30 1061,1117,1147,1207,1258,1295
+packages/db/src/auth.ts
+  s_1f3a9ec02d29ed::t_e49a1ef1697f66 1407-1414,1419-1420,1448,1571-1589,1595,1598-1601,1648-1667,1678-1680
+packages/db/src/groups.test.ts
+  s_1f3a9ec02d29ed::t_3aac876d99fe81 4078-4081,4185,4199
+packages/db/test/sessions.ts
+  s_1f3a9ec02d29ed::t_99a83df50e7de2 1-41
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f25d66c634f4af63613ca1b6a2667d6d370424a7",
+  "prompts": {},
+  "sessions": {
+    "s_1f3a9ec02d29ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aef80487-cabb-455f-b2f1-acb7f8d96c4e",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
