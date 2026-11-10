@@ -44,8 +44,12 @@ export type StepChallenge = {
     token: string;
     methods: StepMethod[];
     expiresAt: string;
+    /* The same, as seconds from when the server answered: count from receipt, on the local clock. */
+    expiresIn: number;
     phrase?: { userId: string; recoveryVersion: number; wrappingSalt: string };
 };
+/* What a session is answered when it asks for a step token: none, for an account without the step. */
+export type StepOffer = { on: false } | ({ on: true } & StepChallenge);
 /* An answer as it is sent: a code as typed, or the phrase's signature over the step's statement. */
 export type StepProof =
     | { kind: 'totp'; code: string }
@@ -78,6 +82,22 @@ export type TwoStepStatus = {
 };
 /* A finished sign-in: the account, its wrapped key and the session's device. */
 export type SignedIn = {
+    user: AuthUser;
+    envelope: AccountKeyEnvelope;
+    device: SessionDevice & { attached: boolean };
+};
+/*
+ * A sign-in finished by the second step, with what the step leaves to say: whether this
+ * server lets the account change its step (TWO_STEP_ENABLED), and after a backup code how
+ * many are left.
+ */
+export type SteppedIn = SignedIn & { twoStep: { offered: boolean; backupCodesLeft?: number } };
+/*
+ * A security change as the server answers it: every session of the account is ended, and the
+ * device that asked has the one that replaces its own (the cookie), with the account's key as
+ * now wrapped.
+ */
+export type SecurityChanged = {
     user: AuthUser;
     envelope: AccountKeyEnvelope;
     device: SessionDevice & { attached: boolean };
@@ -273,16 +293,16 @@ export interface AuthApi {
     }): Promise<SignedIn | { twoStep: StepChallenge }>;
     /*
      * The second step of a sign-in. 401 `two-step` for a wrong answer (the token takes
-     * another), 401 `two-step-expired` once the token is gone, 403 `totp-frozen`, 429 for a
-     * spent code budget, 400 for what is not a code at all.
+     * another), 401 `two-step-expired` once the token is gone, 403 `totp-frozen`, 429
+     * `code-budget`, 503 `two-step-unavailable`, 400 `not-a-code`.
      */
-    loginTwoStep(input: StepSubmission): Promise<SignedIn>;
+    loginTwoStep(input: StepSubmission): Promise<SteppedIn>;
     /* 501 `unsupported` while the server does not offer two-step sign-in. */
     twoStep(): Promise<TwoStepStatus>;
     /* Changing the second step asks for the password: this starts the exchange, bound to the session. */
     twoStepReauth(input: { startLoginRequest: string }): Promise<LoginChallenge>;
-    /* A step token for one change. 409 when the account has no second step. */
-    twoStepChallenge(purpose: StepPurpose): Promise<StepChallenge>;
+    /* A step token for one change, or `on: false` when the account has no second step. */
+    twoStepChallenge(purpose: StepPurpose): Promise<StepOffer>;
     /* A pending authenticator app, for ten minutes: its secret (base32) and key URI, once. */
     startTotp(proof: TwoStepChangeProof): Promise<{ id: string; secret: string; uri: string }>;
     /* The ten backup codes only when this turned the step on; only then are other devices signed out. */
@@ -290,7 +310,6 @@ export interface AuthApi {
         id: string,
         input: { code: string; signOutOthers?: boolean },
     ): Promise<{ backupCodes?: string[] }>;
-    renameTwoStepMethod(id: string, name: string): Promise<{ method: TwoStepMethod }>;
     /* `on`: whether the step is still on; removing the last method turns it off. */
     removeTwoStepMethod(id: string, proof: TwoStepChangeProof): Promise<{ on: boolean }>;
     replaceBackupCodes(proof: TwoStepChangeProof): Promise<{ codes: string[] }>;
@@ -347,7 +366,7 @@ export interface AuthApi {
             attemptToken: string;
             twoStep?: StepSubmission;
         } & AccountSecurityUpdate,
-    ): Promise<unknown>;
+    ): Promise<SecurityChanged>;
     deleteStart(input: { startLoginRequest: string }): Promise<LoginChallenge>;
     deleteFinish(input: {
         attemptToken: string;

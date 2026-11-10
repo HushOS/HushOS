@@ -2,12 +2,15 @@ import { createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import {
+    givenAFactor,
     hydrated,
     landedOnHome,
     mailSubjects,
     newPage,
     PASSWORD,
+    readQr,
     registerAccount,
+    saveKit,
 } from './helpers';
 
 /*
@@ -16,13 +19,17 @@ import {
  * the other devices signed out with it, then every way a sign-in answers the
  * step (a code, a backup code, the recovery phrase) and every way it does not
  * (a slip, a wrong code, a step that ran out, a client too old to answer), a
- * password change behind the step, new backup codes, removing the method,
+ * password change and a new recovery phrase behind the step (each leaving the
+ * browser signed in, on one answer), new backup codes, removing the method,
  * deleting the account, and the unlock of a browser that was left signed in.
  *
  * Whether the server offers it is this run's TWO_STEP_ENABLED (from the
  * environment or .env, as the server reads it; off unless `true`). The server
  * must agree: one that says otherwise fails the file rather than letting it
- * skip. With it off, the one test left checks that Account draws nothing of it.
+ * skip. With it off, which is how hushos.com runs until the apps can answer,
+ * two tests are left: Account draws nothing of it, and an account that already
+ * has a method (given one by e2e/fixtures/two-step-factor.ts, since no request
+ * can) is still asked for it at sign-in and at a password change.
  */
 
 const twoStepOn = process.env.TWO_STEP_ENABLED === 'true';
@@ -73,7 +80,9 @@ function authenticator(secret: string) {
 
 const section = (page: Page) => page.locator('#two-step');
 const dialog = (page: Page) => page.getByRole('dialog');
-const codeField = (scope: Page | Locator) => scope.getByLabel('Code from your authenticator app');
+const codeField = (scope: Page | Locator) => scope.getByLabel('Six-digit code', { exact: true });
+const methodList = (page: Page) =>
+    section(page).getByRole('list', { name: 'Ways to pass your second step' });
 const backupField = (scope: Page | Locator) => scope.getByLabel('Backup code', { exact: true });
 const subjects = async (email: string, subject: RegExp) =>
     (await mailSubjects(email)).filter((value) => subject.test(value)).length;
@@ -130,7 +139,7 @@ async function turnOn(page: Page, options: { keepOthers?: boolean } = {}) {
         await others.click();
         await expect(others).not.toBeChecked();
     }
-    await setup.getByLabel(/Enter the code the app shows/).fill(await app.next());
+    await setup.getByLabel(/Enter the six-digit code the app shows/).fill(await app.next());
     await setup.getByRole('button', { name: 'Turn on' }).click();
     const list = setup.getByRole('list', { name: 'Backup codes' });
     await expect(list).toBeVisible({ timeout: 60_000 });
@@ -164,6 +173,79 @@ test('the server offers two-step sign-in exactly when this run says so, and Acco
     await expect(section(page)).toHaveCount(1);
     await expect(section(page)).toBeHidden();
     await page.context().close();
+});
+
+test('with two-step sign-in off, an account that already has a method is still asked: at sign-in, and at a password change', async ({
+    browser,
+}) => {
+    test.skip(twoStepOn, 'Two-step sign-in is on (TWO_STEP_ENABLED).');
+    test.setTimeout(300_000);
+    const a = await newPage(browser);
+    const { email } = await registerAccount(a);
+    // No request can turn the step on here, so the account is given its app and codes in the
+    // server's database, made as the server makes them (e2e/fixtures/two-step-factor.ts).
+    const given = givenAFactor(email);
+    const app = authenticator(given.secret);
+
+    // Another browser: the password alone opens nothing.
+    const b = await newPage(browser);
+    await enterPassword(b, email);
+    await expect(b.getByRole('heading', { name: 'Enter your code' })).toBeVisible({
+        timeout: 60_000,
+    });
+    await expect(b).toHaveURL(/\/login/);
+    await codeField(b).fill(await app.next());
+    await codeField(b).press('Enter');
+    await landedOnHome(b);
+    // Account shows nothing of it: nothing there could work.
+    await b.goto('/app/account', { waitUntil: 'networkidle' });
+    await expect(b.getByRole('heading', { name: 'Your devices' })).toBeVisible({
+        timeout: 60_000,
+    });
+    await expect(b.getByText(/two-step/i)).toHaveCount(0);
+    await expect(section(b)).toBeHidden();
+
+    // A backup code with two left says so, without offering what this server cannot do.
+    const c = await newPage(browser);
+    await c.route('**/api/auth/login/two-step', async (route) => {
+        const response = await route.fetch();
+        const json = (await response.json()) as { twoStep?: { backupCodesLeft?: number } };
+        if (json.twoStep) json.twoStep.backupCodesLeft = 2;
+        await route.fulfill({ response, json });
+    });
+    await enterPassword(c, email);
+    await c.getByRole('button', { name: 'Use a backup code' }).click();
+    await backupField(c).fill(given.codes[0]!);
+    await backupField(c).press('Enter');
+    await expect(c.getByRole('heading', { name: '2 backup codes left' })).toBeVisible({
+        timeout: 60_000,
+    });
+    await expect(c.getByRole('link', { name: 'Make new codes' })).toHaveCount(0);
+    await c.getByRole('link', { name: 'Continue' }).click();
+    await landedOnHome(c);
+    await c.context().close();
+
+    // A password change, from the browser that signed up before the step existed: asked for
+    // the step in the dialog, changed on one answer, and still signed in.
+    const next = 'a-new-password-with-the-step-off-6';
+    await a.goto('/app/account', { waitUntil: 'networkidle' });
+    await a.getByRole('button', { name: 'Change password' }).click();
+    const change = dialog(a);
+    await change.getByLabel('Current password', { exact: true }).fill(PASSWORD);
+    await change.getByLabel('New password', { exact: true }).fill(next);
+    await change.getByLabel('Confirm new password', { exact: true }).fill(next);
+    await change.getByRole('button', { name: 'Change password' }).click();
+    await expect(change).toContainText('Confirm it’s you with your second step.', {
+        timeout: 60_000,
+    });
+    await codeField(change).fill(await app.next());
+    await change.getByRole('button', { name: 'Change password' }).click();
+    await expect(a.getByText('Password changed. Your other devices are signed out.')).toBeVisible({
+        timeout: 120_000,
+    });
+    await expect(a.getByRole('button', { name: 'Lock on this browser' })).toBeVisible();
+    await a.context().close();
+    await b.context().close();
 });
 
 test.describe('an account with two-step sign-in', () => {
@@ -217,18 +299,27 @@ test.describe('an account with two-step sign-in', () => {
         await expect(
             setup.getByRole('heading', { name: 'Set up your authenticator app' }),
         ).toBeVisible({ timeout: 60_000 });
-        // The code to scan, and the same key as text for typing.
-        await expect(
-            setup.getByRole('img', { name: 'Code for your authenticator app' }),
-        ).toBeVisible();
+        // The QR code to scan, and the same key as text for typing.
+        const qr = setup.getByRole('img', { name: 'QR code for your authenticator app' });
+        await expect(qr).toBeVisible();
         const key = (await setup.locator('[data-setup-key]').innerText()).trim();
         expect(key).toMatch(/^([A-Z2-7]{4} ){7}[A-Z2-7]{4}$/);
+        // Read off the screen as a phone's camera reads it, mark in the middle and all: it is
+        // the key URI an authenticator app takes, for this key, this account and this server.
+        const host = new URL(a.url()).host;
+        const issuer = encodeURIComponent(host === 'hushos.com' ? 'HushOS' : `HushOS (${host})`);
+        expect(await readQr(qr)).toBe(
+            `otpauth://totp/${issuer}:${encodeURIComponent(email)}?secret=${key.replaceAll(' ', '')}&issuer=${issuer}&algorithm=SHA1&digits=6&period=30`,
+        );
+        // A stray Esc must not drop an app half set up: only Cancel and the close button do.
+        await a.keyboard.press('Escape');
+        await expect(setup.locator('[data-setup-key]')).toHaveText(key);
         app = authenticator(key);
         // Another device is signed in, so signing it out is offered, and ticked.
         await expect(
             setup.getByRole('checkbox', { name: /Sign out my other devices/ }),
         ).toBeChecked();
-        const code = setup.getByLabel(/Enter the code the app shows/);
+        const code = setup.getByLabel(/Enter the six-digit code the app shows/);
         await expect(code).toHaveAttribute('inputmode', 'numeric');
         await expect(code).toHaveAttribute('autocomplete', 'one-time-code');
         // A wrong code turns nothing on.
@@ -271,7 +362,7 @@ test.describe('an account with two-step sign-in', () => {
         await expect(section(a)).toContainText(
             'Two-step sign-in is on. Your other devices were signed out.',
         );
-        const methods = section(a).getByRole('list', { name: 'Your second steps' });
+        const methods = methodList(a);
         await expect(methods.getByRole('listitem')).toHaveCount(1);
         await expect(methods).toContainText('Authenticator app');
         await expect(section(a)).toContainText('10 backup codes left');
@@ -338,9 +429,7 @@ test.describe('an account with two-step sign-in', () => {
         expect(answers).toBe(2);
 
         await openAccount(b);
-        await expect(section(b).getByRole('list', { name: 'Your second steps' })).toContainText(
-            'Last used today',
-        );
+        await expect(methodList(b)).toContainText('Last used today');
     });
 
     test('a client too old to answer the step is told to update, and gets nothing', async ({
@@ -356,7 +445,8 @@ test.describe('an account with two-step sign-in', () => {
         });
         await enterPassword(old, email);
         await expect(old.getByRole('alert')).toHaveText(
-            'Update HushOS to sign in. This account asks for a second step.',
+            // On the web, updating is reloading: said so, with the way to do it.
+            'This page is out of date. Reload it to sign in.',
             { timeout: 60_000 },
         );
         await expect(old.getByRole('button', { name: 'Reload this page' })).toBeVisible();
@@ -371,11 +461,19 @@ test.describe('an account with two-step sign-in', () => {
     }) => {
         test.setTimeout(180_000);
         const page = await newPage(browser);
-        // A step token with four seconds left, as one left waiting for five minutes has.
+        // A step token with four seconds left, as one left waiting for five minutes has, from a
+        // server whose clock is ten minutes behind this browser's: by the browser's clock the
+        // token ended long ago. The time left is counted from when it arrived, so the screen
+        // still appears, and lasts its four seconds.
         await page.route('**/api/auth/login/finish', async (route) => {
             const response = await route.fetch();
-            const json = (await response.json()) as { twoStep?: { expiresAt: string } };
-            if (json.twoStep) json.twoStep.expiresAt = new Date(Date.now() + 4_000).toISOString();
+            const json = (await response.json()) as {
+                twoStep?: { expiresAt: string; expiresIn: number };
+            };
+            if (json.twoStep) {
+                json.twoStep.expiresIn = 4;
+                json.twoStep.expiresAt = new Date(Date.now() - 600_000).toISOString();
+            }
             await route.fulfill({ response, json });
         });
         await enterPassword(page, email);
@@ -386,6 +484,8 @@ test.describe('an account with two-step sign-in', () => {
             timeout: 30_000,
         });
         await expect(page.getByRole('heading', { name: 'Welcome back' })).toBeVisible();
+        // Back at the password, which takes the focus: Enter tries again.
+        await expect(page.locator('input[autocomplete=current-password]')).toBeFocused();
         await page.unroute('**/api/auth/login/finish');
 
         // The form kept what was typed: the password again, then five wrong codes.
@@ -445,21 +545,20 @@ test.describe('an account with two-step sign-in', () => {
         await expect(page.getByRole('alert')).toHaveText(
             'That backup code didn’t work. Each code works once.',
         );
-        // With two left after this sign-in (the count is the server's; here it is told two),
-        // the screen suggests a new set before the app opens.
-        await page.route('**/api/auth/two-step', async (route) => {
+        // With two left after this sign-in (the count comes with the sign-in's own reply; here
+        // that reply is told two), the screen suggests a new set before the app opens.
+        await page.route('**/api/auth/login/two-step', async (route) => {
             const response = await route.fetch();
-            await route.fulfill({
-                response,
-                json: { ...((await response.json()) as object), backupCodesLeft: 2 },
-            });
+            const json = (await response.json()) as { twoStep?: { backupCodesLeft?: number } };
+            if (json.twoStep) json.twoStep.backupCodesLeft = 2;
+            await route.fulfill({ response, json });
         });
         await backupField(page).fill(codes[1]!);
         await backupField(page).press('Enter');
         await expect(page.getByRole('heading', { name: '2 backup codes left' })).toBeVisible({
             timeout: 60_000,
         });
-        await page.unroute('**/api/auth/two-step');
+        await page.unroute('**/api/auth/login/two-step');
         await page.getByRole('link', { name: 'Make new codes' }).click();
         await expect(page).toHaveURL(/\/app\/account#two-step$/, { timeout: 60_000 });
         await expect(section(page)).toContainText('8 backup codes left', { timeout: 60_000 });
@@ -506,7 +605,7 @@ test.describe('an account with two-step sign-in', () => {
         await page.context().close();
     });
 
-    test('changing the password asks for the step before anything changes', async () => {
+    test('changing the password asks for the step once, and leaves this browser signed in', async () => {
         test.setTimeout(240_000);
         const next = 'a-new-password-behind-the-step-4';
         await openAccount(a);
@@ -546,17 +645,23 @@ test.describe('an account with two-step sign-in', () => {
         await change.getByRole('button', { name: 'Use a backup code' }).click();
         await backupField(change).fill(codes[2]!);
         await change.getByRole('button', { name: 'Change password' }).click();
-        // The change ends every session; this browser signs in again, with the step.
-        await expect(a).toHaveURL(/\/login/, { timeout: 120_000 });
-        await expect(a.getByText('Password changed')).toBeVisible();
+        // One answer is enough: the change is made and this browser stays signed in and open,
+        // on the account page, with no sign-in in between.
+        await expect(
+            a.getByText('Password changed. Your other devices are signed out.'),
+        ).toBeVisible({ timeout: 120_000 });
+        await expect(change).toHaveCount(0);
+        await expect(a).toHaveURL(/\/app\/account/);
+        await expect(a.getByRole('button', { name: 'Lock on this browser' })).toBeVisible();
         password = next;
-        await enterPassword(a, email, password);
-        await expect(a.getByRole('heading', { name: 'Enter your code' })).toBeVisible({
+        // A reload still finds the session, and the saved unlock made for the new password.
+        await a.reload({ waitUntil: 'networkidle' });
+        await expect(a.getByRole('button', { name: 'Lock on this browser' })).toBeVisible({
             timeout: 60_000,
         });
-        await codeField(a).fill(await app.next());
-        await codeField(a).press('Enter');
-        await landedOnHome(a);
+        // The other browser was signed out by the change.
+        await b.goto('/app', { waitUntil: 'networkidle' });
+        await expect(b).toHaveURL(/\/login/, { timeout: 60_000 });
     });
 
     test('new backup codes take the password and the step, and replace the old ones', async () => {
@@ -585,20 +690,71 @@ test.describe('an account with two-step sign-in', () => {
         codes = [codes[4]!, ...fresh];
     });
 
-    test('renaming a method, then removing it with the password and the step, turns two-step sign-in off', async () => {
+    test('a new recovery phrase, answered with the old one, goes straight to saving the new: no sign-in a lost app could not finish', async ({
+        browser,
+    }) => {
+        test.setTimeout(300_000);
+        // The person whose authenticator is gone: the phrase is the step they can still answer,
+        // and it is about to be replaced. Signed out by the change, nothing they hold would
+        // get them back in.
+        await openAccount(a);
+        await a.getByRole('button', { name: 'Make a new phrase' }).click();
+        const make = dialog(a);
+        await make.getByLabel('Password', { exact: true }).fill(password);
+        await make.getByRole('button', { name: 'Make a new phrase' }).click();
+        await expect(make).toContainText('Confirm it’s you with your second step.', {
+            timeout: 60_000,
+        });
+        await make.getByRole('button', { name: 'Use your recovery phrase' }).click();
+        await make.getByLabel('Recovery phrase', { exact: true }).fill(phrase);
+        await make.getByRole('button', { name: 'Make a new phrase' }).click();
+        // Straight to the new words, signed in and open.
+        await expect(a).toHaveURL(/\/setup\/recovery-key/, { timeout: 120_000 });
+        await expect(a.getByRole('heading', { name: 'Your new recovery phrase' })).toBeVisible({
+            timeout: 60_000,
+        });
+        const words = a.getByRole('list', { name: 'Recovery phrase' });
+        await expect(words).toBeVisible({ timeout: 60_000 });
+        const fresh = (await words.getByRole('listitem').allInnerTexts())
+            .map((item) => item.split(/\s+/).at(-1))
+            .join(' ');
+        expect(fresh).not.toBe(phrase);
+        await saveKit(a);
+        await landedOnHome(a);
+
+        // On another browser the old phrase answers nothing, and the new one signs in.
+        const other = await newPage(browser);
+        await enterPassword(other, email, password);
+        await other.getByRole('button', { name: 'Use your recovery phrase' }).click();
+        const field = other.getByLabel('Recovery phrase', { exact: true });
+        await field.fill(phrase);
+        await Promise.all([
+            other.waitForResponse((response) =>
+                response.url().endsWith('/api/auth/login/two-step'),
+            ),
+            other.getByRole('button', { name: 'Sign in', exact: true }).click(),
+        ]);
+        await expect(other.getByRole('alert')).toHaveText(
+            'That recovery phrase doesn’t match this account. Check each word and try again.',
+        );
+        await field.fill(fresh);
+        await other.getByRole('button', { name: 'Sign in', exact: true }).click();
+        await expect(other).toHaveURL(/\/app\/account#two-step$/, { timeout: 60_000 });
+        phrase = fresh;
+        await other.context().close();
+    });
+
+    test('removing the method takes the password and the step, and turns two-step sign-in off', async () => {
         test.setTimeout(240_000);
         await openAccount(a);
-        const methods = section(a).getByRole('list', { name: 'Your second steps' });
-        await methods.getByRole('button', { name: 'Rename Authenticator app' }).click();
-        const rename = dialog(a);
-        await expect(rename).toContainText('Names aren’t encrypted.');
-        await rename.getByLabel('Name').fill('My phone');
-        await rename.getByRole('button', { name: 'Save name' }).click();
-        await expect(rename).toHaveCount(0);
-        await expect(methods).toContainText('My phone');
-
-        await methods.getByRole('button', { name: 'Remove My phone' }).click();
+        const methods = methodList(a);
+        // Listed as a device is: what it is, its name, when it was added and last used.
+        await expect(methods.getByRole('listitem')).toContainText(/Added \d+ \w+ · Last used/);
+        // No Rename while there is only ever one app to name.
+        await expect(methods.getByRole('button', { name: /Rename/ })).toHaveCount(0);
+        await methods.getByRole('button', { name: 'Remove Authenticator app' }).click();
         const remove = dialog(a);
+        await expect(remove.getByRole('heading')).toHaveText('Remove your authenticator app?');
         await expect(remove).toContainText('This turns two-step sign-in off.');
         await remove.getByLabel('Your password', { exact: true }).fill(password);
         await remove.getByRole('button', { name: 'Remove', exact: true }).click();
@@ -615,6 +771,10 @@ test.describe('an account with two-step sign-in', () => {
         );
         await backupField(remove).fill(codes[1]!);
         await remove.getByRole('button', { name: 'Remove', exact: true }).click();
+        // Said as it happens (a toast is up for a few seconds), then the dialog goes.
+        await expect(a.locator('[data-slot=toast]')).toContainText('Authenticator app removed', {
+            timeout: 60_000,
+        });
         await expect(remove).toHaveCount(0, { timeout: 60_000 });
         await expect(section(a).getByRole('button', { name: 'Turn on' })).toBeVisible({
             timeout: 60_000,

@@ -1,7 +1,7 @@
 import type { AskStep, StepAnswer, StepAnswerKind, StepRequest } from '@hushos/auth/client';
 import { cn } from 'cn';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
-import { authLink } from '@/components/auth-layout';
+import { AuthNote, authLink } from '@/components/auth-layout';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { authError } from '@/lib/form';
@@ -15,46 +15,54 @@ import { WORDS } from '@/lib/recovery-kit';
  * account; each draws its own buttons around it.
  */
 
-/* The server's words for a step token that ran out, said when the screen's own clock gets there first. */
-export const STEP_TIMED_OUT = 'Your sign-in timed out. Sign in again.';
+/* A change left waiting at the step is given up on after this long: it holds passwords in memory. */
+export const STEP_LIMIT_MS = 10 * 60_000;
 
 export const stepWords: Record<
     StepAnswerKind,
-    { title: string; about: string; label: string; hint: string; choose: string }
+    { title: string; about: string; label: string; choose: string }
 > = {
     totp: {
         title: 'Enter your code',
         about: 'Open your authenticator app and enter the code it shows for HushOS.',
-        label: 'Code from your authenticator app',
-        hint: 'Six digits. A new one every 30 seconds.',
+        label: 'Six-digit code',
         choose: 'Use your authenticator app',
     },
     backup: {
         title: 'Use a backup code',
-        about: 'Enter one of the backup codes you saved when you turned on two-step sign-in.',
+        about: 'Enter one of the backup codes you saved.',
         label: 'Backup code',
-        hint: 'Each code works once.',
         choose: 'Use a backup code',
     },
     phrase: {
         title: 'Use your recovery phrase',
-        about: 'Enter the 24 words from your recovery kit. They stay on this device.',
+        about: `Enter the ${WORDS} words from your recovery kit. They stay on this device.`,
         label: 'Recovery phrase',
-        hint: `All ${WORDS} words, in order.`,
         choose: 'Use your recovery phrase',
     },
 };
 
-export function useStepPrompt({ onExpired }: { onExpired?: () => void } = {}) {
+/*
+ * `onExpired` runs when the screen gives the step up by itself: at sign-in when the step
+ * token's time is out (counted from when the token arrived, on this device's own clock, so a
+ * clock that runs fast or slow changes nothing; the server stays the judge of an answer sent
+ * in time), and at a change after `limitMs` at the step.
+ */
+export function useStepPrompt({
+    onExpired,
+    limitMs,
+}: { onExpired?: () => void; limitMs?: number } = {}) {
     const [request, setRequest] = useState<StepRequest | null>(null);
     const [kind, setKind] = useState<StepAnswerKind>('totp');
     const [value, setValue] = useState('');
     const [checking, setChecking] = useState(false);
     // Each time the client asks: the field takes focus again, and a repeated error is said again.
     const [round, setRound] = useState(0);
+    // When the screen gives up, on this device's clock: set as the token (or the flow) arrives.
+    const [deadline, setDeadline] = useState<number | null>(null);
     const resolver = useRef<((answer: StepAnswer | null) => void) | null>(null);
     const shown = useRef<StepAnswerKind>('totp');
-    const answered = useRef<StepAnswerKind | null>(null);
+    const began = useRef<number | null>(null);
 
     // What was refused is said until the person picks another way to answer: it was about the last one.
     const [said, setSaid] = useState(true);
@@ -67,20 +75,25 @@ export function useStepPrompt({ onExpired }: { onExpired?: () => void } = {}) {
         (next) =>
             new Promise((resolve) => {
                 resolver.current = resolve;
+                began.current ??= Date.now();
                 // The method on screen stays while it can still answer; otherwise the first that can.
                 show(next.methods.includes(shown.current) ? shown.current : next.methods[0]!);
                 setChecking(false);
                 setSaid(true);
                 setRequest(next);
+                setDeadline(
+                    limitMs === undefined ? Date.now() + next.endsIn : began.current + limitMs,
+                );
                 setRound((count) => count + 1);
             }),
-        [show],
+        [show, limitMs],
     );
     const clear = useCallback(() => {
         resolver.current = null;
-        answered.current = null;
+        began.current = null;
         shown.current = 'totp';
         setRequest(null);
+        setDeadline(null);
         setKind('totp');
         setValue('');
         setChecking(false);
@@ -93,19 +106,16 @@ export function useStepPrompt({ onExpired }: { onExpired?: () => void } = {}) {
         const resolve = resolver.current;
         if (!resolve) return;
         resolver.current = null;
-        answered.current = kind;
         setChecking(true);
         resolve(kind === 'phrase' ? { kind, phrase: value } : { kind, code: value });
     }
 
-    // At sign-in the step token is the sign-in: when it runs out, so does the screen.
-    const expiresAt = request?.expiresAt;
     const expired = useRef(onExpired);
     useEffect(() => {
         expired.current = onExpired;
     }, [onExpired]);
     useEffect(() => {
-        if (!expiresAt || !expired.current) return;
+        if (deadline === null || !expired.current) return;
         const timer = window.setTimeout(
             () => {
                 // An answer already on its way is the server's to refuse.
@@ -113,10 +123,10 @@ export function useStepPrompt({ onExpired }: { onExpired?: () => void } = {}) {
                 cancel();
                 expired.current?.();
             },
-            Math.max(0, Date.parse(expiresAt) - Date.now()),
+            Math.max(0, deadline - Date.now()),
         );
         return () => window.clearTimeout(timer);
-    }, [expiresAt, cancel]);
+    }, [deadline, cancel]);
     // Left behind by a page that went away: the flow waiting on an answer ends.
     useEffect(() => () => resolver.current?.(null), []);
 
@@ -124,8 +134,10 @@ export function useStepPrompt({ onExpired }: { onExpired?: () => void } = {}) {
         /* Handed to the auth client: `authClient.login(email, password, { step: ask })`. */
         ask,
         request,
-        /* Why it is asked again, while that still applies to what is on screen. */
+        /* What was wrong with the last answer, while that answer's field is still on screen. */
         error: said ? (request?.error ?? '') : '',
+        /* What changed about the step itself (a method paused, a new token): above the field. */
+        notice: request?.notice ?? '',
         kind,
         value,
         checking,
@@ -140,15 +152,16 @@ export function useStepPrompt({ onExpired }: { onExpired?: () => void } = {}) {
         cancel,
         /* The flow ended, either way: nothing of the answer stays on screen. */
         done: clear,
-        /* What answered in this flow, until `done`: for what follows a sign-in (a suggestion, the settings page). */
-        answeredWith: () => answered.current,
     };
 }
 export type StepPrompt = ReturnType<typeof useStepPrompt>;
 
 const words = (text: string) => text.trim().split(/\s+/).filter(Boolean).length;
 
-/* The field for the method on screen: its label, the input, and the error or the hint beneath. */
+/*
+ * The field for the method on screen: a notice about the step above it when there is one, its
+ * label, the input, and the error beneath when the answer typed in it was refused.
+ */
 export function StepField({ prompt }: { prompt: StepPrompt }) {
     const id = useId();
     const { request, kind, value, checking, round } = prompt;
@@ -170,89 +183,104 @@ export function StepField({ prompt }: { prompt: StepPrompt }) {
         value,
         disabled: checking,
         'aria-invalid': Boolean(error),
-        'aria-describedby': `${id}-note`,
+        'aria-describedby': error ? `${id}-error` : undefined,
         spellCheck: false,
         autoCorrect: 'off',
     } as const;
     return (
-        <div data-slot="form-row" data-step={kind} className="flex flex-col gap-1.5">
-            <div className="flex items-baseline justify-between gap-3">
-                <label htmlFor={id} className="text-[13px] font-semibold">
-                    {copy.label}
-                </label>
-                {kind === 'phrase' && (
-                    <span
-                        className={cn(
-                            'text-[13px] tabular-nums',
-                            words(value) === WORDS ? 'text-success' : 'text-muted-foreground',
-                        )}
+        <div className="flex flex-col gap-4">
+            {/* Keyed by the round, so the same notice twice is announced twice. */}
+            {prompt.notice && (
+                <AuthNote key={round} tone="warning">
+                    {authError(new Error(prompt.notice))}
+                </AuthNote>
+            )}
+            <div data-slot="form-row" data-step={kind} className="flex flex-col gap-1.5">
+                <div className="flex items-baseline justify-between gap-3">
+                    <label htmlFor={id} className="text-[13px] font-semibold">
+                        {copy.label}
+                    </label>
+                    {kind === 'phrase' && (
+                        <span
+                            className={cn(
+                                'text-[13px] tabular-nums',
+                                words(value) === WORDS ? 'text-success' : 'text-muted-foreground',
+                            )}
+                        >
+                            {words(value)} of {WORDS} words
+                        </span>
+                    )}
+                </div>
+                {kind === 'phrase' ? (
+                    <Textarea
+                        {...shared}
+                        autoComplete="off"
+                        autoCapitalize="none"
+                        onChange={(event) => prompt.setValue(event.target.value)}
+                        className="min-h-28 font-mono text-[15px]"
+                    />
+                ) : (
+                    <Input
+                        {...shared}
+                        // A code from an app is offered by the keyboard and by password managers.
+                        {...(kind === 'totp'
+                            ? {
+                                  inputMode: 'numeric' as const,
+                                  autoComplete: 'one-time-code',
+                                  maxLength: 12,
+                              }
+                            : {
+                                  autoComplete: 'off',
+                                  autoCapitalize: 'characters',
+                                  placeholder: 'XXXXX-XXXXX',
+                                  maxLength: 32,
+                              })}
+                        onChange={(event) => prompt.setValue(event.target.value)}
+                        onKeyDown={(event) => {
+                            // Submit on Enter ourselves, as the other auth fields do.
+                            if (event.key === 'Enter' && !event.shiftKey) {
+                                event.preventDefault();
+                                event.currentTarget.form?.requestSubmit();
+                            }
+                        }}
+                        className="font-mono text-[15px]"
+                    />
+                )}
+                {/* Keyed by the round, so the same refusal twice is announced twice. */}
+                {error && (
+                    <p
+                        key={round}
+                        id={`${id}-error`}
+                        role="alert"
+                        className="text-[13px] leading-snug text-destructive"
                     >
-                        {words(value)} of {WORDS} words
-                    </span>
+                        {error}
+                    </p>
                 )}
             </div>
-            {kind === 'phrase' ? (
-                <Textarea
-                    {...shared}
-                    autoComplete="off"
-                    autoCapitalize="none"
-                    onChange={(event) => prompt.setValue(event.target.value)}
-                    className="min-h-28 font-mono text-[15px]"
-                />
-            ) : (
-                <Input
-                    {...shared}
-                    // A code from an app is offered by the keyboard and by password managers.
-                    {...(kind === 'totp'
-                        ? {
-                              inputMode: 'numeric' as const,
-                              autoComplete: 'one-time-code',
-                              maxLength: 12,
-                          }
-                        : {
-                              autoComplete: 'off',
-                              autoCapitalize: 'characters',
-                              placeholder: 'XXXXX-XXXXX',
-                              maxLength: 32,
-                          })}
-                    onChange={(event) => prompt.setValue(event.target.value)}
-                    onKeyDown={(event) => {
-                        // Submit on Enter ourselves, as the other auth fields do.
-                        if (event.key === 'Enter' && !event.shiftKey) {
-                            event.preventDefault();
-                            event.currentTarget.form?.requestSubmit();
-                        }
-                    }}
-                    className="font-mono text-[15px]"
-                />
-            )}
-            {/* Keyed by the round, so the same refusal twice is announced twice. */}
-            <p
-                key={round}
-                id={`${id}-note`}
-                role={error ? 'alert' : undefined}
-                className={cn(
-                    'text-[13px] leading-snug',
-                    error ? 'text-destructive' : 'text-muted-foreground',
-                )}
-            >
-                {error || copy.hint}
-            </p>
         </div>
     );
 }
 
-/* The other ways to answer, as quiet links: only what the account has and the server still takes. */
+/*
+ * The other ways to answer, as quiet links: only what the account has and the server still
+ * takes. On a touch screen each is 44px tall, so two of them are not one target.
+ */
 export function StepChoices({ prompt, className }: { prompt: StepPrompt; className?: string }) {
     const others = prompt.request?.methods.filter((method) => method !== prompt.kind) ?? [];
     if (others.length === 0) return null;
     return (
-        <div className={cn('flex flex-wrap gap-x-5 gap-y-2 text-sm', className)}>
+        <div
+            className={cn(
+                'flex flex-wrap gap-x-5 gap-y-2 text-sm pointer-coarse:gap-y-0',
+                className,
+            )}
+        >
             {others.map((method) => (
                 <button
                     key={method}
                     type="button"
-                    className={authLink}
+                    className={cn(authLink, 'pointer-coarse:min-h-11')}
                     disabled={prompt.checking}
                     onClick={() => prompt.choose(method)}
                 >

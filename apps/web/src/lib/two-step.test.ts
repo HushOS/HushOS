@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { backupCodesText, codesLeft, groupSecret, usedOn } from './two-step';
+import { addedOn, backupCodesText, codesLeft, groupSecret, usedOn } from './two-step';
 
 /*
  * What a person copies off the screen when they turn two-step sign-in on. The setup key is
@@ -96,5 +96,26 @@ describe('when a method was last used', () => {
         expect(usedOn('2026-11-08T00:00:00.000Z', now)).toBe('yesterday');
         expect(usedOn('2026-11-01T00:00:00.000Z', now)).toBe('1 Nov');
         expect(usedOn('2025-12-31T00:00:00.000Z', now)).toBe('31 Dec 2025');
+    });
+});
+
+/*
+ * "Added" sat in the browser's timezone beside a "Last used" in UTC: a method set up and used
+ * at one in the morning in India read "Added 10 Nov · Last used yesterday", and the server's
+ * render and the browser's could name different days.
+ */
+describe('when a method was added', () => {
+    const now = new Date('2026-11-09T23:37:00Z');
+
+    test('is the server’s day, the same calendar as its last use', () => {
+        // The hour the server rounds to: 05:00 on the 10th in India, 23:00 on the 9th in UTC.
+        const added = '2026-11-09T23:00:00.000Z';
+        expect(addedOn(added, now)).toBe('9 Nov');
+        expect(usedOn('2026-11-09T00:00:00.000Z', now)).toBe('today');
+        expect(addedOn(new Date(added), now)).toBe('9 Nov');
+    });
+
+    test('names the year when it is not this one', () => {
+        expect(addedOn('2025-12-31T23:00:00.000Z', now)).toBe('31 Dec 2025');
     });
 });

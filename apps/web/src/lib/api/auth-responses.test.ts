@@ -22,7 +22,6 @@ import {
     identityResponse,
     loginChallengeResponse,
     loginOrStepResponse,
-    loginResponse,
     profileResponse,
     recoveryBackupResponse,
     recoveryChallengeResponse,
@@ -33,7 +32,9 @@ import {
     settingsResponse,
     settingsSavedResponse,
     setupResponse,
+    securityChangedResponse,
     stepChallengeResponse,
+    steppedLoginResponse,
     storageResponse,
     successionResponse,
     successResponse,
@@ -138,6 +139,7 @@ const stepToken: StepAsked['twoStep'] = {
     token: b64(32, 5),
     methods: ['totp', 'backup', 'phrase'],
     expiresAt: '2026-11-10T12:05:00.000Z',
+    expiresIn: 300,
     phrase: { userId, recoveryVersion: 3, wrappingSalt: b64(32) },
 };
 const method: Reply<typeof auth.getTwoStep>['methods'][number] = {
@@ -518,36 +520,61 @@ const cases: Record<string, Case> = {
             } satisfies Pick<SignedIn, 'user' | 'envelope' | 'device'>,
             'a second step asked for': { twoStep: stepToken } satisfies StepAsked,
             'a second step, for an account without a recovery key': {
-                twoStep: { token: b64(32, 9), methods: ['totp'], expiresAt: stepToken.expiresAt },
+                twoStep: {
+                    token: b64(32, 9),
+                    methods: ['totp'],
+                    expiresAt: stepToken.expiresAt,
+                    expiresIn: 300,
+                },
             } satisfies StepAsked,
         },
         stray: (v) => v.envelope ?? v.twoStep,
         required: ['a new device', (v) => delete v.envelope.encryptedKey],
     },
     'POST /auth/login/two-step': {
-        schema: loginResponse,
+        schema: steppedLoginResponse,
         samples: {
             'a known device, after the step': {
                 user: { id: userId, name: 'Ada', email: 'ada@example.com', role: 'member' },
                 envelope: accountKey,
                 device: { id: deviceId, attached: true, registered: true },
-            } satisfies Pick<Reply<typeof auth.finishTwoStepLogin>, 'user' | 'envelope' | 'device'>,
+                twoStep: { offered: true },
+            } satisfies Pick<
+                Reply<typeof auth.finishTwoStepLogin>,
+                'user' | 'envelope' | 'device' | 'twoStep'
+            >,
+            'after a backup code, on a server that no longer offers the step': {
+                user: { id: userId, name: 'Ada', email: 'ada@example.com', role: 'member' },
+                envelope: accountKey,
+                device: { id: deviceId, attached: false, registered: false },
+                twoStep: { offered: false, backupCodesLeft: 2 },
+            } satisfies Pick<
+                Reply<typeof auth.finishTwoStepLogin>,
+                'user' | 'envelope' | 'device' | 'twoStep'
+            >,
         },
-        stray: (v) => v.device,
-        required: ['a known device, after the step', (v) => delete v.envelope],
+        stray: (v) => v.twoStep,
+        required: ['a known device, after the step', (v) => delete v.twoStep.offered],
     },
     'POST /auth/two-step/challenge': {
         schema: stepChallengeResponse,
         samples: {
-            'every method': stepToken satisfies Reply<typeof auth.challengeTwoStep>,
+            'every method': { on: true, ...stepToken } satisfies Reply<
+                typeof auth.challengeTwoStep
+            >,
             'codes only': {
+                on: true,
                 token: b64(32, 9),
                 methods: ['backup'],
                 expiresAt: stepToken.expiresAt,
+                expiresIn: 300,
             } satisfies Reply<typeof auth.challengeTwoStep>,
+            'an account without the step': { on: false } satisfies Reply<
+                typeof auth.challengeTwoStep
+            >,
         },
         stray: (v) => v.phrase ?? v,
-        required: ['every method', (v) => delete v.expiresAt],
+        required: ['every method', (v) => delete v.expiresIn],
     },
     'GET /auth/two-step': {
         schema: twoStepResponse,
@@ -687,10 +714,22 @@ const cases: Record<string, Case> = {
         stray: (v) => v.workspaces[1] ?? v.workspaces[0],
         required: ['everything to re-wrap', (v) => delete v.identityHistory],
     },
-    'POST /auth/security/finish, /auth/delete/finish, /auth/recovery-key/confirm, /auth/logout': {
+    'POST /auth/security/finish': {
+        schema: securityChangedResponse,
+        samples: {
+            'on the device that asked': {
+                success: true,
+                user: { id: userId, name: 'Ada', email: 'ada@example.com', role: 'member' },
+                envelope: accountKey,
+                device: { id: deviceId, attached: true, registered: true },
+            } satisfies Omit<Reply<typeof auth.finishSecurityChange>, 'sessionToken'>,
+        },
+        stray: (v) => v.envelope,
+        required: ['on the device that asked', (v) => delete v.envelope],
+    },
+    'POST /auth/delete/finish, /auth/recovery-key/confirm, /auth/logout': {
         schema: successResponse,
         samples: {
-            'security change': { success: true } satisfies Reply<typeof auth.finishSecurityChange>,
             deletion: { success: true } satisfies Reply<typeof auth.finishAccountDeletion>,
             confirmed: { success: true } satisfies Reply<typeof auth.confirmRecoveryBackup>,
         },
@@ -1024,7 +1063,7 @@ const expectedSchemas: Record<string, { 200: AnySchema }> = {
     'POST /api/auth/register/finish': { 200: authUserResponse },
     'POST /api/auth/login/start': { 200: loginChallengeResponse },
     'POST /api/auth/login/finish': { 200: loginOrStepResponse },
-    'POST /api/auth/login/two-step': { 200: loginResponse },
+    'POST /api/auth/login/two-step': { 200: steppedLoginResponse },
     'POST /api/auth/recover/email': { 200: emailSentResponse },
     'GET /api/auth/recover': { 200: enrollmentResponse },
     'POST /api/auth/recover/start': { 200: recoveryChallengeResponse },
@@ -1032,7 +1071,7 @@ const expectedSchemas: Record<string, { 200: AnySchema }> = {
     'POST /api/auth/delete/start': { 200: loginChallengeResponse },
     'POST /api/auth/delete/finish': { 200: successResponse },
     'POST /api/auth/security/start': { 200: securityChallengeResponse },
-    'POST /api/auth/security/finish': { 200: successResponse },
+    'POST /api/auth/security/finish': { 200: securityChangedResponse },
     'GET /api/auth/storage': { 200: storageResponse },
     'GET /api/auth/recovery-key': { 200: recoveryBackupResponse },
     'POST /api/auth/recovery-key/confirm': { 200: successResponse },

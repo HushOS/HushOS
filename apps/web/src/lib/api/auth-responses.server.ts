@@ -275,14 +275,17 @@ const stepMethod = t.Union([
  * account's id, which a device that kept nothing does not know, and the recovery envelope's
  * salt and version. Never a secret, a method's name or anything of the account beyond that.
  */
-const stepChallenge = t.Object({
+const stepChallengeFields = {
     token: t.String(),
     methods: t.Array(stepMethod),
     expiresAt: t.String(),
+    /* The same as seconds from now, for a client whose clock is not the server's. */
+    expiresIn: t.Integer(),
     phrase: t.Optional(
         t.Object({ userId: t.String(), recoveryVersion: t.Integer(), wrappingSalt: t.String() }),
     ),
-});
+};
+const stepChallenge = t.Object(stepChallengeFields);
 
 /*
  * POST /auth/login/finish: a finished sign-in, or, for an account with a second step, a step
@@ -291,8 +294,40 @@ const stepChallenge = t.Object({
  */
 export const loginOrStepResponse = t.Union([t.Object({ twoStep: stepChallenge }), loginResponse]);
 
-/* POST /auth/two-step/challenge: a step token for one change, bound to the session asking. */
-export const stepChallengeResponse = stepChallenge;
+/*
+ * POST /auth/two-step/challenge: a step token for one change, bound to the session asking, or
+ * `on: false` for an account without a second step, which then changes on its password alone.
+ */
+export const stepChallengeResponse = t.Union([
+    t.Object({ on: t.Literal(false) }),
+    t.Object({ on: t.Literal(true), ...stepChallengeFields }),
+]);
+
+const sessionDevice = t.Object({ id: t.String(), attached: t.Boolean(), registered: t.Boolean() });
+
+/*
+ * POST /auth/login/two-step: a finished sign-in, with what the step leaves to say: whether
+ * this server lets the account change its second step, and after a backup code how many are
+ * left.
+ */
+export const steppedLoginResponse = t.Object({
+    user: authUser,
+    envelope: accountKeyEnvelope,
+    device: sessionDevice,
+    twoStep: t.Object({ offered: t.Boolean(), backupCodesLeft: t.Optional(t.Integer()) }),
+});
+
+/*
+ * POST /auth/security/finish: the change is made, every session of the account is ended, and
+ * the device that asked has the session that replaces its own (the cookie): the account, its
+ * key as now wrapped, and that device, as a sign-in answers.
+ */
+export const securityChangedResponse = t.Object({
+    success: t.Literal(true),
+    user: authUser,
+    envelope: accountKeyEnvelope,
+    device: sessionDevice,
+});
 
 /* A method as Settings lists it: never its secret or public key. Dates are ISO strings, rounded. */
 const twoStepMethod = t.Object({

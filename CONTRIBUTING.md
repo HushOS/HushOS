@@ -626,7 +626,7 @@ bun run e2e
 - From there it uses the app the way a person would: uploads, previews, sharing, links, families, recovery and the rest, one spec per area.
 - Every test context sends its own `x-forwarded-for`, so sign-up's per-address email cap never trips.
 - A dev server you start yourself needs `TRUSTED_PROXY_HEADER=x-forwarded-for` in `.env`. The example sets it.
-- `two-step.spec.ts` runs its flows only where the server offers two-step sign-in: set `TWO_STEP_ENABLED=true` in `.env` (CI does). Without it the spec checks only that Account shows nothing of it. A server that disagrees with the run's setting fails the file.
+- `two-step.spec.ts` runs its flows only where the server offers two-step sign-in: set `TWO_STEP_ENABLED=true` in `.env` (CI's main browser jobs do). Without it (CI's families job) the spec runs its off path: Account shows nothing of it, and an account given a method by `e2e/fixtures/two-step-factor.ts` is still asked for it. A server that disagrees with the run's setting fails the file.
 
 ### Test a server of your own
 

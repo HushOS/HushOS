@@ -1,14 +1,14 @@
 import type { TwoStepMethod } from '@hushos/auth/api';
 import { StepCancelled } from '@hushos/auth/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { CopyIcon, DownloadIcon, TriangleAlertIcon } from 'lucide-react';
+import { cn } from 'cn';
+import { CopyIcon, DownloadIcon, QrCodeIcon, TriangleAlertIcon } from 'lucide-react';
 import { useEffect, useId, useState } from 'react';
 import { devicesQueryOptions } from '@/components/account-devices';
-import { AccountDialog } from '@/components/account-dialogs';
-import { CopyButton } from '@/components/copy-button';
+import { AccountDialog, STEP_GAVE_UP } from '@/components/account-dialogs';
 import { QrCode } from '@/components/qr-code';
 import { DialogField, Done, Setting, SettingsGroup } from '@/components/settings';
-import { useStepPrompt } from '@/components/two-step-prompt';
+import { STEP_LIMIT_MS, useStepPrompt } from '@/components/two-step-prompt';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -16,11 +16,11 @@ import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/toast';
 import { authClient } from '@/lib/auth-client';
 import { copySecret } from '@/lib/clipboard';
-import { formatDay } from '@/lib/drive';
 import { authError } from '@/lib/form';
 import { saveBlob } from '@/lib/save-file';
 import { cue } from '@/lib/sounds';
 import {
+    addedOn,
     backupCodesText,
     codesLeft,
     FEW_CODES,
@@ -34,7 +34,8 @@ import { twoStepQueryOptions } from '@/lib/two-step-status';
 /*
  * Two-step sign-in (docs/two-step-design.md): a code from an authenticator app, asked for
  * after the password. Off, the section offers to turn it on; on, it lists the method with
- * Rename and Remove, says how many backup codes are left, and makes a new set. Every change
+ * Remove, says how many backup codes are left, and makes a new set. (Renaming waits for
+ * security keys: there is only ever one app to name.) Every change
  * asks for the password, and for the second step once there is one. On a server that does
  * not offer it (TWO_STEP_ENABLED off) the section draws nothing: only the place the security
  * notices link to (`/app/account#two-step`).
@@ -51,7 +52,6 @@ const kindWords: Record<TwoStepMethod['kind'], string> = {
 
 type Open =
     | { kind: 'on' }
-    | { kind: 'rename'; method: TwoStepMethod }
     | { kind: 'remove'; method: TwoStepMethod; last: boolean }
     | { kind: 'codes' }
     | null;
@@ -122,8 +122,8 @@ export function AccountTwoStep({ user }: { user: { email: string } }) {
                                         </AlertTitle>
                                         <AlertDescription>
                                             If you’ve lost your authenticator app, remove it here
-                                            and turn two-step sign-in on again with a new one. Then
-                                            make new backup codes.
+                                            and turn two-step sign-in on again. You’ll get new
+                                            backup codes when you do.
                                         </AlertDescription>
                                     </Alert>
                                 )}
@@ -143,12 +143,14 @@ export function AccountTwoStep({ user }: { user: { email: string } }) {
                                 )}
                             </div>
                         )}
-                        <ul aria-label="Your second steps" className="m-0 list-none p-0">
+                        <ul
+                            aria-label="Ways to pass your second step"
+                            className="m-0 list-none p-0"
+                        >
                             {data.methods.map((method) => (
                                 <li key={method.id} data-method-id={method.id}>
                                     <MethodRow
                                         method={method}
-                                        onRename={() => setOpen({ kind: 'rename', method })}
                                         onRemove={() =>
                                             setOpen({
                                                 kind: 'remove',
@@ -162,7 +164,6 @@ export function AccountTwoStep({ user }: { user: { email: string } }) {
                         </ul>
                         <Setting
                             label="Backup codes"
-                            data={{ 'data-backup-codes': String(data.backupCodesLeft) }}
                             action={
                                 <Button
                                     variant="outline"
@@ -192,8 +193,7 @@ export function AccountTwoStep({ user }: { user: { email: string } }) {
                         </Setting>
                         <Setting label="Recovery phrase">
                             <span className="text-muted-foreground">
-                                Also works as your second step. Keep it somewhere other than your
-                                password.
+                                Also works as your second step. Keep it apart from your password.
                             </span>
                         </Setting>
                     </>
@@ -203,24 +203,19 @@ export function AccountTwoStep({ user }: { user: { email: string } }) {
                 open={open?.kind === 'on'}
                 email={user.email}
                 onClose={close}
-                onDone={async (signedOut) => {
+                onDone={(signedOut) => {
                     setTurnedOn({ signedOut });
-                    await refresh();
+                    return refresh();
                 }}
-            />
-            <RenameDialog
-                method={open?.kind === 'rename' ? open.method : null}
-                onClose={close}
-                onDone={refresh}
             />
             <RemoveDialog
                 pending={open?.kind === 'remove' ? open : null}
                 onClose={close}
-                onDone={async () => {
+                onDone={() => {
                     setTurnedOn(null);
                     // The lost method is gone: the suggestion to remove it has been followed.
                     notePhraseSignIn(false);
-                    await refresh();
+                    return refresh();
                 }}
             />
             <NewCodesDialog
@@ -233,41 +228,29 @@ export function AccountTwoStep({ user }: { user: { email: string } }) {
     );
 }
 
-function MethodRow({
-    method,
-    onRename,
-    onRemove,
-}: {
-    method: TwoStepMethod;
-    onRename: () => void;
-    onRemove: () => void;
-}) {
-    const kind = kindWords[method.kind];
-    const facts = [
-        // The name says what it is until it is renamed.
-        method.name === kind ? null : kind,
-        `Added ${formatDay(method.createdAt)}`,
-        method.lastUsedAt ? `Last used ${usedOn(method.lastUsedAt)}` : 'Not used yet',
-    ].filter(Boolean);
+/* One method, as a device is listed: what it is, its name, and when it was added and last used. */
+function MethodRow({ method, onRemove }: { method: TwoStepMethod; onRemove: () => void }) {
     return (
         <Setting
-            label={method.name}
+            label={kindWords[method.kind]}
             action={
-                <>
-                    <Button variant="ghost" onClick={onRename} aria-label={`Rename ${method.name}`}>
-                        Rename
-                    </Button>
-                    <Button
-                        variant="destructive-outline"
-                        onClick={onRemove}
-                        aria-label={`Remove ${method.name}`}
-                    >
-                        Remove
-                    </Button>
-                </>
+                <Button
+                    variant="destructive-outline"
+                    onClick={onRemove}
+                    aria-label={`Remove ${method.name}`}
+                >
+                    Remove
+                </Button>
             }
         >
-            <span className="text-muted-foreground">{facts.join(' · ')}</span>
+            <div className="flex min-w-0 flex-col gap-0.5">
+                <span className="font-medium wrap-anywhere">{method.name}</span>
+                {/* Both days in the server's calendar (UTC), so they agree with each other. */}
+                <span className="text-[13px] text-muted-foreground">
+                    Added {addedOn(method.createdAt)} ·{' '}
+                    {method.lastUsedAt ? `Last used ${usedOn(method.lastUsedAt)}` : 'Never used'}
+                </span>
+            </div>
         </Setting>
     );
 }
@@ -280,8 +263,8 @@ function Problem({ children }: { children: string }) {
     ) : null;
 }
 
-/* The ten codes, shown once: read them, copy them, or keep them as a file. */
-function BackupCodes({ codes, email }: { codes: string[]; email: string }) {
+/* Copies something secret (it leaves the clipboard again after a while) and says so, or says why not. */
+function useSecretCopy(failed: string) {
     const [copied, setCopied] = useState(false);
     const [error, setError] = useState('');
     useEffect(() => {
@@ -289,19 +272,25 @@ function BackupCodes({ codes, email }: { codes: string[]; email: string }) {
         const timer = window.setTimeout(() => setCopied(false), 2_000);
         return () => window.clearTimeout(timer);
     }, [copied]);
-    async function copy() {
+    async function copy(text: string) {
         setError('');
         try {
-            await copySecret(codes.join('\n'));
+            await copySecret(text);
             cue('success', { volume: 0.4 });
             setCopied(true);
         } catch {
             cue('error');
-            setError('Copying isn’t available here. Download the codes instead.');
+            setError(failed);
         }
     }
+    return { copied, error, copy, clear: () => setError('') };
+}
+
+/* The ten codes, shown once: read them, copy them, or keep them as a file. */
+function BackupCodes({ codes, email }: { codes: string[]; email: string }) {
+    const copying = useSecretCopy('Copying isn’t available here. Download the codes instead.');
     function download() {
-        setError('');
+        copying.clear();
         saveBlob(
             new Blob([backupCodesText({ email }, codes, window.location.host)], {
                 type: 'text/plain;charset=utf-8',
@@ -327,13 +316,90 @@ function BackupCodes({ codes, email }: { codes: string[]; email: string }) {
                     <DownloadIcon />
                     Download
                 </Button>
-                <Button type="button" variant="ghost" onClick={() => void copy()}>
+                <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => void copying.copy(codes.join('\n'))}
+                >
                     <CopyIcon />
-                    {copied ? 'Copied' : 'Copy codes'}
+                    {copying.copied ? 'Copied' : 'Copy codes'}
                 </Button>
             </div>
-            <Problem>{error}</Problem>
+            <Problem>{copying.error}</Problem>
         </div>
+    );
+}
+
+/*
+ * The key an authenticator app is set up with. Beside a computer the phone scans the QR code,
+ * so it comes first, with the key for typing under it. On a phone the authenticator is on the
+ * same device and cannot scan its own screen: the key leads, with a Copy across the width, and
+ * the QR code waits behind a button for someone whose app is on another device.
+ */
+function SetupKey({ secret, uri }: { secret: string; uri: string }) {
+    const [showQr, setShowQr] = useState(false);
+    const panel = useId();
+    const copying = useSecretCopy('Copying isn’t available here. Type the key instead.');
+    return (
+        <li className="flex flex-col gap-3">
+            <p>
+                <span className="font-semibold">1.</span>{' '}
+                <span className="pointer-coarse:hidden">
+                    In your authenticator app, add an account and scan this QR code.
+                </span>
+                <span className="hidden pointer-coarse:inline">
+                    In your authenticator app, add an account and enter this key.
+                </span>
+            </p>
+            {/* White under the code in either theme, so a camera reads it (DESIGN.md, Colors). */}
+            <div
+                id={panel}
+                className={cn(
+                    'order-1 w-fit max-w-full rounded-md bg-white p-2 pointer-coarse:order-3 [&>svg]:h-auto [&>svg]:max-w-full',
+                    !showQr && 'pointer-coarse:hidden',
+                )}
+            >
+                <QrCode
+                    value={uri}
+                    cell={3}
+                    kind="recovery"
+                    title="QR code for your authenticator app"
+                />
+            </div>
+            <div className="order-2 flex flex-col gap-1.5 pointer-coarse:order-1">
+                <p className="text-[13px] text-muted-foreground pointer-coarse:hidden">
+                    Can’t scan it? Type this key into the app instead.
+                </p>
+                <div className="flex flex-wrap items-center gap-2 pointer-coarse:flex-col pointer-coarse:items-stretch">
+                    <code
+                        data-setup-key
+                        className="min-w-0 rounded-md bg-muted px-3 py-2 font-mono text-sm wrap-anywhere"
+                    >
+                        {groupSecret(secret)}
+                    </code>
+                    <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => void copying.copy(secret)}
+                    >
+                        <CopyIcon />
+                        {copying.copied ? 'Copied' : 'Copy key'}
+                    </Button>
+                </div>
+                <Problem>{copying.error}</Problem>
+            </div>
+            <Button
+                type="button"
+                variant="ghost"
+                aria-expanded={showQr}
+                aria-controls={panel}
+                className="order-3 hidden w-fit pointer-coarse:order-2 pointer-coarse:inline-flex"
+                onClick={() => setShowQr((value) => !value)}
+            >
+                <QrCodeIcon />
+                {showQr ? 'Hide QR code' : 'Show QR code'}
+            </Button>
+        </li>
     );
 }
 
@@ -341,8 +407,8 @@ const CODES_ABOUT =
     'Each code signs you in once when you can’t use your authenticator app. Save them somewhere private, apart from your password. They aren’t shown again.';
 
 /*
- * Turning it on: the password, then the app's code to scan (or its key to type) with a code
- * from the app to confirm it, then the ten backup codes, once.
+ * Turning it on: the password, then the app's key to scan or type with a code from the app to
+ * confirm it, then the ten backup codes, once.
  */
 function TurnOnDialog({
     open,
@@ -364,7 +430,13 @@ function TurnOnDialog({
     const [codes, setCodes] = useState<string[] | null>(null);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
-    const step = useStepPrompt();
+    const step = useStepPrompt({
+        limitMs: STEP_LIMIT_MS,
+        onExpired: () => {
+            setPassword('');
+            setError(STEP_GAVE_UP);
+        },
+    });
     // The offer to sign the other devices out is made only when there are some.
     const devices = useQuery({ ...devicesQueryOptions, enabled: open });
     const others = devices.data ? devices.data.devices.some((device) => !device.current) : true;
@@ -401,9 +473,14 @@ function TurnOnDialog({
         try {
             const { backupCodes } = await authClient.confirmTotp(setup.id, code, signOut);
             cue('success');
-            await onDone(signOut);
+            // The codes first: they exist only in this reply, and nothing that can fail (a
+            // refresh on a dropped connection) may stand between it and the screen. The key
+            // has done its work and goes from memory.
+            setSetup(null);
+            setCode('');
             if (backupCodes) setCodes(backupCodes);
-            else leave();
+            void onDone(signOut).catch(() => {});
+            if (!backupCodes) leave();
         } catch (cause) {
             cue('error');
             // The ten minutes ran out: back to the start, with the server's words.
@@ -425,6 +502,9 @@ function TurnOnDialog({
             onOpenChange={(next) => !next && leave()}
             pending={busy}
             locked={view === 'codes'}
+            // A stray click must not drop an app half set up: it would stay in the
+            // authenticator as an entry that opens nothing.
+            sticky={view === 'setup'}
             view={view}
             step={step}
             stepAction={{ action: 'Continue', busy: 'Checking…' }}
@@ -440,7 +520,7 @@ function TurnOnDialog({
                     ? CODES_ABOUT
                     : view === 'setup'
                       ? undefined
-                      : 'You’ll need an authenticator app on your phone. It shows a new six-digit code every 30 seconds; many password managers can do this too.'
+                      : 'You’ll need an authenticator app on your phone. It shows a new six-digit code every 30 seconds.'
             }
             onSubmit={() => {
                 if (view === 'password') void begin();
@@ -481,42 +561,11 @@ function TurnOnDialog({
             {view === 'setup' && setup && (
                 <>
                     <ol className="m-0 flex list-none flex-col gap-5 p-0">
-                        <li className="flex flex-col gap-3">
-                            <p>
-                                <span className="font-semibold">1.</span> In your authenticator app,
-                                add an account and scan this code.
-                            </p>
-                            {/* White under the code in either theme, so a camera reads it. */}
-                            <div className="w-fit max-w-full rounded-md bg-white p-2 [&>svg]:h-auto [&>svg]:max-w-full">
-                                <QrCode
-                                    value={setup.uri}
-                                    cell={3}
-                                    kind="recovery"
-                                    title="Code for your authenticator app"
-                                />
-                            </div>
-                            <div className="flex flex-col gap-1.5">
-                                <p className="text-[13px] text-muted-foreground">
-                                    Can’t scan it? Type this key into the app instead.
-                                </p>
-                                <div className="flex items-center gap-2">
-                                    <code
-                                        data-setup-key
-                                        className="min-w-0 rounded-md bg-muted px-3 py-2 font-mono text-sm wrap-anywhere"
-                                    >
-                                        {groupSecret(setup.secret)}
-                                    </code>
-                                    <CopyButton value={setup.secret} label="Copy setup key" />
-                                </div>
-                                <p className="text-[13px] text-muted-foreground">
-                                    The app will list it as HushOS, with your email address.
-                                </p>
-                            </div>
-                        </li>
+                        <SetupKey secret={setup.secret} uri={setup.uri} />
                         <li className="flex flex-col gap-1.5">
                             <label htmlFor={codeId}>
-                                <span className="font-semibold">2.</span> Enter the code the app
-                                shows.
+                                <span className="font-semibold">2.</span> Enter the six-digit code
+                                the app shows.
                             </label>
                             <Input
                                 id={codeId}
@@ -558,8 +607,8 @@ function TurnOnDialog({
                             <span className="flex flex-col gap-0.5">
                                 Sign out my other devices
                                 <span className="text-[13px] text-muted-foreground">
-                                    They signed in with your password alone. They’ll need it, and a
-                                    code, to sign in again.
+                                    They signed in with your password alone. They’ll need your
+                                    password and a code to sign in again.
                                 </span>
                             </span>
                         </label>
@@ -567,80 +616,6 @@ function TurnOnDialog({
                 </>
             )}
             {view === 'codes' && codes && <BackupCodes codes={codes} email={email} />}
-        </AccountDialog>
-    );
-}
-
-function RenameDialog({
-    method,
-    onClose,
-    onDone,
-}: {
-    method: TwoStepMethod | null;
-    onClose: () => void;
-    onDone: () => Promise<unknown>;
-}) {
-    const [draft, setDraft] = useState('');
-    const [error, setError] = useState('');
-    const [saving, setSaving] = useState(false);
-    const [shownFor, setShownFor] = useState<string | null>(null);
-    // A dialog opened for another method starts from that method's name.
-    if (method && shownFor !== method.id) {
-        setShownFor(method.id);
-        setDraft(method.name);
-        setError('');
-    }
-    function leave() {
-        setShownFor(null);
-        onClose();
-    }
-    async function save() {
-        if (!method) return;
-        const name = draft.trim();
-        if (!name) return setError('Enter a name.');
-        if (Array.from(name).length > 40) return setError('Use no more than 40 characters.');
-        setSaving(true);
-        setError('');
-        try {
-            await authClient.renameTwoStepMethod(method.id, name);
-            cue('success');
-            await onDone();
-            leave();
-        } catch (cause) {
-            cue('error');
-            setError(authError(cause));
-        } finally {
-            setSaving(false);
-        }
-    }
-    return (
-        <AccountDialog
-            open={method !== null}
-            onOpenChange={(next) => !next && leave()}
-            pending={saving}
-            title={`Rename ${method ? kindWords[method.kind].toLowerCase() : 'method'}`}
-            description="Shown in this list. Names aren’t encrypted."
-            onSubmit={() => void save()}
-            footer={
-                <>
-                    <Button type="button" variant="ghost" disabled={saving} onClick={leave}>
-                        Cancel
-                    </Button>
-                    <Button type="submit" disabled={saving}>
-                        {saving ? 'Saving…' : 'Save name'}
-                    </Button>
-                </>
-            }
-        >
-            <DialogField
-                label="Name"
-                value={draft}
-                maxLength={40}
-                autoComplete="off"
-                disabled={saving}
-                error={error}
-                onChange={(event) => setDraft(event.target.value)}
-            />
         </AccountDialog>
     );
 }
@@ -653,12 +628,21 @@ function RemoveDialog({
 }: {
     pending: { method: TwoStepMethod; last: boolean } | null;
     onClose: () => void;
-    onDone: (on: boolean) => Promise<unknown>;
+    onDone: () => Promise<unknown>;
 }) {
     const [password, setPassword] = useState('');
     const [removing, setRemoving] = useState(false);
     const [error, setError] = useState('');
-    const step = useStepPrompt();
+    const step = useStepPrompt({
+        limitMs: STEP_LIMIT_MS,
+        onExpired: () => {
+            setPassword('');
+            setError(STEP_GAVE_UP);
+        },
+    });
+    const kind = pending ? kindWords[pending.method.kind] : '';
+    // A name the person chose is said; the name every app starts with reads as what it is.
+    const named = pending !== null && pending.method.name !== kind;
     function leave() {
         setPassword('');
         setError('');
@@ -670,13 +654,12 @@ function RemoveDialog({
         setRemoving(true);
         setError('');
         try {
-            const { on } = await authClient.removeTwoStepMethod(pending.method.id, password, {
-                step: step.ask,
-            });
+            await authClient.removeTwoStepMethod(pending.method.id, password, { step: step.ask });
             cue('close');
-            toast.add({ title: on ? 'Removed' : 'Two-step sign-in is off' });
-            await onDone(on);
+            toast.add({ title: `${kind} removed` });
+            // Done: the dialog goes, and the section behind it catches up.
             leave();
+            void onDone().catch(() => {});
         } catch (cause) {
             if (cause instanceof StepCancelled) return;
             cue('error');
@@ -693,7 +676,11 @@ function RemoveDialog({
             pending={removing}
             step={step}
             stepAction={{ action: 'Remove', busy: 'Removing…', destructive: true }}
-            title={`Remove ${pending?.method.name ?? 'this method'}?`}
+            title={
+                named
+                    ? `Remove ${pending.method.name}?`
+                    : `Remove your ${kind.toLowerCase() || 'method'}?`
+            }
             description={
                 pending?.last
                     ? 'This turns two-step sign-in off. You’ll sign in with your password alone, and your backup codes stop working.'
@@ -740,7 +727,13 @@ function NewCodesDialog({
     const [codes, setCodes] = useState<string[] | null>(null);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
-    const step = useStepPrompt();
+    const step = useStepPrompt({
+        limitMs: STEP_LIMIT_MS,
+        onExpired: () => {
+            setPassword('');
+            setError(STEP_GAVE_UP);
+        },
+    });
     function leave() {
         setPassword('');
         setCodes(null);
@@ -755,8 +748,9 @@ function NewCodesDialog({
             const made = await authClient.newBackupCodes(password, { step: step.ask });
             cue('success');
             setPassword('');
+            // The codes first; the count behind the dialog catches up after.
             setCodes(made.codes);
-            await onDone();
+            void onDone().catch(() => {});
         } catch (cause) {
             if (cause instanceof StepCancelled) return;
             cue('error');
@@ -777,9 +771,7 @@ function NewCodesDialog({
             stepAction={{ action: 'Make new codes', busy: 'Making…' }}
             title={codes ? 'Save your backup codes' : 'Make new backup codes?'}
             description={
-                codes
-                    ? CODES_ABOUT
-                    : 'You get ten new codes. The ones you have now stop working, used or not.'
+                codes ? CODES_ABOUT : 'You get ten new codes. The ones you have now stop working.'
             }
             onSubmit={() => (codes ? leave() : void make())}
             footer={

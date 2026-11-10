@@ -51,6 +51,17 @@ export function usedOn(value: string | Date, now = new Date()) {
     return (day.slice(0, 4) === dayOf(now).slice(0, 4) ? usedDay : usedDayYear).format(date);
 }
 
+/*
+ * When a method was added: the same calendar as its last use (UTC), so the two never
+ * disagree, and the server's render and the browser's say the same day wherever each is.
+ */
+export function addedOn(value: string | Date, now = new Date()) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    const sameYear = date.getUTCFullYear() === now.getUTCFullYear();
+    return (sameYear ? usedDay : usedDayYear).format(date);
+}
+
 /* At two or fewer the account is close to having none: both screens suggest a new set. */
 export const FEW_CODES = 2;
 

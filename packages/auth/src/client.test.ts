@@ -336,13 +336,13 @@ describe('a device store that does not answer at sign-in', () => {
                 action,
                 attemptToken: 'security',
             }),
-            securityFinish: async () => ({}),
+            securityFinish: async () => ({
+                user: { ...user, email: 'maya@example.com' },
+                envelope: { keyVersion: 1, credentialVersion: 2 },
+                device: { id: 'device', attached: true, registered: true },
+            }),
             // An account without a second step: the change goes on its password alone.
-            twoStepChallenge: async () => {
-                throw Object.assign(new Error('Two-step sign-in is not on for this account.'), {
-                    status: 409,
-                });
-            },
+            twoStepChallenge: async () => ({ on: false }),
         } as unknown as AuthApi;
         const auth = createAuthClient(() => transport, keyStore([]).store, signing, {
             identities,
@@ -442,19 +442,19 @@ describe('a device store that does not answer at sign-in', () => {
         expect(calls).toEqual([]);
     });
 
-    test('a password change that cannot sign in here leaves the person signed out with the reason, the device key kept', async () => {
-        const { auth, calls, cleared } = await client([blocked, blocked]);
+    test('a password change carries on in the session the server opened with it: no sign-in, so a device store that does not answer costs nothing', async () => {
+        const { auth, calls, cleared, reads } = await client([blocked, blocked]);
         const result = await auth.changeSecurity(
             { ...user, email: 'maya@example.com' } as SessionUser,
             'password',
             'correct horse',
             'new horse',
         );
-        expect(result).toEqual({ signedIn: false, uncertain: false, storage: 'blocked' });
+        expect(result).toEqual({ signedIn: true, uncertain: false });
+        // Nobody signed in again, and the store that would have refused was never read.
         expect(calls).toEqual([]);
-        const state = auth.store.getState();
-        expect(state.unlockedUserId).toBeNull();
-        expect(state.device).toBeNull();
+        expect(reads()).toBe(0);
+        expect(auth.store.getState().unlockedUserId).toBe(user.id);
         // The device's own key stays: the next sign-in here can still prove this device.
         expect(cleared()).toBe(0);
     });

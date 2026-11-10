@@ -18,7 +18,6 @@ export const authApi: AuthApi = {
     twoStepChallenge: (purpose) => unwrap(api()['two-step'].challenge.post({ purpose })),
     startTotp: (proof) => unwrap(api()['two-step'].totp.post(proof)),
     confirmTotp: (id, input) => unwrap(api()['two-step'].totp({ id }).confirm.post(input)),
-    renameTwoStepMethod: (id, name) => unwrap(api()['two-step'].methods({ id }).put({ name })),
     removeTwoStepMethod: (id, proof) => unwrap(api()['two-step'].methods({ id }).delete(proof)),
     replaceBackupCodes: (proof) => unwrap(api()['two-step']['backup-codes'].post(proof)),
     session: () => unwrap(api().session.get()),

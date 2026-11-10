@@ -586,6 +586,7 @@ describe('what happens to devices around them', () => {
                 userId: user.id,
                 action: 'password',
                 sessionTokenHash: laptop.token,
+                replacement: { tokenHash: bytes(32), expiresAt: new Date(Date.now() + 3_600_000) },
                 credentialVersion: 1,
                 registrationRecord: 'record-2',
                 envelope: {
@@ -595,7 +596,7 @@ describe('what happens to devices around them', () => {
                     encryptedKey: bytes(48),
                 },
             }),
-        ).toBe(true);
+        ).toBeTruthy();
         expect(await resolves(laptop.token)).toBe(false);
         expect(await resolves(phone.token)).toBe(false);
         expect(await auth.wasRemoved(phone.token)).toBe(false);

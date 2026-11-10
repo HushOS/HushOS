@@ -1,4 +1,4 @@
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { db } from '../src/client';
 import {
     accountDevices,
@@ -92,4 +92,28 @@ export async function membershipState(groupId: string, userId: string) {
         .from(groupMemberships)
         .where(and(eq(groupMemberships.groupId, groupId), eq(groupMemberships.userId, userId)));
     return row?.state;
+}
+
+/*
+ * Makes the database refuse any new session for one account until the function this returns
+ * is called: what a session that cannot be opened looks like to the code above it (the guard
+ * trigger refusing, a constraint, an outage mid-transaction). For proving that whatever was
+ * to commit with the session is rolled back with it.
+ */
+export async function refuseNewSessions(userId: string) {
+    if (!/^[0-9a-f-]{36}$/.test(userId)) throw new Error('Not an account id.');
+    await db.execute(
+        sql.raw(
+            `create or replace function test_refuse_sessions() returns trigger language plpgsql as $$ begin if new.user_id = '${userId}' then raise exception 'test: no new session for this account'; end if; return new; end $$`,
+        ),
+    );
+    await db.execute(
+        sql.raw(
+            'create trigger test_refuse_sessions before insert on sessions for each row execute function test_refuse_sessions()',
+        ),
+    );
+    return async () => {
+        await db.execute(sql.raw('drop trigger if exists test_refuse_sessions on sessions'));
+        await db.execute(sql.raw('drop function if exists test_refuse_sessions()'));
+    };
 }

@@ -56,6 +56,7 @@ import {
     stepRequired,
     stepUnused,
     type StepSubmission,
+    twoStepEnabled,
 } from './two-step';
 
 import {
@@ -663,7 +664,21 @@ export async function finishTwoStepLogin(submission: StepSubmission) {
         });
     if (opened.status !== 'ok') return stepNotPassed(step, opened);
     await stepPassed(step, opened.passed);
-    return { ...signedIn(opened.session, token), method: step.kind };
+    return {
+        ...signedIn(opened.session, token),
+        method: step.kind,
+        /*
+         * What a client says next: how many backup codes are left after one was used (at two
+         * or fewer it suggests a new set), and whether this server lets the account change its
+         * second step at all, so it suggests nothing the person could not do.
+         */
+        twoStep: {
+            offered: twoStepEnabled(),
+            ...(step.kind === 'backup'
+                ? { backupCodesLeft: opened.passed.backupCodesLeft ?? 0 }
+                : {}),
+        },
+    };
 }
 
 /* A device proof's 64 bytes, or null for anything else: a malformed proof is no proof, not a failure. */
@@ -2273,10 +2288,16 @@ export async function finishSecurityChange(
             (input.identityHistory !== undefined || input.settingsKey !== undefined))
     )
         throw failure();
+    // The session that replaces the asking one, on the same device, opened with the change.
+    const replacement = randomToken();
     const change = {
         userId: user.id,
         action: input.action,
         sessionTokenHash: hash(token),
+        replacement: {
+            tokenHash: hash(replacement),
+            expiresAt: new Date(Date.now() + SESSION_IDLE_SECONDS * 1000),
+        },
         credentialVersion: user.credentialVersion,
         registrationRecord: input.registrationRecord,
         envelope: {
@@ -2301,16 +2322,32 @@ export async function finishSecurityChange(
             decodeWorkspaceGrant({ id: grant.workspaceId, grant }, keyVersion),
         ),
     };
-    // The password first (above), then the step, then the change, which commits with it.
-    await changeBehindStep(
+    // The password first (above), then the step, then the change, which commits with it, and
+    // with the session this device carries on in: all of it, or none.
+    const changed = await changeBehindStep(
         user,
         token,
         input.action,
         input.twoStep,
-        async (tx) => ((await authRepository.changeAccountSecurity(change, tx)) ? true : null),
+        async (tx) => (await authRepository.changeAccountSecurity(change, tx)) || null,
         failure,
     );
-    return { success: true };
+    const { key } = changed;
+    return {
+        success: true as const,
+        user: changed.user,
+        envelope: {
+            envelopeVersion: supportedEnvelope(key.envelopeVersion),
+            keyVersion: key.keyVersion,
+            credentialVersion: key.credentialVersion,
+            wrappingSalt: key.wrappingSalt.toString('base64url'),
+            wrappingNonce: key.wrappingNonce.toString('base64url'),
+            encryptedKey: key.encryptedKey.toString('base64url'),
+        },
+        // Attached: the session is on the device that asked.
+        device: { ...changed.device, attached: true },
+        sessionToken: replacement,
+    };
 }
 
 /* ------------------------------------------------------------------------- */
@@ -2440,8 +2477,9 @@ export type StepChallengePurpose = (typeof STEP_CHALLENGE_PURPOSES)[number];
  */
 export async function challengeTwoStep(sessionToken: string | null, purpose: StepChallengePurpose) {
     const { user, token } = await requireTwoStepSession(sessionToken);
-    if (!(await twoStepRepository.hasTwoStep(user.id)))
-        throw new AuthError('Two-step sign-in is not on for this account.', 409);
+    // An account without the step is told so, as an answer: every password change asks this
+    // first, and a refusal there would be a failed request on each of them.
+    if (!(await twoStepRepository.hasTwoStep(user.id))) return { on: false as const };
     // Each challenge is a row for five minutes: a session gets thirty in fifteen.
     if (
         !(await authRepository.consumeRateLimit(
@@ -2451,12 +2489,15 @@ export async function challengeTwoStep(sessionToken: string | null, purpose: Ste
         ))
     )
         throw new AuthError('Too many attempts. Please try again in 15 minutes.', 429);
-    return issueStepToken({
-        userId: user.id,
-        purpose,
-        sessionTokenHash: hash(token),
-        credentialVersion: user.credentialVersion,
-    });
+    return {
+        on: true as const,
+        ...(await issueStepToken({
+            userId: user.id,
+            purpose,
+            sessionTokenHash: hash(token),
+            credentialVersion: user.credentialVersion,
+        })),
+    };
 }
 
 /* The password proof, and the step for an account that has one, that a change to the step carries. */

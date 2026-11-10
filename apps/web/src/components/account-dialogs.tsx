@@ -6,6 +6,7 @@ import { StepCancelled } from '@hushos/auth/client';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { DialogField } from '@/components/settings';
 import {
+    STEP_LIMIT_MS,
     StepChoices,
     StepField,
     useStepPrompt,
@@ -48,6 +49,12 @@ import { forgetDevice } from '@/lib/sign-out';
 function reopen(user: SessionUser) {
     return authClient.restore(user).catch(() => {});
 }
+
+/*
+ * Said when a dialog gives up on a step left unanswered (STEP_LIMIT_MS): it was holding the
+ * password, and what was typed is cleared with it.
+ */
+export const STEP_GAVE_UP = 'That took too long, so nothing was changed. Start again.';
 
 /* The server's words for a change that needs the second step. */
 export const STEP_ASKED = 'Confirm it’s you with your second step.';
@@ -105,6 +112,7 @@ export function AccountDialog({
     onSubmit,
     step,
     stepAction,
+    sticky = false,
     view = '',
 }: {
     open: boolean;
@@ -112,6 +120,11 @@ export function AccountDialog({
     pending: boolean;
     /* It shows something shown only once: nothing but its own button closes it. */
     locked?: boolean;
+    /*
+     * It holds something a stray click or Esc must not throw away (an authenticator app half
+     * set up): only its buttons and its close control close it.
+     */
+    sticky?: boolean;
     /* Which of its views a dialog with several is showing: focus moves in when it changes. */
     view?: string;
     title: string;
@@ -152,8 +165,14 @@ export function AccountDialog({
     return (
         <Dialog
             open={open}
-            onOpenChange={(next) => {
+            onOpenChange={(next, details) => {
                 if (locked) return;
+                if (
+                    sticky &&
+                    !next &&
+                    (details.reason === 'escape-key' || details.reason === 'outside-press')
+                )
+                    return;
                 // Closing while the step is asked backs out of the step, to the form before it.
                 if (!next && step?.request && !step.checking) step.cancel();
                 else if (!pending) onOpenChange(next);
@@ -211,7 +230,13 @@ export function ChangePasswordDialog({
     const [tried, setTried] = useState(false);
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
-    const step = useStepPrompt();
+    const step = useStepPrompt({
+        limitMs: STEP_LIMIT_MS,
+        onExpired: () => {
+            reset();
+            setError(STEP_GAVE_UP);
+        },
+    });
     const errors = {
         current: current ? '' : 'Enter your current password.',
         next:
@@ -243,11 +268,8 @@ export function ChangePasswordDialog({
             if (!result.signedIn) {
                 await router.navigate({
                     to: '/login',
-                    search: {
-                        securityChanged: result.uncertain ? 'uncertain' : 'password',
-                        // Signed out because this browser's device key could not be read: said there.
-                        storage: result.storage ?? undefined,
-                    },
+                    // The reply never arrived, so the change may or may not have been made.
+                    search: { securityChanged: 'uncertain' },
                     replace: true,
                 });
                 return;
@@ -462,7 +484,14 @@ export function NewKeyDialog({
     const [tried, setTried] = useState(false);
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
-    const step = useStepPrompt();
+    const step = useStepPrompt({
+        limitMs: STEP_LIMIT_MS,
+        onExpired: () => {
+            setPassword('');
+            setTried(false);
+            setError(STEP_GAVE_UP);
+        },
+    });
     const keys = action === 'master-key';
     async function submit() {
         setTried(true);
@@ -478,10 +507,7 @@ export function NewKeyDialog({
             if (!result.signedIn) {
                 await router.navigate({
                     to: '/login',
-                    search: {
-                        securityChanged: result.uncertain ? 'uncertain' : action,
-                        storage: result.storage ?? undefined,
-                    },
+                    search: { securityChanged: 'uncertain' },
                     replace: true,
                 });
                 return;
@@ -597,7 +623,14 @@ export function DeleteAccountDialog({
     const [typed, setTyped] = useState('');
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
-    const step = useStepPrompt();
+    const step = useStepPrompt({
+        limitMs: STEP_LIMIT_MS,
+        onExpired: () => {
+            setPassword('');
+            setTyped('');
+            setError(STEP_GAVE_UP);
+        },
+    });
     const ready = password.length > 0 && typed === 'DELETE';
     async function submit() {
         if (!ready) return;

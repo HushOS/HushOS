@@ -1517,7 +1517,13 @@ export function createCryptoSession() {
                 clearState();
                 return security.start(message.input);
             case 'securityFinish':
-                return security.finish(message.input);
+                // The new password's export key stays here, as after a sign-in's `loginFinish`:
+                // once the server has made the change, `unlock` opens the envelope it answers
+                // with. A lock, another start or a failure drops it (clearState).
+                return security.finish(message.input, (key) => {
+                    exportKey = key;
+                    phase = 'unlock';
+                });
             case 'initialize': {
                 if (!accountKey || unlockedUserId !== message.input.userId)
                     throw new CryptoError('Unlock your account to finish setup.');
