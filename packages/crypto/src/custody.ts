@@ -371,7 +371,8 @@ async function signerAt(org: OrgChain, ctx: Sealed, servedMlDsaPublicKey: Uint8A
     const spans = Object.hasOwn(org.signerKeys, ctx.sealerUserId)
         ? org.signerKeys[ctx.sealerUserId]!
         : [];
-    const named = spans.filter((span) => span.from <= ctx.rosterVersion).at(-1);
+    const at = spans.filter((span) => span.from <= ctx.rosterVersion).length - 1;
+    const named = spans[at];
     if (
         !named ||
         servedMlDsaPublicKey.length !== ML_DSA_PUBLIC_KEY_BYTES ||
@@ -383,7 +384,15 @@ async function signerAt(org: OrgChain, ctx: Sealed, servedMlDsaPublicKey: Uint8A
             signingPublicKey: decode(named.signingPublicKey, 32),
             mlDsaPublicKey: servedMlDsaPublicKey,
         } satisfies HybridPublicKey,
-        current: named === spans.at(-1),
+        // Still the entry's keys: no later span names other signing keys (a key version
+        // alone moving on keeps them).
+        current: spans
+            .slice(at)
+            .every(
+                (span) =>
+                    span.signingPublicKey === named.signingPublicKey &&
+                    span.mlDsaPublicKeyDigest === named.mlDsaPublicKeyDigest,
+            ),
     };
 }
 

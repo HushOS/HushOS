@@ -48,6 +48,7 @@ import {
     pattern,
     person,
     succeed,
+    tombstoneAt,
     type History,
     type OrgRosterOptions,
     type Person,
@@ -1301,6 +1302,57 @@ export async function companyCases(): Promise<CompanyCase[]> {
                     },
                 }),
             ],
+            // What version 4 added (2.3): every roster's heads digest, when each entry was active,
+            // when each area was retired, and the key version beside each entry's signing keys.
+            [
+                'heads-digests-short',
+                (org) => ({ org: { ...org, headsDigests: org.headsDigests.slice(1) } }),
+            ],
+            [
+                'another-last-heads-digest',
+                (org) => ({
+                    org: {
+                        ...org,
+                        headsDigests: [...org.headsDigests.slice(0, -1), encode(pattern(32, 8))],
+                    },
+                }),
+            ],
+            ['no-heads-digests', (org) => ({ org: { ...org, headsDigests: undefined as never } })],
+            ['no-active-spans', (org) => ({ org: { ...org, active: {} } })],
+            [
+                'an-active-span-closed',
+                (org) => ({
+                    org: {
+                        ...org,
+                        active: { ...org.active, [member.userId]: [{ from: 2, until: 3 }] },
+                    },
+                }),
+            ],
+            [
+                'an-active-span-for-nobody-on-the-list',
+                (org) => ({
+                    org: {
+                        ...org,
+                        active: { ...org.active, [another.userId]: [{ from: 2, until: 3 }] },
+                    },
+                }),
+            ],
+            ['a-live-folder-retired', (org) => ({ org: { ...org, areaRetiredAt: { [AREA]: 3 } } })],
+            [
+                'signer-keys-at-another-key-version',
+                (org) => ({
+                    org: {
+                        ...org,
+                        signerKeys: {
+                            ...org.signerKeys,
+                            [owner.userId]: [
+                                { ...org.signerKeys[owner.userId]![0]!, keyVersion: 2 },
+                            ],
+                        },
+                    },
+                }),
+            ],
+            ['the-version-before', () => ({ cacheVersion: 3 })],
             ['a-familys-version', () => ({ cacheVersion: 2 })],
             ['no-company-record', () => ({ org: undefined })],
         ];
@@ -1308,6 +1360,30 @@ export async function companyCases(): Promise<CompanyCase[]> {
             await cached(`cache-edited-${name}`, written, second2nd, 'cache', (cache) => ({
                 ...cache,
                 ...edit(cache.org!, cache),
+            }));
+        // Someone leaves, a folder is deleted, and they come back: the spans and the roster that
+        // retired the folder carry over the cache, and a record that says otherwise is refused.
+        const gone = async (c: Company) => {
+            await next(c, admin, withEntry(c, left(c.e.member)));
+            await next(c, admin, withEntry(c, left(c.e.member)), {}, [tombstoneAt(AREA, 2)]);
+        };
+        const back = async (c: Company) => void (await next(c, admin, c.all));
+        await cached('from-a-cache-someone-comes-back', gone, back, 5);
+        const history: [string, (org: Org) => Partial<Org>][] = [
+            [
+                'a-left-member-still-active',
+                (org) => ({
+                    active: { ...org.active, [member.userId]: [{ from: 2, until: null }] },
+                }),
+            ],
+            ['a-deleted-folder-not-retired', () => ({ areaRetiredAt: {} })],
+            ['a-folder-retired-by-an-earlier-roster', () => ({ areaRetiredAt: { [AREA]: 3 } })],
+            ['a-folder-retired-before-its-key', () => ({ areaRetiredAt: { [AREA]: 1 } })],
+        ];
+        for (const [name, edit] of history)
+            await cached(`cache-edited-${name}`, gone, back, 'cache', (cache) => ({
+                ...cache,
+                org: { ...cache.org!, ...edit(cache.org!) },
             }));
     }
 

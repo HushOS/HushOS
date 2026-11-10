@@ -349,7 +349,12 @@ fn signer_at(
             signing_public_key: decode("signingPublicKey", &named.1.signing_public_key, Some(32))?,
             ml_dsa_public_key: served_ml_dsa_public_key.to_vec(),
         },
-        named.0 == spans.len() - 1,
+        // Still the entry's keys: no later span names other signing keys (a key version alone
+        // moving on keeps them).
+        spans[named.0..].iter().all(|span| {
+            span.signing_public_key == named.1.signing_public_key
+                && span.ml_dsa_public_key_digest == named.1.ml_dsa_public_key_digest
+        }),
     ))
 }
 

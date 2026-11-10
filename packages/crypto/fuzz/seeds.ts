@@ -125,6 +125,72 @@ function companyStatements(): Uint8Array[] {
             kitVersion: 1,
             rosterDigest: roster.statement.slice(0, 8),
         }),
+        ...listStatements(wc),
+    ];
+}
+
+/* A folder's lists, heads and a fork's dismissal (companies-design 2.3), from the web's list cases. */
+function listStatements(wc: Json): Uint8Array[] {
+    const parts = (statement: string) => JSON.parse(new TextDecoder().decode(bytes(statement)));
+    const list = (statement: string, over: Json = {}) => {
+        const p = parts(statement);
+        return json({
+            kind: 'area-list',
+            groupId: p[2],
+            workspaceId: p[3],
+            listVersion: p[4],
+            previousListDigest: p[5],
+            workspaceKeyVersion: p[6],
+            signerUserId: p[7],
+            signerKeyVersion: p[8],
+            rosterVersion: p[9],
+            rosterDigest: p[10],
+            nonce: p[11],
+            everyone: p[12],
+            people: p[13].map(([userId, role]: [string, string]) => ({ userId, role })),
+            ...over,
+        });
+    };
+    const first = wc.lists.cases[0];
+    const [base, addition] = first.steps[0].served;
+    const dismissal = parts(
+        wc.lists.statements.find((k: Json) => k.name === 'a-dismissal').statement,
+    );
+    const dismissed = (over: Json = {}) =>
+        json({
+            kind: 'fork-dismissal',
+            groupId: dismissal[2],
+            workspaceId: dismissal[3],
+            forkKind: dismissal[4],
+            committedPosition: dismissal[5],
+            committedDigest: dismissal[6],
+            reportedPosition: dismissal[7],
+            reportedDigest: dismissal[8],
+            signerUserId: dismissal[9],
+            signerKeyVersion: dismissal[10],
+            rosterVersion: dismissal[11],
+            rosterDigest: dismissal[12],
+            ...over,
+        });
+    const rows = first.heads.at(-1).rows.length ? first.heads.at(-1).rows : first.heads[0].rows;
+    return [
+        list(base.statement),
+        list(addition.statement),
+        // Roster 0 is a base list's alone; `everyone` is never a manager; nobody is named twice.
+        list(base.statement, { rosterVersion: 0, rosterDigest: '' }),
+        list(addition.statement, { rosterVersion: 0, rosterDigest: '' }),
+        list(addition.statement, { everyone: 'manager' }),
+        list(addition.statement, {
+            people: [...parts(addition.statement)[13]]
+                .reverse()
+                .map(([userId, role]: [string, string]) => ({ userId, role })),
+        }),
+        json({ kind: 'heads', groupId: wc.groupId, rows }),
+        json({ kind: 'heads', groupId: wc.groupId, rows: [...rows, ...rows] }),
+        json({ kind: 'heads', groupId: wc.groupId, rows: [{ ...rows[0], shareLogIndex: 7 }] }),
+        dismissed(),
+        dismissed({ forkKind: 'share-log', committedPosition: 0 }),
+        dismissed({ committedPosition: 0 }),
     ];
 }
 

@@ -7,6 +7,8 @@ import {
     STORED_ACCEPTANCE,
 } from './accepted';
 import { KIND_FIXED, NOTHING_LISTED, RETIRED, rowsAfter } from './area-keys';
+import type { FolderStanding } from './area-lists';
+import { requireCommittedHeads, type CommittedHeads } from './committed-heads';
 import { ascending, bytesOf, digestOf, integer, uuid } from './canonical';
 import { CryptoError } from './errors';
 import {
@@ -47,6 +49,7 @@ import {
     type GroupPublicKey,
     type GroupRole,
     type Roster,
+    type RosterArea,
     type RosterMember,
     type SignedGroupStatement,
 } from './groups';
@@ -186,16 +189,28 @@ export type KitKeysAt = CustodyKeyAt & {
  *   and not including, the roster that took it (`until` null while held), so
  *   a seal that names a roster is judged by who was a data admin there;
  * - the signing keys each member's entry named, from the roster that first
- *   named them (the Ed25519 key, the ML-DSA key by digest), so a seal that
- *   names a roster is checked under the keys its sealer's entry named there,
- *   whatever the entry names now;
- * - every recovery roster (rule 11): its version and its signer.
+ *   named them (the key version, the Ed25519 key, the ML-DSA key by digest),
+ *   so a seal or a list that names a roster is checked under the keys its
+ *   signer's entry named there, whatever the entry names now;
+ * - every recovery roster (rule 11): its version and its signer;
+ * - every roster's heads digest, roster 1 first (2.3): what the rows served
+ *   with any roster on the chain must hash to, so the furthest head any
+ *   roster committed can be told from a later, lower one;
+ * - the roster that retired each retired area, so the live areas at any
+ *   roster are known (a roster's heads rows are every live area's);
+ * - when each entry was active: from the roster that let them in up to, and
+ *   not including, the roster that marked them `left` (`until` null while
+ *   active). A list is judged at the roster it names, and what someone signed
+ *   after leaving, or stood for before coming back, is told from these.
  */
 export type SignerKeysAt = {
     from: number;
+    keyVersion: number;
     signingPublicKey: string;
     mlDsaPublicKeyDigest: string;
 };
+/* A stretch of rosters: from `from` up to, and not including, `until` (null while it lasts). */
+export type RosterSpan = { from: number; until: number | null };
 export type OrgChain = {
     readonly custodyKeys: readonly CustodyKeyAt[];
     readonly kitKeys: readonly KitKeysAt[];
@@ -203,11 +218,12 @@ export type OrgChain = {
     readonly areaKinds: Readonly<Record<string, AreaKind>>;
     readonly areaLists: Readonly<Record<string, readonly string[]>>;
     readonly areaRosters: Readonly<Record<string, readonly IntroducedAt[]>>;
-    readonly dataAdmins: Readonly<
-        Record<string, readonly { from: number; until: number | null }[]>
-    >;
+    readonly dataAdmins: Readonly<Record<string, readonly RosterSpan[]>>;
     readonly signerKeys: Readonly<Record<string, readonly SignerKeysAt[]>>;
     readonly recoveries: readonly IntroducedAt[];
+    readonly headsDigests: readonly string[];
+    readonly areaRetiredAt: Readonly<Record<string, number>>;
+    readonly active: Readonly<Record<string, readonly RosterSpan[]>>;
 };
 
 /*
@@ -431,8 +447,14 @@ const REUSED_ROOT = 'This folder key was used before: a rotation needs a new one
 const DOWNGRADE = 'This member list is in an older format than the one before it.';
 /* The cache format this core writes (GroupChainCache.cacheVersion): root commitments and retired areas. */
 const CACHE_VERSION = 2;
-/* A company's cache (format 3 chains): CACHE_VERSION's fields and `org`. */
-const ORG_CACHE_VERSION = 3;
+/*
+ * A company's cache (format 3 chains): CACHE_VERSION's fields and `org`.
+ * Version 4 added every roster's heads digest, when each area was retired,
+ * when each entry was active, and the key version beside each entry's signing
+ * keys (companies-design 2.3); version 3 was never written by a shipped app
+ * and is refused.
+ */
+const ORG_CACHE_VERSION = 4;
 
 /* The refusals of checkRosterOrg, as companies-design 2.1 words them. */
 const DROPPED_ADMIN = 'A roster that removes a data admin replaces the company key.';
@@ -476,9 +498,12 @@ type OrgState = {
     areaKinds: Map<string, AreaKind>;
     areaLists: Map<string, string[]>;
     areaRosters: Map<string, IntroducedAt[]>;
-    dataAdmins: Map<string, { from: number; until: number | null }[]>;
+    dataAdmins: Map<string, RosterSpan[]>;
     signerKeys: Map<string, SignerKeysAt[]>;
     recoveries: IntroducedAt[];
+    headsDigests: string[];
+    areaRetiredAt: Map<string, number>;
+    active: Map<string, RosterSpan[]>;
 };
 
 function orgStateOf(org: OrgChain | null | undefined): OrgState {
@@ -509,6 +534,14 @@ function orgStateOf(org: OrgChain | null | undefined): OrgState {
             ]),
         ),
         recoveries: (org?.recoveries ?? []).map((at) => ({ ...at })),
+        headsDigests: [...(org?.headsDigests ?? [])],
+        areaRetiredAt: new Map(Object.entries(org?.areaRetiredAt ?? {})),
+        active: new Map(
+            Object.entries(org?.active ?? {}).map(([id, list]) => [
+                id,
+                list.map((at) => ({ ...at })),
+            ]),
+        ),
     };
 }
 
@@ -530,6 +563,9 @@ function orgChainOf(org: OrgState): OrgChain {
         dataAdmins: sorted(org.dataAdmins, (list) => list.map((at) => ({ ...at }))),
         signerKeys: sorted(org.signerKeys, (list) => list.map((at) => ({ ...at }))),
         recoveries: org.recoveries.map((at) => ({ ...at })),
+        headsDigests: [...org.headsDigests],
+        areaRetiredAt: sorted(org.areaRetiredAt, (at) => at),
+        active: sorted(org.active, (list) => list.map((at) => ({ ...at }))),
     };
 }
 
@@ -807,8 +843,12 @@ function foldOrg(org: OrgState, previous: Roster | undefined, roster: Roster, re
     if (!roster.auto && roster.rules!.autoJoin && previous && !previous.rules!.autoJoin)
         org.lastAuto = null;
     if (roster.auto) org.lastAuto = { ...roster.auto };
+    org.headsDigests.push(roster.heads!.headsDigest);
     for (const row of roster.areas ?? []) {
-        if (row.retired) continue;
+        if (row.retired) {
+            org.areaRetiredAt.set(row.workspaceId, roster.rosterVersion);
+            continue;
+        }
         if (!org.areaKinds.has(row.workspaceId)) org.areaKinds.set(row.workspaceId, row.areaKind!);
         org.areaLists.set(row.workspaceId, [
             ...(org.areaLists.get(row.workspaceId) ?? []),
@@ -827,16 +867,29 @@ function foldOrg(org: OrgState, previous: Roster | undefined, roster: Roster, re
         if (!holds && open) spans.at(-1)!.until = roster.rosterVersion;
         if (spans.length > 0) org.dataAdmins.set(entry.userId, spans);
     }
-    // The signing keys each entry names, from the roster that first named them there.
+    // When each entry was active: a span opens on the roster that lets them in (again) and
+    // closes on the one that marks them left.
+    for (const entry of roster.members) {
+        const spans = org.active.get(entry.userId) ?? [];
+        const open = spans.length > 0 && spans.at(-1)!.until === null;
+        const active = activeWith(entry);
+        if (active && !open) spans.push({ from: roster.rosterVersion, until: null });
+        if (!active && open) spans.at(-1)!.until = roster.rosterVersion;
+        if (spans.length > 0) org.active.set(entry.userId, spans);
+    }
+    // The signing keys each entry names, with its key version, from the roster that first
+    // named them there.
     for (const entry of roster.members) {
         const spans = org.signerKeys.get(entry.userId) ?? [];
         const last = spans.at(-1);
         if (
-            last?.signingPublicKey !== entry.signingPublicKey ||
+            last?.keyVersion !== entry.keyVersion ||
+            last.signingPublicKey !== entry.signingPublicKey ||
             last.mlDsaPublicKeyDigest !== entry.mlDsaPublicKeyDigest
         )
             spans.push({
                 from: roster.rosterVersion,
+                keyVersion: entry.keyVersion,
                 signingPublicKey: entry.signingPublicKey,
                 mlDsaPublicKeyDigest: entry.mlDsaPublicKeyDigest,
             });
@@ -1558,28 +1611,60 @@ async function checkCache(groupId: string, value: unknown, server: boolean) {
                 )
                     throw bad();
             }
-            const dataAdmins: Record<string, { from: number; until: number | null }[]> = {};
-            for (const [userId, spans] of Object.entries(record.dataAdmins)) {
-                if (!Array.isArray(spans) || spans.length === 0) throw bad();
-                let floor = 0;
-                dataAdmins[uuid(userId, 'user id')] = spans.map((span: unknown, index) => {
-                    if (!plain(span)) throw bad();
-                    const from = integer(span.from, 'roster version');
-                    const until =
-                        span.until === null ? null : integer(span.until, 'roster version');
-                    // In order, never overlapping, within the chain; only the last may be open.
-                    if (
-                        from <= floor ||
-                        from > last ||
-                        (until === null
-                            ? index !== spans.length - 1
-                            : until <= from || until > last)
-                    )
-                        throw bad();
-                    floor = until ?? from;
-                    return { from, until };
-                });
+            // Spans by member: in order, never overlapping, within the chain; only the last may be open.
+            const spansOf = (map: Record<string, unknown>) => {
+                const out: Record<string, RosterSpan[]> = {};
+                for (const [userId, spans] of Object.entries(map)) {
+                    if (!Array.isArray(spans) || spans.length === 0) throw bad();
+                    let floor = 0;
+                    out[uuid(userId, 'user id')] = spans.map((span: unknown, index) => {
+                        if (!plain(span)) throw bad();
+                        const from = integer(span.from, 'roster version');
+                        const until =
+                            span.until === null ? null : integer(span.until, 'roster version');
+                        if (
+                            from <= floor ||
+                            from > last ||
+                            (until === null
+                                ? index !== spans.length - 1
+                                : until <= from || until > last)
+                        )
+                            throw bad();
+                        floor = until ?? from;
+                        return { from, until };
+                    });
+                }
+                return out;
+            };
+            const dataAdmins = spansOf(record.dataAdmins);
+            if (!plain(record.active)) throw bad();
+            const active = spansOf(record.active);
+            // Every roster's heads digest, one per version; the last is the last roster's.
+            if (
+                !Array.isArray(record.headsDigests) ||
+                record.headsDigests.length !== last ||
+                record.headsDigests.at(-1) !== roster.heads!.headsDigest
+            )
+                throw bad();
+            const headsDigests = record.headsDigests.map((at: unknown) =>
+                digestOf(at, 'heads digest'),
+            );
+            // Exactly the retired areas, each retired after its last key was listed; the last
+            // roster's tombstones are retired by it.
+            if (
+                !plain(record.areaRetiredAt) ||
+                Object.keys(record.areaRetiredAt).length !== retiredAreas.length
+            )
+                throw bad();
+            const areaRetiredAt: Record<string, number> = {};
+            for (const id of retiredAreas) {
+                if (!Object.hasOwn(record.areaRetiredAt, id)) throw bad();
+                const at = integer(record.areaRetiredAt[id], 'roster version');
+                if (at > last || at <= areaRosters[id]!.at(-1)!.rosterVersion) throw bad();
+                areaRetiredAt[id] = at;
             }
+            for (const area of roster.areas ?? [])
+                if (area.retired && areaRetiredAt[area.workspaceId] !== last) throw bad();
             if (!plain(record.signerKeys)) throw bad();
             const signerKeys: Record<string, SignerKeysAt[]> = {};
             for (const [userId, spans] of Object.entries(record.signerKeys)) {
@@ -1593,6 +1678,7 @@ async function checkCache(groupId: string, value: unknown, server: boolean) {
                     floor = from;
                     return {
                         from,
+                        keyVersion: integer(span.keyVersion, 'key version'),
                         signingPublicKey: bytesOf(span.signingPublicKey, 32, 'signing key'),
                         mlDsaPublicKeyDigest: digestOf(span.mlDsaPublicKeyDigest, 'key digest'),
                     };
@@ -1618,19 +1704,24 @@ async function checkCache(groupId: string, value: unknown, server: boolean) {
                 if ((await rosterMembersDigest(resolved)) !== roster.membersSame) throw bad();
                 roster = resolved;
             }
-            // Who holds `data_admin` on the last roster is who has an open span, and every
-            // entry's signing keys there are its latest span's; nobody else has spans.
+            // Who holds `data_admin` on the last roster is who has an open span, who is active
+            // there is who has an open span of their own, and every entry's signing keys there
+            // are its latest span's; nobody else has spans.
             for (const entry of roster.members) {
                 const open = dataAdmins[entry.userId]?.at(-1)?.until === null;
                 if (open !== activeWith(entry, 'data_admin')) throw bad();
+                if ((active[entry.userId]?.at(-1)?.until === null) !== activeWith(entry))
+                    throw bad();
                 const keys = signerKeys[entry.userId]?.at(-1);
                 if (
-                    keys?.signingPublicKey !== entry.signingPublicKey ||
+                    keys?.keyVersion !== entry.keyVersion ||
+                    keys.signingPublicKey !== entry.signingPublicKey ||
                     keys.mlDsaPublicKeyDigest !== entry.mlDsaPublicKeyDigest
                 )
                     throw bad();
             }
             if (Object.keys(signerKeys).length !== roster.members.length) throw bad();
+            if (Object.keys(active).some((id) => !Object.hasOwn(signerKeys, id))) throw bad();
             org = {
                 custodyKeys,
                 kitKeys,
@@ -1641,6 +1732,9 @@ async function checkCache(groupId: string, value: unknown, server: boolean) {
                 dataAdmins,
                 signerKeys,
                 recoveries,
+                headsDigests,
+                areaRetiredAt,
+                active,
             };
         }
         return {
@@ -2866,7 +2960,10 @@ export async function firstRoster(
                   custody: await custodyField(1, options.org.custodyKey, 1, options.org.kit),
                   rules: options.org.rules ?? { autoJoin: false, autoJoinDailyLimit: 10 },
                   auto: null,
-                  heads: { areaCount: areas.length, headsDigest: options.org.headsDigest },
+                  heads: {
+                      areaCount: areas.length,
+                      headsDigest: headsFor(options.org.heads, null, groupId, areas),
+                  },
               }
             : {}),
     };
@@ -2968,9 +3065,53 @@ export type FirstOrgRoster = {
     kit: KitPublicKeys;
     /* Auto-join off, ten a day, unless given. */
     rules?: RosterRules;
-    /* The digest over the heads of the roster's areas, as the creator's device verified them (2.3). */
-    headsDigest: string;
+    /* The heads of the roster's areas, built by headsToCommit from their base lists (2.3). */
+    heads: CommittedHeads;
 };
+
+const HEADS_NOT_FOR_THIS = 'These heads were not built for this member list.';
+
+/*
+ * The digest a roster carries for its heads: only of heads headsToCommit
+ * built (area-lists.ts), on the roster this one follows, for exactly the
+ * areas it creates, rotates and retires, each with the base list its row
+ * commits to. A recovery roster commits nothing new (rule 11): it takes only
+ * the heads of the roster before, restated (carriedHeads), and no other
+ * roster takes those.
+ */
+function headsFor(
+    heads: unknown,
+    chain: AcceptedRosters | null,
+    groupId: string,
+    areas: readonly RosterArea[],
+    recovery = false,
+) {
+    const built = requireCommittedHeads(heads);
+    // (Heads no device verified, in tests and fuzzers: a digest and nothing to hold it to.)
+    if (built.rosterVersion === null) return built.headsDigest;
+    if (built.carried !== recovery)
+        throw new CryptoError(recovery ? NOT_A_RECOVERY : HEADS_NOT_FOR_THIS);
+    const rows = areas.filter((row) => !row.retired);
+    const retired = areas.filter((row) => row.retired).map((row) => row.workspaceId);
+    if (
+        built.groupId !== groupId ||
+        built.rosterVersion !== (chain ? chain.roster.rosterVersion : 0) ||
+        rows.length !== built.changed.length ||
+        rows.some(
+            (row) =>
+                !built.changed.some(
+                    (at) =>
+                        at.workspaceId === row.workspaceId &&
+                        at.workspaceKeyVersion === row.workspaceKeyVersion &&
+                        at.listDigest === row.listDigest,
+                ),
+        ) ||
+        retired.length !== built.retired.length ||
+        retired.some((id) => !built.retired.includes(id))
+    )
+        throw new CryptoError(HEADS_NOT_FOR_THIS);
+    return built.headsDigest;
+}
 
 /*
  * What a company's next roster says beside its members and areas
@@ -2987,8 +3128,11 @@ export type NextOrgRoster = {
     rules?: RosterRules;
     /* Set by a device admitting someone unattended (rule 9): the UTC day by its own clock. */
     auto?: { utcDay: string };
-    /* The digest over every live area's heads as this device verified them (2.3). */
-    headsDigest: string;
+    /*
+     * Every live area's heads as this device verified them, built by headsToCommit (2.3); for
+     * a recovery roster, the heads of the roster before, restated by carriedHeads (rule 11).
+     */
+    heads: CommittedHeads;
     /*
      * The fresh words checks this device holds (companies-design 1.2, and 2.2
      * "Another Owner checks first"): a verified pin of each Owner or kit
@@ -3134,7 +3278,13 @@ async function companyFields(
     roster.heads = {
         areaCount:
             Object.keys(chain.areaKeys).length - chain.retiredAreas.length + created - retiring,
-        headsDigest: options.headsDigest,
+        headsDigest: headsFor(
+            options.heads,
+            chain,
+            roster.groupId,
+            rows,
+            isRecoveryRoster(previous, { ...roster, signerUserId }),
+        ),
     };
     // No entry changed: the statement says `same` and names the members of the roster before.
     if (
@@ -3459,6 +3609,47 @@ export async function groupWriterTrust(input: {
 
 /* A record's verdict inside a group's areas, beyond the personal ones: a key conflict, or a former member's. */
 export type GroupIntegrity = Integrity | 'key-conflict' | 'former-member';
+/*
+ * A record's verdict in a company's folder: a group's, or `not-on-this-folder`
+ * for a colleague whose signature holds and whom the folder's list does not
+ * name (companies-design 2.3, "Who writes"; drawn as Unverified: "Written by
+ * Sam, who isn't on this folder now"). Its own type, so a family's verdicts,
+ * and everything that draws them, are as they were.
+ */
+export type FolderIntegrity = GroupIntegrity | 'not-on-this-folder';
+
+/* The verdicts under which a writer's signature held, under the roster's keys or the reader's own pin. */
+const HELD: readonly GroupIntegrity[] = [
+    'verified',
+    'seen',
+    'saved-from-link',
+    'resealed',
+    'retired-key',
+];
+
+/*
+ * A company folder's own rows (companies-design 2.3, "Who writes"), applied
+ * after the verdict of design 2.8, and only for a writer who is active on the
+ * roster and whose signature holds, whether under the roster's keys or under
+ * a pin the reader made themselves: a personal check says whose keys these
+ * are, not that the person is on this folder. `standing` is folderStanding's
+ * (area-lists.ts): with the reader's list not loaded, behind or forked the
+ * verdict is `unchecked`; a writer the list, the company key or a share
+ * record stands behind keeps the verdict they had; anyone else reads
+ * `not-on-this-folder`, never a bad signature. A signature that failed, a key
+ * conflict, a former member and a writer outside the roster read as 2.8 has
+ * them.
+ */
+export function folderIntegrityOf(
+    verdict: { integrity: GroupIntegrity; via: string | null },
+    trust: GroupWriterTrust,
+    standing: FolderStanding,
+): { integrity: FolderIntegrity; via: string | null } {
+    if (trust.trust !== 'roster' || !HELD.includes(verdict.integrity)) return verdict;
+    if (standing === 'unchecked') return { integrity: 'unchecked', via: null };
+    if (standing === 'not-on-this-folder') return { integrity: 'not-on-this-folder', via: null };
+    return verdict;
+}
 
 /*
  * What a reader shows for one record in light of `trust` (groupWriterTrust):

@@ -198,7 +198,7 @@ pub const OWNER_ROLES: [GroupRole; 4] =
     [GroupRole::Billing, GroupRole::DataAdmin, GroupRole::Members, GroupRole::Recovery];
 
 /* The heads digest every testkit company roster carries (pattern(32, 240)), as the web's HEADS_DIGEST. */
-pub fn heads_digest() -> String {
+pub fn testkit_heads_digest() -> String {
     e(&pattern(32, 240))
 }
 
@@ -243,7 +243,7 @@ pub fn org_fields(group_id: &str, area_count: u64) -> RosterOrg {
         },
         rules: RosterRules { auto_join: false, auto_join_daily_limit: 10 },
         auto: None,
-        heads: RosterHeads { area_count, heads_digest: heads_digest() },
+        heads: RosterHeads { area_count, heads_digest: testkit_heads_digest() },
     }
 }
 
@@ -5837,7 +5837,7 @@ pub fn first_roster_cases() -> Vec<FirstRosterCase> {
                 custody_key: custody_public_key(custody_seed_at(1)).unwrap(),
                 kit: kit_public_keys(kit_secret_at(1), GROUP.into()).unwrap(),
                 rules: None,
-                heads_digest: heads_digest(),
+                heads: heads_unverified(testkit_heads_digest()),
             }),
             org_areas: vec![(root_key_at(AREA, 1), AreaKind::Shared, list_digest_at(AREA, 1))],
             ..of(
@@ -5921,7 +5921,7 @@ pub fn first_roster_case_json(c: &FirstRosterCase, expected: &Option<String>) ->
                 "signingPublicKey": org.kit.signing_public_key,
                 "mlDsaPublicKey": org.kit.ml_dsa_public_key,
             },
-            "headsDigest": org.heads_digest,
+            "headsDigest": org.heads.heads_digest(),
         });
     }
     case
@@ -5954,7 +5954,7 @@ pub fn first_roster_case_from(v: &Value) -> (FirstRosterCase, Option<String>) {
                         ml_dsa_public_key: s(&org["kit"], "mlDsaPublicKey"),
                     },
                     rules: None,
-                    heads_digest: s(org, "headsDigest"),
+                    heads: heads_unverified(s(org, "headsDigest")),
                 }
             }),
             org_areas: v["areaKeys"]

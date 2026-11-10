@@ -1,3 +1,5 @@
+import { carriedHeads } from './area-lists';
+import { unverifiedHeads } from './committed-heads';
 import { describe, expect, test } from 'vitest';
 import {
     companyCases,
@@ -185,7 +187,7 @@ describe('what the chain keeps of a company', () => {
         });
         await c.h.roster(cast.admin, all);
         const five = await accepted(c);
-        expect(five.cache.cacheVersion).toBe(3);
+        expect(five.cache.cacheVersion).toBe(4);
         expect(five.cache.org!.members).toHaveLength(all.length);
         const cache = structuredClone(five.cache) as GroupChainCache;
         // From the cache: a second automatic admission must count 2, and the kit still signs.
@@ -236,7 +238,11 @@ describe('what the chain keeps of a company', () => {
 });
 
 describe('nextRoster for a company', () => {
-    const heads = { headsDigest: HEADS_DIGEST };
+    const heads = { heads: unverifiedHeads(HEADS_DIGEST) };
+    /* What a recovery roster carries (rule 11): the heads of the roster before, restated. */
+    const carried = async (chain: AcceptedRosters) => ({
+        heads: await carriedHeads({ chain, groupId: chain.groupId, heads: null }),
+    });
 
     test('builds what acceptance takes: `same` when nothing changed, versions and digests computed, the count kept', async () => {
         const cast = await companyCast();
@@ -555,7 +561,7 @@ describe('nextRoster for a company', () => {
         const promoted = withEntry(c, { ...c.e.keeper, roles: [...OWNER_ROLES] });
         const roster = await nextRoster(plain as AcceptedRosters, promoted, {
             signerUserId: cast.keeper.userId,
-            org: heads,
+            org: await carried(plain as AcceptedRosters),
         });
         const signed = await signRecoveryRoster(
             roster,
@@ -580,8 +586,16 @@ describe('nextRoster for a company', () => {
         const promoted = withEntry(c, { ...c.e.keeper, roles: [...OWNER_ROLES] });
         const roster = await nextRoster(chain, promoted, {
             signerUserId: cast.keeper.userId,
-            org: heads,
+            org: await carried(chain),
         });
+        expect(roster.heads).toEqual(chain.roster.heads);
+        // No other roster restates the heads before it.
+        await expect(
+            nextRoster(chain, c.all, {
+                signerUserId: cast.admin.userId,
+                org: await carried(chain),
+            }),
+        ).rejects.toThrow('These heads were not built for this member list.');
         const input = await companyInput(c.h, cast);
         const kit = (await kitAt(1)).signer;
         const signed = await signRecoveryRoster(roster, c.h.keys[0]!, cast.keeper.signer, kit);
@@ -602,11 +616,14 @@ describe('nextRoster for a company', () => {
         await expect(
             nextRoster(chain, withEntry(c, { ...c.e.keeper, roles: [...ADMIN_ROLES] }), {
                 signerUserId: cast.keeper.userId,
-                org: heads,
+                org: await carried(chain),
             }),
         ).rejects.toThrow(CryptoError);
         await expect(
-            nextRoster(chain, c.all, { signerUserId: cast.keeper.userId, org: heads }),
+            nextRoster(chain, c.all, {
+                signerUserId: cast.keeper.userId,
+                org: await carried(chain),
+            }),
         ).rejects.toThrow('The recovery kit makes its holder an owner and changes nothing else.');
     });
 

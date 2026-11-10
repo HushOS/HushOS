@@ -42,6 +42,7 @@ import {
 import type { AcceptedRosters } from './group-trust';
 import { checkId } from './ids';
 import { RETIRED, areaKeyCommitment, areaRootCommitment, rowsAfter } from './area-keys';
+import { grantAllowed, granterAt, type AreaLists } from './area-lists';
 import {
     NOT_LISTED,
     NOT_LISTED_KEY,
@@ -1230,6 +1231,8 @@ export async function sealAreaGrant(
         areaIdSeed: string;
         granteeKemPublicKey: Uint8Array;
         granter: HybridSigningKey;
+        /* A company's area only: the folder's list as this device verified it. */
+        lists?: AreaLists | null;
     },
 ) {
     if (workspaceKey.length !== 32) throw new CryptoError('Invalid workspace key.');
@@ -1251,6 +1254,20 @@ export async function sealAreaGrant(
     const grantee = rosterEntry(options.chain.roster, ctx.granteeUserId);
     if (!activeWith(grantee) || grantee!.keyVersion !== ctx.granteeKeyVersion)
         throw new CryptoError('Areas are granted only to active members.');
+    // A company folder's key goes only to someone its list entitles, as this device verified it
+    // (companies-design 2.3, "Grants"): a colleague the list does not name is sealed nothing.
+    if (
+        options.chain.kind === 'org' &&
+        (!options.lists ||
+            !grantAllowed(
+                options.chain,
+                options.lists,
+                ctx.granteeUserId,
+                ctx.workspaceId,
+                ctx.workspaceKeyVersion,
+            ))
+    )
+        throw new CryptoError(NOT_ON_LIST);
     const recipient = await memberRecipient(grantee!, options.granteeKemPublicKey);
     return sealHybrid(workspaceKey, recipient, options.granter, areaGrantKind(ctx));
 }
@@ -1298,6 +1315,7 @@ export async function checkAreaRoot(
     return true;
 }
 
+export const NOT_ON_LIST = 'This folder’s list of people does not name this account.';
 const NOT_LISTED_ROOT = 'This folder’s key is not the one the group’s member list names.';
 
 /*
@@ -1400,6 +1418,11 @@ export function areasToRotate(chain: AcceptedRosters, members: RosterMember[]): 
  * and the key it opens to must be the one the roster's commitment names. A
  * former member, with the server's help, cannot hand anyone a fake key, and an
  * honest member kept behind cannot hand on a key the real chain never listed.
+ *
+ * In a company (companies-design 2.3, "Grants") the grantee must also be
+ * entitled by the folder's list as this device verified it (`lists`, from
+ * readAreaLists at this chain's latest roster): being a member of the
+ * company opens nothing. A family has no lists and takes none.
  */
 export async function openAreaGrant(
     envelope: Uint8Array,
@@ -1411,6 +1434,8 @@ export async function openAreaGrant(
         granterHistory?: SignerHistory | null;
         reader: { userId: string; keyVersion: number };
         grantee: GranteeSecrets;
+        /* A company's area only: the folder's list as this device verified it. */
+        lists?: AreaLists | null;
     },
 ) {
     const { chain } = options;
@@ -1418,23 +1443,45 @@ export async function openAreaGrant(
     sealedOnChain(chain, ctx);
     await areaOf(ctx.groupId, ctx.workspaceId, options.areaIdSeed);
     if (
+        chain.kind === 'org' &&
+        (!options.lists ||
+            !grantAllowed(
+                chain,
+                options.lists,
+                options.reader.userId,
+                ctx.workspaceId,
+                ctx.workspaceKeyVersion,
+            ))
+    )
+        throw new CryptoError(NOT_ON_LIST);
+    if (
         ctx.granteeUserId !== options.reader.userId ||
         ctx.granteeKeyVersion !== options.reader.keyVersion
     )
         throw new CryptoError('This grant is not for this account’s keys.');
-    if (!activeWith(rosterEntry(chain.roster, ctx.granterUserId)))
+    // A family's granter is judged on the latest roster, as ever. A company's is judged at the
+    // roster the grant names, by the chain's own record of who was active there and under which
+    // keys, so a grant made by an Admin who has since been removed still opens.
+    if (chain.kind !== 'org' && !activeWith(rosterEntry(chain.roster, ctx.granterUserId)))
         throw new CryptoError('This grant is not from an active member of the group.');
     const listed = listedArea(chain, ctx.workspaceId, ctx.workspaceKeyVersion);
     if (!listed) throw new CryptoError('This area key version is not on the group’s member list.');
     const workspaceKey = await openHybrid(
         envelope,
         32,
-        await signersThrough(
-            chain,
-            ctx.granterUserId,
-            options.granterMlDsaPublicKey,
-            options.granterHistory ?? null,
-        ),
+        chain.kind === 'org'
+            ? await granterAt(
+                  chain,
+                  ctx.granterUserId,
+                  ctx.rosterVersion,
+                  options.granterMlDsaPublicKey,
+              )
+            : await signersThrough(
+                  chain,
+                  ctx.granterUserId,
+                  options.granterMlDsaPublicKey,
+                  options.granterHistory ?? null,
+              ),
         options.grantee,
         areaGrantKind(ctx),
     );

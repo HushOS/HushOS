@@ -2,6 +2,7 @@
 
 pub mod area_ledger;
 pub mod company;
+pub mod company_lists;
 pub mod device_records;
 pub mod groups;
 pub mod join;
