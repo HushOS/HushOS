@@ -19,6 +19,7 @@ import {
     partLength,
     validObjectSize,
 } from '@hushos/crypto/drive';
+import { WEB_CALL_MAX_MS } from './bounds';
 import { type ObjectStore, objectKey, storeFor } from './storage';
 import { groupsEnv } from '@hushos/env/groups';
 import { storageEnv } from '@hushos/env/storage';
@@ -1697,8 +1698,10 @@ export async function completeUpload(
         row.objectKey,
         row.multipartId,
         [...parts].sort((a, b) => a.partNumber - b.partNumber),
-        // What the store is asked to assemble: its deadline allows for it.
-        { size: Number(row.ciphertextSize) },
+        // What the store is asked to assemble: its deadline allows for it, up to what a
+        // person's request can wait. Cut off there, the upload stays `completing`, and the
+        // next try or the expiry job finishes it.
+        { size: Number(row.ciphertextSize), maxMs: WEB_CALL_MAX_MS },
     );
     const finished = await driveRepository.finishCompleting(
         workspaceId,

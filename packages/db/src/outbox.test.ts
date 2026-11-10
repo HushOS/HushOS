@@ -15,6 +15,7 @@ import * as auth from './auth';
 import { db } from './client';
 import * as drive from './drive';
 // What only a move will call is not on the repository yet: it is tested from its module.
+import { pendingAfterMigrate, runAfterMigrate } from './after-migrate';
 import * as outbox from './outbox';
 import {
     ENVIRONMENT_PRIMARY_STORE_ID as PRIMARY,
@@ -1398,5 +1399,72 @@ describe('each store’s rows in turn', () => {
         // The replica's line is the legacy row, the oldest, and then the rows that name it.
         expect(at(null)).toEqual([legacy]);
         expect(at(REPLICA)).toEqual(many.slice(0, 3));
+    });
+
+    test('a store’s page is read off its index, in order, without sorting anybody’s backlog', async () => {
+        await queuedAt(second, 5, 1_000);
+        const planOf = async (statement: ReturnType<typeof outbox.pendingDeletionTurns>) => {
+            let plan = '';
+            await db
+                .transaction(async (tx) => {
+                    // With tables this small the planner would scan and sort whatever the
+                    // indexes: ask what it does when both are the last resort.
+                    await tx.execute(sql`set local enable_seqscan = off`);
+                    await tx.execute(sql`set local enable_sort = off`);
+                    plan = (
+                        await tx.execute<{ 'QUERY PLAN': string }>(sql`explain ${statement}`)
+                    ).rows
+                        .map((row) => row['QUERY PLAN'])
+                        .join('\n');
+                    throw new Error('rolled back');
+                })
+                .catch((error: unknown) => {
+                    if ((error as Error).message !== 'rolled back') throw error;
+                });
+            return plan;
+        };
+        const pending = await planOf(outbox.pendingDeletionTurns(200));
+        // The index gives the store's rows least recently failed first, as the page wants them.
+        expect(pending).toContain('Index Scan using drive_object_deletions_turn_idx');
+        expect(pending).not.toMatch(/Sort Key: d\./);
+        // The rows whose backup copy is due are found without reading the ones still waiting.
+        expect(await planOf(outbox.backupDeletionTurns(200))).toContain(
+            'drive_object_deletions_backup_due_idx',
+        );
+    });
+
+    test('the pages are the same before the step after the migration has built the indexes, and that step builds them', async () => {
+        const third = await createTestStore();
+        await queuedAt(second, 12, 10_000);
+        await queuedAt(PRIMARY, 3, 100);
+        await queuedAt(third, 2, 50, {
+            primaryDeletedAt: new Date(Date.now() - 1000),
+            deleteReplicaAfter: new Date(Date.now() - 1000),
+            replicated: true,
+            backupStoreId: REPLICA,
+        });
+        const pages = async () => ({
+            pending: (await drive.listPendingObjectDeletions(6)).map((row) => row.objectId),
+            due: (await drive.listBackupDeletionsDue(6)).map((row) => row.objectId),
+        });
+        const built = await pages();
+        expect(built.pending).toHaveLength(6);
+        expect(built.due).toHaveLength(2);
+
+        const names = ['drive_object_deletions_turn_idx', 'drive_object_deletions_backup_due_idx'];
+        // One session for the step, as the migration image runs it: its lock is the session's.
+        const session = await db.$client.connect();
+        try {
+            for (const name of names) await session.query(`drop index ${name}`);
+            const query = (text: string, params?: unknown[]) => session.query(text, params);
+            expect((await pendingAfterMigrate(query)).map((step) => step.name)).toEqual(names);
+            // A deployment that has migrated and not yet run the step: nothing is wrong.
+            expect(await pages()).toEqual(built);
+            expect(await runAfterMigrate(query)).toEqual({ busy: false, done: names, failed: [] });
+            expect(await pendingAfterMigrate(query)).toEqual([]);
+        } finally {
+            session.release();
+        }
+        expect(await pages()).toEqual(built);
     });
 });

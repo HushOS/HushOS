@@ -15,18 +15,23 @@
 export type StoreBounds = {
     /* To connect. */
     connectMs: number;
-    /* With no byte moving in either direction. */
+    /* With no byte moving in either direction, on every request but the ones a store answers after working in silence. */
     idleMs: number;
     /* The whole call, every retry included, before the allowance for its bytes. */
     callMs: number;
     /* The slowest transfer still waited for: a call is allowed one more second per this many bytes it expects. */
     bytesPerSecond: number;
+    /* The longest any one call is given, whatever its bytes. */
+    maxCallMs: number;
     /* The most that is read of an answer that is not an object's bytes: a listing, a part list, an error body. */
     answerBytes: number;
-    /* Failures or timeouts in a row that open the breaker, and how long it stays open. */
+    /* How many of a store's latest calls the breaker looks at, and how old the oldest of them may be. */
+    breakerWindow: number;
+    breakerWindowMs: number;
+    /* Failures among those calls, or in a row whatever their age, that open the breaker, and how long it stays open. */
     breakerFailures: number;
     breakerOpenMs: number;
-    /* Successes in a row, each slower than half its deadline, that mark the store slow, and for how long. */
+    /* Calls among them that failed or took more than half their deadline, that mark the store slow, and for how long. */
     slowCalls: number;
     slowMs: number;
 };
@@ -35,38 +40,67 @@ export type StoreBounds = {
  * The design's numbers (2.4), none of them measured:
  * - 10 s to connect: a TCP and TLS handshake to any reachable store takes well
  *   under a second, so ten is a store that is not there;
- * - 30 s idle: longer than any pause a working store makes inside one request;
+ * - 30 s idle: longer than a working store pauses while bytes are moving. It
+ *   does not hold for a request the store answers only after working (a
+ *   completion, a rewrite): those are sent without it (`storage.ts`);
  * - 60 s for the whole call: room for the SDK's three attempts at a store that
  *   answers, and the longest anyone waits for a call that carries no bytes;
  * - 256 KiB/s: the slowest uplink worth serving, so a 64 MiB part gets 60 s
  *   plus 256 s. `STORAGE_MIN_BYTES_PER_SECOND` lowers it for an honest store
  *   behind a slow link;
+ * - 15 minutes at most for one call: half the 30 minutes a run of a job is
+ *   given, so no single call can use a run up, and enough for a 64 MiB part at
+ *   the lowest rate the setting accepts (80 KiB/s: 60 s plus 820 s);
  * - 1 MiB of listing: a page of 1,000 keys of ours is about a third of that;
- * - five in a row, 60 s: enough failures not to be one bad request, and a
- *   pause short enough that a store that came back is used again within a
- *   run or two.
+ * - five of the last ten calls, none older than ten minutes: a store that
+ *   fails as often as it answers, judged on two runs of the five-minute jobs
+ *   and not on yesterday. Five in a row count whatever their age, since five
+ *   calls that each wait out a long deadline take longer than that;
+ * - 60 s open, 60 s slow: a pause short enough that a store that came back is
+ *   used again within a run or two.
  */
 export const STORE_BOUNDS: StoreBounds = {
     connectMs: 10_000,
     idleMs: 30_000,
     callMs: 60_000,
     bytesPerSecond: 256 * 1024,
+    maxCallMs: 15 * 60_000,
     answerBytes: 1024 * 1024,
+    breakerWindow: 10,
+    breakerWindowMs: 10 * 60_000,
     breakerFailures: 5,
     breakerOpenMs: 60_000,
     slowCalls: 5,
     slowMs: 60_000,
 };
 
+/*
+ * The longest a call that a person's request waits on is given: five minutes.
+ * S3 says completing a large upload "could take several minutes"; past five no
+ * browser or proxy is still waiting, and an upload cut off there is finished by
+ * the next try or by the expiry job, which asks the store whether the object is
+ * there. The worker's calls have `maxCallMs`.
+ */
+export const WEB_CALL_MAX_MS = 5 * 60_000;
+
 /* How many calls one company's store may have in flight from each process (2.4). Nothing opens a company's store yet. */
 export const COMPANY_STORE_CAP = { worker: 2, web: 4 } as const;
 
-/* The total deadline of one call that expects `expectedBytes` to move. */
+/*
+ * The total deadline of one call that expects `expectedBytes` to move: the
+ * base and the allowance for the bytes, and never more than the store's
+ * ceiling or the caller's own (`maxMs`).
+ */
 export function deadlineFor(
-    bounds: Pick<StoreBounds, 'callMs' | 'bytesPerSecond'>,
+    bounds: Pick<StoreBounds, 'callMs' | 'bytesPerSecond' | 'maxCallMs'>,
     expectedBytes = 0,
+    maxMs = Number.POSITIVE_INFINITY,
 ) {
-    return bounds.callMs + Math.ceil((expectedBytes / bounds.bytesPerSecond) * 1000);
+    return Math.min(
+        bounds.callMs + Math.ceil((expectedBytes / bounds.bytesPerSecond) * 1000),
+        bounds.maxCallMs,
+        maxMs,
+    );
 }
 
 /*
@@ -125,32 +159,58 @@ type Pass = { trial: boolean };
 /*
  * The breaker of one store, in this process's memory.
  *
- * Closed, it counts failures in a row; an answer resets the count. At
- * `breakerFailures` it opens for `breakerOpenMs`, and nothing is admitted.
- * After that it is half-open: one call is admitted as the trial, and nothing
- * else until that call ends. The trial's success closes the breaker; its
- * failure opens it again for the full time. A call admitted before the breaker
- * opened and still in flight changes nothing when it ends: only the trial
- * decides.
+ * Closed, it remembers how the store's latest `breakerWindow` calls ended, and
+ * forgets one after `breakerWindowMs`. It opens when `breakerFailures` of those
+ * failed, or when that many failed in a row whatever their age. So a store
+ * that times out four times and answers once, over and over, opens it; a store
+ * that fails now and then does not.
  *
- * Apart from that it counts successes that took more than half their deadline.
- * `slowCalls` of them in a row mark the store slow for `slowMs`; one success
- * in good time, or a failure, starts the count again. Slow refuses nothing
- * here: it is for whoever asks `health()`.
+ * Open, nothing is admitted for `breakerOpenMs`. After that it is half-open:
+ * one call is admitted as the trial, and nothing else until that call ends.
+ * The trial's success closes the breaker with nothing remembered; its failure
+ * opens it again for the full time. A call admitted before the breaker opened
+ * and still in flight changes nothing when it ends: only the trial decides.
+ *
+ * Slow is the weaker mark, for whoever asks `health()`: it refuses nothing.
+ * A store is slow for `slowMs` when `slowCalls` of the calls it remembers
+ * went badly, by failing or by taking more than half their deadline, and the
+ * latest of them just has. A call that went well never marks it.
  */
 export function createBreaker(
-    bounds: Pick<StoreBounds, 'breakerFailures' | 'breakerOpenMs' | 'slowCalls' | 'slowMs'>,
+    bounds: Pick<
+        StoreBounds,
+        | 'breakerWindow'
+        | 'breakerWindowMs'
+        | 'breakerFailures'
+        | 'breakerOpenMs'
+        | 'slowCalls'
+        | 'slowMs'
+    >,
     now: () => number = Date.now,
 ) {
-    let failures = 0;
+    type Ending = 'failed' | 'slow' | 'well';
+    let recent: { at: number; ending: Ending }[] = [];
+    let inRow = 0;
     let tripped = false;
     let openUntil = 0;
     let trial = false;
-    let slow = 0;
     let slowUntil = 0;
 
+    /* Remembers how a call ended and returns how many remembered calls ended in one of `endings`. */
+    function remember(ending: Ending, endings: Ending[]) {
+        const oldest = now() - bounds.breakerWindowMs;
+        recent = [...recent.filter((call) => call.at >= oldest), { at: now(), ending }].slice(
+            -bounds.breakerWindow,
+        );
+        return recent.filter((call) => endings.includes(call.ending)).length;
+    }
+    function forget() {
+        recent = [];
+        inRow = 0;
+    }
+
     return {
-        /* A pass for one call, or null when the call must be refused. Every pass ends in one of the two below. */
+        /* A pass for one call, or null when the call must be refused. Every pass ends in exactly one of the three below. */
         admit(): Pass | null {
             if (!tripped) return { trial: false };
             if (now() < openUntil || trial) return null;
@@ -163,13 +223,12 @@ export function createBreaker(
                 if (!pass.trial) return;
                 trial = false;
                 tripped = false;
+                forget();
             }
-            failures = 0;
-            if (tookMs * 2 <= allowedMs) slow = 0;
-            else if (++slow >= bounds.slowCalls) {
-                slow = 0;
+            inRow = 0;
+            if (tookMs * 2 <= allowedMs) remember('well', []);
+            else if (remember('slow', ['slow', 'failed']) >= bounds.slowCalls)
                 slowUntil = now() + bounds.slowMs;
-            }
         },
         /* The store did not answer, or answered that it is failing. */
         failed(pass: Pass) {
@@ -179,11 +238,18 @@ export function createBreaker(
                 openUntil = now() + bounds.breakerOpenMs;
                 return;
             }
-            slow = 0;
-            if (++failures < bounds.breakerFailures) return;
-            failures = 0;
-            tripped = true;
-            openUntil = now() + bounds.breakerOpenMs;
+            inRow++;
+            const bad = remember('failed', ['slow', 'failed']);
+            const failures = recent.filter((call) => call.ending === 'failed').length;
+            if (inRow >= bounds.breakerFailures || failures >= bounds.breakerFailures) {
+                tripped = true;
+                openUntil = now() + bounds.breakerOpenMs;
+                forget();
+            } else if (bad >= bounds.slowCalls) slowUntil = now() + bounds.slowMs;
+        },
+        /* The call ended without saying anything about the store: its caller's time ran out before the store had its own. */
+        released(pass: Pass) {
+            if (pass.trial) trial = false;
         },
         health(): Health {
             if (tripped && (now() < openUntil || trial)) return 'open';
@@ -251,13 +317,19 @@ function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
     });
 }
 
+/* The longest delay a timer takes: past it Node and Bun fire after one millisecond instead. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
+
 /*
  * A signal that aborts with `StoreDeadlineError` after `ms`, or when `outer`
  * aborts, with its reason. `clear` when the work is over.
  */
 export function deadline(ms: number, outer?: AbortSignal) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(new StoreDeadlineError()), ms);
+    const timer = setTimeout(
+        () => controller.abort(new StoreDeadlineError()),
+        Math.min(Math.max(ms, 0), MAX_TIMER_MS),
+    );
     const follow = () => controller.abort(outer!.reason);
     if (outer?.aborted) follow();
     else outer?.addEventListener('abort', follow, { once: true });
@@ -273,6 +345,8 @@ export function deadline(ms: number, outer?: AbortSignal) {
 export type CallOptions = {
     /* A deadline this call shares with others: when it aborts, so does the call. */
     signal?: AbortSignal;
+    /* A ceiling on this call's own deadline, below the store's: what a person's request can wait. */
+    maxMs?: number;
 };
 
 export type Guard = ReturnType<typeof createGuard>;
@@ -280,16 +354,22 @@ export type Guard = ReturnType<typeof createGuard>;
 /*
  * Everything one store's calls go through, in this order:
  *
- * 1. An open breaker refuses the call at once (`StoreUnavailableError`).
- * 2. The deadline starts: `callMs` plus the allowance for the bytes expected.
- *    It covers the wait for a place under the cap and everything `work` does,
- *    and `work` is handed its signal, which it must give to every request it
- *    makes, so a retry is cut off with the attempt before it and none begins
- *    after it. The call ends at the deadline even if `work` ignores the signal.
+ * 1. A call whose shared deadline has already passed is not made, and says
+ *    nothing about the store. An open breaker refuses the call at once
+ *    (`StoreUnavailableError`).
+ * 2. The deadline starts: `callMs` plus the allowance for the bytes expected,
+ *    up to the ceiling. It covers the wait for a place under the cap and
+ *    everything `work` does, and `work` is handed its signal, which it must
+ *    give to every request it makes, so a retry is cut off with the attempt
+ *    before it and none begins after it. The call ends at the deadline even if
+ *    `work` ignores the signal.
  * 3. The call waits for a place under the cap, when the store has one.
  * 4. The breaker is asked again, since it may have opened during the wait,
  *    and the outcome is told to it: `answered(error)` says whether an error is
- *    the store answering (it is up, and refused this request) or failing.
+ *    the store answering (it is up, and refused this request) or failing. A
+ *    call ended by the deadline it shares counts against the store only when
+ *    the store had more than half of the call's own time and still had not
+ *    answered; otherwise the time was spent before this call, and by others.
  */
 export function createGuard(options: {
     storeId: string;
@@ -307,10 +387,11 @@ export function createGuard(options: {
     async function call<T>(
         expectedBytes: number,
         work: (signal: AbortSignal) => Promise<T>,
-        { signal: outer }: CallOptions = {},
+        { signal: outer, maxMs }: CallOptions = {},
     ): Promise<T> {
+        if (outer?.aborted) throw outer.reason;
         if (breaker.health() === 'open') throw new StoreUnavailableError(storeId, 'breaker-open');
-        const allowedMs = deadlineFor(bounds, expectedBytes);
+        const allowedMs = deadlineFor(bounds, expectedBytes, maxMs);
         const limit = deadline(allowedMs, outer);
         try {
             const release = await limiter.acquire(limit.signal);
@@ -322,13 +403,14 @@ export function createGuard(options: {
                 try {
                     result = await untilAborted(work(limit.signal), limit.signal);
                 } catch (error) {
+                    const tookMs = now() - started;
                     // A deadline that passed is the failure, whatever the cut-off request threw.
                     if (limit.signal.aborted) {
-                        breaker.failed(pass);
+                        if (outer?.aborted && tookMs * 2 <= allowedMs) breaker.released(pass);
+                        else breaker.failed(pass);
                         throw limit.signal.reason;
                     }
-                    if (options.answered(error))
-                        breaker.succeeded(pass, now() - started, allowedMs);
+                    if (options.answered(error)) breaker.succeeded(pass, tookMs, allowedMs);
                     else breaker.failed(pass);
                     throw error;
                 }

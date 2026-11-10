@@ -1,0 +1,167 @@
+{
+    "type": "diff",
+    "version": "9",
+    "dialect": "postgres",
+    "id": "3297a4d3-8970-4c7c-8df3-e2dbd110d6c2",
+    "prevIds": ["17d5fea2-39a9-4d40-8b5c-c1ddb4de19a0"],
+    "footprints": [
+        {
+            "statementType": "create_index",
+            "statementTarget": [
+                "index",
+                "public",
+                "drive_object_deletions",
+                "drive_object_deletions_turn_idx"
+            ],
+            "writes": [
+                "s|idx|public.drive_object_deletions_turn_idx",
+                "n|idx|public.drive_object_deletions_turn_idx",
+                "e|idx|public.drive_object_deletions_turn_idx",
+                "n|rel|public.drive_object_deletions_turn_idx"
+            ],
+            "reads": [
+                "n|tbl|public.drive_object_deletions",
+                "n|sch|public",
+                "n|col|public.drive_object_deletions.store_id",
+                "n|col|public.drive_object_deletions.failed_at",
+                "n|col|public.drive_object_deletions.created_at"
+            ]
+        },
+        {
+            "statementType": "create_index",
+            "statementTarget": [
+                "index",
+                "public",
+                "drive_object_deletions",
+                "drive_object_deletions_backup_due_idx"
+            ],
+            "writes": [
+                "s|idx|public.drive_object_deletions_backup_due_idx",
+                "n|idx|public.drive_object_deletions_backup_due_idx",
+                "e|idx|public.drive_object_deletions_backup_due_idx",
+                "n|rel|public.drive_object_deletions_backup_due_idx"
+            ],
+            "reads": [
+                "n|tbl|public.drive_object_deletions",
+                "n|sch|public",
+                "n|col|public.drive_object_deletions.delete_replica_after"
+            ]
+        },
+        {
+            "statementType": "create_index",
+            "statementTarget": [
+                "index",
+                "public",
+                "drive_uploads",
+                "drive_uploads_store_expiry_idx"
+            ],
+            "writes": [
+                "s|idx|public.drive_uploads_store_expiry_idx",
+                "n|idx|public.drive_uploads_store_expiry_idx",
+                "e|idx|public.drive_uploads_store_expiry_idx",
+                "n|rel|public.drive_uploads_store_expiry_idx"
+            ],
+            "reads": [
+                "n|tbl|public.drive_uploads",
+                "n|sch|public",
+                "n|col|public.drive_uploads.store_id",
+                "n|col|public.drive_uploads.expires_at"
+            ]
+        }
+    ],
+    "deltas": [
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "drive_object_deletions",
+                "name": "drive_object_deletions_turn_idx",
+                "nameExplicit": true,
+                "columns": [
+                    {
+                        "value": "store_id",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": false,
+                        "opclass": null
+                    },
+                    {
+                        "value": "failed_at",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": true,
+                        "opclass": null
+                    },
+                    {
+                        "value": "created_at",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": false,
+                        "opclass": null
+                    }
+                ],
+                "isUnique": false,
+                "where": "done_at is null",
+                "with": "",
+                "method": "btree",
+                "concurrently": false,
+                "entityType": "indexes"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "drive_object_deletions",
+                "name": "drive_object_deletions_backup_due_idx",
+                "nameExplicit": true,
+                "columns": [
+                    {
+                        "value": "delete_replica_after",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": false,
+                        "opclass": null
+                    }
+                ],
+                "isUnique": false,
+                "where": "done_at is null and primary_deleted_at is not null",
+                "with": "",
+                "method": "btree",
+                "concurrently": false,
+                "entityType": "indexes"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "drive_uploads",
+                "name": "drive_uploads_store_expiry_idx",
+                "nameExplicit": true,
+                "columns": [
+                    {
+                        "value": "store_id",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": false,
+                        "opclass": null
+                    },
+                    {
+                        "value": "expires_at",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": false,
+                        "opclass": null
+                    }
+                ],
+                "isUnique": false,
+                "where": "status in ('open', 'completing', 'conflicted')",
+                "with": "",
+                "method": "btree",
+                "concurrently": false,
+                "entityType": "indexes"
+            }
+        }
+    ]
+}

@@ -17,7 +17,8 @@
         "./tags": "./src/tags.ts",
         "./trust": "./src/trust.ts",
         "./downloads": "./src/downloads.ts",
-        "./jobs": "./src/jobs.ts"
+        "./jobs": "./src/jobs.ts",
+        "./turns": "./src/turns.ts"
     },
     "scripts": {
         "typecheck": "tsc --noEmit",

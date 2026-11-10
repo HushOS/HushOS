@@ -1,0 +1,17 @@
+-- Hand-edited (this header, and every statement drizzle-kit generated left out). Three indexes
+-- for the worker's listings, which take each store's rows in turn
+-- (docs/company-storage-design.md 2.4; its PR 3): "drive_object_deletions_turn_idx" on
+-- ("store_id", "failed_at" NULLS FIRST, "created_at") WHERE done_at is null,
+-- "drive_object_deletions_backup_due_idx" on ("delete_replica_after") WHERE done_at is null and
+-- primary_deleted_at is not null, and "drive_uploads_store_expiry_idx" on ("store_id",
+-- "expires_at") WHERE status in ('open', 'completing', 'conflicted').
+--
+-- None is built here. Built inside drizzle's single transaction each would hold a lock that
+-- blocks writes to its table for the length of the build. The step that runs after the
+-- migration (src/after-migrate.ts) builds all three CONCURRENTLY, each as a statement of its
+-- own. Nothing needs them to be right: the listings give the same rows without them, by reading
+-- more of the table.
+--
+-- So this migration changes nothing and takes no lock on any table; the statement below is
+-- there because a migration needs one.
+SET LOCAL lock_timeout = '5s';

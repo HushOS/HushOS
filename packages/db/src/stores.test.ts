@@ -380,24 +380,55 @@ describe('an upload its store never started', () => {
         expect(await reserved()).toBe(MiB);
     });
 
-    test('is found by a listing that reads only the index of live uploads', async () => {
+    test('is found by a listing that reads only an index of live uploads, with or without the one built after the migration', async () => {
+        const unstarted = await began();
+        await backdate(unstarted.uploadId, drive.UPLOAD_START_SECONDS + 1);
         // Expiry runs every five minutes over a table that keeps every finished upload.
-        const { sql: text, params } = drive.expiredUploadsQuery(100).toSQL();
-        const client = await db.$client.connect();
-        try {
-            await client.query('begin');
-            // With the table this small the planner would scan it whatever the indexes: ask
-            // what it does when a scan is the last resort.
-            await client.query('set local enable_seqscan = off');
-            const plan = (await client.query(`explain ${text}`, params)).rows
-                .map((row) => row['QUERY PLAN'] as string)
+        const asked = async (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => {
+            // With the table this small the planner would scan and sort it whatever the
+            // indexes: ask what it does when a scan and a sort are the last resort.
+            await tx.execute(sql`set local enable_seqscan = off`);
+            await tx.execute(sql`set local enable_sort = off`);
+            const plan = (
+                await tx.execute<{ 'QUERY PLAN': string }>(
+                    sql`explain ${drive.expiredUploadTurns(100)}`,
+                )
+            ).rows
+                .map((row) => row['QUERY PLAN'])
                 .join('\n');
-            expect(plan).toContain('drive_uploads_expiry_idx');
-            expect(plan).not.toMatch(/Seq Scan on drive_uploads|drive_uploads_pkey/);
-        } finally {
-            await client.query('rollback');
-            client.release();
-        }
+            const ids = (await tx.execute<{ id: string }>(drive.expiredUploadTurns(100))).rows;
+            return { plan, ids: ids.map((row) => row.id) };
+        };
+        /* What the planner does with only `kept` of the two indexes of live uploads, and the page it gives. */
+        const withOnly = async (kept: string, dropped: string) => {
+            let result!: Awaited<ReturnType<typeof asked>>;
+            await db
+                .transaction(async (tx) => {
+                    await tx.execute(sql.raw(`drop index ${dropped}`));
+                    result = await asked(tx);
+                    expect(result.plan).toContain(`Index Scan using ${kept}`);
+                    throw new Error('rolled back');
+                })
+                .catch((error: unknown) => {
+                    if ((error as Error).message !== 'rolled back') throw error;
+                });
+            // Read in the order asked for: no scan of the table, and nothing sorted.
+            expect(result.plan).not.toMatch(/Seq Scan on drive_uploads|drive_uploads_pkey/);
+            expect(result.plan).not.toMatch(/Sort Key: u\./);
+            return result;
+        };
+        // The index built after the migration gives one store's live uploads, oldest first:
+        // nothing of another store's is read.
+        const built = await withOnly('drive_uploads_store_expiry_idx', 'drive_uploads_expiry_idx');
+        expect(built.plan).toContain('Index Cond: (store_id = s.id)');
+        expect(built.ids).toEqual([unstarted.uploadId]);
+        // A deployment whose step after the migration has not run yet: the same page, off
+        // the index of live uploads that was always there.
+        const unbuilt = await withOnly(
+            'drive_uploads_expiry_idx',
+            'drive_uploads_store_expiry_idx',
+        );
+        expect(unbuilt.ids).toEqual(built.ids);
     });
 
     test('is the only kind undone: a started upload keeps its rows and its reservation', async () => {

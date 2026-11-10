@@ -410,6 +410,12 @@ export const driveUploads = pgTable(
         index('drive_uploads_expiry_idx')
             .on(table.expiresAt)
             .where(sql`status in ('open', 'completing', 'conflicted')`),
+        // Expiry takes each store's live uploads in turn, oldest first: one store's page is
+        // read off this index without sorting the others'. Built CONCURRENTLY by the step
+        // after the migration (src/after-migrate.ts); the listing is right without it.
+        index('drive_uploads_store_expiry_idx')
+            .on(table.storeId, table.expiresAt)
+            .where(sql`status in ('open', 'completing', 'conflicted')`),
         index('drive_uploads_node_idx').on(table.nodeId),
         // One live move per file: the bytes it frees are counted once, never by two moves at once.
         uniqueIndex('drive_uploads_one_move_idx')
@@ -504,6 +510,17 @@ export const driveObjectDeletions = pgTable(
         index('drive_object_deletions_key_idx')
             .on(table.objectKey)
             .where(sql`done_at is null`),
+        // The deletion job takes each store's unfinished rows in turn, least recently failed
+        // first: one store's page is read off this index, however many rows the others have
+        // waiting. And the rows whose backup copy is due, without reading the ones still
+        // waiting out their 30 days. Both built CONCURRENTLY by the step after the migration
+        // (src/after-migrate.ts); the listings are right without them.
+        index('drive_object_deletions_turn_idx')
+            .on(table.storeId, table.failedAt.asc().nullsFirst(), table.createdAt)
+            .where(sql`done_at is null`),
+        index('drive_object_deletions_backup_due_idx')
+            .on(table.deleteReplicaAfter)
+            .where(sql`done_at is null and primary_deleted_at is not null`),
         check(
             'drive_object_deletions_reason_valid',
             sql`${table.reason} in ('purged', 'moved', 'stray')`,

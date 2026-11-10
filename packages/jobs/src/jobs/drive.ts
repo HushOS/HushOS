@@ -5,7 +5,6 @@ import {
     copyEvidence,
     deleteObjects,
     expireUploads,
-    leftForNextRun,
     purgeDue,
     replicateObjects,
     sweepOrphans,
@@ -102,6 +101,3 @@ export const reportsEvidence = (job: Job<unknown>) =>
     );
 export const reportsRequests = (job: Job<unknown>) =>
     run(job, () => answerEvidenceRequests({ evidence: evidenceStore() }));
-
-/* Whether the run a handler just finished stopped at a store's share and should go on at once. */
-export { leftForNextRun };

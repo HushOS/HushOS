@@ -9,42 +9,53 @@ import type { Health } from './bounds';
  *
  * - A run groups its work by store and takes one item from each store in turn.
  * - A store may use `budgetMs` of wall time in one run. The budget is looked at
- *   before each item, never during one: an item that has started finishes under
- *   its own deadlines. What is left of the store's work is `deferred`, to the
- *   next run.
+ *   before each item, and between the calls of an item that is more than one
+ *   call (the parts of a copy, the deletions of a sweep's page); never during a
+ *   call, which ends by its own deadline. What is left of the store's work is
+ *   `deferred`, to the next run.
  * - A store whose breaker is open, or that is marked slow, is left alone for
- *   the rest of the run: its items are `avoided`.
+ *   the rest of the run, at the same two moments: its items are `avoided`.
  *
  * So one slow store delays the other stores' work in a run by at most its
- * budget and one item, however much it has waiting.
+ * budget and what was in flight when the budget ran out: one call, or for a
+ * copy one part (a read and a write), however much the store has waiting.
  */
 
 /* The default share: `STORAGE_STORE_RUN_SECONDS`. */
 export const STORE_RUN_MS = 60_000;
 
 export type Shares = ReturnType<typeof createShares>;
+/* Whether work for some stores may start, or go on: `ok`, or why not. */
+export type Turn = 'ok' | 'avoided' | 'deferred';
 
 export function createShares(options: {
     budgetMs: number;
-    /* What the store's own breaker says; asked before every item. */
+    /* What the store's own breaker says; asked before every item, and inside an item between its calls. */
     health: (storeId: string) => Promise<Health> | Health;
     now?: () => number;
 }) {
     const now = options.now ?? (() => performance.now());
     const used = new Map<string, number>();
+    /* `running` is the time of an item in progress, not yet counted. */
+    async function state(storeIds: string[], running = 0): Promise<Turn> {
+        for (const id of storeIds) if ((await options.health(id)) !== 'ok') return 'avoided';
+        for (const id of storeIds)
+            if ((used.get(id) ?? 0) + running >= options.budgetMs) return 'deferred';
+        return 'ok';
+    }
     return {
         /* Whether work that calls every one of `storeIds` may start now, or why not. */
-        async state(storeIds: string[]): Promise<'ok' | 'avoided' | 'deferred'> {
-            for (const id of storeIds) if ((await options.health(id)) !== 'ok') return 'avoided';
-            for (const id of storeIds)
-                if ((used.get(id) ?? 0) >= options.budgetMs) return 'deferred';
-            return 'ok';
-        },
-        /* Runs `work` and counts its wall time against each of `storeIds`, however it ends. */
-        async spend<T>(storeIds: string[], work: () => Promise<T>): Promise<T> {
+        state: (storeIds: string[]) => state(storeIds),
+        /*
+         * Runs `work` and counts its wall time against each of `storeIds`, however it
+         * ends. An item that is more than one call (a copy of many parts, a page of
+         * deletions) asks `still` between them: the same question, with its own time so
+         * far counted in.
+         */
+        async spend<T>(storeIds: string[], work: (still: () => Promise<Turn>) => Promise<T>) {
             const started = now();
             try {
-                return await work();
+                return await work(() => state(storeIds, now() - started));
             } finally {
                 const took = now() - started;
                 for (const id of storeIds) used.set(id, (used.get(id) ?? 0) + took);
@@ -57,12 +68,13 @@ export function createShares(options: {
  * Runs `work` over every group's items, one item from each group in turn, each
  * group in its own order. A group names the stores its items call; it stops for
  * this run when one of them is unhealthy or has used its share, and the count
- * of what it left is returned. `work` deals with its own failures.
+ * of what it left is returned. `work` deals with its own failures, and is
+ * handed `still` to ask between the calls of one item.
  */
 export async function inTurn<T>(
     groups: { stores: string[]; items: T[] }[],
     shares: Shares,
-    work: (item: T) => Promise<void>,
+    work: (item: T, still: () => Promise<Turn>) => Promise<void>,
 ) {
     const left = { avoided: 0, deferred: 0 };
     let waiting = groups
@@ -77,7 +89,7 @@ export async function inTurn<T>(
                 continue;
             }
             const item = group.items.shift()!;
-            await shares.spend(group.stores, () => work(item));
+            await shares.spend(group.stores, (still) => work(item, still));
             if (group.items.length) next.push(group);
         }
         waiting = next;

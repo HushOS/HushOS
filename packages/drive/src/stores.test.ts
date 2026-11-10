@@ -566,7 +566,15 @@ describe('the worker follows each row', () => {
                 open: async (storeId) => (storeId === secondId ? unanswering : open(storeId)),
                 backups: [],
             }),
-        ).toEqual({ examined: 4, aborted: 1, finalised: 1, skipped: 2, failed: 0, deferred: 0 });
+        ).toEqual({
+            examined: 4,
+            aborted: 1,
+            finalised: 1,
+            skipped: 2,
+            failed: 0,
+            deferred: 0,
+            unaborted: 0,
+        });
 
         const rows = Object.fromEntries((await uploadRows()).map((row) => [row.id, row.status]));
         // Neither was aborted: their objects and reservations stand until a store answers.
@@ -641,7 +649,7 @@ describe('the worker follows each row', () => {
             ...credentials,
         });
 
-    test('a store that never answers does not keep another store’s expired uploads from being resolved, and takes its share of the run and no more', async () => {
+    test('every expired upload’s bytes are given back before any store is asked, and a store that never answers gets its share of the aborts and no more', async () => {
         const mine = [await begin(), await begin()];
         const theirs = [await begin(), await begin(), await begin()];
         const unstarted = await begin();
@@ -662,41 +670,76 @@ describe('the worker follows each row', () => {
             [unstarted.begun.upload.id],
         );
         const silent = impatient(100);
-        s3.hooks.hostile = (request) => request.bucket === SECOND;
-        const sent = () => s3.requests.filter((request) => request.bucket === SECOND).length;
-        const before = sent();
+        // The silent store sits on every request, and by the run's clock each cost it 40 seconds.
+        const clock = { at: 0 };
+        const reservedWhenAsked: bigint[] = [];
+        s3.hooks.hostile = async (request) => {
+            if (request.bucket !== SECOND) return false;
+            reservedWhenAsked.push(await reserved());
+            clock.at += 40_000;
+            return true;
+        };
 
-        const started = performance.now();
         const result = await jobs.expireUploads({
             open: async (storeId) => (storeId === secondId ? silent : open(storeId)),
             backups: [],
-            budgetMs: 180,
+            budgetMs: 60_000,
+            now: () => clock.at,
         });
-        const took = performance.now() - started;
 
-        // Both of ours, the one nobody started, and the two of theirs the share had room for.
+        // All six are aborted in the database, whatever their stores do.
         expect(result).toEqual({
             examined: 6,
-            aborted: 5,
+            aborted: 6,
             finalised: 0,
             skipped: 0,
             failed: 0,
-            deferred: 1,
+            deferred: 0,
+            // Two aborts sent to the silent store and given up at their deadline; the third
+            // not sent, its store's share of the run being used.
+            unaborted: 3,
         });
-        expect(
-            s3
-                .openUploads(PRIMARY)
-                .map((upload) => upload.key)
-                .sort(),
-        ).toEqual([...theirs, unstarted].map((upload) => upload.key).sort());
+        expect(await reserved()).toBe(0n);
+        // Nothing was still reserved when the silent store was first asked anything.
+        expect(reservedWhenAsked).toEqual([0n, 0n]);
+        // Ours were aborted at their store; the unstarted upload asked no store anything.
         for (const upload of mine)
             expect(s3.openUploads(PRIMARY).map((open) => open.key)).not.toContain(upload.key);
-        // Two aborts were sent to the silent store, each given up at its deadline; the
-        // unstarted upload asked it nothing.
-        expect(sent() - before).toBe(2);
-        expect(took).toBeLessThan(2 * 100 + 1_000);
-        // The bytes of everything resolved are no longer reserved, the silent store's included.
-        expect(await reserved()).toBe(4096n);
+    });
+
+    test('a completing upload at a store out of its share waits for the next run, and is not aborted unasked', async () => {
+        const stalled = async () => {
+            const upload = await begin();
+            await driveRepository.startCompleting(owner.workspaceId, upload.begun.upload.id);
+            return { ...upload, id: upload.begun.upload.id };
+        };
+        const first = await stalled();
+        const second = await stalled();
+        await run(`update drive_uploads set completing_at = now() - interval '2 hours'`);
+        s3.put(PRIMARY, first.key, randomBytes(4096));
+        s3.put(PRIMARY, second.key, randomBytes(4096));
+        // The store answers, rightly, and each answer takes 61 seconds of the run's 60.
+        const clock = { at: 0 };
+        s3.hooks.hostile = (request) => {
+            if (request.method === 'HEAD') clock.at += 61_000;
+            return false;
+        };
+        const result = await jobs.expireUploads({
+            open,
+            backups: [],
+            budgetMs: 60_000,
+            now: () => clock.at,
+        });
+        expect(result).toMatchObject({ examined: 2, finalised: 1, aborted: 0, deferred: 1 });
+        const rows = Object.fromEntries((await uploadRows()).map((row) => [row.id, row.status]));
+        expect(Object.values(rows).sort()).toEqual(['completed', 'completing']);
+        // The next run, which the worker sends at once, asks about the other.
+        s3.hooks.hostile = undefined;
+        expect(await jobs.expireUploads({ open, backups: [] })).toMatchObject({
+            examined: 1,
+            finalised: 1,
+            deferred: 0,
+        });
     });
 
     test('an evidence copy is bounded by the size the report recorded, whatever the store holds under that key now', async () => {
@@ -728,37 +771,42 @@ describe('the worker follows each row', () => {
 
     test('a slow store’s reported files keep to its share of an evidence run: the rest are copied, and its report comes round again', async () => {
         const evidence = evidenceBucket();
-        const slow = impatient(300);
-        const openSlow = async (storeId: string) => (storeId === secondId ? slow : open(storeId));
         const first = await storedFile(secondId, SECOND, randomBytes(800));
         const firstReport = await reported(first);
-        const second = await storedFile(secondId, SECOND, randomBytes(800));
-        const secondReport = await reported(second);
+        const later = await storedFile(secondId, SECOND, randomBytes(800));
+        const laterReport = await reported(later);
         const ours = await storedFile(ENVIRONMENT_PRIMARY_STORE_ID, PRIMARY, randomBytes(800));
         const oursReport = await reported(ours);
-        // Each call to the slow store takes 100 ms: a copy from it is a HEAD and a GET.
-        s3.hooks.hostile = async (request) => {
-            if (request.bucket === SECOND) await new Promise((resolve) => setTimeout(resolve, 100));
+        // Each call to the slow store takes 40 seconds by the run's clock: a copy from it
+        // is a look and a read.
+        const clock = { at: 0 };
+        s3.hooks.hostile = (request) => {
+            if (request.bucket === SECOND) clock.at += 40_000;
             return false;
         };
         const status = async (reportId: string) =>
             (await run('select evidence_status from drive_reports where id = $1', [reportId]))
                 .rows[0].evidence_status;
 
-        const result = await jobs.copyEvidence({ open: openSlow, evidence, budgetMs: 150 });
+        const result = await jobs.copyEvidence({
+            open,
+            evidence,
+            budgetMs: 60_000,
+            now: () => clock.at,
+        });
         expect(result).toMatchObject({ reports: 3, copied: 2, failed: 0, deferred: 1 });
         expect(await status(firstReport)).toBe('copied');
         expect(await status(oursReport)).toBe('copied');
         // Not failed: it was not tried. It is still waiting, and the next run takes it.
-        expect(await status(secondReport)).toBe('pending');
+        expect(await status(laterReport)).toBe('pending');
 
         s3.hooks.hostile = undefined;
-        expect(await jobs.copyEvidence({ open: openSlow, evidence })).toMatchObject({
+        expect(await jobs.copyEvidence({ open, evidence })).toMatchObject({
             reports: 1,
             copied: 1,
             deferred: 0,
         });
-        expect(await status(secondReport)).toBe('copied');
+        expect(await status(laterReport)).toBe('copied');
         expect(s3.keys(EVIDENCE)).toHaveLength(3);
     });
 

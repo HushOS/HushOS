@@ -29,10 +29,10 @@ import {
     drivePurge,
     driveReplicate,
     driveTier,
-    leftForNextRun,
     reportsEvidence,
     reportsRequests,
 } from './jobs/drive';
+import { thenAgain } from './rerun';
 import {
     cancelDissolvedFamilyPlan,
     endPersonalPlan,
@@ -252,11 +252,12 @@ if (replica) {
 for (const [queue, cron, handler] of driveJobs) {
     await boss.schedule(queue, cron, {}, { tz: 'UTC' });
     await boss.send(queue, {});
-    await boss.work(queue, { batchSize: 1, pollingIntervalSeconds: 10 }, async ([job]) => {
-        if (!job) return;
+    await boss.work(
+        queue,
+        { batchSize: 1, pollingIntervalSeconds: 10 },
         // A run that stopped at a store's share of it goes on in the next one, now.
-        if (leftForNextRun(await handler(job))) await boss.send(queue, {});
-    });
+        thenAgain(handler, () => boss.send(queue, {})),
+    );
 }
 
 let stopping = false;

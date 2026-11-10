@@ -10,7 +10,7 @@ import { log, sanitizeFailure } from '@hushos/logging';
 import { STORE_BOUNDS, deadline } from './bounds';
 import { TOMBSTONE_DAYS, TRASH_RETENTION_DAYS } from './protocol';
 import type { ObjectStore } from './storage';
-import { STORE_RUN_MS, byStore, createShares, inTurn } from './turns';
+import { STORE_RUN_MS, type Turn, byStore, createShares, inTurn } from './turns';
 
 export { leftForNextRun } from './turns';
 
@@ -56,6 +56,8 @@ export type Stores = {
     budgetMs?: number;
     /* The one deadline every store call of one outbox row shares; a call that carries no bytes gets as long. */
     itemMs?: number;
+    /* The clock a store's share is counted by, for tests that say how long a call took instead of waiting. */
+    now?: () => number;
 };
 
 /*
@@ -63,15 +65,32 @@ export type Stores = {
  * store that cannot be opened has none to ask, and its items fail one by one
  * and are recorded, as they always were.
  */
-function sharesFor({ open, budgetMs = STORE_RUN_MS }: Pick<Stores, 'open' | 'budgetMs'>) {
+function sharesFor({
+    open,
+    budgetMs = STORE_RUN_MS,
+    now,
+}: Pick<Stores, 'open' | 'budgetMs' | 'now'>) {
     return createShares({
         budgetMs,
+        now,
         health: (storeId) =>
             open(storeId).then(
                 (store) => store.health(),
                 () => 'ok' as const,
             ),
     });
+}
+
+/*
+ * What a copy of several parts asks between two of them, and what it was last
+ * told: when the copy stops, that is why, and which count its object goes to.
+ */
+function between(still: () => Promise<Turn>) {
+    const asked = { turn: 'ok' as Turn };
+    return {
+        proceed: async () => (asked.turn = await still()) === 'ok',
+        left: () => (asked.turn === 'avoided' ? ('avoided' as const) : ('deferred' as const)),
+    };
 }
 
 /* Runs `work` with a signal that aborts after `ms`: one deadline for every store call made with it. */
@@ -113,83 +132,106 @@ function tally(failures: Failures, error: unknown) {
  * again at the next run, since aborting it would retire bytes that may be
  * fully uploaded.
  *
- * The stores are served in turn and each within its share. A store's health is
- * not asked here: an expired upload holds reserved bytes, and giving them back
- * is the database's work, which must not wait for a store to get well. An open
- * breaker refuses the abort at once and costs nothing. An upload the store
- * never started asks no store at all, and waits for no turn.
+ * The database goes first: every upload that needs no answer from a store is
+ * aborted and its reserved bytes given back before any store is called, so a
+ * slow store holds nobody's allowance. What is left is the stores' part, taken
+ * in turn and each within its share: asking about a completing upload, and
+ * aborting the multipart uploads at the stores. A store's health is not asked;
+ * an open breaker refuses the call at once and costs nothing.
+ *
+ * A multipart upload this run did not abort at its store (the store's share
+ * ran out, its breaker is open, or the abort failed) is counted `unaborted`
+ * and is not tried again: its row is gone. The store's own rule for incomplete
+ * uploads removes it (the bundled Garage's after 3 days; docs/self-hosting.md
+ * says to set one on any other store).
  */
 export async function expireUploads(stores: Stores, limit = 200) {
     const { open } = stores;
     const rows = await driveRepository.listExpiredUploads(limit);
-    let aborted = 0;
-    let finalised = 0;
-    let skipped = 0;
-    let failed = 0;
-    const resolve = async (row: (typeof rows)[number]) => {
-        if (row.status === 'completing' && row.objectId && row.ciphertextSize !== null) {
-            // `head` answers null for an object that is not there and throws for anything else.
-            const asked = await open(row.storeId)
-                .then((store) => store.head(row.objectKey))
-                .then(
-                    (stored) => ({ stored }),
-                    () => null,
-                );
-            if (!asked) {
-                skipped++;
-                return;
-            }
-            const { stored } = asked;
-            if (stored && BigInt(stored.size) === row.ciphertextSize) {
-                const result = await driveRepository.finishCompleting(
-                    row.workspaceId,
-                    row.id,
-                    BigInt(stored.size),
-                );
-                if (result.status === 'published') {
-                    finalised++;
-                    return;
-                }
-            }
-        }
+    type Row = (typeof rows)[number];
+    type Leftover = { storeId: string; objectKey: string; multipartId: string };
+    const counts = { aborted: 0, finalised: 0, skipped: 0, failed: 0, deferred: 0, unaborted: 0 };
+    /* The database's part of an abort; returns what is still to abort at the store. */
+    const abort = async (row: Row): Promise<Leftover | null> => {
         const result =
             row.multipartId === null
                 ? await driveRepository.expireUnstartedUpload(row.workspaceId, row.id)
                 : await driveRepository.abortUpload(row.workspaceId, row.id, { force: true });
-        if (result.status === 'ok') {
-            // The id read under the abort's lock, not the listing's: the store's answer may
-            // have been written in between.
-            const { multipartId, storeId, objectKey } = result.upload;
-            if (!result.alreadyAborted && multipartId !== null)
-                await open(storeId)
-                    .then((store) => store.abortMultipart(objectKey, multipartId))
-                    .catch(() => {});
-            aborted++;
-        }
+        if (result.status !== 'ok') return null;
+        counts.aborted++;
+        // The id read under the abort's lock, not the listing's: the store's answer may
+        // have been written in between.
+        const { multipartId, storeId, objectKey } = result.upload;
+        return !result.alreadyAborted && multipartId !== null
+            ? { storeId, objectKey, multipartId }
+            : null;
     };
+    const completing = (row: Row) =>
+        row.status === 'completing' && row.objectId !== null && row.ciphertextSize !== null;
     // One upload that throws is left as it is for the next run; the others are still resolved.
-    const tried = (row: (typeof rows)[number]) =>
-        resolve(row).catch(() => {
-            failed++;
-        });
-    for (const row of rows) if (row.multipartId === null) await tried(row);
-    const shares = createShares({ budgetMs: stores.budgetMs ?? STORE_RUN_MS, health: () => 'ok' });
-    const left = await inTurn(
-        byStore(
-            rows.filter((row) => row.multipartId !== null),
-            (row) => row.storeId,
-        ),
+    const leftovers: Leftover[] = [];
+    for (const row of rows.filter((row) => !completing(row)))
+        try {
+            const leftover = await abort(row);
+            if (leftover) leftovers.push(leftover);
+        } catch {
+            counts.failed++;
+        }
+
+    const shares = createShares({
+        budgetMs: stores.budgetMs ?? STORE_RUN_MS,
+        health: () => 'ok',
+        now: stores.now,
+    });
+    const asked = await inTurn(
+        byStore(rows.filter(completing), (row) => row.storeId),
         shares,
-        tried,
+        async (row) => {
+            try {
+                // `head` answers null for an object that is not there and throws for anything else.
+                const answer = await open(row.storeId)
+                    .then((store) => store.head(row.objectKey))
+                    .then(
+                        (stored) => ({ stored }),
+                        () => null,
+                    );
+                if (!answer) {
+                    counts.skipped++;
+                    return;
+                }
+                const { stored } = answer;
+                if (stored && BigInt(stored.size) === row.ciphertextSize) {
+                    const result = await driveRepository.finishCompleting(
+                        row.workspaceId,
+                        row.id,
+                        BigInt(stored.size),
+                    );
+                    if (result.status === 'published') {
+                        counts.finalised++;
+                        return;
+                    }
+                }
+                const leftover = await abort(row);
+                if (leftover) leftovers.push(leftover);
+            } catch {
+                counts.failed++;
+            }
+        },
     );
-    return {
-        examined: rows.length,
-        aborted,
-        finalised,
-        skipped,
-        failed,
-        deferred: left.deferred,
-    };
+    counts.deferred = asked.deferred;
+    const unsent = await inTurn(
+        byStore(leftovers, (leftover) => leftover.storeId),
+        shares,
+        async ({ storeId, objectKey, multipartId }) => {
+            await open(storeId)
+                .then((store) => store.abortMultipart(objectKey, multipartId))
+                .catch(() => {
+                    counts.unaborted++;
+                });
+        },
+    );
+    counts.unaborted += unsent.deferred;
+    return { examined: rows.length, ...counts };
 }
 
 /*
@@ -341,14 +383,19 @@ export async function deleteObjects(stores: Stores, limit = 200) {
  *
  * Every read is bounded by the size on the object's row; the source must say
  * the same before a byte is read. With more than one backup, one copy is made
- * for each pair in turn.
+ * for each pair in turn. A copy of several parts stops between two of them
+ * when a store of its pair is unwell or out of its share, and goes on from
+ * there in the next run.
  */
 export async function replicateObjects(stores: Stores, limit = 100) {
     const { open, backups } = stores;
     const counts = { copied: 0, failed: 0, unmarked: 0, skipped: 0, avoided: 0, deferred: 0 };
     const failures: Failures = {};
     const served: BackupPair[] = [];
-    const groups: { stores: string[]; items: (() => Promise<void>)[] }[] = [];
+    const groups: {
+        stores: string[];
+        items: ((still: () => Promise<Turn>) => Promise<void>)[];
+    }[] = [];
     for (const pair of backups) {
         let backup: ObjectStore;
         let source: ObjectStore;
@@ -365,12 +412,20 @@ export async function replicateObjects(stores: Stores, limit = 100) {
         groups.push({
             // A copy calls both: either one unwell, or out of its share, ends the pair's run.
             stores: [pair.storeId, pair.backupStoreId],
-            items: rows.map((row) => async () => {
+            items: rows.map((row) => async (still) => {
                 const key = { objectId: row.objectId, storeId: pair.storeId };
                 try {
-                    await backup.copyFrom(source, row.objectKey, row.objectKey, {
+                    // Between the parts of a large object: its stores' health, and their share.
+                    const parts = between(still);
+                    const copy = await backup.copyFrom(source, row.objectKey, row.objectKey, {
                         size: row.ciphertextSize,
+                        proceed: parts.proceed,
                     });
+                    if (copy === 'suspended') {
+                        // Not a failure and not a copy: the next run goes on from the next part.
+                        counts[parts.left()]++;
+                        return;
+                    }
                     const marked = await driveRepository.markObjectReplicated({
                         ...key,
                         backupStoreId: pair.backupStoreId,
@@ -394,9 +449,9 @@ export async function replicateObjects(stores: Stores, limit = 100) {
             }),
         });
     }
-    const left = await inTurn(groups, sharesFor(stores), (copy) => copy());
-    counts.avoided = left.avoided;
-    counts.deferred = left.deferred;
+    const left = await inTurn(groups, sharesFor(stores), (copy, still) => copy(still));
+    counts.avoided += left.avoided;
+    counts.deferred += left.deferred;
     for (const pair of served)
         counts.skipped += await driveRepository.countObjectsNotCopied(pair.storeId);
     return { ...counts, failures };
@@ -505,7 +560,7 @@ export async function auditObjects(stores: Stores, target: 'primary' | 'replica'
     );
     const matches = (row: AuditRow, head: Head) =>
         head !== null && BigInt(head.size) === row.ciphertextSize;
-    const left = await inTurn(groups, sharesFor(stores), async (row) => {
+    const left = await inTurn(groups, sharesFor(stores), async (row, still) => {
         counts.examined++;
         try {
             const primary = target === 'primary' ? await open(row.storeId) : null;
@@ -529,13 +584,21 @@ export async function auditObjects(stores: Stores, target: 'primary' | 'replica'
                     counts.missing++;
                     await driveRepository.recordObjectAudit(row.objectId, 'missing');
                     break;
-                case 'recoverable':
-                    await primary!.copyFrom(backup!, row.objectKey, row.objectKey, {
+                case 'recoverable': {
+                    const parts = between(still);
+                    const copy = await primary!.copyFrom(backup!, row.objectKey, row.objectKey, {
                         size: row.ciphertextSize,
+                        proceed: parts.proceed,
                     });
+                    if (copy === 'suspended') {
+                        // Nothing is recorded: the object comes round again, and the copy goes on.
+                        counts[parts.left()]++;
+                        break;
+                    }
                     counts.recovered++;
                     await driveRepository.recordObjectAudit(row.objectId, 'recovered');
                     break;
+                }
                 case 'replica-missing':
                     counts.replicaMissing++;
                     await driveRepository.recordObjectAudit(row.objectId, 'replica-missing');
@@ -546,7 +609,9 @@ export async function auditObjects(stores: Stores, target: 'primary' | 'replica'
             tally(failures, error);
         }
     });
-    return { ...counts, ...left, failures };
+    counts.avoided += left.avoided;
+    counts.deferred += left.deferred;
+    return { ...counts, failures };
 }
 
 type Listed = { key: string; modifiedAt: Date | null };
@@ -613,8 +678,13 @@ export async function sweepOrphans(
         exhausted: boolean;
         stopped: boolean;
     };
-    /* One page of one store's listing; the cursor is kept after every page that got through. */
-    const page = async (sweep: Sweep) => {
+    /*
+     * One page of one store's listing; the cursor is kept after every page that got
+     * through. A page can hold a thousand orphans, so the store's health and its share are
+     * asked again before each deletion after the page's first: a page cut short keeps its
+     * cursor just before the first orphan it left, and the store's sweep ends for this run.
+     */
+    const page = async (sweep: Sweep, still: () => Promise<Turn>) => {
         try {
             if (!sweep.store) {
                 sweep.cursor = await driveRepository.getSweepCursor(sweep.name);
@@ -627,7 +697,17 @@ export async function sweepOrphans(
                 storeId,
                 result.objects.map((o) => o.key),
             );
-            for (const orphan of selectOrphans(result.objects, known, now, ORPHAN_MIN_AGE_DAYS))
+            let cut: Turn = 'ok';
+            const orphans = selectOrphans(result.objects, known, now, ORPHAN_MIN_AGE_DAYS);
+            for (const [index, orphan] of orphans.entries()) {
+                // Never before the first: a store whose listing alone uses its share still
+                // loses one orphan a run, and its sweep moves on.
+                if (index > 0) cut = await still();
+                if (cut !== 'ok') {
+                    const before = result.objects.findIndex((o) => o.key === orphan.key) - 1;
+                    sweep.cursor = result.objects[before]?.key ?? sweep.cursor;
+                    break;
+                }
                 try {
                     await store.delete(orphan.key);
                     counts.deleted++;
@@ -636,6 +716,13 @@ export async function sweepOrphans(
                     counts.failed++;
                     tally(failures, error);
                 }
+            }
+            if (cut !== 'ok') {
+                counts[cut]++;
+                sweep.stopped = true;
+                await driveRepository.setSweepCursor(sweep.name, sweep.cursor);
+                return;
+            }
             sweep.cursor = result.objects.at(-1)?.key ?? sweep.cursor;
             if (!result.truncated) {
                 sweep.exhausted = true;
@@ -669,7 +756,7 @@ export async function sweepOrphans(
                 counts[state]++;
                 continue;
             }
-            await shares.spend([sweep.storeId], () => page(sweep));
+            await shares.spend([sweep.storeId], (still) => page(sweep, still));
             if (!sweep.stopped) next.push(sweep);
         }
         waiting = next;
@@ -765,7 +852,8 @@ export async function copyEvidence(
         open,
         evidence,
         budgetMs,
-    }: { open: Stores['open']; evidence: ObjectStore | null; budgetMs?: number },
+        now,
+    }: { open: Stores['open']; evidence: ObjectStore | null } & Pick<Stores, 'budgetMs' | 'now'>,
     limit = 20,
 ) {
     const counts = {
@@ -781,7 +869,7 @@ export async function copyEvidence(
     };
     // The share is the store's a reported object is read from. The evidence store is the
     // operator's own and every copy lands there: it has no share to keep to, only its health.
-    const shares = sharesFor({ open, budgetMs });
+    const shares = sharesFor({ open, budgetMs, now });
     for (const report of await reportsRepository.listReportsAwaitingEvidence(limit)) {
         counts.reports++;
         if (!evidence) {
@@ -811,15 +899,25 @@ export async function copyEvidence(
             try {
                 // No row names it any more: its primary copy was deleted before this run.
                 if (!storeId) throw new ObjectInNoStore();
-                await shares.spend([storeId], async () =>
-                    evidence.copyFrom(
+                // Between the parts of a large file: both stores' health, and the source's share.
+                let parts = between(async () => 'ok');
+                const copy = await shares.spend([storeId], async (still) => {
+                    parts = between(async () =>
+                        evidence.health() === 'ok' ? still() : ('avoided' as const),
+                    );
+                    return evidence.copyFrom(
                         await open(storeId),
                         object.objectKey!,
                         evidenceKey(report.id, object.objectId!),
                         // The size the report's snapshot took from the version's row.
-                        { size: object.ciphertextSize, verified: true },
-                    ),
-                );
+                        { size: object.ciphertextSize, verified: true, proceed: parts.proceed },
+                    );
+                });
+                if (copy === 'suspended') {
+                    counts[parts.left()]++;
+                    untried = true;
+                    continue;
+                }
                 await reportsRepository.markReportItemCopied(report.id, object.nodeId);
                 counts.copied++;
             } catch (error) {

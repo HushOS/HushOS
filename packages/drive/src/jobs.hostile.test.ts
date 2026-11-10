@@ -11,8 +11,14 @@ import { type S3Request, startS3 } from '../test/s3-server';
  *
  * The healthy store is the environment's primary, with the replica as its
  * backup. The hostile one is a second region's store, a `database` row the
- * jobs are handed an opener for, with the production bounds scaled down: a
- * 300 ms deadline stands for 60 s, and a share of a run is set per test.
+ * jobs are handed an opener for.
+ *
+ * Nothing here asserts that a run was quick. How long the hostile store "took"
+ * over a call is said by a clock the test moves when the request arrives, and
+ * the store's share of a run and its breaker's "slow" are counted by that
+ * clock, with the production numbers: 60 seconds of a run, 59 of them for one
+ * answer. What a run did is read off what each store was sent, in order. Only
+ * a store that never answers is waited for, and then for a deadline of 100 ms.
  */
 
 const s3 = await startS3();
@@ -49,26 +55,24 @@ const { createObjectStore, storeFor } = await import('./storage');
 type Account = Awaited<ReturnType<typeof fixtures.member>>;
 type Store = ReturnType<typeof createObjectStore>;
 
-const CALL = 300;
-const BOUNDS = {
-    connectMs: 200,
-    idleMs: 5_000,
-    callMs: CALL,
-    bytesPerSecond: 1024 * 1024 * 1024,
-    breakerOpenMs: 60_000,
-    slowMs: 60_000,
-};
+/* The deployment's bounds, but for the rate: no test's few bytes add to a deadline. */
+const BOUNDS = { connectMs: 200, bytesPerSecond: 1024 * 1024 * 1024 };
+type Bounds = Partial<typeof BOUNDS> & { callMs?: number };
 const DAY = 24 * 3600 * 1000;
 const OLD = new Date(Date.now() - 30 * DAY);
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const run = (text: string, params: unknown[] = []) => db.$client.query(text, params);
-const bucketStore = (bucket: string, bounds: Partial<typeof BOUNDS> = {}): Store =>
+/* The clock a store's share of a run, and its breaker's "slow", are counted by. */
+const clock = { at: 0 };
+const now = () => clock.at;
+const bucketStore = (bucket: string, bounds: Bounds = {}): Store =>
     createObjectStore({
         endpoint: s3.url,
         region: 'auto',
         bucket,
         forcePathStyle: true,
         bounds: { ...BOUNDS, ...bounds },
+        now,
         ...credentials,
     });
 
@@ -80,13 +84,14 @@ let hostileStore: Store;
 let open: (storeId: string) => Promise<Store>;
 
 /* The hostile bucket's store, opened again with other bounds, in place of the default. */
-function hostileWith(bounds: Partial<typeof BOUNDS>) {
+function hostileWith(bounds: Bounds) {
     hostileStore = bucketStore(HOSTILE, bounds);
     return hostileStore;
 }
 
 beforeEach(async () => {
     s3.reset();
+    clock.at = 0;
     await resetDatabase();
     owner = await fixtures.member();
     root = await fixtures.root(owner);
@@ -114,10 +119,25 @@ afterAll(async () => {
     await s3.stop();
 });
 
-/* Only the hostile bucket is tampered with. Return false and the request is served honestly, after whatever wait. */
+/* Only the hostile bucket is tampered with. Return false and the request is served honestly. */
 function hostile(answer: (request: S3Request, res: ServerResponse) => boolean | Promise<boolean>) {
     s3.hooks.hostile = (request, res) =>
         request.bucket === HOSTILE ? answer(request, res) : false;
+}
+/* Every request to the hostile bucket is answered rightly, having "taken" `ms` by the clock. */
+const taking = (ms: number, only: (request: S3Request) => boolean = () => true) =>
+    hostile((request) => {
+        if (only(request)) clock.at += ms;
+        return false;
+    });
+/* Which store each request of `method` went to, in the order they arrived. */
+const order = (method: string) =>
+    s3.requests
+        .filter((request) => request.method === method)
+        .map((request) => (request.bucket === HOSTILE ? 'theirs' : 'ours'));
+async function until(happened: () => boolean) {
+    for (let tries = 0; tries < 500 && !happened(); tries++) await wait(10);
+    return happened();
 }
 const requestsTo = (bucket: string, method?: string) =>
     s3.requests.filter(
@@ -184,41 +204,28 @@ const objectRow = async (objectId: string) =>
         audited_at: Date | null;
     };
 
-describe('the deletion outbox, with a store that answers every call late, and rightly', () => {
-    test('200 rows of its own delay another store’s deletions by no more than its share of the run and one request’s deadline', async () => {
+describe('the deletion outbox, with a store that answers every call at 59 seconds', () => {
+    test('200 rows of its own delay another store’s deletions by its share of the run and one call, and no more', async () => {
         // Queued first, so that before stores were taken in turn they filled the page by themselves.
         await queued(hostileId, 200, 10_000);
         const ours = await queued(PRIMARY_ID, 10, 100);
-        // Two thirds of its deadline, every time, and the answer is right every time: it trips
-        // no breaker, and two such calls are not yet "slow".
-        const DEADLINE = 600;
-        hostileWith({ callMs: DEADLINE });
-        hostile(async () => {
-            await wait(DEADLINE * (2 / 3));
-            return false;
-        });
+        taking(59_000);
 
-        const started = performance.now();
-        const result = await jobs.deleteObjects({
-            open,
-            backups: [],
-            budgetMs: DEADLINE,
-            itemMs: DEADLINE,
-        });
-        const took = performance.now() - started;
+        const result = await jobs.deleteObjects({ open, backups: [], budgetMs: 60_000, now });
 
         // Every one of the other store's deletions was done in this run.
         expect(s3.keys(PRIMARY)).toEqual([]);
         expect(ours).toHaveLength(10);
         expect(await outboxOf(PRIMARY_ID)).toEqual({ done: 10, pending: 0, failed: 0 });
-        // The slow store got two calls: the second began inside its share and was let finish.
-        expect(requestsTo(HOSTILE, 'DELETE')).toHaveLength(2);
+        // The slow store got two calls: the second began at 59 of its 60 seconds and was
+        // let finish. Ours went on in turn, and then without it.
+        expect(order('DELETE')).toEqual(['theirs', 'ours', 'theirs', ...Array(9).fill('ours')]);
         expect(result).toMatchObject({ primaries: 12, failed: 0, avoided: 0 });
         // What it left is deferred, not failed: nothing is recorded against those rows.
         expect(result.deferred).toBe(188);
         expect(await outboxOf(hostileId)).toEqual({ done: 2, pending: 198, failed: 0 });
-        // The share and one request's deadline, and the well store's own ten deletions.
-        expect(took).toBeLessThan(DEADLINE + DEADLINE + 700);
+        // Two calls of 59 seconds: its share and one call. Not the three hours of 200.
+        expect(clock.at).toBe(2 * 59_000);
     });
 
     test('a page is not filled by the store with the most waiting: the rows are listed store by store in turn', async () => {
@@ -237,16 +244,13 @@ describe('the deletion outbox, with a store that accepts the request and never a
         await queued(hostileId, 12, 10_000);
         await queued(PRIMARY_ID, 6, 100);
         hostileWith({ callMs: 100 });
-        hostile(() => true);
-
-        const started = performance.now();
-        const result = await jobs.deleteObjects({
-            open,
-            backups: [],
-            budgetMs: 60_000,
-            itemMs: 100,
+        // Each call is waited for until its deadline, and by the clock took all of it.
+        hostile(() => {
+            clock.at += 100;
+            return true;
         });
-        const took = performance.now() - started;
+
+        const result = await jobs.deleteObjects({ open, backups: [], itemMs: 100 });
 
         expect(s3.keys(PRIMARY)).toEqual([]);
         expect(await outboxOf(PRIMARY_ID)).toEqual({ done: 6, pending: 0, failed: 0 });
@@ -262,9 +266,6 @@ describe('the deletion outbox, with a store that accepts the request and never a
         // The other seven were never sent: the store is not hammered while it is failing.
         expect(requestsTo(HOSTILE)).toHaveLength(5);
         expect(hostileStore.health()).toBe('open');
-        // Five deadlines of 100 ms, not twelve, and not for ever.
-        expect(took).toBeGreaterThanOrEqual(5 * 100 - 25);
-        expect(took).toBeLessThan(5 * 100 + 1_000);
         // No row's lock or transaction outlived its call.
         const idle = await run(
             `select count(*)::int as n from pg_stat_activity
@@ -278,7 +279,7 @@ describe('the deletion outbox, with a store that accepts the request and never a
         expect(requestsTo(HOSTILE)).toHaveLength(5);
     });
 
-    test('the calls of one row share one deadline: a look and a delete that each fit do not get two', async () => {
+    test('the calls of one row share one deadline: a look that is answered and a delete that is not end together', async () => {
         // A published copy with no backup yet, at a store this worker backs up: the outbox
         // first asks whether the copy is there at all (it is not), then deletes.
         const objectId = randomUUID();
@@ -287,18 +288,19 @@ describe('the deletion outbox, with a store that accepts the request and never a
              values ($1, $2, $3, $4, 'purged', true)`,
             [objectId, hostileId, owner.workspaceId, keyOf(objectId)],
         );
-        // Each call answers at two thirds of the deadline: alone each is in time, together they are not.
-        const DEADLINE = 600;
-        hostileWith({ callMs: DEADLINE });
-        hostile(async () => {
-            await wait(DEADLINE * (2 / 3));
+        // The look is answered after 400 ms; the delete never is. Each call's own deadline
+        // is ten seconds; the row's is one.
+        hostileWith({ callMs: 10_000 });
+        hostile(async (request) => {
+            if (request.method === 'DELETE') return true;
+            await wait(400);
             return false;
         });
         const started = performance.now();
         const result = await jobs.deleteObjects({
             open,
             backups: [{ storeId: hostileId, backupStoreId: hostileBackupId }],
-            itemMs: DEADLINE,
+            itemMs: 1_000,
         });
         const took = performance.now() - started;
         expect(requestsTo(HOSTILE).map((request) => request.method)).toEqual(['HEAD', 'DELETE']);
@@ -307,30 +309,30 @@ describe('the deletion outbox, with a store that accepts the request and never a
             failed: 1,
             failures: { StoreDeadlineError: 1 },
         });
-        expect(took).toBeLessThan(DEADLINE + 300);
+        // Ended by the row's deadline: the delete had ten seconds of its own left. And not early.
+        expect(took).toBeGreaterThanOrEqual(1_000 - 5);
+        // The delete had 600 ms of the ten seconds it was allowed: the time was the row's,
+        // and is not held against the store.
+        expect(hostileStore.health()).toBe('ok');
         // Not marked as deleted: the row is tried again.
         expect(await outboxOf(hostileId)).toEqual({ done: 0, pending: 1, failed: 1 });
     });
 });
 
 describe('the deletion outbox, with a store whose successes are slow', () => {
-    test('after five in a row the run leaves the store alone, and so does the next', async () => {
+    test('after five in the last ten the run leaves the store alone, and so does the next', async () => {
         await queued(hostileId, 9, 10_000);
         await queued(PRIMARY_ID, 3, 100);
-        hostileWith({ callMs: 400 });
-        // 260 ms of a 400 ms deadline: more than half, every time, and always right.
-        hostile(async () => {
-            await wait(260);
-            return false;
-        });
-        const result = await jobs.deleteObjects({ open, backups: [], budgetMs: 60_000 });
+        // 31 of 60 seconds: more than half, every time, and always right.
+        taking(31_000);
+        const result = await jobs.deleteObjects({ open, backups: [], budgetMs: 3_600_000, now });
         expect(result).toMatchObject({ primaries: 3 + 5, failed: 0, avoided: 4, deferred: 0 });
         expect(hostileStore.health()).toBe('slow');
         expect(await outboxOf(hostileId)).toEqual({ done: 5, pending: 4, failed: 0 });
         expect(await outboxOf(PRIMARY_ID)).toEqual({ done: 3, pending: 0, failed: 0 });
 
         const sent = requestsTo(HOSTILE).length;
-        expect(await jobs.deleteObjects({ open, backups: [] })).toMatchObject({
+        expect(await jobs.deleteObjects({ open, backups: [], now })).toMatchObject({
             primaries: 0,
             avoided: 4,
         });
@@ -375,16 +377,16 @@ describe('the backup copy, with a source that lies', () => {
 
     test('a source that sends more than the range it was asked for is cut off at the row’s size', async () => {
         const endless = await storedFile(hostileId);
-        let written = 0;
+        const body = { closed: false };
         hostile((request, res) => {
             if (request.method !== 'GET') return false;
             res.writeHead(206, {});
             const piece = Buffer.alloc(64 * 1024, 1);
-            const timer = setInterval(() => {
-                written += piece.length;
-                res.write(piece);
-            }, 1);
-            res.on('close', () => clearInterval(timer));
+            const timer = setInterval(() => res.write(piece), 1);
+            res.on('close', () => {
+                clearInterval(timer);
+                body.closed = true;
+            });
             return true;
         });
         const result = await jobs.replicateObjects({ open, backups: PAIRS() });
@@ -392,9 +394,8 @@ describe('the backup copy, with a source that lies', () => {
         expect(requestsTo(HOSTILE, 'GET')[0]!.range).toBe('bytes=0-511');
         expect(s3.keys(HOSTILE_BACKUP)).toEqual([]);
         expect(await objectRow(endless.objectId)).toMatchObject({ copy_failures: 1 });
-        // The row said 512 bytes; the store was stopped long before it could send what it liked.
-        await wait(50);
-        expect(written).toBeLessThan(16 * 1024 * 1024);
+        // The row said 512 bytes; the store was stopped there, its connection closed.
+        expect(await until(() => body.closed)).toBe(true);
     });
 
     test('a slow pair keeps to its share of the run, and the other pair’s copies are all made', async () => {
@@ -402,26 +403,65 @@ describe('the backup copy, with a source that lies', () => {
         for (let i = 0; i < 6; i++) theirs.push(await storedFile(hostileId));
         const mine: Awaited<ReturnType<typeof storedFile>>[] = [];
         for (let i = 0; i < 4; i++) mine.push(await storedFile(PRIMARY_ID));
-        // A HEAD and a GET per copy, each at a third of the deadline: never slow, never failing.
-        hostile(async () => {
-            await wait(CALL / 3);
-            return false;
-        });
-        const started = performance.now();
+        // A look and a read per copy, 20 seconds each: never slow, never failing.
+        taking(20_000);
         const result = await jobs.replicateObjects({
             open,
             backups: PAIRS(),
-            budgetMs: CALL + 50,
+            budgetMs: 60_000,
+            now,
         });
-        const took = performance.now() - started;
         for (const file of mine) expect(s3.get(REPLICA, file.key)!.equals(file.bytes)).toBe(true);
-        // Two copies of 200 ms each use the 350 ms share; four wait for the next run.
+        // Two copies of 40 seconds use the 60: the second began inside the share. Four wait.
         expect(result).toMatchObject({ copied: 4 + 2, failed: 0, avoided: 0, deferred: 4 });
         expect(s3.keys(HOSTILE_BACKUP)).toHaveLength(2);
-        expect(took).toBeLessThan(CALL + 2 * CALL + 700);
         // Nothing is held against the objects that waited.
         for (const file of theirs) expect((await objectRow(file.objectId)).copy_failures).toBe(0);
     });
+
+    test('a large object stops between its parts when its store’s share is used, leaves no copy behind, and is finished by the next run', async () => {
+        // Two parts: one of 64 MiB and a tail. What the copy reads is what the row says.
+        const bytes = Buffer.alloc(64 * 1024 * 1024 + 4096, 7);
+        randomBytes(4096).copy(bytes, bytes.length - 4096);
+        const large = await storedFile(hostileId, bytes);
+        const small = await storedFile(hostileId);
+        // A read of a part takes 61 seconds, by a store that is otherwise prompt.
+        taking(61_000, (request) => request.method === 'GET');
+
+        const first = await jobs.replicateObjects({
+            open,
+            backups: PAIRS(),
+            budgetMs: 60_000,
+            now,
+        });
+        // The first part went; before the second the share was used: not copied, not failed.
+        expect(first).toMatchObject({ copied: 0, failed: 0, avoided: 0 });
+        expect(first.deferred).toBe(2);
+        expect(requestsTo(HOSTILE, 'GET').map((request) => request.range)).toEqual([
+            `bytes=0-${64 * 1024 * 1024 - 1}`,
+        ]);
+        // Nothing under the key at the backup, and no mark on the row: an upload left open.
+        expect(s3.keys(HOSTILE_BACKUP)).toEqual([]);
+        expect(s3.openUploads(HOSTILE_BACKUP)).toHaveLength(1);
+        expect(await objectRow(large.objectId)).toMatchObject({
+            replicated_at: null,
+            copy_failures: 0,
+        });
+
+        // The run the worker sends at once: the tail only, and then the object after it.
+        s3.hooks.hostile = undefined;
+        const second = await jobs.replicateObjects({ open, backups: PAIRS(), now });
+        expect(second).toMatchObject({ copied: 2, failed: 0, deferred: 0 });
+        expect(requestsTo(HOSTILE, 'GET').map((request) => request.range)).toEqual([
+            `bytes=0-${64 * 1024 * 1024 - 1}`,
+            `bytes=${64 * 1024 * 1024}-${bytes.length - 1}`,
+            'bytes=0-511',
+        ]);
+        expect(s3.get(HOSTILE_BACKUP, large.key)!.equals(bytes)).toBe(true);
+        expect(s3.get(HOSTILE_BACKUP, small.key)!.equals(small.bytes)).toBe(true);
+        expect(s3.openUploads(HOSTILE_BACKUP)).toEqual([]);
+        expect((await objectRow(large.objectId)).replicated_at).not.toBeNull();
+    }, 60_000);
 });
 
 describe('the audit', () => {
@@ -474,18 +514,16 @@ describe('the audit', () => {
 });
 
 describe('the orphan sweep', () => {
+    const orphanKey = (index: number) => `ws/${String(index).padStart(8, '0')}`;
+
     test('takes a page of each store in turn, and a slow store that has used its share keeps its cursor for the next run', async () => {
         // Three pages at the hostile store, one at ours; all too young to be deleted.
-        for (let i = 0; i < 2500; i++)
-            s3.put(HOSTILE, `ws/${String(i).padStart(8, '0')}`, Buffer.alloc(1));
-        for (let i = 0; i < 20; i++)
-            s3.put(PRIMARY, `ws/${String(i).padStart(8, '0')}`, Buffer.alloc(1));
-        hostile(async () => {
-            await wait(CALL / 3);
-            return false;
-        });
+        for (let i = 0; i < 2500; i++) s3.put(HOSTILE, orphanKey(i), Buffer.alloc(1));
+        for (let i = 0; i < 20; i++) s3.put(PRIMARY, orphanKey(i), Buffer.alloc(1));
+        // A listing takes 61 seconds.
+        taking(61_000);
         const result = await jobs.sweepOrphans(
-            { open, backups: [], budgetMs: CALL / 6 },
+            { open, backups: [], budgetMs: 60_000, now },
             { pages: 5 },
         );
         // One page of the slow store, which used its share; ours was listed to the end.
@@ -499,13 +537,70 @@ describe('the orphan sweep', () => {
         });
         expect(requestsTo(HOSTILE, 'GET')).toHaveLength(1);
         expect(await driveRepository.getSweepCursor(jobs.orphanSweepName(hostileId))).toBe(
-            'ws/00000999',
+            orphanKey(999),
         );
         // The next run goes on from there.
         s3.hooks.hostile = undefined;
-        const next = await jobs.sweepOrphans({ open, backups: [] }, { pages: 5 });
+        const next = await jobs.sweepOrphans({ open, backups: [], now }, { pages: 5 });
         expect(next).toMatchObject({ listed: 1500 + 20, completed: true, deferred: 0 });
         expect(requestsTo(HOSTILE, 'GET')[1]!.query).toContain('start-after=ws%2F00000999');
+    });
+
+    test('a page of a thousand orphans is not one item: the share is asked again before each deletion, and the next run starts at the first orphan left', async () => {
+        // Forty orphans in one page, old enough to go; every deletion takes 10 seconds.
+        for (let i = 0; i < 40; i++) s3.put(HOSTILE, orphanKey(i), Buffer.alloc(1), OLD);
+        s3.put(PRIMARY, orphanKey(0), Buffer.alloc(1), OLD);
+        taking(10_000, (request) => request.method === 'DELETE');
+
+        const first = await jobs.sweepOrphans({ open, backups: [], budgetMs: 60_000, now });
+        // Six deletions use the 60 seconds; the seventh is not sent. Ours is swept whole.
+        expect(first).toMatchObject({ deleted: 6 + 1, failed: 0, deferred: 1, completed: false });
+        expect(requestsTo(HOSTILE, 'DELETE').map((request) => request.key)).toEqual(
+            [0, 1, 2, 3, 4, 5].map(orphanKey),
+        );
+        expect(s3.keys(PRIMARY)).toEqual([]);
+        // The cursor is the key before the first orphan left: nothing is skipped.
+        expect(await driveRepository.getSweepCursor(jobs.orphanSweepName(hostileId))).toBe(
+            orphanKey(5),
+        );
+
+        s3.hooks.hostile = undefined;
+        const second = await jobs.sweepOrphans({ open, backups: [], now });
+        expect(second).toMatchObject({ deleted: 34, completed: true, deferred: 0 });
+        expect(s3.keys(HOSTILE)).toEqual([]);
+    });
+
+    test('a store whose listing alone uses its share still loses one orphan a run: its sweep never stands still', async () => {
+        for (let i = 0; i < 3; i++) s3.put(HOSTILE, orphanKey(i), Buffer.alloc(1), OLD);
+        // The listing takes 61 seconds of the 60; a deletion takes none.
+        taking(61_000, (request) => request.method === 'GET');
+        for (const left of [2, 1, 0]) {
+            const result = await jobs.sweepOrphans({ open, backups: [], budgetMs: 60_000, now });
+            expect(result).toMatchObject({ deleted: 1, failed: 0 });
+            expect(s3.keys(HOSTILE)).toHaveLength(left);
+        }
+    });
+
+    test('deletions that go unanswered open the breaker, and the rest of the page is not sent', async () => {
+        for (let i = 0; i < 40; i++) s3.put(HOSTILE, orphanKey(i), Buffer.alloc(1), OLD);
+        hostileWith({ callMs: 80 });
+        hostile((request) => request.method === 'DELETE');
+        const result = await jobs.sweepOrphans({ open, backups: [] });
+        expect(result).toMatchObject({
+            deleted: 0,
+            failed: 5,
+            failures: { StoreDeadlineError: 5 },
+            avoided: 1,
+            completed: false,
+        });
+        // Five, not forty.
+        expect(requestsTo(HOSTILE, 'DELETE')).toHaveLength(5);
+        // The page stops before the sixth. The five that failed are orphans still, and are
+        // met again the next time round, as a deletion that failed always was.
+        expect(await driveRepository.getSweepCursor(jobs.orphanSweepName(hostileId))).toBe(
+            orphanKey(4),
+        );
+        expect(s3.keys(HOSTILE)).toHaveLength(40);
     });
 
     test('a store whose breaker is open is not listed, and the others are swept', async () => {

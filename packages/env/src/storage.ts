@@ -66,16 +66,18 @@ export const storageEnv = createEnv({
             )
             .optional(),
         // The slowest transfer a store call still waits for, in bytes a second: every call to
-        // a store gets 60 seconds and one more for each this many bytes it expects to move
-        // (docs/company-storage-design.md 2.4). 256 KiB/s by default; lower it for a store
-        // behind a slow link, whose large copies would otherwise be cut off.
+        // a store gets 60 seconds and one more for each this many bytes it expects to move,
+        // up to 15 minutes (docs/company-storage-design.md 2.4). 256 KiB/s by default; lower
+        // it for a store behind a slow link, whose large copies would otherwise be cut off.
+        // Not below 80 KiB/s: a copy moves in parts of 64 MiB, and under that rate a part
+        // would need more than the 15 minutes any one call is given.
         STORAGE_MIN_BYTES_PER_SECOND: z
             .string()
             .regex(/^[0-9]{1,10}$/)
             .default(String(256 * 1024))
             .transform(Number)
-            .refine((value) => value >= 1024 && value <= 1024 * 1024 * 1024, {
-                message: 'STORAGE_MIN_BYTES_PER_SECOND must be between 1024 and 1073741824.',
+            .refine((value) => value >= 80 * 1024 && value <= 1024 * 1024 * 1024, {
+                message: 'STORAGE_MIN_BYTES_PER_SECOND must be between 81920 and 1073741824.',
             }),
         // How many seconds of one run of one worker job a single store may use before the
         // rest of its work waits for the next run, so that a slow store cannot hold up the

@@ -743,8 +743,9 @@ describe('the backup mark is a compare-and-set', () => {
         const racing = {
             ...replica,
             copyFrom: async (...args: Parameters<Store['copyFrom']>) => {
-                await replica.copyFrom(...args);
+                const copied = await replica.copyFrom(...args);
                 await move(file, PRIMARY_ID, secondId, moveId);
+                return copied;
             },
         } as Store;
         const result = await jobs.replicateObjects({
@@ -777,12 +778,13 @@ describe('the backup mark is a compare-and-set', () => {
         const racing = {
             ...replica,
             copyFrom: async (...args: Parameters<Store['copyFrom']>) => {
-                await replica.copyFrom(...args);
+                const copied = await replica.copyFrom(...args);
                 // The row names another store by the time the copy is made, and nothing queued the old one.
                 await run('update drive_objects set store_id = $1 where id = $2', [
                     secondId,
                     file.objectId,
                 ]);
+                return copied;
             },
         } as Store;
         expect(

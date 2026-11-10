@@ -136,6 +136,72 @@ describe('a store’s share of a run', () => {
     });
 });
 
+describe('an item that is more than one call', () => {
+    /* A copy of `parts` parts of `ms` each, that asks before every part after its first. */
+    function copyOf(parts: number, ms: number, moved: string[], advance: (ms: number) => void) {
+        return async (name: string, still: () => Promise<string>) => {
+            for (let part = 1; part <= parts; part++) {
+                if (part > 1 && (await still()) !== 'ok') return;
+                advance(ms);
+                moved.push(`${name}/${part}`);
+            }
+        };
+    }
+
+    test('asks about its share between its calls, with its own time so far counted in', async () => {
+        let at = 0;
+        const shares = createShares({ budgetMs: 60_000, health: () => 'ok', now: () => at });
+        const moved: string[] = [];
+        const copy = copyOf(80, 25_000, moved, (ms) => (at += ms));
+        const left = await inTurn(
+            [
+                { stores: ['large'], items: ['object'] },
+                { stores: ['other'], items: ['theirs'] },
+            ],
+            shares,
+            (item, still) =>
+                item === 'object' ? copy(item, still) : Promise.resolve(void moved.push(item)),
+        );
+        // 25, 50, 75 seconds: the share ran out during the third part, which was let finish.
+        // Without the question in between, all 80 parts: over half an hour for one item.
+        expect(moved).toEqual(['object/1', 'object/2', 'object/3', 'theirs']);
+        expect(left).toEqual({ avoided: 0, deferred: 0 });
+        // What the item used is the store's for the rest of the run.
+        expect(await shares.state(['large'])).toBe('deferred');
+        expect(await shares.state(['other'])).toBe('ok');
+    });
+
+    test('is told the same when a store of its own goes unwell half way', async () => {
+        let at = 0;
+        let unwell = false;
+        const shares = createShares({
+            budgetMs: 60_000,
+            health: (storeId) => (storeId === 'backup' && unwell ? 'open' : 'ok'),
+            now: () => at,
+        });
+        const asked: string[] = [];
+        await shares.spend(['region', 'backup'], async (still) => {
+            asked.push(await still());
+            unwell = true;
+            asked.push(await still());
+        });
+        expect(asked).toEqual(['ok', 'avoided']);
+    });
+
+    test('counts time already used by earlier items of the same store', async () => {
+        let at = 0;
+        const shares = createShares({ budgetMs: 60_000, health: () => 'ok', now: () => at });
+        await shares.spend(['a'], async () => void (at += 50_000));
+        const asked: string[] = [];
+        await shares.spend(['a'], async (still) => {
+            asked.push(await still());
+            at += 10_000;
+            asked.push(await still());
+        });
+        expect(asked).toEqual(['ok', 'deferred']);
+    });
+});
+
 describe('a store that is unwell', () => {
     test('is not worked at all when its breaker is open or it is slow, and the others are', async () => {
         const health = (storeId: string): Health =>

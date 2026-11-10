@@ -2830,30 +2830,56 @@ export const UPLOAD_START_SECONDS = 60;
  * Uploads past their expiry, for the worker's sweep. Completing ones older than an hour too,
  * and open ones whose store never started the multipart upload within a minute of begin.
  * It runs every five minutes, so every arm names a live status: the planner then reads
- * only `drive_uploads_expiry_idx`, the partial index of live uploads, however many
- * finished ones the table keeps. The query is apart so a test can ask the planner.
+ * only a partial index of live uploads, however many finished ones the table keeps.
+ *
+ * Each store's uploads in turn, the oldest of each first (2.4): a store whose uploads cannot
+ * be resolved (it does not answer) takes no more of a page than any other. Every store is
+ * asked for its own first `limit`, off `drive_uploads_store_expiry_idx` where the step after
+ * the migration has built it and off `drive_uploads_expiry_idx` where it has not; the page is
+ * the same either way. The statement is apart so a test can ask the planner.
  */
-export function expiredUploadsQuery(limit: number) {
-    return (
-        db
-            .select(uploadColumns)
-            .from(driveUploads)
-            .leftJoin(driveObjects, eq(driveObjects.id, driveUploads.objectId))
-            .where(
-                sql`(${driveUploads.status} in ('open', 'conflicted') and ${driveUploads.expiresAt} <= now()) or (${driveUploads.status} = 'completing' and ${driveUploads.completingAt} <= now() - interval '1 hour') or (${driveUploads.status} = 'open' and ${driveUploads.multipartId} is null and ${driveUploads.createdAt} <= now() - make_interval(secs => ${UPLOAD_START_SECONDS}))`,
-            )
-            // Each store's uploads in turn, the oldest of each first: a store whose uploads cannot
-            // be resolved (it does not answer) takes no more of a page than any other (2.4).
-            .orderBy(
-                sql`row_number() over (partition by ${driveUploads.storeId} order by ${driveUploads.expiresAt} asc)`,
-                asc(driveUploads.expiresAt),
-            )
-            .limit(limit)
-    );
+export function expiredUploadTurns(limit: number) {
+    return sql`
+        select t.id
+        from object_stores s
+        cross join lateral (
+            select p.*, row_number() over (order by p.expires_at asc) as turn
+            from (
+                select u.id, u.expires_at
+                from ${driveUploads} u
+                -- The live statuses, said once outright: every arm below names one, but the
+                -- planner only reads an index of live uploads in order when told so here.
+                where u.store_id = s.id and u.status in ('open', 'completing', 'conflicted') and (
+                    (u.status in ('open', 'conflicted') and u.expires_at <= now())
+                    or (u.status = 'completing' and u.completing_at <= now() - interval '1 hour')
+                    or (u.status = 'open' and u.multipart_id is null
+                        and u.created_at <= now() - make_interval(secs => ${UPLOAD_START_SECONDS}))
+                )
+                order by u.expires_at asc
+                limit ${limit}
+            ) p
+        ) t
+        order by t.turn, t.expires_at asc
+        limit ${limit}
+    `;
 }
 
 export async function listExpiredUploads(limit = 100) {
-    return (await expiredUploadsQuery(limit)) as UploadRow[];
+    const turns = await db.execute<{ id: string }>(expiredUploadTurns(limit));
+    if (!turns.rows.length) return [];
+    const rows = (await db
+        .select(uploadColumns)
+        .from(driveUploads)
+        .leftJoin(driveObjects, eq(driveObjects.id, driveUploads.objectId))
+        .where(
+            inArray(
+                driveUploads.id,
+                turns.rows.map((turn) => turn.id),
+            ),
+        )) as UploadRow[];
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    // Whether each is still to expire is read again under its row's lock by whoever resolves it.
+    return turns.rows.flatMap((turn) => byId.get(turn.id) ?? []);
 }
 
 /*

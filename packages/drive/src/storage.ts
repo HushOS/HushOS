@@ -71,6 +71,8 @@ export type StoreConfig = {
     cap?: number;
     /* Other bounds than this deployment's, for tests that cannot wait a minute. */
     bounds?: Partial<StoreBounds>;
+    /* The clock the breaker times calls by, for tests that say how long a call took instead of waiting. */
+    now?: () => number;
 };
 
 export type ObjectStore = ReturnType<typeof createObjectStore>;
@@ -100,8 +102,35 @@ export function storeBounds(): StoreBounds {
     return { ...STORE_BOUNDS, bytesPerSecond: storageEnv.STORAGE_MIN_BYTES_PER_SECOND };
 }
 
-/* One breaker and one cap per store and process (2.4), whoever opens the store and however often. */
-const guards = new Map<string, Guard>();
+/*
+ * One breaker and one cap per store and process (2.4), whoever opens the store
+ * and however often. A store opened again under the same id with another cap
+ * or other bounds (its row was changed) gets a guard of its own from then on:
+ * what was learnt about the store as it was configured before is not carried
+ * over, and the settings in force are always the latest opener's.
+ */
+const guards = new Map<string, { guard: Guard; settings: string }>();
+
+/*
+ * Copies of several parts that stopped between two of them, by the store they
+ * were going to and the key there: the multipart upload left open, and the
+ * parts it holds. In this process's memory only. A copy that stopped is taken
+ * up again from its next part by the next call for the same key; after a
+ * restart it begins again, and the upload it left is the store's own lifecycle
+ * rule's to remove (the bundled Garage aborts incomplete uploads after 3 days).
+ */
+type SuspendedCopy = {
+    uploadId: string;
+    size: number;
+    partSize: number;
+    verified: boolean;
+    parts: { partNumber: number; etag: string; checksum?: string }[];
+    at: number;
+};
+const suspendedCopies = new WeakMap<Guard, Map<string, SuspendedCopy>>();
+/* A stopped copy nobody took up again (its object was purged meanwhile) is aborted after a day; a store holds 16 at most. */
+const SUSPENDED_COPY_MS = 24 * 3600 * 1000;
+const SUSPENDED_COPIES = 16;
 
 /*
  * A 4xx is the store answering: it is up, and it refused this request (a key
@@ -171,7 +200,7 @@ async function readExactly(body: unknown, length: number, signal: AbortSignal) {
 
 export function createObjectStore(config: StoreConfig) {
     const bounds = { ...storeBounds(), ...config.bounds };
-    const clientFor = (endpoint: string) =>
+    const clientFor = (endpoint: string, idleMs = bounds.idleMs) =>
         new S3Client({
             endpoint,
             region: config.region,
@@ -186,25 +215,46 @@ export function createObjectStore(config: StoreConfig) {
             responseChecksumValidation: 'WHEN_REQUIRED',
             // Each attempt's own limits. The total deadline is the guard's, and spans the
             // SDK's retries: every request below is sent with the guard's signal.
-            requestHandler: { connectionTimeout: bounds.connectMs, socketTimeout: bounds.idleMs },
+            requestHandler: { connectionTimeout: bounds.connectMs, socketTimeout: idleMs },
             streamCollector: boundedCollector(bounds.answerBytes),
         });
     // The server talks to the store at the internal address; a signature names the
     // host the browser will use, so presigned URLs come from a client on the public one.
     const client = clientFor(config.internalEndpoint ?? config.endpoint);
     const signer = config.internalEndpoint ? clientFor(config.endpoint) : client;
+    /*
+     * For the requests a store answers only after working in silence: completing a
+     * multipart upload, and copying an object onto itself in another class. S3 keeps such a
+     * connection alive by sending white space; other stores send nothing until they are done,
+     * and 30 seconds of that is not a store that has stopped. These are sent with no idle
+     * limit short of the longest a call may take, and the call's own deadline, which allows
+     * for the object's size, is what ends them. Everything else keeps the 30 seconds.
+     */
+    let silent: S3Client | undefined;
+    const quiet = () =>
+        (silent ??= clientFor(config.internalEndpoint ?? config.endpoint, bounds.maxCallMs));
     const Bucket = config.bucket;
 
     // An error names the store by its id and never by its bucket; one opened without an id has none to name.
     const fresh = () =>
-        createGuard({ storeId: config.id ?? 'unnamed', bounds, cap: config.cap, answered });
+        createGuard({
+            storeId: config.id ?? 'unnamed',
+            bounds,
+            cap: config.cap,
+            answered,
+            now: config.now,
+        });
     let guard: Guard;
     if (config.id === undefined) guard = fresh();
     else {
-        guard = guards.get(config.id) ?? fresh();
-        guards.set(config.id, guard);
+        const settings = JSON.stringify([bounds, config.cap ?? null]);
+        const kept = guards.get(config.id);
+        guard = kept?.settings === settings ? kept.guard : fresh();
+        guards.set(config.id, { guard, settings });
     }
     const { call } = guard;
+    const suspended = suspendedCopies.get(guard) ?? new Map<string, SuspendedCopy>();
+    suspendedCopies.set(guard, suspended);
 
     /* The requests themselves, unguarded: each is made inside one `call`, with that call's signal. */
     async function headWith(key: string, signal: AbortSignal) {
@@ -361,8 +411,9 @@ export function createObjectStore(config: StoreConfig) {
          * Finishes the multipart upload and returns the stored size. `NoSuchUpload`
          * with the object present is a retry after an earlier success and is treated
          * as one; without the object it is reported as null. Both requests share one
-         * deadline, which allows for the `size` the store is asked to assemble: S3
-         * itself can take minutes over a large object, and says so.
+         * deadline, which allows for the `size` the store is asked to assemble, up to
+         * the ceiling: S3 itself can take minutes over a large object, and says so. The
+         * completion is sent without the idle limit; the look that follows keeps it.
          */
         completeMultipart(
             key: string,
@@ -374,7 +425,7 @@ export function createObjectStore(config: StoreConfig) {
                 size,
                 async (signal) => {
                     try {
-                        await client.send(
+                        await quiet().send(
                             new CompleteMultipartUploadCommand({
                                 Bucket,
                                 Key: key,
@@ -451,7 +502,8 @@ export function createObjectStore(config: StoreConfig) {
 
         /*
          * Rewrites an object into another storage class in place; the bytes never
-         * change. The store copies `size` bytes itself, and the deadline allows for them.
+         * change. The store copies `size` bytes itself: the deadline allows for them, up
+         * to the ceiling, and the request is sent without the idle limit.
          */
         async setStorageClass(
             key: string,
@@ -461,7 +513,7 @@ export function createObjectStore(config: StoreConfig) {
             await call(
                 size,
                 (signal) =>
-                    client.send(
+                    quiet().send(
                         new CopyObjectCommand({
                             Bucket,
                             Key: key,
@@ -497,6 +549,15 @@ export function createObjectStore(config: StoreConfig) {
          * Every request is a call of its store's, the source's reads included:
          * each has its own total deadline and goes through that store's cap and
          * breaker.
+         *
+         * A copy of several parts asks `proceed` before each part after the
+         * first it moves in this call, and stops when the answer is no
+         * (`suspended`): the multipart upload stays open, nothing exists under
+         * the target key, and the next call for the same key goes on from the
+         * next part, without reading again what the store already holds. So a
+         * large object costs a run one part at least and its share at most,
+         * and is still copied whole in the end. A copy that fails is aborted
+         * and begins again.
          */
         async copyFrom(
             source: CopySource,
@@ -506,13 +567,25 @@ export function createObjectStore(config: StoreConfig) {
                 size: expected,
                 verified = false,
                 partSize = COPY_PART_SIZE,
+                proceed,
                 ...options
             }: CallOptions & {
                 size: bigint | number | null;
                 verified?: boolean;
                 partSize?: number;
+                /* Whether to go on to the next part: the caller's share of a run, and the stores' health. */
+                proceed?: () => boolean | Promise<boolean>;
             },
-        ) {
+        ): Promise<'copied' | 'suspended'> {
+            // Stopped copies nobody came back for, and more of them than a store should hold.
+            for (const [staleKey, stale] of suspended)
+                if (
+                    stale.at < Date.now() - SUSPENDED_COPY_MS ||
+                    suspended.size > SUSPENDED_COPIES
+                ) {
+                    suspended.delete(staleKey);
+                    void abortMultipart(staleKey, stale.uploadId).catch(() => undefined);
+                }
             const found = await source.head(key, options);
             if (!found) throw new StoreAnswerError('not-found');
             const size = found.size;
@@ -532,12 +605,39 @@ export function createObjectStore(config: StoreConfig) {
                     ? await source.read(key, 0, size - 1, options)
                     : new Uint8Array(0);
                 await put(targetKey, bytes, { ...options, checksum: digest(bytes) });
-                return;
+                return 'copied';
             }
-            const uploadId = await createMultipart(targetKey, options);
+            // Taken out while this call has it, so no second call goes on from the same parts.
+            let held = suspended.get(targetKey);
+            suspended.delete(targetKey);
+            if (
+                held &&
+                (held.size !== size || held.partSize !== partSize || held.verified !== verified)
+            ) {
+                // Not the copy this call was asked for: it is given up, and this one begins.
+                await abortMultipart(targetKey, held.uploadId).catch(() => undefined);
+                held = undefined;
+            }
+            const uploadId = held?.uploadId ?? (await createMultipart(targetKey, options));
+            const parts = held?.parts ?? [];
+            const resumedAt = parts.length;
             try {
-                const parts: { partNumber: number; etag: string; checksum?: string }[] = [];
-                for (let from = 0, partNumber = 1; from < size; from += partSize, partNumber++) {
+                for (
+                    let from = parts.length * partSize, partNumber = parts.length + 1;
+                    from < size;
+                    from += partSize, partNumber++
+                ) {
+                    if (partNumber > resumedAt + 1 && proceed && !(await proceed())) {
+                        suspended.set(targetKey, {
+                            uploadId,
+                            size,
+                            partSize,
+                            verified,
+                            parts,
+                            at: Date.now(),
+                        });
+                        return 'suspended';
+                    }
                     const bytes = await source.read(
                         key,
                         from,
@@ -568,7 +668,7 @@ export function createObjectStore(config: StoreConfig) {
                 await call(
                     size,
                     (signal) =>
-                        client.send(
+                        quiet().send(
                             new CompleteMultipartUploadCommand({
                                 Bucket,
                                 Key: targetKey,
@@ -585,6 +685,7 @@ export function createObjectStore(config: StoreConfig) {
                         ),
                     options,
                 );
+                return 'copied';
             } catch (error) {
                 // Under a deadline of its own: the one that ended the copy may be the caller's.
                 await abortMultipart(targetKey, uploadId).catch(() => undefined);

@@ -97,21 +97,56 @@ describe('constraints added NOT VALID', () => {
         expect(found.rows.sort((a, b) => a.name.localeCompare(b.name))).toEqual(listed);
     });
 
-    test('nothing the step after the migration does is still pending, and its index is usable', async () => {
+    test('nothing the step after the migration does is still pending, and its indexes are usable', async () => {
         expect(await pendingAfterMigrate((text, params) => db.$client.query(text, params))).toEqual(
             [],
         );
-        const index = await db.execute<{ valid: boolean; definition: string }>(sql`
-            select i.indisvalid as valid, pg_get_indexdef(i.indexrelid) as definition
+        const names = AFTER_MIGRATE.flatMap((step) => (step.kind === 'index' ? [step.name] : []));
+        const index = await db.execute<{ name: string; valid: boolean; definition: string }>(sql`
+            select c.relname as name, i.indisvalid as valid, pg_get_indexdef(i.indexrelid) as definition
             from pg_index i join pg_class c on c.oid = i.indexrelid
-            where c.relname = 'drive_objects_store_idx'
+            where c.relname in ${names}
+            order by c.relname
         `);
+        // As Postgres writes each back: what the listings that take stores in turn are planned on.
         expect(index.rows).toEqual([
             {
+                name: 'drive_object_deletions_backup_due_idx',
+                valid: true,
+                definition:
+                    'CREATE INDEX drive_object_deletions_backup_due_idx ON public.drive_object_deletions USING btree (delete_replica_after) WHERE ((done_at IS NULL) AND (primary_deleted_at IS NOT NULL))',
+            },
+            {
+                name: 'drive_object_deletions_turn_idx',
+                valid: true,
+                definition:
+                    'CREATE INDEX drive_object_deletions_turn_idx ON public.drive_object_deletions USING btree (store_id, failed_at NULLS FIRST, created_at) WHERE (done_at IS NULL)',
+            },
+            {
+                name: 'drive_objects_store_idx',
                 valid: true,
                 definition:
                     'CREATE INDEX drive_objects_store_idx ON public.drive_objects USING btree (store_id)',
             },
+            {
+                name: 'drive_uploads_store_expiry_idx',
+                valid: true,
+                definition:
+                    "CREATE INDEX drive_uploads_store_expiry_idx ON public.drive_uploads USING btree (store_id, expires_at) WHERE (status = ANY (ARRAY['open'::text, 'completing'::text, 'conflicted'::text]))",
+            },
         ]);
+    });
+
+    test('every index the schema leaves to that step is one no migration builds under its lock', () => {
+        // An index named in the step and also created by a migration would be built twice,
+        // the first time inside drizzle's transaction.
+        const sqlOf = (migration: string) =>
+            readFileSync(new URL(`../drizzle/${migration}/migration.sql`, import.meta.url), 'utf8')
+                .split('\n')
+                .filter((line) => !line.startsWith('--'))
+                .join('\n');
+        const built = migrations().map(sqlOf).join('\n');
+        for (const step of AFTER_MIGRATE)
+            if (step.kind === 'index') expect(built, step.name).not.toContain(`"${step.name}"`);
     });
 });

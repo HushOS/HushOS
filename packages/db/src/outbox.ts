@@ -207,54 +207,87 @@ const fairly = [
     asc(driveObjectDeletions.createdAt),
 ];
 /*
- * A row's place in its own store's line. Ordered by it first, a page holds the
- * first row of every store, then the second of each, and so on: a store with
- * ten thousand rows waiting takes no more of a page than a store with ten
- * (2.4). `store` is the store the row's next call goes to.
+ * A page of the outbox with each store's rows in turn (2.4): the first row of
+ * every store, then the second of each, and so on, so a store with ten
+ * thousand rows waiting takes no more of a page than a store with ten.
+ *
+ * Every store is asked for its own first `limit` rows, least recently failed
+ * first (`rowsOf`, over `d`, for the store `s.id`), and the page is cut from
+ * those by each row's place in its store's line. No store's backlog is sorted,
+ * and none is read past its own page, where the index for it is there
+ * (`drive_object_deletions_turn_idx`, `drive_object_deletions_backup_due_idx`,
+ * built by the step after the migration). Without the index the page is the
+ * same, read the slow way.
  */
-const turnAt = (store: SQL) =>
-    sql`row_number() over (partition by ${store} order by ${driveObjectDeletions.failedAt} asc nulls first, ${driveObjectDeletions.createdAt} asc)`;
+function turnsOf(rowsOf: SQL, limit: number) {
+    return sql`
+        select t.object_id, t.store_id
+        from object_stores s
+        cross join lateral (
+            select p.*, row_number() over (order by p.failed_at asc nulls first, p.created_at asc) as turn
+            from (
+                select d.object_id, d.store_id, d.failed_at, d.created_at
+                from ${driveObjectDeletions} d
+                where ${rowsOf}
+                order by d.failed_at asc nulls first, d.created_at asc
+                limit ${limit}
+            ) p
+        ) t
+        order by t.turn, t.failed_at asc nulls first, t.created_at asc
+        limit ${limit}
+    `;
+}
+
+async function pageInTurn(turnsSql: SQL) {
+    const turns = await db.execute<{ object_id: string; store_id: string }>(turnsSql);
+    if (!turns.rows.length) return [];
+    const rows = await db
+        .select()
+        .from(driveObjectDeletions)
+        .where(
+            inArray(
+                driveObjectDeletions.objectId,
+                turns.rows.map((turn) => turn.object_id),
+            ),
+        );
+    const byKey = new Map(rows.map((row) => [`${row.objectId}:${row.storeId}`, row]));
+    // A row finished or taken back between the two reads is simply not in the page.
+    return turns.rows.flatMap((turn) => byKey.get(`${turn.object_id}:${turn.store_id}`) ?? []);
+}
 
 /*
  * Rows whose copy at their own store is still there and may go now: not held by
  * a report, not waiting on a move. Each store's rows in turn.
  */
 export async function listPendingObjectDeletions(limit = 200) {
-    return db
-        .select()
-        .from(driveObjectDeletions)
-        .where(
-            and(
-                isNull(driveObjectDeletions.doneAt),
-                isNull(driveObjectDeletions.primaryDeletedAt),
-                released,
-                // An open or held report names the object: it stays until the report lets go.
-                heldObjectCondition(driveObjectDeletions.objectId),
-            ),
-        )
-        .orderBy(turnAt(sql`${driveObjectDeletions.storeId}`), ...fairly)
-        .limit(limit);
+    return pageInTurn(pendingDeletionTurns(limit));
+}
+/* The statement, apart so a test can ask the planner. */
+export function pendingDeletionTurns(limit: number) {
+    return turnsOf(
+        sql`d.store_id = s.id
+            and d.done_at is null
+            and d.primary_deleted_at is null
+            and d.held_by_move is null and (d.not_before is null or d.not_before <= now())
+            -- An open or held report names the object: it stays until the report lets go.
+            and ${heldObjectCondition(sql`d.object_id`)}`,
+        limit,
+    );
 }
 
 /* Rows whose backup copy has outlived its undo window, each backup store's rows in turn. */
 export async function listBackupDeletionsDue(limit = 200) {
-    return db
-        .select()
-        .from(driveObjectDeletions)
-        .where(
-            and(
-                isNull(driveObjectDeletions.doneAt),
-                sql`${driveObjectDeletions.primaryDeletedAt} is not null`,
-                sql`${driveObjectDeletions.deleteReplicaAfter} <= now()`,
-            ),
-        )
-        .orderBy(
-            turnAt(
-                sql`coalesce(${driveObjectDeletions.backupStoreId}, ${ENVIRONMENT_REPLICA_STORE_ID}::uuid)`,
-            ),
-            ...fairly,
-        )
-        .limit(limit);
+    return pageInTurn(backupDeletionTurns(limit));
+}
+export function backupDeletionTurns(limit: number) {
+    return turnsOf(
+        // The store the call goes to is the backup; a row of the release before the column means the replica.
+        sql`coalesce(d.backup_store_id, ${ENVIRONMENT_REPLICA_STORE_ID}::uuid) = s.id
+            and d.done_at is null
+            and d.primary_deleted_at is not null
+            and d.delete_replica_after <= now()`,
+        limit,
+    );
 }
 
 /* What the deletion job can do at a store. Each call throws when the store did not answer. */

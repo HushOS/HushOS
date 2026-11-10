@@ -94,6 +94,30 @@ export const AFTER_MIGRATE: AfterMigrateStep[] = [
         migration: '20261110025847_storage_outbox',
         definition: '("store_id")',
     },
+    // The listings that take each store's rows in turn (docs/company-storage-design.md 2.4).
+    {
+        kind: 'index',
+        table: 'drive_object_deletions',
+        name: 'drive_object_deletions_turn_idx',
+        migration: '20261110063858_storage_turn_indexes',
+        definition: '("store_id", "failed_at" NULLS FIRST, "created_at") WHERE done_at is null',
+    },
+    {
+        kind: 'index',
+        table: 'drive_object_deletions',
+        name: 'drive_object_deletions_backup_due_idx',
+        migration: '20261110063858_storage_turn_indexes',
+        definition:
+            '("delete_replica_after") WHERE done_at is null and primary_deleted_at is not null',
+    },
+    {
+        kind: 'index',
+        table: 'drive_uploads',
+        name: 'drive_uploads_store_expiry_idx',
+        migration: '20261110063858_storage_turn_indexes',
+        definition:
+            "(\"store_id\", \"expires_at\") WHERE status in ('open', 'completing', 'conflicted')",
+    },
 ];
 
 type Rows = { rows: Record<string, unknown>[] };

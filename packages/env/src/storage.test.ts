@@ -72,16 +72,18 @@ describe('the store bounds', () => {
 
     test('are read as numbers, so an operator behind a slow link can lower the rate', async () => {
         const { storageEnv } = await startWithBounds({
-            STORAGE_MIN_BYTES_PER_SECOND: '65536',
+            STORAGE_MIN_BYTES_PER_SECOND: '81920',
             STORAGE_STORE_RUN_SECONDS: '300',
         });
-        expect(storageEnv.STORAGE_MIN_BYTES_PER_SECOND).toBe(65_536);
+        expect(storageEnv.STORAGE_MIN_BYTES_PER_SECOND).toBe(81_920);
         expect(storageEnv.STORAGE_STORE_RUN_SECONDS).toBe(300);
     });
 
     test.each([
         ['STORAGE_MIN_BYTES_PER_SECOND', '0'],
-        ['STORAGE_MIN_BYTES_PER_SECOND', '1023'],
+        // Under 80 KiB/s a 64 MiB copy part cannot finish inside the 15 minutes a call is given.
+        ['STORAGE_MIN_BYTES_PER_SECOND', '81919'],
+        ['STORAGE_MIN_BYTES_PER_SECOND', '1024'],
         ['STORAGE_MIN_BYTES_PER_SECOND', '-1'],
         ['STORAGE_MIN_BYTES_PER_SECOND', '256k'],
         ['STORAGE_MIN_BYTES_PER_SECOND', '1073741825'],
