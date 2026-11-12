@@ -1,0 +1,70 @@
+apps/web/src/components/account-two-step.tsx
+  s_566b8e0c4467a4::t_76150f5413c975 1-836
+  s_566b8e0c4467a4::t_8907982f9a91f8 837-841
+apps/web/src/components/account-dialogs.tsx
+  s_566b8e0c4467a4::t_92df6a4a508643 7,24,31-32,96,113,121-131,152,216,348,356-365,386,398,456,479,486-495,503,515,558
+apps/web/src/components/sign-in-step.tsx
+  s_566b8e0c4467a4::t_0b533c825ebb29 1-128
+apps/web/src/components/two-step-answer.tsx
+  s_566b8e0c4467a4::t_c35768963f6cf9 1-194
+apps/web/src/components/unlock-device.test.tsx
+  s_566b8e0c4467a4::t_14b72361e10ff0 1,15-16,18-23,72-140
+apps/web/src/components/unlock-device.tsx
+  s_566b8e0c4467a4::t_7cc12901ed2354 2-4,8,36-39,60-64,73-97
+apps/web/src/lib/api-client.ts
+  s_566b8e0c4467a4::t_4439dbefba3051 57-64
+apps/web/src/lib/auth-api.ts
+  s_566b8e0c4467a4::t_038b78c0667169 14-25
+apps/web/src/lib/device-data.test.ts
+  s_566b8e0c4467a4::t_efe45142a6d1eb 329-330
+apps/web/src/lib/device-session.test.ts
+  s_566b8e0c4467a4::t_bfa69bd4116de3 47-56
+apps/web/src/lib/two-step.test.ts
+  s_566b8e0c4467a4::t_abe85d4d6261b6 1-69
+apps/web/src/lib/two-step.ts
+  s_566b8e0c4467a4::t_cd741e1783c4ea 1-159
+apps/web/src/routes/_authenticated/app/account.tsx
+  s_566b8e0c4467a4::t_786d2002a502db 13,37,109-110
+apps/web/src/routes/login/route.tsx
+  s_566b8e0c4467a4::t_53a5d25e483866 10-11,15,97-124,145,147-151,154-159,176-195
+apps/web/src/test/login-storage-choice.test.tsx
+  s_566b8e0c4467a4::t_5c5a0e624daf9a 36-37
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_d3a230e3439edf 870
+docs/two-step-design.md
+  s_566b8e0c4467a4::t_a44dfb58e25be5 5,292-297,606
+e2e/helpers.ts
+  s_566b8e0c4467a4::t_d429844aceb365 384-385,388,395,401,422
+e2e/two-step.spec.ts
+  s_566b8e0c4467a4::t_9664d25ebd158c 1-363
+packages/auth/src/api.ts
+  s_566b8e0c4467a4::t_a30dcdd27b5f4d 140-189,263-268,273-291,338-342,344-349,352-356
+packages/auth/src/client.test.ts
+  s_566b8e0c4467a4::t_5a70d8b54de1ca 55-68,85-89,207,328
+packages/auth/src/client.ts
+  s_566b8e0c4467a4::t_be450b329acfac 12,14,87-183,195-199,204,210-224,278,281-287,320-325,526,529-540,543,545,549-571,575,593,619-671,705-706,710-711,725-726,730,741,744-748,754-756,818-821,876,878,880-885,923,925,964-965,969,974,984-988,991-993,1053-1056,1058-1104,1107,1109
+packages/auth/src/client.two-step.test.ts
+  s_566b8e0c4467a4::t_0768960f12ab40 1-348
+packages/auth/src/login-reply.test.ts
+  s_566b8e0c4467a4::t_4cb93273577d9e 1-90
+packages/crypto/scripts/core-fixtures.ts
+  s_566b8e0c4467a4::t_535a5a8ff81085 45-50,888-909,936
+packages/crypto/src/session.two-step.test.ts
+  s_566b8e0c4467a4::t_5a6d183c2aac74 1-130
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a606f493e817b0a9a04e2bbc28d1a0ec9a4efe26",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
