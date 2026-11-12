@@ -893,6 +893,46 @@ fn the_web_s_device_session_proof_is_this_core_s_byte_for_byte() {
     assert_eq!(device_email_hash(s(session, "email")), s(session, "emailDigest"));
 }
 
+#[test]
+fn the_web_s_recovery_phrase_answer_to_a_step_is_this_core_s_byte_for_byte() {
+    let step = &fixture()["twoStepPhrase"];
+    let (user, token, salt) = (s(step, "userId"), s(step, "stepToken"), s(step, "wrappingSalt"));
+    // The digest the statement names, and the statement both sides sign: the id is upper
+    // case in the fixture and lower case in the bytes.
+    assert_eq!(step_token_digest(token.clone()), s(step, "tokenDigest"));
+    let statement = two_step_phrase_statement(user.clone(), s(step, "tokenDigest")).unwrap();
+    assert_eq!(statement, b(step, "statement"));
+    // The same phrase and salt derive the same key here as on the web, and Ed25519 is
+    // deterministic: the signature is libsodium's, byte for byte.
+    assert_eq!(
+        two_step_phrase_sign(s(step, "phrase"), salt.clone(), user.clone(), token.clone()).unwrap(),
+        s(step, "signature")
+    );
+    // The recovery envelope's public key, which the server holds, verifies it, for this token only.
+    assert!(two_step_phrase_verify(
+        b(step, "publicKey"),
+        user.clone(),
+        s(step, "tokenDigest"),
+        b(step, "signature")
+    ));
+    assert!(!two_step_phrase_verify(
+        b(step, "publicKey"),
+        user.clone(),
+        step_token_digest(format!("{token}x")),
+        b(step, "signature")
+    ));
+    // Another salt is another key: its signature is not the web's, and the envelope's key refuses it.
+    let other = two_step_phrase_sign(s(step, "phrase"), base64url_encode(vec![9u8; 32]), user.clone(), token)
+        .unwrap();
+    assert_ne!(other, s(step, "signature"));
+    assert!(!two_step_phrase_verify(
+        b(step, "publicKey"),
+        user,
+        s(step, "tokenDigest"),
+        base64url_decode(other).unwrap()
+    ));
+}
+
 /* A record of the web's rekeyed fixture as the core reads it. */
 fn rekeyed_record(value: &Value) -> rekeyed::Input {
     let mut input = value.clone();

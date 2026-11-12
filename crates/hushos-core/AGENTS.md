@@ -65,7 +65,7 @@ Every module with a TypeScript twin is held to it by fixtures in both directions
 | ML-DSA       | `fixtures/ml-dsa-65-acvp.json`, a subset of NIST's ACVP-Server vectors (commit and file hashes inside)                                               | Passed by `pq.rs`'s tests and `packages/crypto/src/ml-dsa-acvp.test.ts`                                                                                                             |                                                                                                                                                                                                                                                                                                                    |
 | Old apps     | `fixtures/v0.10.0/planted-join.json`, made by the core at the tag `v0.10.0` with `fixtures/v0.10.0/planted_join.rs` (how to run it is in its header) | Read by `tests/planted_join.rs` and `packages/crypto/src/planted-join.test.ts`                                                                                                      |                                                                                                                                                                                                                                                                                                                    |
 
-- The base files cover the sealed box, argon2id, BIP-39, settings, shares, rewraps, `ids`, `rekeyed`, `node.attributed` and the area self-grant.
+- The base files cover the sealed box, argon2id, BIP-39, settings, shares, rewraps, `ids`, `rekeyed`, `node.attributed`, the area self-grant, the device session proof and the recovery phrase's answer to a second step (`twoStepPhrase`).
 - `bun run fixtures:groups` rebuilds the group and area-ledger files.
 - The case lists for each area are under that area below.
 
@@ -84,6 +84,7 @@ Every module with a TypeScript twin is held to it by fixtures in both directions
 | `links.rs`                |                                                                                                                     | Link keys                                                                    |
 | `reports.rs`              | `packages/crypto/src/reports.ts`                                                                                    | Report seals, `pair_key`                                                     |
 | `recovery.rs`             |                                                                                                                     | Recovery phrases                                                             |
+| `two_step.rs`             | `packages/crypto/src/two-step.ts`, `packages/auth/src/login-reply.ts`                                               | The phrase's answer to a second step, reading a sign-in's reply              |
 | `contacts.rs`             | `packages/crypto/src/contacts.ts`                                                                                   | Fingerprints, key digests, pins, the settings document                       |
 | `first_seen.rs`           | `packages/drive` (`comparePin`), `packages/crypto/src/first-seen.test.ts`                                           | First-seen pins and the guard's rule                                         |
 | `canonical.rs`            |                                                                                                                     | The group statement grammar                                                  |
@@ -336,6 +337,23 @@ Design: docs/identity-pq-design.md.
 
 - The BIP-39 English list is embedded from `bip39-english.txt`.
 - `recovery_create/open/phrase`.
+
+### Two-step sign-in (`two_step.rs`)
+
+`docs/two-step-design.md` 4 to 6. Codes are checked on the server; nothing here makes or checks one.
+
+- `two_step_phrase_statement(user_id, token_digest)` is `["hushos/two-step/phrase",1,userId,sha256(stepToken)]`, the id lowercased, the digest base64url (`step_token_digest`).
+- `two_step_phrase_sign(phrase, wrapping_salt, user_id, step_token)` derives the recovery signing key (`recovery_signing_seed`, the same HKDF a phrase reset uses) and signs. It compares nothing with an envelope: the server's check says whether the phrase is the account's.
+- `sign_in_reply_read(status, body) -> StepReply` decides what `login/finish` or `login/two-step` answered, from the reply alone:
+    - `Done` only for a whole session (the account, its envelope, its device);
+    - `Step` for `twoStep` with a token, a list and an end, and no `user` beside it;
+    - `Refused { refusal, message }` for a refusal in the server's words, by its `code` (`step-unavailable` is `Unavailable`; a 429 without a code is `Busy`, the address's own limit);
+    - `Lost` for anything else, a 5xx without `step-unavailable` included. Never a sign-in, never a refusal.
+- `step_challenge_reply_read` and `step_change_reply_read` read `two-step/challenge` and the changes that carry a step.
+- A method this build does not know is left out of a challenge; the phrase is left out without what it signs with.
+- `step_answer_json(token, proof)` writes the body both phones send.
+- `backup_code_normalize` reads a typed code as the server does.
+- Fixtures: `twoStepPhrase` in both base files (the web's statement and signature made here byte for byte, and this crate's verified by the web's `verifyTwoStepPhrase`).
 
 ## Contacts, pins and settings (`contacts.rs`, `first_seen.rs`)
 
