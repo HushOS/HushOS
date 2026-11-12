@@ -90,6 +90,12 @@ export class DeviceStorageUnreadable extends Error {
 export type LoginOptions = {
     /* Skip reading the device key and sign in as a new device: the person's choice when it can't be read. */
     asNewDevice?: boolean;
+    /*
+     * Whose sign-in this is: the form that started it, by any object of its own. A step it
+     * stops at is that form's to answer, and `cancelStep(owner)` from another form (the same
+     * unlock form mounted twice, one closing) leaves it alone.
+     */
+    owner?: object;
 };
 
 /*
@@ -235,7 +241,9 @@ export function createAuthClient(
      * A sign-in stopped at its second step: the worker holds what the password gave it until
      * the answer brings the envelope. Like a running sign-in, it owns the worker (`owned`).
      */
-    let pendingStep: { challenge: StepChallenge; epoch: number; until: number } | undefined;
+    let pendingStep:
+        | { challenge: StepChallenge; epoch: number; until: number; owner: object | undefined }
+        | undefined;
     /*
      * The sign-in a page is waiting on, by number; 0 when the page that asked has gone
      * (`cancelStep`). A reply that arrives after that finds nobody to ask for the step, so
@@ -243,7 +251,14 @@ export function createAuthClient(
      * answer it.
      */
     let signIns = 0;
-    let askedBy = 0;
+    let askedBy: { attempt: number; owner: object | undefined } | null = null;
+    /*
+     * Whether the worker holds what a sign-in or a change is in the middle of: from its start
+     * until the account is open in the worker (or the flow ends). `busy` lasts longer, to the
+     * end of the flow: saving device access comes after the account is open, and by then other
+     * operations are as safe as they ever were and must not be refused.
+     */
+    let holding = false;
     let channel: BroadcastChannel | undefined;
     let listening = false;
     function lock() {
@@ -269,6 +284,8 @@ export function createAuthClient(
      * halves is as long as a person takes to find a code.
      */
     const owned = () => busy || waitingStep() !== undefined;
+    /* Whether another account operation would throw away what the worker holds (see `rpc`). */
+    const guarded = () => holding || waitingStep() !== undefined;
     function listen() {
         if (listening) return;
         listening = true;
@@ -328,7 +345,7 @@ export function createAuthClient(
         // Drive's and a family's operations fail without touching what the worker holds
         // (ordinary-failure.ts), so they go through; an account operation that is not the
         // owner's would not.
-        if (!owner && owned() && !ordinaryFailure(String(operation)))
+        if (!owner && guarded() && !ordinaryFailure(String(operation)))
             throw Object.assign(new Error('Please wait for the current sign-in attempt.'), {
                 kept: true,
             });
@@ -587,7 +604,7 @@ export function createAuthClient(
     ) {
         const loginEpoch = epoch;
         const attempt = ++signIns;
-        if (step === 'ask') askedBy = attempt;
+        if (step === 'ask') askedBy = { attempt, owner: options.owner };
         const stored = identities && !options.asNewDevice ? await storedIdentity(identities) : null;
         const start = await own('loginStart', { password });
         const challenge = await api.loginStart({ email, ...start });
@@ -608,11 +625,13 @@ export function createAuthClient(
             if (epoch !== loginEpoch)
                 throw new Error('Your account was locked. Please sign in again.');
             // The page that asked left while the reply was on its way: nobody can answer.
-            if (askedBy !== attempt) throw new Error('This sign-in was left. Sign in again.');
+            if (askedBy?.attempt !== attempt)
+                throw new Error('This sign-in was left. Sign in again.');
             pendingStep = {
                 challenge: reply.challenge,
                 epoch: loginEpoch,
                 until: Date.parse(reply.challenge.expiresAt),
+                owner: options.owner,
             };
             throw new TwoStepRequired(reply.challenge);
         }
@@ -630,6 +649,10 @@ export function createAuthClient(
             );
         }
         if (epoch !== loginEpoch) throw new Error('Your account was locked. Please sign in again.');
+        // The account is open in the worker: nothing is held that another operation could
+        // throw away. Let go before saying so, because the app acts on "unlocked" at once
+        // (Drive opens the identity), and saving device access below can take a while.
+        holding = false;
         store.setState({ unlockedUserId: result.user.id, rememberError: '' });
         // Which step a failed save stopped at, and why: the banner says only that it failed.
         let saving = 'storage';
@@ -698,6 +721,7 @@ export function createAuthClient(
         const pending = waitingStep();
         if (!pending || pending.epoch !== epoch) throw new StepFailure('over', STEP_OVER);
         busy = true;
+        holding = true;
         try {
             const reply = readLoginReply(
                 await api.loginTwoStep(await proveStep(pending.challenge, answer, own)),
@@ -718,6 +742,7 @@ export function createAuthClient(
             throw failure;
         } finally {
             busy = false;
+            holding = false;
         }
     }
     let initializing: Promise<boolean> | undefined;
@@ -753,6 +778,7 @@ export function createAuthClient(
     async function exclusive<T>(action: () => Promise<T>) {
         if (busy) throw new Error('Please wait for the current sign-in attempt.');
         busy = true;
+        holding = true;
         // Whatever starts now takes the worker over: a sign-in left waiting at its step is dropped.
         pendingStep = undefined;
         try {
@@ -763,6 +789,7 @@ export function createAuthClient(
             throw error;
         } finally {
             busy = false;
+            holding = false;
         }
     }
     /*
@@ -1112,11 +1139,16 @@ export function createAuthClient(
         login: (email: string, password: string, options?: LoginOptions) =>
             exclusive(() => login(email, password, options, 'ask')),
         answerStep,
-        /* Leaves a sign-in that is waiting at its step: what the worker held for it goes. */
-        cancelStep() {
+        /*
+         * Leaves a sign-in that is waiting at its step: what the worker held for it goes. With
+         * `owner`, only that form's own sign-in is left: another form going away (the unlock
+         * form is mounted in more than one place) must not take a step it never started.
+         */
+        cancelStep(owner?: object) {
+            const mine = (other: object | undefined) => owner === undefined || other === owner;
             // A sign-in still on its way to the server is no longer anyone's to answer either.
-            askedBy = 0;
-            if (pendingStep) lock();
+            if (askedBy && mine(askedBy.owner)) askedBy = null;
+            if (pendingStep && mine(pendingStep.owner)) lock();
         },
         /*
          * The step for a change this session is about to make, or null for an account that

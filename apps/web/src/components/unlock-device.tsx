@@ -36,7 +36,11 @@ export function UnlockDevice({
     // Unlocking is a sign-in, so an account with two-step sign-in may be asked for its step:
     // on a browser the account does not know, or one whose session did not pass it.
     const [step, setStep] = useState<StepChallenge | null>(null);
-    useEffect(() => () => authClient.cancelStep(), []);
+    // This form's own mark on the sign-ins it starts. The form is mounted in more than one
+    // place at once (the locked page, and the Unlock dialog behind its button): one of them
+    // going away lets go of its own waiting sign-in, never the other's.
+    const [owner] = useState(() => ({}));
+    useEffect(() => () => authClient.cancelStep(owner), [owner]);
     const form = useForm({
         defaultValues: { password: '' },
         validationLogic: revalidateLogic(),
@@ -50,6 +54,7 @@ export function UnlockDevice({
             try {
                 await authClient.login(user.email, value.password, {
                     asNewDevice: meta.asNewDevice,
+                    owner,
                 });
                 cue('success');
                 // Kept, and busy, while what unlocking opens takes over; emptied after,
@@ -80,6 +85,7 @@ export function UnlockDevice({
                     <SignInStep
                         key={step.token}
                         challenge={step}
+                        owner={owner}
                         size={onCancel ? 'default' : 'lg'}
                         onSignedIn={async () => {
                             await onUnlocked?.();

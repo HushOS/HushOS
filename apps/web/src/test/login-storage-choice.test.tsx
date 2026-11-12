@@ -58,9 +58,11 @@ async function refusedOnce() {
     await user.click(screen.getByRole('button', { name: 'Sign in' }));
     await screen.findByRole('button', { name: 'Sign in as a new device' });
     expect(screen.getByText(/didn’t answer in time/)).toBeInTheDocument();
-    expect(login).toHaveBeenLastCalledWith('maya@example.com', 'correct horse', {
-        asNewDevice: false,
-    });
+    expect(login).toHaveBeenLastCalledWith(
+        'maya@example.com',
+        'correct horse',
+        expect.objectContaining({ asNewDevice: false }),
+    );
     return { user, password };
 }
 
@@ -75,17 +77,21 @@ describe('signing in when the device key could not be read', () => {
         await user.type(password, 'correct horse');
         await user.click(screen.getByRole('button', { name: 'Try again' }));
         await vi.waitFor(() => expect(login).toHaveBeenCalledTimes(2));
-        expect(login).toHaveBeenLastCalledWith('maya@example.com', 'correct horse', {
-            asNewDevice: false,
-        });
+        expect(login).toHaveBeenLastCalledWith(
+            'maya@example.com',
+            'correct horse',
+            expect.objectContaining({ asNewDevice: false }),
+        );
     });
 
     test('the new-device press signs in as a new device', async () => {
         const { user } = await refusedOnce();
         await user.click(screen.getByRole('button', { name: 'Sign in as a new device' }));
         await vi.waitFor(() => expect(login).toHaveBeenCalledTimes(2));
-        expect(login).toHaveBeenLastCalledWith('maya@example.com', 'correct horse', {
-            asNewDevice: true,
-        });
+        expect(login).toHaveBeenLastCalledWith(
+            'maya@example.com',
+            'correct horse',
+            expect.objectContaining({ asNewDevice: true }),
+        );
     });
 });

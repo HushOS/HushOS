@@ -106,10 +106,16 @@ export function readEnrolment(reply: unknown) {
     if (!record(reply) || !text(reply.id) || !text(reply.secret) || !text(reply.uri)) return null;
     return { id: reply.id, secret: reply.secret, uri: reply.uri };
 }
-/* A confirmed app: the backup codes when this turned the step on, none when it replaced an app. */
+/*
+ * A confirmed app, exactly as the server answers: the backup codes when this turned the step
+ * on, and an empty object when it replaced an app. Nothing else is one: an object that merely
+ * lacks `backupCodes`, such as a proxy's `{ "error": … }` with a 200, is not a confirmation.
+ */
 export function readConfirmed(reply: unknown) {
     if (!record(reply)) return null;
-    if (reply.backupCodes === undefined) return {};
+    const keys = Object.keys(reply);
+    if (keys.length === 0) return {};
+    if (keys.length !== 1 || keys[0] !== 'backupCodes') return null;
     return texts(reply.backupCodes) ? { backupCodes: reply.backupCodes } : null;
 }
 export function readBackupCodes(reply: unknown) {

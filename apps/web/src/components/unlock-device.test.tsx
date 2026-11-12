@@ -10,16 +10,20 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
  */
 const login =
     vi.fn<
-        (email: string, password: string, options?: { asNewDevice?: boolean }) => Promise<void>
+        (
+            email: string,
+            password: string,
+            options?: { asNewDevice?: boolean; owner?: object },
+        ) => Promise<void>
     >();
 const answerStep = vi.fn<(answer: unknown) => Promise<void>>();
-const cancelStep = vi.fn();
+const cancelStep = vi.fn<(owner?: object) => void>();
 vi.mock('@/lib/auth-client', () => ({
     authClient: {
         login: (...args: Parameters<typeof login>) => login(...args),
         answerStep: (answer: unknown) => answerStep(answer),
         // Leaving the form lets go of a sign-in waiting at its second step.
-        cancelStep: () => cancelStep(),
+        cancelStep: (owner?: object) => cancelStep(owner),
     },
 }));
 vi.mock('@/lib/sounds', () => ({ cue: vi.fn() }));
@@ -38,9 +42,11 @@ async function refusedOnce() {
     await user.type(password, 'correct horse');
     await user.click(screen.getByRole('button', { name: 'Unlock' }));
     await screen.findByRole('button', { name: 'Unlock as a new device' });
-    expect(login).toHaveBeenLastCalledWith('maya@example.com', 'correct horse', {
-        asNewDevice: false,
-    });
+    expect(login).toHaveBeenLastCalledWith(
+        'maya@example.com',
+        'correct horse',
+        expect.objectContaining({ asNewDevice: false }),
+    );
     return { user, password };
 }
 
@@ -55,18 +61,22 @@ describe('unlocking when the device key could not be read', () => {
         await user.type(password, 'correct horse');
         await user.click(screen.getByRole('button', { name: 'Try again' }));
         await vi.waitFor(() => expect(login).toHaveBeenCalledTimes(2));
-        expect(login).toHaveBeenLastCalledWith('maya@example.com', 'correct horse', {
-            asNewDevice: false,
-        });
+        expect(login).toHaveBeenLastCalledWith(
+            'maya@example.com',
+            'correct horse',
+            expect.objectContaining({ asNewDevice: false }),
+        );
     });
 
     test('the new-device press unlocks as a new device', async () => {
         const { user } = await refusedOnce();
         await user.click(screen.getByRole('button', { name: 'Unlock as a new device' }));
         await vi.waitFor(() => expect(login).toHaveBeenCalledTimes(2));
-        expect(login).toHaveBeenLastCalledWith('maya@example.com', 'correct horse', {
-            asNewDevice: true,
-        });
+        expect(login).toHaveBeenLastCalledWith(
+            'maya@example.com',
+            'correct horse',
+            expect.objectContaining({ asNewDevice: true }),
+        );
     });
 });
 
@@ -171,5 +181,33 @@ describe('unlocking an account that asks for a second step', () => {
         expect(answerStep).toHaveBeenLastCalledWith({ kind: 'backup', code: '7KQ2M-9XD4P' });
         expect(screen.getByLabelText('Password')).toHaveValue('');
         expect(screen.getByRole('button', { name: 'Unlock' })).toBeEnabled();
+    });
+
+    test('the form is on the page twice: the one that closes lets go of its own sign-in only, never the other’s step', async () => {
+        // The locked page's form, which the person uses, and the Unlock dialog's, which they close.
+        cancelStep.mockClear();
+        login.mockReset();
+        login.mockRejectedValueOnce(new TwoStepRequired(challenge));
+        const user = userEvent.setup();
+        const inline = render(<UnlockDevice user={{ email: 'maya@example.com' }} />);
+        const inDialog = render(<UnlockDevice user={{ email: 'maya@example.com' }} />);
+        await user.type(inline.getAllByLabelText('Password')[0]!, 'correct horse');
+        await user.click(inline.getAllByRole('button', { name: 'Unlock' })[0]!);
+        await inline.findByLabelText('Code from your authenticator app');
+        const started = login.mock.calls[0]![2]!.owner;
+        expect(started).toBeTypeOf('object');
+
+        inDialog.unmount();
+        // What the closing form lets go of is named, and it is not the other form's sign-in.
+        expect(cancelStep).toHaveBeenCalledTimes(1);
+        const left = cancelStep.mock.calls[0]![0];
+        expect(left).toBeTypeOf('object');
+        expect(left).not.toBe(started);
+        // The step is still on screen, and still answerable.
+        expect(inline.getByLabelText('Code from your authenticator app')).toBeVisible();
+
+        // The form that started it does let go of it when it goes.
+        inline.unmount();
+        expect(cancelStep).toHaveBeenLastCalledWith(started);
     });
 });

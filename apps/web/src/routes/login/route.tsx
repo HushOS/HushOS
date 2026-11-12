@@ -96,8 +96,10 @@ function LoginPage() {
     const [removed, setRemoved] = useState(false);
     // The password was right and the account asks for a second step: the card asks for it.
     const [step, setStep] = useState<StepChallenge | null>(null);
-    // A sign-in left at its step holds the worker; leaving the page lets go of it.
-    useEffect(() => () => authClient.cancelStep(), []);
+    // A sign-in left at its step holds the worker; leaving the page lets go of it, and of
+    // nothing another form started (`owner`).
+    const [owner] = useState(() => ({}));
+    useEffect(() => () => authClient.cancelStep(owner), [owner]);
     /* Signed in: on to the page asked for, or to the new recovery phrase after a rotation. */
     async function enter() {
         // The form keeps what was typed and stays busy until the app replaces it:
@@ -141,6 +143,7 @@ function LoginPage() {
             try {
                 await authClient.login(value.email, value.password, {
                     asNewDevice: meta.asNewDevice,
+                    owner,
                 });
                 await enter();
             } catch (error) {
@@ -183,6 +186,7 @@ function LoginPage() {
                 <SignInStep
                     key={step.token}
                     challenge={step}
+                    owner={owner}
                     onSignedIn={enter}
                     onOver={(reason) => {
                         setStep(null);

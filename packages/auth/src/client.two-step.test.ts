@@ -282,6 +282,94 @@ describe('a sign-in that stops at its second step', () => {
         await expect(client.rpc('identityOpen', {} as never)).resolves.toEqual({});
     });
 
+    test('a form that goes away lets go of its own sign-in only: another form’s step, waiting or still on its way, is left alone', async () => {
+        const mine = {};
+        const other = {};
+        const { client, locks } = setup({ loginTwoStep: async () => session });
+        const asked = await client
+            .login(user.email, 'correct horse', { owner: mine })
+            .catch((error: unknown) => error);
+        expect(asked).toBeInstanceOf(TwoStepRequired);
+        // The same form, mounted elsewhere and closed: nothing of this sign-in is touched.
+        client.cancelStep(other);
+        expect(locks()).toBe(0);
+        expect(client.isAuthenticating()).toBe(true);
+        expect(await client.answerStep({ kind: 'totp', code: '123456' })).toEqual(user);
+
+        // A sign-in still on its way to the server, when the other form closes: its step is
+        // installed for the form that asked.
+        let answer!: (reply: unknown) => void;
+        const flight = setup({ loginFinish: () => new Promise((resolve) => (answer = resolve)) });
+        const signingIn = flight.client
+            .login(user.email, 'correct horse', { owner: mine })
+            .catch((error: unknown) => error);
+        await vi.waitFor(() => expect(answer).toBeTypeOf('function'));
+        flight.client.cancelStep(other);
+        answer({ twoStep: step });
+        expect(await signingIn).toBeInstanceOf(TwoStepRequired);
+        // Its own form going away does drop it.
+        flight.client.cancelStep(mine);
+        expect(flight.locks()).toBe(1);
+        expect(flight.client.isAuthenticating()).toBe(false);
+    });
+
+    test.each([
+        ['a sign-in with the password alone', false],
+        ['a sign-in that answered its step', true],
+    ])(
+        'once the account is open after %s, other operations go through, though device access is still being saved',
+        async (_name, viaStep) => {
+            items.clear();
+            const worker: string[] = [];
+            const transport: CryptoTransport = {
+                request: async (operation) => {
+                    worker.push(String(operation));
+                    return {} as never;
+                },
+                lock() {},
+                onLock() {},
+            };
+            // The device key store is slow, as it is on a loaded phone: the sign-in is not over.
+            let saved!: () => void;
+            const keys: DeviceKeyStore = {
+                create: () =>
+                    new Promise((resolve) => {
+                        saved = () => resolve({ id: 'device-key-1', key: {} as CryptoKey });
+                    }),
+                load: async () => null,
+                clear: async () => {},
+            };
+            const client = createAuthClient(() => transport, keys, {
+                loginStart: async () => ({ attemptToken: 'attempt' }),
+                loginFinish: async () => (viaStep ? { twoStep: step } : session),
+                loginTwoStep: async () => session,
+            } as unknown as AuthApi);
+            // What the app does the moment it hears "unlocked": Drive opens the identity.
+            let opened: Promise<string> | undefined;
+            client.store.subscribe((state, previous) => {
+                if (state.unlockedUserId && !previous.unlockedUserId)
+                    opened = client.rpc('identityOpen', {} as never).then(
+                        () => 'opened',
+                        (error: Error) => error.message,
+                    );
+            });
+            const signIn = viaStep
+                ? client
+                      .login(user.email, 'correct horse')
+                      .catch(() => client.answerStep({ kind: 'totp', code: '123456' }))
+                : client.login(user.email, 'correct horse');
+            await vi.waitFor(() => expect(opened).toBeDefined());
+            // Not "Please wait for the current sign-in attempt.": that ends at "Your files didn't
+            // open" for a sign-in that worked.
+            expect(await opened).toBe('opened');
+            expect(worker).toContain('identityOpen');
+            // The sign-in itself is still going, and finishes when the store answers.
+            expect(client.isAuthenticating()).toBe(true);
+            saved();
+            expect(await signIn).toEqual(user);
+        },
+    );
+
     test('leaving the step, or starting another sign-in, drops it', async () => {
         const { client, toStep, locks } = setup({ loginTwoStep: async () => session });
         await toStep();
@@ -483,6 +571,28 @@ describe('other replies that say a change was made', () => {
             backupCodes: codes,
         });
         expect(await client.confirmAuthenticator('second', '123456')).toEqual({});
+    });
+
+    test.each([
+        ['a proxy’s error object', { error: 'upstream unavailable' }],
+        ['a success flag the server never sends here', { success: true }],
+        ['codes beside something else', { backupCodes: ['CODE0-AAAAA'], error: 'x' }],
+        ['codes that are not codes', { backupCodes: 'CODE0-AAAAA' }],
+    ])('a 200 with %s is not a confirmed authenticator app', async (_name, reply) => {
+        const { client } = setup({ twoStepConfirmTotp: async () => reply });
+        await expect(client.confirmAuthenticator('app', '123456')).rejects.toBeInstanceOf(
+            LostReply,
+        );
+    });
+
+    test('the other answers the server gives to a change of the step are read as what they are', async () => {
+        const codes = Array.from({ length: 10 }, (_, index) => `CODE${index}-AAAAA`);
+        const { client } = setup({
+            ...reauth,
+            twoStepBackupCodes: async () => ({ codes }),
+            twoStepRemoveMethod: async () => ({ removed: true, on: false }),
+            twoStepStartTotp: async () => ({ id: 'app', secret: 'KEY', uri: 'otpauth://totp/x' }),
+        });
         const twoStep = { token: step.token, proof: { kind: 'totp', code: '123456' } } as const;
         expect(await client.newBackupCodes('correct horse', twoStep)).toEqual({ codes });
         expect(await client.removeTwoStepMethod('app', 'correct horse', twoStep)).toEqual({

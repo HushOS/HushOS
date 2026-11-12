@@ -20,12 +20,15 @@ export function SignInStep({
     challenge,
     onSignedIn,
     onOver,
+    owner,
     size = 'lg',
 }: {
     challenge: StepChallenge;
     onSignedIn: () => void | Promise<void>;
     /* Back to the password: with why, or with nothing when the person chose to start again. */
     onOver: (reason: string) => void;
+    /* The form that started this sign-in (`LoginOptions.owner`): what it leaves is its own. */
+    owner?: object;
     /* `lg` on the sign-in page, where the action spans the card; `default` in a dialog. */
     size?: 'lg' | 'default';
 }) {
@@ -64,7 +67,7 @@ export function SignInStep({
             } else {
                 // Over for a reason that was not the step's own (a sign-out elsewhere, say):
                 // what the sign-in held is let go before the password is asked for again.
-                authClient.cancelStep();
+                authClient.cancelStep(owner);
                 onOver(authError(cause));
             }
         } finally {
@@ -104,7 +107,7 @@ export function SignInStep({
                             variant="outline"
                             disabled={pending}
                             onClick={() => {
-                                authClient.cancelStep();
+                                authClient.cancelStep(owner);
                                 onOver('');
                             }}
                         >
@@ -129,7 +132,7 @@ export function SignInStep({
                             className="h-11 w-full text-[15px]"
                             disabled={pending}
                             onClick={() => {
-                                authClient.cancelStep();
+                                authClient.cancelStep(owner);
                                 onOver('');
                             }}
                         >
