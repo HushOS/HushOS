@@ -1,0 +1,59 @@
+.github/workflows/ci.yml
+  s_566b8e0c4467a4::t_01a04f63b5da2b 390,430-433
+apps/web/src/components/account-two-step.tsx
+  s_566b8e0c4467a4::t_0c47f5a44abc13 2,8,26,28,76,227,236,238-242,244-248,384-409,419,462-482,517-519,562,565-576,585-587,611-615,618-625,669,684-685,687,695-699,711,716-717,733
+apps/web/src/components/sign-in-step.tsx
+  s_566b8e0c4467a4::t_b5b96edc917f45 10,37,42-45,55-56,59-60,92-93
+apps/web/src/components/two-step-answer.tsx
+  s_566b8e0c4467a4::t_2a20d3014cbc08 3,40-41,52-58,61-62,64-76,80-82,86,115,117-118,128,140,142,148,158,160,166,219
+apps/web/src/components/unlock-device.test.tsx
+  s_566b8e0c4467a4::t_7e55fd574cd7e6 110-112,122-144,153-155,157-162,170-171
+apps/web/src/lib/api/two-step.db.test.ts
+  s_566b8e0c4467a4::t_9b0f569b2982c2 1219-1237
+apps/web/src/lib/two-step.test.ts
+  s_566b8e0c4467a4::t_c5c4c22b94e42d 9,56-73
+apps/web/src/lib/two-step.ts
+  s_566b8e0c4467a4::t_2bd5f6702216f4 70-80,107-108,115-118,128,150-153,167-173
+docs/two-step-design.md
+  s_566b8e0c4467a4::t_3be76206612162 293
+e2e/two-step.spec.ts
+  s_566b8e0c4467a4::t_83fdfa9b19e26a 11-15,18-30,59-60,63-66,80,89-97,106-120,155-163,167,170,172-175,190-195,219,224-225,235-236,267,353,426-496
+packages/auth/src/api.ts
+  s_566b8e0c4467a4::t_a7cf80caae2a55 282-289
+packages/auth/src/client.test.ts
+  s_566b8e0c4467a4::t_b349d5fdc05139 356-357
+packages/auth/src/client.two-step.test.ts
+  s_566b8e0c4467a4::t_5bc5314a5f4668 1,28,174-175,254-278,336-339,371-379,387-481
+packages/auth/src/login-reply.ts
+  s_566b8e0c4467a4::t_a1735bbc4f1634 90-121
+packages/db/src/auth.ts
+  s_566b8e0c4467a4::t_05d1174cf6f52e 422-425,433-438,1642-1645
+packages/db/src/two-step.test.ts
+  s_566b8e0c4467a4::t_7ef2a127be5c47 1722-1745
+packages/auth/src/client.ts
+  s_a7b7a6f08ce4bb::t_0dd5506eee5bff 14-22,120-121,133,174-176,197-216,234-241,584-585,605-606,927,932,1027,1037-1039,1041-1043,1112-1113,1139-1145,1148-1153,1157-1166,1172-1178
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2f83890fe118816ab16cfb128fc93472f83bf894",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_a7b7a6f08ce4bb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a2fc93fc7e1974125",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
