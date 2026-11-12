@@ -2,7 +2,7 @@
 
 This document adds an optional second step to signing in to HushOS: a code from an authenticator app (TOTP), a security key (WebAuthn), or a backup code, asked for after the password and before the server hands over anything. It says what that step protects in an end-to-end encrypted system and what it does not, where it sits in each flow, how a person gets back in without it, and how it ships on the web and the apps. It sits beside `docs/devices-design.md` (Approve new devices, Keys need a device) and changes nothing there; section 1 says how the three fit together.
 
-Written on 21 October 2026, and revised the same day after an independent review: the apps' browser path for security keys, code budgets for known devices, where the two-step key comes from, the phrase's salt and justification, the counter rule, policies, guardians, the security log and the phones' sign-in. Section 11 lists the decisions the owner had to make, each with a recommendation; all nine are answered below it. Steps 1 and 2 of the implementation plan (section 10) are built, behind `TWO_STEP_ENABLED`, which is off. The same section lists what the flag still waits for.
+Written on 21 October 2026, and revised the same day after an independent review: the apps' browser path for security keys, code budgets for known devices, where the two-step key comes from, the phrase's salt and justification, the counter rule, policies, guardians, the security log and the phones' sign-in. Section 11 lists the decisions the owner had to make, each with a recommendation; all nine are answered below it. Steps 1 to 3 of the implementation plan (section 10) are built, behind `TWO_STEP_ENABLED`, which is off: the server and the web app. The same section lists what the flag still waits for.
 
 The recommendations, in short:
 
@@ -288,6 +288,12 @@ That is the web's unlock after a lock. The new session inherits `two_step_at` an
     2. The action's finish request carries `twoStep: { token, proof }`.
     3. The server checks the password proof first, then the step, then commits. A step token made for one purpose or one session is refused for another.
 - **Not removing a device.** Removal already needs the password. Its worst case, signing devices out, is something the owner fixes by signing in again. Adding the step there would make the owner's response to an intrusion slower than the intruder's.
+
+- **The device that made the change stays signed in.** A password change or a rotation ends every session, and the device that made it signs in again at once. With the step on it would then be asked for the step a second time, with a code it has to wait for, having passed it seconds earlier. So a client may send `keepSession: 1` with `/auth/security/finish`:
+    - the server then writes a session for that device in the transaction that makes the change, only when the change passed the step, with `two_step_at` set, and for ten minutes at most;
+    - its token goes out as the cookie and nowhere else. The sign-in that follows replaces it and inherits its step, as any sign-in from a device that keeps its session does;
+    - a client that does not ask gets none: the phone apps and older web bundles keep today's behaviour, and are asked for the step when they sign in again. An account without the step gets none either;
+    - if the reply is lost, the cookie never arrives and the device is asked for the step like any other.
 
 What this protects is narrow but real: someone with a live session and the password, such as a shared computer where the owner stayed signed in and the password was watched. They cannot change the password, rotate the phrase, delete the account or remove the step.
 
@@ -597,7 +603,7 @@ Base64url without padding; ids lowercase UUIDs, as elsewhere.
 | `GET /two-step/return` (hushos.com)                     | A static page, no API call                                                                               | The verified callback the apps open; in a browser it says to open the HushOS app, and never sends its fragment                                                                    |
 | `GET /api/auth/security-events`                         | → `[{ id, kind, method, deviceId, deviceKind, createdAt }]`                                              | The last 90 days, newest first                                                                                                                                                    |
 | `POST /api/children/:userId/reset`                      | adds `twoStep?: { token, proof }` (the guardian's own)                                                   | `DELETE /api/children/:userId/two-step` removes the child's methods, before `adultFrom` only                                                                                      |
-| `POST /api/auth/security/finish`, `/auth/delete/finish` | add `twoStep?: { token, proof }`                                                                         | 403 `two-step` when the step is on and the proof is missing; 403 `step-wrong` or `step-expired` when it is wrong or over                                                          |
+| `POST /api/auth/security/finish`, `/auth/delete/finish` | add `twoStep?: { token, proof }`; `security/finish` also takes `keepSession?: 1` (section 4)             | 403 `two-step` when the step is on and the proof is missing; 403 `step-wrong` or `step-expired` when it is wrong or over                                                          |
 
 ### Migrations
 

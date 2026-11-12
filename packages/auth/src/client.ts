@@ -9,8 +9,9 @@ export {
 } from '@hushos/crypto/fingerprint';
 export { pinVerified, settingsRolledBack } from '@hushos/crypto/pins';
 import type { IdentityEnvelope } from '@hushos/crypto/identity';
-import type { AuthApi } from './api';
+import type { AuthApi, LoginSession, StepChallenge, StepInput, StepPurpose } from './api';
 import type { CryptoTransport, RequestOptions } from './crypto-transport';
+import { readLoginReply, readStepChallenge } from './login-reply';
 import { ordinaryFailure } from './ordinary-failure';
 import { createAuthStore } from './store';
 import { withStorageEvents } from './with-storage-events';
@@ -83,6 +84,103 @@ export type LoginOptions = {
     asNewDevice?: boolean;
 };
 
+/*
+ * Two-step sign-in (docs/two-step-design.md 4). The password was right and the account asks
+ * for a second step: `login` stops here, with what the password gave still held in the worker,
+ * and the page asks for the answer and hands it to `answerStep`.
+ */
+export class TwoStepRequired extends Error {
+    readonly challenge: StepChallenge;
+    constructor(challenge: StepChallenge) {
+        super('This account asks for a second step.');
+        this.name = 'TwoStepRequired';
+        this.challenge = challenge;
+    }
+}
+/* What a person answers a step with: a code as typed, or the recovery phrase's words. */
+export type StepAnswer =
+    | { kind: 'totp'; code: string }
+    | { kind: 'backup'; code: string }
+    | { kind: 'phrase'; phrase: string };
+/*
+ * Why a step's answer did not pass, for the page to act on rather than read:
+ * - `wrong`: the answer was wrong, and the step can be answered again;
+ * - `frozen`: the authenticator app is paused here; a backup code or the phrase still works;
+ * - `limited`: too many wrong codes for now; the phrase still works;
+ * - `unavailable`: the server cannot check this method right now; the phrase still works;
+ * - `offline`: no answer came back at all; the same answer can be sent again;
+ * - `over`: the step has ended (five answers, five minutes, or it was used): start again;
+ * - `lost`: a reply came that was not the server's answer. The step may have passed there
+ *   or not, so it is over here too, and a code that was sent may be spent.
+ * `again` says whether the same step can still be answered.
+ */
+export type StepFailureReason =
+    | 'wrong'
+    | 'frozen'
+    | 'limited'
+    | 'unavailable'
+    | 'offline'
+    | 'over'
+    | 'lost';
+export class StepFailure extends Error {
+    readonly reason: StepFailureReason;
+    readonly again: boolean;
+    constructor(reason: StepFailureReason, message: string, options?: { cause?: unknown }) {
+        super(message, options);
+        this.name = 'StepFailure';
+        this.reason = reason;
+        this.again = reason !== 'over' && reason !== 'lost';
+    }
+}
+const LOST_REPLY =
+    'The server’s answer didn’t arrive, so HushOS can’t tell whether you were signed in. Enter your password again. If you used a code, wait for the next one.';
+const STEP_OVER = 'This sign-in timed out. Enter your password again.';
+/* The codes a step's refusal carries (docs/two-step-design.md 4), and what each leaves possible. */
+const STEP_CODES: Record<string, StepFailureReason> = {
+    'step-wrong': 'wrong',
+    'step-frozen': 'frozen',
+    'step-limited': 'limited',
+    'step-expired': 'over',
+};
+/*
+ * A failed answer as the page needs it. A refusal with a code is the server's own; a 503 is
+ * the server saying it cannot check this method; no status at all means no answer came back.
+ * Anything else the server answered ends the step: it is not a wrong answer to try again.
+ */
+export function stepFailure(error: unknown): StepFailure {
+    if (error instanceof StepFailure) return error;
+    const { code, status, kept } = (error ?? {}) as {
+        code?: unknown;
+        status?: unknown;
+        kept?: unknown;
+    };
+    const message = error instanceof Error ? error.message : '';
+    const reason = typeof code === 'string' ? STEP_CODES[code] : undefined;
+    if (reason) return new StepFailure(reason, message, { cause: error });
+    // The worker refused a mistyped phrase before anything was sent.
+    if (kept === true) return new StepFailure('wrong', message, { cause: error });
+    if (status === 503) return new StepFailure('unavailable', message, { cause: error });
+    if (typeof status !== 'number')
+        return new StepFailure(
+            'offline',
+            'We couldn’t reach HushOS. Check your connection, then try again.',
+            { cause: error },
+        );
+    return new StepFailure('over', message || STEP_OVER, { cause: error });
+}
+/* A change's refusals that are the step's: the server answered, and nothing was changed. */
+const STEP_REFUSALS = new Set([
+    'two-step',
+    'step-wrong',
+    'step-expired',
+    'step-frozen',
+    'step-limited',
+]);
+export function stepRefused(error: unknown) {
+    const code = (error as { code?: unknown } | null)?.code;
+    return typeof code === 'string' && STEP_REFUSALS.has(code);
+}
+
 export function createAuthClient(
     createTransport: () => CryptoTransport,
     deviceKeys: DeviceKeyStore,
@@ -94,15 +192,36 @@ export function createAuthClient(
     const { store, canPersist } = createAuthStore();
     let restoring: Promise<void> | undefined;
     let busy = false;
+    /*
+     * A sign-in stopped at its second step: the worker holds what the password gave it until
+     * the answer brings the envelope. Like a running sign-in, it owns the worker (`owned`).
+     */
+    let pendingStep: { challenge: StepChallenge; epoch: number; until: number } | undefined;
     let channel: BroadcastChannel | undefined;
     let listening = false;
     function lock() {
         epoch += 1;
+        pendingStep = undefined;
         const active = transport;
         transport = undefined;
         active?.lock();
         store.setState({ unlockedUserId: null });
     }
+    /* The step a sign-in is waiting at, while it can still be answered. */
+    function waitingStep() {
+        // A minute past its end the server has long refused it: what the worker holds for it goes.
+        if (pendingStep && Date.now() > pendingStep.until + 60_000) lock();
+        return pendingStep;
+    }
+    /*
+     * Whether a sign-in or a security change owns the worker. Between its two halves the worker
+     * holds state that any other account operation would throw away: one that fails resets
+     * the worker, and a restore or another sign-in replaces what it holds. So while this is
+     * true only the owner's own operations reach the worker (`own`); every other account
+     * operation is refused here, before it is sent. With a second step the gap between the
+     * halves is as long as a person takes to find a code.
+     */
+    const owned = () => busy || waitingStep() !== undefined;
     function listen() {
         if (listening) return;
         listening = true;
@@ -156,8 +275,16 @@ export function createAuthClient(
         operation: K,
         input: WorkerRequests[K],
         options?: RequestOptions,
+        owner = false,
     ): Promise<WorkerResults[K]> {
         listen();
+        // Drive's and a family's operations fail without touching what the worker holds
+        // (ordinary-failure.ts), so they go through; an account operation that is not the
+        // owner's would not.
+        if (!owner && owned() && !ordinaryFailure(String(operation)))
+            throw Object.assign(new Error('Please wait for the current sign-in attempt.'), {
+                kept: true,
+            });
         if (!transport) {
             const created = createTransport();
             transport = created;
@@ -190,6 +317,12 @@ export function createAuthClient(
             throw error;
         }
     }
+    /* The worker, for the sign-in or the change that owns it. */
+    const own = <K extends keyof WorkerRequests>(
+        operation: K,
+        input: WorkerRequests[K],
+        options?: RequestOptions,
+    ) => rpc(operation, input, options, true);
     /*
      * WebKit stores a CryptoKey in IndexedDB by wrapping it with a key from the system
      * keychain, and that step now and then fails at once with DataCloneError (seen in CI
@@ -390,27 +523,56 @@ export function createAuthClient(
     async function readSession() {
         const result = await api.session();
         // Not while a sign-in or a security change owns the worker: the next check will do it.
-        if (!result.user && result.removed && !busy) await forgetRemovedDevice().catch(() => {});
+        if (!result.user && result.removed && !owned()) await forgetRemovedDevice().catch(() => {});
         return result;
     }
-    async function login(email: string, password: string, options: LoginOptions = {}) {
+    /*
+     * `step`: what to do when the account asks for a second step. A page that can ask the
+     * person (`ask`) gets TwoStepRequired and answers with `answerStep`. A sign-in made on
+     * the person's behalf after something else (a new account, a reset, a security change)
+     * has nobody to ask, so it stops (`refuse`) and the person signs in themselves.
+     */
+    async function login(
+        email: string,
+        password: string,
+        options: LoginOptions = {},
+        step: 'ask' | 'refuse' = 'refuse',
+    ) {
         const loginEpoch = epoch;
         const stored = identities && !options.asNewDevice ? await storedIdentity(identities) : null;
-        const start = await rpc('loginStart', { password });
+        const start = await own('loginStart', { password });
         const challenge = await api.loginStart({ email, ...start });
-        const finish = await rpc('loginFinish', challenge);
+        const finish = await own('loginFinish', challenge);
         const device = await deviceProof(stored, email, challenge.attemptToken);
         // A lock here has already dropped the export key; do not create a session for it.
         if (epoch !== loginEpoch) throw new Error('Your account was locked. Please sign in again.');
-        const result = await api.loginFinish({
-            attemptToken: challenge.attemptToken,
-            ...finish,
-            ...(device ? { device } : {}),
-        });
+        const reply = readLoginReply(
+            await api.loginFinish({
+                attemptToken: challenge.attemptToken,
+                ...finish,
+                ...(device ? { device } : {}),
+            }),
+        );
+        if (reply.kind === 'lost') throw new StepFailure('lost', LOST_REPLY);
+        if (reply.kind === 'step') {
+            if (step === 'refuse') throw new Error('This account asks for a second step.');
+            if (epoch !== loginEpoch)
+                throw new Error('Your account was locked. Please sign in again.');
+            pendingStep = {
+                challenge: reply.challenge,
+                epoch: loginEpoch,
+                until: Date.parse(reply.challenge.expiresAt),
+            };
+            throw new TwoStepRequired(reply.challenge);
+        }
+        return openSession(reply.session, loginEpoch);
+    }
+    /* The second half of a sign-in: the session is open, and the envelope opens the account here. */
+    async function openSession(result: LoginSession, loginEpoch: number) {
         // A device the proof did not bring back registers itself; never in the way of signing in.
         void ensureDevice(result.user, result.device).catch(() => {});
         try {
-            await rpc('unlock', { userId: result.user.id, envelope: result.envelope });
+            await own('unlock', { userId: result.user.id, envelope: result.envelope });
         } catch {
             throw new Error(
                 'Signed in, but your account key could not be unlocked. Please sign in again.',
@@ -428,7 +590,7 @@ export function createAuthClient(
             saving = 'lock check';
             if (epoch !== loginEpoch) throw new Error('Your account was locked.');
             saving = 'worker';
-            const device = await rpc('remember', {
+            const device = await own('remember', {
                 deviceKey: saved.key,
                 identity: {
                     userId: result.user.id,
@@ -453,6 +615,59 @@ export function createAuthClient(
             });
         }
         return result.user;
+    }
+    /* A step's answer as the server takes it: the phrase signs in the worker and never leaves it. */
+    async function proveStep(
+        challenge: StepChallenge,
+        answer: StepAnswer,
+        worker: typeof own,
+    ): Promise<StepInput> {
+        if (answer.kind !== 'phrase')
+            return {
+                token: challenge.token,
+                proof: { kind: answer.kind, code: answer.code.trim() },
+            };
+        if (!challenge.phrase)
+            throw new StepFailure('wrong', 'Your recovery phrase can’t be used for this step.');
+        const { signature } = await worker('twoStepPhrase', {
+            phrase: answer.phrase,
+            userId: challenge.phrase.userId,
+            wrappingSalt: challenge.phrase.wrappingSalt,
+            stepToken: challenge.token,
+        });
+        return { token: challenge.token, proof: { kind: 'phrase', signature } };
+    }
+    /*
+     * Answers the step a sign-in stopped at. A wrong answer leaves the step, and what the
+     * worker holds for it, in place: only a step that is over (or a reply that was lost)
+     * drops them, and then the person enters their password again.
+     */
+    async function answerStep(answer: StepAnswer) {
+        if (busy) throw new Error('Please wait for the current sign-in attempt.');
+        const pending = waitingStep();
+        if (!pending || pending.epoch !== epoch) throw new StepFailure('over', STEP_OVER);
+        busy = true;
+        try {
+            const reply = readLoginReply(
+                await api.loginTwoStep(await proveStep(pending.challenge, answer, own)),
+            );
+            if (reply.kind !== 'session') throw new StepFailure('lost', LOST_REPLY);
+            if (epoch !== pending.epoch) throw new StepFailure('over', STEP_OVER);
+            // The step is passed: from here this is an ordinary sign-in's second half.
+            pendingStep = undefined;
+            return await openSession(reply.session, pending.epoch);
+        } catch (error) {
+            // Passed, and then the account did not open here: a sign-in's failure, not the step's.
+            if (pendingStep !== pending) {
+                lock();
+                throw error;
+            }
+            const failure = stepFailure(error);
+            if (!failure.again) lock();
+            throw failure;
+        } finally {
+            busy = false;
+        }
     }
     let initializing: Promise<boolean> | undefined;
     function initializeAccount(user: SessionUser): Promise<boolean> {
@@ -487,10 +702,13 @@ export function createAuthClient(
     async function exclusive<T>(action: () => Promise<T>) {
         if (busy) throw new Error('Please wait for the current sign-in attempt.');
         busy = true;
+        // Whatever starts now takes the worker over: a sign-in left waiting at its step is dropped.
+        pendingStep = undefined;
         try {
             return await action();
         } catch (error) {
-            lock();
+            // A sign-in that stopped at its step has not failed: the worker keeps what it holds.
+            if (!(error instanceof TwoStepRequired)) lock();
             throw error;
         } finally {
             busy = false;
@@ -504,10 +722,12 @@ export function createAuthClient(
     async function withPassword<T>(
         password: string,
         action: (proof: { attemptToken: string; finishLoginRequest: string }) => Promise<T>,
+        // Which change the proof is for: the server binds the exchange to it.
+        reauth: AuthApi['devicesReauth'] = (input) => api.devicesReauth(input),
     ) {
         try {
             const start = await rpc('reauthStart', { password });
-            const challenge = await api.devicesReauth(start);
+            const challenge = await reauth(start);
             const finish = await rpc('reauthFinish', challenge);
             return await action({ attemptToken: challenge.attemptToken, ...finish });
         } finally {
@@ -518,15 +738,22 @@ export function createAuthClient(
     }
     return {
         store,
-        isAuthenticating: () => busy,
+        isAuthenticating: owned,
         initializeAccount,
         /* Other domains (Drive) reach the crypto worker through the same transport and lock. */
-        rpc,
+        rpc: <K extends keyof WorkerRequests>(
+            operation: K,
+            input: WorkerRequests[K],
+            options?: RequestOptions,
+        ) => rpc(operation, input, options),
         // `validated`: the caller has just confirmed `user` against the live session
         // (a route guard did), so the bundle can be checked without another request.
         async restore(user: SessionUser, options: { validated?: boolean } = {}) {
             listen();
             if (store.getState().unlockedUserId === user.id) return;
+            // A sign-in or a change owns the worker, a sign-in waiting at its step included:
+            // a restore would replace what the worker holds for it.
+            if (owned()) return;
             if (restoring) return restoring;
             restoring = (async () => {
                 // A trail of steps with timings: what a slow or failed restore was doing.
@@ -588,6 +815,10 @@ export function createAuthClient(
                     if (epoch !== restoringEpoch) return stop('locked while opening the key');
                     store.setState({ unlockedUserId: user.id, rememberError: '' });
                 } catch (error) {
+                    // Refused before it reached the worker, because a sign-in began meanwhile
+                    // and owns it: that sign-in is left alone, and so is the saved access.
+                    if ((error as { kept?: unknown } | null)?.kept === true && owned())
+                        return stop('a sign-in began meanwhile');
                     lock();
                     // The trail is part of the message on purpose: a report from a phone
                     // then says which step stalled, and for how long. It goes to the
@@ -642,12 +873,16 @@ export function createAuthClient(
         ) => api.requestEmail(purpose, email, intent),
         verifyEmail: (token: string) => api.verifyEmail(token),
         enrollment: (purpose: 'register' | 'recover' = 'register') => api.enrollment(purpose),
-        deleteAccount: (password: string) =>
+        deleteAccount: (password: string, twoStep?: StepInput) =>
             exclusive(async () => {
-                const start = await rpc('loginStart', { password });
+                const start = await own('loginStart', { password });
                 const challenge = await api.deleteStart(start);
-                const finish = await rpc('loginFinish', challenge);
-                await api.deleteFinish({ attemptToken: challenge.attemptToken, ...finish });
+                const finish = await own('loginFinish', challenge);
+                await api.deleteFinish({
+                    attemptToken: challenge.attemptToken,
+                    ...finish,
+                    ...(twoStep ? { twoStep } : {}),
+                });
                 lock();
                 store.setState({
                     device: null,
@@ -685,9 +920,9 @@ export function createAuthClient(
             api.saveSettingsKey(input),
         recover: (email: string, password: string, phrase: string) =>
             exclusive(async () => {
-                const start = await rpc('registerStart', { password });
+                const start = await own('registerStart', { password });
                 const challenge = await api.recoverStart(start);
-                const finish = await rpc('recoverFinish', { ...challenge, phrase });
+                const finish = await own('recoverFinish', { ...challenge, phrase });
                 try {
                     await api.recoverFinish({
                         userId: challenge.userId,
@@ -726,15 +961,17 @@ export function createAuthClient(
             action: SecurityAction,
             password: string,
             newPassword?: string,
+            /* The second step, for an account that has it on: asked for before this is called. */
+            twoStep?: StepInput,
         ) =>
             exclusive(async () => {
                 lock();
-                const start = await rpc('securityStart', { action, password, newPassword });
+                const start = await own('securityStart', { action, password, newPassword });
                 const challenge = await api.securityStart({ action, ...start });
                 if (challenge.userId !== user.id || challenge.action !== action)
                     throw new Error('Your account changed. Sign in again.');
                 const changeEpoch = epoch;
-                const finish = await rpc('securityFinish', challenge);
+                const finish = await own('securityFinish', challenge);
                 if (epoch !== changeEpoch)
                     throw new Error('Your account was locked. Please try again.');
                 let committed = true;
@@ -744,8 +981,16 @@ export function createAuthClient(
                         action,
                         attemptToken: challenge.attemptToken,
                         ...finish,
+                        ...(twoStep ? { twoStep } : {}),
+                        // This device signs in again below. With the step on, the server
+                        // then writes its session with the change, so that sign-in is not
+                        // asked for a second code a moment after the first.
+                        keepSession: 1,
                     });
                 } catch (error) {
+                    // The step's own refusal is the server's answer: nothing was changed, and
+                    // nothing this browser keeps needs clearing.
+                    if (stepRefused(error)) throw error;
                     // A lost response leaves the outcome unknown: the server may have
                     // replaced the credentials and revoked every session. Clean up as if it
                     // had, then let the live session say which it was.
@@ -805,13 +1050,63 @@ export function createAuthClient(
         removeOtherDevices: (password: string) =>
             withPassword(password, (proof) => api.removeOtherDevices(proof)),
         updateProfile: (name: string) => api.updateProfile(name),
+        /*
+         * Signs in. For an account that asks for a second step it throws TwoStepRequired with
+         * the step to answer, and `answerStep` finishes the sign-in.
+         */
         login: (email: string, password: string, options?: LoginOptions) =>
-            exclusive(() => login(email, password, options)),
+            exclusive(() => login(email, password, options, 'ask')),
+        answerStep,
+        /* Leaves a sign-in that is waiting at its step: what the worker held for it goes. */
+        cancelStep() {
+            if (pendingStep) lock();
+        },
+        /*
+         * The step for a change this session is about to make, or null for an account that
+         * has none: asked before the change, and answered with `proveStep`.
+         */
+        async stepChallenge(purpose: StepPurpose) {
+            let reply: unknown;
+            try {
+                reply = await api.twoStepChallenge(purpose);
+            } catch (error) {
+                if ((error as { status?: unknown } | null)?.status === 409) return null;
+                throw error;
+            }
+            const challenge = readStepChallenge(reply);
+            if (!challenge) throw new Error('Please try again.');
+            return challenge;
+        },
+        proveStep: (challenge: StepChallenge, answer: StepAnswer) =>
+            proveStep(challenge, answer, rpc),
+        twoStep: () => api.twoStep(),
+        /* Starts adding an authenticator app: the password again and, once the step is on, the step. */
+        startAuthenticator: (password: string, twoStep?: StepInput) =>
+            withPassword(
+                password,
+                (proof) => api.twoStepStartTotp({ ...proof, ...(twoStep ? { twoStep } : {}) }),
+                (input) => api.twoStepReauth(input),
+            ),
+        confirmAuthenticator: (id: string, code: string) => api.twoStepConfirmTotp(id, code.trim()),
+        removeTwoStepMethod: (id: string, password: string, twoStep?: StepInput) =>
+            withPassword(
+                password,
+                (proof) =>
+                    api.twoStepRemoveMethod(id, { ...proof, ...(twoStep ? { twoStep } : {}) }),
+                (input) => api.twoStepReauth(input),
+            ),
+        newBackupCodes: (password: string, twoStep: StepInput) =>
+            withPassword(
+                password,
+                (proof) => api.twoStepBackupCodes({ ...proof, twoStep }),
+                (input) => api.twoStepReauth(input),
+            ),
+        securityEvents: () => api.securityEvents(),
         register: (email: string, name: string, password: string) =>
             exclusive(async () => {
-                const start = await rpc('registerStart', { password });
+                const start = await own('registerStart', { password });
                 const challenge = await api.registerStart(start);
-                const finish = await rpc('registerFinish', challenge);
+                const finish = await own('registerFinish', challenge);
                 await api.registerFinish({ name, ...finish });
                 try {
                     // A new account has no device here to prove: no need to read the store.

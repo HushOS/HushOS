@@ -326,6 +326,8 @@ const NOT_STORAGE = new Set([
     // The contact guard's Web Lock, per account (lib/contact-guard.ts withGuardLock).
     'hushos-contact-guard:',
     'hushos-recovery-kit.txt',
+    // The backup codes file a person saves when two-step sign-in is turned on: a download.
+    'hushos-backup-codes.txt',
     'hushos-report-',
     'hushos-keys',
     'hushos-sealed',

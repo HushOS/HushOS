@@ -11,13 +11,18 @@ export const authApi: AuthApi = {
     registerStart: (input) => unwrap(api().register.start.post(input)),
     registerFinish: (input) => unwrap(api().register.finish.post(input)),
     loginStart: (input) => unwrap(api().login.start.post(input)),
-    loginFinish: async (input) => {
-        const result = await unwrap(api().login.finish.post(input));
-        // Only a client that says it can answer a second step is sent one (`twoStep: 1`), and
-        // this one does not say so yet: the server answers it `update-required` instead.
-        if (!('user' in result)) throw new Error('Update HushOS to sign in.');
-        return result;
-    },
+    // `twoStep: 1`: this client can answer a second step, so the server may send one. The
+    // reply is read by the auth client, which never takes a 200 on trust (login-reply.ts).
+    loginFinish: (input) => unwrap(api().login.finish.post({ ...input, twoStep: 1 })),
+    loginTwoStep: (input) => unwrap(api().login['two-step'].post(input)),
+    twoStep: () => unwrap(api()['two-step'].get()),
+    twoStepReauth: (input) => unwrap(api()['two-step'].reauth.post(input)),
+    twoStepChallenge: (purpose) => unwrap(api()['two-step'].challenge.post({ purpose })),
+    twoStepStartTotp: (input) => unwrap(api()['two-step'].totp.post(input)),
+    twoStepConfirmTotp: (id, code) => unwrap(api()['two-step'].totp({ id }).confirm.post({ code })),
+    twoStepRemoveMethod: (id, input) => unwrap(api()['two-step'].methods({ id }).delete(input)),
+    twoStepBackupCodes: (input) => unwrap(api()['two-step']['backup-codes'].post(input)),
+    securityEvents: () => unwrap(api()['security-events'].get()),
     session: () => unwrap(api().session.get()),
     forgetSession: () => unwrap(api().session.forget.post({})),
     devices: () => unwrap(api().devices.get()),

@@ -137,6 +137,56 @@ export type AccountSecurityUpdate = SecurityUpdate & {
     settingsKey?: SettingsKeyEnvelope;
 };
 
+/*
+ * Two-step sign-in (docs/two-step-design.md 4). What an account that has the step on is told
+ * after its password: the step token, which methods can answer it, and what the device needs
+ * to sign with the recovery phrase. `methods` holds only what this client can answer.
+ */
+export type StepMethod = 'totp' | 'backup' | 'phrase';
+export type StepChallenge = {
+    token: string;
+    methods: StepMethod[];
+    expiresAt: string;
+    phrase?: { userId: string; recoveryVersion: number; wrappingSalt: string };
+};
+/* An answer as the server takes it: a code, or the recovery phrase's signature. */
+export type StepProof =
+    | { kind: 'totp'; code: string }
+    | { kind: 'backup'; code: string }
+    | { kind: 'phrase'; signature: string };
+export type StepInput = { token: string; proof: StepProof };
+/* What a change to the account sends its step for. */
+export type StepPurpose = SecurityAction | 'delete' | 'two-step';
+/* What a sign-in ends with: the user, the password envelope, and the session's device. */
+export type LoginSession = {
+    user: AuthUser;
+    envelope: AccountKeyEnvelope;
+    device: SessionDevice & { attached: boolean };
+};
+export type TwoStepStatus = {
+    on: boolean;
+    methods: {
+        id: string;
+        kind: 'totp' | 'webauthn';
+        name: string | null;
+        createdAt: string;
+        lastUsedAt: string | null;
+        synced: boolean;
+    }[];
+    backupCodesLeft: number;
+    totpFrozen: boolean;
+};
+export type SecurityEvent = {
+    id: string;
+    kind: string;
+    method: 'totp' | 'webauthn' | 'backup' | 'phrase' | null;
+    deviceId: string | null;
+    deviceKind: DeviceKind | null;
+    createdAt: string;
+};
+/* The password proved again for a change to the step, and the step once it is on. */
+export type TwoStepChange = DeviceRemovalProof & { twoStep?: StepInput };
+
 export interface AuthApi {
     identity(): Promise<{ identity: IdentityEnvelope }>;
     /* The account's earlier identities, oldest first, still sealed under the root. */
@@ -210,15 +260,35 @@ export interface AuthApi {
      * device the session is on, whether the proof brought it back (`attached`),
      * and whether that device has described itself yet (`registered`).
      */
+    /*
+     * The reply is handed over as it came, unread: the session, the step to answer first, or
+     * something that is not the server's answer at all (a proxy's page with a 200). The client
+     * tells them apart (login-reply.ts), so an odd reply is never taken for a sign-in. The
+     * implementation says this client can answer a step (`twoStep: 1`).
+     */
     loginFinish(input: {
         attemptToken: string;
         finishLoginRequest: string;
         device?: { id: string; signature: string };
-    }): Promise<{
-        user: AuthUser;
-        envelope: AccountKeyEnvelope;
-        device: SessionDevice & { attached: boolean };
-    }>;
+    }): Promise<unknown>;
+    /* A sign-in's answer to its step: the session, read the same way. */
+    loginTwoStep(input: StepInput): Promise<unknown>;
+    /* The account's step as its settings show it. 501 on a server that has two-step off. */
+    twoStep(): Promise<TwoStepStatus>;
+    /* Changing the step asks for the password again: this starts that exchange. */
+    twoStepReauth(input: { startLoginRequest: string }): Promise<LoginChallenge>;
+    /* A step for a change this session is about to make. 409 when the account has no step. */
+    twoStepChallenge(purpose: StepPurpose): Promise<StepChallenge>;
+    twoStepStartTotp(
+        input: TwoStepChange,
+    ): Promise<{ id: string; secret: string; uri: string; expiresAt: string }>;
+    twoStepConfirmTotp(id: string, code: string): Promise<{ backupCodes?: string[] }>;
+    twoStepRemoveMethod(
+        id: string,
+        input: TwoStepChange,
+    ): Promise<{ removed: boolean; on: boolean }>;
+    twoStepBackupCodes(input: TwoStepChange): Promise<{ codes: string[] }>;
+    securityEvents(): Promise<{ events: SecurityEvent[] }>;
     /* No user: `removed` when this session ended because its device was removed. */
     session(): Promise<{
         user: SessionUser | null;
@@ -265,10 +335,24 @@ export interface AuthApi {
         startLoginRequest: string;
         registrationRequest: string;
     }): Promise<AccountSecurityChallenge>;
+    /*
+     * `twoStep`: the second step, for an account that has it on. `keepSession`: this client
+     * takes a session for this device with the change, so it is not asked for the step again
+     * a moment later; the server writes one only when the change passed the step.
+     */
     securityFinish(
-        input: { action: SecurityAction; attemptToken: string } & AccountSecurityUpdate,
+        input: {
+            action: SecurityAction;
+            attemptToken: string;
+            twoStep?: StepInput;
+            keepSession?: 1;
+        } & AccountSecurityUpdate,
     ): Promise<unknown>;
     deleteStart(input: { startLoginRequest: string }): Promise<LoginChallenge>;
-    deleteFinish(input: { attemptToken: string; finishLoginRequest: string }): Promise<unknown>;
+    deleteFinish(input: {
+        attemptToken: string;
+        finishLoginRequest: string;
+        twoStep?: StepInput;
+    }): Promise<unknown>;
     updateProfile(name: string): Promise<{ user: SessionUser }>;
 }

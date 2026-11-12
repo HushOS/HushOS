@@ -33,6 +33,8 @@ vi.mock('@/lib/auth-client', () => ({
         login: (...args: Parameters<typeof login>) => login(...args),
         session: async () => ({ user: null }),
         takeRemovedNotice: () => false,
+        // Leaving the page lets go of a sign-in waiting at its second step; none waits here.
+        cancelStep: () => {},
     },
 }));
 vi.mock('@/lib/session', () => ({ ensureSessionUser: vi.fn(), sessionQueryOptions: {} }));

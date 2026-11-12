@@ -52,7 +52,20 @@ Object.defineProperty(globalThis, 'window', {
 
 const { createAuthClient, DeviceStorageUnreadable } = await import('./client');
 
-const user = { id: '0b7f1c2e-3d4a-4b5c-8d6e-7f8091a2b3c4', credentialVersion: 1 } as SessionUser;
+const user = {
+    id: '0b7f1c2e-3d4a-4b5c-8d6e-7f8091a2b3c4',
+    email: 'maya@example.com',
+    credentialVersion: 1,
+} as SessionUser;
+/* The password envelope as the server sends it; the fake worker never opens it. */
+const envelope = {
+    envelopeVersion: 1,
+    keyVersion: 1,
+    credentialVersion: 1,
+    wrappingSalt: 'c2FsdA',
+    wrappingNonce: 'bm9uY2U',
+    encryptedKey: 'a2V5',
+};
 const bundle = {
     version: 1 as const,
     keyVersion: 1,
@@ -69,7 +82,11 @@ const transport: CryptoTransport = {
 };
 const api = {
     loginStart: async () => ({ attemptToken: 'attempt' }),
-    loginFinish: async () => ({ user, envelope: { keyVersion: 1, credentialVersion: 1 } }),
+    loginFinish: async () => ({
+        user,
+        envelope,
+        device: { id: 'device', attached: false, registered: true },
+    }),
 } as unknown as AuthApi;
 
 /* A device key store whose create() fails with each of `failures` in turn, then works. */
@@ -187,7 +204,7 @@ describe('the device key at sign-in', () => {
                 sent.push(input);
                 return {
                     user: { ...user, email: 'maya@example.com' },
-                    envelope: { keyVersion: 1, credentialVersion: 1 },
+                    envelope,
                     device: { id: deviceId, attached: true, registered: true },
                 };
             },
@@ -308,7 +325,7 @@ describe('a device store that does not answer at sign-in', () => {
                 finished.push(input);
                 return {
                     user: { ...user, email: 'maya@example.com' },
-                    envelope: { keyVersion: 1, credentialVersion: 1 },
+                    envelope,
                     // A sign-in without a proof is a new device the server has not described yet.
                     device: input.device
                         ? { id: deviceId, attached: true, registered: true }

@@ -7,10 +7,12 @@ import {
 } from '@tanstack/react-router';
 import { revalidateLogic, useForm } from '@tanstack/react-form';
 import { useEffect, useState } from 'react';
-import { DeviceStorageUnreadable } from '@hushos/auth/client';
+import type { StepChallenge } from '@hushos/auth/api';
+import { DeviceStorageUnreadable, TwoStepRequired } from '@hushos/auth/client';
 import { z } from 'zod';
 import { AuthInput } from '@/components/auth-input';
 import { AuthActions, AuthFields, AuthLayout, AuthNote, authLink } from '@/components/auth-layout';
+import { SignInStep } from '@/components/sign-in-step';
 import { Button } from '@/components/ui/button';
 import { authClient } from '@/lib/auth-client';
 import { rememberReturn, returnTarget, safeReturnPath } from '@/lib/return-to';
@@ -92,6 +94,34 @@ function LoginPage() {
     // server rendered this page without a session) asks once: the auth client then clears
     // what this browser kept for that account.
     const [removed, setRemoved] = useState(false);
+    // The password was right and the account asks for a second step: the card asks for it.
+    const [step, setStep] = useState<StepChallenge | null>(null);
+    // A sign-in left at its step holds the worker; leaving the page lets go of it.
+    useEffect(() => () => authClient.cancelStep(), []);
+    /* Signed in: on to the page asked for, or to the new recovery phrase after a rotation. */
+    async function enter() {
+        // The form keeps what was typed and stays busy until the app replaces it:
+        // emptied first, it would look for a moment as if signing in had failed.
+        cue('success');
+        const queryClient = router.options.context.queryClient;
+        queryClient.clear();
+        // Known again before moving on: a public page (a shared link) reads the session from the cache,
+        // and an empty cache there reads as signed out.
+        await queryClient.fetchQuery(sessionQueryOptions).catch(() => null);
+        const rotated =
+            securityChanged === 'master-key' || securityChanged === 'recovery-key'
+                ? securityChanged
+                : undefined;
+        if (rotated) {
+            // The recovery step comes first; it goes on to the page asked for when it is done.
+            if (returnTo) rememberReturn(returnTo);
+            await router.navigate({
+                to: '/setup/recovery-key',
+                search: { reason: rotated },
+                replace: true,
+            });
+        } else await router.navigate({ href: returnTarget(returnTo), replace: true });
+    }
     useEffect(() => {
         void authClient
             .session()
@@ -112,31 +142,21 @@ function LoginPage() {
                 await authClient.login(value.email, value.password, {
                     asNewDevice: meta.asNewDevice,
                 });
-                // The form keeps what was typed and stays busy until the app replaces it:
-                // emptied first, it would look for a moment as if signing in had failed.
-                cue('success');
-                const queryClient = router.options.context.queryClient;
-                queryClient.clear();
-                // Known again before moving on: a public page (a shared link) reads the session from the cache,
-                // and an empty cache there reads as signed out.
-                await queryClient.fetchQuery(sessionQueryOptions).catch(() => null);
-                const rotated =
-                    securityChanged === 'master-key' || securityChanged === 'recovery-key'
-                        ? securityChanged
-                        : undefined;
-                if (rotated) {
-                    // The recovery step comes first; it goes on to the page asked for when it is done.
-                    if (returnTo) rememberReturn(returnTo);
-                    await router.navigate({
-                        to: '/setup/recovery-key',
-                        search: { reason: rotated },
-                        replace: true,
-                    });
-                } else await router.navigate({ href: returnTarget(returnTo), replace: true });
+                await enter();
             } catch (error) {
+                if (error instanceof TwoStepRequired) {
+                    setOfferNewDevice(false);
+                    setStep(error.challenge);
+                    return;
+                }
                 cue('error');
                 setOfferNewDevice(error instanceof DeviceStorageUnreadable);
-                setError(authError(error, { signIn: true }));
+                setError(
+                    // An old page that cannot answer a second step: a reload brings one that can.
+                    (error as { code?: unknown } | null)?.code === 'update-required'
+                        ? 'This page is out of date and can’t ask for your second step. Reload it, then sign in again.'
+                        : authError(error, { signIn: true }),
+                );
             } finally {
                 // Unmounted by now, unless the app sent this page back to itself (a session the
                 // browser did not keep): then the form, still filled in, can be used again.
@@ -153,6 +173,26 @@ function LoginPage() {
               }
             : notices[securityChanged]
         : null;
+    if (step)
+        return (
+            <AuthLayout
+                title="One more step"
+                description="This account has two-step sign-in on."
+                art="CODE"
+            >
+                <SignInStep
+                    key={step.token}
+                    challenge={step}
+                    onSignedIn={enter}
+                    onOver={(reason) => {
+                        setStep(null);
+                        setError(reason);
+                        // The password is asked for again: nothing of the old one is kept.
+                        form.setFieldValue('password', '');
+                    }}
+                />
+            </AuthLayout>
+        );
     return (
         <AuthLayout
             title="Welcome back"
