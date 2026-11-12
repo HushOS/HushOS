@@ -49,6 +49,7 @@ import {
     settleRefusal,
     stepIsOn,
     type StepProof,
+    type TwoStepRefusal,
 } from './two-step.core';
 import {
     accountDevices,
@@ -1064,7 +1065,7 @@ export async function deleteAccount(input: {
     credentialVersion: number;
     sessionTokenHash: Buffer;
     twoStep?: StepProof;
-}): Promise<boolean | 'group-holder' | 'busy' | 'pays' | 'unavailable' | 'two-step'> {
+}): Promise<boolean | 'group-holder' | 'busy' | 'pays' | 'unavailable' | TwoStepRefusal> {
     class Holder extends Error {}
     // They pay for a family's plan: a change to it holds its claim, or it renews (payerHold).
     class Busy extends Error {}
@@ -1087,7 +1088,8 @@ export async function deleteAccount(input: {
         if (error instanceof Pays) return 'pays';
         if (error instanceof Refused) return false;
         // The step did not pass: the departures above rolled back with it.
-        if (await settleRefusal(error)) return 'two-step';
+        const refusal = await settleRefusal(error);
+        if (refusal) return refusal;
         // It locks groups, areas and the account: a deadlock with a group write is retried.
         const code = pgCode(error);
         if (code === '40P01' || code === '40001') return 'unavailable';
@@ -1356,16 +1358,17 @@ export async function changeAccountSecurity(input: {
     /*
      * The second step, for an account that has it on (docs/two-step-design.md 4): the
      * session's step token for this action, and what the answer spends. Without one that
-     * passes, the answer is `two-step` and nothing changes; the step is asked last, so a
-     * change that would be refused anyway spends nothing.
+     * passes, the answer is a `two-step` refusal with its reason and nothing changes; the
+     * step is asked last, so a change that would be refused anyway spends nothing.
      */
     twoStep?: StepProof;
-}): Promise<boolean | 'two-step'> {
+}): Promise<boolean | TwoStepRefusal> {
     try {
         return await db.transaction((tx) => changeSecurity(tx, input));
     } catch (error) {
-        if (await settleRefusal(error)) return 'two-step';
-        throw error;
+        const refusal = await settleRefusal(error);
+        if (!refusal) throw error;
+        return refusal;
     }
 }
 

@@ -25,6 +25,9 @@
 -- that owns it (the one that migrates), whatever role writes the session. A split-role install whose
 -- application role was never granted SELECT on the new table would otherwise fail every sign-in. It
 -- takes no argument and returns only the row it was given, so it lends that role nothing else.
+-- pg_temp is named last in its search_path, so nothing a session made temporary is found first, and
+-- EXECUTE is taken from PUBLIC: a trigger fires whatever the writing role may execute, and nobody
+-- has a reason to call it.
 --
 -- CREATE TRIGGER takes a SHARE ROW EXCLUSIVE lock on "sessions": reads go on, and writes to
 -- "sessions" wait until the run commits.
@@ -32,7 +35,7 @@ SET LOCAL lock_timeout = '5s';--> statement-breakpoint
 CREATE FUNCTION "sessions_two_step_guard"() RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = pg_catalog
+SET search_path = pg_catalog, pg_temp
 AS $guard$
 BEGIN
 	IF TG_OP = 'UPDATE' AND NEW."user_id" = OLD."user_id" AND NEW."token_hash" = OLD."token_hash" THEN
@@ -51,4 +54,5 @@ BEGIN
 	RETURN NEW;
 END
 $guard$;--> statement-breakpoint
+REVOKE ALL ON FUNCTION "sessions_two_step_guard"() FROM PUBLIC;--> statement-breakpoint
 CREATE TRIGGER "sessions_two_step_guard" BEFORE INSERT OR UPDATE OF "user_id", "token_hash" ON "sessions" FOR EACH ROW EXECUTE FUNCTION "sessions_two_step_guard"();

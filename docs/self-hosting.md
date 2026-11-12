@@ -2326,7 +2326,7 @@ Behaviour:
 - One dissolved by this release before its worker runs waits for it (a week at most).
 - Nothing is written with `GROUPS_ENABLED=false`.
 
-#### Two-step sign-in tables release (`20261112160538_two_step`, `20261112160539_two_step_session_guard`)
+#### Two-step sign-in tables release (`20261112160538_two_step`, `20261112174853_two_step_session_guard`)
 
 This release adds the database side of two-step sign-in ([docs/two-step-design.md](two-step-design.md)) and nothing else. No route makes a second-step method yet, so nothing changes for anyone until a later release turns the feature on.
 
@@ -2342,7 +2342,7 @@ What the second adds:
 - It is there for rolling updates and rollbacks. A release from before two-step sign-in does not know the step, and would sign such an account in with the password alone. With the trigger, that sign-in fails instead: the older container answers 500. Its log carries only the error's code, `23514` (a check violation); Postgres's own log names `sessions_two_step_guard`.
 - Accounts without a confirmed method are not affected, and neither are sessions that were open before an account turned the step on.
 - It covers sign-in only. An older container still skips the step at a password change, a rotation and account deletion, which need a live session and the password. So finish a rollout before people turn the step on, and don't roll back past this release once they have.
-- The trigger's function runs as the role that owns it, the one that migrates (`SECURITY DEFINER`, with a fixed `search_path`). So it reads `two_step_factors` whatever the application role was granted, and a split-role setup that missed a grant on the new table still signs people in.
+- The trigger's function runs as the role that owns it, the one that migrates (`SECURITY DEFINER`, with a fixed `search_path`). So it reads `two_step_factors` whatever the application role was granted, and a split-role setup that missed a grant on the new table still signs people in. Nobody else may call it: `EXECUTE` is revoked from `PUBLIC`, which a trigger does not need.
 
 Locks:
 
@@ -2356,7 +2356,7 @@ Containers of the previous release keep working beside the new ones: they never 
 To take the schema back, run the two undo scripts that ship beside the migrations, as the role that migrates, in this order:
 
 ```bash
-psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f packages/db/drizzle/20261112160539_two_step_session_guard/undo.sql
+psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f packages/db/drizzle/20261112174853_two_step_session_guard/undo.sql
 psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f packages/db/drizzle/20261112160538_two_step/undo.sql
 ```
 
@@ -2371,6 +2371,14 @@ psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f packages/db/drizzle/2026111
         PGOPTIONS="-c hushos.delete_two_step=yes" psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f packages/db/drizzle/20261112160538_two_step/undo.sql
         ```
 
-- It locks `opaque_login_attempts` exclusively until it commits, so sign-ins wait for it: milliseconds.
+        A pooler may refuse startup options. Then set it in the same session instead:
+
+        ```bash
+        psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -c "set hushos.delete_two_step = 'yes'" -f packages/db/drizzle/20261112160538_two_step/undo.sql
+        ```
+
+        Either form needs a connection that keeps its session for the whole run: a direct one, as `MIGRATION_DATABASE_URL` is meant to be, or a pooler in session mode. Through a pooler in transaction mode the setting may not reach the script, which then refuses as if it were never given.
+
+- It locks `two_step_factors` and `opaque_login_attempts` exclusively until it commits, so sign-ins wait for it: milliseconds. The first lock is taken before the accounts are counted, so no method can be confirmed between the count and the drop.
 - Then run the previous release's images only: this release's worker waits for the migrations and exits without them.
 - `packages/db/src/two-step.migration.test.ts` runs both scripts against a migrated database and checks that the schema is exactly what it was before.

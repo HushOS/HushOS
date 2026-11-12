@@ -448,6 +448,16 @@ describe('an account with a confirmed factor', () => {
         try {
             await client.query(`create role ${role}`);
             await client.query(`grant insert on sessions to ${role}`);
+            // The function is nobody's to call, and resolves names in the catalogue first and
+            // temporary objects last: a trigger needs neither grant nor path from the writer.
+            const { rows } = await client.query(
+                `select has_function_privilege($1, p.oid, 'execute') as callable, p.proconfig as config
+                 from pg_proc p where p.proname = 'sessions_two_step_guard'`,
+                [role],
+            );
+            expect(rows).toEqual([
+                { callable: false, config: ['search_path=pg_catalog, pg_temp'] },
+            ]);
             await client.query('begin');
             await client.query(`set local role ${role}`);
             await client.query('savepoint reading');
@@ -559,6 +569,43 @@ describe('a device that keeps its session', () => {
         // And the browser that did pass still unlocks.
         const unlocked = await passwordSignIn(user.id, { previous: enrolling.token });
         expect(unlocked.deviceId).toBe(enrolling.deviceId);
+    });
+});
+
+describe('a stamp from a step that was turned off', () => {
+    test('exempts nothing once the step is on again: every device is asked', async () => {
+        const { user } = await registered();
+        const laptop = await passwordSignIn(user.id);
+        const first = await turnOn(user.id, laptop.token);
+        const phone = await steppedSignIn(user.id);
+        expect((await sessionRow(phone.token))!.twoStepAt).not.toBeNull();
+        const { user: sam } = await registered();
+        const sams = await passwordSignIn(sam.id);
+        await turnOn(sam.id, sams.token);
+
+        // Off: the last method goes, and with it every stamp on the account's sessions.
+        expect(
+            await twoStep.removeFactor({
+                userId: user.id,
+                factorId: first,
+                step: await stepUp(user.id, laptop.token),
+            }),
+        ).toMatchObject({ status: 'ok', turnedOff: true });
+        expect((await sessionsOf(user.id)).map((row) => row.twoStepAt)).toEqual([null, null]);
+        // Another account's stamps are its own.
+        expect((await sessionRow(sams.token))!.twoStepAt).not.toBeNull();
+
+        // On again, with a new app, from the laptop: only the laptop passed anything.
+        await turnOn(user.id, laptop.token);
+        expect((await sessionRow(laptop.token))!.twoStepAt).not.toBeNull();
+        expect((await sessionRow(phone.token))!.twoStepAt).toBeNull();
+        // The phone kept its session through all of it. Its unlock is asked for the new step,
+        // not waved through on a stamp from the old one.
+        expect(await password(user.id, { previous: phone.token }).answered).toEqual(ASKED);
+        expect(await resolves(phone.token)).toBe(true);
+        // The laptop, which passed it, still unlocks.
+        const again = await passwordSignIn(user.id, { previous: laptop.token });
+        expect(again.deviceId).toBe(laptop.deviceId);
     });
 });
 

@@ -41,12 +41,19 @@ const HOUR_MS = 60 * 60 * 1000;
 export const hourOf = (moment: Date) => new Date(Math.floor(moment.getTime() / HOUR_MS) * HOUR_MS);
 
 /*
- * A time step is taken only up to the one after the database's own clock: the code for T+1 is
- * the latest the server accepts, so a later step can only be a mistake above this repository,
- * and stored it would refuse every real code until the clock caught up.
+ * Whether `step` is a time step the server could have accepted a code for by now: none later
+ * than the one after the current step, by this process's clock. That is the clock the
+ * server's window of T-1, T and T+1 comes from, so a code the server accepted is never out of
+ * reach here, whatever the database's clock says. A later step can only be a mistake above
+ * this repository, and stored it would refuse every real code until the clock caught up.
  */
-const stepInReach = (step: number) =>
-    sql`${step} <= floor(extract(epoch from clock_timestamp()) / ${TOTP_PERIOD_SECONDS}) + 1`;
+export function totpStepInReach(step: number, now = Date.now()) {
+    return (
+        Number.isSafeInteger(step) &&
+        step > 0 &&
+        step <= Math.floor(now / (TOTP_PERIOD_SECONDS * 1000)) + 1
+    );
+}
 
 export async function confirmedFactors(executor: Executor, userId: string) {
     return executor
@@ -84,10 +91,10 @@ export async function unusedBackupCodes(executor: Executor, userId: string) {
 }
 
 /*
- * Moves a confirmed app's last accepted time step on, in one statement. The comparisons are
- * in the update itself: only a step later than the last accepted one, and no
- * later than the next one by the database's clock, moves it. So a code is accepted once
- * however many requests carry it, and a code used once is refused for anything after.
+ * Moves a confirmed app's last accepted time step on, in one statement. The comparison is in
+ * the update itself: only a step later than the last accepted one moves it. So a code is
+ * accepted once however many requests carry it, and a code used once is refused for anything
+ * after. The caller has checked the step is within the clock's reach (`totpStepInReach`).
  */
 async function advanceTotpStep(
     executor: Executor,
@@ -104,18 +111,10 @@ async function advanceTotpStep(
                 eq(twoStepFactors.kind, 'totp'),
                 isNotNull(twoStepFactors.confirmedAt),
                 sql`${twoStepFactors.totpLastStep} < ${input.step}`,
-                stepInReach(input.step),
             ),
         )
         .returning({ id: twoStepFactors.id });
     return moved.length === 1;
-}
-
-/* Whether `step` is a time step the database's clock allows yet: asked before anything is written. */
-export async function totpStepInReach(executor: Executor, step: number) {
-    if (!Number.isSafeInteger(step) || step <= 0) return false;
-    const result = await executor.execute<{ ok: boolean }>(sql`select ${stepInReach(step)} as ok`);
-    return result.rows[0]?.ok === true;
 }
 
 /*
@@ -388,20 +387,33 @@ export type StepSpend =
 /* A step token, and what the answer that came with it spends. */
 export type StepProof = { tokenHash: Buffer; spend: StepSpend };
 
-export type StepRefusal =
+/* Why a step did not pass, as a gated transaction throws it. */
+type Refused =
     /* The account has the step on and the action came without a proof. */
-    | { status: 'required' }
+    | { reason: 'required' }
     /* The token cannot pass: unknown, expired, for another purpose or session, or with no slot taken. */
-    | { status: 'gone' }
-    /* The authenticator app is frozen for this token. */
-    | { status: 'frozen' }
+    | { reason: 'gone' }
+    /* The authenticator app is frozen for this token: refused unchecked, and not counted. */
+    | { reason: 'frozen' }
+    /* The time step is one no code could be for yet: a mistake above the repository, not counted. */
+    | { reason: 'step' }
     /* The time step or backup code was already used: a wrong answer, counted as one. */
-    | { status: 'spent'; attempt: StepAttempt };
+    | { reason: 'spent'; attempt: StepAttempt };
+
+/*
+ * What a gated function answers when the step did not pass, with nothing else done. A spent
+ * answer has been counted by then, once, and `failure` is that count as `recordStepFailure`
+ * answers it: its `notice` and `froze` are the caller's to act on. The caller must not report
+ * the same answer again; a second report is answered `gone` while the token still stands.
+ */
+export type TwoStepRefusal =
+    | { status: 'two-step'; reason: 'required' | 'gone' | 'frozen' | 'step' }
+    | { status: 'two-step'; reason: 'spent'; failure: StepFailure };
 
 /* Thrown inside a gated transaction, so everything it did so far rolls back with the refusal. */
 export class StepRefused extends Error {
-    constructor(readonly refusal: StepRefusal) {
-        super(`The second step did not pass: ${refusal.status}.`);
+    constructor(readonly refused: Refused) {
+        super(`The second step did not pass: ${refused.reason}.`);
         this.name = 'StepRefused';
     }
 }
@@ -409,19 +421,26 @@ export class StepRefused extends Error {
 /*
  * For the `catch` around a gated transaction: the refusal an error carries, or null when the
  * error is something else and must be thrown on. A spent answer is counted as the wrong
- * answer it is, here, after the transaction that refused it has rolled back.
+ * answer it is, here, after the transaction that refused it has rolled back, and the count
+ * goes back with the refusal.
  */
-export async function settleRefusal(error: unknown): Promise<StepRefusal | null> {
+export async function settleRefusal(error: unknown): Promise<TwoStepRefusal | null> {
     if (!(error instanceof StepRefused)) return null;
-    if (error.refusal.status === 'spent') await recordStepFailure(error.refusal.attempt);
-    return error.refusal;
+    const { refused } = error;
+    if (refused.reason !== 'spent') return { status: 'two-step', reason: refused.reason };
+    return {
+        status: 'two-step',
+        reason: 'spent',
+        failure: await recordStepFailure(refused.attempt),
+    };
 }
 
 /*
  * Passes the step inside the caller's transaction, which holds the account's lock: the token
  * is read again, must be this account's, for this purpose and session, and must have an
- * answer slot taken and not yet counted (`takeStepAnswer`); a frozen app is refused; the time
- * step or backup code is spent; the token is deleted and the success recorded. Any refusal
+ * answer slot taken and not yet counted (`takeStepAnswer`); a frozen app is refused, and so is
+ * a time step out of the clock's reach, before anything is written; the time step or backup
+ * code is spent; the token is deleted and the success recorded. Any refusal
  * is thrown (`StepRefused`), so the caller's transaction rolls back whole. What this wrote
  * commits only if the caller's action does.
  */
@@ -444,8 +463,10 @@ export async function passStep(
         (bound ? !input.sessionTokenHash?.equals(bound) : input.sessionTokenHash !== null) ||
         attempt.answers <= attempt.failures
     )
-        throw new StepRefused({ status: 'gone' });
-    if (spend.method === 'totp' && attempt.totpFrozen) throw new StepRefused({ status: 'frozen' });
+        throw new StepRefused({ reason: 'gone' });
+    if (spend.method === 'totp' && attempt.totpFrozen) throw new StepRefused({ reason: 'frozen' });
+    if (spend.method === 'totp' && !totpStepInReach(spend.step))
+        throw new StepRefused({ reason: 'step' });
 
     let backupCodesLeft: number | null = null;
     if (spend.method === 'totp') {
@@ -454,20 +475,20 @@ export async function passStep(
             factorId: spend.factorId,
             step: spend.step,
         });
-        if (!moved) throw new StepRefused({ status: 'spent', attempt });
+        if (!moved) throw new StepRefused({ reason: 'spent', attempt });
     } else if (spend.method === 'backup') {
         const used = await useBackupCode(tx, {
             userId: attempt.userId,
             codeHash: spend.codeHash,
         });
-        if (!used) throw new StepRefused({ status: 'spent', attempt });
+        if (!used) throw new StepRefused({ reason: 'spent', attempt });
         backupCodesLeft = used.left;
     }
     const gone = await tx
         .delete(twoStepAttempts)
         .where(eq(twoStepAttempts.tokenHash, attempt.tokenHash))
         .returning({ tokenHash: twoStepAttempts.tokenHash });
-    if (gone.length !== 1) throw new StepRefused({ status: 'gone' });
+    if (gone.length !== 1) throw new StepRefused({ reason: 'gone' });
     await recordSuccess(tx, { userId: attempt.userId, pool: attempt.pool, method: spend.method });
     return { attempt, method: spend.method, backupCodesLeft };
 }
@@ -487,6 +508,6 @@ export async function passStepIfOn(
     },
 ) {
     if (!(await stepIsOn(tx, input.userId))) return null;
-    if (!input.proof) throw new StepRefused({ status: 'required' });
+    if (!input.proof) throw new StepRefused({ reason: 'required' });
     return passStep(tx, { ...input, proof: input.proof });
 }

@@ -1,4 +1,4 @@
--- Takes back 20261112160539_two_step_session_guard: the trigger on "sessions" and its function.
+-- Takes back 20261112174853_two_step_session_guard: the trigger on "sessions" and its function.
 -- Run it as the role that migrates, and stop at the first error:
 --     psql -v ON_ERROR_STOP=1 -f undo.sql
 -- It is one transaction, so it applies whole or not at all. Run it before 20261112160538_two_step's
@@ -11,5 +11,5 @@ BEGIN;
 SET LOCAL lock_timeout = '5s';
 DROP TRIGGER "sessions_two_step_guard" ON "sessions";
 DROP FUNCTION "sessions_two_step_guard"();
-DELETE FROM "drizzle"."__drizzle_migrations" WHERE "name" = '20261112160539_two_step_session_guard';
+DELETE FROM "drizzle"."__drizzle_migrations" WHERE "name" = '20261112174853_two_step_session_guard';
 COMMIT;

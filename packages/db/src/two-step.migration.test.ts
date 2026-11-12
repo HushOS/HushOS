@@ -17,7 +17,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'vitest';
  */
 
 const TABLES = '20261112160538_two_step';
-const GUARD = '20261112160539_two_step_session_guard';
+const GUARD = '20261112174853_two_step_session_guard';
 
 const migrationsFolder = fileURLToPath(new URL('../drizzle', import.meta.url));
 const undo = (migration: string) =>
@@ -281,18 +281,75 @@ describe('the two-step migrations and their undo scripts', () => {
         // An undo script run twice fails whole instead of half-applying.
         await run(undo(GUARD));
         await expect(run(undo(GUARD))).rejects.toMatchObject({ code: '42704' });
-        expect(await schemaOf(client)).toEqual({
+        const unguardedAgain = {
             ...again,
             triggers: before.triggers,
             functions: before.functions,
             ledger: [...before.ledger, TABLES],
-        });
+        };
+        expect(await schemaOf(client)).toEqual(unguardedAgain);
+
+        // A method being confirmed while the undo runs: the undo waits behind it, and then
+        // counts it. Counted before the lock, it would be dropped without anyone having said so.
+        const factor = `insert into two_step_factors (user_id, kind, confirmed_at, totp_key_id, totp_nonce, totp_secret, totp_last_step)
+             values ($1, 'totp', $2, $3, $4, $5, $6)`;
+        const confirming = new Client({ connectionString: scratchUrl.toString() });
+        await confirming.connect();
+        try {
+            await confirming.query('begin');
+            await confirming.query(factor, [
+                userId,
+                new Date(),
+                randomBytes(8),
+                randomBytes(24),
+                randomBytes(36),
+                1000,
+            ]);
+            const undoing = run(undo(TABLES)).then(
+                () => null,
+                (error: Error) => error,
+            );
+            await expect
+                .poll(
+                    async () => {
+                        await confirming.query('select pg_stat_clear_snapshot()');
+                        const waiting = await confirming.query(
+                            `select 1 from pg_stat_activity where datname = current_database()
+                             and pid <> pg_backend_pid() and wait_event_type = 'Lock'`,
+                        );
+                        return waiting.rowCount;
+                    },
+                    { timeout: 10_000 },
+                )
+                .toBe(1);
+            await confirming.query('commit');
+            expect(await undoing).toMatchObject({
+                message: expect.stringContaining('1 account(s) have two-step sign-in on'),
+            });
+        } finally {
+            await confirming.end();
+        }
+        expect(await schemaOf(client)).toEqual(unguardedAgain);
+        expect((await client.query('select 1 from two_step_factors')).rowCount).toBe(1);
+
+        // The acknowledgement set in the session itself, for a pooler that takes no startup
+        // options: psql -c "set hushos.delete_two_step = 'yes'" -f undo.sql.
+        await client.query(`set hushos.delete_two_step = 'yes'`);
+        await run(undo(TABLES));
+        await client.query('reset hushos.delete_two_step');
+        expect(await schemaOf(client)).toEqual(before);
+
         // With no account on the step (a pending method is not one), the tables' undo asks for nothing.
-        await client.query(
-            `insert into two_step_factors (user_id, kind, totp_key_id, totp_nonce, totp_secret, totp_last_step)
-             values ($1, 'totp', $2, $3, $4, 0)`,
-            [userId, randomBytes(8), randomBytes(24), randomBytes(36)],
-        );
+        await migrate(upTo(GUARD), scratch, { migrationsFolder });
+        await run(undo(GUARD));
+        await client.query(factor, [
+            userId,
+            null,
+            randomBytes(8),
+            randomBytes(24),
+            randomBytes(36),
+            0,
+        ]);
         await run(undo(TABLES));
         expect(await schemaOf(client)).toEqual(before);
         await expect(run(undo(TABLES))).rejects.toMatchObject({ code: '42P01' });

@@ -38,8 +38,10 @@ import {
     totpStepInReach,
     unusedBackupCodes,
     type StepAttempt,
+    type StepFailure,
     type StepProof,
     type StepSpend,
+    type TwoStepRefusal,
 } from './two-step.core';
 
 /*
@@ -67,7 +69,9 @@ import {
  * 4. Wrong: `recordStepFailure` with what step 1 returned. The bucket stays charged.
  * 5. Right: the gated function, with the token and what the answer spends; then
  *    `releaseRateLimit` on the bucket. If the gated function answers that the code was
- *    already spent, it has counted the wrong answer itself, and the bucket stays charged.
+ *    already spent (`reason: 'spent'`), it has counted the wrong answer itself, once, and
+ *    hands back that count (`failure`, with its `notice` and `froze`): the caller acts on
+ *    it, leaves the bucket charged, and does not call `recordStepFailure` for it again.
  */
 
 export {
@@ -78,7 +82,14 @@ export {
     TOTP_FREEZE_FAILURES,
     recordStepFailure,
 } from './two-step.core';
-export type { StepAttempt, StepFailure, StepPool, StepProof, StepSpend } from './two-step.core';
+export type {
+    StepAttempt,
+    StepFailure,
+    StepPool,
+    StepProof,
+    StepSpend,
+    TwoStepRefusal,
+} from './two-step.core';
 export { TWO_STEP_REMEMBER_SECONDS } from './sessions';
 
 /* A step-up's proof: the session asking, its step token, and what the answer spends. */
@@ -86,14 +97,16 @@ export type SessionStep = StepProof & { sessionTokenHash: Buffer };
 
 /*
  * Runs a gated transaction. A step that did not pass rolls the whole transaction back and is
- * answered as `two-step`; a spent code is counted as a wrong answer on the way out.
+ * answered as `two-step` with its reason; a spent code is counted as a wrong answer on the
+ * way out, and that count is in the answer.
  */
-async function gated<T>(run: (tx: Tx) => Promise<T>): Promise<T | { status: 'two-step' }> {
+async function gated<T>(run: (tx: Tx) => Promise<T>): Promise<T | TwoStepRefusal> {
     try {
         return await db.transaction(run);
     } catch (error) {
-        if (await settleRefusal(error)) return { status: 'two-step' };
-        throw error;
+        const refusal = await settleRefusal(error);
+        if (!refusal) throw error;
+        return refusal;
     }
 }
 
@@ -177,7 +190,8 @@ function totpOf(row: TotpRow | undefined) {
 
 export type StartTotpResult =
     | { status: 'ok'; id: string; expiresAt: Date }
-    | { status: 'missing' | 'two-step' };
+    | { status: 'missing' }
+    | TwoStepRefusal;
 
 /*
  * Starts enrolling an authenticator app: a pending factor holding the sealed secret, good for
@@ -291,8 +305,9 @@ export type ConfirmTotpResult =
 /*
  * Confirms a pending app, once the server has checked a current code against its secret.
  * `step` is the time step that code was for: it becomes the app's last used step, so the same
- * code cannot sign in afterwards. A step later than the next one by the database's clock is
- * refused (`step`): stored, it would lock the app out until the clock caught up. Under the
+ * code cannot sign in afterwards. A step later than the one after the current step is
+ * refused (`step`): stored, it would lock the app out until the clock caught up. The clock
+ * is this process's, the one the server's window comes from. Under the
  * account's lock:
  * - the session asking must be the account's own, live and on its current credential;
  * - the factor must be this account's, pending, and younger than ten minutes;
@@ -335,7 +350,7 @@ export async function confirmTotpFactor(input: {
             .for('update');
         if (!pending) return { status: 'missing' };
         // Asked before anything is written, so a refused step leaves a replaced app in place.
-        if (!(await totpStepInReach(tx, input.step))) return { status: 'step' };
+        if (!totpStepInReach(input.step)) return { status: 'step' };
         const confirmed = await confirmedFactors(tx, input.userId);
         const turnedOn = confirmed.length === 0;
         if (turnedOn && !codes) return { status: 'codes-required' };
@@ -393,14 +408,16 @@ export async function confirmTotpFactor(input: {
 export type RemoveFactorResult =
     /* `turnedOff`: it was the last method, so the step is off and its codes, tokens and counts are gone. */
     | { status: 'ok'; kind: TwoStepFactorKind; turnedOff: boolean }
-    | { status: 'missing' | 'two-step' };
+    | { status: 'missing' }
+    | TwoStepRefusal;
 
 /*
  * Removes one of the account's methods. A confirmed one needs the step (`step`, a token for
  * `two-step` from the session asking), passed by any method, the one being removed included:
  * what the answer spends and the removal commit together. A pending one is the person's own
  * unfinished enrolment and needs none. Removing the last confirmed method turns the step off:
- * the backup codes and every step token of the account are deleted and its counts start over.
+ * the backup codes and every step token of the account are deleted, its counts start over,
+ * and its sessions lose their stamp.
  * Removing the app while other methods stay lifts its freeze, which has nothing left to freeze.
  */
 export async function removeFactor(input: {
@@ -435,6 +452,12 @@ export async function removeFactor(input: {
                 .update(accountDevices)
                 .set({ twoStepFailures: 0 })
                 .where(eq(accountDevices.userId, input.userId));
+            // No session keeps its stamp past the step it was for: turned on again later, the
+            // step is asked of every device, not waved through on a stamp from the old one.
+            await tx
+                .update(sessions)
+                .set({ twoStepAt: null })
+                .where(and(eq(sessions.userId, input.userId), isNotNull(sessions.twoStepAt)));
         }
         if (turnedOff || factor.kind === 'totp')
             await tx
@@ -465,7 +488,7 @@ export async function countBackupCodes(userId: string) {
  */
 export async function replaceBackupCodes(
     input: { userId: string; step?: SessionStep } & BackupCodeSet,
-): Promise<{ status: 'ok' | 'off' | 'two-step' }> {
+): Promise<{ status: 'ok' | 'off' } | TwoStepRefusal> {
     const codes = checkedSet(input);
     return gated<{ status: 'ok' | 'off' }>(async (tx) => {
         if (!(await lockAccount(tx, input.userId)) || !(await stepIsOn(tx, input.userId)))
@@ -617,8 +640,13 @@ export type SteppedSession =
           /* How many backup codes are left, when one was just used. */
           backupCodesLeft: number | null;
       }
-    /* `gone`: the token cannot pass. `spent`: the code was already used, and was counted as wrong. */
-    | { status: 'gone' | 'frozen' | 'spent' | 'suspended' };
+    /*
+     * `gone`: the token cannot pass. `frozen`: the app is frozen for it. `step`: the time step
+     * is one no code could be for yet. None of the three is counted.
+     */
+    | { status: 'gone' | 'frozen' | 'step' | 'suspended' }
+    /* The code was already used. It was counted as a wrong answer, once: `failure` is that count. */
+    | { status: 'spent'; failure: StepFailure };
 
 /*
  * Opens the session a sign-in's step token was made for, once the server has checked the
@@ -682,6 +710,7 @@ export async function openSteppedSession(input: {
     } catch (error) {
         const refusal = await settleRefusal(error);
         if (!refusal) throw error;
-        return { status: refusal.status === 'required' ? 'gone' : refusal.status };
+        if (refusal.reason === 'spent') return { status: 'spent', failure: refusal.failure };
+        return { status: refusal.reason === 'required' ? 'gone' : refusal.reason };
     }
 }
