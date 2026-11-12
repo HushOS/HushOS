@@ -1,0 +1,45 @@
+packages/auth/src/server.deletion.test.ts
+  s_566b8e0c4467a4::t_9aa4ba25e1431d 1-161
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_279c435838bc7c 2329,2345,2359,2374-2382
+docs/two-step-design.md
+  s_566b8e0c4467a4::t_3eec78f1436b31 508-520
+packages/auth/src/server.ts
+  s_566b8e0c4467a4::t_532f7304e5b023 22-28,2005-2010,2041-2042,2215
+packages/db/drizzle/20261112160538_two_step/undo.sql
+  s_566b8e0c4467a4::t_5d95c48940b8e5 6,14-18,22-24,34
+packages/db/drizzle/20261112174853_two_step_session_guard/migration.sql
+  s_566b8e0c4467a4::t_2f0876153d358c 28-30,38,57
+packages/db/drizzle/20261112174853_two_step_session_guard/undo.sql
+  s_566b8e0c4467a4::t_95c19035fe483d 1,14
+packages/db/src/auth.ts
+  s_566b8e0c4467a4::t_4952fef8c1d667 52,1068,1091-1092,1361-1362,1365,1369-1371
+packages/db/src/readiness.ts
+  s_566b8e0c4467a4::t_fabe8e820a922f 14
+packages/db/src/two-step.core.ts
+  s_566b8e0c4467a4::t_39a11513aba66e 44-48,50-56,94-97,390-391,393,395-399,401-411,415-416,424-425,427,429-435,441-443,466-469,478,484,491,511
+packages/db/src/two-step.guard.test.ts
+  s_566b8e0c4467a4::t_8dde57ba504ad8 451-460,575-611
+packages/db/src/two-step.migration.test.ts
+  s_566b8e0c4467a4::t_352fb7a0a8d415 20,284,289-341,343-352
+packages/db/src/two-step.test.ts
+  s_566b8e0c4467a4::t_26284aec6854e0 2-3,234-242,265-268,289,386,404-405,407,514,521,523,528,568,717,753-757,788,794,796,804-815,817-837,879,893,908,919,932,951,1240,1256,1273,1276,1284,1354,1367,1598,1614,1656,1728-1790,1930,2057
+packages/db/src/two-step.ts
+  s_566b8e0c4467a4::t_c0f1a2d5b52b43 41,44,72-74,85-92,100-101,103,107-109,193-194,308-310,353,411-412,419-420,455-460,491,643-649,713-714
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4d179586ec50a40da0f002c1e2c9179ae8c6bcad",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
