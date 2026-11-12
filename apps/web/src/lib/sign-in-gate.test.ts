@@ -99,3 +99,61 @@ test('a sign-in in one tab waits until a sign-out in another has finished cleari
     await signIn;
     expect(opened).toEqual(['maya']);
 });
+
+/*
+ * A sign-in that stopped at its second step opens its session when the step is answered,
+ * not when the password was. While a sign-out elsewhere is still deleting this device's
+ * stores, the answer must wait like any other way in, or the session it opens writes into
+ * stores that are about to go.
+ */
+test('answering a second step waits for a sign-out in another tab too, and is refused if one landed meanwhile', async () => {
+    stubLocks();
+    const leaving = await openTab();
+    const signingIn = await openTab();
+    let wiped!: () => void;
+    leaving.holdSignIn(new Promise<void>((resolve) => (wiped = resolve)));
+
+    const opened: string[] = [];
+    let signedOutAgain = 0;
+    const client = signingIn.afterSignOut({
+        login: async () => {},
+        register: async () => {},
+        recover: async () => {},
+        answerStep: async (answer: string) => {
+            opened.push(answer);
+        },
+        logout: async () => {
+            signedOutAgain++;
+        },
+    });
+    const answered = client.answerStep!('123456');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // The step's answer has not gone out while the wipe could still take the stores.
+    expect(opened).toEqual([]);
+    wiped();
+    await answered;
+    expect(opened).toEqual(['123456']);
+
+    // A sign-out that reaches the server while the answer waits: the answer is never sent.
+    let cleared!: () => void;
+    signingIn.holdSignIn(new Promise<void>((resolve) => (cleared = resolve)));
+    const late = client.answerStep!('654321').catch((error: unknown) => error);
+    signingIn.markSignedOut();
+    cleared();
+    expect(await late).toBeInstanceOf(Error);
+    expect(opened).toEqual(['123456']);
+    expect(signedOutAgain).toBe(0);
+});
+
+test('a client without a second step is wrapped as before', async () => {
+    stubLocks();
+    const tab = await openTab();
+    const client = tab.afterSignOut({
+        login: async () => 'in',
+        register: async () => {},
+        recover: async () => {},
+        logout: async () => {},
+    });
+    expect('answerStep' in client).toBe(false);
+    expect(await client.login()).toBe('in');
+});

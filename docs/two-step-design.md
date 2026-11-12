@@ -232,17 +232,18 @@ Today `login/finish` checks OPAQUE, creates the session and returns the password
 
 **Refusals carry a code,** so a client acts on the code and not on the words. At sign-in they are 401; from a signed-in session (below) they are 403, which no client reads as "signed out".
 
-| Code              | Means                                                                                    | The client                                             |
-| ----------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| `step-wrong`      | The answer was wrong, and the token has answers left                                     | Asks again, on the same token                          |
-| `step-expired`    | The token is over: five answers, five minutes, or already used                           | Starts again: the password at sign-in, a new challenge |
-| `step-frozen`     | The authenticator app is paused for this sign-in (403)                                   | Offers a backup code or the phrase                     |
-| `step-limited`    | The 15-minute code budget is spent (429)                                                 | Offers the phrase, or waiting                          |
-| `two-step`        | The action needs the step and came without it, or the step was turned on meanwhile (403) | Asks for a challenge and the step                      |
-| `setup-required`  | The account has no recovery key yet, so the step cannot be turned on (409)               | Sends the person to finish account setup               |
-| `update-required` | The account asks for a step and this client cannot answer one (409, below)               | Says to update                                         |
+| Code               | Means                                                                                                                              | The client                                             |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `step-wrong`       | The answer was wrong, and the token has answers left                                                                               | Asks again, on the same token                          |
+| `step-expired`     | The token is over: five answers, five minutes, or already used                                                                     | Starts again: the password at sign-in, a new challenge |
+| `step-frozen`      | The authenticator app is paused for this sign-in (403)                                                                             | Offers a backup code or the phrase                     |
+| `step-limited`     | The 15-minute code budget is spent (429)                                                                                           | Offers the phrase, or waiting                          |
+| `step-unavailable` | The server cannot check this method right now: a row under a key it no longer has (503, section 8). Nothing was counted or changed | Offers the phrase                                      |
+| `two-step`         | The action needs the step and came without it, or the step was turned on meanwhile (403)                                           | Asks for a challenge and the step                      |
+| `setup-required`   | The account has no recovery key yet, so the step cannot be turned on (409)                                                         | Sends the person to finish account setup               |
+| `update-required`  | The account asks for a step and this client cannot answer one (409, below)                                                         | Says to update                                         |
 
-A row the server cannot read is none of these: it is the server's fault, answered 503 and never counted (section 8).
+A 503 without `step-unavailable` is not the server's answer but a proxy's. It says nothing about the step or the change, so a client treats it as a reply that never came: at sign-in the same answer can be sent again, and after a change the client checks its session before saying what happened.
 
 **The step comes after OPAQUE, never before.**
 
@@ -521,7 +522,7 @@ Settings › Security gets a list, **Recent security activity**, so a person can
 
 **A row under a key the server no longer has** is the server's fault, never a wrong answer:
 
-- the request is answered 503 ("Two-step sign-in is unavailable on this server right now. Use your recovery phrase, or try again later."), nothing is counted, and the answer's slot and budget go back;
+- the request is answered 503 `step-unavailable` ("Two-step sign-in is unavailable on this server right now. Use your recovery phrase, or try again later."), nothing is counted, and the answer's slot and budget go back;
 - the operator's log names the kind of row and the id of the key it wants;
 - the recovery phrase needs no key of the server's, so it still passes the step, and is the way in until the operator puts the key back;
 - a backup-code set is unavailable only when none of its unused codes can be compared. If some can, the answer is compared with those, and matching none of them is a wrong answer.

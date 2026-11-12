@@ -504,7 +504,12 @@ function AppDialog({
     const codeId = useId();
     const othersId = useId();
     const devices = useQuery({ ...devicesQueryOptions, enabled: open && mode === 'on' });
-    const others = (devices.data?.devices ?? []).filter((device) => !device.current).length;
+    // How many other devices the list shows, when it could be read. It only words the offer:
+    // whether they are removed is the tick box's to say, since the list may have failed to
+    // load or be a moment behind a device that signed in since.
+    const others = devices.isSuccess
+        ? devices.data.devices.filter((device) => !device.current).length
+        : null;
     const step = useStepUp('two-step');
     const [password, setPassword] = useState('');
     const [tried, setTried] = useState(false);
@@ -555,6 +560,13 @@ function AppDialog({
             const { backupCodes } = await authClient.confirmAuthenticator(app.id, typed);
             cue('success');
             if (!backupCodes) {
+                // Turning the step on always comes back with the codes. An answer without
+                // them is not the server's answer to that: nothing is claimed, and the
+                // section behind this dialog is read again (below).
+                if (!replacing)
+                    throw new LostReply(
+                        'The server’s answer didn’t arrive, so HushOS can’t tell whether two-step sign-in was turned on. Check before you try again.',
+                    );
                 onDone('Authenticator app replaced.');
                 onClose();
                 return;
@@ -562,16 +574,25 @@ function AppDialog({
             // The codes first: they are shown once, and nothing that follows may cost them.
             setCodes(backupCodes);
             onDone('');
-            // Then the other devices, which signed in before the step was on: removed unless
-            // the person kept them. A failure here is said beside the codes, not instead of them.
-            if (others > 0 && signOutOthers) {
+            // Then the other devices, which signed in before the step was on: removed whenever
+            // the box is ticked, whatever the list said (the server removes none when there
+            // are none). It runs behind the codes and never holds them or the dialog: a
+            // failure is said beside the codes, and in a notice if the dialog has closed.
+            if (signOutOthers) {
                 setRemoving('running');
                 void authClient.removeOtherDevices(password).then(
                     () => {
                         setRemoving('no');
                         onDone('');
                     },
-                    () => setRemoving('failed'),
+                    () => {
+                        setRemoving('failed');
+                        toast.add({
+                            type: 'error',
+                            title: 'Your other devices weren’t removed',
+                            description: 'You can remove them under Your devices.',
+                        });
+                    },
                 );
             }
         } catch (cause) {
@@ -608,11 +629,8 @@ function AppDialog({
                     onDone('Two-step sign-in is on.');
                     onClose();
                 }}
-                footer={
-                    <Button type="submit" disabled={removing === 'running'}>
-                        Done
-                    </Button>
-                }
+                // Never held by the removal: a request that hangs must not keep the person here.
+                footer={<Button type="submit">Done</Button>}
             >
                 <BackupCodes codes={codes} email={user.email} />
                 {removing === 'running' && (
@@ -698,7 +716,7 @@ function AppDialog({
                         </p>
                     )}
                 </div>
-                {!replacing && others > 0 && (
+                {!replacing && (
                     <div className="flex items-start gap-3">
                         <Checkbox
                             id={othersId}
@@ -710,11 +728,9 @@ function AppDialog({
                         <label htmlFor={othersId} className="flex flex-col gap-0.5 text-sm">
                             <span className="font-semibold">Remove my other devices</span>
                             <span className="text-[13px] text-muted-foreground">
-                                {others === 1
-                                    ? 'One other device is'
-                                    : `${others} other devices are`}{' '}
-                                signed in without the second step. They’ll need to sign in again,
-                                and will be asked for it.
+                                {others
+                                    ? `${others === 1 ? 'One other device is' : `${others} other devices are`} signed in without the second step. They’ll need to sign in again, and will be asked for it.`
+                                    : 'Any other device signed in to your account will need to sign in again, and will be asked for the second step.'}
                             </span>
                         </label>
                     </div>

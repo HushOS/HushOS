@@ -965,6 +965,8 @@ describe('what the server does about its own faults', () => {
         const unavailable = {
             status: 503,
             body: {
+                // The server's own 503, told from a proxy's by its code.
+                code: 'step-unavailable',
                 message:
                     'Two-step sign-in is unavailable on this server right now. Use your recovery phrase, or try again later.',
             },

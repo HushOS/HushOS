@@ -61,7 +61,12 @@ export function SignInStep({
                 // A wrong answer is the field's own error; anything else is said above it.
                 if (cause.reason === 'wrong') setError(cause.message);
                 else setRefused(cause.message);
-            } else onOver(authError(cause));
+            } else {
+                // Over for a reason that was not the step's own (a sign-out elsewhere, say):
+                // what the sign-in held is let go before the password is asked for again.
+                authClient.cancelStep();
+                onOver(authError(cause));
+            }
         } finally {
             setPending(false);
         }

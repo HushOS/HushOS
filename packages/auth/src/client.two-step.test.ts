@@ -169,7 +169,13 @@ describe('a sign-in that stops at its second step', () => {
         ['a wrong code', refusal('That code didn’t work.', 401, 'step-wrong'), 'wrong'],
         ['a paused app', refusal('Paused on this device.', 403, 'step-frozen'), 'frozen'],
         ['a spent budget', refusal('Too many wrong codes.', 429, 'step-limited'), 'limited'],
-        ['a server that cannot check', refusal('Unavailable right now.', 503), 'unavailable'],
+        [
+            'a server that cannot check',
+            refusal('Unavailable right now.', 503, 'step-unavailable'),
+            'unavailable',
+        ],
+        // A proxy's 503 says nothing of the step: the same answer goes again.
+        ['a gateway’s 503', refusal('Bad gateway.', 503), 'offline'],
         ['no connection', new TypeError('Failed to fetch'), 'offline'],
         // The address's own limit at the HTTP edge, which carries no step code.
         ['too many requests from this address', refusal('Too many requests.', 429), 'busy'],
@@ -368,15 +374,25 @@ describe('the second step at a security change', () => {
             client.changeSecurity(user, 'password', 'correct horse', 'a new one', twoStep),
         ).rejects.toBe(wrong);
         expect(cleared()).toBe(0);
-        // So are the address's limit and a method the server cannot check: answered, unchanged.
-        for (const status of [429, 503]) {
-            const answered = refusal('Not now.', status);
+        // So are the address's limit and a method the server says it cannot check: answered,
+        // unchanged.
+        for (const answered of [
+            refusal('Too many requests.', 429),
+            refusal('Unavailable right now.', 503, 'step-unavailable'),
+        ]) {
             const busy = change(() => Promise.reject(answered));
             await expect(
                 busy.client.changeSecurity(user, 'password', 'correct horse', 'a new one', twoStep),
             ).rejects.toBe(answered);
             expect(busy.cleared()).toBe(0);
         }
+        // A 503 without the server's code may be a proxy's, sent after the change went
+        // through: it is cleaned up after and the live session decides, as for no reply.
+        const gateway = change(() => Promise.reject(refusal('Bad gateway.', 503)));
+        await expect(
+            gateway.client.changeSecurity(user, 'password', 'correct horse', 'a new one', twoStep),
+        ).rejects.toThrow('Bad gateway.');
+        expect(gateway.cleared()).toBe(1);
         // Any other failure may be a lost reply, and is still cleaned up after as before.
         const unknown = change(() => Promise.reject(new TypeError('Failed to fetch')));
         await expect(

@@ -151,12 +151,15 @@ const STEP_CODES: Record<string, StepFailureReason> = {
     'step-wrong': 'wrong',
     'step-frozen': 'frozen',
     'step-limited': 'limited',
+    'step-unavailable': 'unavailable',
     'step-expired': 'over',
 };
 /*
- * A failed answer as the page needs it. A refusal with a code is the server's own; a 503 is
- * the server saying it cannot check this method; no status at all means no answer came back.
- * Anything else the server answered ends the step: it is not a wrong answer to try again.
+ * A failed answer as the page needs it. A refusal with a code is the server's own. No status
+ * at all means no answer came back, and a 503 without the server's code is a proxy's, which
+ * says as little: the answer may or may not have reached the server, so the same one can be
+ * sent again and the server says what became of the step. Anything else the server answered
+ * ends the step: it is not a wrong answer to try again.
  */
 export function stepFailure(error: unknown): StepFailure {
     if (error instanceof StepFailure) return error;
@@ -170,11 +173,10 @@ export function stepFailure(error: unknown): StepFailure {
     if (reason) return new StepFailure(reason, message, { cause: error });
     // The worker refused a mistyped phrase before anything was sent.
     if (kept === true) return new StepFailure('wrong', message, { cause: error });
-    if (status === 503) return new StepFailure('unavailable', message, { cause: error });
     // The address's own limit, not the step's (that one has a code): nothing about the step
     // was looked at, and it is still there when the limit lets the next request through.
     if (status === 429) return new StepFailure('busy', message, { cause: error });
-    if (typeof status !== 'number')
+    if (typeof status !== 'number' || status === 503)
         return new StepFailure(
             'offline',
             'We couldn’t reach HushOS. Check your connection, then try again.',
@@ -189,19 +191,22 @@ const STEP_REFUSALS = new Set([
     'step-expired',
     'step-frozen',
     'step-limited',
+    'step-unavailable',
 ]);
 export function stepRefused(error: unknown) {
     const code = (error as { code?: unknown } | null)?.code;
     return typeof code === 'string' && STEP_REFUSALS.has(code);
 }
 /*
- * A refusal the server answered before doing anything: the step's own, the address's limit
- * (429), or a method it cannot check right now (503). Nothing was changed, so nothing this
- * browser keeps needs clearing and no other tab needs locking.
+ * A refusal the server answered before doing anything: the step's own, by its code (a method
+ * it cannot check right now among them), or the address's limit (429). Nothing was changed,
+ * so nothing this browser keeps needs clearing and no other tab needs locking. A 503 without
+ * the server's code is not one of these: a proxy sends it too, after a change that went
+ * through as easily as before one, so it is treated as a reply that never came.
  */
 export function nothingChanged(error: unknown) {
     const status = (error as { status?: unknown } | null)?.status;
-    return stepRefused(error) || status === 429 || status === 503;
+    return stepRefused(error) || status === 429;
 }
 /* A 200 that was not the server's answer to a change: what was asked for may or may not be done. */
 export class LostReply extends Error {

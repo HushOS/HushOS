@@ -1,0 +1,152 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
+
+/*
+ * Turning two-step sign-in on, in Account. The offer to remove the account's other devices
+ * must do what its tick says whatever this page knows of the device list (a list that failed
+ * to load, or is a moment old, must not quietly skip it); the backup codes, shown once, must
+ * never wait on that removal; and an answer that is not the server's must not be read as the
+ * step being on.
+ */
+
+const password = 'correct horse battery staple';
+const codes = Array.from({ length: 10 }, (_, index) => `CODE${index}-AAAAA`);
+const api = {
+    twoStep: vi.fn(async () => ({ on: false, methods: [], backupCodesLeft: 0, totpFrozen: false })),
+    securityEvents: vi.fn(async () => ({ events: [] })),
+    devices: vi.fn<() => Promise<{ devices: { id: string; current: boolean }[] }>>(),
+    startAuthenticator: vi.fn(async () => ({
+        id: 'app-1',
+        secret: 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP',
+        uri: 'otpauth://totp/HushOS:maya@example.com?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP',
+    })),
+    confirmAuthenticator: vi.fn<() => Promise<{ backupCodes?: string[] }>>(),
+    removeOtherDevices: vi.fn<(password: string) => Promise<{ removed: number }>>(),
+    stepChallenge: vi.fn(async () => null),
+};
+vi.mock('@/lib/auth-client', () => ({ authClient: api }));
+vi.mock('@/lib/sounds', () => ({ cue: vi.fn() }));
+// Dates are worded by Drive's helpers; the module behind them opens Drive, which this page does not.
+vi.mock('@/lib/drive', () => ({ formatDay: () => '13 Nov', formatTime: () => '14:08' }));
+const toasts = vi.fn();
+vi.mock('@/components/ui/toast', () => ({ toast: { add: (toast: unknown) => toasts(toast) } }));
+// The server's flag, which this page asks a server function for: on.
+vi.mock('@/lib/two-step', async (original) => ({
+    ...(await original<Record<string, unknown>>()),
+    useTwoStepEnabled: () => true,
+}));
+const { AccountTwoStep } = await import('./account-two-step');
+
+const user = { id: 'user-1', email: 'maya@example.com', name: 'Maya', credentialVersion: 1 };
+
+/* From "Turn on" to the screen with the QR code and the offer. */
+async function toTheOffer() {
+    const person = userEvent.setup();
+    render(
+        <QueryClientProvider
+            client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+        >
+            <AccountTwoStep user={user as never} />
+        </QueryClientProvider>,
+    );
+    await person.click(await screen.findByRole('button', { name: 'Turn on' }));
+    await person.type(screen.getByLabelText('Password'), password);
+    await person.click(screen.getByRole('button', { name: 'Continue' }));
+    const code = await screen.findByLabelText('Code from your authenticator app');
+    return { person, code };
+}
+
+beforeEach(() => {
+    for (const mock of Object.values(api)) mock.mockClear();
+    toasts.mockClear();
+    api.devices.mockRejectedValue(new Error('offline'));
+    api.confirmAuthenticator.mockResolvedValue({ backupCodes: codes });
+    api.removeOtherDevices.mockResolvedValue({ removed: 0 });
+});
+
+describe('turning two-step sign-in on', () => {
+    test('a device list that could not be read does not skip the removal: the box is there, ticked, claims no number, and removes', async () => {
+        const { person, code } = await toTheOffer();
+        const offer = screen.getByRole('checkbox', { name: /Remove my other devices/ });
+        expect(offer).toBeChecked();
+        // No count is claimed for a list nobody could read.
+        expect(screen.getByText(/Any other device signed in to your account/)).toBeVisible();
+        expect(screen.queryByText(/other devices? (is|are) signed in/)).toBeNull();
+        await person.type(code, '123456');
+        await person.click(screen.getByRole('button', { name: 'Turn on' }));
+        await screen.findByRole('heading', { name: 'Save your backup codes' });
+        await waitFor(() => expect(api.removeOtherDevices).toHaveBeenCalledWith(password));
+    });
+
+    test('a list that shows no other device does not skip it either, and a list that shows some says how many', async () => {
+        // Only this browser in the list: another may have signed in since it was read.
+        api.devices.mockResolvedValue({ devices: [{ id: 'this', current: true }] });
+        const first = await toTheOffer();
+        await screen.findByText(/Any other device signed in to your account/);
+        await first.person.type(first.code, '123456');
+        await first.person.click(screen.getByRole('button', { name: 'Turn on' }));
+        await screen.findByRole('heading', { name: 'Save your backup codes' });
+        await waitFor(() => expect(api.removeOtherDevices).toHaveBeenCalledTimes(1));
+    });
+
+    test('with two others listed the line says so, and unticked nothing is removed', async () => {
+        api.devices.mockResolvedValue({
+            devices: [
+                { id: 'this', current: true },
+                { id: 'phone', current: false },
+                { id: 'laptop', current: false },
+            ],
+        });
+        const { person, code } = await toTheOffer();
+        await screen.findByText(/2 other devices are signed in without the second step/);
+        await person.click(screen.getByRole('checkbox', { name: /Remove my other devices/ }));
+        await person.type(code, '123456');
+        await person.click(screen.getByRole('button', { name: 'Turn on' }));
+        await screen.findByRole('heading', { name: 'Save your backup codes' });
+        expect(api.removeOtherDevices).not.toHaveBeenCalled();
+    });
+
+    test('the codes are shown, and Done closes the dialog, while the removal is still running; its failure is said afterwards', async () => {
+        let fail!: (error: Error) => void;
+        api.removeOtherDevices.mockReturnValue(
+            new Promise((_resolve, reject) => {
+                fail = reject;
+            }),
+        );
+        const { person, code } = await toTheOffer();
+        await person.type(code, '123456');
+        await person.click(screen.getByRole('button', { name: 'Turn on' }));
+        // The codes are on screen though the removal has not answered.
+        const list = await screen.findByRole('list', { name: 'Backup codes' });
+        expect(list).toHaveTextContent(codes[0]!);
+        expect(api.removeOtherDevices).toHaveBeenCalledTimes(1);
+        const done = screen.getByRole('button', { name: 'Done' });
+        expect(done).toBeEnabled();
+        await person.click(done);
+        await waitFor(() =>
+            expect(screen.queryByRole('heading', { name: 'Save your backup codes' })).toBeNull(),
+        );
+        // The request fails after the dialog has gone: the person is still told.
+        fail(new Error('timeout'));
+        await waitFor(() =>
+            expect(toasts).toHaveBeenCalledWith(
+                expect.objectContaining({ title: 'Your other devices weren’t removed' }),
+            ),
+        );
+    });
+
+    test('an answer without the backup codes is not read as the step being on, or as an app replaced', async () => {
+        api.confirmAuthenticator.mockResolvedValue({});
+        const { person, code } = await toTheOffer();
+        await person.type(code, '123456');
+        await person.click(screen.getByRole('button', { name: 'Turn on' }));
+        await screen.findByText(/can’t tell whether two-step sign-in was turned on/);
+        expect(screen.queryByRole('heading', { name: 'Save your backup codes' })).toBeNull();
+        expect(screen.queryByText('Authenticator app replaced.')).toBeNull();
+        expect(api.removeOtherDevices).not.toHaveBeenCalled();
+        // The settings behind the dialog were read again, to show what is true.
+        expect(api.twoStep.mock.calls.length).toBeGreaterThan(1);
+    });
+});

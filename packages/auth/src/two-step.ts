@@ -149,6 +149,9 @@ function unavailable(error: KeyUnavailable) {
     return new AuthError(
         'Two-step sign-in is unavailable on this server right now. Use your recovery phrase, or try again later.',
         503,
+        // The server's own 503, told apart by its code from one a proxy sends: this one says
+        // nothing was looked at and nothing changed.
+        { code: 'step-unavailable' },
     );
 }
 
