@@ -1,0 +1,49 @@
+apps/web/src/components/account-two-step.test.tsx
+  s_566b8e0c4467a4::t_c0b437ba9ab58d 1-152
+apps/web/src/components/sign-in-step.tsx
+  s_566b8e0c4467a4::t_0b46b0724bdaa9 64-69
+apps/web/src/lib/api/two-step.db.test.ts
+  s_566b8e0c4467a4::t_2a25602db85b65 968-969
+apps/web/src/lib/sign-in-gate.test.ts
+  s_566b8e0c4467a4::t_801c20f868b39d 102-159
+packages/auth/src/client.two-step.test.ts
+  s_566b8e0c4467a4::t_a2b628c662ac52 172-178,377-382,389-395
+packages/auth/src/tokens.test.ts
+  s_566b8e0c4467a4::t_2bdf647e58a0d0 1-20
+packages/auth/src/tokens.ts
+  s_566b8e0c4467a4::t_98fe077591e0d1 26-27,41
+packages/auth/src/two-step.ts
+  s_566b8e0c4467a4::t_a205a6a26b5455 152-154
+apps/web/src/components/account-two-step.tsx
+  s_566b8e0c4467a4::t_ed9740e1a3e8a4 507-512,563-569,577-581,588-595,632-633,719,731-733
+apps/web/src/lib/sign-in-gate.ts
+  s_1e3406041198f8::t_19f2afecc8ddc2 77-78,107-109
+docs/two-step-design.md
+  s_1e3406041198f8::t_54c99d93d69bd3 235-246,525
+packages/auth/src/client.ts
+  s_566b8e0c4467a4::t_2e1be0ed51e509 154,158-162,179,194,201-205,209
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "eac00e520da164b54a0e36dc17a78b6c49cd701d",
+  "prompts": {},
+  "sessions": {
+    "s_1e3406041198f8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a0e21c7cc47809e54",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
