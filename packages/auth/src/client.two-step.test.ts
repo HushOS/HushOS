@@ -610,3 +610,106 @@ describe('other replies that say a change was made', () => {
         });
     });
 });
+
+/*
+ * The worker keeps one password exchange's state between its start and its finish. Two
+ * exchanges at once is not a double press: after two-step sign-in is turned on, the other
+ * devices are removed in the background, and the person may go on to something else that asks
+ * for the password while that request is still out.
+ */
+describe('proving the password again for two things at once', () => {
+    /* A worker that holds one exchange, as the real session does. */
+    function oneExchange(server: Partial<Record<keyof AuthApi, (...input: never[]) => unknown>>) {
+        items.clear();
+        let held = '';
+        const transport: CryptoTransport = {
+            request: async (operation, input) => {
+                if (operation === 'reauthStart') {
+                    held = (input as { password: string }).password;
+                    return { startLoginRequest: `start:${held}` } as never;
+                }
+                if (operation === 'reauthFinish') {
+                    const password = held;
+                    held = '';
+                    if (!password)
+                        throw Object.assign(new Error('Enter your password again.'), {
+                            kept: true,
+                        });
+                    return { finishLoginRequest: `finish:${password}` } as never;
+                }
+                if (operation === 'reauthCancel') held = '';
+                return {} as never;
+            },
+            lock() {},
+            onLock() {},
+        };
+        const keys: DeviceKeyStore = {
+            create: async () => ({ id: 'device-key-1', key: {} as CryptoKey }),
+            load: async () => null,
+            clear: async () => {},
+        };
+        return createAuthClient(() => transport, keys, server as unknown as AuthApi);
+    }
+
+    test('the second waits for the first, so neither loses its exchange and both requests are sent', async () => {
+        let answerFirst!: (challenge: unknown) => void;
+        const removed: unknown[] = [];
+        const started: unknown[] = [];
+        const client = oneExchange({
+            // The removal's exchange is slow to come back.
+            devicesReauth: () => new Promise((resolve) => (answerFirst = resolve)),
+            removeOtherDevices: async (proof: never) => {
+                removed.push(proof);
+                return { removed: 2 };
+            },
+            twoStepReauth: async () => ({ attemptToken: 'second' }),
+            twoStepStartTotp: async (input: never) => {
+                started.push(input);
+                return { id: 'app', secret: 'KEY', uri: 'otpauth://totp/x' };
+            },
+        });
+        const removal = client.removeOtherDevices('the password');
+        await vi.waitFor(() => expect(answerFirst).toBeTypeOf('function'));
+        // Meanwhile the person starts something else that asks for the password.
+        const another = client.startAuthenticator('the password');
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        // It has not begun its exchange over the first one's.
+        expect(started).toEqual([]);
+        answerFirst({ attemptToken: 'first' });
+        // The removal reaches its endpoint with its own finished exchange.
+        expect(await removal).toEqual({ removed: 2 });
+        expect(removed).toEqual([
+            { attemptToken: 'first', finishLoginRequest: 'finish:the password' },
+        ]);
+        // And the second then runs its own.
+        expect(await another).toMatchObject({ id: 'app' });
+        expect(started).toEqual([
+            { attemptToken: 'second', finishLoginRequest: 'finish:the password' },
+        ]);
+    });
+
+    test('an exchange that fails does not hold up the next, and a slow request does not hold up the next exchange', async () => {
+        let finishRemoval!: (result: unknown) => void;
+        let refuse = true;
+        const client = oneExchange({
+            devicesReauth: async () => {
+                if (refuse) throw new Error('Too many attempts.');
+                return { attemptToken: 'first' };
+            },
+            // The request itself hangs, after its exchange is done.
+            removeOtherDevices: () => new Promise((resolve) => (finishRemoval = resolve)),
+            twoStepReauth: async () => ({ attemptToken: 'second' }),
+            twoStepStartTotp: async () => ({ id: 'app', secret: 'KEY', uri: 'otpauth://totp/x' }),
+        });
+        await expect(client.removeOtherDevices('the password')).rejects.toThrow(
+            'Too many attempts.',
+        );
+        refuse = false;
+        const removal = client.removeOtherDevices('the password');
+        await vi.waitFor(() => expect(finishRemoval).toBeTypeOf('function'));
+        // The removal's request is still out; the next thing that asks for the password goes ahead.
+        expect(await client.startAuthenticator('the password')).toMatchObject({ id: 'app' });
+        finishRemoval({ removed: 1 });
+        expect(await removal).toEqual({ removed: 1 });
+    });
+});

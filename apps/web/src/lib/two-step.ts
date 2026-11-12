@@ -79,14 +79,22 @@ export function draftFor(draft: StepDraft, methods: readonly StepMethod[]): Step
 }
 
 /*
- * After an answer was refused: which methods are still worth offering on this step. A paused
- * app is not; after too many wrong codes, or when the server cannot check codes, only the
- * recovery phrase is.
+ * After an answer was refused: which methods are still worth offering on this step.
+ * - A paused app is not (`frozen`).
+ * - After too many wrong codes (`limited`) only the recovery phrase is: the app's codes and
+ *   the backup codes share one budget.
+ * - A method the server cannot check right now (`unavailable`) is withdrawn alone, the one
+ *   that was `tried`: the app's secret and the backup codes can sit under different keys, so
+ *   one being unreadable says nothing of the other.
  */
-export function methodsAfter(methods: readonly StepMethod[], reason: string): StepMethod[] {
+export function methodsAfter(
+    methods: readonly StepMethod[],
+    reason: string,
+    tried: StepMethod,
+): StepMethod[] {
     if (reason === 'frozen') return methods.filter((method) => method !== 'totp');
-    if ((reason === 'limited' || reason === 'unavailable') && methods.includes('phrase'))
-        return ['phrase'];
+    if (reason === 'unavailable') return methods.filter((method) => method !== tried);
+    if (reason === 'limited' && methods.includes('phrase')) return ['phrase'];
     return [...methods];
 }
 
@@ -166,7 +174,7 @@ export function useStepUp(purpose: StepPurpose) {
                 await start(true).catch(() => setChallenge(null));
             } else {
                 // What is offered and what the draft is for change together.
-                const left = methodsAfter(methods, failure.reason);
+                const left = methodsAfter(methods, failure.reason, draft.method);
                 setMethods(left);
                 setDraft((typed) => draftFor(typed, left));
             }

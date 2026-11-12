@@ -57,7 +57,7 @@ export function SignInStep({
             if (cause instanceof StepFailure && cause.again) {
                 // What is offered and what the draft is for change together: an answer is
                 // never sent for a method that is no longer shown.
-                const left = methodsAfter(methods, cause.reason);
+                const left = methodsAfter(methods, cause.reason, draft.method);
                 setMethods(left);
                 setDraft((typed) => draftFor(typed, left));
                 setRefocus((count) => count + 1);

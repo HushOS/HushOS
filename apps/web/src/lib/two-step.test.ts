@@ -56,32 +56,40 @@ describe('what is still offered after a refusal', () => {
     test('what is sent is what is shown: a draft typed for a method that was withdrawn moves to the one now offered', () => {
         // A code was typed for the app, and the app was then paused for this sign-in.
         const typed = { ...emptyDraft(all), totp: '123456', backup: '7KQ2M-9XD4P' };
-        const left = methodsAfter(all, 'frozen');
+        const left = methodsAfter(all, 'frozen', 'totp');
         const now = draftFor(typed, left);
         expect(now.method).toBe('backup');
         // The app's code is never what goes out, though it is still in the draft.
         expect(draftAnswer(now)).toEqual({ kind: 'backup', code: '7KQ2M-9XD4P' });
         // With nothing typed for the new method, nothing is sent at all.
         expect(draftError(draftFor({ ...typed, backup: '' }, left))).toMatch(/backup codes/);
-        expect(draftFor(typed, methodsAfter(all, 'limited')).method).toBe('phrase');
+        expect(draftFor(typed, methodsAfter(all, 'limited', 'totp')).method).toBe('phrase');
         // A method still offered stays where the person put it, and no methods changes nothing.
         expect(draftFor({ ...typed, method: 'phrase' }, left).method).toBe('phrase');
         expect(draftFor(typed, [])).toBe(typed);
     });
     test('the address’s own limit withdraws nothing: the same answer can go again', () => {
-        expect(methodsAfter(all, 'busy')).toEqual(['totp', 'backup', 'phrase']);
+        expect(methodsAfter(all, 'busy', 'totp')).toEqual(['totp', 'backup', 'phrase']);
     });
     test('a wrong answer, or no connection, changes nothing', () => {
-        expect(methodsAfter(all, 'wrong')).toEqual(['totp', 'backup', 'phrase']);
-        expect(methodsAfter(all, 'offline')).toEqual(['totp', 'backup', 'phrase']);
+        expect(methodsAfter(all, 'wrong', 'totp')).toEqual(['totp', 'backup', 'phrase']);
+        expect(methodsAfter(all, 'offline', 'backup')).toEqual(['totp', 'backup', 'phrase']);
     });
     test('a paused app is no longer offered; a backup code and the phrase are', () => {
-        expect(methodsAfter(all, 'frozen')).toEqual(['backup', 'phrase']);
+        expect(methodsAfter(all, 'frozen', 'totp')).toEqual(['backup', 'phrase']);
     });
-    test('after too many wrong codes, or when the server cannot check codes, only the phrase is', () => {
-        expect(methodsAfter(all, 'limited')).toEqual(['phrase']);
-        expect(methodsAfter(all, 'unavailable')).toEqual(['phrase']);
+    test('after too many wrong codes only the phrase is: the app and the backup codes share one budget', () => {
+        expect(methodsAfter(all, 'limited', 'totp')).toEqual(['phrase']);
+        expect(methodsAfter(all, 'limited', 'backup')).toEqual(['phrase']);
         // An account with no recovery key has no phrase to fall back to: the codes stay.
-        expect(methodsAfter(['totp', 'backup'], 'limited')).toEqual(['totp', 'backup']);
+        expect(methodsAfter(['totp', 'backup'], 'limited', 'totp')).toEqual(['totp', 'backup']);
+    });
+    test('a method the server cannot check is withdrawn alone: the other, under its own key, is still offered', () => {
+        // The app's secret is under a key the server lost; the backup codes are not.
+        expect(methodsAfter(all, 'unavailable', 'totp')).toEqual(['backup', 'phrase']);
+        expect(methodsAfter(all, 'unavailable', 'backup')).toEqual(['totp', 'phrase']);
+        // Without a phrase too: the one that was tried goes, whatever is left stays.
+        expect(methodsAfter(['totp', 'backup'], 'unavailable', 'backup')).toEqual(['totp']);
+        expect(methodsAfter(['totp'], 'unavailable', 'totp')).toEqual([]);
     });
 });

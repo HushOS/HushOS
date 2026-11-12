@@ -803,16 +803,35 @@ export function createAuthClient(
         // Which change the proof is for: the server binds the exchange to it.
         reauth: AuthApi['devicesReauth'] = (input) => api.devicesReauth(input),
     ) {
-        try {
-            const start = await rpc('reauthStart', { password });
-            const challenge = await reauth(start);
-            const finish = await rpc('reauthFinish', challenge);
-            return await action({ attemptToken: challenge.attemptToken, ...finish });
-        } finally {
-            // A server that refused the start (429, a lost session) leaves the password in the
-            // worker otherwise, until the next lock.
-            await rpc('reauthCancel', {}).catch(() => {});
-        }
+        return action(await provePassword(password, reauth));
+    }
+    /*
+     * One password exchange at a time. The worker holds a single exchange's state between its
+     * start and its finish, so a second one begun meanwhile would overwrite the first's, and
+     * its tidying-up would clear it: the first then fails with "Enter your password again"
+     * without its request ever being sent. That can happen without anyone pressing twice: other
+     * devices are removed in the background after two-step sign-in is turned on, while the
+     * person goes on to something else that asks for the password. Each exchange waits for
+     * the one before it to end. Only the exchange is queued: what is done with the proof (the
+     * request it authorises) runs outside the queue, so a slow request holds nobody up.
+     */
+    let proving: Promise<unknown> = Promise.resolve();
+    function provePassword(password: string, reauth: AuthApi['devicesReauth']) {
+        const exchange = proving.then(async () => {
+            try {
+                const start = await rpc('reauthStart', { password });
+                const challenge = await reauth(start);
+                const finish = await rpc('reauthFinish', challenge);
+                return { attemptToken: challenge.attemptToken, ...finish };
+            } finally {
+                // A server that refused the start (429, a lost session) leaves the password in
+                // the worker otherwise, until the next lock.
+                await rpc('reauthCancel', {}).catch(() => {});
+            }
+        });
+        // The next exchange waits for this one's end, whichever way it ends.
+        proving = exchange.catch(() => {});
+        return exchange;
     }
     return {
         store,

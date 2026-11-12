@@ -152,6 +152,29 @@ describe('unlocking an account that asks for a second step', () => {
         await vi.waitFor(() => expect(answerStep).toHaveBeenCalledTimes(2));
     });
 
+    test('a method the server cannot check is withdrawn alone: the app’s codes go, and a backup code is still offered and sent', async () => {
+        const { user, code } = await toStep();
+        answerStep.mockRejectedValueOnce(
+            new StepFailure(
+                'unavailable',
+                'Two-step sign-in is unavailable on this server right now.',
+            ),
+        );
+        await user.type(code, '123456');
+        await user.click(screen.getByRole('button', { name: 'Continue' }));
+        await screen.findByText('Two-step sign-in is unavailable on this server right now.');
+        // The backup codes are under their own key: still offered, beside the phrase.
+        const backup = await screen.findByLabelText('Backup code');
+        expect(screen.getByRole('button', { name: 'Use your recovery phrase' })).toBeEnabled();
+        expect(screen.queryByRole('button', { name: 'Use your authenticator app' })).toBeNull();
+        answerStep.mockResolvedValueOnce(undefined);
+        await user.type(backup, '7KQ2M-9XD4P');
+        await user.click(screen.getByRole('button', { name: 'Continue' }));
+        await vi.waitFor(() =>
+            expect(answerStep).toHaveBeenLastCalledWith({ kind: 'backup', code: '7KQ2M-9XD4P' }),
+        );
+    });
+
     test('a paused app stops being offered, and a step that is over goes back to the password with the reason', async () => {
         const { user, code } = await toStep();
         answerStep.mockRejectedValueOnce(
