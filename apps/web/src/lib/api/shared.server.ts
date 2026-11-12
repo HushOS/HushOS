@@ -250,11 +250,15 @@ export function notifyDevices(
     userId: string,
     kind: 'new-device' | 'device-removed' | 'devices-removed',
     count?: number,
+    /* How a new device signed in, when it passed a second step. */
+    signedInWith?: string,
 ) {
-    void auth.notifyDevices(userId, kind, count).catch((error: unknown) => {
-        log.set({ auth: { failure: describeFailure(error) } });
-        log.error(new Error('Security notice failed.'));
-    });
+    void auth
+        .notifyDevices(userId, kind, count, undefined, signedInWith)
+        .catch((error: unknown) => {
+            log.set({ auth: { failure: describeFailure(error) } });
+            log.error(new Error('Security notice failed.'));
+        });
 }
 
 /* What the operator gets to see about a failure: the class and machine code, one cause deep. */
@@ -783,6 +787,29 @@ export const guards = new Elysia({ name: 'hushos-api-guards' }).use(requestConte
 export const deviceRemovalSchema = t.Object({
     attemptToken: tokenSchema,
     finishLoginRequest: opaqueMessage,
+});
+
+/*
+ * An answer to a second step (docs/two-step-design.md 4): the step token and one of a code
+ * from an authenticator app, a backup code, or the recovery phrase's signature (64 bytes).
+ */
+export const stepAnswerSchema = t.Object({
+    token: tokenSchema,
+    proof: t.Union([
+        t.Object({ kind: t.Literal('totp'), code: t.String({ minLength: 6, maxLength: 16 }) }),
+        t.Object({ kind: t.Literal('backup'), code: t.String({ minLength: 10, maxLength: 32 }) }),
+        t.Object({
+            kind: t.Literal('phrase'),
+            signature: t.String({ minLength: 86, maxLength: 86, pattern: '^[A-Za-z0-9_-]+$' }),
+        }),
+    ]),
+});
+
+/* What changing the step itself carries: the password proved again, and the step once it is on. */
+export const twoStepChangeSchema = t.Object({
+    attemptToken: tokenSchema,
+    finishLoginRequest: opaqueMessage,
+    twoStep: t.Optional(stepAnswerSchema),
 });
 
 export const securityActionSchema = t.Union([

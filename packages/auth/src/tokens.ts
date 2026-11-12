@@ -15,8 +15,25 @@ export type TokenKind = 'session' | 'enrollment';
  * A refusal a client may act on by its code rather than its words: `current`
  * (the device asking is the one named; sign out instead), `registered` (the
  * device already described itself). Approval will add `busy` and `policy`.
+ *
+ * Two-step sign-in (docs/two-step-design.md 4):
+ * - `update-required`: the account asks for a second step and this client cannot answer one;
+ * - `two-step`: the action needs the step and came without it, or the step was turned on meanwhile;
+ * - `step-wrong`: the answer was wrong, and the token still has answers left;
+ * - `step-expired`: the token is over (five wrong answers, five minutes, or used): start again;
+ * - `step-frozen`: the authenticator app is paused for this sign-in; use another method;
+ * - `step-limited`: too many wrong codes in 15 minutes; the recovery phrase still works.
  */
-export type AuthErrorCode = 'current' | 'registered' | 'key-in-use';
+export type AuthErrorCode =
+    | 'current'
+    | 'registered'
+    | 'key-in-use'
+    | 'update-required'
+    | 'two-step'
+    | 'step-wrong'
+    | 'step-expired'
+    | 'step-frozen'
+    | 'step-limited';
 
 export class AuthError extends Error {
     readonly code?: AuthErrorCode;

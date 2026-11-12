@@ -1,0 +1,301 @@
+import '@/lib/server-only';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { KEY_STRETCHING, OPAQUE_IDENTIFIERS, OPAQUE_PROFILE_VERSION } from '@hushos/crypto';
+import { deviceSessionStatement } from '@hushos/crypto/device-identity';
+import { createRecovery } from '@hushos/crypto/recovery';
+import { client, ready, server } from '@hushos/crypto/server';
+import { recoveryStepKey, signTwoStepPhrase } from '@hushos/crypto/two-step';
+import { totpCode, totpStep } from '@hushos/crypto/two-step/server';
+import { vi } from 'vitest';
+import { loadApiModule } from './api-app';
+
+/*
+ * The auth API as a browser or a phone app reaches it, for tests that must not skip a layer:
+ * every request goes through the HTTP edge (`handleApiRequest`: the Origin check, the body
+ * cap, the per-address limit), the Elysia routes and their schemas, a real OPAQUE exchange,
+ * and Postgres. Only three things are stood in for: the client address (Nitro's request
+ * context, which a test has none of), outgoing mail (kept in `outbox`), and the logger.
+ *
+ * The environment is read when the server's modules load, so everything that loads them is
+ * imported here, after it is set: nothing of the server is imported at the top of this file.
+ */
+
+const ORIGIN = 'http://localhost:5173';
+export const PASSWORD = 'correct horse battery staple';
+
+export type Reply = { status: number; body: any; session: string | null | undefined };
+export type Notice = { to: string; kind: string; count?: number; method?: string };
+export type Account = { userId: string; email: string; phrase: string };
+
+const BASE32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+/* An authenticator app's reading of the secret the page shows. */
+export function fromBase32(value: string) {
+    let bits = 0;
+    let buffer = 0;
+    const out: number[] = [];
+    for (const character of value) {
+        buffer = (buffer << 5) | BASE32.indexOf(character);
+        bits += 5;
+        if (bits >= 8) {
+            out.push((buffer >>> (bits - 8)) & 255);
+            bits -= 8;
+        }
+    }
+    return new Uint8Array(out);
+}
+
+/* The code an authenticator app shows now, or `offset` steps from now. */
+export function appCode(secret: string, offset = 0) {
+    return totpCode(fromBase32(secret), totpStep() + offset);
+}
+
+export async function loadEdge(env: Record<string, string> = {}) {
+    await ready;
+    vi.stubEnv('OPAQUE_SERVER_SETUP', server.createSetup());
+    for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value);
+    const state = { address: '203.0.113.1' };
+    const outbox: Notice[] = [];
+    vi.doMock('nitro/context', () => ({
+        useRequest: () => ({ ip: state.address, headers: new Headers(), context: {} }),
+    }));
+    // The emails package is not a dependency of the web app, so it is named by its file.
+    type SecurityNotice = { kind: string; count?: number; method?: string };
+    vi.doMock(
+        new URL('../../../../packages/emails/src/service.ts', import.meta.url).pathname,
+        async (importOriginal) => {
+            const emails = (await importOriginal()) as {
+                composeSecurityNotice: (to: string, input: SecurityNotice) => unknown;
+            };
+            return {
+                ...emails,
+                sendSecurityNotice: async (to: string, input: SecurityNotice) => {
+                    // Composed for real: a notice whose template lacks a value fails here too.
+                    emails.composeSecurityNotice(to, input);
+                    outbox.push({ to, kind: input.kind, count: input.count, method: input.method });
+                },
+            };
+        },
+    );
+    const { handleApiRequest } = await loadApiModule();
+    const { authRepository, db, twoStepRepository } = await import('@hushos/db');
+    const schema = await import('@hushos/db/schema');
+    const { registration, sha256 } = await import('../../../../packages/db/test/accounts');
+    const { closeDatabase, resetDatabase, signingKeyFromSeed } =
+        await import('../../../../packages/db/test/helpers');
+
+    /* One request to /api/auth, as a client sends it. `session` is the cookie it set: a token, null when cleared. */
+    async function call(
+        method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+        path: string,
+        body?: unknown,
+        options: { cookie?: string | null; origin?: string } = {},
+    ): Promise<Reply> {
+        const init: RequestInit = {
+            method,
+            headers: {
+                origin: options.origin ?? ORIGIN,
+                ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+                ...(options.cookie ? { cookie: `hushos-session=${options.cookie}` } : {}),
+            },
+        };
+        if (body !== undefined) init.body = JSON.stringify(body);
+        const response = await handleApiRequest(new Request(`${ORIGIN}/api/auth${path}`, init));
+        const cookie = response.headers
+            .getSetCookie()
+            .map((value) => /^hushos-session=([^;]*);/.exec(value)?.[1])
+            .find((value) => value !== undefined);
+        return {
+            status: response.status,
+            body: await response.json().catch(() => null),
+            session: cookie === undefined ? undefined : cookie || null,
+        };
+    }
+
+    /* An account whose password really is PASSWORD and whose recovery phrase really opens its recovery key. */
+    async function account(password = PASSWORD): Promise<Account> {
+        const email = `${randomUUID()}@hush.example`;
+        const verification = randomUUID();
+        const enrollment = randomUUID();
+        const later = new Date(Date.now() + 60 * 60 * 1000);
+        await authRepository.createEnrollment({
+            purpose: 'register',
+            email,
+            normalizedEmail: email,
+            verificationTokenHash: sha256(verification),
+            expiresAt: later,
+        });
+        const verified = await authRepository.verifyEnrollment(
+            sha256(verification),
+            sha256(enrollment),
+            later,
+        );
+        const start = client.startRegistration({ password });
+        const { registrationResponse } = server.createRegistrationResponse({
+            serverSetup: process.env.OPAQUE_SERVER_SETUP!,
+            userIdentifier: verified!.id,
+            registrationRequest: start.registrationRequest,
+        });
+        const { registrationRecord } = client.finishRegistration({
+            password,
+            clientRegistrationState: start.clientRegistrationState,
+            registrationResponse,
+            identifiers: OPAQUE_IDENTIFIERS,
+            keyStretching: KEY_STRETCHING,
+        });
+        const made = await createRecovery(new Uint8Array(randomBytes(32)), verified!.id);
+        const bytes = (value: string) => Buffer.from(value, 'base64url');
+        const registered = await authRepository.registerAccount({
+            enrollmentTokenHash: sha256(enrollment),
+            ...registration(),
+            registrationRecord,
+            profileVersion: OPAQUE_PROFILE_VERSION,
+            serverSetupId: 'primary',
+            recovery: {
+                wrappingSalt: bytes(made.recovery.wrappingSalt),
+                wrappingNonce: bytes(made.recovery.wrappingNonce),
+                encryptedKey: bytes(made.recovery.encryptedKey),
+                backupNonce: bytes(made.recovery.backupNonce),
+                encryptedRecoveryKey: bytes(made.recovery.encryptedRecoveryKey),
+                publicKey: bytes(made.recovery.publicKey),
+            },
+        });
+        if (registered.status !== 'created') throw new Error(`Registration ${registered.status}.`);
+        return { userId: registered.user.id, email, phrase: made.phrase };
+    }
+
+    type Proof = { deviceId: string; seed: Buffer };
+
+    /* The password, proved to `path`'s start route: what its finish route then takes. */
+    async function passwordProof(
+        startPath: string,
+        body: Record<string, unknown>,
+        options: { cookie?: string | null; password?: string } = {},
+    ) {
+        const password = options.password ?? PASSWORD;
+        const start = client.startLogin({ password });
+        const challenge = await call(
+            'POST',
+            startPath,
+            { ...body, startLoginRequest: start.startLoginRequest },
+            options,
+        );
+        if (challenge.status !== 200) throw new Error(`${startPath} answered ${challenge.status}.`);
+        const finish = client.finishLogin({
+            password,
+            clientLoginState: start.clientLoginState,
+            loginResponse: challenge.body.loginResponse,
+            identifiers: OPAQUE_IDENTIFIERS,
+            keyStretching: KEY_STRETCHING,
+        });
+        return {
+            challenge: challenge.body,
+            // A wrong password yields no KE3; a made-up one stands in for whatever a client would send.
+            proof: {
+                attemptToken: challenge.body.attemptToken as string,
+                finishLoginRequest:
+                    finish?.finishLoginRequest ?? randomBytes(64).toString('base64url'),
+            },
+        };
+    }
+
+    /* A sign-in's two requests. `twoStep` is what a client that can answer a step sends. */
+    async function signIn(
+        who: Account,
+        options: {
+            cookie?: string | null;
+            twoStep?: boolean;
+            device?: Proof;
+            password?: string;
+        } = {},
+    ): Promise<Reply> {
+        const { proof } = await passwordProof('/login/start', { email: who.email }, options);
+        const device = options.device
+            ? {
+                  id: options.device.deviceId,
+                  signature: signingKeyFromSeed(options.device.seed)
+                      .sign(
+                          Buffer.from(
+                              await deviceSessionStatement({
+                                  userId: who.userId,
+                                  deviceId: options.device.deviceId,
+                                  attemptToken: proof.attemptToken,
+                              }),
+                          ),
+                      )
+                      .toString('base64url'),
+              }
+            : undefined;
+        return call(
+            'POST',
+            '/login/finish',
+            { ...proof, ...(options.twoStep ? { twoStep: 1 } : {}), ...(device ? { device } : {}) },
+            { cookie: options.cookie },
+        );
+    }
+
+    /* The recovery phrase's answer to a step, made as a device makes it from what the step's reply carries. */
+    async function phraseProof(
+        phrase: string,
+        step: { token: string; phrase: { userId: string; wrappingSalt: string } },
+    ) {
+        const key = await recoveryStepKey(phrase, step.phrase.wrappingSalt);
+        return {
+            kind: 'phrase' as const,
+            signature: await signTwoStepPhrase(key, {
+                userId: step.phrase.userId,
+                stepToken: step.token,
+            }),
+        };
+    }
+
+    /* Gives the session's device a key of its own, as the app does after signing in. */
+    async function giveDeviceKey(cookie: string, deviceId: string): Promise<Proof> {
+        const seed = randomBytes(32);
+        const registered = await call(
+            'POST',
+            '/devices',
+            {
+                kind: 'web',
+                name: 'Laptop',
+                signingPublicKey: signingKeyFromSeed(seed).publicKey.toString('base64url'),
+            },
+            { cookie },
+        );
+        if (registered.status !== 200) throw new Error(`Device ${registered.status}.`);
+        return { deviceId, seed };
+    }
+
+    /* Notices are sent after the reply and not awaited: wait for the ones a test expects. */
+    async function notices(kind: string, count = 1) {
+        for (let waited = 0; waited < 200; waited++) {
+            if (outbox.filter((notice) => notice.kind === kind).length >= count) break;
+            await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        return outbox.filter((notice) => notice.kind === kind);
+    }
+
+    /* Lets anything still being sent land, for asserting that a notice was not sent. */
+    const quiet = () => new Promise((resolve) => setTimeout(resolve, 150));
+
+    return {
+        call,
+        account,
+        signIn,
+        passwordProof,
+        phraseProof,
+        giveDeviceKey,
+        notices,
+        quiet,
+        outbox,
+        state,
+        db,
+        schema,
+        authRepository,
+        twoStepRepository,
+        sha256,
+        resetDatabase,
+        closeDatabase,
+    };
+}
+
+export type Edge = Awaited<ReturnType<typeof loadEdge>>;

@@ -6,7 +6,7 @@ import type { JobPayloads, queues } from '../client';
 /*
  * Deletes expired auth rows (enrollments, login and recovery attempts, sessions,
  * rate-limit buckets, removed devices' tokens, second-step tokens and methods
- * nobody confirmed) and devices that can never come
+ * nobody confirmed, security log lines past 90 days) and devices that can never come
  * back, revokes keyed devices idle for 90 days, and deletes revoked devices 90
  * days on; closes expired group invitations and forgets the address on any
  * no longer open for 30 days; deletes notification events past their 30 days;

@@ -7,9 +7,9 @@ import { afterAll, beforeEach, describe, expect, test, vi } from 'vitest';
  * Deleting an account that has two-step sign-in on, against the test database with a real
  * OPAQUE exchange. The route stops whatever is billed to the account before the account goes
  * (`beforeDelete`: the web app revokes the plan and deletes the customer at the payment
- * provider there). An account with the step on is deleted only with its second step, and
- * this server cannot take one yet: it must refuse before billing is touched, or the account
- * would survive with its plan destroyed.
+ * provider there). An account with the step on is deleted only with its second step: a
+ * missing or wrong answer must be refused before billing is touched, or the account would
+ * survive with its plan destroyed.
  */
 await ready;
 process.env.APP_ORIGIN = 'https://hush.example';
@@ -108,6 +108,7 @@ async function turnOnTwoStep(userId: string, sessionToken: string) {
 async function deleteWithPassword(
     sessionToken: string,
     beforeDelete: (userId: string) => Promise<void>,
+    twoStep?: Parameters<typeof auth.finishAccountDeletion>[1]['twoStep'],
 ) {
     const start = client.startLogin({ password: PASSWORD });
     const { attemptToken, loginResponse } = await auth.startAccountDeletion(
@@ -123,7 +124,7 @@ async function deleteWithPassword(
     });
     return auth.finishAccountDeletion(
         sessionToken,
-        { attemptToken, finishLoginRequest: finish!.finishLoginRequest },
+        { attemptToken, finishLoginRequest: finish!.finishLoginRequest, twoStep },
         beforeDelete,
     );
 }
@@ -136,8 +137,18 @@ describe('deleting an account', () => {
         await expect(deleteWithPassword(maya.sessionToken, billing)).rejects.toMatchObject({
             name: 'AuthError',
             status: 403,
-            message: 'Your account was not deleted: it asks for a second step.',
+            code: 'two-step',
+            message: 'This needs your second step.',
         });
+        expect(billing).not.toHaveBeenCalled();
+        // A wrong answer to the step is refused at the same place.
+        const step = await auth.startStepChallenge(maya.sessionToken, 'delete');
+        await expect(
+            deleteWithPassword(maya.sessionToken, billing, {
+                token: step.token,
+                proof: { kind: 'backup', code: 'AAAAA-AAAAA' },
+            }),
+        ).rejects.toMatchObject({ status: 403, code: 'step-wrong' });
         expect(billing).not.toHaveBeenCalled();
         expect((await db.select().from(users)).map((user) => user.id)).toEqual([maya.userId]);
         // The session that asked is still signed in, and the step is still on.

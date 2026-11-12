@@ -217,10 +217,10 @@ Today `login/finish` checks OPAQUE, creates the session and returns the password
 2. `login/finish` checks OPAQUE and consumes the attempt, as today. It also checks the device proof (`docs/devices-design.md` 12) and records which device the session would attach to. Then, if the account has the step on and the sign-in is not exempt (below), it creates **no session and no cookie, and returns no envelope.** It returns:
 
     ```
-    { twoStep: { token, methods: ['webauthn','totp','backup','phrase'], expiresAt, webauthn?: { challenge, allowCredentials }, phrase?: { recoveryVersion, wrappingSalt } } }
+    { twoStep: { token, methods: ['webauthn','totp','backup','phrase'], expiresAt, webauthn?: { challenge, allowCredentials }, phrase?: { userId, recoveryVersion, wrappingSalt } } }
     ```
 
-    `phrase` carries what the device needs to derive the recovery signing key (section 5). The token is 32 random bytes and lasts five minutes. The server keeps only its hash, in `two_step_attempts`, with the user, the credential version, the device the session will attach to and the WebAuthn challenge.
+    `phrase` carries what the device needs to derive the recovery signing key and build its statement (section 5): the account's id is in it because a sign-in has not been told it yet. The token is 32 random bytes and lasts five minutes. The server keeps only its hash, in `two_step_attempts`, with the user, the credential version, the device the session will attach to and the WebAuthn challenge.
 
 3. `POST /api/auth/login/two-step { token, proof }`, where `proof` is one of `{ kind: 'totp', code }`, `{ kind: 'backup', code }`, `{ kind: 'webauthn', response }`, or `{ kind: 'phrase', signature }` (section 5). The apps' browser path for security keys (section 6) sends the same `webauthn` proof; no token is ever marked passed by anything but this request. On success the server deletes the token and checks again, under the user's lock, that the credential version has not changed. It then creates the session (with `two_step_at` set) and returns exactly what `login/finish` returns today: `{ user, envelope, device }` and the cookie.
 4. A wrong answer counts against the token and the account (section 2). Five wrong answers end the token.

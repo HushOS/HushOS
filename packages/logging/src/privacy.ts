@@ -91,6 +91,7 @@ const authActions = new Set([
     'register/finish',
     'login/start',
     'login/finish',
+    'login/two-step',
     'session',
     'session/forget',
     'logout',
@@ -120,6 +121,14 @@ const authActions = new Set([
     'devices/:id',
     'devices/others',
     'devices/reauth',
+    'two-step',
+    'two-step/reauth',
+    'two-step/challenge',
+    'two-step/totp',
+    'two-step/totp/:id/confirm',
+    'two-step/methods/:id',
+    'two-step/backup-codes',
+    'security-events',
 ]);
 const FAILURE_TOKEN = /^[A-Za-z0-9_.:-]{1,64}$/;
 export type Failure = { kind: string; code?: string; cause?: Failure };
@@ -230,7 +239,9 @@ export function authLogAction(pathname: string) {
     const action = pathname
         .slice('/api/auth/'.length)
         .replace(/^contacts\/[0-9a-f-]{36}\/succession$/, 'contacts/:userId/succession')
-        .replace(/^devices\/[0-9a-f-]{36}$/, 'devices/:id');
+        .replace(/^devices\/[0-9a-f-]{36}$/, 'devices/:id')
+        .replace(/^two-step\/totp\/[0-9a-f-]{36}\/confirm$/, 'two-step/totp/:id/confirm')
+        .replace(/^two-step\/methods\/[0-9a-f-]{36}$/, 'two-step/methods/:id');
     return authActions.has(action) ? action : 'unknown';
 }
 

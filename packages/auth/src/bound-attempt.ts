@@ -11,7 +11,13 @@ import { ready, server } from '@hushos/crypto/server';
  * The caller consumes the attempt (a DELETE … RETURNING) before calling this,
  * so a replay finds nothing.
  */
-export type BoundPurpose = 'delete' | 'password' | 'master-key' | 'recovery-key' | 'devices';
+export type BoundPurpose =
+    | 'delete'
+    | 'password'
+    | 'master-key'
+    | 'recovery-key'
+    | 'devices'
+    | 'two-step';
 
 export type StoredAttempt = {
     purpose: string;

@@ -45,6 +45,7 @@ import {
 } from './signatures';
 import {
     PENDING_FACTOR_SECONDS,
+    SECURITY_EVENT_DAYS,
     passStepIfOn,
     settleRefusal,
     stepIsOn,
@@ -66,6 +67,7 @@ import {
     opaqueLoginAttempts,
     removedSessionTokens,
     serverSecrets,
+    accountSecurityEvents,
     sessions,
     twoStepAttempts,
     twoStepFactors,
@@ -836,6 +838,7 @@ export async function cleanupExpired(options: { batchSize?: number; signal?: Abo
     const revokedCutoff = new Date(now.getTime() - DEVICE_REVOKED_DAYS * 24 * 60 * 60 * 1000);
     const noSession = sql`not exists (select 1 from ${sessions} where ${sessions.deviceId} = ${accountDevices.id})`;
     const pendingCutoff = new Date(now.getTime() - PENDING_FACTOR_SECONDS * 1000);
+    const logCutoff = new Date(now.getTime() - SECURITY_EVENT_DAYS * 24 * 60 * 60 * 1000);
     return {
         enrollments: await sweep(
             accountEnrollments,
@@ -870,6 +873,12 @@ export async function cleanupExpired(options: { batchSize?: number; signal?: Abo
         pendingFactors: await repeat(() =>
             db.execute(
                 sql`delete from ${twoStepFactors} where ${twoStepFactors.confirmedAt} is null and ${twoStepFactors.createdAt} < ${pendingCutoff} and ${twoStepFactors.id} in (select ${twoStepFactors.id} from ${twoStepFactors} where ${twoStepFactors.confirmedAt} is null and ${twoStepFactors.createdAt} < ${pendingCutoff} limit ${batch})`,
+            ),
+        ),
+        // The security log keeps 90 days (docs/two-step-design.md 7).
+        securityEvents: await repeat(() =>
+            db.execute(
+                sql`delete from ${accountSecurityEvents} where ${accountSecurityEvents.id} in (select ${accountSecurityEvents.id} from ${accountSecurityEvents} where ${accountSecurityEvents.createdAt} < ${logCutoff} limit ${batch})`,
             ),
         ),
         // A device without a key and without a session can never come back: neither a

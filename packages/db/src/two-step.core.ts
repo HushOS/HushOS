@@ -31,6 +31,8 @@ export const STEP_NOTICE_FAILURES = 5;
 export const TOTP_FREEZE_FAILURES = 100;
 /* A set of backup codes. */
 export const BACKUP_CODE_COUNT = 10;
+/* How long a line of the security log is kept (docs/two-step-design.md 7). */
+export const SECURITY_EVENT_DAYS = 90;
 /* How long a second-step method may wait to be confirmed (docs/two-step-design.md 2). */
 export const PENDING_FACTOR_SECONDS = 10 * 60;
 /* RFC 6238's time step, which the key URI fixes at 30 seconds. */

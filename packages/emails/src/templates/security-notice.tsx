@@ -15,11 +15,12 @@ import {
 } from 'react-email';
 
 /*
- * A security notice about the account's devices: a new sign-in with the
- * password, a device removed, or every other device removed. Always sent; it
- * cannot be turned off. It never names the device: a device's name is what the
- * device said about itself, so whoever signed in would choose the words. Nor the
- * address or browser. When, and where to look.
+ * A security notice about the account's devices or its two-step sign-in: a new
+ * sign-in, a device removed, every other device removed, a change to the second
+ * step, a backup code or the recovery phrase used, a failed step. Always sent; it
+ * cannot be turned off. It never names a device or a method: a name is what
+ * whoever added it chose, so an intruder would choose the words. Nor the address
+ * or browser. When, the kind of method, and where to look.
  *
  * The same sheet as the share notice: the cool ground, one white card, the
  * facts as ruled rows, one blue button.
@@ -28,7 +29,16 @@ export type SecurityNoticeKind =
     | 'new-device'
     | 'device-removed'
     | 'devices-removed'
-    | 'password-attempts';
+    | 'password-attempts'
+    | 'two-step-on'
+    | 'two-step-off'
+    | 'two-step-app-added'
+    | 'two-step-app-removed'
+    | 'backup-codes-made'
+    | 'backup-code-used'
+    | 'phrase-used'
+    | 'step-failed'
+    | 'totp-frozen';
 
 /* Hidden everywhere, Outlook included; a variable, since React's types lack mso-hide. */
 const hidden = { display: 'none', msoHide: 'all' };
@@ -43,7 +53,15 @@ const label = {
 
 const copy: Record<
     SecurityNoticeKind,
-    { preview: string; heading: string; body: string; facts: [string, string][]; foot: string }
+    {
+        preview: string;
+        heading: string;
+        body: string;
+        facts: [string, string][];
+        foot: string;
+        /* The button's words; the device notices' own when absent. */
+        action?: string;
+    }
 > = {
     'new-device': {
         preview: 'Your HushOS account was signed in to on a new device.',
@@ -51,7 +69,7 @@ const copy: Record<
         body: 'Someone signed in with your email and password on a device HushOS hadn’t seen before. It now appears in your list of devices.',
         facts: [
             ['When', '{{when}}'],
-            ['Signed in with', 'Your password'],
+            ['Signed in with', '{{method}}'],
         ],
         foot: 'If this was you, there’s nothing to do. If it wasn’t, remove the device from your account and change your password.',
     },
@@ -79,12 +97,91 @@ const copy: Record<
         ],
         foot: 'If you didn’t do this, someone else may be signed in to your account. Check your devices and change your password.',
     },
+    'two-step-on': {
+        preview: 'Two-step sign-in was turned on for your HushOS account.',
+        heading: 'Two-step sign-in is on.',
+        body: 'Signing in to your account now takes your password and a second step. It stops someone who has your password from signing in. It doesn’t change how your files are encrypted.',
+        facts: [
+            ['When', '{{when}}'],
+            ['Second step', '{{method}}'],
+        ],
+        foot: 'If you didn’t do this, someone else may be signed in to your account. Check your devices and change your password.',
+        action: 'Review your account',
+    },
+    'two-step-off': {
+        preview: 'Two-step sign-in was turned off for your HushOS account.',
+        heading: 'Two-step sign-in is off.',
+        body: 'The last second-step method was removed from your account. Signing in takes only your password again, and your backup codes no longer work.',
+        facts: [['When', '{{when}}']],
+        foot: 'If this wasn’t you, sign in, turn two-step sign-in on again and change your password.',
+        action: 'Review your account',
+    },
+    'two-step-app-added': {
+        preview: 'An authenticator app was added to your HushOS account.',
+        heading: 'An authenticator app was added.',
+        body: 'Codes from this app now pass your second step. If your account already had an authenticator app, this one replaced it and the old app’s codes no longer work.',
+        facts: [['When', '{{when}}']],
+        foot: 'If you didn’t do this, someone else may be signed in to your account. Check your devices and change your password.',
+        action: 'Review your account',
+    },
+    'two-step-app-removed': {
+        preview: 'An authenticator app was removed from your HushOS account.',
+        heading: 'An authenticator app was removed.',
+        body: 'Its codes no longer pass your second step. Your other ways to pass it still work.',
+        facts: [['When', '{{when}}']],
+        foot: 'If you didn’t do this, someone else may be signed in to your account. Check your devices and change your password.',
+        action: 'Review your account',
+    },
+    'backup-codes-made': {
+        preview: 'New backup codes were made for your HushOS account.',
+        heading: 'New backup codes were made.',
+        body: 'The backup codes you had before no longer work. Keep the new ones somewhere safe, apart from your password.',
+        facts: [['When', '{{when}}']],
+        foot: 'If you didn’t do this, someone else may be signed in to your account. Check your devices and change your password.',
+        action: 'Review your account',
+    },
+    'backup-code-used': {
+        preview: 'A backup code was used for your HushOS account.',
+        heading: 'A backup code was used.',
+        body: 'One of your backup codes passed your second step. Each code works once.',
+        facts: [
+            ['When', '{{when}}'],
+            ['Backup codes left', '{{count}}'],
+        ],
+        foot: 'If this wasn’t you, change your password and make new backup codes.',
+        action: 'Review your account',
+    },
+    'phrase-used': {
+        preview: 'Your recovery phrase was used as your second step.',
+        heading: 'Your recovery phrase was used as your second step.',
+        body: 'Someone with your password passed your second step with your recovery phrase. Keep the phrase apart from your password: whoever has both needs nothing else.',
+        facts: [['When', '{{when}}']],
+        foot: 'If this wasn’t you, change your password and make a new recovery phrase.',
+        action: 'Review your account',
+    },
+    'step-failed': {
+        preview: 'Someone signed in with your HushOS password but did not pass the second step.',
+        heading: 'Someone signed in with your password but did not pass the second step.',
+        body: 'Your password was right, and the second step was answered wrongly several times in a row. Nobody got in. If this wasn’t you, someone else knows your password.',
+        facts: [['When', '{{when}}']],
+        foot: 'Change your password.',
+        action: 'Review your account',
+    },
+    'totp-frozen': {
+        preview: 'Your authenticator app is paused on new devices.',
+        heading: 'Your authenticator app is paused on new devices.',
+        body: 'The second step was answered wrongly 100 times in a row from devices that aren’t yours, so codes from your authenticator app are refused on new devices for now. The devices you already use are not affected. On a new device, sign in with your recovery phrase; that lifts the pause.',
+        facts: [['When', '{{when}}']],
+        foot: 'Someone knows your password. Change it.',
+        action: 'Review your account',
+    },
 };
 
 export default function SecurityNotice({
     kind = 'new-device',
     when = 'Today, 14:02 UTC',
     count = '2',
+    method = 'Your password',
     accountUrl = 'http://localhost:5173/app/account#devices',
     logoUrl = '/static/hushos-logo-square.png',
     marker = 'preview',
@@ -92,13 +189,16 @@ export default function SecurityNotice({
     kind?: SecurityNoticeKind;
     when?: string;
     count?: string;
+    /* How the sign-in was made, or the kind of second step: never a name. */
+    method?: string;
     accountUrl?: string;
     logoUrl?: string;
     /** Different in every message; see the end of the body. */
     marker?: string;
 }) {
     const text = copy[kind];
-    const fill = (value: string) => value.replace('{{when}}', when).replace('{{count}}', count);
+    const fill = (value: string) =>
+        value.replace('{{when}}', when).replace('{{count}}', count).replace('{{method}}', method);
     return (
         <Html lang="en">
             <Head>
@@ -235,7 +335,7 @@ export default function SecurityNotice({
                                 textDecoration: 'none',
                             }}
                         >
-                            Review your devices
+                            {text.action ?? 'Review your devices'}
                         </Button>
                     </Section>
                     <Section className="email-pad" style={{ padding: '0 28px 28px' }}>

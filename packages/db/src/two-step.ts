@@ -1,7 +1,8 @@
-import { and, asc, eq, gt, isNotNull, isNull, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, isNotNull, isNull, ne, sql } from 'drizzle-orm';
 import { db } from './client';
 import {
     accountDevices,
+    accountSecurityEvents,
     sessions,
     twoStepAttempts,
     twoStepBackupCodes,
@@ -26,6 +27,7 @@ import {
 import {
     BACKUP_CODE_COUNT,
     PENDING_FACTOR_SECONDS,
+    SECURITY_EVENT_DAYS,
     STEP_TOKEN_ANSWERS,
     confirmedFactors,
     ensureState,
@@ -77,6 +79,7 @@ import {
 export {
     BACKUP_CODE_COUNT,
     PENDING_FACTOR_SECONDS,
+    SECURITY_EVENT_DAYS,
     STEP_NOTICE_FAILURES,
     STEP_TOKEN_ANSWERS,
     TOTP_FREEZE_FAILURES,
@@ -713,4 +716,80 @@ export async function openSteppedSession(input: {
         if (refusal.reason === 'spent') return { status: 'spent', failure: refusal.failure };
         return { status: refusal.reason === 'required' ? 'gone' : refusal.reason };
     }
+}
+
+/* ------------------------------------------------------------------------- */
+/* The security log                                                           */
+/* ------------------------------------------------------------------------- */
+
+/*
+ * What the log records so far: a sign-in that passed the step, a failed step after a correct
+ * password, and each change to the step. A line carries a kind of event and a kind of
+ * method, never a name, an address or a browser.
+ */
+export const SECURITY_EVENT_KINDS = [
+    'sign-in',
+    'step-failed',
+    'two-step-on',
+    'two-step-off',
+    'method-added',
+    'method-removed',
+    'backup-codes-made',
+    'backup-code-used',
+    'phrase-used',
+    'totp-frozen',
+] as const;
+export type SecurityEventKind = (typeof SECURITY_EVENT_KINDS)[number];
+
+/*
+ * Writes one line. The device is linked, with its kind as it stands now, only when it is one
+ * of this account's own: a line never points at another account's device.
+ */
+export async function recordSecurityEvent(input: {
+    userId: string;
+    kind: SecurityEventKind;
+    method?: TwoStepMethod | null;
+    deviceId?: string | null;
+}) {
+    const [device] = input.deviceId
+        ? await db
+              .select({ id: accountDevices.id, kind: accountDevices.kind })
+              .from(accountDevices)
+              .where(
+                  and(
+                      eq(accountDevices.id, input.deviceId),
+                      eq(accountDevices.userId, input.userId),
+                  ),
+              )
+        : [];
+    await db.insert(accountSecurityEvents).values({
+        userId: input.userId,
+        kind: input.kind,
+        method: input.method ?? null,
+        deviceId: device?.id ?? null,
+        deviceKind: device?.kind ?? null,
+    });
+}
+
+/* The account's log for the last 90 days, newest first: every session of the account may read it. */
+export async function listSecurityEvents(userId: string, limit = 200) {
+    const since = new Date(Date.now() - SECURITY_EVENT_DAYS * 24 * 60 * 60 * 1000);
+    return db
+        .select({
+            id: accountSecurityEvents.id,
+            kind: accountSecurityEvents.kind,
+            method: accountSecurityEvents.method,
+            deviceId: accountSecurityEvents.deviceId,
+            deviceKind: accountSecurityEvents.deviceKind,
+            createdAt: accountSecurityEvents.createdAt,
+        })
+        .from(accountSecurityEvents)
+        .where(
+            and(
+                eq(accountSecurityEvents.userId, userId),
+                gt(accountSecurityEvents.createdAt, since),
+            ),
+        )
+        .orderBy(desc(accountSecurityEvents.createdAt), desc(accountSecurityEvents.id))
+        .limit(Math.max(1, Math.min(limit, 500)));
 }

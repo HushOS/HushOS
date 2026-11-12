@@ -2235,3 +2235,83 @@ describe('what the tables refuse', () => {
         ).rejects.toMatchObject(refused('account_security_events_kind_valid'));
     });
 });
+
+describe('the security log', () => {
+    const DAY = 24 * HOUR;
+
+    test('lists the account’s own lines, newest first, with a device only when it is the account’s own', async () => {
+        const maya = await withApp('maya');
+        const sam = await withApp('sam');
+        const phone = await steppedSignIn(maya.userId);
+        await auth.registerDevice({
+            sessionTokenHash: phone.token,
+            kind: 'ios',
+            name: 'Maya’s iPhone',
+            signingPublicKey: null,
+        });
+        await twoStep.recordSecurityEvent({
+            userId: maya.userId,
+            kind: 'two-step-on',
+            method: 'totp',
+        });
+        await twoStep.recordSecurityEvent({
+            userId: maya.userId,
+            kind: 'sign-in',
+            method: 'backup',
+            deviceId: phone.deviceId,
+        });
+        // A line naming another account's device: recorded, without the link.
+        await twoStep.recordSecurityEvent({
+            userId: maya.userId,
+            kind: 'step-failed',
+            deviceId: sam.session.deviceId,
+        });
+        await twoStep.recordSecurityEvent({
+            userId: sam.userId,
+            kind: 'phrase-used',
+            method: 'phrase',
+        });
+        await db
+            .update(accountSecurityEvents)
+            .set({ createdAt: new Date(Date.now() - 2 * HOUR) })
+            .where(eq(accountSecurityEvents.kind, 'two-step-on'));
+        await db
+            .update(accountSecurityEvents)
+            .set({ createdAt: new Date(Date.now() - HOUR) })
+            .where(eq(accountSecurityEvents.kind, 'sign-in'));
+
+        const lines = await twoStep.listSecurityEvents(maya.userId);
+        expect(lines.map(({ id: _id, createdAt: _at, ...line }) => line)).toEqual([
+            { kind: 'step-failed', method: null, deviceId: null, deviceKind: null },
+            { kind: 'sign-in', method: 'backup', deviceId: phone.deviceId, deviceKind: 'ios' },
+            { kind: 'two-step-on', method: 'totp', deviceId: null, deviceKind: null },
+        ]);
+        // Nothing of the device but its kind: the name it gave itself is not in a line.
+        expect(JSON.stringify(lines)).not.toContain('iPhone');
+        expect((await twoStep.listSecurityEvents(sam.userId)).map((line) => line.kind)).toEqual([
+            'phrase-used',
+        ]);
+    });
+
+    test('keeps ninety days: older lines are not listed, and the sweep deletes them and only them', async () => {
+        const maya = await withApp('maya');
+        for (const kind of ['sign-in', 'step-failed', 'two-step-off'] as const)
+            await twoStep.recordSecurityEvent({ userId: maya.userId, kind });
+        await db
+            .update(accountSecurityEvents)
+            .set({ createdAt: new Date(Date.now() - 90 * DAY - HOUR) })
+            .where(eq(accountSecurityEvents.kind, 'sign-in'));
+        await db
+            .update(accountSecurityEvents)
+            .set({ createdAt: new Date(Date.now() - 90 * DAY + HOUR) })
+            .where(eq(accountSecurityEvents.kind, 'step-failed'));
+        expect((await twoStep.listSecurityEvents(maya.userId)).map((line) => line.kind)).toEqual([
+            'two-step-off',
+            'step-failed',
+        ]);
+        expect((await auth.cleanupExpired()).securityEvents).toBe(1);
+        expect(
+            (await db.select().from(accountSecurityEvents)).map((row) => row.kind).sort(),
+        ).toEqual(['step-failed', 'two-step-off']);
+    });
+});

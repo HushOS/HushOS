@@ -860,6 +860,32 @@ Off by default while the apps that show them are built: `NOTIFICATIONS_ENABLED=t
 - **Browsers** need no relay: the server pushes to the browser's own push service (Google's, Mozilla's, Apple's or Microsoft's, and no other host), encrypted to the browser and signed with this server's VAPID key, which it makes at first use and keeps in the database (`server_secrets`). The push carries only the event id; an open, unlocked HushOS tab writes the words, and otherwise the browser shows "New activity in HushOS". The push service learns that a browser received an encrypted push at a time.
 - **What the server keeps:** each device's relay handle or browser subscription, the events for 30 days, and two toggles per account (Shared with you, Families). Security notices cannot be turned off.
 
+## Two-step sign-in
+
+Off by default while the apps that answer the step are built: `TWO_STEP_ENABLED=true` lets accounts turn it on. Only the web service reads it and the two keys below; the worker only trims the security log. The design is `docs/two-step-design.md`.
+
+- **What it is.** After the password, an account that has the step on gets no session and no keys until it passes a second step: a code from an authenticator app, a backup code, or its recovery phrase. The same step is asked before a password change, a key rotation, deleting the account, and any change to the step itself.
+- **What it protects.** It is the server's rule. It stops someone who has a password from signing in to your server. It does not change how files are encrypted, and it does nothing against whoever controls the server, or holds a copy of its database with the OPAQUE setup.
+- **With the flag off,** nobody can turn the step on, and the routes that set it up or manage it answer 501. An account that already has the step is still asked for it: turning the flag off is never a way past someone's second step. Such an account also cannot remove its step until the flag is on again.
+- **Clients.** A client that cannot answer the step is told to update (409 `update-required`) when it signs in to an account that has it. This release has the server side only: no HushOS app offers the settings or answers the step yet, so leave the flag off until one that does is released.
+- **`TWO_STEP_KEY`** (optional): 32 bytes, Base64url without padding. It seals authenticator secrets and keys the hash backup codes are stored under.
+    - Unset, the key is derived from the OPAQUE server setup (HKDF-SHA-256, with its own `info`), wherever the setup lives. Moving the setup from the database to the environment changes nothing here.
+    - Keep it outside the database, as you keep the setup. With the setup in `server_secrets`, the derived key sits beside what it seals and protects nothing against a copy of the database.
+    - To make one: `openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`.
+- **Rotating the key.** Set the new key as `TWO_STEP_KEY` and the old one as `TWO_STEP_PREVIOUS_KEY`.
+    - Each row records which key it was made under, and the server reads under the current key, the previous one, and the derived one. So setting `TWO_STEP_KEY` for the first time needs no previous key.
+    - Nothing re-seals older rows yet: keep the previous key set.
+    - Backup codes can never be re-keyed, because the server never holds them in plain text. A set keeps verifying under its own key until its owner makes a new one.
+- **What the server keeps:**
+    - each method's kind, when it was added, and when it was last used, to the hour;
+    - each authenticator secret, sealed under the key above, which the running server can open;
+    - backup codes only as a keyed Argon2id hash;
+    - a security log per account for 90 days: the kind of event, the kind of method and the kind of device, never a name, an address or a browser.
+- **Notices.** Every change to the step, a backup code or the recovery phrase used, and a run of wrong answers after a correct password are emailed to the account. They cannot be turned off, and they name only the kind of method and the time.
+- **You can turn anyone's step off.** Anyone with write access to the database can delete a person's methods, because the step is a server rule. The management area has no button for it.
+- **Losing everything.** The recovery phrase passes the step. Someone who has lost every method, their backup codes and the phrase cannot sign in, and neither email nor the operator's pages can let them in.
+- **Rolling back** past the release that added the tables is covered under [Release migration notes](#release-migration-notes).
+
 ## Billing (optional)
 
 Self-hosted instances have no billing. Leave `BILLING_PROVIDER=none`, and every account keeps the allowance set by `INITIAL_STORAGE_QUOTA_BYTES`.

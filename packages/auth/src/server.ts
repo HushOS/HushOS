@@ -18,14 +18,7 @@ import {
     type RecoveryReset,
 } from '@hushos/crypto/recovery';
 import { authEnv } from '@hushos/env/auth';
-import { createHash, randomBytes } from 'node:crypto';
-import {
-    adminRepository,
-    authRepository,
-    billingRepository,
-    groupsRepository,
-    twoStepRepository,
-} from '@hushos/db';
+import { adminRepository, authRepository, billingRepository, groupsRepository } from '@hushos/db';
 import type { SignupIntent } from '@hushos/db/schema';
 import {
     sendAccountNotice,
@@ -37,8 +30,10 @@ import {
 import { ready, server, client } from '@hushos/crypto/server';
 import { SECURITY_CHANGE_IDENTITY_BYTES, SECURITY_CHANGE_REST_BYTES } from './limits';
 import { notify } from './notifications';
+import { checkChangeStep, settleChangeStep, startLoginStep, type StepInput } from './two-step';
 import { log as serverLog } from '@hushos/logging';
 import { boundAttemptHolds, type BoundPurpose } from './bound-attempt';
+import { hash, noticeWhen, randomToken, serverSetup } from './internal';
 
 import {
     ENVELOPE_VERSION,
@@ -72,59 +67,12 @@ function config() {
     };
 }
 
-/*
- * The OPAQUE server setup: from the environment when the operator provides one,
- * otherwise made once on first start and kept in the database under the setup
- * id, so a fresh stack registers accounts without anyone minting a secret by
- * hand. Every password depends on it; the database backup is what keeps it.
- */
-let setup: Promise<string> | undefined;
-function serverSetup() {
-    setup ??= (async () => {
-        if (authEnv.OPAQUE_SERVER_SETUP) return authEnv.OPAQUE_SERVER_SETUP;
-        // Beside the password records, a dump of the database is all an offline guess needs.
-        if (process.env.NODE_ENV === 'production')
-            console.warn(
-                'OPAQUE_SERVER_SETUP is not set, so the server setup lives in the database beside the password records. Move it to the environment (see docs/self-hosting.md).',
-            );
-        await ready;
-        return authRepository.ensureServerSecret(
-            `opaque-setup:${authEnv.OPAQUE_SERVER_SETUP_ID}`,
-            () => server.createSetup(),
-        );
-    })().catch((error: unknown) => {
-        setup = undefined;
-        throw error;
-    });
-    return setup;
-}
-
-function hash(value: string) {
-    return createHash('sha256').update(value).digest();
-}
-
-function randomToken() {
-    return randomBytes(32).toString('base64url');
-}
-
 export function normalizeEmail(email: string) {
     const normalized = email.trim().toLowerCase();
     if (normalized.length > 254 || !EMAIL_ADDRESS_PATTERN.test(normalized))
         throw new AuthError('Enter a valid email address.');
     return normalized;
 }
-
-const noticeTime = new Intl.DateTimeFormat('en-GB', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-    timeZone: 'UTC',
-});
-/* When something happened, as every notice to an account's email says it. */
-const noticeWhen = (at: Date = new Date()) => `${noticeTime.format(at)} UTC`;
 
 function normalizeName(value: string) {
     const name = value.trim().normalize('NFC');
@@ -219,7 +167,7 @@ async function limitBoundAttempts(binding: { userId: string; sessionTokenHash: B
  * and throws `failure` unless it holds. A proof that holds takes its start off the
  * unfinished count.
  */
-async function consumeBoundAttempt(
+export async function consumeBoundAttempt(
     purpose: BoundPurpose,
     user: { id: string; credentialVersion: number },
     sessionToken: string,
@@ -478,7 +426,7 @@ export async function startLogin(
     email: string,
     startLoginRequest: string,
     binding?: {
-        purpose: SecurityAction | 'delete' | 'devices';
+        purpose: SecurityAction | 'delete' | 'devices' | 'two-step';
         sessionTokenHash: Buffer;
         userId: string;
     },
@@ -532,12 +480,18 @@ export async function startLogin(
  * valid one brings the device back to its own row; anything else makes a new
  * device and never fails the sign-in. `newDevice` says whether that new device
  * came in with the password alone, which is what the sign-in notice is for.
+ *
+ * An account that has two-step sign-in on gets no session here unless the sign-in is exempt
+ * (docs/two-step-design.md 4; the repository decides, under the account's lock). A client
+ * that says it can answer a step (`twoStep`) gets a step token in place of the session:
+ * no cookie, no envelope. One that does not is told to update, and nothing is made.
  */
 export async function finishLogin(
     attemptToken: string,
     finishLoginRequest: string,
     previousSessionToken: string | null = null,
     device?: { id: string; signature: string },
+    options: { twoStep?: boolean } = {},
 ) {
     const failure = () => new AuthError('Unable to sign in. Check your email and password.', 401);
     if (!TOKEN_PATTERN.test(attemptToken)) throw failure();
@@ -567,25 +521,41 @@ export async function finishLogin(
             ? previousSessionToken
             : null;
     const signature = device ? decodeSignature(device.signature) : null;
+    // The attempt's digest is its stored token hash: the statement names that.
+    const proof =
+        device && signature
+            ? { id: device.id, signature, attemptDigest: hash(attemptToken) }
+            : undefined;
+    const previousTokenHash = previousToken ? hash(previousToken) : null;
     const result = await authRepository.createSession({
         userId: attempt.userId,
         credentialVersion: attempt.credentialVersion,
         tokenHash: hash(token),
-        previousTokenHash: previousToken ? hash(previousToken) : null,
+        previousTokenHash,
         expiresAt: new Date(Date.now() + SESSION_IDLE_SECONDS * 1000),
-        // The attempt's digest is its stored token hash: the statement names that.
-        device:
-            device && signature
-                ? { id: device.id, signature, attemptDigest: hash(attemptToken) }
-                : undefined,
+        device: proof,
     });
     if (!result) throw failure();
     if ('suspended' in result)
         throw new AuthError('This account is suspended. Contact whoever runs this instance.', 403);
-    // The account asks for a second step (docs/two-step-design.md 4), and this server has no
-    // route to answer one yet: no session was made, and the envelope stays where it is.
-    if ('twoStep' in result)
-        throw new AuthError('Update HushOS to sign in. This account asks for a second step.', 409);
+    if ('twoStep' in result) {
+        // A client that cannot ask for the step never gets an envelope it should not have,
+        // and the person is told why instead of seeing a broken sign-in.
+        if (!options.twoStep)
+            throw new AuthError(
+                'Update HushOS to sign in. This account asks for a second step.',
+                409,
+                { code: 'update-required' },
+            );
+        return {
+            twoStep: await startLoginStep({
+                userId: attempt.userId,
+                credentialVersion: attempt.credentialVersion,
+                previousTokenHash,
+                device: proof,
+            }),
+        };
+    }
     const { key, user } = result;
     return {
         user,
@@ -644,7 +614,7 @@ export async function sessionState(sessionToken: string | null) {
         : { user: null, device: null };
 }
 
-async function requireSession(sessionToken: string | null, message: string) {
+export async function requireSession(sessionToken: string | null, message: string) {
     const user = await getSessionUser(sessionToken);
     if (!sessionToken || !user) throw new AuthError(message, 401);
     return { user, token: sessionToken };
@@ -1611,11 +1581,17 @@ export async function removeOtherDevices(sessionToken: string | null, proof: Dev
  * or browser. Callers send it after the action, and a mail failure is theirs to
  * log; the action already happened.
  */
+export type DeviceNoticeKind = Extract<
+    SecurityNoticeKind,
+    'new-device' | 'device-removed' | 'devices-removed' | 'password-attempts'
+>;
 export async function notifyDevices(
     userId: string,
-    kind: SecurityNoticeKind,
+    kind: DeviceNoticeKind,
     count?: number,
     at: Date = new Date(),
+    /* How a new device signed in, when it passed a second step: the kind of method, never a name. */
+    signedInWith?: string,
 ) {
     if (!(await authRepository.consumeRateLimit(hash(`auth:notice:${userId}`), 10, 60 * 60_000)))
         return;
@@ -1636,6 +1612,7 @@ export async function notifyDevices(
         kind,
         when: noticeWhen(at),
         count,
+        method: signedInWith,
         accountUrl: new URL('/app/account#devices', authEnv.APP_ORIGIN).href,
     });
 }
@@ -1991,7 +1968,7 @@ export async function startAccountDeletion(sessionToken: string | null, startLog
 }
 export async function finishAccountDeletion(
     sessionToken: string | null,
-    input: { attemptToken: string; finishLoginRequest: string },
+    input: { attemptToken: string; finishLoginRequest: string; twoStep?: StepInput },
     beforeDelete?: (userId: string) => Promise<void>,
 ) {
     const { user, token } = await requireSession(
@@ -2003,11 +1980,15 @@ export async function finishAccountDeletion(
     await refuseWhileHoldingGroups(user.id);
     await consumeBoundAttempt('delete', user, token, input, failure);
     // An account with two-step sign-in on is deleted only with its second step
-    // (docs/two-step-design.md 4), and this server has no way to take one yet. Refused here,
-    // before anything billed to the account is touched: the repository refuses too, but by
-    // then the plan would be revoked and the account left behind without it.
-    if (await twoStepRepository.hasTwoStep(user.id))
-        throw new AuthError('Your account was not deleted: it asks for a second step.', 403);
+    // (docs/two-step-design.md 4): after the password, and before anything billed to the
+    // account is touched. A missing or wrong answer is refused here, with the plan as it was;
+    // the repository spends the answer with the deletion, and refuses again if it must.
+    const step = await checkChangeStep({
+        userId: user.id,
+        sessionToken: token,
+        purpose: 'delete',
+        step: input.twoStep,
+    });
     // Anything billed to the account stops before the account goes; an outage there
     // leaves the account in place rather than a subscription without an owner.
     await beforeDelete?.(user.id);
@@ -2015,7 +1996,22 @@ export async function finishAccountDeletion(
         userId: user.id,
         credentialVersion: user.credentialVersion,
         sessionTokenHash: hash(token),
+        twoStep: step?.proof,
     });
+    // A step the repository refused after all (its code was used meanwhile, or the step was
+    // turned on since the check above) is answered as the step's own refusal. Billing has
+    // already stopped by then: the refusal says so rather than pretend nothing happened.
+    try {
+        await settleChangeStep(step, deleted, deleted === true);
+    } catch (error) {
+        if (beforeDelete && error instanceof AuthError && error.status === 403)
+            throw new AuthError(
+                'Your plan was stopped, but your account was not deleted: your second step didn’t pass. Try again.',
+                403,
+                { code: error.code },
+            );
+        throw error;
+    }
     // Another holder left between the check above and here (docs/groups-server.md 3). Billing
     // has already stopped; say so rather than pretend nothing happened.
     const stopped = beforeDelete ? 'Your plan was stopped, but your' : 'Your';
@@ -2038,9 +2034,7 @@ export async function finishAccountDeletion(
             `${stopped} account was not deleted: another change to your family’s plan is in progress. Try again in a moment.`,
             409,
         );
-    // The step was turned on between the check above and here: the repository held the line.
-    if (typeof deleted === 'object')
-        throw new AuthError(`${stopped} account was not deleted: it asks for a second step.`, 403);
+    if (typeof deleted === 'object') throw failure();
     if (!deleted) throw failure();
     return { success: true };
 }
@@ -2147,7 +2141,11 @@ export type ServerSecurityUpdate = SecurityUpdate & {
 
 export async function finishSecurityChange(
     sessionToken: string | null,
-    input: ServerSecurityUpdate & { action: SecurityAction; attemptToken: string },
+    input: ServerSecurityUpdate & {
+        action: SecurityAction;
+        attemptToken: string;
+        twoStep?: StepInput;
+    },
 ) {
     const { user, token } = await requireSession(
         sessionToken,
@@ -2183,6 +2181,15 @@ export async function finishSecurityChange(
             (input.identityHistory !== undefined || input.settingsKey !== undefined))
     )
         throw failure();
+    // The second step, for an account that has it on: after the password, and before the
+    // first write. The repository spends the answer in the transaction that makes the change,
+    // so a refused step never leaves a new credential behind.
+    const step = await checkChangeStep({
+        userId: user.id,
+        sessionToken: token,
+        purpose: input.action,
+        step: input.twoStep,
+    });
     const changed = await authRepository.changeAccountSecurity({
         userId: user.id,
         action: input.action,
@@ -2210,12 +2217,12 @@ export async function finishSecurityChange(
         workspaces: input.workspaces?.map((grant) =>
             decodeWorkspaceGrant({ id: grant.workspaceId, grant }, keyVersion),
         ),
+        twoStep: step?.proof,
     });
-    // The account has two-step sign-in on, and this server cannot ask for the step yet.
-    if (typeof changed === 'object')
-        throw new AuthError('This change needs your second step, and nothing was changed.', 403);
-    if (!changed) throw failure();
+    await settleChangeStep(step, changed, changed === true);
+    if (changed !== true) throw failure();
     return { success: true };
 }
 
 export * from './notifications';
+export * from './two-step';

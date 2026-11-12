@@ -243,19 +243,39 @@ const securitySubjects: Record<SecurityNoticeKind, (when: string) => string> = {
     'devices-removed': (when) => `Devices were removed from your account · ${when} · HushOS`,
     'password-attempts': (when) =>
         `Someone kept trying to confirm your password · ${when} · HushOS`,
+    'two-step-on': (when) => `Two-step sign-in is on · ${when} · HushOS`,
+    'two-step-off': (when) => `Two-step sign-in is off · ${when} · HushOS`,
+    'two-step-app-added': (when) => `An authenticator app was added · ${when} · HushOS`,
+    'two-step-app-removed': (when) => `An authenticator app was removed · ${when} · HushOS`,
+    'backup-codes-made': (when) => `New backup codes were made · ${when} · HushOS`,
+    'backup-code-used': (when) => `A backup code was used · ${when} · HushOS`,
+    'phrase-used': (when) => `Your recovery phrase was used as your second step · ${when} · HushOS`,
+    'step-failed': (when) =>
+        `Someone has your password but did not pass the second step · ${when} · HushOS`,
+    'totp-frozen': (when) => `Your authenticator app is paused on new devices · ${when} · HushOS`,
 };
 
-type SecurityInput = { kind: SecurityNoticeKind; when: string; count?: number; accountUrl: string };
+type SecurityInput = {
+    kind: SecurityNoticeKind;
+    when: string;
+    /* Devices removed, or backup codes left. */
+    count?: number;
+    /* How the sign-in was made, or the kind of second step. Never a name anyone chose. */
+    method?: string;
+    accountUrl: string;
+};
 
 /*
- * A security notice about the account's devices: when it happened (written by
- * the caller, in UTC), how many devices for a removal of all others, and a link
- * to the device list. It carries nothing the device said about itself.
+ * A security notice about the account's devices or its two-step sign-in: when
+ * it happened (written by the caller, in UTC), a count where one is shown, the
+ * kind of method, and a link to the account. It carries nothing a device said
+ * about itself, and no name anyone gave a method.
  */
 export function composeSecurityNotice(to: string, input: SecurityInput) {
     return compose(to, securitySubjects[input.kind](input.when), securityNotice[input.kind], {
         when: input.when,
         count: String(input.count ?? 1),
+        method: input.method ?? 'Your password',
         accountUrl: input.accountUrl,
         logoUrl: logoUrl(input.accountUrl),
     });
