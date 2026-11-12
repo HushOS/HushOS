@@ -1,0 +1,59 @@
+apps/web/src/lib/api/two-step-keys.db.test.ts
+  s_566b8e0c4467a4::t_e675ff4384d2b9 1-134
+apps/web/src/lib/api/two-step-off.db.test.ts
+  s_566b8e0c4467a4::t_41cfab8b0395a5 177
+apps/web/src/lib/api/two-step-setup.db.test.ts
+  s_566b8e0c4467a4::t_70c93970bede39 1-78
+apps/web/src/lib/api/two-step.db.test.ts
+  s_566b8e0c4467a4::t_62a415d26fb422 3,245,465,515,557,588,601,616-627,675,683-685,786-1088
+apps/web/src/test/auth-edge.server.ts
+  s_566b8e0c4467a4::t_295f1d50d803f9 7-16,35-43,68-75,77-78,91-94,100-108,117-138,188,322-354,374,384-385
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_ae6ef780a7e31c 875,878-879,886-889
+packages/auth/src/internal.ts
+  s_566b8e0c4467a4::t_8da5176a0c5db3 5-6,59-65
+packages/auth/src/server.deletion.test.ts
+  s_566b8e0c4467a4::t_08140dd478f1da 4-11,30,38-40,90,93-98,100-103,107-109,118,123-147,178,215-326
+packages/auth/src/server.ts
+  s_566b8e0c4467a4::t_e31611698c7608 33-39,42,1993-1995,2006,2010,2194-2225
+packages/auth/src/two-step.ts
+  s_566b8e0c4467a4::t_dcb624e0200234 25,81-84,90-91,93-109,111-116,127-165,219-229,234,238-261,302,324,330-340,343-348,356-357,360,362-363,371,376-379,386-387,438-449,452,471-477,482,489-490,497-514,517-520,522-537,642,719-724,740,812,821-836,848-857,863,867-870,900,902-905,957-958,967-973,983-984,997-1004
+packages/db/src/two-step.test.ts
+  s_566b8e0c4467a4::t_94ebc03b9536ef 4,10,1019-1045,1963-1999
+packages/db/src/two-step.ts
+  s_566b8e0c4467a4::t_565ef16126ad4c 87
+packages/emails/scripts/render.tsx
+  s_566b8e0c4467a4::t_89cf2f6674ef2f 135
+packages/emails/src/rendered/security-notice.ts
+  s_566b8e0c4467a4::t_295955bd7b112b 48-53,56-57
+packages/emails/src/service.ts
+  s_566b8e0c4467a4::t_fd883f5ed74e6b 254-258
+packages/emails/src/templates/security-notice.tsx
+  s_566b8e0c4467a4::t_c8c4cc0bacf71f 41,166,168-178,182-184,186
+packages/db/src/two-step.core.ts
+  s_1e3406041198f8::t_d958c6db119d74 341-361
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cb1e0039d747a04f8cb2761dc66eb55ed50c8ce1",
+  "prompts": {},
+  "sessions": {
+    "s_1e3406041198f8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a0e21c7cc47809e54",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
