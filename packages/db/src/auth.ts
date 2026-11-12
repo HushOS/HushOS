@@ -28,6 +28,7 @@ import {
     workspaces,
 } from './schema';
 import {
+    REPLACEMENT_SESSION_SECONDS,
     lockSignIn,
     provenDevice,
     rememberedStep,
@@ -1375,7 +1376,18 @@ export async function changeAccountSecurity(input: {
      * step is asked last, so a change that would be refused anyway spends nothing.
      */
     twoStep?: StepProof;
-}): Promise<boolean | TwoStepRefusal> {
+    /*
+     * A session for the device making the change, asked for by its client. The change ends
+     * every session, and the device would then sign in again and be asked for the step a
+     * second time, with a code it has to wait for. Written only when the change itself
+     * passed the step, on that same device, with `two_step_at` now, and for at most
+     * REPLACEMENT_SESSION_SECONDS: the sign-in that follows replaces it and inherits the
+     * step. A client that does not ask (the phone apps, an older bundle) gets none, and an
+     * account without the step gets none either: nothing changes for them. `'replaced'` says
+     * it was written.
+     */
+    replacement?: { tokenHash: Buffer; expiresAt: Date };
+}): Promise<boolean | 'replaced' | TwoStepRefusal> {
     try {
         return await db.transaction((tx) => changeSecurity(tx, input));
     } catch (error) {
@@ -1388,7 +1400,7 @@ export async function changeAccountSecurity(input: {
 async function changeSecurity(
     tx: Tx,
     input: Parameters<typeof changeAccountSecurity>[0],
-): Promise<boolean> {
+): Promise<boolean | 'replaced'> {
     {
         const [user] = await tx
             .select(userFieldsWithEmailKey)
@@ -1402,6 +1414,7 @@ async function changeSecurity(
                 envelope: accountKeys,
                 recovery: accountRecoveryKeys,
                 identity: accountIdentities,
+                deviceId: sessions.deviceId,
             })
             .from(sessions)
             .innerJoin(
@@ -1524,7 +1537,7 @@ async function changeSecurity(
             if (Boolean(settingsKey) !== Boolean(input.settingsKey)) return false;
         } else if (input.identity || input.workspaces || input.identityHistory || input.settingsKey)
             return false;
-        await passStepIfOn(tx, {
+        const stepped = await passStepIfOn(tx, {
             userId: user.id,
             purpose: input.action,
             sessionTokenHash: input.sessionTokenHash,
@@ -1595,7 +1608,34 @@ async function changeSecurity(
                     eq(accountEnrollments.purpose, 'recover'),
                 ),
             );
-        return true;
+        // The device that made the change and passed the step with it, signed in again by
+        // the change, when its client asked: see `replacement` above.
+        if (!input.replacement || !stepped || !current.deviceId) return true;
+        const [device] = await tx
+            .select({ id: accountDevices.id })
+            .from(accountDevices)
+            .where(
+                and(
+                    eq(accountDevices.id, current.deviceId),
+                    eq(accountDevices.userId, user.id),
+                    isNull(accountDevices.revokedAt),
+                    isNotNull(accountDevices.approvedAt),
+                ),
+            )
+            .for('update');
+        if (!device) return true;
+        const now = new Date();
+        const latest = new Date(now.getTime() + REPLACEMENT_SESSION_SECONDS * 1000);
+        await tx.insert(sessions).values({
+            userId: user.id,
+            credentialVersion: version,
+            tokenHash: input.replacement.tokenHash,
+            deviceId: device.id,
+            expiresAt: input.replacement.expiresAt < latest ? input.replacement.expiresAt : latest,
+            lastSeenAt: now,
+            twoStepAt: now,
+        });
+        return 'replaced';
     }
 }
 

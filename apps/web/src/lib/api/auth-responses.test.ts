@@ -724,7 +724,11 @@ const cases: Record<string, Case> = {
     'POST /auth/security/finish, /auth/delete/finish, /auth/recovery-key/confirm, /auth/logout': {
         schema: successResponse,
         samples: {
-            'security change': { success: true } satisfies Reply<typeof auth.finishSecurityChange>,
+            // The replacement session's token goes out as the cookie, never in the reply.
+            'security change': { success: true } satisfies Omit<
+                Reply<typeof auth.finishSecurityChange>,
+                'sessionToken'
+            >,
             deletion: { success: true } satisfies Reply<typeof auth.finishAccountDeletion>,
             confirmed: { success: true } satisfies Reply<typeof auth.confirmRecoveryBackup>,
         },

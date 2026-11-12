@@ -110,7 +110,12 @@ async function challenge(cookie: string, purpose: string) {
 }
 
 /* A password change as the client sends it: the old password proved, a record for the new one. */
-async function changePassword(cookie: string, to: string, twoStep?: unknown): Promise<Reply> {
+async function changePassword(
+    cookie: string,
+    to: string,
+    twoStep?: unknown,
+    extra: Record<string, unknown> = {},
+): Promise<Reply> {
     const registration = client.startRegistration({ password: to });
     const { challenge: started, proof } = await edge.passwordProof(
         '/security/start',
@@ -140,6 +145,7 @@ async function changePassword(cookie: string, to: string, twoStep?: unknown): Pr
                 encryptedKey: b64(48),
             },
             ...(twoStep ? { twoStep } : {}),
+            ...extra,
         },
         { cookie },
     );
@@ -1164,5 +1170,83 @@ describe('a spent code budget', () => {
         const passed = await answer(step.token, await edge.phraseProof(who.phrase, step));
         expect(passed.status).toBe(200);
         expect(passed.session).toBeTruthy();
+    }, 120_000);
+});
+
+describe('the session of the device that made a security change', () => {
+    const next = 'a new password entirely';
+    const code = async (cookie: string, secret: string) => ({
+        token: (await challenge(cookie, 'password')).token,
+        proof: { kind: 'totp', code: await appCode(secret) },
+    });
+
+    test('is written with the change when the client asks and the step passed: capped, on the same device, and the sign-in that follows needs no second code', async () => {
+        const { who, cookie, secret, deviceId } = await stepped();
+        const changed = await changePassword(cookie, next, await code(cookie, secret), {
+            keepSession: 1,
+        });
+        expect(changed).toMatchObject({ status: 200, body: { success: true } });
+        // The token is the cookie and nowhere in the reply.
+        expect(changed.session).toMatch(/^[A-Za-z0-9_-]{43}$/);
+        expect(JSON.stringify(changed.body)).not.toContain(changed.session!);
+        const [kept, ...others] = await rows.sessions();
+        expect(others).toEqual([]);
+        expect(kept).toMatchObject({ userId: who.userId, deviceId, credentialVersion: 2 });
+        expect(kept!.tokenHash.equals(edge.sha256(changed.session!))).toBe(true);
+        expect(kept!.twoStepAt).toBeInstanceOf(Date);
+        // Ten minutes at most, however long an ordinary session lasts.
+        expect(kept!.expiresAt.getTime() - Date.now()).toBeLessThanOrEqual(10 * 60_000);
+        expect(kept!.expiresAt.getTime()).toBeGreaterThan(Date.now());
+
+        // The device signs in with the new password. The code it just used is spent, and it
+        // is not asked for another: the session it replaces passed the step a moment ago.
+        const back = await edge.signIn(who, {
+            cookie: changed.session,
+            twoStep: true,
+            password: next,
+        });
+        expect(back.status).toBe(200);
+        expect(back.body.twoStep).toBeUndefined();
+        expect(back.body.user.id).toBe(who.userId);
+        expect(back.body.device.id).toBe(deviceId);
+        expect(await rows.sessions()).toHaveLength(1);
+        // Anyone without that cookie is asked for the step, new password or not.
+        const stranger = await edge.signIn(who, { twoStep: true, password: next });
+        expect(stranger.body.twoStep).toBeDefined();
+        expect(stranger.session).toBeUndefined();
+    }, 90_000);
+
+    test('is not written for a client that did not ask, for a change the step refused, or for an account without the step', async () => {
+        // The phone apps and older bundles: today's reply, every session ended, the cookie cleared.
+        const quiet = await stepped();
+        const plain = await changePassword(
+            quiet.cookie,
+            next,
+            await code(quiet.cookie, quiet.secret),
+        );
+        expect(plain).toMatchObject({ status: 200, session: null });
+        expect(await rows.sessions()).toHaveLength(0);
+
+        // Asked for, with a wrong code: nothing changes and nothing is minted.
+        const refused = await stepped();
+        const wrong = await changePassword(
+            refused.cookie,
+            next,
+            {
+                token: (await challenge(refused.cookie, 'password')).token,
+                proof: { kind: 'totp', code: await wrongCode(refused.secret) },
+            },
+            { keepSession: 1 },
+        );
+        expect(wrong).toMatchObject({ status: 403, body: { code: 'step-wrong' } });
+        expect(wrong.session).toBeUndefined();
+        expect((await rows.sessions()).map((row) => row.credentialVersion)).toEqual([1]);
+
+        // No step on the account: asking changes nothing about today's password change.
+        await edge.resetDatabase();
+        const without = await signedIn();
+        const today = await changePassword(without.cookie, next, undefined, { keepSession: 1 });
+        expect(today).toMatchObject({ status: 200, body: { success: true }, session: null });
+        expect(await rows.sessions()).toHaveLength(0);
     }, 120_000);
 });

@@ -18,7 +18,13 @@ import {
     type RecoveryReset,
 } from '@hushos/crypto/recovery';
 import { authEnv } from '@hushos/env/auth';
-import { adminRepository, authRepository, billingRepository, groupsRepository } from '@hushos/db';
+import {
+    adminRepository,
+    authRepository,
+    billingRepository,
+    groupsRepository,
+    twoStepRepository,
+} from '@hushos/db';
 import type { SignupIntent } from '@hushos/db/schema';
 import {
     sendAccountNotice,
@@ -2146,6 +2152,12 @@ export async function finishSecurityChange(
         action: SecurityAction;
         attemptToken: string;
         twoStep?: StepInput;
+        /*
+         * Asked by a client that will take it: a session for this device, written with the
+         * change when the change passes the second step, so the device is not asked for the
+         * step again a moment later. Capped, and replaced by the sign-in that follows.
+         */
+        keepSession?: boolean;
     },
 ) {
     const { user, token } = await requireSession(
@@ -2191,6 +2203,8 @@ export async function finishSecurityChange(
         purpose: input.action,
         step: input.twoStep,
     });
+    // Only a change that passes the step can sign its own device back in, and only when asked.
+    const replacement = input.keepSession && step ? randomToken() : null;
     // A part that does not decode stops the change for its own reason, after a right answer.
     const changed = await beforeSpending(step, async () =>
         authRepository.changeAccountSecurity({
@@ -2221,11 +2235,20 @@ export async function finishSecurityChange(
                 decodeWorkspaceGrant({ id: grant.workspaceId, grant }, keyVersion),
             ),
             twoStep: step?.proof,
+            replacement: replacement
+                ? {
+                      tokenHash: hash(replacement),
+                      expiresAt: new Date(
+                          Date.now() + twoStepRepository.REPLACEMENT_SESSION_SECONDS * 1000,
+                      ),
+                  }
+                : undefined,
         }),
     );
-    await settleChangeStep(step, changed, changed === true);
-    if (changed !== true) throw failure();
-    return { success: true };
+    const done = changed === true || changed === 'replaced';
+    await settleChangeStep(step, changed, done);
+    if (!done) throw failure();
+    return { success: true, sessionToken: changed === 'replaced' ? replacement : null };
 }
 
 export * from './notifications';
