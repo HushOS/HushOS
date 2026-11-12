@@ -872,16 +872,21 @@ Off by default while the apps that answer the step are built: `TWO_STEP_ENABLED=
     - Unset, the key is derived from the OPAQUE server setup (HKDF-SHA-256, with its own `info`), wherever the setup lives. Moving the setup from the database to the environment changes nothing here.
     - Keep it outside the database, as you keep the setup. With the setup in `server_secrets`, the derived key sits beside what it seals and protects nothing against a copy of the database.
     - To make one: `openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`.
+    - Both keys are read from the environment only. There is no `TWO_STEP_KEY_FILE` or `TWO_STEP_PREVIOUS_KEY_FILE` yet.
 - **Rotating the key.** Set the new key as `TWO_STEP_KEY` and the old one as `TWO_STEP_PREVIOUS_KEY`.
     - Each row records which key it was made under, and the server reads under the current key, the previous one, and the derived one. So setting `TWO_STEP_KEY` for the first time needs no previous key.
-    - Nothing re-seals older rows yet: keep the previous key set.
+    - **Only one rotation of an explicit key is safe for now.** Nothing re-seals older rows yet, and the server knows three keys at most: the current one, the previous one and the derived one. Going from the derived key to a first `TWO_STEP_KEY` loses nothing, and neither does one rotation after that, with the old key kept as `TWO_STEP_PREVIOUS_KEY` for as long as the instance runs. A second rotation drops the key before the previous one, and every authenticator secret and backup-code set still under it stops working. Wait for a release that re-seals before rotating again.
+    - A row whose key the server no longer has is never treated as a wrong answer. The person is told that two-step sign-in is temporarily unavailable (503), nothing is counted against them, and the server logs an error with the row's kind and key id (`twoStep.row`, `twoStep.keyId`). Putting the missing key back as `TWO_STEP_PREVIOUS_KEY` repairs it. Until then only the recovery phrase gets that person in.
     - Backup codes can never be re-keyed, because the server never holds them in plain text. A set keeps verifying under its own key until its owner makes a new one.
 - **What the server keeps:**
     - each method's kind, when it was added, and when it was last used, to the hour;
     - each authenticator secret, sealed under the key above, which the running server can open;
     - backup codes only as a keyed Argon2id hash;
     - a security log per account for 90 days: the kind of event, the kind of method and the kind of device, never a name, an address or a browser.
-- **Notices.** Every change to the step, a backup code or the recovery phrase used, and a run of wrong answers after a correct password are emailed to the account. They cannot be turned off, and they name only the kind of method and the time.
+- **Limits on wrong answers.** A step allows five answers. Codes, from an app or a backup set, have a budget of ten in 15 minutes. Each known device has its own, for sign-ins that prove the device's key and for changes made from its session; every sign-in that proves no device shares one. Wrong answers in a row are also counted, and the hundredth from devices HushOS doesn't recognise pauses the authenticator app on such devices until a backup code or the recovery phrase is used.
+    - The 15-minute budgets are rate-limit buckets under [the server hash key](#the-server-hash-key). With the OPAQUE setup kept in the database, they count per process and start over when a process restarts. So do the hourly caps on the failed-step notice (one) and on failed-step lines in the security log (ten).
+    - The count to 100 is a row in the database: it holds across processes and restarts, whatever the setup.
+- **Notices.** Every change to the step, a backup code or the recovery phrase used, and a run of wrong answers after a correct password are emailed to the account. They cannot be turned off, and they name only the kind of method and the time. They go by email only: the apps' push notifications do not carry them yet.
 - **You can turn anyone's step off.** Anyone with write access to the database can delete a person's methods, because the step is a server rule. The management area has no button for it.
 - **Losing everything.** The recovery phrase passes the step. Someone who has lost every method, their backup codes and the phrase cannot sign in, and neither email nor the operator's pages can let them in.
 - **Rolling back** past the release that added the tables is covered under [Release migration notes](#release-migration-notes).

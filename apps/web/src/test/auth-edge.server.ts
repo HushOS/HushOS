@@ -4,8 +4,16 @@ import { KEY_STRETCHING, OPAQUE_IDENTIFIERS, OPAQUE_PROFILE_VERSION } from '@hus
 import { deviceSessionStatement } from '@hushos/crypto/device-identity';
 import { createRecovery } from '@hushos/crypto/recovery';
 import { client, ready, server } from '@hushos/crypto/server';
-import { recoveryStepKey, signTwoStepPhrase } from '@hushos/crypto/two-step';
-import { totpCode, totpStep } from '@hushos/crypto/two-step/server';
+import { formatBackupCode, recoveryStepKey, signTwoStepPhrase } from '@hushos/crypto/two-step';
+import {
+    base32,
+    generateBackupCodes,
+    generateTotpSecret,
+    hashBackupCode,
+    sealTotpSecret,
+    totpCode,
+    totpStep,
+} from '@hushos/crypto/two-step/server';
 import { vi } from 'vitest';
 import { loadApiModule } from './api-app';
 
@@ -24,7 +32,15 @@ const ORIGIN = 'http://localhost:5173';
 export const PASSWORD = 'correct horse battery staple';
 
 export type Reply = { status: number; body: any; session: string | null | undefined };
-export type Notice = { to: string; kind: string; count?: number; method?: string };
+export type Notice = {
+    to: string;
+    kind: string;
+    count?: number;
+    method?: string;
+    /* The message as it would be sent: its subject and its plain-text part. */
+    subject: string;
+    text: string;
+};
 export type Account = { userId: string; email: string; phrase: string };
 
 const BASE32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
@@ -49,9 +65,17 @@ export function appCode(secret: string, offset = 0) {
     return totpCode(fromBase32(secret), totpStep() + offset);
 }
 
-export async function loadEdge(env: Record<string, string> = {}) {
+/*
+ * `setup: 'database'` leaves OPAQUE_SERVER_SETUP unset, so the server makes its setup on first
+ * use and keeps it in `server_secrets`, as an instance does when its operator sets none.
+ */
+export async function loadEdge(
+    env: Record<string, string> = {},
+    options: { setup?: 'environment' | 'database' } = {},
+) {
     await ready;
-    vi.stubEnv('OPAQUE_SERVER_SETUP', server.createSetup());
+    const fromDatabase = options.setup === 'database';
+    vi.stubEnv('OPAQUE_SERVER_SETUP', fromDatabase ? '' : server.createSetup());
     for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value);
     const state = { address: '203.0.113.1' };
     const outbox: Notice[] = [];
@@ -64,14 +88,24 @@ export async function loadEdge(env: Record<string, string> = {}) {
         new URL('../../../../packages/emails/src/service.ts', import.meta.url).pathname,
         async (importOriginal) => {
             const emails = (await importOriginal()) as {
-                composeSecurityNotice: (to: string, input: SecurityNotice) => unknown;
+                composeSecurityNotice: (
+                    to: string,
+                    input: SecurityNotice,
+                ) => { subject: string; text: string };
             };
             return {
                 ...emails,
                 sendSecurityNotice: async (to: string, input: SecurityNotice) => {
                     // Composed for real: a notice whose template lacks a value fails here too.
-                    emails.composeSecurityNotice(to, input);
-                    outbox.push({ to, kind: input.kind, count: input.count, method: input.method });
+                    const { subject, text } = emails.composeSecurityNotice(to, input);
+                    outbox.push({
+                        to,
+                        kind: input.kind,
+                        count: input.count,
+                        method: input.method,
+                        subject,
+                        text,
+                    });
                 },
             };
         },
@@ -80,8 +114,28 @@ export async function loadEdge(env: Record<string, string> = {}) {
     const { authRepository, db, twoStepRepository } = await import('@hushos/db');
     const schema = await import('@hushos/db/schema');
     const { registration, sha256 } = await import('../../../../packages/db/test/accounts');
-    const { closeDatabase, resetDatabase, signingKeyFromSeed } =
-        await import('../../../../packages/db/test/helpers');
+    const helpers = await import('../../../../packages/db/test/helpers');
+    const { closeDatabase, signingKeyFromSeed } = helpers;
+    const logging = await import('@hushos/logging');
+
+    /*
+     * The OPAQUE setup this server uses. Kept in the database, it is made once and outlives
+     * every reset here, as it outlives everything on a real instance: the server holds it in
+     * memory after first use, so a reset that dropped the row puts the same value back.
+     */
+    let databaseSetup: string | undefined;
+    async function serverSetup() {
+        if (!fromDatabase) return process.env.OPAQUE_SERVER_SETUP!;
+        databaseSetup = await authRepository.ensureServerSecret(
+            'opaque-setup:primary',
+            () => databaseSetup ?? server.createSetup(),
+        );
+        return databaseSetup;
+    }
+    async function resetDatabase() {
+        await helpers.resetDatabase();
+        if (fromDatabase) await serverSetup();
+    }
 
     /* One request to /api/auth, as a client sends it. `session` is the cookie it set: a token, null when cleared. */
     async function call(
@@ -131,7 +185,7 @@ export async function loadEdge(env: Record<string, string> = {}) {
         );
         const start = client.startRegistration({ password });
         const { registrationResponse } = server.createRegistrationResponse({
-            serverSetup: process.env.OPAQUE_SERVER_SETUP!,
+            serverSetup: await serverSetup(),
             userIdentifier: verified!.id,
             registrationRequest: start.registrationRequest,
         });
@@ -265,6 +319,39 @@ export async function loadEdge(env: Record<string, string> = {}) {
         return { deviceId, seed };
     }
 
+    /*
+     * Turns the step on for an account past the routes, with its app's secret sealed and its
+     * codes hashed under `key`: rows as a server holding that key wrote them. For what the
+     * routes cannot set up: a row from before a key rotation, or from while the flag was on.
+     */
+    async function stepUnder(key: Uint8Array, who: Account, cookie: string) {
+        const secret = generateTotpSecret();
+        const id = randomUUID();
+        const sealed = await sealTotpSecret({ secret, key, userId: who.userId, factorId: id });
+        await twoStepRepository.startTotpFactor({
+            id,
+            userId: who.userId,
+            keyId: Buffer.from(sealed.keyId),
+            nonce: Buffer.from(sealed.nonce),
+            sealedSecret: Buffer.from(sealed.sealed),
+        });
+        const { backupCodeSalt } = await twoStepRepository.ensureTwoStepState(who.userId);
+        const codes = generateBackupCodes();
+        const hashes = [];
+        for (const code of codes)
+            hashes.push(Buffer.from(await hashBackupCode({ code, key, salt: backupCodeSalt })));
+        const confirmed = await twoStepRepository.confirmTotpFactor({
+            userId: who.userId,
+            factorId: id,
+            step: 1_000,
+            sessionTokenHash: sha256(cookie),
+            credentialVersion: 1,
+            backupCodes: { keyId: Buffer.from(sealed.keyId), hashes },
+        });
+        if (confirmed.status !== 'ok') throw new Error(`Confirmation ${confirmed.status}.`);
+        return { factorId: id, secret: base32(secret), codes: codes.map(formatBackupCode) };
+    }
+
     /* Notices are sent after the reply and not awaited: wait for the ones a test expects. */
     async function notices(kind: string, count = 1) {
         for (let waited = 0; waited < 200; waited++) {
@@ -284,6 +371,7 @@ export async function loadEdge(env: Record<string, string> = {}) {
         passwordProof,
         phraseProof,
         giveDeviceKey,
+        stepUnder,
         notices,
         quiet,
         outbox,
@@ -293,6 +381,8 @@ export async function loadEdge(env: Record<string, string> = {}) {
         authRepository,
         twoStepRepository,
         sha256,
+        serverSetup,
+        logging,
         resetDatabase,
         closeDatabase,
     };

@@ -30,10 +30,16 @@ import {
 import { ready, server, client } from '@hushos/crypto/server';
 import { SECURITY_CHANGE_IDENTITY_BYTES, SECURITY_CHANGE_REST_BYTES } from './limits';
 import { notify } from './notifications';
-import { checkChangeStep, settleChangeStep, startLoginStep, type StepInput } from './two-step';
+import {
+    checkChangeStep,
+    beforeSpending,
+    settleChangeStep,
+    startLoginStep,
+    type StepInput,
+} from './two-step';
 import { log as serverLog } from '@hushos/logging';
 import { boundAttemptHolds, type BoundPurpose } from './bound-attempt';
-import { hash, noticeWhen, randomToken, serverSetup } from './internal';
+import { hash, noticeWhen, randomToken, serverSetup, supportedEnvelope } from './internal';
 
 import {
     ENVELOPE_VERSION,
@@ -325,12 +331,6 @@ export async function startRegistration(
     } catch {
         throw new AuthError('Could not start registration. Please try again.');
     }
-}
-
-function supportedEnvelope(version: number): typeof ENVELOPE_VERSION {
-    if (version !== ENVELOPE_VERSION)
-        throw new AuthError('This account-key envelope is not supported.', 503);
-    return ENVELOPE_VERSION;
 }
 
 function decodeField(value: string, length: number) {
@@ -1990,8 +1990,9 @@ export async function finishAccountDeletion(
         step: input.twoStep,
     });
     // Anything billed to the account stops before the account goes; an outage there
-    // leaves the account in place rather than a subscription without an owner.
-    await beforeDelete?.(user.id);
+    // leaves the account in place rather than a subscription without an owner. The step's
+    // answer was right and is not spent yet: its budget goes back if billing stops the deletion.
+    await beforeSpending(step, async () => beforeDelete?.(user.id));
     const deleted = await authRepository.deleteAccount({
         userId: user.id,
         credentialVersion: user.credentialVersion,
@@ -2002,11 +2003,11 @@ export async function finishAccountDeletion(
     // turned on since the check above) is answered as the step's own refusal. Billing has
     // already stopped by then: the refusal says so rather than pretend nothing happened.
     try {
-        await settleChangeStep(step, deleted, deleted === true);
+        await settleChangeStep(step, deleted, deleted === true, { accountGone: true });
     } catch (error) {
         if (beforeDelete && error instanceof AuthError && error.status === 403)
             throw new AuthError(
-                'Your plan was stopped, but your account was not deleted: your second step didn’t pass. Try again.',
+                'Your plan was stopped, but your account was not deleted: it needs your second step first. Try again.',
                 403,
                 { code: error.code },
             );
@@ -2190,35 +2191,38 @@ export async function finishSecurityChange(
         purpose: input.action,
         step: input.twoStep,
     });
-    const changed = await authRepository.changeAccountSecurity({
-        userId: user.id,
-        action: input.action,
-        sessionTokenHash: hash(token),
-        credentialVersion: user.credentialVersion,
-        registrationRecord: input.registrationRecord,
-        envelope: {
-            keyVersion,
-            wrappingSalt: decodeField(input.envelope.wrappingSalt, 32),
-            wrappingNonce: decodeField(input.envelope.wrappingNonce, 24),
-            encryptedKey: decodeField(input.envelope.encryptedKey, 48),
-        },
-        recovery: input.recovery
-            ? decodeRecovery(input.recovery, old.recovery.recoveryVersion + 1, keyVersion)
-            : undefined,
-        // The identity keeps its own key version (or takes the root's, when higher); the
-        // repository holds it to the current one, since a succession moves it on its own.
-        identity: input.identity
-            ? decodeIdentity(input.identity, input.identity.keyVersion, user.id)
-            : undefined,
-        identityHistory: input.identityHistory?.map((earlier) =>
-            decodeIdentity(earlier, earlier.keyVersion, user.id),
-        ),
-        settingsKey: input.settingsKey ? decodeSettingsKey(input.settingsKey) : undefined,
-        workspaces: input.workspaces?.map((grant) =>
-            decodeWorkspaceGrant({ id: grant.workspaceId, grant }, keyVersion),
-        ),
-        twoStep: step?.proof,
-    });
+    // A part that does not decode stops the change for its own reason, after a right answer.
+    const changed = await beforeSpending(step, async () =>
+        authRepository.changeAccountSecurity({
+            userId: user.id,
+            action: input.action,
+            sessionTokenHash: hash(token),
+            credentialVersion: user.credentialVersion,
+            registrationRecord: input.registrationRecord,
+            envelope: {
+                keyVersion,
+                wrappingSalt: decodeField(input.envelope.wrappingSalt, 32),
+                wrappingNonce: decodeField(input.envelope.wrappingNonce, 24),
+                encryptedKey: decodeField(input.envelope.encryptedKey, 48),
+            },
+            recovery: input.recovery
+                ? decodeRecovery(input.recovery, old.recovery.recoveryVersion + 1, keyVersion)
+                : undefined,
+            // The identity keeps its own key version (or takes the root's, when higher); the
+            // repository holds it to the current one, since a succession moves it on its own.
+            identity: input.identity
+                ? decodeIdentity(input.identity, input.identity.keyVersion, user.id)
+                : undefined,
+            identityHistory: input.identityHistory?.map((earlier) =>
+                decodeIdentity(earlier, earlier.keyVersion, user.id),
+            ),
+            settingsKey: input.settingsKey ? decodeSettingsKey(input.settingsKey) : undefined,
+            workspaces: input.workspaces?.map((grant) =>
+                decodeWorkspaceGrant({ id: grant.workspaceId, grant }, keyVersion),
+            ),
+            twoStep: step?.proof,
+        }),
+    );
     await settleChangeStep(step, changed, changed === true);
     if (changed !== true) throw failure();
     return { success: true };

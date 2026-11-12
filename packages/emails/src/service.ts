@@ -251,8 +251,11 @@ const securitySubjects: Record<SecurityNoticeKind, (when: string) => string> = {
     'backup-code-used': (when) => `A backup code was used · ${when} · HushOS`,
     'phrase-used': (when) => `Your recovery phrase was used as your second step · ${when} · HushOS`,
     'step-failed': (when) =>
-        `Someone has your password but did not pass the second step · ${when} · HushOS`,
-    'totp-frozen': (when) => `Your authenticator app is paused on new devices · ${when} · HushOS`,
+        `Someone signed in with your password but did not pass the second step · ${when} · HushOS`,
+    'change-step-failed': (when) =>
+        `Someone tried to change your account and did not pass the second step · ${when} · HushOS`,
+    'totp-frozen': (when) =>
+        `Your authenticator app is paused on devices HushOS doesn’t recognise · ${when} · HushOS`,
 };
 
 type SecurityInput = {

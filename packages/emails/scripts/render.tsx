@@ -132,6 +132,7 @@ const securityKinds: SecurityNoticeKind[] = [
     'backup-code-used',
     'phrase-used',
     'step-failed',
+    'change-step-failed',
     'totp-frozen',
 ];
 const securityRendered: Record<string, { html: string; text: string }> = {};

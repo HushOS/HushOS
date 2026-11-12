@@ -2,6 +2,8 @@ import { createHash, randomBytes } from 'node:crypto';
 import { authRepository } from '@hushos/db';
 import { authEnv } from '@hushos/env/auth';
 import { ready, server } from '@hushos/crypto/server';
+import { ENVELOPE_VERSION } from '@hushos/crypto';
+import { AuthError } from './tokens';
 
 /*
  * What the auth domain's modules share and nothing outside the package imports: the token
@@ -54,3 +56,10 @@ const noticeTime = new Intl.DateTimeFormat('en-GB', {
 });
 /* When something happened, as every notice to an account's email says it. */
 export const noticeWhen = (at: Date = new Date()) => `${noticeTime.format(at)} UTC`;
+
+/* The one account-key envelope version this server writes and reads. */
+export function supportedEnvelope(version: number): typeof ENVELOPE_VERSION {
+    if (version !== ENVELOPE_VERSION)
+        throw new AuthError('This account-key envelope is not supported.', 503);
+    return ENVELOPE_VERSION;
+}

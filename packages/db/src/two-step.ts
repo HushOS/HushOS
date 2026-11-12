@@ -84,6 +84,7 @@ export {
     STEP_TOKEN_ANSWERS,
     TOTP_FREEZE_FAILURES,
     recordStepFailure,
+    returnStepAnswer,
 } from './two-step.core';
 export type {
     StepAttempt,

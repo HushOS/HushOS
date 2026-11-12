@@ -1227,7 +1227,11 @@ export async function initializeAccount(input: {
                 ),
             );
         if (!session) return false;
-        if (input.recovery)
+        // A recovery key passes the second step (docs/two-step-design.md 5). Stored from a
+        // session alone while the step is on, it would be a way past the step that no step was
+        // asked for: an account that turned the step on has one already, and one that somehow
+        // has none keeps none until the step is off.
+        if (input.recovery && !(await stepIsOn(tx, user.id)))
             await tx
                 .insert(accountRecoveryKeys)
                 .values({ ...input.recovery, userId: user.id })

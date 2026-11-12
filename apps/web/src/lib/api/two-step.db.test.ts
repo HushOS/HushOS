@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { KEY_STRETCHING, OPAQUE_IDENTIFIERS } from '@hushos/crypto';
+import { createRecovery } from '@hushos/crypto/recovery';
 import { client } from '@hushos/crypto/server';
 import { totpCode, totpStep } from '@hushos/crypto/two-step/server';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -241,7 +242,7 @@ describe('turning the step on', () => {
                 )
             ).status,
         ).toBe(404);
-        expect(await edge.notices('two-step-on')).toEqual([
+        expect(await edge.notices('two-step-on')).toMatchObject([
             {
                 to: who.email,
                 kind: 'two-step-on',
@@ -461,7 +462,7 @@ describe('signing in to an account with the step on', () => {
         const passed = await answer(step.token, { kind: 'backup', code: typed });
         expect(passed.status).toBe(200);
         expect(passed.session).toBeTruthy();
-        expect(await edge.notices('backup-code-used')).toEqual([
+        expect(await edge.notices('backup-code-used')).toMatchObject([
             { to: who.email, kind: 'backup-code-used', count: 9, method: undefined },
         ]);
         expect((await edge.notices('new-device')).at(-1)).toMatchObject({
@@ -511,7 +512,7 @@ describe('signing in to an account with the step on', () => {
         expect(passed.status).toBe(200);
         expect(passed.body.user.id).toBe(who.userId);
         expect(passed.session).toBeTruthy();
-        expect(await edge.notices('phrase-used')).toEqual([
+        expect(await edge.notices('phrase-used')).toMatchObject([
             { to: who.email, kind: 'phrase-used', count: undefined, method: undefined },
         ]);
         expect((await edge.notices('new-device')).at(-1)).toMatchObject({
@@ -553,7 +554,7 @@ describe('signing in to an account with the step on', () => {
         const third = await toStep(who);
         expect(third.methods).toContain('totp');
         await answer(third.token, garbage);
-        expect(await edge.notices('totp-frozen')).toEqual([
+        expect(await edge.notices('totp-frozen')).toMatchObject([
             { to: who.email, kind: 'totp-frozen', count: undefined, method: undefined },
         ]);
         // A sign-in that proves no device is no longer offered the app, and its code is refused unchecked.
@@ -584,7 +585,7 @@ describe('signing in to an account with the step on', () => {
 
 describe('changes that need the step', () => {
     test('a password change without the step, or with a wrong one, saves nothing; with it, the password changes', async () => {
-        const { who, cookie, secret } = await stepped();
+        const { who, cookie, secret, codes } = await stepped();
         const next = 'a new password entirely';
         const unchanged = async () => {
             // The old password still proves itself, and the new one does not.
@@ -597,7 +598,7 @@ describe('changes that need the step', () => {
             body: { code: 'two-step', message: 'This needs your second step.' },
         });
         await unchanged();
-        // A wrong code, a step made for another purpose, and another session's step.
+        // A wrong code, and a step made for another purpose.
         const forPassword = await challenge(cookie, 'password');
         expect(
             await changePassword(cookie, next, {
@@ -612,11 +613,18 @@ describe('changes that need the step', () => {
                 proof: { kind: 'totp', code: await appCode(secret) },
             }),
         ).toMatchObject({ status: 403, body: { code: 'step-expired' } });
-        const elsewhere = await answer(
-            (await toStep(who)).token,
-            await edge.phraseProof(who.phrase, await toStep(who)),
-        );
-        expect(elsewhere.status).toBe(401);
+        // Another session of this account, itself signed in through the step: a step made for
+        // that session's password change is not this session's.
+        const other = await answer((await toStep(who)).token, { kind: 'backup', code: codes[0]! });
+        expect(other.status).toBe(200);
+        const theirs = await challenge(other.session!, 'password');
+        expect(
+            await changePassword(cookie, next, {
+                token: theirs.token,
+                proof: { kind: 'totp', code: await appCode(secret) },
+            }),
+        ).toMatchObject({ status: 403, body: { code: 'step-expired' } });
+        // Nor is a sign-in's token a step for a change.
         const signIn = await toStep(who);
         expect(
             await changePassword(cookie, next, {
@@ -664,6 +672,7 @@ describe('changes that need the step', () => {
             on: true,
             backupCodesLeft: 10,
         });
+        const logged = vi.spyOn(edge.logging.log, 'error');
         const deleted = await remove({
             token: step.token,
             proof: { kind: 'backup', code: codes[0]! },
@@ -671,6 +680,9 @@ describe('changes that need the step', () => {
         expect(deleted).toMatchObject({ status: 200, body: { success: true }, session: null });
         expect(await edge.db.select().from(edge.schema.users)).toHaveLength(0);
         expect(await edge.authRepository.accountExists(who.email)).toBe(false);
+        // Nothing is logged for an account that is gone: a deletion that worked raises no error.
+        await edge.quiet();
+        expect(logged).not.toHaveBeenCalled();
     }, 90_000);
 
     test('the step itself changes only with the step: new codes, another app, and turning it off', async () => {
@@ -770,4 +782,307 @@ describe('changes that need the step', () => {
         });
         expect((await edge.call('GET', '/security-events')).status).toBe(401);
     }, 60_000);
+});
+
+/* A recovery-key rotation as the client sends it: the password proved, a new record, a new recovery envelope. */
+async function rotateRecoveryKey(who: Account, cookie: string, twoStep: unknown, versions = 1) {
+    const registration = client.startRegistration({ password: 'correct horse battery staple' });
+    const { challenge: started, proof } = await edge.passwordProof(
+        '/security/start',
+        { action: 'recovery-key', registrationRequest: registration.registrationRequest },
+        { cookie },
+    );
+    const { registrationRecord } = client.finishRegistration({
+        password: 'correct horse battery staple',
+        clientRegistrationState: registration.clientRegistrationState,
+        registrationResponse: started.registrationResponse,
+        identifiers: OPAQUE_IDENTIFIERS,
+        keyStretching: KEY_STRETCHING,
+    });
+    const made = await createRecovery(
+        new Uint8Array(randomBytes(32)),
+        who.userId,
+        started.recovery.recoveryVersion + versions,
+        started.envelope.keyVersion,
+    );
+    const reply = await edge.call(
+        'POST',
+        '/security/finish',
+        {
+            action: 'recovery-key',
+            ...proof,
+            registrationRecord,
+            envelope: {
+                envelopeVersion: 1,
+                keyVersion: started.envelope.keyVersion,
+                credentialVersion: started.envelope.credentialVersion + 1,
+                wrappingSalt: b64(32),
+                wrappingNonce: b64(24),
+                encryptedKey: b64(48),
+            },
+            recovery: made.recovery,
+            twoStep,
+        },
+        { cookie },
+    );
+    return { reply, phrase: made.phrase };
+}
+
+describe('the recovery phrase and the step', () => {
+    test('after the recovery key is rotated, the old phrase no longer passes the step and the new one does', async () => {
+        const { who, cookie, secret, deviceId } = await stepped();
+        // Nine codes already charged to this device's budget of ten, as nine wrong ones leave it.
+        const budget = edge.sha256(`auth:two-step:codes:device:${deviceId}`);
+        for (let used = 0; used < 9; used++)
+            expect(await edge.authRepository.consumeRateLimit(budget, 10, 15 * 60_000)).toBe(true);
+        // A right code with a recovery envelope the server will not take (it skips a version):
+        // the change stops for its own reason, nothing is rotated, and the code is not charged.
+        const first = await challenge(cookie, 'recovery-key');
+        const malformed = await rotateRecoveryKey(
+            who,
+            cookie,
+            { token: first.token, proof: { kind: 'totp', code: await appCode(secret) } },
+            2,
+        );
+        expect(malformed.reply.status).toBe(400);
+        // So the tenth place is still there for the real one, with the same unspent code.
+        const step = await challenge(cookie, 'recovery-key');
+        const rotated = await rotateRecoveryKey(who, cookie, {
+            token: step.token,
+            proof: { kind: 'totp', code: await appCode(secret) },
+        });
+        expect(rotated.reply).toMatchObject({ status: 200, body: { success: true } });
+
+        const asked = await toStep(who);
+        expect(asked.phrase.recoveryVersion).toBe(2);
+        // The phrase from before, signed as a device would with what this step carries.
+        expect(await answer(asked.token, await edge.phraseProof(who.phrase, asked))).toMatchObject({
+            status: 401,
+            body: { code: 'step-wrong' },
+        });
+        expect(await rows.sessions()).toHaveLength(0);
+        const passed = await answer(asked.token, await edge.phraseProof(rotated.phrase, asked));
+        expect(passed.status).toBe(200);
+        expect(passed.session).toBeTruthy();
+    }, 90_000);
+
+    test('the step is not turned on for an account without a recovery key, and none can be added from a session once it is on', async () => {
+        const recoveryRows = async () =>
+            (await edge.db.select().from(edge.schema.accountRecoveryKeys)).map((row) => row.userId);
+        const envelope = async (userId: string) =>
+            (await createRecovery(new Uint8Array(randomBytes(32)), userId)).recovery;
+        // An account whose setup never stored a recovery key.
+        const bare = await signedIn();
+        await edge.db.$client.query('delete from account_recovery_keys where user_id = $1', [
+            bare.who.userId,
+        ]);
+        const unfinished = {
+            status: 409,
+            body: { message: 'Finish setting up your account first.' },
+        };
+        const { proof } = await edge.passwordProof('/two-step/reauth', {}, { cookie: bare.cookie });
+        expect(
+            await edge.call('POST', '/two-step/totp', proof, { cookie: bare.cookie }),
+        ).toMatchObject(unfinished);
+        expect(await edge.db.select().from(edge.schema.twoStepFactors)).toHaveLength(0);
+        // Without the step, account setup stores the key as it always has; then the step can be set up.
+        expect(
+            await edge.call(
+                'POST',
+                '/setup',
+                { recovery: await envelope(bare.who.userId) },
+                { cookie: bare.cookie },
+            ),
+        ).toMatchObject({ status: 200, body: { ok: true } });
+        expect(await recoveryRows()).toEqual([bare.who.userId]);
+
+        // A pending app, and the key gone before it is confirmed: confirming is refused too.
+        const late = await signedIn();
+        const started = await edge.passwordProof('/two-step/reauth', {}, { cookie: late.cookie });
+        const enrol = await edge.call('POST', '/two-step/totp', started.proof, {
+            cookie: late.cookie,
+        });
+        expect(enrol.status).toBe(200);
+        await edge.db.$client.query('delete from account_recovery_keys where user_id = $1', [
+            late.who.userId,
+        ]);
+        expect(
+            await edge.call(
+                'POST',
+                `/two-step/totp/${enrol.body.id}/confirm`,
+                { code: await appCode(enrol.body.secret) },
+                { cookie: late.cookie },
+            ),
+        ).toMatchObject(unfinished);
+        expect(
+            (await edge.call('GET', '/two-step', undefined, { cookie: late.cookie })).body.on,
+        ).toBe(false);
+
+        // The step on, and no recovery key (as only an account from before this rule could be):
+        // a session alone cannot give it one, or that phrase would pass a step nobody passed.
+        const on = await stepped();
+        await edge.db.$client.query('delete from account_recovery_keys where user_id = $1', [
+            on.who.userId,
+        ]);
+        expect(
+            await edge.call(
+                'POST',
+                '/setup',
+                { recovery: await envelope(on.who.userId) },
+                { cookie: on.cookie },
+            ),
+        ).toMatchObject({ status: 200, body: { ok: true } });
+        expect(await recoveryRows()).toEqual([bare.who.userId]);
+        const asked = await edge.signIn(on.who, { twoStep: true });
+        expect(asked.body.twoStep.methods).toEqual(['totp', 'backup']);
+        expect(asked.body.twoStep.phrase).toBeUndefined();
+    }, 120_000);
+});
+
+describe('what the server does about its own faults', () => {
+    test('a row under a key this server no longer has is the server’s fault: 503, nothing counted or used up, and the log names the key', async () => {
+        const { who, secret, codes, factorId } = await stepped();
+        const logged = vi.spyOn(edge.logging.log, 'error');
+        const limits = async () => (await edge.db.select().from(edge.schema.authRateLimits)).length;
+        const lost = randomBytes(8);
+        await edge.db.$client.query('update two_step_factors set totp_key_id = $1 where id = $2', [
+            lost,
+            factorId,
+        ]);
+        const step = await toStep(who);
+        const charged = await limits();
+        const unavailable = {
+            status: 503,
+            body: { message: 'Two-step sign-in is temporarily unavailable. Please try again.' },
+        };
+        expect(
+            await answer(step.token, { kind: 'totp', code: await appCode(secret) }),
+        ).toMatchObject(unavailable);
+        // A right code and a wrong one get the same answer: neither was looked at.
+        expect(
+            await answer(step.token, { kind: 'totp', code: await wrongCode(secret) }),
+        ).toMatchObject(unavailable);
+        expect(logged).toHaveBeenCalledWith(
+            expect.objectContaining({ twoStep: { row: 'totp', keyId: lost.toString('hex') } }),
+        );
+        // Nothing was counted, the token has all five answers, and the budget is as it was.
+        expect((await rows.state(who.userId)).consecutiveFailures).toBe(0);
+        expect(await edge.db.select().from(edge.schema.twoStepAttempts)).toMatchObject([
+            { answers: 0, failures: 0 },
+        ]);
+        expect(await limits()).toBe(charged);
+        expect(
+            (await rows.log(who.userId)).filter((line) => line.startsWith('step-failed')),
+        ).toEqual([]);
+
+        // The backup codes, hashed under a key that is gone, the same.
+        const gone = randomBytes(8);
+        await edge.db.$client.query(
+            'update two_step_backup_codes set key_id = $1 where user_id = $2',
+            [gone, who.userId],
+        );
+        expect(await answer(step.token, { kind: 'backup', code: codes[0]! })).toMatchObject(
+            unavailable,
+        );
+        expect(logged).toHaveBeenCalledWith(
+            expect.objectContaining({
+                twoStep: { row: 'backup-codes', keyId: gone.toString('hex') },
+            }),
+        );
+        expect((await rows.state(who.userId)).consecutiveFailures).toBe(0);
+        // The phrase needs no key of the server's, and still passes on the same token.
+        expect((await answer(step.token, await edge.phraseProof(who.phrase, step))).status).toBe(
+            200,
+        );
+    }, 90_000);
+
+    test('a sign-in that passed stays passed when handing its budget back fails', async () => {
+        const { who, secret } = await stepped();
+        const step = await toStep(who);
+        const logged = vi.spyOn(edge.logging.log, 'error');
+        const { rows: before } = await edge.db.$client.query('select count from auth_rate_limits');
+        // The database refuses the one statement that hands the budget back.
+        await edge.db.$client.query(
+            `create or replace function refuse_release() returns trigger language plpgsql as $$
+             begin raise exception 'no release'; end $$`,
+        );
+        await edge.db.$client.query(
+            'create trigger refuse_release before delete on auth_rate_limits for each row execute function refuse_release()',
+        );
+        try {
+            const passed = await answer(step.token, { kind: 'totp', code: await appCode(secret) });
+            expect(passed.status).toBe(200);
+            expect(passed.session).toBeTruthy();
+            expect(passed.body.user.id).toBe(who.userId);
+        } finally {
+            await edge.db.$client.query('drop trigger refuse_release on auth_rate_limits');
+            await edge.db.$client.query('drop function refuse_release()');
+        }
+        expect(before.length).toBeGreaterThan(0);
+        expect(logged).toHaveBeenCalledWith(
+            expect.objectContaining({ twoStep: expect.objectContaining({ what: 'release' }) }),
+        );
+    }, 60_000);
+});
+
+describe('what the account hears and keeps of wrong answers', () => {
+    test('a failed sign-in and a failed change are told apart: only the first can say nobody got in', async () => {
+        const { who, cookie } = await stepped();
+        const wrong = { kind: 'backup', code: 'AAAAA-AAAAA' };
+        // Five wrong answers at sign-in.
+        const signIn = await toStep(who);
+        for (let index = 0; index < 5; index++) await answer(signIn.token, wrong);
+        const [atSignIn] = await edge.notices('step-failed');
+        expect(atSignIn).toMatchObject({
+            to: who.email,
+            subject: expect.stringMatching(
+                /^Someone signed in with your password but did not pass the second step · .* UTC · HushOS$/,
+            ),
+        });
+        expect(atSignIn!.text).toContain('Nobody got in.');
+        expect(atSignIn!.text).toContain('If this wasn’t you, change your password.');
+        await edge.quiet();
+        expect(edge.outbox.filter((notice) => notice.kind === 'change-step-failed')).toEqual([]);
+
+        // Five wrong answers from a session that is signed in, at a password change.
+        const step = await challenge(cookie, 'password');
+        for (let index = 0; index < 5; index++)
+            expect(
+                (
+                    await changePassword(cookie, 'another password', {
+                        token: step.token,
+                        proof: wrong,
+                    })
+                ).status,
+            ).toBe(403);
+        const [atChange] = await edge.notices('change-step-failed');
+        expect(atChange).toMatchObject({
+            to: who.email,
+            subject: expect.stringMatching(
+                /^Someone tried to change your account and did not pass the second step · .* UTC · HushOS$/,
+            ),
+        });
+        expect(atChange!.text).toContain(
+            'Someone signed in to your account tried to change it and did not pass the second step.',
+        );
+        expect(atChange!.text).toContain('Check your devices and change your password.');
+        // Whoever failed there is signed in: this notice must not say otherwise.
+        expect(atChange!.text).not.toContain('Nobody got in');
+        expect(edge.outbox.filter((notice) => notice.kind === 'step-failed')).toHaveLength(1);
+    }, 120_000);
+
+    test('wrong answers cannot bury the security log: ten lines an hour, however many there are', async () => {
+        const { who } = await stepped();
+        const garbage = { kind: 'phrase', signature: b64(64) };
+        for (let token = 0; token < 3; token++) {
+            edge.state.address = `198.51.100.${token + 1}`;
+            const step = await toStep(who);
+            for (let index = 0; index < 5; index++) await answer(step.token, garbage);
+        }
+        // All fifteen were counted; ten were written down.
+        expect((await rows.state(who.userId)).consecutiveFailures).toBe(15);
+        const log = await rows.log(who.userId);
+        expect(log.filter((line) => line === 'step-failed:phrase')).toHaveLength(10);
+        expect(log).toContain('two-step-on:totp');
+    }, 90_000);
 });

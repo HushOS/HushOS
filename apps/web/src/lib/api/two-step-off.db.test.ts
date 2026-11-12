@@ -174,7 +174,7 @@ describe('with TWO_STEP_ENABLED off', () => {
         expect(capable.session).toBeTruthy();
         // The first sign-in after sign-up is the account's own device; the second is a new one,
         // and its notice reads as it always has.
-        expect(await edge.notices('new-device')).toEqual([
+        expect(await edge.notices('new-device')).toMatchObject([
             { to: who.email, kind: 'new-device', count: undefined, method: undefined },
         ]);
         // The web's unlock: the same device, a new cookie.

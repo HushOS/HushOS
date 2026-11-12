@@ -339,6 +339,27 @@ export async function recordStepFailure(answer: StepAttempt): Promise<StepFailur
 }
 
 /*
+ * Gives back the slot an answer took, when the answer could not be looked at for a reason of
+ * the server's own (a key it no longer has): nothing was guessed, so nothing is used up. Only
+ * a slot that is still open goes back; one already counted wrong stays counted.
+ */
+export async function returnStepAnswer(answer: StepAttempt) {
+    await db.transaction(async (tx) => {
+        if (!(await lockAccount(tx, answer.userId))) return;
+        await tx
+            .update(twoStepAttempts)
+            .set({ answers: sql`${twoStepAttempts.answers} - 1` })
+            .where(
+                and(
+                    eq(twoStepAttempts.tokenHash, answer.tokenHash),
+                    eq(twoStepAttempts.userId, answer.userId),
+                    sql`${twoStepAttempts.answers} > ${twoStepAttempts.failures}`,
+                ),
+            );
+    });
+}
+
+/*
  * A step passed: the count of the pool it came from starts over, and a success with anything
  * but the authenticator app, from any device, lifts the app's freeze. The app's own code from
  * a known device does not: that is the frozen method. The account's count is reset only by a

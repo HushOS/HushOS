@@ -38,6 +38,7 @@ export type SecurityNoticeKind =
     | 'backup-code-used'
     | 'phrase-used'
     | 'step-failed'
+    | 'change-step-failed'
     | 'totp-frozen';
 
 /* Hidden everywhere, Outlook included; a variable, since React's types lack mso-hide. */
@@ -162,17 +163,27 @@ const copy: Record<
     'step-failed': {
         preview: 'Someone signed in with your HushOS password but did not pass the second step.',
         heading: 'Someone signed in with your password but did not pass the second step.',
-        body: 'Your password was right, and the second step was answered wrongly several times in a row. Nobody got in. If this wasn’t you, someone else knows your password.',
+        body: 'Your password was right, and the second step was answered wrongly several times in a row. Nobody got in.',
         facts: [['When', '{{when}}']],
-        foot: 'Change your password.',
+        foot: 'If this wasn’t you, change your password.',
+        action: 'Review your account',
+    },
+    'change-step-failed': {
+        preview:
+            'Someone signed in to your HushOS account tried to change it and did not pass the second step.',
+        heading:
+            'Someone signed in to your account tried to change it and did not pass the second step.',
+        body: 'A device that is signed in to your account confirmed your password, then answered the second step wrongly several times in a row. Nothing was changed.',
+        facts: [['When', '{{when}}']],
+        foot: 'Check your devices and change your password.',
         action: 'Review your account',
     },
     'totp-frozen': {
-        preview: 'Your authenticator app is paused on new devices.',
-        heading: 'Your authenticator app is paused on new devices.',
-        body: 'The second step was answered wrongly 100 times in a row from devices that aren’t yours, so codes from your authenticator app are refused on new devices for now. The devices you already use are not affected. On a new device, sign in with your recovery phrase; that lifts the pause.',
+        preview: 'Your authenticator app is paused on devices HushOS doesn’t recognise.',
+        heading: 'Your authenticator app is paused on devices HushOS doesn’t recognise.',
+        body: 'The second step was answered wrongly 100 times in a row from devices HushOS doesn’t recognise, so codes from your authenticator app are refused on such devices for now. To sign in on one, use a backup code or your recovery phrase; either lifts the pause.',
         facts: [['When', '{{when}}']],
-        foot: 'Someone knows your password. Change it.',
+        foot: 'If this wasn’t you, someone knows your password. Change it.',
         action: 'Review your account',
     },
 };

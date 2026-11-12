@@ -22,7 +22,7 @@ import { sendSecurityNotice, type SecurityNoticeKind } from '@hushos/emails/serv
 import { authEnv } from '@hushos/env/auth';
 import { twoStepEnv } from '@hushos/env/two-step';
 import { log as serverLog } from '@hushos/logging';
-import { hash, noticeWhen, randomToken, serverSetup } from './internal';
+import { hash, noticeWhen, randomToken, serverSetup, supportedEnvelope } from './internal';
 import { consumeBoundAttempt, requireSession, startLogin } from './server';
 import { AuthError, SESSION_IDLE_SECONDS, TOKEN_PATTERN } from './tokens';
 
@@ -78,30 +78,42 @@ const CODE_BUDGET_MS = 15 * 60_000;
 /* The two-step key                                                           */
 /* ------------------------------------------------------------------------- */
 
-type Keyring = { current: { key: Uint8Array; id: Buffer }; byId: Map<string, Uint8Array> };
-let keyring: Promise<Keyring> | undefined;
+export type TwoStepKeyring = {
+    current: { key: Uint8Array; id: Buffer };
+    byId: Map<string, Uint8Array>;
+};
 
 /*
  * The key new secrets and codes are made under, and every key older rows may name: the
  * operator's TWO_STEP_KEY when set, its predecessor during a rotation, and always the key
  * derived from the OPAQUE server setup, which is what an instance used before it set one.
+ * Nothing re-seals older rows yet, so a key that is in none of the three places is gone, and
+ * what was sealed or hashed under it with it: only one rotation of an explicit key is safe.
  */
+export async function twoStepKeyring(input: {
+    serverSetup: string;
+    key?: string;
+    previousKey?: string;
+}): Promise<TwoStepKeyring> {
+    const decode = (value: string) => new Uint8Array(Buffer.from(value, 'base64url'));
+    const derived = await deriveTwoStepKey(decode(input.serverSetup));
+    const explicit = input.key ? decode(input.key) : null;
+    const previous = input.previousKey ? decode(input.previousKey) : null;
+    const byId = new Map<string, Uint8Array>();
+    for (const key of [derived, previous, explicit])
+        if (key) byId.set(Buffer.from(await twoStepKeyId(key)).toString('hex'), key);
+    const current = explicit ?? derived;
+    return { current: { key: current, id: Buffer.from(await twoStepKeyId(current)) }, byId };
+}
+
+let keyring: Promise<TwoStepKeyring> | undefined;
 function keys() {
-    keyring ??= (async () => {
-        const decode = (value: string) => new Uint8Array(Buffer.from(value, 'base64url'));
-        const derived = await deriveTwoStepKey(
-            new Uint8Array(Buffer.from(await serverSetup(), 'base64url')),
-        );
-        const explicit = twoStepEnv.TWO_STEP_KEY ? decode(twoStepEnv.TWO_STEP_KEY) : null;
-        const previous = twoStepEnv.TWO_STEP_PREVIOUS_KEY
-            ? decode(twoStepEnv.TWO_STEP_PREVIOUS_KEY)
-            : null;
-        const byId = new Map<string, Uint8Array>();
-        for (const key of [derived, previous, explicit])
-            if (key) byId.set(Buffer.from(await twoStepKeyId(key)).toString('hex'), key);
-        const current = explicit ?? derived;
-        return { current: { key: current, id: Buffer.from(await twoStepKeyId(current)) }, byId };
-    })().catch((error: unknown) => {
+    keyring ??= (async () =>
+        twoStepKeyring({
+            serverSetup: await serverSetup(),
+            key: twoStepEnv.TWO_STEP_KEY,
+            previousKey: twoStepEnv.TWO_STEP_PREVIOUS_KEY,
+        }))().catch((error: unknown) => {
         keyring = undefined;
         throw error;
     });
@@ -110,6 +122,45 @@ function keys() {
 
 async function keyFor(keyId: Buffer) {
     return (await keys()).byId.get(keyId.toString('hex')) ?? null;
+}
+
+/*
+ * A stored row that no key this server has will open: sealed or hashed under a key that was
+ * rotated away, or damaged. That is the server's fault, never a wrong answer: the request is
+ * answered 503, nothing is counted, and the operator's log names the key the row wants.
+ */
+class KeyUnavailable extends Error {
+    constructor(
+        readonly keyId: Buffer,
+        readonly row: 'totp' | 'backup-codes',
+    ) {
+        super('No two-step key this server has opens a stored row.');
+        this.name = 'TwoStepKeyUnavailable';
+    }
+}
+
+function unavailable(error: KeyUnavailable) {
+    serverLog.error({
+        message: 'A two-step row names a key this server does not have, or does not open under it.',
+        twoStep: { row: error.row, keyId: error.keyId.toString('hex') },
+    });
+    return new AuthError('Two-step sign-in is temporarily unavailable. Please try again.', 503);
+}
+
+/*
+ * Bookkeeping that runs after the action it belongs to has committed, or been refused: a
+ * budget handed back, a log line, a count read for a notice. A database blip there must not
+ * turn a finished action into an error, so it is logged and the request goes on.
+ */
+async function quietly(what: string, run: () => Promise<unknown>) {
+    try {
+        await run();
+    } catch (error) {
+        serverLog.error({
+            message: 'Two-step bookkeeping failed.',
+            twoStep: { what, failure: error instanceof Error ? error.name : typeof error },
+        });
+    }
 }
 
 /* ------------------------------------------------------------------------- */
@@ -165,28 +216,49 @@ async function record(input: Parameters<typeof twoStepRepository.recordSecurityE
 const poolDevice = (attempt: twoStepRepository.StepAttempt) =>
     attempt.pool.kind === 'device' ? attempt.pool.deviceId : null;
 
-/* What a counted wrong answer sets off: a log line, the notice from the fifth on, the freeze notice. */
+/* How many failed-step lines one account's log takes in an hour. */
+const FAILED_LINES_AN_HOUR = 10;
+
+/*
+ * What a counted wrong answer sets off:
+ * - a log line, up to ten an hour for an account. Wrong phrase answers have no budget, so
+ *   without the cap whoever has the password could bury every other line under these;
+ * - from the fifth in a row, the notice, once an hour for each of its two forms: a sign-in
+ *   that failed says nobody got in; a change that failed came from a session that is in;
+ * - the freeze notice, when this failure froze the app.
+ */
 async function afterFailure(
     attempt: twoStepRepository.StepAttempt,
     failure: twoStepRepository.StepFailure,
     method: TwoStepMethod,
+    flow: Flow,
 ) {
     if (failure.status !== 'counted') return;
     const { userId } = attempt;
-    await record({ userId, kind: 'step-failed', method, deviceId: poolDevice(attempt) });
-    if (
-        failure.notice &&
-        (await authRepository.consumeRateLimit(
-            hash(`auth:two-step:failed-notice:${userId}`),
-            1,
-            60 * 60_000,
-        ))
-    )
-        notice(userId, 'step-failed');
-    if (failure.froze) {
-        await record({ userId, kind: 'totp-frozen', method: 'totp' });
-        notice(userId, 'totp-frozen');
-    }
+    await quietly('failed-step', async () => {
+        if (
+            await authRepository.consumeRateLimit(
+                hash(`auth:two-step:failed-log:${userId}`),
+                FAILED_LINES_AN_HOUR,
+                60 * 60_000,
+            )
+        )
+            await record({ userId, kind: 'step-failed', method, deviceId: poolDevice(attempt) });
+        const kind = flow === 'sign-in' ? 'step-failed' : 'change-step-failed';
+        if (
+            failure.notice &&
+            (await authRepository.consumeRateLimit(
+                hash(`auth:two-step:failed-notice:${kind}:${userId}`),
+                1,
+                60 * 60_000,
+            ))
+        )
+            notice(userId, kind);
+        if (failure.froze) {
+            await record({ userId, kind: 'totp-frozen', method: 'totp' });
+            notice(userId, 'totp-frozen');
+        }
+    });
 }
 
 /* ------------------------------------------------------------------------- */
@@ -227,7 +299,7 @@ const refusals = {
         ),
     frozen: () =>
         new AuthError(
-            'Your authenticator app is paused on new devices. Use a backup code or your recovery phrase.',
+            'Your authenticator app is paused on this device. Use a backup code or your recovery phrase.',
             403,
             { code: 'step-frozen' },
         ),
@@ -249,23 +321,31 @@ function codeBucket(attempt: twoStepRepository.StepAttempt) {
     );
 }
 
-/* The app's secret, opened under whichever known key sealed it; null when none does. */
+/* The app's secret, opened under whichever known key sealed it. */
 async function totpSecret(
     userId: string,
     factor: { id: string; keyId: Buffer; nonce: Buffer; sealedSecret: Buffer },
 ) {
     const key = await keyFor(factor.keyId);
-    if (!key) return null;
-    return openTotpSecret({
-        sealed: factor.sealedSecret,
-        nonce: factor.nonce,
-        key,
-        userId,
-        factorId: factor.id,
-    });
+    const secret = key
+        ? await openTotpSecret({
+              sealed: factor.sealedSecret,
+              nonce: factor.nonce,
+              key,
+              userId,
+              factorId: factor.id,
+          })
+        : null;
+    if (!secret) throw new KeyUnavailable(factor.keyId, 'totp');
+    return secret;
 }
 
-/* What a right answer spends, or null for a wrong one. Nothing is written here. */
+/*
+ * What a right answer spends, or null for a wrong one. Nothing is written here. A code the
+ * app really shows but that was already used is a wrong answer here, and is counted as one
+ * by the caller: whatever the action does before it reaches the repository (a deletion stops
+ * what is billed first) must not happen for a replay. The repository refuses a replay again.
+ */
 async function rightAnswer(
     attempt: twoStepRepository.StepAttempt,
     proof: StepAnswer,
@@ -273,16 +353,14 @@ async function rightAnswer(
     const { userId } = attempt;
     if (proof.kind === 'totp') {
         const factor = await twoStepRepository.getTotpFactor(userId);
-        const secret = factor ? await totpSecret(userId, factor) : null;
-        if (!factor || !secret) return null;
+        if (!factor) return null;
+        const secret = await totpSecret(userId, factor);
         const steps = await totpMatches(secret, proof.code);
         secret.fill(0);
-        if (steps.length === 0) return null;
-        // The earliest step not yet used; a code whose every step is used goes on as a replay,
-        // which the repository refuses and counts.
+        // The earliest matching step not yet used; none left is a replay.
         const unused = steps.filter((step) => step > factor.lastStep);
-        const step = unused.length > 0 ? Math.min(...unused) : Math.max(...steps);
-        return { method: 'totp', factorId: factor.id, step };
+        if (unused.length === 0) return null;
+        return { method: 'totp', factorId: factor.id, step: Math.min(...unused) };
     }
     if (proof.kind === 'backup') {
         const code = normalizeBackupCode(proof.code);
@@ -290,17 +368,23 @@ async function rightAnswer(
         if (!code || !stored) return null;
         // Hashed once for each key the unused codes were made under: one, outside a rotation.
         const hashes = new Map<string, Uint8Array>();
+        let unknown: Buffer | null = null;
         for (const candidate of stored.codes) {
             const id = candidate.keyId.toString('hex');
             if (!hashes.has(id)) {
                 const key = await keyFor(candidate.keyId);
-                if (!key) continue;
+                if (!key) {
+                    unknown = candidate.keyId;
+                    continue;
+                }
                 hashes.set(id, await hashBackupCode({ code, key, salt: stored.salt }));
             }
             const hashed = hashes.get(id);
             if (hashed && timingSafeEqual(hashed, candidate.codeHash))
                 return { method: 'backup', codeHash: candidate.codeHash };
         }
+        // A code under a key this server no longer has cannot be told right from wrong.
+        if (unknown) throw new KeyUnavailable(unknown, 'backup-codes');
         return null;
     }
     const recovery = await authRepository.getRecoveryKey(userId);
@@ -351,10 +435,21 @@ async function checkAnswer(input: {
     const bucket = proof.kind === 'phrase' ? null : codeBucket(attempt);
     if (bucket && !(await authRepository.consumeRateLimit(bucket, CODE_BUDGET, CODE_BUDGET_MS)))
         throw refusals.limited();
-    const spend = await rightAnswer(attempt, proof);
+    let spend: twoStepRepository.StepSpend | null;
+    try {
+        spend = await rightAnswer(attempt, proof);
+    } catch (error) {
+        if (!(error instanceof KeyUnavailable)) throw error;
+        // Nothing was looked at, so nothing is used up: the budget and the slot go back.
+        await quietly('unavailable', async () => {
+            if (bucket) await authRepository.releaseRateLimit(bucket);
+            await twoStepRepository.returnStepAnswer(attempt);
+        });
+        throw unavailable(error);
+    }
     if (!spend) {
         const failure = await twoStepRepository.recordStepFailure(attempt);
-        await afterFailure(attempt, failure, proof.kind);
+        await afterFailure(attempt, failure, proof.kind, flow);
         throw refusals.wrong(
             flow,
             proof.kind,
@@ -373,41 +468,73 @@ async function checkAnswer(input: {
 async function settle(
     checked: Checked,
     refusal: twoStepRepository.TwoStepRefusal | null,
-    passed: { backupCodesLeft?: number | null; deviceId?: string | null; signIn?: boolean } = {},
+    passed: {
+        backupCodesLeft?: number | null;
+        deviceId?: string | null;
+        signIn?: boolean;
+        /* The action deleted the account: nobody is left to log for or to tell. */
+        accountGone?: boolean;
+    } = {},
 ) {
     const { attempt, method, flow } = checked;
     if (refusal) {
         if (refusal.reason === 'spent') {
-            await afterFailure(attempt, refusal.failure, method);
+            await afterFailure(attempt, refusal.failure, method, flow);
             throw refusals.wrong(
                 flow,
                 method,
                 refusal.failure.status === 'counted' ? refusal.failure.tokenEnded : true,
             );
         }
+        // The answer was right and nothing was counted: its budget goes back.
+        await release(checked);
         if (refusal.reason === 'frozen') throw refusals.frozen();
         if (refusal.reason === 'required') throw refusals.required();
         throw refusal.reason === 'step'
             ? refusals.wrong(flow, method, false)
             : refusals.expired(flow);
     }
-    if (checked.bucket) await authRepository.releaseRateLimit(checked.bucket);
-    const { userId } = attempt;
-    const deviceId = passed.deviceId ?? poolDevice(attempt);
-    if (method === 'backup') {
-        const left = passed.backupCodesLeft ?? (await twoStepRepository.countBackupCodes(userId));
-        if (!passed.signIn) await record({ userId, kind: 'backup-code-used', method, deviceId });
-        notice(userId, 'backup-code-used', { count: left });
-    }
-    if (method === 'phrase') {
-        if (!passed.signIn) await record({ userId, kind: 'phrase-used', method, deviceId });
-        notice(userId, 'phrase-used');
-    }
+    // The action is done. Nothing below may undo that for the caller.
+    await release(checked);
+    if (passed.accountGone) return;
+    await quietly('passed', async () => {
+        const { userId } = attempt;
+        const deviceId = passed.deviceId ?? poolDevice(attempt);
+        if (method === 'backup') {
+            const left =
+                passed.backupCodesLeft ?? (await twoStepRepository.countBackupCodes(userId));
+            if (!passed.signIn)
+                await record({ userId, kind: 'backup-code-used', method, deviceId });
+            notice(userId, 'backup-code-used', { count: left });
+        }
+        if (method === 'phrase') {
+            if (!passed.signIn) await record({ userId, kind: 'phrase-used', method, deviceId });
+            notice(userId, 'phrase-used');
+        }
+    });
 }
 
-/* Gives a right answer's budget back when the action failed for a reason of its own: nothing was guessed. */
+/*
+ * Gives a right answer's budget back when the step passed, or when the action stopped for a
+ * reason of its own: nothing was guessed, so nothing stays charged.
+ */
 async function release(checked: Checked | null) {
-    if (checked?.bucket) await authRepository.releaseRateLimit(checked.bucket);
+    const bucket = checked?.bucket;
+    if (bucket) await quietly('release', () => authRepository.releaseRateLimit(bucket));
+}
+
+/*
+ * Runs what stands between a right answer and the repository function that spends it: billing
+ * stopped before a deletion, an envelope decoded, a secret sealed. If that throws, the action
+ * stopped for a reason of its own, and the answer's budget goes back.
+ */
+export async function beforeSpending<T>(checked: Checked | null, run: () => Promise<T>) {
+    try {
+        return await run();
+    } catch (error) {
+        await release(checked);
+        throw error;
+    }
 }
 
 /* ------------------------------------------------------------------------- */
@@ -512,7 +639,7 @@ export async function finishLoginStep(input: StepInput) {
     return {
         user,
         envelope: {
-            envelopeVersion: 1 as const,
+            envelopeVersion: supportedEnvelope(key.envelopeVersion),
             keyVersion: key.keyVersion,
             credentialVersion: key.credentialVersion,
             wrappingSalt: key.wrappingSalt.toString('base64url'),
@@ -589,7 +716,12 @@ export async function checkChangeStep(input: {
 }
 
 /* After a gated change: `result` is whatever the repository answered. */
-export async function settleChangeStep(checked: Checked | null, result: unknown, done: boolean) {
+export async function settleChangeStep(
+    checked: Checked | null,
+    result: unknown,
+    done: boolean,
+    options: { accountGone?: boolean } = {},
+) {
     const refusal =
         typeof result === 'object' &&
         result !== null &&
@@ -605,7 +737,7 @@ export async function settleChangeStep(checked: Checked | null, result: unknown,
     }
     if (refusal) return settle(checked, refusal);
     if (!done) return release(checked);
-    return settle(checked, null);
+    return settle(checked, null, options);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -677,6 +809,7 @@ function issuer() {
  */
 export async function startTotpEnrolment(sessionToken: string | null, input: TwoStepChange) {
     const { user, token } = await requireChange(sessionToken, input);
+    await requireRecoveryKey(user.id);
     const checked = await checkChangeStep({
         userId: user.id,
         sessionToken: token,
@@ -685,20 +818,22 @@ export async function startTotpEnrolment(sessionToken: string | null, input: Two
     });
     const secret = generateTotpSecret();
     const id = randomUUID();
-    const { current } = await keys();
-    const sealed = await sealTotpSecret({
-        secret,
-        key: current.key,
-        userId: user.id,
-        factorId: id,
-    });
-    const started = await twoStepRepository.startTotpFactor({
-        id,
-        userId: user.id,
-        keyId: Buffer.from(sealed.keyId),
-        nonce: Buffer.from(sealed.nonce),
-        sealedSecret: Buffer.from(sealed.sealed),
-        step: checked ? { sessionTokenHash: hash(token), ...checked.proof } : undefined,
+    const started = await beforeSpending(checked, async () => {
+        const { current } = await keys();
+        const sealed = await sealTotpSecret({
+            secret,
+            key: current.key,
+            userId: user.id,
+            factorId: id,
+        });
+        return twoStepRepository.startTotpFactor({
+            id,
+            userId: user.id,
+            keyId: Buffer.from(sealed.keyId),
+            nonce: Buffer.from(sealed.nonce),
+            sealedSecret: Buffer.from(sealed.sealed),
+            step: checked ? { sessionTokenHash: hash(token), ...checked.proof } : undefined,
+        });
     });
     await settleChangeStep(checked, started, started.status === 'ok');
     if (started.status !== 'ok') throw new AuthError('Sign in to change two-step sign-in.', 401);
@@ -710,15 +845,29 @@ export async function startTotpEnrolment(sessionToken: string | null, input: Two
     };
 }
 
+/*
+ * The recovery phrase passes the step, so the step is turned on only for an account that
+ * already has its recovery key. One that has none yet finishes account setup first: a key
+ * added afterwards, from a session alone, would be a second step nobody was asked for.
+ */
+async function requireRecoveryKey(userId: string) {
+    if (!(await authRepository.getRecoveryKey(userId)))
+        throw new AuthError('Finish setting up your account first.', 409);
+}
+
 async function freshBackupCodes(userId: string) {
     const { current } = await keys();
     const { backupCodeSalt } = await twoStepRepository.ensureTwoStepState(userId);
     const codes = generateBackupCodes();
     const hashes = [];
-    for (const code of codes)
+    for (const code of codes) {
         hashes.push(
             Buffer.from(await hashBackupCode({ code, key: current.key, salt: backupCodeSalt })),
         );
+        // Each hash is some 25 ms of Argon2id on this thread. Between two, the event loop
+        // gets a turn, so ten in a row never hold every other request for a quarter second.
+        await new Promise((resolve) => setImmediate(resolve));
+    }
     return { codes: codes.map(formatBackupCode), set: { keyId: current.id, hashes } };
 }
 
@@ -748,9 +897,12 @@ export async function confirmTotpEnrolment(
         ))
     )
         throw new AuthError('Too many attempts. Please try again in 15 minutes.', 429);
+    await requireRecoveryKey(user.id);
     const pending = await twoStepRepository.getPendingTotpFactor({ userId: user.id, factorId });
-    const secret = pending ? await totpSecret(user.id, pending) : null;
-    if (!pending || !secret) throw new AuthError('This setup timed out. Start again.', 404);
+    if (!pending) throw new AuthError('This setup timed out. Start again.', 404);
+    const secret = await totpSecret(user.id, pending).catch((error: unknown) => {
+        throw error instanceof KeyUnavailable ? unavailable(error) : error;
+    });
     const steps = await totpMatches(secret, code);
     secret.fill(0);
     if (steps.length === 0) throw wrong();
@@ -802,9 +954,8 @@ export async function removeTwoStepMethod(
     input: TwoStepChange,
 ) {
     const { user, token } = await requireChange(sessionToken, input);
-    const confirmed = (await twoStepRepository.getTwoStep(user.id)).methods.some(
-        (method) => method.id === factorId,
-    );
+    const before = await twoStepRepository.getTwoStep(user.id);
+    const confirmed = before.methods.some((method) => method.id === factorId);
     // A pending method is the person's own unfinished setup and needs no step.
     const checked = await checkChangeStep({
         userId: user.id,
@@ -813,11 +964,13 @@ export async function removeTwoStepMethod(
         step: input.twoStep,
         optional: !confirmed,
     });
-    const removed = await twoStepRepository.removeFactor({
-        userId: user.id,
-        factorId,
-        step: checked ? { sessionTokenHash: hash(token), ...checked.proof } : undefined,
-    });
+    const removed = await beforeSpending(checked, () =>
+        twoStepRepository.removeFactor({
+            userId: user.id,
+            factorId,
+            step: checked ? { sessionTokenHash: hash(token), ...checked.proof } : undefined,
+        }),
+    );
     await settleChangeStep(checked, removed, removed.status === 'ok');
     if (removed.status !== 'ok') throw new AuthError('This method isn’t on your account.', 404);
     if (removed.turnedOff) {
@@ -827,7 +980,8 @@ export async function removeTwoStepMethod(
         await record({ userId: user.id, kind: 'method-removed', method: removed.kind });
         notice(user.id, 'two-step-app-removed');
     }
-    return { removed: true, on: await twoStepRepository.hasTwoStep(user.id) };
+    // Read before the removal: nothing is asked of the database once the method is gone.
+    return { removed: true, on: before.on && !removed.turnedOff };
 }
 
 /* A new set of backup codes, which replaces the old one: the password and the step. */
@@ -840,11 +994,14 @@ export async function makeBackupCodes(sessionToken: string | null, input: TwoSte
         step: input.twoStep,
     });
     if (!checked) throw new AuthError('Turn on two-step sign-in first.', 409);
-    const fresh = await freshBackupCodes(user.id);
-    const replaced = await twoStepRepository.replaceBackupCodes({
-        userId: user.id,
-        ...fresh.set,
-        step: { sessionTokenHash: hash(token), ...checked.proof },
+    const { fresh, replaced } = await beforeSpending(checked, async () => {
+        const fresh = await freshBackupCodes(user.id);
+        const replaced = await twoStepRepository.replaceBackupCodes({
+            userId: user.id,
+            ...fresh.set,
+            step: { sessionTokenHash: hash(token), ...checked.proof },
+        });
+        return { fresh, replaced };
     });
     await settleChangeStep(checked, replaced, replaced.status === 'ok');
     if (replaced.status !== 'ok') throw new AuthError('Turn on two-step sign-in first.', 409);
