@@ -22,7 +22,9 @@ import { loadApiModule } from './api-app';
  * every request goes through the HTTP edge (`handleApiRequest`: the Origin check, the body
  * cap, the per-address limit), the Elysia routes and their schemas, a real OPAQUE exchange,
  * and Postgres. Only three things are stood in for: the client address (Nitro's request
- * context, which a test has none of), outgoing mail (kept in `outbox`), and the logger.
+ * context, which a test has none of), outgoing mail (kept in `outbox`), and the request's
+ * logger. The process logger is the real one, set up as production sets it up, and what it
+ * emits after redaction is kept in `emitted`.
  *
  * The environment is read when the server's modules load, so everything that loads them is
  * imported here, after it is set: nothing of the server is imported at the top of this file.
@@ -117,6 +119,19 @@ export async function loadEdge(
     const helpers = await import('../../../../packages/db/test/helpers');
     const { closeDatabase, signingKeyFromSeed } = helpers;
     const logging = await import('@hushos/logging');
+    // What the operator's log receives: each event as it leaves the logger, redaction applied.
+    const emitted: Record<string, unknown>[] = [];
+    logging.initLogger({
+        ...logging.loggingOptions,
+        redact: {
+            ...logging.loggingOptions.redact,
+            transform: logging.redactAuthenticationEvent,
+        },
+        silent: true,
+        drain: ({ event }) => {
+            emitted.push(event);
+        },
+    });
 
     /*
      * The OPAQUE setup this server uses. Kept in the database, it is made once and outlives
@@ -375,6 +390,7 @@ export async function loadEdge(
         notices,
         quiet,
         outbox,
+        emitted,
         state,
         db,
         schema,

@@ -35,6 +35,7 @@ beforeEach(async () => {
     vi.useFakeTimers({ now: Date.now(), toFake: ['Date'] });
     await edge.resetDatabase();
     edge.outbox.length = 0;
+    edge.emitted.length = 0;
     edge.state.address = '203.0.113.1';
 });
 afterEach(() => {
@@ -878,7 +879,7 @@ describe('the recovery phrase and the step', () => {
         ]);
         const unfinished = {
             status: 409,
-            body: { message: 'Finish setting up your account first.' },
+            body: { code: 'setup-required', message: 'Finish setting up your account first.' },
         };
         const { proof } = await edge.passwordProof('/two-step/reauth', {}, { cookie: bare.cookie });
         expect(
@@ -942,7 +943,11 @@ describe('the recovery phrase and the step', () => {
 describe('what the server does about its own faults', () => {
     test('a row under a key this server no longer has is the server’s fault: 503, nothing counted or used up, and the log names the key', async () => {
         const { who, secret, codes, factorId } = await stepped();
-        const logged = vi.spyOn(edge.logging.log, 'error');
+        // The operator's log as it is emitted, after redaction: what names the key must survive it.
+        const named = () =>
+            edge.emitted
+                .filter((event) => String(event.message).startsWith('A two-step row names a key'))
+                .map((event) => event.twoStep);
         const limits = async () => (await edge.db.select().from(edge.schema.authRateLimits)).length;
         const lost = randomBytes(8);
         await edge.db.$client.query('update two_step_factors set totp_key_id = $1 where id = $2', [
@@ -953,7 +958,10 @@ describe('what the server does about its own faults', () => {
         const charged = await limits();
         const unavailable = {
             status: 503,
-            body: { message: 'Two-step sign-in is temporarily unavailable. Please try again.' },
+            body: {
+                message:
+                    'Two-step sign-in is unavailable on this server right now. Use your recovery phrase, or try again later.',
+            },
         };
         expect(
             await answer(step.token, { kind: 'totp', code: await appCode(secret) }),
@@ -962,9 +970,10 @@ describe('what the server does about its own faults', () => {
         expect(
             await answer(step.token, { kind: 'totp', code: await wrongCode(secret) }),
         ).toMatchObject(unavailable);
-        expect(logged).toHaveBeenCalledWith(
-            expect.objectContaining({ twoStep: { row: 'totp', keyId: lost.toString('hex') } }),
-        );
+        expect(named()).toEqual([
+            { row: 'totp', sealedWith: lost.toString('hex') },
+            { row: 'totp', sealedWith: lost.toString('hex') },
+        ]);
         // Nothing was counted, the token has all five answers, and the budget is as it was.
         expect((await rows.state(who.userId)).consecutiveFailures).toBe(0);
         expect(await edge.db.select().from(edge.schema.twoStepAttempts)).toMatchObject([
@@ -984,17 +993,44 @@ describe('what the server does about its own faults', () => {
         expect(await answer(step.token, { kind: 'backup', code: codes[0]! })).toMatchObject(
             unavailable,
         );
-        expect(logged).toHaveBeenCalledWith(
-            expect.objectContaining({
-                twoStep: { row: 'backup-codes', keyId: gone.toString('hex') },
-            }),
-        );
+        expect(named().at(-1)).toEqual({ row: 'backup-codes', sealedWith: gone.toString('hex') });
         expect((await rows.state(who.userId)).consecutiveFailures).toBe(0);
         // The phrase needs no key of the server's, and still passes on the same token.
         expect((await answer(step.token, await edge.phraseProof(who.phrase, step))).status).toBe(
             200,
         );
     }, 90_000);
+
+    test('a backup-code set only partly under a lost key is still checked: its other codes pass, and a code that matches none is a wrong answer', async () => {
+        const { who, codes } = await stepped();
+        // Five of the ten under a key that is gone.
+        await edge.db.$client.query(
+            `update two_step_backup_codes set key_id = $1 where user_id = $2 and code_hash in
+                 (select code_hash from two_step_backup_codes where user_id = $2 order by code_hash limit 5)`,
+            [randomBytes(8), who.userId],
+        );
+        const tryCode = async (code: string, from: number) => {
+            edge.state.address = `198.51.100.${from}`;
+            return answer((await toStep(who)).token, { kind: 'backup', code });
+        };
+        // A code that is none of the ten was compared with the five the server can read: wrong,
+        // and counted, not "unavailable" for as long as the lost key stays lost.
+        expect(await tryCode('AAAAA-AAAAA', 1)).toMatchObject({
+            status: 401,
+            body: { code: 'step-wrong' },
+        });
+        expect((await rows.state(who.userId)).consecutiveFailures).toBe(1);
+        // The five under the known key sign in. One under the lost key cannot be told from a
+        // wrong code while any readable code is left to compare it with; once those are all
+        // used, nothing can be compared, and that is the server's fault again.
+        let passed = 0;
+        for (const [index, code] of codes.entries()) {
+            const reply = await tryCode(code, index + 2);
+            if (reply.status === 200) passed++;
+            else expect(reply.status, `after ${passed} passed`).toBe(passed < 5 ? 401 : 503);
+        }
+        expect(passed).toBe(5);
+    }, 120_000);
 
     test('a sign-in that passed stays passed when handing its budget back fails', async () => {
         const { who, secret } = await stepped();
@@ -1065,7 +1101,9 @@ describe('what the account hears and keeps of wrong answers', () => {
         expect(atChange!.text).toContain(
             'Someone signed in to your account tried to change it and did not pass the second step.',
         );
-        expect(atChange!.text).toContain('Check your devices and change your password.');
+        expect(atChange!.text).toContain(
+            'If this wasn’t you, check your devices and change your password.',
+        );
         // Whoever failed there is signed in: this notice must not say otherwise.
         expect(atChange!.text).not.toContain('Nobody got in');
         expect(edge.outbox.filter((notice) => notice.kind === 'step-failed')).toHaveLength(1);

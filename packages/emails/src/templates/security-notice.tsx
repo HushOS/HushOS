@@ -175,7 +175,7 @@ const copy: Record<
             'Someone signed in to your account tried to change it and did not pass the second step.',
         body: 'A device that is signed in to your account confirmed your password, then answered the second step wrongly several times in a row. Nothing was changed.',
         facts: [['When', '{{when}}']],
-        foot: 'Check your devices and change your password.',
+        foot: 'If this wasn’t you, check your devices and change your password.',
         action: 'Review your account',
     },
     'totp-frozen': {

@@ -140,11 +140,16 @@ class KeyUnavailable extends Error {
 }
 
 function unavailable(error: KeyUnavailable) {
+    // `sealedWith` is the key's id, the first bytes of a hash of the key: not a secret, and
+    // named so that the log's redaction of anything called a key leaves it readable.
     serverLog.error({
         message: 'A two-step row names a key this server does not have, or does not open under it.',
-        twoStep: { row: error.row, keyId: error.keyId.toString('hex') },
+        twoStep: { row: error.row, sealedWith: error.keyId.toString('hex') },
     });
-    return new AuthError('Two-step sign-in is temporarily unavailable. Please try again.', 503);
+    return new AuthError(
+        'Two-step sign-in is unavailable on this server right now. Use your recovery phrase, or try again later.',
+        503,
+    );
 }
 
 /*
@@ -369,6 +374,7 @@ async function rightAnswer(
         // Hashed once for each key the unused codes were made under: one, outside a rotation.
         const hashes = new Map<string, Uint8Array>();
         let unknown: Buffer | null = null;
+        let compared = 0;
         for (const candidate of stored.codes) {
             const id = candidate.keyId.toString('hex');
             if (!hashes.has(id)) {
@@ -380,11 +386,14 @@ async function rightAnswer(
                 hashes.set(id, await hashBackupCode({ code, key, salt: stored.salt }));
             }
             const hashed = hashes.get(id);
-            if (hashed && timingSafeEqual(hashed, candidate.codeHash))
+            if (!hashed) continue;
+            compared++;
+            if (timingSafeEqual(hashed, candidate.codeHash))
                 return { method: 'backup', codeHash: candidate.codeHash };
         }
-        // A code under a key this server no longer has cannot be told right from wrong.
-        if (unknown) throw new KeyUnavailable(unknown, 'backup-codes');
+        // With no code this server could compare, the answer cannot be told right from wrong.
+        // With some, it matched none of them, and that is a wrong answer like any other.
+        if (unknown && compared === 0) throw new KeyUnavailable(unknown, 'backup-codes');
         return null;
     }
     const recovery = await authRepository.getRecoveryKey(userId);
@@ -852,7 +861,9 @@ export async function startTotpEnrolment(sessionToken: string | null, input: Two
  */
 async function requireRecoveryKey(userId: string) {
     if (!(await authRepository.getRecoveryKey(userId)))
-        throw new AuthError('Finish setting up your account first.', 409);
+        throw new AuthError('Finish setting up your account first.', 409, {
+            code: 'setup-required',
+        });
 }
 
 async function freshBackupCodes(userId: string) {

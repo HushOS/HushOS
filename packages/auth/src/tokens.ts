@@ -22,7 +22,9 @@ export type TokenKind = 'session' | 'enrollment';
  * - `step-wrong`: the answer was wrong, and the token still has answers left;
  * - `step-expired`: the token is over (five wrong answers, five minutes, or used): start again;
  * - `step-frozen`: the authenticator app is paused for this sign-in; use another method;
- * - `step-limited`: too many wrong codes in 15 minutes; the recovery phrase still works.
+ * - `step-limited`: too many wrong codes in 15 minutes; the recovery phrase still works;
+ * - `setup-required`: the account has no recovery key yet, so the step cannot be turned on:
+ *   finish account setup first.
  */
 export type AuthErrorCode =
     | 'current'
@@ -33,7 +35,8 @@ export type AuthErrorCode =
     | 'step-wrong'
     | 'step-expired'
     | 'step-frozen'
-    | 'step-limited';
+    | 'step-limited'
+    | 'setup-required';
 
 export class AuthError extends Error {
     readonly code?: AuthErrorCode;
