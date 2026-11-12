@@ -567,7 +567,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) { runCatching { Auth.answerStep(context, pending, answer.proof) } }
             result.onSuccess { user -> signedIn(user); done(null) }.onFailure { failure ->
-                val outcome = com.hushos.app.data.StepOutcome.after(failure, methods)
+                val outcome = com.hushos.app.data.StepOutcome.after(failure, methods, tried = answer.method)
                 if (outcome is com.hushos.app.data.StepOutcome.Over) { cancelStep(outcome.message); done(null) } else done(outcome)
             }
         }
@@ -593,11 +593,26 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         return result
     }
 
-    /* How many other devices are signed in, for "Sign out my other devices"; none when that can't be told. */
-    suspend fun otherDevices(): Int = withContext(Dispatchers.IO) { runCatching { Auth.devices(context).count { !it.current } }.getOrDefault(0) }
+    /* How many other devices are signed in, for the words under "Remove my other devices" only; null when that can't be told. */
+    suspend fun otherDevices(): Int? = withContext(Dispatchers.IO) { runCatching { Auth.devices(context).count { !it.current } }.getOrNull() }
 
-    /* True when the other devices were signed out. */
-    suspend fun removeOtherDevices(password: String): Boolean = withContext(Dispatchers.IO) { runCatching { Auth.removeOtherDevices(context, password) }.isSuccess }
+    /*
+     * Removes the other devices after the step was turned on with the box ticked. In the view model's
+     * scope, not the screen's: it runs behind the backup codes and never holds them, Done closes that
+     * screen meanwhile, and a removal that fails later is said in a notice wherever the person is by then.
+     * `done` says how it ended, for the screen if it is still there.
+     */
+    fun removeOtherDevices(password: String, done: (Boolean) -> Unit) {
+        val asked = Shared.session(context)
+        viewModelScope.launch {
+            val removed = withContext(Dispatchers.IO) { runCatching { Auth.removeOtherDevices(context, password) } }
+            // A session that ended under it is said as everywhere, but only if it is still the one stored: a sign-in
+            // since (after a password change made meanwhile) must not be taken down by the old session's answer.
+            if (removed.exceptionOrNull() is NotAuthenticated && Shared.session(context) == asked) { sessionLost(); return@launch }
+            if (removed.isFailure) notifyUntilRead(com.hushos.app.data.StepWords.OTHERS_NOT_REMOVED)
+            done(removed.isSuccess)
+        }
+    }
 
     fun signOut() {
         showingOwnWords = false

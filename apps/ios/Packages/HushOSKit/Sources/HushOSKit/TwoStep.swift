@@ -33,6 +33,15 @@ public struct StepAnswer: Sendable, Equatable {
         self.proof = proof
     }
 
+    /* The method this answers with: what a refusal about "this method" is about. */
+    public var method: StepMethod {
+        switch proof {
+        case .totp: .totp
+        case .backup: .backup
+        case .phrase: .phrase
+        }
+    }
+
     /* The core writes the JSON, so both phones send the same bytes. */
     func json() throws -> [String: Any] {
         guard let object = try JSONSerialization.jsonObject(with: Data(stepAnswerJson(token: token, proof: proof).utf8)) as? [String: Any] else {
@@ -55,12 +64,18 @@ public enum StepWords {
     public static let lostDeleted = lost(whether: "your account was deleted")
     public static let lostSetup = lost(whether: "the setup was started")
     public static let lostAppAdded = lost(whether: "your authenticator app was added")
+    /* Turning the step on always comes back with the codes: an answer without them is not the server's answer to that. */
+    public static let lostTurnedOn = lost(whether: "two-step sign-in was turned on")
     public static let lostTurnedOff = lost(whether: "two-step sign-in was turned off")
     public static let lostNewCodes = lost(whether: "new backup codes were made")
     /* A sign-in with no step screen (the Files sheet). */
     public static let openApp = "This account asks for a second step. Open HushOS and sign in there."
     /* A step none of whose methods this build knows. */
     public static let cannotAnswer = "This version of HushOS can’t answer this account’s second step. Update HushOS, then try again."
+    /* The ways ran out after refusals (a paused app, a spent budget): updating would not help. */
+    public static let noWayLeft = "There is no other way to answer this step from here right now. Start again in a while."
+    /* The removal of other devices, asked for while turning the step on, did not happen. */
+    public static let othersNotRemoved = "Your other devices weren’t removed. You can remove them under Devices."
     /* A step that ended with nothing said. */
     public static let over = "This sign-in timed out. Enter your password again."
 }
@@ -104,8 +119,24 @@ public enum StepOutcome: Sendable, Equatable {
     /* The reply was lost: say so, and offer to send the same answer again or start over. */
     case retry(message: String)
 
-    /* Nil for a cancellation: nothing failed, and nothing is said. */
-    public static func after(_ error: Error, methods: [StepMethod]) -> StepOutcome? {
+    /*
+     * What is still offered after a refusal that takes something away (shared with `StepUp`):
+     * - a paused app: everything but the app;
+     * - a spent budget: the budget is one for the app's codes and the backup codes, so both go together;
+     * - a method the server cannot check: only that one, the one that was `tried`. The app's secret and
+     *   the backup codes can sit under different server keys, so one failing says nothing of the other.
+     */
+    public static func left(_ methods: [StepMethod], after refusal: StepRefusal, tried: StepMethod?) -> [StepMethod] {
+        switch refusal {
+        case .frozen: methods.filter { $0 != .totp }
+        case .limited: methods.filter { $0 != .totp && $0 != .backup }
+        case .unavailable: methods.filter { $0 != tried }
+        default: methods
+        }
+    }
+
+    /* Nil for a cancellation: nothing failed, and nothing is said. `tried` is the method the refused answer used. */
+    public static func after(_ error: Error, methods: [StepMethod], tried: StepMethod? = nil) -> StepOutcome? {
         guard let words = ErrorWords.say(error) else { return nil }
         switch error {
         case StepError.lost(let message):
@@ -114,11 +145,9 @@ public enum StepOutcome: Sendable, Equatable {
             switch refusal {
             case .wrong:
                 return .again(message: message, field: true, methods: methods)
-            case .frozen:
-                return .again(message: message, field: false, methods: methods.filter { $0 != .totp })
-            case .limited, .unavailable:
-                // Only codes are counted and only codes need the server's key: the phrase still passes. Nothing changed.
-                return .again(message: message, field: false, methods: methods.contains(.phrase) ? [.phrase] : methods)
+            case .frozen, .limited, .unavailable:
+                // Nothing changed; what the refusal was about is withdrawn, and the rest stays offered.
+                return .again(message: message, field: false, methods: left(methods, after: refusal, tried: tried))
             case .busy:
                 // The address's own limit: nothing about the step was looked at, and nothing is taken away.
                 return .again(message: message, field: false, methods: methods)
@@ -185,6 +214,32 @@ public struct StepDraft: Sendable, Equatable {
     }
 }
 
+/*
+ * One password re-check at a time on this phone. Each one is an OPAQUE exchange bound to the session,
+ * then the change it authorises (a new password, a rotation, deleting the account, removing devices, a
+ * change to the step). Turning the step on leaves one running behind the backup codes (the removal of
+ * the other devices) while the person is free to start another: taken in turn, the second starts only
+ * once the first has finished, under the session the first left, and neither sees the other half done.
+ */
+actor PasswordTurn {
+    static let shared = PasswordTurn()
+    private var busy = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    func enter() async {
+        if !busy { busy = true; return }
+        await withCheckedContinuation { waiting.append($0) }
+    }
+
+    /* Hands the turn to whoever has waited longest, or frees it. */
+    func leave() {
+        if waiting.isEmpty { busy = false } else { waiting.removeFirst().resume() }
+    }
+
+    /* For a `defer`, which cannot wait. */
+    nonisolated func leaveSoon() { Task { await leave() } }
+}
+
 /* What a change asks the step for: the server binds the token to the session and this purpose. */
 public enum StepPurpose: String, Sendable {
     case password, masterKey = "master-key", recoveryKey = "recovery-key", delete, twoStep = "two-step"
@@ -244,6 +299,15 @@ public struct TotpEnrolment: Sendable, Equatable {
 
     /* The address an authenticator app opens, only when it is one: nothing else the server sent is ever opened. */
     public var link: URL? { uri.hasPrefix("otpauth://totp/") ? URL(string: uri) : nil }
+
+    /*
+     * The line under "Remove my other devices". The count is only for the words: unknown (the list
+     * didn't load) or zero, the line says what ticking does without one, and the box is there all the same.
+     */
+    public static func othersLine(_ others: Int?) -> String {
+        guard let others, others > 0 else { return "Any other device signed in to your account will need to sign in again, and will be asked for the second step." }
+        return "\(others == 1 ? "One other device is" : "\(others) other devices are") signed in without the second step. They’ll need to sign in again, and will be asked for it."
+    }
 }
 
 /* One line of Recent security activity (docs/two-step-design.md 7): a kind of event, of method and of device; never a name or an address. */
@@ -283,13 +347,14 @@ public struct SecurityEvent: Sendable, Equatable, Identifiable {
         switch kind {
         case "sign-in": return with.map { "Signed in with your password and \($0)" } ?? "Signed in"
         case "step-failed": return with.map { "Wrong answer to the second step, with \($0)" } ?? "Wrong answer to the second step"
-        case "totp-frozen": return "Authenticator app paused after many wrong codes"
+        case "totp-frozen": return "Authenticator app paused after many wrong answers"
         case "backup-code-used": return "Backup code used"
         case "phrase-used": return "Recovery phrase used for the second step"
         case "two-step-on": return "Two-step sign-in turned on"
         case "two-step-off": return "Two-step sign-in turned off"
-        case "method-added": return "Authenticator app replaced"
-        case "method-removed": return "Authenticator app removed"
+        // Said by the kind of method, so the line is right for a security key too.
+        case "method-added": return method == "webauthn" ? "Security key added" : method == "totp" ? "Authenticator app replaced" : "Second-step method added"
+        case "method-removed": return method == "webauthn" ? "Security key removed" : method == "totp" ? "Authenticator app removed" : "Second-step method removed"
         case "backup-codes-made": return "New backup codes made"
         default: return "Security change"
         }
@@ -367,11 +432,36 @@ public enum TwoStep {
 
     /* A pending authenticator app, good for ten minutes: the key to type and the address to open. `twoStep` once the step is on (replacing the app). */
     public static func startAuthenticator(password: String, twoStep: StepAnswer? = nil) async throws -> TotpEnrolment {
+        await PasswordTurn.shared.enter()
+        defer { PasswordTurn.shared.leaveSoon() }
         let reply = try await Auth.call("/api/auth/two-step/totp", method: "POST", body: try await change(password, twoStep), whole: true, lost: StepWords.lostSetup)
-        guard let id = reply["id"] as? String, let secret = reply["secret"] as? String, let uri = reply["uri"] as? String, !id.isEmpty, !secret.isEmpty else {
-            throw StepError.lost(StepWords.lostSetup)
-        }
+        guard let app = enrolment(reply) else { throw StepError.lost(StepWords.lostSetup) }
+        return app
+    }
+
+    /*
+     * The readers below take a 200's body and give the server's own answer, or nil: the web's
+     * `readEnrolment`, `readRemoved` and `readBackupCodes` (packages/auth/src/login-reply.ts). A body
+     * that is merely an object (a proxy's `{ "error": … }`) is none of them, and its change is not
+     * reported as made.
+     */
+
+    /* A pending app: its id, its key and its address, each there. */
+    static func enrolment(_ body: [String: Any]) -> TotpEnrolment? {
+        guard let id = body["id"] as? String, let secret = body["secret"] as? String, let uri = body["uri"] as? String, !id.isEmpty, !secret.isEmpty, !uri.isEmpty else { return nil }
         return TotpEnrolment(id: id, secret: secret, uri: uri)
+    }
+
+    /* A removed method: `removed` true, and whether the step is still on. */
+    static func removed(_ body: [String: Any]) -> Bool? {
+        guard (body["removed"] as AnyObject) === kCFBooleanTrue, let on = body["on"], (on as AnyObject) === kCFBooleanTrue || (on as AnyObject) === kCFBooleanFalse else { return nil }
+        return (on as AnyObject) === kCFBooleanTrue
+    }
+
+    /* A new set of codes: a list that is not empty, of text that is not empty. */
+    static func codes(_ body: [String: Any]) -> [String]? {
+        guard let codes = body["codes"] as? [String], !codes.isEmpty, codes.allSatisfy({ !$0.isEmpty }) else { return nil }
+        return codes
     }
 
     /* Thrown when the pending app ran out (ten minutes): the setup starts again. */
@@ -425,17 +515,20 @@ public enum TwoStep {
     /* Removes a method: the password and the step. Returns whether the step is still on; removing the last turns it off and deletes the codes. */
     @discardableResult
     public static func removeMethod(_ id: String, password: String, twoStep: StepAnswer?) async throws -> Bool {
+        await PasswordTurn.shared.enter()
+        defer { PasswordTurn.shared.leaveSoon() }
         let reply = try await Auth.call("/api/auth/two-step/methods/\(id)", method: "DELETE", body: try await change(password, twoStep), whole: true, lost: StepWords.lostTurnedOff)
-        // The server's own answer: `removed` true and whether the step is still on. Without both, nothing says it was removed.
-        guard (reply["removed"] as AnyObject) === kCFBooleanTrue, let on = reply["on"] as? Bool else { throw StepError.lost(StepWords.lostTurnedOff) }
+        guard let on = removed(reply) else { throw StepError.lost(StepWords.lostTurnedOff) }
         return on
     }
 
     /* A new set of ten backup codes, which replaces the old one, shown once. */
     public static func newBackupCodes(password: String, twoStep: StepAnswer?) async throws -> [String] {
+        await PasswordTurn.shared.enter()
+        defer { PasswordTurn.shared.leaveSoon() }
         let reply = try await Auth.call("/api/auth/two-step/backup-codes", method: "POST", body: try await change(password, twoStep), whole: true, lost: StepWords.lostNewCodes)
-        guard let codes = reply["codes"] as? [String], !codes.isEmpty, codes.allSatisfy({ !$0.isEmpty }) else { throw StepError.lost(StepWords.lostNewCodes) }
-        return codes
+        guard let made = codes(reply) else { throw StepError.lost(StepWords.lostNewCodes) }
+        return made
     }
 
     /* The codes as a note to keep: what the web's download writes. */
@@ -525,15 +618,11 @@ public struct StepUp: Sendable, Equatable {
             error = message
             tried = false
             return .again
-        case .frozen:
+        case .frozen, .limited, .unavailable:
             error = message
             tried = false
-            methods = methods.filter { $0 != .totp }
-            return .again
-        case .limited, .unavailable:
-            error = message
-            tried = false
-            if methods.contains(.phrase) { methods = [.phrase] }
+            // The method on screen is the one the refused change carried.
+            methods = StepOutcome.left(methods, after: refusal, tried: shown)
             return .again
         case .setupRequired, .updateRequired, .busy, .other:
             return .notStep

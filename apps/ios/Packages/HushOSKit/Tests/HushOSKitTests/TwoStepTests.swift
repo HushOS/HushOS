@@ -41,13 +41,32 @@ private func challenge(_ methods: [StepMethod] = [.totp, .backup, .phrase], phra
         #expect(StepOutcome.after(StepError.refused(.frozen, said), methods: all) == .again(message: said, field: false, methods: [.backup, .phrase]))
     }
 
-    @Test func aSpentBudgetOrAServerThatCannotCheckCodesLeavesThePhrase() {
+    @Test func aSpentBudgetWithdrawsTheCodeMethodsTogether() {
+        // One 15-minute budget covers the app's codes and the backup codes: offering the other one would only be refused too.
         let limited = "Too many wrong codes. Try again in 15 minutes, or use your recovery phrase."
-        #expect(StepOutcome.after(StepError.refused(.limited, limited), methods: all) == .again(message: limited, field: false, methods: [.phrase]))
-        let unavailable = "Two-step sign-in is unavailable on this server right now. Use your recovery phrase, or try again later."
-        #expect(StepOutcome.after(StepError.refused(.unavailable, unavailable), methods: all) == .again(message: unavailable, field: false, methods: [.phrase]))
-        // With no phrase to fall back on, what was offered stays: waiting is the only way, and the field must not vanish.
-        #expect(StepOutcome.after(StepError.refused(.limited, limited), methods: [.totp, .backup]) == .again(message: limited, field: false, methods: [.totp, .backup]))
+        for tried in [StepMethod.totp, .backup] {
+            #expect(StepOutcome.after(StepError.refused(.limited, limited), methods: all, tried: tried) == .again(message: limited, field: false, methods: [.phrase]))
+        }
+        // With no phrase to fall back on nothing is left, and the screen says so rather than show a field every answer to which is refused.
+        #expect(StepOutcome.after(StepError.refused(.limited, limited), methods: [.totp, .backup], tried: .totp) == .again(message: limited, field: false, methods: []))
+    }
+
+    @Test func aMethodTheServerCannotCheckIsWithdrawnAloneAndTheOthersStayOffered() {
+        // `step-unavailable` is per method: the app's secret and the backup codes can sit under different server keys.
+        // Withdrawing both for one would send someone to their recovery phrase while a backup code still works.
+        let said = "Two-step sign-in is unavailable on this server right now. Use your recovery phrase, or try again later."
+        #expect(StepOutcome.after(StepError.refused(.unavailable, said), methods: all, tried: .totp) == .again(message: said, field: false, methods: [.backup, .phrase]))
+        #expect(StepOutcome.after(StepError.refused(.unavailable, said), methods: all, tried: .backup) == .again(message: said, field: false, methods: [.totp, .phrase]))
+        #expect(StepOutcome.after(StepError.refused(.unavailable, said), methods: [.totp, .backup], tried: .backup) == .again(message: said, field: false, methods: [.totp]))
+        // Unlike a spent budget, which is one for both kinds of code.
+        #expect(StepOutcome.left(all, after: .limited, tried: .backup) == [.phrase])
+        // The same inside a form: the method on screen is the one that was sent.
+        var step = StepUp(purpose: .password)
+        step.take(challenge())
+        step.draft.method = .backup
+        #expect(step.failed(StepError.refused(.unavailable, said)) == .again)
+        #expect(step.methods == [.totp, .phrase])
+        #expect(step.shown == .totp)
     }
 
     @Test func theAddresssOwnLimitTakesNoMethodAway() {
@@ -204,6 +223,44 @@ private func challenge(_ methods: [StepMethod] = [.totp, .backup, .phrase], phra
     }
 }
 
+/* Password re-checks on this phone, one at a time. */
+@Suite struct PasswordTurnTests {
+    actor Log {
+        var lines: [String] = []
+        func add(_ line: String) { lines.append(line) }
+    }
+
+    @Test func aSecondPasswordExchangeStartsOnlyOnceTheFirstHasFinished() async {
+        // The removal of other devices runs behind the backup codes while the person can open New codes or Change
+        // password. Interleaved, the second would start under a session the first is about to change.
+        let turn = PasswordTurn()
+        let log = Log()
+        await turn.enter()
+        let second = Task {
+            await turn.enter()
+            await log.add("second starts")
+            await turn.leave()
+        }
+        let third = Task {
+            try? await Task.sleep(for: .milliseconds(20))
+            await turn.enter()
+            await log.add("third starts")
+            await turn.leave()
+        }
+        try? await Task.sleep(for: .milliseconds(80))
+        // Both are waiting: neither ran while the first held its turn.
+        #expect(await log.lines.isEmpty)
+        await log.add("first ends")
+        await turn.leave()
+        await second.value
+        await third.value
+        #expect(await log.lines == ["first ends", "second starts", "third starts"])
+        // Free again once everyone has left: the next one does not wait.
+        await turn.enter()
+        await turn.leave()
+    }
+}
+
 /* What Account shows. */
 @Suite struct TwoStepSettingsTests {
     @Test func onlyAnAuthenticatorAddressIsEverOpened() {
@@ -215,6 +272,41 @@ private func challenge(_ methods: [StepMethod] = [.totp, .backup, .phrase], phra
         }
         #expect(TotpEnrolment(id: "a", secret: key, uri: "").grouped == "JBSW Y3DP EHPK 3PXP JBSW Y3DP EHPK 3PXP")
         #expect(TotpEnrolment(id: "a", secret: "ABCDE", uri: "").grouped == "ABCD E")
+    }
+
+    @Test func aChangeIsMadeOnlyWhenTheServersOwnAnswerSaysSo() throws {
+        let json: (String) -> [String: Any] = { (try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]) ?? [:] }
+        // A password change, a rotation, a deletion: `{ "success": true }` and nothing less. An object that is merely
+        // an object (a proxy's reply with a 200) must not have the app remember a new password, or wipe the phone.
+        try Auth.done(json("{\"success\":true}"), lost: StepWords.lostSaved)
+        for body in ["{}", "{\"success\":false}", "{\"success\":1}", "{\"success\":\"true\"}", "{\"error\":\"upstream\"}", "{\"ok\":true}"] {
+            #expect(throws: StepError.lost(StepWords.lostDeleted), "\(body)") { try Auth.done(json(body), lost: StepWords.lostDeleted) }
+        }
+        // A pending app needs its id, its key and its address: a key shown without an id could never be confirmed.
+        #expect(TwoStep.enrolment(json("{\"id\":\"f\",\"secret\":\"JBSW\",\"uri\":\"otpauth://totp/x\",\"expiresAt\":\"2026-11-13T10:00:00.000Z\"}")) == TotpEnrolment(id: "f", secret: "JBSW", uri: "otpauth://totp/x"))
+        for body in ["{}", "{\"id\":\"f\",\"secret\":\"JBSW\"}", "{\"id\":\"\",\"secret\":\"JBSW\",\"uri\":\"otpauth://totp/x\"}", "{\"id\":\"f\",\"secret\":\"\",\"uri\":\"otpauth://totp/x\"}", "{\"id\":\"f\",\"secret\":\"JBSW\",\"uri\":\"\"}", "{\"id\":7,\"secret\":\"JBSW\",\"uri\":\"u\"}"] {
+            #expect(TwoStep.enrolment(json(body)) == nil, "\(body)")
+        }
+        // Turning off: `removed` true and whether the step is still on, or nothing says it was turned off.
+        #expect(TwoStep.removed(json("{\"removed\":true,\"on\":false}")) == false)
+        #expect(TwoStep.removed(json("{\"removed\":true,\"on\":true}")) == true)
+        for body in ["{}", "{\"removed\":true}", "{\"removed\":false,\"on\":false}", "{\"removed\":1,\"on\":false}", "{\"removed\":true,\"on\":0}", "{\"on\":false}"] {
+            #expect(TwoStep.removed(json(body)) == nil, "\(body)")
+        }
+        // New codes: shown as "your codes" only when they are codes.
+        #expect(TwoStep.codes(json("{\"codes\":[\"7KQ2M-9XD4P\"]}")) == ["7KQ2M-9XD4P"])
+        for body in ["{}", "{\"codes\":[]}", "{\"codes\":[\"\"]}", "{\"codes\":\"7KQ2M-9XD4P\"}", "{\"codes\":[1,2]}", "{\"backupCodes\":[\"7KQ2M-9XD4P\"]}"] {
+            #expect(TwoStep.codes(json(body)) == nil, "\(body)")
+        }
+    }
+
+    @Test func theLineUnderRemoveMyOtherDevicesNeverNeedsACount() {
+        // The box is there whatever the device list said: unknown or none, the line still says what ticking does.
+        let general = "Any other device signed in to your account will need to sign in again, and will be asked for the second step."
+        #expect(TotpEnrolment.othersLine(nil) == general)
+        #expect(TotpEnrolment.othersLine(0) == general)
+        #expect(TotpEnrolment.othersLine(1) == "One other device is signed in without the second step. They’ll need to sign in again, and will be asked for it.")
+        #expect(TotpEnrolment.othersLine(3) == "3 other devices are signed in without the second step. They’ll need to sign in again, and will be asked for it.")
     }
 
     @Test func theCodesLeftSayWhenToMakeMore() throws {
@@ -240,6 +332,14 @@ private func challenge(_ methods: [StepMethod] = [.totp, .backup, .phrase], phra
         #expect(words("sign-in") == "Signed in")
         #expect(words("step-failed", "backup") == "Wrong answer to the second step, with a backup code")
         #expect(words("two-step-off") == "Two-step sign-in turned off")
+        #expect(words("totp-frozen", "totp") == "Authenticator app paused after many wrong answers")
+        // Said by the kind of method: a security key added is not "Authenticator app replaced".
+        #expect(words("method-added", "totp") == "Authenticator app replaced")
+        #expect(words("method-added", "webauthn") == "Security key added")
+        #expect(words("method-added") == "Second-step method added")
+        #expect(words("method-removed", "totp") == "Authenticator app removed")
+        #expect(words("method-removed", "webauthn") == "Security key removed")
+        #expect(words("method-removed") == "Second-step method removed")
         #expect(words("something-new") == "Security change")
         #expect(SecurityEvent(id: "e", kind: "sign-in", method: nil, deviceKind: "ios", createdAt: nil).device == "iPhone or iPad")
     }
@@ -354,7 +454,7 @@ extension OnFakeDrive {
             let words = "Two-step sign-in is unavailable on this server right now. Use your recovery phrase, or try again later."
             let unavailable = await answer(StepServer(503, json: ["message": words, "code": "step-unavailable"]))
             #expect(unavailable as? StepError == .refused(.unavailable, words))
-            #expect(unavailable.flatMap { StepOutcome.after($0, methods: [.totp, .backup, .phrase]) } == .again(message: words, field: false, methods: [.phrase]))
+            #expect(unavailable.flatMap { StepOutcome.after($0, methods: [.totp, .backup, .phrase], tried: .totp) } == .again(message: words, field: false, methods: [.backup, .phrase]))
         }
 
         @Test func aFiveHundredWithoutTheStepsCodeIsALostReplyNeverAnAnswer() async {

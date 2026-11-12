@@ -119,7 +119,7 @@ struct StepUpSections: View {
                     StepNote(method: method, draft: step.step.draft, problem: step.step.problem)
                 }
             } else {
-                Section { Text(StepWords.cannotAnswer).foregroundStyle(Alpine.danger).alpineRow() }
+                Section { Text(step.step.challenge?.methods.isEmpty == true ? StepWords.cannotAnswer : StepWords.noWayLeft).foregroundStyle(Alpine.danger).alpineRow() }
             }
         }
     }
@@ -228,7 +228,9 @@ struct SignInStepView: View {
                         }
                         .padding(.horizontal, Alpine.Space.s4)
                     } else {
-                        Text(StepWords.cannotAnswer).font(Theme.Text.callout).foregroundStyle(Alpine.danger).padding(.horizontal, Alpine.Space.s4)
+                        // Nothing this build knows was offered: update. The ways ran out after refusals: updating would not help.
+                        Text(pending.challenge.methods.isEmpty ? StepWords.cannotAnswer : StepWords.noWayLeft)
+                            .font(Theme.Text.callout).foregroundStyle(Alpine.danger).padding(.horizontal, Alpine.Space.s4)
                     }
                 }
                 .padding(.horizontal, Alpine.Space.s4).padding(.top, Alpine.Space.s2)
@@ -279,7 +281,7 @@ struct SignInStepView: View {
                 try await model.answerStep(answer.proof)
             } catch {
                 lost = nil
-                switch StepOutcome.after(error, methods: methods) {
+                switch StepOutcome.after(error, methods: methods, tried: answer.method) {
                 case .again(let message, let field, let left)?:
                     methods = left
                     if field { fieldError = message } else { notice = message }
@@ -327,7 +329,8 @@ struct TwoStepView: View {
                 Section { ProgressView().frame(maxWidth: .infinity).alpineRow() }
             } else if let status {
                 Section {} header: {
-                    Text("A second step after your password when you sign in.").font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).textCase(nil)
+                    Text("A second step stops someone who has your password from signing in. It doesn’t change how your files are encrypted.")
+                        .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).textCase(nil)
                 }
                 if status.on {
                     methods(status)
@@ -478,7 +481,7 @@ private func primaryRow(_ title: String, disabled: Bool, action: @escaping () ->
     }
 }
 
-/* This phone only, and gone in two minutes: not Universal Clipboard, not every app that reads the board later. */
+/* This phone only, and gone in two minutes (the pasteboard's own expiry, as the recovery phrase's copy sets): not Universal Clipboard, not every app that reads the board later. */
 @MainActor private func copyBriefly(_ text: String) {
     UIPasteboard.general.setItems([["public.utf8-plain-text": text]], options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(120)])
 }
@@ -513,7 +516,7 @@ private struct BackupCodesList: View {
         Section {
             Button("Copy") {
                 copyBriefly(codes.joined(separator: "\n"))
-                NoticeCenter.shared.show("Backup codes copied")
+                NoticeCenter.shared.show("Backup codes copied. Cleared from the clipboard in two minutes.")
             }
             .foregroundStyle(Alpine.primary).alpineRow()
             ShareLink(item: TwoStep.codesNote(codes, email: email), subject: Text("HushOS backup codes")) { Text("Share") }
@@ -539,10 +542,13 @@ struct AuthenticatorSheet: View {
     @State private var error = ""
     @State private var app: TotpEnrolment?
     @State private var code = ""
-    @State private var others = 0
+    /* How many other devices are signed in, for the words only: nil until the list answers, or when it doesn't. */
+    @State private var others: Int?
     @State private var signOutOthers = true
     @State private var codes: [String]?
-    @State private var othersKept = false
+    /* The removal of other devices, which runs behind the codes and never holds them or this sheet. */
+    @State private var removing = Removing.no
+    private enum Removing { case no, running, failed }
     @State private var capture = ScreenCapture.shared
 
     private var codeReady: Bool {
@@ -556,8 +562,10 @@ struct AuthenticatorSheet: View {
                 if let codes {
                     SheetIntro(text: "Two-step sign-in is on.")
                     BackupCodesList(codes: codes, email: email)
-                    if othersKept {
-                        Section {} footer: { Text("Your other devices are still signed in. You can remove them under Devices.") }
+                    if removing == .running {
+                        Section {} footer: { Text("Removing your other devices") }
+                    } else if removing == .failed {
+                        Section {} footer: { Text(StepWords.othersNotRemoved).foregroundStyle(Alpine.danger) }
                     }
                     primaryRow("Done", disabled: false) {
                         done("Two-step sign-in is on.")
@@ -586,7 +594,7 @@ struct AuthenticatorSheet: View {
                             Spacer()
                             Button("Copy key") {
                                 copyBriefly(app.secret)
-                                NoticeCenter.shared.show("Key copied")
+                                NoticeCenter.shared.show("Key copied. Cleared from the clipboard in two minutes.")
                             }
                             .font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.primary).buttonStyle(.borderless)
                         }
@@ -601,11 +609,12 @@ struct AuthenticatorSheet: View {
                     } footer: {
                         if tried && !codeReady { Text("Enter the 6-digit code the app shows.").foregroundStyle(Alpine.danger) }
                     }
-                    if !replacing && others > 0 {
+                    // Offered whenever the step is being turned on, whatever the device list said or didn't.
+                    if !replacing {
                         Section {
-                            Toggle("Sign out my other devices", isOn: $signOutOthers).tint(Alpine.primary).disabled(pending).alpineRow()
+                            Toggle("Remove my other devices", isOn: $signOutOthers).tint(Alpine.primary).disabled(pending).alpineRow()
                         } footer: {
-                            Text("\(others == 1 ? "One other device is" : "\(others) other devices are") signed in without the second step. Signing in again asks for it.")
+                            Text(TotpEnrolment.othersLine(others))
                         }
                     }
                     FormProblem(text: error)
@@ -613,7 +622,7 @@ struct AuthenticatorSheet: View {
                 } else {
                     SheetIntro(text: replacing
                         ? "The new app takes over once you confirm it. Your backup codes stay as they are."
-                        : "After your password, HushOS will ask for a code from an authenticator app on your phone. Your recovery phrase works as the second step too.")
+                        : "After your password, HushOS will ask for a code from an authenticator app on your phone. Your recovery phrase works as the second step too, so keep it apart from your password.")
                     ConfirmPassword(password: $password, tried: tried)
                     StepUpSections(step: step, disabled: pending)
                     FormProblem(text: error)
@@ -628,7 +637,7 @@ struct AuthenticatorSheet: View {
             .interactiveDismissDisabled(codes != nil || pending)
             // Replacing needs the step from the start: its fields are there when the sheet opens.
             .task { if replacing { await step.prepare() } }
-            .task { if !replacing { others = ((try? await Devices.list()) ?? []).filter { !$0.current }.count } }
+            .task { if !replacing { others = (try? await Devices.list())?.filter { !$0.current }.count } }
         }
     }
 
@@ -665,17 +674,34 @@ struct AuthenticatorSheet: View {
         Task {
             do {
                 guard case .turnedOn(let made) = try await TwoStep.confirmAuthenticator(id: app.id, code: code) else {
+                    // Turning the step on always comes back with the codes. An answer without them is not the
+                    // server's answer to that: nothing is claimed, and the settings behind are read again.
+                    if !replacing { throw StepError.lost(StepWords.lostTurnedOn) }
                     done("Authenticator app replaced.")
                     dismiss()
                     return
                 }
-                // The other devices signed in before the step was on: gone unless the person keeps them.
-                if others > 0 && signOutOthers {
-                    do { try await Devices.removeOthers(password: password) } catch { othersKept = true }
-                }
-                password = ""
+                // The codes first: they are shown once, and nothing that follows may cost them.
                 codes = made
                 done("")
+                // Then the other devices, which signed in before the step was on: removed whenever the box is ticked,
+                // whatever the list said (the server removes none when there are none). It runs behind the codes and
+                // never holds them or this sheet: Done closes it meanwhile, and a failure is then a notice.
+                if signOutOthers {
+                    removing = .running
+                    let typed = password
+                    Task {
+                        do {
+                            try await Devices.removeOthers(password: typed)
+                            removing = .no
+                            done("")
+                        } catch {
+                            removing = .failed
+                            NoticeCenter.shared.show(StepWords.othersNotRemoved, important: true)
+                        }
+                    }
+                }
+                password = ""
             } catch let timedOut as TwoStep.SetupTimedOut {
                 // The setup ran out (ten minutes): back to the start, with why.
                 self.app = nil

@@ -283,6 +283,14 @@ extension Auth {
         return SessionReply(status: (response as? HTTPURLResponse)?.statusCode ?? 0, text: String(data: data, encoding: .utf8) ?? "", body: parsed, session: session)
     }
 
+    /*
+     * A security change or a deletion the server says it made: `{ "success": true }`, as the web's
+     * `readDone` reads it. Any other 200 says nothing either way, and is a lost reply.
+     */
+    static func done(_ reply: [String: Any], lost: String) throws {
+        guard (reply["success"] as AnyObject) === kCFBooleanTrue else { throw StepError.lost(lost) }
+    }
+
     public static func updateName(_ name: String) async throws -> SessionUser {
         let reply = try await call("/api/auth/profile", method: "POST", body: ["name": name])
         guard let user = reply["user"] as? [String: Any] else { throw AuthError.message("HushOS returned no account.") }
@@ -317,6 +325,8 @@ extension Auth {
      * refuses with `two-step` (`StepError.refused(.required, …)`) and nothing changes.
      */
     public static func changePassword(current: String, new: String, twoStep: StepAnswer? = nil) async throws {
+        await PasswordTurn.shared.enter()
+        defer { PasswordTurn.shared.leaveSoon() }
         let login = try opaqueStartLogin(password: current)
         let registration = try opaqueStartRegistration(password: new)
         let challenge = try await call("/api/auth/security/start", method: "POST", body: [
@@ -343,7 +353,7 @@ extension Auth {
         ]
         // No replacement session is asked for (`keepSession`): this phone signs in again, and is asked for the step.
         if let twoStep { body["twoStep"] = try twoStep.json() }
-        _ = try await call("/api/auth/security/finish", method: "POST", body: body, whole: true, lost: StepWords.lostSaved)
+        try done(try await call("/api/auth/security/finish", method: "POST", body: body, whole: true, lost: StepWords.lostSaved), lost: StepWords.lostSaved)
         // The device memory names the credential version; remember the account key under the new one.
         let memory = try deviceRemember(userId: userId, accountKey: accountKey, keyVersion: sealed.keyVersion, credentialVersion: sealed.credentialVersion, deviceKeyId: UUID().uuidString.lowercased())
         try SharedKeychain.write(SharedKeychain.deviceAccount, SharedKeychain.Device(memory: memory))
@@ -351,6 +361,8 @@ extension Auth {
 
     /* Proves the password once more, then the server removes the account; every local trace goes with it. */
     public static func deleteAccount(password: String, twoStep: StepAnswer? = nil) async throws {
+        await PasswordTurn.shared.enter()
+        defer { PasswordTurn.shared.leaveSoon() }
         let login = try opaqueStartLogin(password: password)
         let started = try await call("/api/auth/delete/start", method: "POST", body: ["startLoginRequest": login.request])
         guard let attemptToken = started["attemptToken"] as? String, let loginResponse = started["loginResponse"] as? String else {
@@ -361,7 +373,7 @@ extension Auth {
         }
         var body: [String: Any] = ["attemptToken": attemptToken, "finishLoginRequest": finish.request]
         if let twoStep { body["twoStep"] = try twoStep.json() }
-        _ = try await call("/api/auth/delete/finish", method: "POST", body: body, whole: true, lost: StepWords.lostDeleted)
+        try done(try await call("/api/auth/delete/finish", method: "POST", body: body, whole: true, lost: StepWords.lostDeleted), lost: StepWords.lostDeleted)
         SharedKeychain.delete(SharedKeychain.sessionAccount)
         SharedKeychain.delete(SharedKeychain.deviceAccount)
     }
@@ -498,6 +510,8 @@ extension Auth {
      * and the kit is saved before that.
      */
     public static func rotateKeysKit(password: String, twoStep: StepAnswer? = nil) async throws -> (phrase: String, recovery: [String: Any]) {
+        await PasswordTurn.shared.enter()
+        defer { PasswordTurn.shared.leaveSoon() }
         let login = try opaqueStartLogin(password: password)
         let registration = try opaqueStartRegistration(password: password)
         let challenge = try await call("/api/auth/security/start", method: "POST", body: [
@@ -543,7 +557,7 @@ extension Auth {
         ]
         if let settingsKey { body["settingsKey"] = json(settingsKey) }
         if let twoStep { body["twoStep"] = try twoStep.json() }
-        _ = try await call("/api/auth/security/finish", method: "POST", body: body, whole: true, lost: StepWords.lostSaved)
+        try done(try await call("/api/auth/security/finish", method: "POST", body: body, whole: true, lost: StepWords.lostSaved), lost: StepWords.lostSaved)
         let memory = try deviceRemember(userId: userId, accountKey: newRoot, keyVersion: sealed.keyVersion, credentialVersion: sealed.credentialVersion, deviceKeyId: UUID().uuidString.lowercased())
         try SharedKeychain.write(SharedKeychain.deviceAccount, SharedKeychain.Device(memory: memory))
         return (recovery.phrase, json(recovery.envelope))

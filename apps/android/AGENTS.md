@@ -209,6 +209,11 @@ Design: `docs/devices-design.md` 5; as built: `docs/push-relay-plan.md`, PR 4.
 - A phrase reset's sign-in answers its step with the phrase it just made (`Auth.signInAfterRecovery`).
 - `TwoStep.confirmAuthenticator` takes only the server's two answers (`TwoStep.confirmed`): `{ backupCodes }` turned the step on, `{ replaced: true }` replaced the app. Anything else with a 200, `{}` included, is a lost reply: the page says it can't tell whether the app was added, and the settings are read again.
 - A lost change says what is unknown, in the web's sentence (`StepWords.lost`).
+- The other replies are read the same way, by the web's readers: `Auth.done` (`{ success: true }`), `TwoStep.enrolment`, `TwoStep.removed`, `TwoStep.codes`. Turning the step on without codes in the reply is lost too.
+- "Remove my other devices" is offered whenever the step is turned on, whatever the device list said, and removes when ticked. The codes show first; the removal runs behind them (`DriveViewModel.removeOtherDevices`, in the view model's scope), Done closes the codes meanwhile, and a failure is a notice.
+- A copied key or set of codes leaves the clipboard after two minutes, as the recovery phrase does (`SensitiveClipboard`).
+- What a refusal withdraws is `StepOutcome.left`: a paused app, the app; a spent budget, both kinds of code together; `step-unavailable`, only the method that was tried.
+- Password re-checks go one at a time (`Auth.passwordTurn`): the removal of other devices behind the backup codes, and whatever password action the person starts meanwhile, never overlap.
 - Account › Two-step sign-in shows nothing on a server that has two-step off (`TwoStep.status` is null for 501).
 - The key and the backup codes are on a secure window (no screenshots), as the recovery phrase is.
 - "Open in authenticator app" opens only an `otpauth://totp/` address (`TotpEnrolment.link`).

@@ -335,6 +335,11 @@ Markdown files (`text/markdown`, or `.md`, `.markdown`, `.mdx`) up to 2 MB open 
 - `Auth.recover` answers the step of the sign-in that follows a phrase reset with the phrase it just made.
 - `TwoStep.confirmAuthenticator` takes only the server's two answers (`TwoStep.confirmed`): `{ backupCodes }` turned the step on, `{ replaced: true }` replaced the app. Anything else with a 200, `{}` included, is a lost reply: the sheet says it can't tell whether the app was added, and the settings are read again.
 - A lost change says what is unknown, in the web's sentence (`StepWords.lost(whether:)`).
+- The other replies are read the same way, by the web's readers: `Auth.done` (`{ success: true }`), `TwoStep.enrolment`, `TwoStep.removed`, `TwoStep.codes`. Turning the step on without codes in the reply is lost too.
+- "Remove my other devices" is offered whenever the step is turned on, whatever the device list said, and removes when ticked. The codes show first; the removal runs behind them (an unstructured task), Done closes the codes meanwhile, and a failure is a notice.
+- A copied key or set of codes leaves the clipboard after two minutes, as the recovery phrase does (the pasteboard's expiry, this phone only).
+- What a refusal withdraws is `StepOutcome.left`: a paused app, the app; a spent budget, both kinds of code together; `step-unavailable`, only the method that was tried.
+- Password re-checks go one at a time (`PasswordTurn` (HushOSKit)): the removal of other devices behind the backup codes, and whatever password action the person starts meanwhile, never overlap.
 - Account › Two-step sign-in (`TwoStepView`) shows nothing on a server that has two-step off (`TwoStep.status()` is nil for 501).
 - "Open in authenticator app" opens only an `otpauth://totp/` address (`TotpEnrolment.link`).
 

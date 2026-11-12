@@ -587,6 +587,19 @@ object Auth {
         AccountDevice.from(call(context, "/api/auth/devices/$id", JSONObject().put("name", name), "PUT").getJSONObject("device"))
 
     /*
+     * One password re-check at a time on this phone. Each one is an OPAQUE exchange bound to the session,
+     * then the change it authorises (a new password, a rotation, deleting the account, removing devices,
+     * a change to the step). Turning the step on leaves one running behind the backup codes (the removal
+     * of the other devices) while the person is free to start another: taken in turn, the second starts
+     * only once the first has finished, under the session the first left. Fair, so they go in the order asked.
+     */
+    private val passwordLock = java.util.concurrent.locks.ReentrantLock(true)
+    internal fun <T> passwordTurn(block: () -> T): T {
+        passwordLock.lock()
+        try { return block() } finally { passwordLock.unlock() }
+    }
+
+    /*
      * Removing devices proves the password again (OPAQUE in the core, bound to this session), so a
      * session alone cannot sign the other devices out and have them clear what they kept.
      */
@@ -600,11 +613,11 @@ object Auth {
 
     /* Signs another device out at once; the server refuses this phone (sign out instead). */
     fun removeDevice(context: Context, id: String, password: String) {
-        call(context, "/api/auth/devices/$id", passwordProof(context, password), "DELETE")
+        passwordTurn { call(context, "/api/auth/devices/$id", passwordProof(context, password), "DELETE") }
     }
 
     fun removeOtherDevices(context: Context, password: String): Int =
-        call(context, "/api/auth/devices/others", passwordProof(context, password), "DELETE").optInt("removed")
+        passwordTurn { call(context, "/api/auth/devices/others", passwordProof(context, password), "DELETE").optInt("removed") }
 
     /*
      * Whether a late "removed" answer about `ended` may still clear the phone: only while nobody has
@@ -696,6 +709,14 @@ object Auth {
     }
 
     /* Thrown as the step's own refusal: when the server named one of its codes. The address's own 429 and anything else stay the route's error. */
+    /*
+     * A security change or a deletion the server says it made: `{ "success": true }`, as the web's
+     * `readDone` reads it. Any other 200 says nothing either way, and is a lost reply.
+     */
+    internal fun done(reply: JSONObject, lost: String) {
+        if (reply.opt("success") != true) throw LostReply(lost)
+    }
+
     private fun stepNamed(refusal: com.hushos.core.StepRefusal): Boolean = when (refusal) {
         com.hushos.core.StepRefusal.BUSY, com.hushos.core.StepRefusal.OTHER -> false
         else -> true
@@ -845,7 +866,9 @@ object Auth {
      * account with two-step sign-in has no session to read it back with until it has signed in again,
      * and the kit is saved before that.
      */
-    fun rotateKeysKit(context: Context, password: String, twoStep: StepAnswer? = null): Pair<String, JSONObject> {
+    fun rotateKeysKit(context: Context, password: String, twoStep: StepAnswer? = null): Pair<String, JSONObject> = passwordTurn { rotateKeysNow(context, password, twoStep) }
+
+    private fun rotateKeysNow(context: Context, password: String, twoStep: StepAnswer?): Pair<String, JSONObject> {
         val login = opaqueStartLogin(password)
         val registration = opaqueStartRegistration(password)
         val challenge = call(context, "/api/auth/security/start", JSONObject().put("action", "master-key")
@@ -878,7 +901,7 @@ object Auth {
                 .put("wrappingNonce", sealed.wrappingNonce).put("encryptedKey", sealed.encryptedKey))
             .put("recovery", json(recovery.envelope)).put("identity", json(identity)).put("workspaces", workspaces)
             .put("identityHistory", history).apply { settingsKey?.let { put("settingsKey", json(it)) } }
-            .apply { twoStep?.let { put("twoStep", it.json()) } }, whole = true, lost = StepWords.LOST_SAVED)
+            .apply { twoStep?.let { put("twoStep", it.json()) } }, whole = true, lost = StepWords.LOST_SAVED).let { done(it, StepWords.LOST_SAVED) }
         Shared.writeDevice(context, deviceRemember(userId, newRoot, sealed.keyVersion, sealed.credentialVersion, UUID.randomUUID().toString()))
         return recovery.phrase to json(recovery.envelope)
     }
@@ -935,7 +958,9 @@ object Auth {
      * refuses with `two-step` (`StepRefused`) and nothing changes. No replacement session is asked for
      * (`keepSession`): this phone signs in again, and is asked for the step.
      */
-    fun changePassword(context: Context, current: String, new: String, twoStep: StepAnswer? = null) {
+    fun changePassword(context: Context, current: String, new: String, twoStep: StepAnswer? = null) = passwordTurn { changePasswordNow(context, current, new, twoStep) }
+
+    private fun changePasswordNow(context: Context, current: String, new: String, twoStep: StepAnswer?) {
         val login = opaqueStartLogin(current)
         val registration = opaqueStartRegistration(new)
         val challenge = call(context, "/api/auth/security/start", JSONObject().put("action", "password")
@@ -951,17 +976,19 @@ object Auth {
             .put("envelope", JSONObject().put("envelopeVersion", sealed.envelopeVersion.toInt()).put("keyVersion", sealed.keyVersion.toLong())
                 .put("credentialVersion", sealed.credentialVersion.toLong()).put("wrappingSalt", sealed.wrappingSalt)
                 .put("wrappingNonce", sealed.wrappingNonce).put("encryptedKey", sealed.encryptedKey))
-            .apply { twoStep?.let { put("twoStep", it.json()) } }, whole = true, lost = StepWords.LOST_SAVED)
+            .apply { twoStep?.let { put("twoStep", it.json()) } }, whole = true, lost = StepWords.LOST_SAVED).let { done(it, StepWords.LOST_SAVED) }
         Shared.writeDevice(context, deviceRemember(userId, accountKey, sealed.keyVersion, sealed.credentialVersion, UUID.randomUUID().toString()))
     }
 
     /* Proves the password once more, then the server removes the account; every local trace goes with it. */
-    fun deleteAccount(context: Context, password: String, twoStep: StepAnswer? = null) {
+    fun deleteAccount(context: Context, password: String, twoStep: StepAnswer? = null) = passwordTurn { deleteAccountNow(context, password, twoStep) }
+
+    private fun deleteAccountNow(context: Context, password: String, twoStep: StepAnswer?) {
         val login = opaqueStartLogin(password)
         val started = call(context, "/api/auth/delete/start", JSONObject().put("startLoginRequest", login.request))
         val finish = opaqueFinishLogin(password, login.state, started.getString("loginResponse")) ?: throw AuthFailure("The password is not right.")
         call(context, "/api/auth/delete/finish", JSONObject().put("attemptToken", started.getString("attemptToken")).put("finishLoginRequest", finish.request)
-            .apply { twoStep?.let { put("twoStep", it.json()) } }, whole = true, lost = StepWords.LOST_DELETED)
+            .apply { twoStep?.let { put("twoStep", it.json()) } }, whole = true, lost = StepWords.LOST_DELETED).let { done(it, StepWords.LOST_DELETED) }
         Shared.clearSession(context)
         Shared.clearDevice(context)
         AccountStore.of(context).wipe()

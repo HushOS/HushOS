@@ -91,14 +91,54 @@ class TwoStepTest {
     }
 
     @Test
-    fun aSpentBudgetOrAServerThatCannotCheckCodesLeavesThePhrase() {
+    fun aSpentBudgetWithdrawsTheCodeMethodsTogether() {
+        // One 15-minute budget covers the app's codes and the backup codes: offering the other one would only be refused too.
         val limited = "Too many wrong codes. Try again in 15 minutes, or use your recovery phrase."
-        assertEquals(StepOutcome.Again(limited, false, listOf(StepMethod.PHRASE)), StepOutcome.after(StepRefused(StepRefusal.LIMITED, limited), all))
-        val unavailable = "Two-step sign-in is unavailable on this server right now. Use your recovery phrase, or try again later."
-        assertEquals(StepOutcome.Again(unavailable, false, listOf(StepMethod.PHRASE)), StepOutcome.after(StepRefused(StepRefusal.UNAVAILABLE, unavailable), all))
-        // With no phrase to fall back on, what was offered stays: waiting is the only way, and the field must not vanish.
-        val codes = listOf(StepMethod.TOTP, StepMethod.BACKUP)
-        assertEquals(StepOutcome.Again(limited, false, codes), StepOutcome.after(StepRefused(StepRefusal.LIMITED, limited), codes))
+        for (tried in listOf(StepMethod.TOTP, StepMethod.BACKUP))
+            assertEquals(StepOutcome.Again(limited, false, listOf(StepMethod.PHRASE)), StepOutcome.after(StepRefused(StepRefusal.LIMITED, limited), all, tried))
+        // With no phrase to fall back on nothing is left, and the screen says so rather than show a field every answer to which is refused.
+        assertEquals(StepOutcome.Again(limited, false, emptyList()), StepOutcome.after(StepRefused(StepRefusal.LIMITED, limited), listOf(StepMethod.TOTP, StepMethod.BACKUP), StepMethod.TOTP))
+    }
+
+    @Test
+    fun aMethodTheServerCannotCheckIsWithdrawnAloneAndTheOthersStayOffered() {
+        // `step-unavailable` is per method: the app's secret and the backup codes can sit under different server keys.
+        // Withdrawing both for one would send someone to their recovery phrase while a backup code still works.
+        val said = "Two-step sign-in is unavailable on this server right now. Use your recovery phrase, or try again later."
+        val refused = StepRefused(StepRefusal.UNAVAILABLE, said)
+        assertEquals(StepOutcome.Again(said, false, listOf(StepMethod.BACKUP, StepMethod.PHRASE)), StepOutcome.after(refused, all, StepMethod.TOTP))
+        assertEquals(StepOutcome.Again(said, false, listOf(StepMethod.TOTP, StepMethod.PHRASE)), StepOutcome.after(refused, all, StepMethod.BACKUP))
+        assertEquals(StepOutcome.Again(said, false, listOf(StepMethod.TOTP)), StepOutcome.after(refused, listOf(StepMethod.TOTP, StepMethod.BACKUP), StepMethod.BACKUP))
+        // Unlike a spent budget, which is one for both kinds of code.
+        assertEquals(listOf(StepMethod.PHRASE), StepOutcome.left(all, StepRefusal.LIMITED, StepMethod.BACKUP))
+        // The same inside a form: the method on screen is the one that was sent.
+        val asked = StepUp(StepPurpose.PASSWORD).take(challenge()).let { it.typed(it.draft.copy(method = StepMethod.BACKUP)) }
+        val (next, step) = asked.failed(refused)
+        assertEquals(StepUp.Next.AGAIN, next)
+        assertEquals(listOf(StepMethod.TOTP, StepMethod.PHRASE), step.methods)
+        assertEquals(StepMethod.TOTP, step.shown)
+    }
+
+    @Test
+    fun aSecondPasswordExchangeStartsOnlyOnceTheFirstHasFinished() {
+        // The removal of other devices runs behind the backup codes while the person can open New codes or Change
+        // password. Interleaved, the second would start under a session the first is about to change.
+        val log = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val holding = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val first = Thread { Auth.passwordTurn { holding.countDown(); release.await(); log += "first ends" } }.apply { start() }
+        holding.await()
+        val second = Thread { Auth.passwordTurn { log += "second starts" } }.apply { start() }
+        // The second is waiting: it did not run while the first held its turn.
+        second.join(150)
+        assertTrue(second.isAlive)
+        assertTrue(log.isEmpty())
+        release.countDown()
+        first.join(); second.join()
+        assertEquals(listOf("first ends", "second starts"), log)
+        // A failure inside gives the turn back.
+        assertThrows(AuthFailure::class.java) { Auth.passwordTurn<Unit> { throw AuthFailure("no") } }
+        assertEquals("free", Auth.passwordTurn { "free" })
     }
 
     @Test
@@ -236,8 +276,48 @@ class TwoStepTest {
         assertEquals("Signed in with your password and an authenticator code", words("sign-in", "totp"))
         assertEquals("Signed in", words("sign-in"))
         assertEquals("Wrong answer to the second step, with a backup code", words("step-failed", "backup"))
+        assertEquals("Authenticator app paused after many wrong answers", words("totp-frozen", "totp"))
+        // Said by the kind of method: a security key added is not "Authenticator app replaced".
+        assertEquals("Authenticator app replaced", words("method-added", "totp"))
+        assertEquals("Security key added", words("method-added", "webauthn"))
+        assertEquals("Second-step method added", words("method-added"))
+        assertEquals("Authenticator app removed", words("method-removed", "totp"))
+        assertEquals("Security key removed", words("method-removed", "webauthn"))
+        assertEquals("Second-step method removed", words("method-removed"))
         assertEquals("Security change", words("something-new"))
         assertEquals("Android", SecurityEvent("e", "sign-in", null, "android", null).device)
+    }
+
+    @Test
+    fun aChangeIsMadeOnlyWhenTheServersOwnAnswerSaysSo() {
+        // A password change, a rotation, a deletion: `{ "success": true }` and nothing less. An object that is merely
+        // an object (a proxy's reply with a 200) must not have the app remember a new password, or wipe the phone.
+        Auth.done(JSONObject("""{"success":true}"""), StepWords.LOST_SAVED)
+        for (body in listOf("{}", """{"success":false}""", """{"success":1}""", """{"success":"true"}""", """{"error":"upstream"}""", """{"ok":true}"""))
+            assertEquals(body, StepWords.LOST_DELETED, assertThrows(LostReply::class.java) { Auth.done(JSONObject(body), StepWords.LOST_DELETED) }.message)
+        // A pending app needs its id, its key and its address: a key shown without an id could never be confirmed.
+        assertEquals(TotpEnrolment("f", "JBSW", "otpauth://totp/x"), TwoStep.enrolment(JSONObject("""{"id":"f","secret":"JBSW","uri":"otpauth://totp/x","expiresAt":"2026-11-13T10:00:00.000Z"}""")))
+        for (body in listOf("{}", """{"id":"f","secret":"JBSW"}""", """{"id":"","secret":"JBSW","uri":"otpauth://totp/x"}""", """{"id":"f","secret":"","uri":"otpauth://totp/x"}""", """{"id":"f","secret":"JBSW","uri":""}""", """{"id":7,"secret":"JBSW","uri":"u"}"""))
+            assertNull(body, TwoStep.enrolment(JSONObject(body)))
+        // Turning off: `removed` true and whether the step is still on, or nothing says it was turned off.
+        assertEquals(false, TwoStep.removed(JSONObject("""{"removed":true,"on":false}""")))
+        assertEquals(true, TwoStep.removed(JSONObject("""{"removed":true,"on":true}""")))
+        for (body in listOf("{}", """{"removed":true}""", """{"removed":false,"on":false}""", """{"removed":1,"on":false}""", """{"removed":true,"on":0}""", """{"on":false}"""))
+            assertNull(body, TwoStep.removed(JSONObject(body)))
+        // New codes: shown as "your codes" only when they are codes.
+        assertEquals(listOf("7KQ2M-9XD4P"), TwoStep.codes(JSONObject("""{"codes":["7KQ2M-9XD4P"]}""")))
+        for (body in listOf("{}", """{"codes":[]}""", """{"codes":[""]}""", """{"codes":"7KQ2M-9XD4P"}""", """{"codes":[1,2]}""", """{"backupCodes":["7KQ2M-9XD4P"]}"""))
+            assertNull(body, TwoStep.codes(JSONObject(body)))
+    }
+
+    @Test
+    fun theLineUnderRemoveMyOtherDevicesNeverNeedsACount() {
+        // The box is there whatever the device list said: unknown or none, the line still says what ticking does.
+        val general = "Any other device signed in to your account will need to sign in again, and will be asked for the second step."
+        assertEquals(general, TotpEnrolment.othersLine(null))
+        assertEquals(general, TotpEnrolment.othersLine(0))
+        assertEquals("One other device is signed in without the second step. They’ll need to sign in again, and will be asked for it.", TotpEnrolment.othersLine(1))
+        assertEquals("3 other devices are signed in without the second step. They’ll need to sign in again, and will be asked for it.", TotpEnrolment.othersLine(3))
     }
 
     // The requests themselves, against a server that answers as the real one does, or as something in the way does.
@@ -274,7 +354,7 @@ class TwoStepTest {
         val session = serving(503, refusal(said, "step-unavailable"))
         val thrown = assertThrows(StepRefused::class.java) { Auth.answerStepAt(session.origin, token, StepProof.Totp("123456")) }
         assertEquals(StepRefusal.UNAVAILABLE, thrown.refusal)
-        assertEquals(StepOutcome.Again(said, false, listOf(StepMethod.PHRASE)), StepOutcome.after(thrown, all))
+        assertEquals(StepOutcome.Again(said, false, listOf(StepMethod.BACKUP, StepMethod.PHRASE)), StepOutcome.after(thrown, all, StepMethod.TOTP))
     }
 
     @Test
@@ -289,12 +369,12 @@ class TwoStepTest {
         // At a change too: it may have gone through, so it is not reported either way.
         var session = serving(503, refusal("Authentication is temporarily unavailable. Please try again."))
         assertEquals(StepWords.LOST_CHANGE, assertThrows(LostReply::class.java) { Auth.callAt(session, "/api/auth/security/finish", JSONObject(), whole = true) }.message)
-        // And with the code, a change is refused as the step's, with nothing changed: the form keeps the phrase.
+        // And with the code, a change is refused as the step's, with nothing changed: the form keeps the other methods.
         session = serving(503, refusal("Unavailable.", "step-unavailable"))
         val refused = assertThrows(StepRefused::class.java) { Auth.callAt(session, "/api/auth/security/finish", JSONObject(), whole = true) }
         val (next, step) = StepUp(StepPurpose.PASSWORD).take(challenge()).failed(refused)
         assertEquals(StepUp.Next.AGAIN, next)
-        assertEquals(listOf(StepMethod.PHRASE), step.methods)
+        assertEquals(listOf(StepMethod.BACKUP, StepMethod.PHRASE), step.methods)
     }
 
     @Test

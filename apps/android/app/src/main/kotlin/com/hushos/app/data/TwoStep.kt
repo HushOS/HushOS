@@ -27,6 +27,13 @@ class PendingSignIn(val origin: String, val email: String, val challenge: StepCh
 
 /* A step's token and the answer to it, as `login/two-step` and a change's `twoStep` field take them. */
 data class StepAnswer(val token: String, val proof: StepProof) {
+    /* The method this answers with: what a refusal about "this method" is about. */
+    val method: StepMethod get() = when (proof) {
+        is StepProof.Totp -> StepMethod.TOTP
+        is StepProof.Backup -> StepMethod.BACKUP
+        is StepProof.Phrase -> StepMethod.PHRASE
+    }
+
     /* The core writes the JSON, so both phones send the same bytes. */
     fun json(): JSONObject = JSONObject(stepAnswerJson(token, proof))
 }
@@ -44,12 +51,18 @@ object StepWords {
     val LOST_DELETED = lost("your account was deleted")
     val LOST_SETUP = lost("the setup was started")
     val LOST_APP_ADDED = lost("your authenticator app was added")
+    /* Turning the step on always comes back with the codes: an answer without them is not the server's answer to that. */
+    val LOST_TURNED_ON = lost("two-step sign-in was turned on")
     val LOST_TURNED_OFF = lost("two-step sign-in was turned off")
     val LOST_NEW_CODES = lost("new backup codes were made")
     /* A sign-in with no step screen. */
     const val OPEN_APP = "This account asks for a second step. Open HushOS and sign in there."
     /* A step none of whose methods this build knows. */
     const val CANNOT_ANSWER = "This version of HushOS can’t answer this account’s second step. Update HushOS, then try again."
+    /* The ways ran out after refusals (a paused app, a spent budget): updating would not help. */
+    const val NO_WAY_LEFT = "There is no other way to answer this step from here right now. Start again in a while."
+    /* The removal of other devices, asked for while turning the step on, did not happen. */
+    const val OTHERS_NOT_REMOVED = "Your other devices weren’t removed. You can remove them under Devices."
     /* A step that ended with nothing said. */
     const val OVER = "This sign-in timed out. Enter your password again."
 }
@@ -78,17 +91,30 @@ sealed class StepOutcome {
     data class Retry(val message: String) : StepOutcome()
 
     companion object {
-        /* Null for a cancellation: nothing failed, and nothing is said. */
-        fun after(error: Throwable, methods: List<StepMethod>): StepOutcome? = when (error) {
+        /*
+         * What is still offered after a refusal that takes something away (shared with `StepUp`):
+         * - a paused app: everything but the app;
+         * - a spent budget: the budget is one for the app's codes and the backup codes, so both go together;
+         * - a method the server cannot check: only that one, the one that was `tried`. The app's secret and
+         *   the backup codes can sit under different server keys, so one failing says nothing of the other.
+         */
+        fun left(methods: List<StepMethod>, refusal: StepRefusal, tried: StepMethod?): List<StepMethod> = when (refusal) {
+            StepRefusal.FROZEN -> methods.filter { it != StepMethod.TOTP }
+            StepRefusal.LIMITED -> methods.filter { it != StepMethod.TOTP && it != StepMethod.BACKUP }
+            StepRefusal.UNAVAILABLE -> methods.filter { it != tried }
+            else -> methods
+        }
+
+        /* Null for a cancellation: nothing failed, and nothing is said. `tried` is the method the refused answer used. */
+        fun after(error: Throwable, methods: List<StepMethod>, tried: StepMethod? = null): StepOutcome? = when (error) {
             is kotlinx.coroutines.CancellationException -> null
             is LostReply -> Retry(error.message ?: StepWords.LOST_STEP)
             is StepRefused -> {
                 val message = error.message.orEmpty()
                 when (error.refusal) {
                     StepRefusal.WRONG -> Again(message, true, methods)
-                    StepRefusal.FROZEN -> Again(message, false, methods.filter { it != StepMethod.TOTP })
-                    // Only codes are counted and only codes need the server's key: the phrase still passes. Nothing changed.
-                    StepRefusal.LIMITED, StepRefusal.UNAVAILABLE -> Again(message, false, if (StepMethod.PHRASE in methods) listOf(StepMethod.PHRASE) else methods)
+                    // Nothing changed; what the refusal was about is withdrawn, and the rest stays offered.
+                    StepRefusal.FROZEN, StepRefusal.LIMITED, StepRefusal.UNAVAILABLE -> Again(message, false, left(methods, error.refusal, tried))
                     // The address's own limit: nothing about the step was looked at, and nothing is taken away.
                     StepRefusal.BUSY -> Again(message, false, methods)
                     StepRefusal.EXPIRED, StepRefusal.REQUIRED, StepRefusal.SETUP_REQUIRED, StepRefusal.UPDATE_REQUIRED, StepRefusal.OTHER ->
@@ -209,9 +235,9 @@ data class StepUp(
             StepRefusal.REQUIRED -> Next.RENEW to copy(error = if (challenge == null) "" else message)
             StepRefusal.EXPIRED -> Next.RENEW to copy(error = message)
             StepRefusal.WRONG -> Next.AGAIN to copy(error = message, tried = false)
-            StepRefusal.FROZEN -> Next.AGAIN to copy(error = message, tried = false, methods = methods.filter { it != StepMethod.TOTP })
-            StepRefusal.LIMITED, StepRefusal.UNAVAILABLE ->
-                Next.AGAIN to copy(error = message, tried = false, methods = if (StepMethod.PHRASE in methods) listOf(StepMethod.PHRASE) else methods)
+            // The method on screen is the one the refused change carried.
+            StepRefusal.FROZEN, StepRefusal.LIMITED, StepRefusal.UNAVAILABLE ->
+                Next.AGAIN to copy(error = message, tried = false, methods = StepOutcome.left(methods, failure.refusal, shown))
             StepRefusal.SETUP_REQUIRED, StepRefusal.UPDATE_REQUIRED, StepRefusal.BUSY, StepRefusal.OTHER -> Next.NOT_STEP to this
         }
     }
@@ -253,6 +279,16 @@ data class TotpEnrolment(val id: String, val secret: String, val uri: String) {
     val grouped: String get() = secret.chunked(4).joinToString(" ")
     /* The address an authenticator app opens, only when it is one: nothing else the server sent is ever opened. */
     val link: String? get() = uri.takeIf { it.startsWith("otpauth://totp/") }
+
+    companion object {
+        /*
+         * The line under "Remove my other devices". The count is only for the words: unknown (the list
+         * didn't load) or zero, the line says what ticking does without one, and the box is there all the same.
+         */
+        fun othersLine(others: Int?): String =
+            if (others == null || others <= 0) "Any other device signed in to your account will need to sign in again, and will be asked for the second step."
+            else "${if (others == 1) "One other device is" else "$others other devices are"} signed in without the second step. They’ll need to sign in again, and will be asked for it."
+    }
 }
 
 /* One line of Recent security activity (docs/two-step-design.md 7): a kind of event, of method and of device; never a name or an address. */
@@ -269,13 +305,14 @@ data class SecurityEvent(val id: String, val kind: String, val method: String?, 
         return when (kind) {
             "sign-in" -> with?.let { "Signed in with your password and $it" } ?: "Signed in"
             "step-failed" -> with?.let { "Wrong answer to the second step, with $it" } ?: "Wrong answer to the second step"
-            "totp-frozen" -> "Authenticator app paused after many wrong codes"
+            "totp-frozen" -> "Authenticator app paused after many wrong answers"
             "backup-code-used" -> "Backup code used"
             "phrase-used" -> "Recovery phrase used for the second step"
             "two-step-on" -> "Two-step sign-in turned on"
             "two-step-off" -> "Two-step sign-in turned off"
-            "method-added" -> "Authenticator app replaced"
-            "method-removed" -> "Authenticator app removed"
+            // Said by the kind of method, so the line is right for a security key too.
+            "method-added" -> when (method) { "webauthn" -> "Security key added"; "totp" -> "Authenticator app replaced"; else -> "Second-step method added" }
+            "method-removed" -> when (method) { "webauthn" -> "Security key removed"; "totp" -> "Authenticator app removed"; else -> "Second-step method removed" }
             "backup-codes-made" -> "New backup codes made"
             else -> "Security change"
         }
@@ -343,12 +380,31 @@ object TwoStep {
     }
 
     /* A pending authenticator app, good for ten minutes: the key to type and the address to open. `twoStep` once the step is on (replacing the app). */
-    fun startAuthenticator(at: Shared.Session, password: String, twoStep: StepAnswer? = null): TotpEnrolment {
-        val reply = Auth.callAt(at, "/api/auth/two-step/totp", change(at, password, twoStep), whole = true, lost = StepWords.LOST_SETUP)
-        val secret = reply.optString("secret")
-        if (secret.isEmpty() || reply.optString("id").isEmpty() || reply.opt("uri") !is String) throw LostReply(StepWords.LOST_SETUP)
-        return TotpEnrolment(reply.getString("id"), secret, reply.getString("uri"))
+    fun startAuthenticator(at: Shared.Session, password: String, twoStep: StepAnswer? = null): TotpEnrolment = Auth.passwordTurn {
+        enrolment(Auth.callAt(at, "/api/auth/two-step/totp", change(at, password, twoStep), whole = true, lost = StepWords.LOST_SETUP)) ?: throw LostReply(StepWords.LOST_SETUP)
     }
+
+    /*
+     * The readers below take a 200's body and give the server's own answer, or null: the web's
+     * `readEnrolment`, `readRemoved` and `readBackupCodes` (packages/auth/src/login-reply.ts). A body
+     * that is merely an object (a proxy's `{ "error": … }`) is none of them, and its change is not
+     * reported as made.
+     */
+    private fun JSONObject.textAt(key: String): String? = (opt(key) as? String)?.takeIf { it.isNotEmpty() }
+    private fun texts(list: org.json.JSONArray?): List<String>? {
+        val items = list?.let { all -> (0 until all.length()).map { all.opt(it) } }.orEmpty()
+        return if (items.isNotEmpty() && items.all { it is String && it.isNotEmpty() }) items.map { it as String } else null
+    }
+
+    /* A pending app: its id, its key and its address, each there. */
+    internal fun enrolment(body: JSONObject): TotpEnrolment? =
+        TotpEnrolment(body.textAt("id") ?: return null, body.textAt("secret") ?: return null, body.textAt("uri") ?: return null)
+
+    /* A removed method: `removed` true, and whether the step is still on. */
+    internal fun removed(body: JSONObject): Boolean? = if (body.opt("removed") == true) body.opt("on") as? Boolean else null
+
+    /* A new set of codes: a list that is not empty, of text that is not empty. */
+    internal fun codes(body: JSONObject): List<String>? = texts(body.optJSONArray("codes"))
 
     /* What confirming the pending app did: it turned the step on (the ten backup codes, shown once), or it replaced the app. */
     sealed class Confirmed {
@@ -364,10 +420,7 @@ object TwoStep {
      */
     internal fun confirmed(body: JSONObject): Confirmed? {
         if (body.length() != 1) return null
-        body.optJSONArray("backupCodes")?.let { codes ->
-            val texts = (0 until codes.length()).map { codes.opt(it) }
-            return if (texts.isNotEmpty() && texts.all { it is String && it.isNotEmpty() }) Confirmed.TurnedOn(texts.map { it as String }) else null
-        }
+        if (body.has("backupCodes")) return texts(body.optJSONArray("backupCodes"))?.let(Confirmed::TurnedOn)
         // The JSON `true` itself: not 1, not "true".
         return if (body.opt("replaced") == true) Confirmed.Replaced else null
     }
@@ -387,19 +440,15 @@ object TwoStep {
     }
 
     /* Removes a method: the password and the step. Returns whether the step is still on; removing the last turns it off and deletes the codes. */
-    fun removeMethod(at: Shared.Session, id: String, password: String, twoStep: StepAnswer?): Boolean {
-        val reply = Auth.callAt(at, "/api/auth/two-step/methods/$id", change(at, password, twoStep), "DELETE", whole = true, lost = StepWords.LOST_TURNED_OFF)
-        // The server's own answer: `removed` true and whether the step is still on. Without both, nothing says it was removed.
-        if (reply.opt("removed") != true || reply.opt("on") !is Boolean) throw LostReply(StepWords.LOST_TURNED_OFF)
-        return reply.getBoolean("on")
+    fun removeMethod(at: Shared.Session, id: String, password: String, twoStep: StepAnswer?): Boolean = Auth.passwordTurn {
+        removed(Auth.callAt(at, "/api/auth/two-step/methods/$id", change(at, password, twoStep), "DELETE", whole = true, lost = StepWords.LOST_TURNED_OFF))
+            ?: throw LostReply(StepWords.LOST_TURNED_OFF)
     }
 
     /* A new set of ten backup codes, which replaces the old one, shown once. */
-    fun newBackupCodes(at: Shared.Session, password: String, twoStep: StepAnswer?): List<String> {
-        val codes = Auth.callAt(at, "/api/auth/two-step/backup-codes", change(at, password, twoStep), whole = true, lost = StepWords.LOST_NEW_CODES).optJSONArray("codes")
-        val texts = codes?.let { list -> (0 until list.length()).map { list.opt(it) } }.orEmpty()
-        if (texts.isEmpty() || !texts.all { it is String && it.isNotEmpty() }) throw LostReply(StepWords.LOST_NEW_CODES)
-        return texts.map { it as String }
+    fun newBackupCodes(at: Shared.Session, password: String, twoStep: StepAnswer?): List<String> = Auth.passwordTurn {
+        codes(Auth.callAt(at, "/api/auth/two-step/backup-codes", change(at, password, twoStep), whole = true, lost = StepWords.LOST_NEW_CODES))
+            ?: throw LostReply(StepWords.LOST_NEW_CODES)
     }
 
     /* The codes as a note to keep: what the web's download writes. */

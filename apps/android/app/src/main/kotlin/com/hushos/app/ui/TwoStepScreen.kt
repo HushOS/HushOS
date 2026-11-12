@@ -117,10 +117,11 @@ private val mono @Composable get() = MaterialTheme.typography.bodyLarge.copy(fon
  * offered beneath in plain words.
  */
 @Composable
-internal fun StepFields(methods: List<StepMethod>, draft: StepDraft, onDraft: (StepDraft) -> Unit, problem: String, enabled: Boolean, focus: Boolean = false, onGo: (() -> Unit)? = null) {
+internal fun StepFields(methods: List<StepMethod>, draft: StepDraft, onDraft: (StepDraft) -> Unit, problem: String, enabled: Boolean, focus: Boolean = false, offered: Boolean = true, onGo: (() -> Unit)? = null) {
     val alpine = Alpine.colors
     val method = draft.shown(methods)
-    if (method == null) { Text(StepWords.CANNOT_ANSWER, color = alpine.danger, style = MaterialTheme.typography.bodyMedium); return }
+    // Nothing this build knows was offered: update. The ways ran out after refusals: updating would not help.
+    if (method == null) { Text(if (offered) StepWords.NO_WAY_LEFT else StepWords.CANNOT_ANSWER, color = alpine.danger, style = MaterialTheme.typography.bodyMedium); return }
     val focusRequester = remember { FocusRequester() }
     if (focus) LaunchedEffect(method) { runCatching { focusRequester.requestFocus() } }
     val go = KeyboardActions(onGo = { onGo?.invoke() })
@@ -206,7 +207,7 @@ internal fun StepUpFields(holder: StepUpHolder, enabled: Boolean) {
     val step = holder.step
     if (!step.asked) return
     Text("Two-step sign-in is on, so this needs your second step too.", style = MaterialTheme.typography.bodyMedium, color = Alpine.colors.inkMuted)
-    StepFields(step.methods, step.draft, { holder.step = step.typed(it) }, step.problem, enabled)
+    StepFields(step.methods, step.draft, { holder.step = step.typed(it) }, step.problem, enabled, offered = step.challenge?.methods?.isNotEmpty() == true)
 }
 
 /* MARK: Signing in */
@@ -272,7 +273,7 @@ fun SignInStepScreen(model: DriveViewModel, challenge: com.hushos.core.StepChall
             notice, color = alpine.warning, style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.fillMaxWidth().background(alpine.warningSoft, RoundedCornerShape(16.dp)).padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S3),
         )
-        StepFields(methods, draft, { draft = it; fieldError = ""; lost = null }, fieldError, enabled = !busy, focus = true, onGo = ::submit)
+        StepFields(methods, draft, { draft = it; fieldError = ""; lost = null }, fieldError, enabled = !busy, focus = true, offered = challenge.methods.isNotEmpty(), onGo = ::submit)
         if (method != null) Button(onClick = ::submit, enabled = !busy, modifier = Modifier.fillMaxWidth().padding(top = AlpineSpace.S2).height(48.dp)) {
             Text(if (busy) "Checking" else if (lost == null) "Continue" else "Try again")
         }
@@ -332,7 +333,7 @@ fun TwoStepScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) 
         TwoStepPage.MAIN -> {}
     }
     AccountPage("Two-step sign-in", onBack) {
-        Text("A second step after your password when you sign in.", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted,
+        Text("A second step stops someone who has your password from signing in. It doesn’t change how your files are encrypted.", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted,
             modifier = Modifier.padding(horizontal = AlpineSpace.S4))
         val current = status
         when {
@@ -423,8 +424,9 @@ private fun BackupCodes(model: DriveViewModel, codes: List<String>, email: Strin
         style = MaterialTheme.typography.bodySmall, color = alpine.inkMuted)
     Row(horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
         OutlinedButton(onClick = {
+            // Marked sensitive and cleared two minutes later, as the recovery phrase's copy is (SensitiveClipboard).
             SensitiveClipboard.copy(context, "Backup codes", codes.joinToString("\n"))
-            model.notify("Copied. Paste them somewhere private, then clear your clipboard.")
+            model.notify("Backup codes copied. Cleared from the clipboard in two minutes.")
         }) { Text("Copy") }
         OutlinedButton(onClick = {
             val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, TwoStep.codesNote(codes, email)).putExtra(Intent.EXTRA_SUBJECT, "HushOS backup codes")
@@ -450,10 +452,13 @@ private fun AuthenticatorScreen(model: DriveViewModel, replacing: Boolean, email
     var error by remember { mutableStateOf<String?>(null) }
     var app by retain { mutableStateOf<TotpEnrolment?>(null) }
     var code by retain { mutableStateOf("") }
-    var others by remember { mutableStateOf(0) }
+    // How many other devices are signed in, for the words only: null until the list answers, or when it doesn't.
+    var others by remember { mutableStateOf<Int?>(null) }
     var signOutOthers by rememberSaveable { mutableStateOf(true) }
     var codes by retain { mutableStateOf<List<String>?>(null) }
-    var othersKept by remember { mutableStateOf(false) }
+    // The removal of other devices, which runs behind the codes and never holds them or this page: null when none is asked or it is done.
+    var removing by remember { mutableStateOf<Boolean?>(null) }
+    var notRemoved by remember { mutableStateOf(false) }
     val codeReady = code.filterNot { it.isWhitespace() }.let { it.length == 6 && it.all { digit -> digit in '0'..'9' } }
 
     // Replacing needs the step from the start: its fields are there when the page opens.
@@ -469,7 +474,8 @@ private fun AuthenticatorScreen(model: DriveViewModel, replacing: Boolean, email
                 FormBody {
                     Text("Two-step sign-in is on.", style = MaterialTheme.typography.bodyLarge)
                     BackupCodes(model, made, email)
-                    if (othersKept) Text("Your other devices are still signed in. You can remove them under Devices.", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
+                    if (removing == true) Text("Removing your other devices", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
+                    if (notRemoved) Text(StepWords.OTHERS_NOT_REMOVED, style = MaterialTheme.typography.bodyMedium, color = alpine.danger)
                     Button(onClick = { onDone("Two-step sign-in is on.") }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text("Done") }
                 }
             }
@@ -497,7 +503,7 @@ private fun AuthenticatorScreen(model: DriveViewModel, replacing: Boolean, email
                         }
                         TextButton(onClick = {
                             SensitiveClipboard.copy(context, "Authenticator key", enrolment.secret)
-                            model.notify("Key copied")
+                            model.notify("Key copied. Cleared from the clipboard in two minutes.")
                         }) { Text("Copy key") }
                     }
                     NoKeyboardLearning {
@@ -510,12 +516,12 @@ private fun AuthenticatorScreen(model: DriveViewModel, replacing: Boolean, email
                             modifier = Modifier.fillMaxWidth().semantics { contentType = ContentType.SmsOtpCode },
                         )
                     }
-                    if (!replacing && others > 0) {
+                    // Offered whenever the step is being turned on, whatever the device list said or didn't.
+                    if (!replacing) {
                         Row(Modifier.fillMaxWidth().toggleable(value = signOutOthers, enabled = !pending, role = Role.Switch) { signOutOthers = it }, verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
-                                Text("Sign out my other devices", style = MaterialTheme.typography.bodyLarge)
-                                Text("${if (others == 1) "One other device is" else "$others other devices are"} signed in without the second step. Signing in again asks for it.",
-                                    style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
+                                Text("Remove my other devices", style = MaterialTheme.typography.bodyLarge)
+                                Text(TotpEnrolment.othersLine(others), style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
                             }
                             Switch(checked = signOutOthers, onCheckedChange = null, modifier = Modifier.padding(start = AlpineSpace.S3))
                         }
@@ -530,12 +536,25 @@ private fun AuthenticatorScreen(model: DriveViewModel, replacing: Boolean, email
                             model.twoStep { TwoStep.confirmAuthenticator(it, enrolment.id, code) }.fold(
                                 { confirmed ->
                                     when (confirmed) {
-                                        TwoStep.Confirmed.Replaced -> onDone("Authenticator app replaced.")
+                                        TwoStep.Confirmed.Replaced ->
+                                            if (replacing) onDone("Authenticator app replaced.")
+                                            else {
+                                                // Turning the step on always comes back with the codes. An answer without them is not
+                                                // the server's answer to that: nothing is claimed, and the settings are read again.
+                                                error = StepWords.LOST_TURNED_ON
+                                                onReread()
+                                            }
                                         is TwoStep.Confirmed.TurnedOn -> {
-                                            // The other devices signed in before the step was on: gone unless the person keeps them.
-                                            if (others > 0 && signOutOthers && !model.removeOtherDevices(password)) othersKept = true
-                                            password = ""
+                                            // The codes first: they are shown once, and nothing that follows may cost them.
                                             codes = confirmed.backupCodes
+                                            // Then the other devices, which signed in before the step was on: removed whenever the box
+                                            // is ticked, whatever the list said (the server removes none when there are none). It runs
+                                            // in the view model, behind the codes: Done closes this page meanwhile.
+                                            if (signOutOthers) {
+                                                removing = true
+                                                model.removeOtherDevices(password) { removed -> removing = null; notRemoved = !removed }
+                                            }
+                                            password = ""
                                         }
                                     }
                                 },
@@ -561,7 +580,7 @@ private fun AuthenticatorScreen(model: DriveViewModel, replacing: Boolean, email
                 FormBody {
                     Text(
                         if (replacing) "The new app takes over once you confirm it. Your backup codes stay as they are."
-                        else "After your password, HushOS will ask for a code from an authenticator app on your phone. Your recovery phrase works as the second step too.",
+                        else "After your password, HushOS will ask for a code from an authenticator app on your phone. Your recovery phrase works as the second step too, so keep it apart from your password.",
                         style = MaterialTheme.typography.bodyLarge,
                     )
                     ConfirmPassword(password, { password = it; error = null }, tried, enabled = !pending)

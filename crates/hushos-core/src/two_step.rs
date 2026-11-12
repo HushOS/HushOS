@@ -201,7 +201,8 @@ pub enum StepRefusal {
     Expired,
     /// `step-frozen`: the authenticator app is paused here. A backup code or the phrase.
     Frozen,
-    /// `step-limited`: too many wrong codes for now. The phrase, or waiting.
+    /// `step-limited`: the shared budget for codes is spent for now. It covers the
+    /// authenticator app and the backup codes together; the phrase, or waiting.
     Limited,
     /// `two-step`: the action needs the step and came without it. A challenge, then the step.
     Required,
@@ -209,8 +210,10 @@ pub enum StepRefusal {
     SetupRequired,
     /// `update-required`: this build cannot answer what the account asks for.
     UpdateRequired,
-    /// `step-unavailable`: the server cannot check this method right now, and nothing
-    /// changed. The phrase, or later.
+    /// `step-unavailable`: the server cannot check the method that was tried right now, and
+    /// nothing changed. It is said per method (the app's secret and the backup codes can sit
+    /// under different server keys), and the reply names none: the app withdraws only the
+    /// one it sent, and keeps the others offered.
     Unavailable,
     /// A 429 without a code: the address's own limit, not the step's. Nothing about the
     /// step was looked at, and it is still there when the limit lets a request through.
@@ -711,6 +714,32 @@ mod tests {
                 read(503, said.into()),
                 StepReply::Refused { refusal: StepRefusal::Unavailable, .. }
             ));
+        }
+    }
+
+    #[test]
+    fn unavailable_and_limited_are_told_apart_by_the_code_never_by_the_status() {
+        // They withdraw different things: `unavailable` only the method that was tried, `limited`
+        // the code methods together. Read by status, a `step-limited` behind a 503 would leave a
+        // spent budget's field on screen, and a `step-unavailable` behind a 429 would take the
+        // backup codes away with the app.
+        let read = |status: u16, code: &str| {
+            let body = json!({ "message": "The server’s words.", "code": code }).to_string();
+            match sign_in_reply_read(status, body.clone()) {
+                StepReply::Refused { refusal, .. } => {
+                    // The same at a change, where the step rides on another request.
+                    assert_eq!(
+                        step_change_reply_read(status, body),
+                        StepReply::Refused { refusal, message: "The server’s words.".into() }
+                    );
+                    refusal
+                }
+                other => panic!("expected a refusal, got {other:?}"),
+            }
+        };
+        for status in [401, 403, 429, 503] {
+            assert_eq!(read(status, "step-unavailable"), StepRefusal::Unavailable, "{status}");
+            assert_eq!(read(status, "step-limited"), StepRefusal::Limited, "{status}");
         }
     }
 
