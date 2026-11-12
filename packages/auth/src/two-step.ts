@@ -442,8 +442,12 @@ async function checkAnswer(input: {
     const { attempt } = taken;
     // Only what can be guessed has a budget: the phrase is never refused for a spent one.
     const bucket = proof.kind === 'phrase' ? null : codeBucket(attempt);
-    if (bucket && !(await authRepository.consumeRateLimit(bucket, CODE_BUDGET, CODE_BUDGET_MS)))
+    if (bucket && !(await authRepository.consumeRateLimit(bucket, CODE_BUDGET, CODE_BUDGET_MS))) {
+        // Refused unchecked, so the slot goes back: the refusal says the phrase still works,
+        // and on a token's last slot it would not if this one stayed taken.
+        await quietly('limited', () => twoStepRepository.returnStepAnswer(attempt));
         throw refusals.limited();
+    }
     let spend: twoStepRepository.StepSpend | null;
     try {
         spend = await rightAnswer(attempt, proof);

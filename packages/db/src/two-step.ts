@@ -67,7 +67,9 @@ import {
  * 2. For a code (authenticator or backup): `consumeRateLimit` on the pool's 15-minute bucket,
  *    before checking. That budget is charged up front and handed back on success, so
  *    requests racing a nearly spent budget cannot all be checked.
- * 3. Check the answer.
+ * 3. Check the answer. An answer refused before it is checked (the budget is spent, or the
+ *    server has no key for the row) used nothing: `returnStepAnswer` gives its slot back, so
+ *    the token's remaining answers are still there for a method that can be checked.
  * 4. Wrong: `recordStepFailure` with what step 1 returned. The bucket stays charged.
  * 5. Right: the gated function, with the token and what the answer spends; then
  *    `releaseRateLimit` on the bucket. If the gated function answers that the code was

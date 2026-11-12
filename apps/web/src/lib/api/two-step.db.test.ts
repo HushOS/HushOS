@@ -1124,3 +1124,45 @@ describe('what the account hears and keeps of wrong answers', () => {
         expect(log).toContain('two-step-on:totp');
     }, 90_000);
 });
+
+describe('a spent code budget', () => {
+    test('takes nothing from the token: after four wrong answers and a refused code, the phrase still signs in', async () => {
+        const { who, secret } = await stepped();
+        // Ten wrong codes on two tokens: the 15-minute budget is spent.
+        for (let token = 0; token < 2; token++) {
+            edge.state.address = `198.51.100.${token + 1}`;
+            const spent = await toStep(who);
+            for (let index = 0; index < 5; index++)
+                expect(
+                    (await answer(spent.token, { kind: 'totp', code: await wrongCode(secret) }))
+                        .status,
+                ).toBe(401);
+        }
+        // A new token, with four of its five answers used on wrong phrases.
+        edge.state.address = '198.51.100.3';
+        const step = await toStep(who);
+        for (let index = 0; index < 4; index++)
+            expect(await answer(step.token, { kind: 'phrase', signature: b64(64) })).toMatchObject({
+                status: 401,
+                body: { code: 'step-wrong' },
+            });
+        // A code now, even the right one, is refused unchecked, and told what still works.
+        expect(
+            await answer(step.token, { kind: 'totp', code: await appCode(secret) }),
+        ).toMatchObject({
+            status: 429,
+            body: {
+                code: 'step-limited',
+                message:
+                    'Too many wrong codes. Try again in 15 minutes, or use your recovery phrase.',
+            },
+        });
+        expect(await edge.db.select().from(edge.schema.twoStepAttempts)).toMatchObject([
+            { answers: 4, failures: 4 },
+        ]);
+        // So the phrase must: the refusal did not take the token's last answer.
+        const passed = await answer(step.token, await edge.phraseProof(who.phrase, step));
+        expect(passed.status).toBe(200);
+        expect(passed.session).toBeTruthy();
+    }, 120_000);
+});
