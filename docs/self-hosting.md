@@ -2325,3 +2325,42 @@ Behaviour:
 - A family dissolved by a container of the previous release during the rollout owes no email, and closes nothing pending.
 - One dissolved by this release before its worker runs waits for it (a week at most).
 - Nothing is written with `GROUPS_ENABLED=false`.
+
+#### Two-step sign-in tables release (`20261112151421_two_step`, `20261112151423_two_step_session_guard`)
+
+This release adds the database side of two-step sign-in ([docs/two-step-design.md](two-step-design.md)) and nothing else. No route makes a second-step method yet, so nothing changes for anyone until a later release turns the feature on.
+
+What the first migration adds:
+
+- Five empty tables: `two_step_factors`, `two_step_backup_codes`, `two_step_attempts`, `two_step_state` and `account_security_events`.
+- `sessions.two_step_at`, nullable with no default, and `account_devices.two_step_failures`, with a constant default. Neither rewrites its table.
+- `two-step` among the purposes the check on `opaque_login_attempts` accepts.
+
+What the second adds:
+
+- A trigger on `sessions`, `sessions_two_step_guard`, the first trigger in the schema. It refuses a new session that did not pass the second step (`two_step_at` is null) for an account that has a confirmed method. It also refuses an `UPDATE` that hands such a session to that account or gives it a new token.
+- It is there for rolling updates and rollbacks. A release from before two-step sign-in does not know the step, and would sign such an account in with the password alone. With the trigger, that sign-in fails instead: the older container answers 500. Its log carries only the error's code, `23514` (a check violation); Postgres's own log names `sessions_two_step_guard`.
+- Accounts without a confirmed method are not affected, and neither are sessions that were open before an account turned the step on.
+- It covers sign-in only. An older container still skips the step at a password change, a rotation and account deletion, which need a live session and the password. So finish a rollout before people turn the step on, and don't roll back past this release once they have.
+- The trigger reads `two_step_factors` as the role that writes the session. With a split-role setup, the default privileges under [One role per process](#one-role-per-process) cover it. A role that cannot read that table cannot sign anyone in.
+
+Locks:
+
+- The two `ALTER TABLE ... ADD COLUMN` take an exclusive lock on `account_devices` and then `sessions`, and hold it until drizzle's single transaction commits. Every signed-in request waits meanwhile: milliseconds, since no row is rewritten. The check on `two_step_failures` reads `account_devices` once under that lock.
+- The new tables' foreign keys lock `users` and `account_devices` against writes, and the trigger locks `sessions` against writes, until the run commits.
+- Each lock waits at most five seconds (`lock_timeout`). A lock not had in time, or a deadlock with a live request, fails the migration with nothing applied. Run it again.
+
+Containers of the previous release keep working beside the new ones: they never write the new columns, and no account has a method yet.
+
+To take the schema back, run the two undo scripts that ship beside the migrations, as the role that migrates, in this order:
+
+```bash
+psql "$MIGRATION_DATABASE_URL" -f packages/db/drizzle/20261112151423_two_step_session_guard/undo.sql
+psql "$MIGRATION_DATABASE_URL" -f packages/db/drizzle/20261112151421_two_step/undo.sql
+```
+
+- Each is one transaction, and removes its own row from `drizzle.__drizzle_migrations`. The second stops, changing nothing, while the trigger is still there.
+- The first removes only the trigger. From then on an older container signs every account in with the password alone, whatever methods it has.
+- The second drops the tables and columns. That deletes every account's methods, backup codes and security log, and so turns the second step off for everyone who had it. Take a backup first; nothing else brings them back.
+- Then run the previous release's images only: this release's worker waits for the migrations and exits without them.
+- `packages/db/src/two-step.migration.test.ts` runs both scripts against a migrated database and checks that the schema is exactly what it was before.

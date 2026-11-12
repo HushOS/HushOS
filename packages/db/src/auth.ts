@@ -51,6 +51,8 @@ import {
     removedSessionTokens,
     serverSecrets,
     sessions,
+    twoStepAttempts,
+    twoStepFactors,
     userSettings,
     users,
     type DeviceKind,
@@ -288,6 +290,8 @@ export const REMOVED_TOKEN_SECONDS = 7 * 24 * 60 * 60;
 /* A keyed device with no session for this long is revoked; a revoked row this old is deleted. */
 export const DEVICE_IDLE_DAYS = 90;
 export const DEVICE_REVOKED_DAYS = 90;
+/* How long a second-step method may wait to be confirmed (docs/two-step-design.md 2). */
+export const PENDING_FACTOR_SECONDS = 10 * 60;
 
 export type CreatedDevice = 'enrolment' | 'password';
 
@@ -301,6 +305,11 @@ export type CreatedDevice = 'enrolment' | 'password';
  *   `password` in every other case.
  * A bad or revoked proof never fails the sign-in; it just makes a new device.
  * The device's other session, if any, ends: one live session per device.
+ *
+ * `twoStepAt` is when the sign-in passed the second step
+ * (docs/two-step-design.md 4). An account with a confirmed factor gets no
+ * session without it: the database refuses the row (`sessions_two_step_guard`)
+ * and this throws, with nothing written.
  */
 export async function createSession(input: {
     userId: string;
@@ -309,6 +318,7 @@ export async function createSession(input: {
     previousTokenHash: Buffer | null;
     expiresAt: Date;
     device?: { id: string; signature: Buffer; attemptDigest: Buffer };
+    twoStepAt?: Date | null;
 }) {
     return db.transaction(async (tx) => {
         const [user] = await tx
@@ -424,6 +434,7 @@ export async function createSession(input: {
             deviceId: device.id,
             expiresAt: input.expiresAt,
             lastSeenAt: now,
+            twoStepAt: input.twoStepAt ?? null,
         });
         const { suspendedAt: _suspendedAt, createdAt: _createdAt, ...plain } = user;
         return {
@@ -904,6 +915,7 @@ export async function cleanupExpired(options: { batchSize?: number; signal?: Abo
     const idleCutoff = new Date(now.getTime() - DEVICE_IDLE_DAYS * 24 * 60 * 60 * 1000);
     const revokedCutoff = new Date(now.getTime() - DEVICE_REVOKED_DAYS * 24 * 60 * 60 * 1000);
     const noSession = sql`not exists (select 1 from ${sessions} where ${sessions.deviceId} = ${accountDevices.id})`;
+    const pendingCutoff = new Date(now.getTime() - PENDING_FACTOR_SECONDS * 1000);
     return {
         enrollments: await sweep(
             accountEnrollments,
@@ -926,6 +938,19 @@ export async function cleanupExpired(options: { batchSize?: number; signal?: Abo
             removedSessionTokens,
             removedSessionTokens.tokenHash,
             removedSessionTokens.expiresAt,
+        ),
+        stepAttempts: await sweep(
+            twoStepAttempts,
+            twoStepAttempts.tokenHash,
+            twoStepAttempts.expiresAt,
+        ),
+        // A second-step method nobody confirmed in its ten minutes: its sealed secret goes. The
+        // conditions are on the delete itself too: a row confirmed while this waited on it is
+        // read again there, and stays.
+        pendingFactors: await repeat(() =>
+            db.execute(
+                sql`delete from ${twoStepFactors} where ${twoStepFactors.confirmedAt} is null and ${twoStepFactors.createdAt} < ${pendingCutoff} and ${twoStepFactors.id} in (select ${twoStepFactors.id} from ${twoStepFactors} where ${twoStepFactors.confirmedAt} is null and ${twoStepFactors.createdAt} < ${pendingCutoff} limit ${batch})`,
+            ),
         ),
         // A device without a key and without a session can never come back: neither a
         // signature nor a cookie leads to it any more. A day's grace for one just made.
@@ -1219,10 +1244,10 @@ export async function getAccountSetup(userId: string) {
     };
 }
 
-type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /* Whether the session is live and on the account's current credential: a rotation since ends it. */
-async function sessionIsCurrent(
+export async function sessionIsCurrent(
     tx: Tx,
     input: { userId: string; credentialVersion: number; sessionTokenHash: Buffer },
 ) {
