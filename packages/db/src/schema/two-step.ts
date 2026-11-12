@@ -142,11 +142,15 @@ export const twoStepBackupCodes = pgTable(
 /*
  * Step tokens: what `login/finish` hands a sign-in that must pass the step, and what a session
  * asks for before a security change. Only the token's hash is kept. A token is bound to the
- * credential version it was made at, to its purpose and, for a step-up, to its session; a
- * sign-in's token also carries the device that proved its key (null without a proof) and the
- * browser's previous session, for the session the step will open.
+ * credential version it was made at, to its purpose and, for a step-up, to its session. A
+ * token that ends by opening a session (`login`, and `enrol` when policies arrive) also
+ * carries the device that proved its key (null without a proof) and the browser's previous
+ * session, for the session the step will open.
  *
- * `failures` counts wrong answers: the fifth deletes the row, so a stored count never passes 4.
+ * A token allows five answers. `answers` counts the slots taken: one is taken, under the
+ * account's lock, before an answer is checked, so however many requests arrive at once only
+ * five are ever checked. `failures` counts the slots that turned out wrong: the fifth deletes
+ * the row, so a stored count never passes 4, and never passes the slots taken.
  */
 export const twoStepAttempts = pgTable(
     'two_step_attempts',
@@ -161,6 +165,7 @@ export const twoStepAttempts = pgTable(
         deviceId: uuid('device_id').references(() => accountDevices.id, { onDelete: 'cascade' }),
         previousTokenHash: bytea('previous_token_hash'),
         webauthnChallenge: bytea('webauthn_challenge'),
+        answers: smallint().notNull().default(0),
         failures: smallint().notNull().default(0),
         createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
         expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
@@ -176,9 +181,10 @@ export const twoStepAttempts = pgTable(
             'two_step_attempts_purpose_binding',
             sql`(${table.purpose} in ('login', 'enrol') and ${table.sessionTokenHash} is null) or (${table.purpose} in (${sql.raw(sessionPurposes)}) and ${table.sessionTokenHash} is not null and octet_length(${table.sessionTokenHash}) = 32)`,
         ),
+        // Only a token that ends by opening a session carries what that session attaches to.
         check(
-            'two_step_attempts_login_only',
-            sql`${table.purpose} = 'login' or (${table.deviceId} is null and ${table.previousTokenHash} is null)`,
+            'two_step_attempts_session_opening',
+            sql`${table.purpose} in ('login', 'enrol') or (${table.deviceId} is null and ${table.previousTokenHash} is null)`,
         ),
         check(
             'two_step_attempts_lengths_valid',
@@ -186,7 +192,7 @@ export const twoStepAttempts = pgTable(
         ),
         check(
             'two_step_attempts_valid',
-            sql`${table.credentialVersion} > 0 and ${table.failures} between 0 and 4 and ${table.expiresAt} > ${table.createdAt}`,
+            sql`${table.credentialVersion} > 0 and ${table.failures} between 0 and 4 and ${table.answers} between ${table.failures} and 5 and ${table.expiresAt} > ${table.createdAt}`,
         ),
     ],
 );

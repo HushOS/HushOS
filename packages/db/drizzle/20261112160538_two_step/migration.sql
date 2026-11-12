@@ -30,13 +30,14 @@ CREATE TABLE "two_step_attempts" (
 	"device_id" uuid,
 	"previous_token_hash" bytea,
 	"webauthn_challenge" bytea,
+	"answers" smallint DEFAULT 0 NOT NULL,
 	"failures" smallint DEFAULT 0 NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"expires_at" timestamp with time zone NOT NULL,
 	CONSTRAINT "two_step_attempts_purpose_binding" CHECK (("purpose" in ('login', 'enrol') and "session_token_hash" is null) or ("purpose" in ('password', 'master-key', 'recovery-key', 'delete', 'two-step', 'device-approval', 'child-reset') and "session_token_hash" is not null and octet_length("session_token_hash") = 32)),
-	CONSTRAINT "two_step_attempts_login_only" CHECK ("purpose" = 'login' or ("device_id" is null and "previous_token_hash" is null)),
+	CONSTRAINT "two_step_attempts_session_opening" CHECK ("purpose" in ('login', 'enrol') or ("device_id" is null and "previous_token_hash" is null)),
 	CONSTRAINT "two_step_attempts_lengths_valid" CHECK (octet_length("token_hash") = 32 and ("previous_token_hash" is null or octet_length("previous_token_hash") = 32) and ("webauthn_challenge" is null or octet_length("webauthn_challenge") = 32)),
-	CONSTRAINT "two_step_attempts_valid" CHECK ("credential_version" > 0 and "failures" between 0 and 4 and "expires_at" > "created_at")
+	CONSTRAINT "two_step_attempts_valid" CHECK ("credential_version" > 0 and "failures" between 0 and 4 and "answers" between "failures" and 5 and "expires_at" > "created_at")
 );
 --> statement-breakpoint
 CREATE TABLE "two_step_backup_codes" (

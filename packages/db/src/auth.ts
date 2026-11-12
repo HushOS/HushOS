@@ -28,13 +28,28 @@ import {
     workspaces,
 } from './schema';
 import {
-    deviceSessionStatement,
+    lockSignIn,
+    provenDevice,
+    rememberedStep,
+    returningDevice,
+    sessionIsCurrent,
+    writeSession,
+    type DeviceProof,
+    type Tx,
+} from './sessions';
+import {
     keysStatement,
     successionConsentHolds,
     successionStatement,
     verifyHybrid,
-    verifySignature,
 } from './signatures';
+import {
+    PENDING_FACTOR_SECONDS,
+    passStepIfOn,
+    settleRefusal,
+    stepIsOn,
+    type StepProof,
+} from './two-step.core';
 import {
     accountDevices,
     accountEnrollments,
@@ -279,21 +294,12 @@ export async function consumeLoginAttempt(tokenHash: Buffer) {
     return attempt ?? null;
 }
 
-/*
- * How long after sign-up the first device counts as the one the account was
- * created on (`enrolment`), when the account has no device yet. Registration
- * opens no session, so this is how the first sign-in is told apart.
- */
-export const DEVICE_ENROLMENT_SECONDS = 30 * 60;
+export { DEVICE_ENROLMENT_SECONDS, type CreatedDevice } from './sessions';
 /* How long a removed device's session tokens are remembered, so it learns it was removed. */
 export const REMOVED_TOKEN_SECONDS = 7 * 24 * 60 * 60;
 /* A keyed device with no session for this long is revoked; a revoked row this old is deleted. */
 export const DEVICE_IDLE_DAYS = 90;
 export const DEVICE_REVOKED_DAYS = 90;
-/* How long a second-step method may wait to be confirmed (docs/two-step-design.md 2). */
-export const PENDING_FACTOR_SECONDS = 10 * 60;
-
-export type CreatedDevice = 'enrolment' | 'password';
 
 /*
  * Opens a session, on a device. In one transaction under the account's lock:
@@ -306,10 +312,15 @@ export type CreatedDevice = 'enrolment' | 'password';
  * A bad or revoked proof never fails the sign-in; it just makes a new device.
  * The device's other session, if any, ends: one live session per device.
  *
- * `twoStepAt` is when the sign-in passed the second step
- * (docs/two-step-design.md 4). An account with a confirmed factor gets no
- * session without it: the database refuses the row (`sessions_two_step_guard`)
- * and this throws, with nothing written.
+ * An account that has the second step on (docs/two-step-design.md 4) gets a
+ * session here only when the sign-in is exempt: the browser's previous session
+ * is live, on the same device, and passed the step less than 30 days ago. The
+ * new session inherits that moment and does not extend it. Every other sign-in
+ * is answered `{ twoStep: true }` with nothing written, and must pass the step
+ * (`twoStepRepository.openSteppedSession`). The check is made under the lock,
+ * so a method confirmed while this waited counts. The stamp is never the
+ * caller's to give, and the trigger `sessions_two_step_guard` stands behind
+ * this check.
  */
 export async function createSession(input: {
     userId: string;
@@ -317,135 +328,43 @@ export async function createSession(input: {
     tokenHash: Buffer;
     previousTokenHash: Buffer | null;
     expiresAt: Date;
-    device?: { id: string; signature: Buffer; attemptDigest: Buffer };
-    twoStepAt?: Date | null;
+    device?: DeviceProof;
 }) {
     return db.transaction(async (tx) => {
-        const [user] = await tx
-            .select({ ...userFields, suspendedAt: users.suspendedAt, createdAt: users.createdAt })
-            .from(users)
-            .where(eq(users.id, input.userId))
-            .for('update');
-        if (!user) return null;
-        if (user.suspendedAt) return { suspended: true as const };
-
-        const [record] = await tx
-            .select({ key: accountKeys })
-            .from(opaqueCredentials)
-            .innerJoin(
-                accountKeys,
-                and(
-                    eq(accountKeys.userId, opaqueCredentials.userId),
-                    eq(accountKeys.credentialVersion, opaqueCredentials.version),
-                ),
-            )
-            .where(
-                and(
-                    eq(opaqueCredentials.userId, user.id),
-                    eq(opaqueCredentials.version, input.credentialVersion),
-                ),
-            );
-        if (!record) return null;
-
-        const now = new Date();
-        let device: { id: string; registered: boolean } | null = null;
-        let created: CreatedDevice | null = null;
-        if (input.device && UUID_PATTERN.test(input.device.id)) {
-            const [row] = await tx
-                .select({ id: accountDevices.id, key: accountDevices.signingPublicKey })
-                .from(accountDevices)
-                .where(
-                    and(
-                        eq(accountDevices.id, input.device.id),
-                        eq(accountDevices.userId, user.id),
-                        isNull(accountDevices.revokedAt),
-                        isNotNull(accountDevices.approvedAt),
-                        isNotNull(accountDevices.signingPublicKey),
-                    ),
-                )
-                .for('update');
-            if (
-                row?.key &&
-                verifySignature(
-                    row.key,
-                    deviceSessionStatement({
-                        userId: user.id,
-                        deviceId: row.id,
-                        attemptDigest: input.device.attemptDigest,
-                    }),
-                    input.device.signature,
-                )
-            )
-                device = { id: row.id, registered: true };
+        const account = await lockSignIn(tx, input.userId, input.credentialVersion);
+        if (!account) return null;
+        if (account.suspended) return { suspended: true as const };
+        const device = await returningDevice(tx, {
+            userId: account.user.id,
+            provenDeviceId: await provenDevice(tx, account.user.id, input.device),
+            previousTokenHash: input.previousTokenHash,
+        });
+        let twoStepAt: Date | null = null;
+        if (await stepIsOn(tx, account.user.id)) {
+            // A new device has no session that could have passed the step.
+            twoStepAt = device
+                ? await rememberedStep(tx, {
+                      userId: account.user.id,
+                      credentialVersion: input.credentialVersion,
+                      previousTokenHash: input.previousTokenHash,
+                      deviceId: device.id,
+                  })
+                : null;
+            if (!twoStepAt) return { twoStep: true as const };
         }
-        if (!device && input.previousTokenHash) {
-            const [previous] = await tx
-                .select({ id: accountDevices.id, kind: accountDevices.kind })
-                .from(sessions)
-                .innerJoin(accountDevices, eq(accountDevices.id, sessions.deviceId))
-                .where(
-                    and(
-                        eq(sessions.tokenHash, input.previousTokenHash),
-                        eq(sessions.userId, user.id),
-                        isNull(accountDevices.revokedAt),
-                        isNotNull(accountDevices.approvedAt),
-                        isNull(accountDevices.signingPublicKey),
-                    ),
-                )
-                .for('update', { of: accountDevices });
-            if (previous) device = { id: previous.id, registered: previous.kind !== null };
-        }
-        const attached = device !== null;
-        if (!device) {
-            const [existing] = await tx
-                .select({ count: count() })
-                .from(accountDevices)
-                .where(eq(accountDevices.userId, user.id));
-            created =
-                (existing?.count ?? 0) === 0 &&
-                user.createdAt.getTime() > now.getTime() - DEVICE_ENROLMENT_SECONDS * 1000
-                    ? 'enrolment'
-                    : 'password';
-            const [row] = await tx
-                .insert(accountDevices)
-                .values({
-                    userId: user.id,
-                    approvedBy: created,
-                    approvedAt: now,
-                    createdAt: now,
-                    lastSeenAt: now,
-                })
-                .returning({ id: accountDevices.id });
-            if (!row) throw new Error('Could not create the device.');
-            device = { id: row.id, registered: false };
-        } else
-            await tx
-                .update(accountDevices)
-                .set({ lastSeenAt: now })
-                .where(eq(accountDevices.id, device.id));
-
-        if (input.previousTokenHash)
-            await tx.delete(sessions).where(eq(sessions.tokenHash, input.previousTokenHash));
-        await tx.delete(sessions).where(eq(sessions.deviceId, device.id));
-        await tx.insert(sessions).values({
-            userId: user.id,
+        const written = await writeSession(tx, {
+            user: account.user,
             credentialVersion: input.credentialVersion,
             tokenHash: input.tokenHash,
-            deviceId: device.id,
+            previousTokenHash: input.previousTokenHash,
             expiresAt: input.expiresAt,
-            lastSeenAt: now,
-            twoStepAt: input.twoStepAt ?? null,
+            device,
+            twoStepAt,
         });
-        const { suspendedAt: _suspendedAt, createdAt: _createdAt, ...plain } = user;
-        return {
-            user: plain,
-            key: record.key,
-            device: { id: device.id, attached, registered: device.registered, created },
-        };
+        const { createdAt: _createdAt, ...user } = account.user;
+        return { user, key: account.key, device: written };
     });
 }
-
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /*
  * The session behind a token, with its device, or null. Only a session on a
@@ -1144,7 +1063,8 @@ export async function deleteAccount(input: {
     userId: string;
     credentialVersion: number;
     sessionTokenHash: Buffer;
-}): Promise<boolean | 'group-holder' | 'busy' | 'pays' | 'unavailable'> {
+    twoStep?: StepProof;
+}): Promise<boolean | 'group-holder' | 'busy' | 'pays' | 'unavailable' | 'two-step'> {
     class Holder extends Error {}
     // They pay for a family's plan: a change to it holds its claim, or it renews (payerHold).
     class Busy extends Error {}
@@ -1166,6 +1086,8 @@ export async function deleteAccount(input: {
         if (error instanceof Busy) return 'busy';
         if (error instanceof Pays) return 'pays';
         if (error instanceof Refused) return false;
+        // The step did not pass: the departures above rolled back with it.
+        if (await settleRefusal(error)) return 'two-step';
         // It locks groups, areas and the account: a deadlock with a group write is retried.
         const code = pgCode(error);
         if (code === '40P01' || code === '40001') return 'unavailable';
@@ -1175,7 +1097,12 @@ export async function deleteAccount(input: {
 
 async function deleteAccountRow(
     tx: Tx,
-    input: { userId: string; credentialVersion: number; sessionTokenHash: Buffer },
+    input: {
+        userId: string;
+        credentialVersion: number;
+        sessionTokenHash: Buffer;
+        twoStep?: StepProof;
+    },
 ) {
     const [user] = await tx
         .select(userFieldsWithEmailKey)
@@ -1202,6 +1129,14 @@ async function deleteAccountRow(
             ),
         );
     if (!session) return false;
+    // With the step on, deletion needs it, after everything else has been checked: what the
+    // answer spends commits with the deletion, or rolls back with it.
+    await passStepIfOn(tx, {
+        userId: user.id,
+        purpose: 'delete',
+        sessionTokenHash: input.sessionTokenHash,
+        proof: input.twoStep,
+    });
     const [personal] = await tx
         .select()
         .from(personalWorkspaces)
@@ -1242,34 +1177,6 @@ export async function getAccountSetup(userId: string) {
         workspaceKey: !row.workspaceKey,
         workspaceId: row.workspace ?? null,
     };
-}
-
-export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
-
-/* Whether the session is live and on the account's current credential: a rotation since ends it. */
-export async function sessionIsCurrent(
-    tx: Tx,
-    input: { userId: string; credentialVersion: number; sessionTokenHash: Buffer },
-) {
-    const [session] = await tx
-        .select({ id: sessions.id })
-        .from(sessions)
-        .innerJoin(
-            opaqueCredentials,
-            and(
-                eq(opaqueCredentials.userId, sessions.userId),
-                eq(opaqueCredentials.version, sessions.credentialVersion),
-            ),
-        )
-        .where(
-            and(
-                eq(sessions.userId, input.userId),
-                eq(sessions.tokenHash, input.sessionTokenHash),
-                eq(sessions.credentialVersion, input.credentialVersion),
-                gt(sessions.expiresAt, new Date()),
-            ),
-        );
-    return session !== undefined;
 }
 
 // Existing accounts can add missing features, but can never overwrite permanent keys here.
@@ -1446,8 +1353,27 @@ export async function changeAccountSecurity(input: {
     /* The settings key re-wrapped under the new root, whenever the account has one. */
     settingsKey?: SettingsKeyInput;
     workspaces?: WorkspaceGrantInput[];
-}) {
-    return db.transaction(async (tx) => {
+    /*
+     * The second step, for an account that has it on (docs/two-step-design.md 4): the
+     * session's step token for this action, and what the answer spends. Without one that
+     * passes, the answer is `two-step` and nothing changes; the step is asked last, so a
+     * change that would be refused anyway spends nothing.
+     */
+    twoStep?: StepProof;
+}): Promise<boolean | 'two-step'> {
+    try {
+        return await db.transaction((tx) => changeSecurity(tx, input));
+    } catch (error) {
+        if (await settleRefusal(error)) return 'two-step';
+        throw error;
+    }
+}
+
+async function changeSecurity(
+    tx: Tx,
+    input: Parameters<typeof changeAccountSecurity>[0],
+): Promise<boolean> {
+    {
         const [user] = await tx
             .select(userFieldsWithEmailKey)
             .from(users)
@@ -1582,6 +1508,12 @@ export async function changeAccountSecurity(input: {
             if (Boolean(settingsKey) !== Boolean(input.settingsKey)) return false;
         } else if (input.identity || input.workspaces || input.identityHistory || input.settingsKey)
             return false;
+        await passStepIfOn(tx, {
+            userId: user.id,
+            purpose: input.action,
+            sessionTokenHash: input.sessionTokenHash,
+            proof: input.twoStep,
+        });
         const version = input.credentialVersion + 1;
         await tx
             .update(opaqueCredentials)
@@ -1648,7 +1580,7 @@ export async function changeAccountSecurity(input: {
                 ),
             );
         return true;
-    });
+    }
 }
 
 /* ------------------------------------------------------------------------- */

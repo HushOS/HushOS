@@ -4178,7 +4178,7 @@ describe('a self-grant written while its writer rotates their account key', () =
         await blocker.started;
         const write = put(m, 1);
         // The client read only the personal grant: the folder's self-grant did not exist yet.
-        let rotation: Promise<boolean> | undefined;
+        let rotation: ReturnType<typeof rotate> | undefined;
         try {
             expect(await pending(write)).toBe(true);
             rotation = rotate(m, [m.workspaceId]);

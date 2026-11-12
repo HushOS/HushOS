@@ -21,11 +21,18 @@
 -- rotation and account deletion. Only a session that already exists can get there, and it still
 -- needs the password (docs/two-step-design.md 10, "What it does not cover").
 --
+-- The function is SECURITY DEFINER with a fixed search_path: it reads "two_step_factors" as the role
+-- that owns it (the one that migrates), whatever role writes the session. A split-role install whose
+-- application role was never granted SELECT on the new table would otherwise fail every sign-in. It
+-- takes no argument and returns only the row it was given, so it lends that role nothing else.
+--
 -- CREATE TRIGGER takes a SHARE ROW EXCLUSIVE lock on "sessions": reads go on, and writes to
 -- "sessions" wait until the run commits.
 SET LOCAL lock_timeout = '5s';--> statement-breakpoint
 CREATE FUNCTION "sessions_two_step_guard"() RETURNS trigger
 LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
 AS $guard$
 BEGIN
 	IF TG_OP = 'UPDATE' AND NEW."user_id" = OLD."user_id" AND NEW."token_hash" = OLD."token_hash" THEN

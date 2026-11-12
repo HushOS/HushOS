@@ -16,8 +16,8 @@ import { afterAll, beforeAll, describe, expect, test } from 'vitest';
  * columns, defaults, constraints, indexes, triggers, functions and the migrations ledger.
  */
 
-const TABLES = '20261112151421_two_step';
-const GUARD = '20261112151423_two_step_session_guard';
+const TABLES = '20261112160538_two_step';
+const GUARD = '20261112160539_two_step_session_guard';
 
 const migrationsFolder = fileURLToPath(new URL('../drizzle', import.meta.url));
 const undo = (migration: string) =>
@@ -105,11 +105,11 @@ describe('the two-step migrations and their undo scripts', () => {
     }, 60_000);
 
     /* Runs an undo script as `psql -f` does: the file as it is, which opens and commits its own transaction. */
-    async function run(script: string) {
+    async function run(script: string, on: Client = client) {
         try {
-            await client.query(script);
+            await on.query(script);
         } catch (error) {
-            await client.query('rollback');
+            await on.query('rollback');
             throw error;
         }
     }
@@ -233,8 +233,36 @@ describe('the two-step migrations and their undo scripts', () => {
         // Which is what it costs: the password alone opens a session for this account again.
         await insertSession(userId, tablet, false);
 
-        // The tables' undo: the schema and the ledger are what they were before either migration.
-        await run(undo(TABLES));
+        // The tables' undo deletes what turns the step off for an account that has it on, so
+        // it stops, changing nothing, until the session says that is meant.
+        await expect(run(undo(TABLES))).rejects.toMatchObject({
+            message:
+                'HushOS: 1 account(s) have two-step sign-in on, and this deletes their methods and backup codes.',
+            hint: expect.stringContaining('hushos.delete_two_step=yes'),
+        });
+        expect(await schemaOf(client)).toEqual(unguarded);
+        expect((await client.query('select 1 from two_step_factors')).rowCount).toBe(1);
+        expect((await client.query('select 1 from two_step_backup_codes')).rowCount).toBe(1);
+        // Any other value is not the acknowledgement.
+        await client.query(`set hushos.delete_two_step = 'no'`);
+        await expect(run(undo(TABLES))).rejects.toMatchObject({
+            message: expect.stringContaining('1 account(s) have two-step sign-in on'),
+        });
+        expect(await schemaOf(client)).toEqual(unguarded);
+
+        // Acknowledged (PGOPTIONS="-c hushos.delete_two_step=yes"): the schema and the ledger
+        // are what they were before either migration.
+        await client.query('reset hushos.delete_two_step');
+        const acknowledged = new Client({
+            connectionString: scratchUrl.toString(),
+            options: '-c hushos.delete_two_step=yes',
+        });
+        await acknowledged.connect();
+        try {
+            await run(undo(TABLES), acknowledged);
+        } finally {
+            await acknowledged.end();
+        }
         expect(await schemaOf(client)).toEqual(before);
         // The rows that were there before, and the sessions made since, are still there.
         expect((await client.query('select 1 from users where id = $1', [userId])).rowCount).toBe(
@@ -249,7 +277,8 @@ describe('the two-step migrations and their undo scripts', () => {
         await migrate(upTo(GUARD), scratch, { migrationsFolder });
         const again = await schemaOf(client);
         expect(unnumbered(again)).toEqual(unnumbered(after));
-        // And an undo script run twice fails whole instead of half-applying.
+
+        // An undo script run twice fails whole instead of half-applying.
         await run(undo(GUARD));
         await expect(run(undo(GUARD))).rejects.toMatchObject({ code: '42704' });
         expect(await schemaOf(client)).toEqual({
@@ -258,5 +287,15 @@ describe('the two-step migrations and their undo scripts', () => {
             functions: before.functions,
             ledger: [...before.ledger, TABLES],
         });
+        // With no account on the step (a pending method is not one), the tables' undo asks for nothing.
+        await client.query(
+            `insert into two_step_factors (user_id, kind, totp_key_id, totp_nonce, totp_secret, totp_last_step)
+             values ($1, 'totp', $2, $3, $4, 0)`,
+            [userId, randomBytes(8), randomBytes(24), randomBytes(36)],
+        );
+        await run(undo(TABLES));
+        expect(await schemaOf(client)).toEqual(before);
+        await expect(run(undo(TABLES))).rejects.toMatchObject({ code: '42P01' });
+        expect(await schemaOf(client)).toEqual(before);
     }, 180_000);
 });
