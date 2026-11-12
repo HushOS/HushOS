@@ -664,7 +664,7 @@ struct AuthenticatorSheet: View {
         error = ""
         Task {
             do {
-                guard let made = try await TwoStep.confirmAuthenticator(id: app.id, code: code) else {
+                guard case .turnedOn(let made) = try await TwoStep.confirmAuthenticator(id: app.id, code: code) else {
                     done("Authenticator app replaced.")
                     dismiss()
                     return
@@ -682,6 +682,10 @@ struct AuthenticatorSheet: View {
                 code = ""
                 tried = false
                 error = timedOut.message
+            } catch StepError.lost(let said) {
+                // Nothing says whether the app was added: said so, and the settings behind are read again to show which.
+                self.error = said
+                done("")
             } catch {
                 if let words = ErrorWords.say(error) { self.error = words }
             }

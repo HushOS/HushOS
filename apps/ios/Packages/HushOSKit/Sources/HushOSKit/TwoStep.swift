@@ -48,8 +48,15 @@ public enum StepWords {
     public static let lostSignIn = "The server’s answer didn’t arrive, so HushOS can’t tell whether you were signed in. Try again."
     /* The step's reply was not the server's answer: the same answer can be sent again, or the sign-in started over. */
     public static let lostStep = "The server’s answer didn’t arrive, so HushOS can’t tell whether you were signed in. Try again. If you used a code, you may need to wait for the next one."
-    /* A change's reply was not the server's answer: it may have gone through. */
-    public static let lostChange = "The server’s answer didn’t arrive, so HushOS can’t tell whether that went through. Check, then try again."
+    /* A change's reply was not the server's answer: it may have gone through. The web's sentence, naming what is unknown. */
+    public static func lost(whether what: String) -> String { "The server’s answer didn’t arrive, so HushOS can’t tell whether \(what). Check before you try again." }
+    public static let lostChange = lost(whether: "that went through")
+    public static let lostSaved = lost(whether: "your change was saved")
+    public static let lostDeleted = lost(whether: "your account was deleted")
+    public static let lostSetup = lost(whether: "the setup was started")
+    public static let lostAppAdded = lost(whether: "your authenticator app was added")
+    public static let lostTurnedOff = lost(whether: "two-step sign-in was turned off")
+    public static let lostNewCodes = lost(whether: "new backup codes were made")
     /* A sign-in with no step screen (the Files sheet). */
     public static let openApp = "This account asks for a second step. Open HushOS and sign in there."
     /* A step none of whose methods this build knows. */
@@ -360,9 +367,9 @@ public enum TwoStep {
 
     /* A pending authenticator app, good for ten minutes: the key to type and the address to open. `twoStep` once the step is on (replacing the app). */
     public static func startAuthenticator(password: String, twoStep: StepAnswer? = nil) async throws -> TotpEnrolment {
-        let reply = try await Auth.call("/api/auth/two-step/totp", method: "POST", body: try await change(password, twoStep), whole: true)
-        guard let id = reply["id"] as? String, let secret = reply["secret"] as? String, let uri = reply["uri"] as? String, !secret.isEmpty else {
-            throw StepError.lost(StepWords.lostChange)
+        let reply = try await Auth.call("/api/auth/two-step/totp", method: "POST", body: try await change(password, twoStep), whole: true, lost: StepWords.lostSetup)
+        guard let id = reply["id"] as? String, let secret = reply["secret"] as? String, let uri = reply["uri"] as? String, !id.isEmpty, !secret.isEmpty else {
+            throw StepError.lost(StepWords.lostSetup)
         }
         return TotpEnrolment(id: id, secret: secret, uri: uri)
     }
@@ -373,32 +380,61 @@ public enum TwoStep {
         public var errorDescription: String? { message }
     }
 
-    /* Confirms the pending app with a code from it. The ten backup codes come back only when this turned the step on. */
-    public static func confirmAuthenticator(id: String, code: String) async throws -> [String]? {
+    /* What confirming the pending app did: it turned the step on (the ten backup codes, shown once), or it replaced the app. */
+    public enum Confirmed: Sendable, Equatable {
+        case turnedOn([String])
+        case replaced
+    }
+
+    /*
+     * The server's answer to a confirmation, exactly: `{ "backupCodes": [...] }` when it turned the
+     * step on, `{ "replaced": true }` when it replaced the app. Anything else is not one: an empty
+     * object, an object with other keys (a proxy's `{ "error": … }` with a 200), codes that are not
+     * text. Read as "replaced", such a reply would tell someone their new app is on when nothing says so.
+     */
+    static func confirmed(_ body: [String: Any]) -> Confirmed? {
+        guard body.count == 1, let (key, value) = body.first.map({ ($0.key, $0.value) }) else { return nil }
+        switch key {
+        case "backupCodes":
+            guard let codes = value as? [String], !codes.isEmpty, codes.allSatisfy({ !$0.isEmpty }) else { return nil }
+            return .turnedOn(codes)
+        case "replaced":
+            // The JSON `true` itself, not a 1 that bridges to it.
+            return (value as AnyObject) === kCFBooleanTrue ? .replaced : nil
+        default:
+            return nil
+        }
+    }
+
+    /* Confirms the pending app with a code from it. A reply that is neither of the server's two answers is lost: the app may have been added. */
+    public static func confirmAuthenticator(id: String, code: String) async throws -> Confirmed {
         let reply = try await Auth.request("/api/auth/two-step/totp/\(id)/confirm", method: "POST", body: ["code": code.filter { !$0.isWhitespace }])
         switch stepChangeReplyRead(status: UInt16(clamping: reply.status), body: reply.text) {
         case .done:
-            return reply.body["backupCodes"] as? [String]
+            guard let confirmed = confirmed(reply.body) else { throw StepError.lost(StepWords.lostAppAdded) }
+            return confirmed
         case .refused(let refusal, let message):
             if reply.status == 401 { throw AuthError.sessionEnded(session: reply.session.tag) }
             if reply.status == 404 { throw SetupTimedOut(message: message) }
             throw StepError.refused(refusal, message)
         case .step, .lost:
-            throw StepError.lost(StepWords.lostChange)
+            throw StepError.lost(StepWords.lostAppAdded)
         }
     }
 
     /* Removes a method: the password and the step. Returns whether the step is still on; removing the last turns it off and deletes the codes. */
     @discardableResult
     public static func removeMethod(_ id: String, password: String, twoStep: StepAnswer?) async throws -> Bool {
-        let reply = try await Auth.call("/api/auth/two-step/methods/\(id)", method: "DELETE", body: try await change(password, twoStep), whole: true)
-        return reply["on"] as? Bool ?? false
+        let reply = try await Auth.call("/api/auth/two-step/methods/\(id)", method: "DELETE", body: try await change(password, twoStep), whole: true, lost: StepWords.lostTurnedOff)
+        // The server's own answer: `removed` true and whether the step is still on. Without both, nothing says it was removed.
+        guard (reply["removed"] as AnyObject) === kCFBooleanTrue, let on = reply["on"] as? Bool else { throw StepError.lost(StepWords.lostTurnedOff) }
+        return on
     }
 
     /* A new set of ten backup codes, which replaces the old one, shown once. */
     public static func newBackupCodes(password: String, twoStep: StepAnswer?) async throws -> [String] {
-        let reply = try await Auth.call("/api/auth/two-step/backup-codes", method: "POST", body: try await change(password, twoStep), whole: true)
-        guard let codes = reply["codes"] as? [String], !codes.isEmpty else { throw StepError.lost(StepWords.lostChange) }
+        let reply = try await Auth.call("/api/auth/two-step/backup-codes", method: "POST", body: try await change(password, twoStep), whole: true, lost: StepWords.lostNewCodes)
+        guard let codes = reply["codes"] as? [String], !codes.isEmpty, codes.allSatisfy({ !$0.isEmpty }) else { throw StepError.lost(StepWords.lostNewCodes) }
         return codes
     }
 

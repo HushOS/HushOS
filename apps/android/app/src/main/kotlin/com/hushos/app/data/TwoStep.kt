@@ -37,8 +37,15 @@ object StepWords {
     const val LOST_SIGN_IN = "The server’s answer didn’t arrive, so HushOS can’t tell whether you were signed in. Try again."
     /* The step's reply was not the server's answer: the same answer can be sent again, or the sign-in started over. */
     const val LOST_STEP = "The server’s answer didn’t arrive, so HushOS can’t tell whether you were signed in. Try again. If you used a code, you may need to wait for the next one."
-    /* A change's reply was not the server's answer: it may have gone through. */
-    const val LOST_CHANGE = "The server’s answer didn’t arrive, so HushOS can’t tell whether that went through. Check, then try again."
+    /* A change's reply was not the server's answer: it may have gone through. The web's sentence, naming what is unknown. */
+    fun lost(whether: String) = "The server’s answer didn’t arrive, so HushOS can’t tell whether $whether. Check before you try again."
+    val LOST_CHANGE = lost("that went through")
+    val LOST_SAVED = lost("your change was saved")
+    val LOST_DELETED = lost("your account was deleted")
+    val LOST_SETUP = lost("the setup was started")
+    val LOST_APP_ADDED = lost("your authenticator app was added")
+    val LOST_TURNED_OFF = lost("two-step sign-in was turned off")
+    val LOST_NEW_CODES = lost("new backup codes were made")
     /* A sign-in with no step screen. */
     const val OPEN_APP = "This account asks for a second step. Open HushOS and sign in there."
     /* A step none of whose methods this build knows. */
@@ -337,35 +344,62 @@ object TwoStep {
 
     /* A pending authenticator app, good for ten minutes: the key to type and the address to open. `twoStep` once the step is on (replacing the app). */
     fun startAuthenticator(at: Shared.Session, password: String, twoStep: StepAnswer? = null): TotpEnrolment {
-        val reply = Auth.callAt(at, "/api/auth/two-step/totp", change(at, password, twoStep), whole = true)
+        val reply = Auth.callAt(at, "/api/auth/two-step/totp", change(at, password, twoStep), whole = true, lost = StepWords.LOST_SETUP)
         val secret = reply.optString("secret")
-        if (secret.isEmpty() || reply.optString("id").isEmpty()) throw LostReply(StepWords.LOST_CHANGE)
-        return TotpEnrolment(reply.getString("id"), secret, reply.optString("uri"))
+        if (secret.isEmpty() || reply.optString("id").isEmpty() || reply.opt("uri") !is String) throw LostReply(StepWords.LOST_SETUP)
+        return TotpEnrolment(reply.getString("id"), secret, reply.getString("uri"))
     }
 
-    /* Confirms the pending app with a code from it. The ten backup codes come back only when this turned the step on. */
-    fun confirmAuthenticator(at: Shared.Session, id: String, code: String): List<String>? {
+    /* What confirming the pending app did: it turned the step on (the ten backup codes, shown once), or it replaced the app. */
+    sealed class Confirmed {
+        data class TurnedOn(val backupCodes: List<String>) : Confirmed()
+        data object Replaced : Confirmed()
+    }
+
+    /*
+     * The server's answer to a confirmation, exactly: `{ "backupCodes": [...] }` when it turned the
+     * step on, `{ "replaced": true }` when it replaced the app. Anything else is not one: an empty
+     * object, an object with other keys (a proxy's `{ "error": … }` with a 200), codes that are not
+     * text. Read as "replaced", such a reply would tell someone their new app is on when nothing says so.
+     */
+    internal fun confirmed(body: JSONObject): Confirmed? {
+        if (body.length() != 1) return null
+        body.optJSONArray("backupCodes")?.let { codes ->
+            val texts = (0 until codes.length()).map { codes.opt(it) }
+            return if (texts.isNotEmpty() && texts.all { it is String && it.isNotEmpty() }) Confirmed.TurnedOn(texts.map { it as String }) else null
+        }
+        // The JSON `true` itself: not 1, not "true".
+        return if (body.opt("replaced") == true) Confirmed.Replaced else null
+    }
+
+    /* Confirms the pending app with a code from it. A reply that is neither of the server's two answers is lost: the app may have been added. */
+    fun confirmAuthenticator(at: Shared.Session, id: String, code: String): Confirmed {
         val reply = Auth.requestAt(at, "/api/auth/two-step/totp/$id/confirm", JSONObject().put("code", code.filterNot { it.isWhitespace() }))
         return when (val read = stepChangeReplyRead(status(reply.status), reply.text)) {
-            is StepReply.Done -> reply.body.optJSONArray("backupCodes")?.let { codes -> (0 until codes.length()).map(codes::getString) }
+            is StepReply.Done -> confirmed(reply.body) ?: throw LostReply(StepWords.LOST_APP_ADDED)
             is StepReply.Refused -> when (reply.status) {
                 401 -> throw NotAuthenticated()
                 404 -> throw SetupTimedOut(read.message)
                 else -> throw StepRefused(read.refusal, read.message, reply.status)
             }
-            else -> throw LostReply(StepWords.LOST_CHANGE)
+            else -> throw LostReply(StepWords.LOST_APP_ADDED)
         }
     }
 
     /* Removes a method: the password and the step. Returns whether the step is still on; removing the last turns it off and deletes the codes. */
-    fun removeMethod(at: Shared.Session, id: String, password: String, twoStep: StepAnswer?): Boolean =
-        Auth.callAt(at, "/api/auth/two-step/methods/$id", change(at, password, twoStep), "DELETE", whole = true).optBoolean("on")
+    fun removeMethod(at: Shared.Session, id: String, password: String, twoStep: StepAnswer?): Boolean {
+        val reply = Auth.callAt(at, "/api/auth/two-step/methods/$id", change(at, password, twoStep), "DELETE", whole = true, lost = StepWords.LOST_TURNED_OFF)
+        // The server's own answer: `removed` true and whether the step is still on. Without both, nothing says it was removed.
+        if (reply.opt("removed") != true || reply.opt("on") !is Boolean) throw LostReply(StepWords.LOST_TURNED_OFF)
+        return reply.getBoolean("on")
+    }
 
     /* A new set of ten backup codes, which replaces the old one, shown once. */
     fun newBackupCodes(at: Shared.Session, password: String, twoStep: StepAnswer?): List<String> {
-        val codes = Auth.callAt(at, "/api/auth/two-step/backup-codes", change(at, password, twoStep), whole = true).optJSONArray("codes")
-        if (codes == null || codes.length() == 0) throw LostReply(StepWords.LOST_CHANGE)
-        return (0 until codes.length()).map(codes::getString)
+        val codes = Auth.callAt(at, "/api/auth/two-step/backup-codes", change(at, password, twoStep), whole = true, lost = StepWords.LOST_NEW_CODES).optJSONArray("codes")
+        val texts = codes?.let { list -> (0 until list.length()).map { list.opt(it) } }.orEmpty()
+        if (texts.isEmpty() || !texts.all { it is String && it.isNotEmpty() }) throw LostReply(StepWords.LOST_NEW_CODES)
+        return texts.map { it as String }
     }
 
     /* The codes as a note to keep: what the web's download writes. */

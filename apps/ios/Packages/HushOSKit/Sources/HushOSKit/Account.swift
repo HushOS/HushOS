@@ -233,18 +233,18 @@ extension Auth {
      * from any route, in the server's words.
      */
     static func call(_ path: String, method: String = "GET", body: [String: Any]? = nil, as owner: SharedKeychain.Session? = nil,
-                     whole: Bool = false) async throws -> [String: Any] {
+                     whole: Bool = false, lost: String = StepWords.lostChange) async throws -> [String: Any] {
         let reply = try await request(path, method: method, body: body, as: owner)
         guard (200 ..< 300).contains(reply.status) else {
             let read = stepChangeReplyRead(status: UInt16(clamping: reply.status), body: reply.text)
             if case .refused(let refusal, let message) = read, StepError.named(refusal) { throw StepError.refused(refusal, message) }
             // A server error without the step's code (a 503 from something in the way): the change may have gone through.
-            if whole, read == .lost, reply.status >= 500 { throw StepError.lost(StepWords.lostChange) }
+            if whole, read == .lost, reply.status >= 500 { throw StepError.lost(lost) }
             if reply.status == 401 { throw AuthError.sessionEnded(session: reply.session.tag) }
             if reply.status == 409 { throw AuthError.conflict(reply.body["message"] as? String ?? "This changed on another device. Try again.") }
             throw AuthError.message(reply.body["message"] as? String ?? "Something went wrong on HushOS. Try again in a moment.")
         }
-        if whole, stepChangeReplyRead(status: UInt16(clamping: reply.status), body: reply.text) != .done { throw StepError.lost(StepWords.lostChange) }
+        if whole, stepChangeReplyRead(status: UInt16(clamping: reply.status), body: reply.text) != .done { throw StepError.lost(lost) }
         return reply.body
     }
 
@@ -343,7 +343,7 @@ extension Auth {
         ]
         // No replacement session is asked for (`keepSession`): this phone signs in again, and is asked for the step.
         if let twoStep { body["twoStep"] = try twoStep.json() }
-        _ = try await call("/api/auth/security/finish", method: "POST", body: body, whole: true)
+        _ = try await call("/api/auth/security/finish", method: "POST", body: body, whole: true, lost: StepWords.lostSaved)
         // The device memory names the credential version; remember the account key under the new one.
         let memory = try deviceRemember(userId: userId, accountKey: accountKey, keyVersion: sealed.keyVersion, credentialVersion: sealed.credentialVersion, deviceKeyId: UUID().uuidString.lowercased())
         try SharedKeychain.write(SharedKeychain.deviceAccount, SharedKeychain.Device(memory: memory))
@@ -361,7 +361,7 @@ extension Auth {
         }
         var body: [String: Any] = ["attemptToken": attemptToken, "finishLoginRequest": finish.request]
         if let twoStep { body["twoStep"] = try twoStep.json() }
-        _ = try await call("/api/auth/delete/finish", method: "POST", body: body, whole: true)
+        _ = try await call("/api/auth/delete/finish", method: "POST", body: body, whole: true, lost: StepWords.lostDeleted)
         SharedKeychain.delete(SharedKeychain.sessionAccount)
         SharedKeychain.delete(SharedKeychain.deviceAccount)
     }
@@ -543,7 +543,7 @@ extension Auth {
         ]
         if let settingsKey { body["settingsKey"] = json(settingsKey) }
         if let twoStep { body["twoStep"] = try twoStep.json() }
-        _ = try await call("/api/auth/security/finish", method: "POST", body: body, whole: true)
+        _ = try await call("/api/auth/security/finish", method: "POST", body: body, whole: true, lost: StepWords.lostSaved)
         let memory = try deviceRemember(userId: userId, accountKey: newRoot, keyVersion: sealed.keyVersion, credentialVersion: sealed.credentialVersion, deviceKeyId: UUID().uuidString.lowercased())
         try SharedKeychain.write(SharedKeychain.deviceAccount, SharedKeychain.Device(memory: memory))
         return (recovery.phrase, json(recovery.envelope))

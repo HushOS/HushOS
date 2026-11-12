@@ -326,7 +326,7 @@ fun TwoStepScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) 
     fun finish(said: String) { if (said.isNotEmpty()) model.notify(said); page = TwoStepPage.MAIN; attempt++ }
 
     when (page) {
-        TwoStepPage.ON, TwoStepPage.REPLACE -> { AuthenticatorScreen(model, replacing = page == TwoStepPage.REPLACE, email = email, onBack = { page = TwoStepPage.MAIN; attempt++ }, onDone = ::finish); return }
+        TwoStepPage.ON, TwoStepPage.REPLACE -> { AuthenticatorScreen(model, replacing = page == TwoStepPage.REPLACE, email = email, onBack = { page = TwoStepPage.MAIN; attempt++ }, onReread = { attempt++ }, onDone = ::finish); return }
         TwoStepPage.OFF -> { TurnOffScreen(model, status?.app?.id ?: status?.methods?.firstOrNull()?.id, onBack = { page = TwoStepPage.MAIN }, onDone = ::finish); return }
         TwoStepPage.CODES -> { NewCodesScreen(model, email, onBack = { page = TwoStepPage.MAIN; attempt++ }, onDone = ::finish); return }
         TwoStepPage.MAIN -> {}
@@ -438,7 +438,7 @@ private fun BackupCodes(model: DriveViewModel, codes: List<String>, email: Strin
  * add to an authenticator app, a code from the app to confirm, and, the first time, the backup codes.
  */
 @Composable
-private fun AuthenticatorScreen(model: DriveViewModel, replacing: Boolean, email: String, onBack: () -> Unit, onDone: (String) -> Unit) {
+private fun AuthenticatorScreen(model: DriveViewModel, replacing: Boolean, email: String, onBack: () -> Unit, onReread: () -> Unit, onDone: (String) -> Unit) {
     val alpine = Alpine.colors
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -528,16 +528,20 @@ private fun AuthenticatorScreen(model: DriveViewModel, replacing: Boolean, email
                         error = null
                         scope.launch {
                             model.twoStep { TwoStep.confirmAuthenticator(it, enrolment.id, code) }.fold(
-                                { backup ->
-                                    if (backup == null) onDone("Authenticator app replaced.")
-                                    else {
-                                        // The other devices signed in before the step was on: gone unless the person keeps them.
-                                        if (others > 0 && signOutOthers && !model.removeOtherDevices(password)) othersKept = true
-                                        password = ""
-                                        codes = backup
+                                { confirmed ->
+                                    when (confirmed) {
+                                        TwoStep.Confirmed.Replaced -> onDone("Authenticator app replaced.")
+                                        is TwoStep.Confirmed.TurnedOn -> {
+                                            // The other devices signed in before the step was on: gone unless the person keeps them.
+                                            if (others > 0 && signOutOthers && !model.removeOtherDevices(password)) othersKept = true
+                                            password = ""
+                                            codes = confirmed.backupCodes
+                                        }
                                     }
                                 },
                                 { failure ->
+                                    // Nothing says whether the app was added: said so, and the settings are read again to show which.
+                                    if (failure is com.hushos.app.data.LostReply) onReread()
                                     if (failure is SetupTimedOut) {
                                         // The setup ran out (ten minutes): back to the start, with why.
                                         app = null; code = ""; tried = false

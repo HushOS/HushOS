@@ -333,6 +333,8 @@ Markdown files (`text/markdown`, or `.md`, `.markdown`, `.mdx`) up to 2 MB open 
 - Change password, Rotate account key and Delete account hold a `StepUpModel` and show `StepUpSections`. No `keepSession` is sent.
 - Rotate account key on an account with the step shows the new words before the sign-in that follows: `AppModel.wordsHeld` keeps "You’ve been signed out" away meanwhile, `CheckWordsView(records: false)` checks them without a session, and the check is recorded once signed in (`wordsCheckedBeforeSignIn`).
 - `Auth.recover` answers the step of the sign-in that follows a phrase reset with the phrase it just made.
+- `TwoStep.confirmAuthenticator` takes only the server's two answers (`TwoStep.confirmed`): `{ backupCodes }` turned the step on, `{ replaced: true }` replaced the app. Anything else with a 200, `{}` included, is a lost reply: the sheet says it can't tell whether the app was added, and the settings are read again.
+- A lost change says what is unknown, in the web's sentence (`StepWords.lost(whether:)`).
 - Account › Two-step sign-in (`TwoStepView`) shows nothing on a server that has two-step off (`TwoStep.status()` is nil for 501).
 - "Open in authenticator app" opens only an `otpauth://totp/` address (`TotpEnrolment.link`).
 

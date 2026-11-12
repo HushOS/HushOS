@@ -207,6 +207,8 @@ Design: `docs/devices-design.md` 5; as built: `docs/push-relay-plan.md`, PR 4.
 - Change password, Rotate account key and Delete account hold a `StepUpHolder` and show `StepUpFields`. No `keepSession` is sent.
 - Rotate account key on an account with the step shows the new words from memory (`DriveViewModel.rotated`, `FreshWordsScreen`) before the sign-in that follows. `sessionLost` does nothing while they are on screen or that sign-in is out; the check is recorded once signed in.
 - A phrase reset's sign-in answers its step with the phrase it just made (`Auth.signInAfterRecovery`).
+- `TwoStep.confirmAuthenticator` takes only the server's two answers (`TwoStep.confirmed`): `{ backupCodes }` turned the step on, `{ replaced: true }` replaced the app. Anything else with a 200, `{}` included, is a lost reply: the page says it can't tell whether the app was added, and the settings are read again.
+- A lost change says what is unknown, in the web's sentence (`StepWords.lost`).
 - Account › Two-step sign-in shows nothing on a server that has two-step off (`TwoStep.status` is null for 501).
 - The key and the backup codes are on a secure window (no screenshots), as the recovery phrase is.
 - "Open in authenticator app" opens only an `otpauth://totp/` address (`TotpEnrolment.link`).

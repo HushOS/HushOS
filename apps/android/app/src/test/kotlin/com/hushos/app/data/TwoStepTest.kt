@@ -405,14 +405,24 @@ class TwoStepTest {
     }
 
     @Test
-    fun confirmingTheAppGivesTheCodesOnceAndSaysWhenTheSetupRanOut() {
+    fun confirmingTheAppIsOnlyEverOneOfTheServersTwoAnswers() {
         var session = serving(200, """{"backupCodes":["7KQ2M-9XD4P","AAAAA-BBBBB"]}""")
-        assertEquals(listOf("7KQ2M-9XD4P", "AAAAA-BBBBB"), TwoStep.confirmAuthenticator(session, "factor", "123 456"))
+        assertEquals(TwoStep.Confirmed.TurnedOn(listOf("7KQ2M-9XD4P", "AAAAA-BBBBB")), TwoStep.confirmAuthenticator(session, "factor", "123 456"))
         assertEquals("/api/auth/two-step/totp/factor/confirm", asked.single().path)
         assertEquals("123456", asked.single().body.getString("code"))
-        // Replacing an app that is already on gives no new codes: null, not an empty list shown as "your codes".
-        session = serving(200, "{}")
-        assertNull(TwoStep.confirmAuthenticator(session, "factor", "123456"))
+        session = serving(200, """{"replaced":true}""")
+        assertEquals(TwoStep.Confirmed.Replaced, TwoStep.confirmAuthenticator(session, "factor", "123456"))
+        // Anything else with a 200 says nothing: told "replaced" (or shown an empty list of codes), someone would
+        // believe their new app is on when the server never said so.
+        val notAnswers = listOf(
+            "{}", """{"replaced":false}""", """{"replaced":1}""", """{"replaced":"true"}""", """{"backupCodes":[]}""", """{"backupCodes":[""]}""",
+            """{"backupCodes":"7KQ2M-9XD4P"}""", """{"backupCodes":["7KQ2M-9XD4P"],"replaced":true}""", """{"error":"upstream"}""", """{"success":true}""",
+        )
+        for (body in notAnswers) {
+            session = serving(200, body)
+            val lost = assertThrows(body, LostReply::class.java) { TwoStep.confirmAuthenticator(session, "factor", "123456") }
+            assertEquals("The server’s answer didn’t arrive, so HushOS can’t tell whether your authenticator app was added. Check before you try again.", lost.message)
+        }
         session = serving(400, refusal("That code didn’t work. Codes change every 30 seconds.", "step-wrong"))
         assertEquals(StepRefusal.WRONG, assertThrows(StepRefused::class.java) { TwoStep.confirmAuthenticator(session, "factor", "000000") }.refusal)
         session = serving(404, refusal("This setup timed out. Start again."))

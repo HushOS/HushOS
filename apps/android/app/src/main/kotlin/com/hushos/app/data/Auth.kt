@@ -643,8 +643,8 @@ object Auth {
         (if (session.origin.startsWith("https:")) "__Host-hushos-session" else "hushos-session") + "=" + session.token
 
     /* `as` names the session to send: a vault's own, so what it writes never goes out under another account's. */
-    private fun call(context: Context, path: String, body: JSONObject? = null, method: String? = null, `as`: Shared.Session? = null, whole: Boolean = false): JSONObject =
-        callAt(`as` ?: Shared.session(context) ?: throw AuthFailure("Sign in first."), path, body, method, whole)
+    private fun call(context: Context, path: String, body: JSONObject? = null, method: String? = null, `as`: Shared.Session? = null, whole: Boolean = false, lost: String = StepWords.LOST_CHANGE): JSONObject =
+        callAt(`as` ?: Shared.session(context) ?: throw AuthFailure("Sign in first."), path, body, method, whole, lost)
 
     /* A reply under a session, as it arrived. */
     internal class SessionReply(val status: Int, val text: String, val body: JSONObject)
@@ -681,17 +681,17 @@ object Auth {
      * is a 5xx that does not name `step-unavailable`. A refusal that names one of the step's codes is
      * thrown as `StepRefused` from any route, in the server's words; a bare 429 stays the route's own.
      */
-    internal fun callAt(session: Shared.Session, path: String, body: JSONObject? = null, method: String? = null, whole: Boolean = false): JSONObject {
+    internal fun callAt(session: Shared.Session, path: String, body: JSONObject? = null, method: String? = null, whole: Boolean = false, lost: String = StepWords.LOST_CHANGE): JSONObject {
         val reply = requestAt(session, path, body, method)
         if (reply.status !in 200..299) {
             val read = com.hushos.core.stepChangeReplyRead(reply.status.toUShort(), reply.text)
             if (read is com.hushos.core.StepReply.Refused && stepNamed(read.refusal)) throw StepRefused(read.refusal, read.message, reply.status)
             // A server error without the step's code (a 503 from something in the way): the change may have gone through.
-            if (whole && read is com.hushos.core.StepReply.Lost && reply.status >= 500) throw LostReply(StepWords.LOST_CHANGE)
+            if (whole && read is com.hushos.core.StepReply.Lost && reply.status >= 500) throw LostReply(lost)
             if (reply.status == 401) throw NotAuthenticated()
             throw AuthFailure(Problems.signIn(reply.status, reply.body.optString("message")), reply.status)
         }
-        if (whole && com.hushos.core.stepChangeReplyRead(reply.status.toUShort(), reply.text) !is com.hushos.core.StepReply.Done) throw LostReply(StepWords.LOST_CHANGE)
+        if (whole && com.hushos.core.stepChangeReplyRead(reply.status.toUShort(), reply.text) !is com.hushos.core.StepReply.Done) throw LostReply(lost)
         return reply.body
     }
 
@@ -878,7 +878,7 @@ object Auth {
                 .put("wrappingNonce", sealed.wrappingNonce).put("encryptedKey", sealed.encryptedKey))
             .put("recovery", json(recovery.envelope)).put("identity", json(identity)).put("workspaces", workspaces)
             .put("identityHistory", history).apply { settingsKey?.let { put("settingsKey", json(it)) } }
-            .apply { twoStep?.let { put("twoStep", it.json()) } }, whole = true)
+            .apply { twoStep?.let { put("twoStep", it.json()) } }, whole = true, lost = StepWords.LOST_SAVED)
         Shared.writeDevice(context, deviceRemember(userId, newRoot, sealed.keyVersion, sealed.credentialVersion, UUID.randomUUID().toString()))
         return recovery.phrase to json(recovery.envelope)
     }
@@ -951,7 +951,7 @@ object Auth {
             .put("envelope", JSONObject().put("envelopeVersion", sealed.envelopeVersion.toInt()).put("keyVersion", sealed.keyVersion.toLong())
                 .put("credentialVersion", sealed.credentialVersion.toLong()).put("wrappingSalt", sealed.wrappingSalt)
                 .put("wrappingNonce", sealed.wrappingNonce).put("encryptedKey", sealed.encryptedKey))
-            .apply { twoStep?.let { put("twoStep", it.json()) } }, whole = true)
+            .apply { twoStep?.let { put("twoStep", it.json()) } }, whole = true, lost = StepWords.LOST_SAVED)
         Shared.writeDevice(context, deviceRemember(userId, accountKey, sealed.keyVersion, sealed.credentialVersion, UUID.randomUUID().toString()))
     }
 
@@ -961,7 +961,7 @@ object Auth {
         val started = call(context, "/api/auth/delete/start", JSONObject().put("startLoginRequest", login.request))
         val finish = opaqueFinishLogin(password, login.state, started.getString("loginResponse")) ?: throw AuthFailure("The password is not right.")
         call(context, "/api/auth/delete/finish", JSONObject().put("attemptToken", started.getString("attemptToken")).put("finishLoginRequest", finish.request)
-            .apply { twoStep?.let { put("twoStep", it.json()) } }, whole = true)
+            .apply { twoStep?.let { put("twoStep", it.json()) } }, whole = true, lost = StepWords.LOST_DELETED)
         Shared.clearSession(context)
         Shared.clearDevice(context)
         AccountStore.of(context).wipe()

@@ -429,7 +429,7 @@ extension OnFakeDrive {
             defer { done() }
             await #expect(throws: StepError.lost(StepWords.lostChange)) { _ = try await Auth.call("/api/auth/security/finish", method: "POST", body: [:], whole: true) }
             StepServer.current = StepServer(200, "")
-            await #expect(throws: StepError.lost(StepWords.lostChange)) { _ = try await TwoStep.confirmAuthenticator(id: "f", code: "123456") }
+            await #expect(throws: StepError.lost(StepWords.lostAppAdded)) { _ = try await TwoStep.confirmAuthenticator(id: "f", code: "123456") }
         }
 
         @Test func aServerWithTwoStepOffShowsNothingAndOneThatFailsIsNotReadAsOff() async throws {
@@ -447,16 +447,26 @@ extension OnFakeDrive {
             }
         }
 
-        @Test func confirmingTheAppGivesTheCodesOnceAndSaysWhenTheSetupRanOut() async throws {
+        @Test func confirmingTheAppIsOnlyEverOneOfTheServersTwoAnswers() async throws {
             serve(StepServer(200, json: ["backupCodes": ["7KQ2M-9XD4P", "AAAAA-BBBBB"]]))
             defer { done() }
-            #expect(try await TwoStep.confirmAuthenticator(id: "factor", code: "123 456") == ["7KQ2M-9XD4P", "AAAAA-BBBBB"])
+            #expect(try await TwoStep.confirmAuthenticator(id: "factor", code: "123 456") == .turnedOn(["7KQ2M-9XD4P", "AAAAA-BBBBB"]))
             let sent = StepServer.current?.requests.first
             #expect(sent?.path == "/api/auth/two-step/totp/factor/confirm")
             #expect(sent?.body["code"] as? String == "123456")
-            // Replacing an app that is already on gives no new codes: nil, not an empty list shown as "your codes".
-            StepServer.current = StepServer(200, json: [:])
-            #expect(try await TwoStep.confirmAuthenticator(id: "factor", code: "123456") == nil)
+            StepServer.current = StepServer(200, "{\"replaced\":true}")
+            #expect(try await TwoStep.confirmAuthenticator(id: "factor", code: "123456") == .replaced)
+            // Anything else with a 200 says nothing: told "replaced" (or shown an empty list of codes), someone would
+            // believe their new app is on when the server never said so.
+            let notAnswers = [
+                "{}", "{\"replaced\":false}", "{\"replaced\":1}", "{\"replaced\":\"true\"}", "{\"backupCodes\":[]}", "{\"backupCodes\":[\"\"]}",
+                "{\"backupCodes\":\"7KQ2M-9XD4P\"}", "{\"backupCodes\":[\"7KQ2M-9XD4P\"],\"replaced\":true}", "{\"error\":\"upstream\"}", "{\"success\":true}",
+            ]
+            for body in notAnswers {
+                StepServer.current = StepServer(200, body)
+                await #expect(throws: StepError.lost(StepWords.lostAppAdded), "\(body)") { _ = try await TwoStep.confirmAuthenticator(id: "factor", code: "123456") }
+            }
+            #expect(StepWords.lostAppAdded == "The server’s answer didn’t arrive, so HushOS can’t tell whether your authenticator app was added. Check before you try again.")
             StepServer.current = StepServer(400, json: ["message": "That code didn’t work. Codes change every 30 seconds.", "code": "step-wrong"])
             await #expect(throws: StepError.refused(.wrong, "That code didn’t work. Codes change every 30 seconds.")) { _ = try await TwoStep.confirmAuthenticator(id: "factor", code: "000000") }
             StepServer.current = StepServer(404, json: ["message": "This setup timed out. Start again."])
