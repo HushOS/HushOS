@@ -758,6 +758,43 @@ describe('changes that need the step', () => {
         );
     }, 120_000);
 
+    test('replacing the app answers that it was replaced, with no codes: the new app signs in and the old one no longer does', async () => {
+        const { who, cookie, secret, codes } = await stepped();
+        const step = await challenge(cookie, 'two-step');
+        const { proof } = await edge.passwordProof('/two-step/reauth', {}, { cookie });
+        const enrol = await edge.call(
+            'POST',
+            '/two-step/totp',
+            {
+                ...proof,
+                twoStep: { token: step.token, proof: { kind: 'backup', code: codes[0]! } },
+            },
+            { cookie },
+        );
+        expect(enrol.status).toBe(200);
+        const confirmed = await edge.call(
+            'POST',
+            `/two-step/totp/${enrol.body.id}/confirm`,
+            { code: await appCode(enrol.body.secret, -1) },
+            { cookie },
+        );
+        // Exactly this: a client takes nothing else without codes for a confirmation.
+        expect(confirmed).toMatchObject({ status: 200 });
+        expect(confirmed.body).toEqual({ replaced: true });
+        const status = (await edge.call('GET', '/two-step', undefined, { cookie })).body;
+        expect(status.methods).toMatchObject([{ id: enrol.body.id, kind: 'totp' }]);
+        expect(status.backupCodesLeft).toBe(9);
+        // The old app's code is a wrong answer now; the new app's passes.
+        const asked = await toStep(who);
+        expect(
+            await answer(asked.token, { kind: 'totp', code: await appCode(secret) }),
+        ).toMatchObject({ status: 401, body: { code: 'step-wrong' } });
+        expect(
+            (await answer(asked.token, { kind: 'totp', code: await appCode(enrol.body.secret) }))
+                .status,
+        ).toBe(200);
+    }, 90_000);
+
     test('the security log lists what happened, for the account’s own sessions only', async () => {
         const { who, cookie, secret } = await stepped();
         const step = await toStep(who);

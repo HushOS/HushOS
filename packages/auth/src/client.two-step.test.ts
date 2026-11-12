@@ -562,7 +562,7 @@ describe('other replies that say a change was made', () => {
         const { client } = setup({
             ...reauth,
             twoStepConfirmTotp: async (id: never) =>
-                id === ('first' as never) ? { backupCodes: codes } : {},
+                id === ('first' as never) ? { backupCodes: codes } : { replaced: true },
             twoStepBackupCodes: async () => ({ codes }),
             twoStepRemoveMethod: async () => ({ removed: true, on: false }),
             twoStepStartTotp: async () => ({ id: 'app', secret: 'KEY', uri: 'otpauth://totp/x' }),
@@ -570,11 +570,15 @@ describe('other replies that say a change was made', () => {
         expect(await client.confirmAuthenticator('first', '123456')).toEqual({
             backupCodes: codes,
         });
-        expect(await client.confirmAuthenticator('second', '123456')).toEqual({});
+        expect(await client.confirmAuthenticator('second', '123456')).toEqual({ replaced: true });
     });
 
     test.each([
+        // What a proxy, or a server from before `replaced`, sends: it says nothing happened.
+        ['an empty object', {}],
         ['a proxy’s error object', { error: 'upstream unavailable' }],
+        ['a replacement that is not true', { replaced: 'yes' }],
+        ['a replacement beside something else', { replaced: true, backupCodes: ['CODE0-AAAAA'] }],
         ['a success flag the server never sends here', { success: true }],
         ['codes beside something else', { backupCodes: ['CODE0-AAAAA'], error: 'x' }],
         ['codes that are not codes', { backupCodes: 'CODE0-AAAAA' }],

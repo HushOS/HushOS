@@ -604,11 +604,13 @@ const cases: Record<string, Case> = {
             'the first method, with its codes': {
                 backupCodes: ['7KQ2M-9XD4P', '0A1B2-C3D4E'],
             } satisfies Reply<typeof auth.confirmTotpEnrolment>,
-            'another method': {} satisfies Reply<typeof auth.confirmTotpEnrolment>,
+            'an app that replaced another': { replaced: true } satisfies Reply<
+                typeof auth.confirmTotpEnrolment
+            >,
         },
         stray: (v) => v,
-        // Nothing here is required: the codes go out only when the step was just turned on.
-        required: ['the first method, with its codes', (v) => (v.backupCodes = [7])],
+        // An answer that says neither is not sent: an empty reply would read as a proxy's.
+        required: ['an app that replaced another', (v) => delete v.replaced],
     },
     'DELETE /auth/two-step/methods/:id': {
         schema: methodRemovedResponse,

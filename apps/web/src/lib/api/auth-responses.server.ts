@@ -312,8 +312,15 @@ export const totpEnrolmentResponse = t.Object({
     expiresAt: t.String(),
 });
 
-/* POST /auth/two-step/totp/:id/confirm: the backup codes, only when this turned the step on. */
-export const totpConfirmedResponse = t.Object({ backupCodes: t.Optional(t.Array(t.String())) });
+/*
+ * POST /auth/two-step/totp/:id/confirm: the backup codes when this turned the step on, or
+ * `replaced: true` when the app took over from an earlier one. One or the other, never an
+ * empty object: a client reads anything else as a reply that was not the server's.
+ */
+export const totpConfirmedResponse = t.Union([
+    t.Object({ backupCodes: t.Array(t.String()) }),
+    t.Object({ replaced: t.Literal(true) }),
+]);
 
 /* DELETE /auth/two-step/methods/:id: gone, and whether the step is still on. */
 export const methodRemovedResponse = t.Object({ removed: t.Boolean(), on: t.Boolean() });

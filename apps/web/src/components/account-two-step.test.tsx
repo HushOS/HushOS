@@ -22,7 +22,7 @@ const api = {
         secret: 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP',
         uri: 'otpauth://totp/HushOS:maya@example.com?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP',
     })),
-    confirmAuthenticator: vi.fn<() => Promise<{ backupCodes?: string[] }>>(),
+    confirmAuthenticator: vi.fn<() => Promise<{ backupCodes: string[] } | { replaced: true }>>(),
     removeOtherDevices: vi.fn<(password: string) => Promise<{ removed: number }>>(),
     stepChallenge: vi.fn(async () => null),
 };
@@ -138,7 +138,8 @@ describe('turning two-step sign-in on', () => {
     });
 
     test('an answer without the backup codes is not read as the step being on, or as an app replaced', async () => {
-        api.confirmAuthenticator.mockResolvedValue({});
+        // The server's answer to a replacement, where turning the step on was asked for.
+        api.confirmAuthenticator.mockResolvedValue({ replaced: true });
         const { person, code } = await toTheOffer();
         await person.type(code, '123456');
         await person.click(screen.getByRole('button', { name: 'Turn on' }));

@@ -557,7 +557,8 @@ function AppDialog({
         setPending(true);
         setError('');
         try {
-            const { backupCodes } = await authClient.confirmAuthenticator(app.id, typed);
+            const confirmed = await authClient.confirmAuthenticator(app.id, typed);
+            const backupCodes = 'backupCodes' in confirmed ? confirmed.backupCodes : null;
             cue('success');
             if (!backupCodes) {
                 // Turning the step on always comes back with the codes. An answer without

@@ -959,7 +959,10 @@ export async function confirmTotpEnrolment(
         await record({ userId: user.id, kind: 'method-added', method: 'totp' });
         notice(user.id, 'two-step-app-added');
     }
-    return result.turnedOn && fresh ? { backupCodes: fresh.codes } : {};
+    // One of two answers, each saying what happened: the codes when this turned the step on,
+    // `replaced` when it took over from an earlier app. Never an empty reply, which a client
+    // could not tell from a proxy's.
+    return result.turnedOn && fresh ? { backupCodes: fresh.codes } : { replaced: true as const };
 }
 
 /*

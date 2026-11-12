@@ -107,15 +107,19 @@ export function readEnrolment(reply: unknown) {
     return { id: reply.id, secret: reply.secret, uri: reply.uri };
 }
 /*
- * A confirmed app, exactly as the server answers: the backup codes when this turned the step
- * on, and an empty object when it replaced an app. Nothing else is one: an object that merely
- * lacks `backupCodes`, such as a proxy's `{ "error": … }` with a 200, is not a confirmation.
+ * A confirmed app, exactly as the server answers: `{ backupCodes }` when this turned the step
+ * on, `{ replaced: true }` when it replaced an app. Nothing else is one. An empty object, or
+ * one that merely lacks `backupCodes` (a proxy's `{ "error": … }` with a 200), is not a
+ * confirmation.
  */
-export function readConfirmed(reply: unknown) {
+export function readConfirmed(
+    reply: unknown,
+): { backupCodes: string[] } | { replaced: true } | null {
     if (!record(reply)) return null;
     const keys = Object.keys(reply);
-    if (keys.length === 0) return {};
-    if (keys.length !== 1 || keys[0] !== 'backupCodes') return null;
+    if (keys.length !== 1) return null;
+    if (keys[0] === 'replaced') return reply.replaced === true ? { replaced: true } : null;
+    if (keys[0] !== 'backupCodes') return null;
     return texts(reply.backupCodes) ? { backupCodes: reply.backupCodes } : null;
 }
 export function readBackupCodes(reply: unknown) {
