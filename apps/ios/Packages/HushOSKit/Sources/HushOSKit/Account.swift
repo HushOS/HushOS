@@ -1,4 +1,5 @@
 import Foundation
+import HushOSCore
 
 /*
  * `/api/auth/storage`. While the account's own files draw from a family's pool
@@ -224,8 +225,38 @@ extension Auth {
         return session
     }
 
-    /* `as` names the session to send: a vault's own, so what it writes never goes out under another account's. */
-    static func call(_ path: String, method: String = "GET", body: [String: Any]? = nil, as owner: SharedKeychain.Session? = nil) async throws -> [String: Any] {
+    /*
+     * `as` names the session to send: a vault's own, so what it writes never goes out under another account's.
+     * `whole` is for a change that may carry a second step: its 200 must be the server's own JSON object, or
+     * the reply is lost (`StepError.lost`) and nothing says whether the change went through; so is a 5xx that
+     * does not name `step-unavailable`. A refusal that names a step's code is thrown as `StepError.refused`
+     * from any route, in the server's words.
+     */
+    static func call(_ path: String, method: String = "GET", body: [String: Any]? = nil, as owner: SharedKeychain.Session? = nil,
+                     whole: Bool = false) async throws -> [String: Any] {
+        let reply = try await request(path, method: method, body: body, as: owner)
+        guard (200 ..< 300).contains(reply.status) else {
+            let read = stepChangeReplyRead(status: UInt16(clamping: reply.status), body: reply.text)
+            if case .refused(let refusal, let message) = read, StepError.named(refusal) { throw StepError.refused(refusal, message) }
+            // A server error without the step's code (a 503 from something in the way): the change may have gone through.
+            if whole, read == .lost, reply.status >= 500 { throw StepError.lost(StepWords.lostChange) }
+            if reply.status == 401 { throw AuthError.sessionEnded(session: reply.session.tag) }
+            if reply.status == 409 { throw AuthError.conflict(reply.body["message"] as? String ?? "This changed on another device. Try again.") }
+            throw AuthError.message(reply.body["message"] as? String ?? "Something went wrong on HushOS. Try again in a moment.")
+        }
+        if whole, stepChangeReplyRead(status: UInt16(clamping: reply.status), body: reply.text) != .done { throw StepError.lost(StepWords.lostChange) }
+        return reply.body
+    }
+
+    struct SessionReply {
+        let status: Int
+        let text: String
+        let body: [String: Any]
+        let session: SharedKeychain.Session
+    }
+
+    /* Sends under the session and returns whatever came back, any status; throws only when nothing did. */
+    static func request(_ path: String, method: String = "GET", body: [String: Any]? = nil, as owner: SharedKeychain.Session? = nil) async throws -> SessionReply {
         let session = try testSession ?? owner ?? session()
         guard let url = URL(string: session.origin + path) else { throw AuthError.message("Bad HushOS address.") }
         var request = URLRequest(url: url)
@@ -249,12 +280,7 @@ extension Auth {
             throw AuthError.message(AuthError.unreachable)
         }
         let parsed = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
-        guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) else {
-            if (response as? HTTPURLResponse)?.statusCode == 401 { throw AuthError.sessionEnded(session: session.tag) }
-            if (response as? HTTPURLResponse)?.statusCode == 409 { throw AuthError.conflict(parsed["message"] as? String ?? "This changed on another device. Try again.") }
-            throw AuthError.message(parsed["message"] as? String ?? "Something went wrong on HushOS. Try again in a moment.")
-        }
-        return parsed
+        return SessionReply(status: (response as? HTTPURLResponse)?.statusCode ?? 0, text: String(data: data, encoding: .utf8) ?? "", body: parsed, session: session)
     }
 
     public static func updateName(_ name: String) async throws -> SessionUser {
@@ -285,8 +311,12 @@ extension Auth {
         )
     }
 
-    /* The old password opens the account key; the new one seals it again one credential version up. */
-    public static func changePassword(current: String, new: String) async throws {
+    /*
+     * The old password opens the account key; the new one seals it again one credential version up.
+     * `twoStep` is the second step's answer, for an account that has it on: without one the server
+     * refuses with `two-step` (`StepError.refused(.required, …)`) and nothing changes.
+     */
+    public static func changePassword(current: String, new: String, twoStep: StepAnswer? = nil) async throws {
         let login = try opaqueStartLogin(password: current)
         let registration = try opaqueStartRegistration(password: new)
         let challenge = try await call("/api/auth/security/start", method: "POST", body: [
@@ -303,21 +333,24 @@ extension Auth {
         let accountKey = try accountUnlock(userId: userId, exportKey: finish.exportKey, envelope: old)
         let registered = try opaqueFinishRegistration(password: new, state: registration.state, registrationResponse: registrationResponse)
         let sealed = try accountSeal(userId: userId, exportKey: registered.exportKey, accountKey: accountKey, keyVersion: old.keyVersion, credentialVersion: old.credentialVersion + 1)
-        _ = try await call("/api/auth/security/finish", method: "POST", body: [
+        var body: [String: Any] = [
             "action": "password", "attemptToken": attemptToken, "finishLoginRequest": finish.request,
             "registrationRecord": registered.record,
             "envelope": [
                 "envelopeVersion": sealed.envelopeVersion, "keyVersion": sealed.keyVersion, "credentialVersion": sealed.credentialVersion,
                 "wrappingSalt": sealed.wrappingSalt, "wrappingNonce": sealed.wrappingNonce, "encryptedKey": sealed.encryptedKey,
             ],
-        ])
+        ]
+        // No replacement session is asked for (`keepSession`): this phone signs in again, and is asked for the step.
+        if let twoStep { body["twoStep"] = try twoStep.json() }
+        _ = try await call("/api/auth/security/finish", method: "POST", body: body, whole: true)
         // The device memory names the credential version; remember the account key under the new one.
         let memory = try deviceRemember(userId: userId, accountKey: accountKey, keyVersion: sealed.keyVersion, credentialVersion: sealed.credentialVersion, deviceKeyId: UUID().uuidString.lowercased())
         try SharedKeychain.write(SharedKeychain.deviceAccount, SharedKeychain.Device(memory: memory))
     }
 
     /* Proves the password once more, then the server removes the account; every local trace goes with it. */
-    public static func deleteAccount(password: String) async throws {
+    public static func deleteAccount(password: String, twoStep: StepAnswer? = nil) async throws {
         let login = try opaqueStartLogin(password: password)
         let started = try await call("/api/auth/delete/start", method: "POST", body: ["startLoginRequest": login.request])
         guard let attemptToken = started["attemptToken"] as? String, let loginResponse = started["loginResponse"] as? String else {
@@ -326,7 +359,9 @@ extension Auth {
         guard let finish = try opaqueFinishLogin(password: password, state: login.state, loginResponse: loginResponse) else {
             throw AuthError.message("That isn’t your password.")
         }
-        _ = try await call("/api/auth/delete/finish", method: "POST", body: ["attemptToken": attemptToken, "finishLoginRequest": finish.request])
+        var body: [String: Any] = ["attemptToken": attemptToken, "finishLoginRequest": finish.request]
+        if let twoStep { body["twoStep"] = try twoStep.json() }
+        _ = try await call("/api/auth/delete/finish", method: "POST", body: body, whole: true)
         SharedKeychain.delete(SharedKeychain.sessionAccount)
         SharedKeychain.delete(SharedKeychain.deviceAccount)
     }
@@ -453,7 +488,16 @@ extension Auth {
      * minted. Files and shares do not change; the server ends every session,
      * so the caller signs in again. Returns the phrase to show once.
      */
-    public static func rotateKeys(password: String) async throws -> String {
+    public static func rotateKeys(password: String, twoStep: StepAnswer? = nil) async throws -> String {
+        try await rotateKeysKit(password: password, twoStep: twoStep).phrase
+    }
+
+    /*
+     * The same, with the new recovery key as the server now holds it: what the kit file carries. An
+     * account with two-step sign-in has no session to read it back with until it has signed in again,
+     * and the kit is saved before that.
+     */
+    public static func rotateKeysKit(password: String, twoStep: StepAnswer? = nil) async throws -> (phrase: String, recovery: [String: Any]) {
         let login = try opaqueStartLogin(password: password)
         let registration = try opaqueStartRegistration(password: password)
         let challenge = try await call("/api/auth/security/start", method: "POST", body: [
@@ -498,9 +542,10 @@ extension Auth {
             "workspaces": workspaces.map { json($0) },
         ]
         if let settingsKey { body["settingsKey"] = json(settingsKey) }
-        _ = try await call("/api/auth/security/finish", method: "POST", body: body)
+        if let twoStep { body["twoStep"] = try twoStep.json() }
+        _ = try await call("/api/auth/security/finish", method: "POST", body: body, whole: true)
         let memory = try deviceRemember(userId: userId, accountKey: newRoot, keyVersion: sealed.keyVersion, credentialVersion: sealed.credentialVersion, deviceKeyId: UUID().uuidString.lowercased())
         try SharedKeychain.write(SharedKeychain.deviceAccount, SharedKeychain.Device(memory: memory))
-        return recovery.phrase
+        return (recovery.phrase, json(recovery.envelope))
     }
 }

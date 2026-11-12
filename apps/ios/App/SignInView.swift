@@ -38,6 +38,17 @@ struct SignInView: View {
                     }
                 }
                 .navigationDestination(isPresented: $showingServer) { SelfHostingView() }
+                // The account's second step, after the password: on this stack, so Back is "start again".
+                .navigationDestination(isPresented: Binding(get: { model.pendingStep != nil }, set: { if !$0 { model.cancelStep(model.stepNotice) } })) {
+                    if let pending = model.pendingStep { SignInStepView(pending: pending).id(pending.challenge.token) }
+                }
+        }
+        // Back from a step: the password is asked for again (nothing of the old one is kept), with why if the step ended.
+        .onChange(of: model.pendingStep == nil) { _, back in
+            guard back else { return }
+            password = ""
+            formError = model.stepNotice
+            model.stepNotice = ""
         }
     }
 
@@ -152,7 +163,8 @@ struct SignInView: View {
         .background(Alpine.ground.ignoresSafeArea())
         .onAppear { if email.isEmpty { email = model.lastEmail } }
         .onChange(of: email) { clearErrors() }
-        .onChange(of: password) { clearErrors() }
+        // Emptied by a step that sent the person back here: what it said stays until they type.
+        .onChange(of: password) { _, typed in if !typed.isEmpty { clearErrors() } }
     }
 
     private func fieldRow(_ label: String, error: Bool, @ViewBuilder field: () -> some View) -> some View {

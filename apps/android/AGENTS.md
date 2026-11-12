@@ -193,10 +193,28 @@ Design: `docs/devices-design.md` 5; as built: `docs/push-relay-plan.md`, PR 4.
 - `AccountStore.of(context)` calls `PushNotifications.forget`: the registration goes, its handle is held for deletion, the push notices are taken down and the FCM token deleted.
 - Taps reach `MainActivity` as `com.hushos.app.push.OPEN:<devices|shared:false|families|app>`.
 
+### Two-step sign-in
+
+`docs/two-step-design.md` 4 to 6. `data/TwoStep.kt` holds the requests and the rules; `ui/TwoStepScreen.kt` the screens.
+
+- `Auth.startSignIn` sends `twoStep: 1` and returns `SignIn.SignedIn` or `SignIn.Step(PendingSignIn)`. What the password opened waits in `PendingSignIn`, in the view model's memory, for `Auth.answerStep`.
+- The core reads every reply (`signInReplyRead`, `stepChangeReplyRead`). A reply that is not the server's answer is a `LostReply`, never a sign-in; a step's refusal is a `StepRefused` with its code.
+- `StepOutcome.after` says what the step screen does with a failure: ask again, narrow the methods, go back to the password, or offer the same answer again. `StepUp` is the same for a step inside a form. Change these with their tests (`TwoStepTest`).
+- `SignInScreen` shows `SignInStepScreen` while `DriveState.step` is set; the file picker's sign-in gets it too (it draws `HushOSApp`).
+    - Signed in already (after this phone's own password change or rotation), `DriveViewModel.awaitStep` goes to sign-in first, keeping what the phone holds, and says nothing about being signed out.
+- The code field carries `ContentType.SmsOtpCode`. What is typed for a step is kept with `retain`, never in saved state, and the keyboard is asked not to learn it.
+- The phrase is signed in the core (`twoStepPhraseSign`); only the signature is sent.
+- Change password, Rotate account key and Delete account hold a `StepUpHolder` and show `StepUpFields`. No `keepSession` is sent.
+- Rotate account key on an account with the step shows the new words from memory (`DriveViewModel.rotated`, `FreshWordsScreen`) before the sign-in that follows. `sessionLost` does nothing while they are on screen or that sign-in is out; the check is recorded once signed in.
+- A phrase reset's sign-in answers its step with the phrase it just made (`Auth.signInAfterRecovery`).
+- Account › Two-step sign-in shows nothing on a server that has two-step off (`TwoStep.status` is null for 501).
+- The key and the backup codes are on a secure window (no screenshots), as the recovery phrase is.
+- "Open in authenticator app" opens only an `otpauth://totp/` address (`TotpEnrolment.link`).
+
 ### Account and plan
 
 - Account shows name, plan and storage, read only, with no way to buy.
-- Account also has change password, delete account, Contacts and Your twelve words, trash, and sign out.
+- Account also has change password, two-step sign-in, delete account, Contacts and Your twelve words, trash, and sign out.
 - `PlanDisplay` in `data/Auth.kt` decides the plan card:
     - While `/api/auth/storage` names a `pool`, the card is the family's plan, "Shared with <family>", with the pool's figures.
     - There is no Files row then: the total is counted in whole GB.

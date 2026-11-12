@@ -419,8 +419,27 @@ After the phrase passes the step, the session's settings page opens on Two-step 
 - **The step screen is native:** a code field, a backup-code field and "Use your recovery phrase", after the existing OPAQUE sign-in.
 - **Autofill:** the code field uses `textContentType = .oneTimeCode` on iOS and the one-time-code autofill hint on Android, so password managers that hold TOTP secrets can fill it.
 - **Errors** match the web's ("That code didn't work. Codes change every 30 seconds.").
-- **The core:** TOTP is checked only on the server, so `crates/hushos-core` gains no TOTP code. It gains the phrase statement, and the request and response types.
-- **Enrolment and management stay on the web** in the first release, as making an account does. The apps link to it ("Turn on two-step sign-in on the web").
+- **The core:** TOTP is checked only on the server, so `crates/hushos-core` gains no TOTP code. It gains the phrase statement, and the request and response types (`two_step.rs`): the step a reply carries, the answer the routes take, and what a reply is, read from the reply alone as `packages/auth/src/login-reply.ts` reads it. A 200 that is neither a session nor a step, or a refusal without the server's words, is a lost reply on the phones too: the step screen says so and offers the same answer again or a new start, and nothing reads it as a sign-in.
+- **Refusals** are acted on by their code (section 4), in the server's words: a wrong answer asks again on the same step; an ended step goes back to the password with why; a paused app leaves the backup code and the phrase; a spent budget, or a server that cannot check codes (503 `step-unavailable`, nothing changed), leaves the phrase. A server error without that code is no answer at all: it is a lost reply, and the same answer is offered again. The address's own 429, which carries no code, takes no method away.
+
+### Settings on the phones
+
+**Enrolment and management are in the apps, at parity with the web.** An earlier revision kept them on the web for the first release; the owner's rule is now that each client does what the others do, so Account on the iPhone and on Android has Two-step sign-in:
+
+- **Turn it on:** the password again, then the key to add to an authenticator app. The phone is usually where that app is, so there is no QR code to point a camera at: **Open in authenticator app** opens the `otpauth://` address (only that scheme is ever opened), and the key is shown in groups of four to type or copy. A code from the app confirms it.
+- **Sign out my other devices** is offered while turning it on, ticked, when other devices are signed in. It is the devices' own removal (`DELETE /auth/devices/others`, with the password just typed).
+- **Backup codes** are shown once, to copy or to hand to the share sheet as the note the web downloads.
+- **Manage:** the app with when it was added and last used, Replace, Turn off (removing the last method), New codes, and whether the app is paused for new devices.
+- **Recent security activity:** the same list, in the same words.
+- **Nothing shows** on a server that has two-step off (501).
+
+### Changes on the phones
+
+- **Change password, Rotate account key and Delete account** ask for the step in the same form, when the account has it: the challenge is asked for as the form opens, and the change carries the answer. The phones have no separate "new recovery phrase": Rotate account key is how a phone gets one, and it asks for the step.
+- **No replacement session.** The phones do not send `keepSession` (section 4). After its own password change or rotation a phone signs in again, as before, and is asked for the step at that sign-in, on the sign-in screen.
+- **A rotation shows its new words first.** The sign-in that follows a rotation asks for the step, and someone who passed the rotation's own step with the old phrase has nothing else left: the old phrase stopped working, and the new one is on that screen. So the words are shown, saved and checked before the sign-in runs, with no session; the check is recorded once signed in. While they are on screen nothing signs the app out from under them.
+- **A phrase reset on a phone** (`/auth/recover/finish`) signs in with the new password itself, and the account's phrase is now the one just made there, which the person has not seen yet. That sign-in's step is answered with it: the person proved the old phrase a moment before, and a step they could only answer with a method they may have lost would strand them. The server records it like any other use of the phrase, with its notice.
+- **Where there is no step screen** (the iPhone's sign-in sheet inside Files), an account with the step is told "This account asks for a second step. Open HushOS and sign in there."
 
 ### Security keys
 
@@ -471,7 +490,7 @@ After the phrase passes the step, the session's settings page opens on Two-step 
 
 | Release | Web and server                                                                                                                               | iPhone and Android                                                                    |
 | ------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| A       | Server enforcement and `update-required`; TOTP, backup codes, the phrase; settings and notices. Behind `TWO_STEP_ENABLED`, off on hushos.com | TOTP, backup code and phrase entry; `update-required` handled                         |
+| A       | Server enforcement and `update-required`; TOTP, backup codes, the phrase; settings and notices. Behind `TWO_STEP_ENABLED`, off on hushos.com | TOTP, backup code and phrase entry; settings and the security log; `update-required`  |
 | B       | `TWO_STEP_ENABLED` on at hushos.com, once release A's apps are live in both stores                                                           | Nothing new                                                                           |
 | C       | Security keys: registration and assertion                                                                                                    | Security keys on hushos.com natively, and through the browser for self-hosted servers |
 

@@ -30,6 +30,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -88,6 +89,12 @@ fun SignInScreen(model: DriveViewModel, state: DriveState) {
         }
     }
 
+    // The account's second step, after the password. Back from it, the password is asked for again (nothing of the
+    // old one is kept), with why if the step ended.
+    state.step?.let { challenge -> SignInStepScreen(model, challenge); return }
+    LaunchedEffect(state.stepNotice) {
+        state.stepNotice?.let { said -> password = ""; error = said.ifEmpty { null }; model.clearStepNotice() }
+    }
     // Self-hosting › Server address, from the gear: a screen of its own, as on iOS.
     if (editingOrigin) { SelfHostingScreen(model, state, signedIn = false) { editingOrigin = false }; return }
     Column(

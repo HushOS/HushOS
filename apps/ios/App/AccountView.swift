@@ -27,6 +27,8 @@ struct AccountView: View {
     @State private var showingTrash = false
     @State private var showingDevices = false
     @State private var notifications = NotificationSettings()
+    /* Two-step sign-in, where this server offers it: its row says On or Off. Nil until it answers, and on a server that has it off. */
+    @State private var twoStep: TwoStepStatus?
     @Environment(\.scenePhase) private var scenePhase
     /* Account has finished appearing: a link may push onto its stack. */
     @State private var onScreen = false
@@ -81,6 +83,12 @@ struct AccountView: View {
                 NotificationsSection(model: notifications)
                 Section {
                     Button { changingPassword = true } label: { row("key", "Change password", nil, chevron: true) }.alpineRow()
+                    if let twoStep {
+                        NavigationLink { TwoStepView().environment(store).environment(model).onDisappear { Task { await loadTwoStep() } } } label: {
+                            row("lock.shield", "Two-step sign-in", twoStep.on ? "On" : "Off")
+                        }
+                        .alpineRow()
+                    }
                     Button { showingPhrase = true } label: { row("scroll", "Recovery phrase", "Gets you back in if you forget your password", chevron: true) }.alpineRow()
                     NavigationLink { DevicesView().environment(store) } label: {
                         row("laptopcomputer.and.iphone", "Devices", "Where you’re signed in")
@@ -168,6 +176,12 @@ struct AccountView: View {
         allowance = try? await Auth.storage()
         billing = try? await Auth.billing()
         breakdown = try? await store.vault.storageBreakdown()
+        await loadTwoStep()
+    }
+
+    /* Kept as it was when the server can't be asked; gone when the server says it has two-step off. */
+    private func loadTwoStep() async {
+        do { twoStep = try await TwoStep.status() } catch {}
     }
 
     /* Avatar, name and email, with the chevron that says the row opens something (the name). */
@@ -676,6 +690,8 @@ struct ChangePasswordSheet: View {
     @State private var confirm = ""
     @State private var pending = false
     @State private var error = ""
+    /* The second step, for an account that has it on: its fields sit under the passwords. */
+    @State private var step = StepUpModel(.password)
 
     private var mismatch: Bool { !confirm.isEmpty && confirm != new }
 
@@ -692,6 +708,7 @@ struct ChangePasswordSheet: View {
                 } footer: {
                     if mismatch { Text("The new passwords don’t match.").foregroundStyle(Alpine.danger) } else { PasswordHint(new).text }
                 }
+                StepUpSections(step: step, disabled: pending)
                 Section {
                     Text("Your other devices will be signed out. Your recovery phrase stays the same.").font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
                         .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: Alpine.Space.s4, bottom: 0, trailing: Alpine.Space.s4))
@@ -703,22 +720,34 @@ struct ChangePasswordSheet: View {
                 }
             }
             .alpineGrouped()
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Change password")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+            .task { await step.prepare() }
         }
     }
 
     private func submit() {
+        let twoStep: StepAnswer?
+        do { twoStep = try step.prove() } catch { if !(error is StepUp.Unready) { self.error = ErrorWords.say(error) ?? "" }; return }
         pending = true
         error = ""
         Task {
             do {
-                try await Auth.changePassword(current: current, new: new)
-                // The server ends every session on a password change, as on the web; sign in again with the new one.
+                try await Auth.changePassword(current: current, new: new, twoStep: twoStep)
+            } catch {
+                if let words = await step.failed(error) { self.error = words }
+                pending = false
+                return
+            }
+            // The password is changed, whatever the sign-in after it does.
+            store.notify("Password changed. Other devices are signed out.")
+            do {
+                // The server ends every session on a password change, as on the web; sign in again with the new one. An
+                // account with two-step sign-in is asked for its step again there: the app goes to that screen.
                 if let email = model.user?.email { try await model.signIn(email: email, password: new) }
                 dismiss()
-                store.notify("Password changed. Other devices are signed out.")
             } catch {
                 if let words = ErrorWords.say(error) { self.error = words }
             }
@@ -796,8 +825,10 @@ struct PhraseGrid: View {
 /* Save the kit: the web's kit file through the share sheet (Print, Save to Files, AirDrop). */
 @MainActor
 enum KitShare {
-    static func present(phrase: String, email: String, accountId: String) async {
-        let envelope = (try? await Auth.recoveryEnvelopeJSON()) ?? [:]
+    /* `recovery`: the recovery key when the caller holds it (a rotation's, before any session can read it back); else it is read from the account. */
+    static func present(phrase: String, email: String, accountId: String, recovery: [String: Any]? = nil) async {
+        let envelope: [String: Any]
+        if let recovery { envelope = recovery } else { envelope = (try? await Auth.recoveryEnvelopeJSON()) ?? [:] }
         let text = RecoveryKit.text(email: email, accountId: accountId, phrase: phrase, recovery: envelope)
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("kit-" + UUID().uuidString, isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -890,6 +921,15 @@ struct ResetKeysSheet: View {
     @State private var phrase: String?
     @State private var saved = false
     @State private var checking = false
+    @State private var step = StepUpModel(.masterKey)
+    /* The new recovery key, for the kit file: no session is left to read it with while the sign-in waits. */
+    @State private var recovery = NewRecoveryKey()
+    /*
+     * The sign-in after the rotation will stop at the second step, on a screen that replaces this one. It waits
+     * until the new words are saved and checked here: they are shown only now, and they are what answers that step
+     * for someone whose other methods are gone.
+     */
+    @State private var signInAfter = false
 
     var body: some View {
         NavigationStack {
@@ -901,7 +941,7 @@ struct ResetKeysSheet: View {
                     Section { PhraseGrid(phrase: phrase, columns: 3).padding(.vertical, Alpine.Space.s2).alpineRow() }
                     Section {
                         VStack(spacing: Alpine.Space.s2) {
-                            Button { Task { await KitShare.present(phrase: phrase, email: model.user?.email ?? "", accountId: model.user?.id ?? "") } } label: {
+                            Button { Task { await KitShare.present(phrase: phrase, email: model.user?.email ?? "", accountId: model.user?.id ?? "", recovery: recovery.value) } } label: {
                                 Text("Save the kit").frame(maxWidth: .infinity)
                             }
                             .buttonStyle(PrimaryCapsuleStyle())
@@ -924,6 +964,7 @@ struct ResetKeysSheet: View {
                     } footer: {
                         Text("Enter your password to confirm.")
                     }
+                    StepUpSections(step: step, disabled: pending)
                     Section {
                         Button { reset() } label: { Text(pending ? "Rotating…" : "Rotate account key").frame(maxWidth: .infinity) }
                             .buttonStyle(PrimaryCapsuleStyle()).disabled(pending || password.isEmpty)
@@ -932,6 +973,7 @@ struct ResetKeysSheet: View {
                 }
             }
             .alpineGrouped()
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle(phrase == nil ? "Rotate account key" : "Your new recovery phrase")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { if phrase == nil { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } } }
@@ -939,31 +981,58 @@ struct ResetKeysSheet: View {
             .navigationDestination(isPresented: $checking) {
                 if let phrase {
                     // The new phrase's version: read after the reset, since the server made it.
-                    CheckWordsView(phrase: phrase, recoveryVersion: nil) { NoticeCenter.shared.show("Recovery phrase saved"); dismiss() }
+                    // No session is left to record the check with while the sign-in waits: the app records it once signed in.
+                    CheckWordsView(phrase: phrase, recoveryVersion: nil, records: !signInAfter) {
+                        NoticeCenter.shared.show("Recovery phrase saved")
+                        guard signInAfter, let email = model.user?.email else { dismiss(); return }
+                        model.wordsCheckedBeforeSignIn = true
+                        let (model, password) = (model, password)
+                        dismiss()
+                        Task {
+                            // Held until the sign-in has answered: a late 401 from the old session says nothing over it.
+                            let signedIn = try? await model.signIn(email: email, password: password)
+                            model.wordsHeld = false
+                            // No sign-in (no connection): the ended session is said now, as it would have been.
+                            if signedIn == nil { await model.sessionEnded() }
+                        }
+                    }
                 }
             }
+            .task { await step.prepare() }
         }
     }
 
     private func reset() {
+        let twoStep: StepAnswer?
+        do { twoStep = try step.prove() } catch { if !(error is StepUp.Unready) { self.error = ErrorWords.say(error) ?? "" }; return }
         pending = true
         error = ""
         Task {
             do {
-                let made = try await Auth.rotateKeys(password: password)
+                let made = try await Auth.rotateKeysKit(password: password, twoStep: twoStep)
                 // The rotation happened: the new phrase is shown whatever follows, since the old one no longer opens the
                 // account and this is the only time the new one is shown.
-                phrase = made
+                recovery.value = made.recovery
+                phrase = made.phrase
                 // Every session ended with the reset; sign in again under the new key. If that fails, the session alert
-                // asks for it later; the phrase stays on screen.
-                if let email = model.user?.email { try? await model.signIn(email: email, password: password) }
+                // asks for it later; the phrase stays on screen. An account with two-step sign-in is asked for its step
+                // at that sign-in, on a screen that would replace this one: it waits until the words are saved.
+                if step.step.asked {
+                    signInAfter = true
+                } else if let email = model.user?.email {
+                    signInAfter = (try? await model.signIn(email: email, password: password, stepLater: true)) == false
+                }
+                model.wordsHeld = signInAfter
             } catch {
-                if let words = ErrorWords.say(error) { self.error = words }
+                if let words = await step.failed(error) { self.error = words }
             }
             pending = false
         }
     }
 }
+
+/* A recovery key as JSON, held by a view: a class, since the dictionary is not something SwiftUI state compares. */
+@MainActor final class NewRecoveryKey { var value: [String: Any]? }
 
 /*
  * Replacing the sharing keys by a succession: new keys signed by the old ones. People who
@@ -1044,6 +1113,7 @@ struct DeleteAccountSheet: View {
     @State private var phrase = ""
     @State private var pending = false
     @State private var error = ""
+    @State private var step = StepUpModel(.delete)
 
     var body: some View {
         NavigationStack {
@@ -1057,6 +1127,7 @@ struct DeleteAccountSheet: View {
                 Section {
                     TextField("DELETE", text: $phrase).font(.body.monospaced()).textInputAutocapitalization(.characters).autocorrectionDisabled().alpineRow()
                 } header: { FieldLabel("Type DELETE to confirm") }
+                StepUpSections(step: step, disabled: pending)
                 Section {
                     Button { submit() } label: {
                         // Off, it fades to the same quiet fill as every other button, never a washed-out red.
@@ -1071,22 +1142,26 @@ struct DeleteAccountSheet: View {
                 }
             }
             .alpineGrouped()
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Delete account")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+            .task { await step.prepare() }
         }
     }
 
     private func submit() {
+        let twoStep: StepAnswer?
+        do { twoStep = try step.prove() } catch { if !(error is StepUp.Unready) { self.error = ErrorWords.say(error) ?? "" }; return }
         pending = true
         error = ""
         Task {
             do {
-                try await Auth.deleteAccount(password: password)
+                try await Auth.deleteAccount(password: password, twoStep: twoStep)
                 dismiss()
                 await model.deleted()
             } catch {
-                if let words = ErrorWords.say(error) { self.error = words }
+                if let words = await step.failed(error) { self.error = words }
             }
             pending = false
         }
@@ -1132,6 +1207,8 @@ struct CheckWordsView: View {
     let phrase: String
     /* The version to confirm, or nil to read it from the server (a phrase just made). */
     let recoveryVersion: UInt64?
+    /* False when there is no session to record the check with (Rotate account key, before the sign-in that follows): Finish only checks the words. */
+    var records = true
     let done: () -> Void
     /* A session that ended under the check, where nothing else would notice (a first kit stands in for the drive). */
     var sessionEnded: (() -> Void)? = nil
@@ -1200,6 +1277,7 @@ struct CheckWordsView: View {
     }
 
     private func finish() {
+        guard records else { done(); return }
         pending = true
         error = ""
         Task {

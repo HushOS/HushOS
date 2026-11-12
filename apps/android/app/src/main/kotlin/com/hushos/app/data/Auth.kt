@@ -284,7 +284,11 @@ object Auth {
 
     private class Reply(val body: JSONObject, val cookie: String?, val enrollment: String? = null)
 
-    private fun post(origin: String, path: String, body: JSONObject, cookie: String? = null): Reply {
+    /* A reply as it arrived: the status, the body as text for the core to read, and the cookies if any came. */
+    internal class RawReply(val status: Int, val text: String, val body: JSONObject, val cookie: String?, val enrollment: String?)
+
+    /* Sends and returns whatever came back, any status; throws only when nothing did. */
+    internal fun send(origin: String, path: String, body: JSONObject, cookie: String? = null): RawReply {
         val connection = URL(origin + path).openConnection() as HttpURLConnection
         connection.requestMethod = "POST"
         connection.doOutput = true
@@ -305,15 +309,20 @@ object Auth {
             throw AuthUnreachable()
         }
         val parsed = runCatching { JSONObject(text) }.getOrDefault(JSONObject())
-        if (status !in 200..299) throw AuthFailure(Problems.signIn(status, parsed.optString("message")))
         var token: String? = null
         var enrollment: String? = null
         for (header in connection.headerFields["Set-Cookie"].orEmpty()) {
             val pair = header.split(";")[0].trim()
-            if (pair.startsWith("hushos-session=") || pair.startsWith("__Host-hushos-session=")) token = pair.substringAfter("=")
+            if (pair.startsWith("hushos-session=") || pair.startsWith("__Host-hushos-session=")) token = pair.substringAfter("=").ifEmpty { null }
             if (pair.startsWith("hushos-enrollment=") || pair.startsWith("__Host-hushos-enrollment=")) enrollment = pair.substringAfter("=").ifEmpty { null }
         }
-        return Reply(parsed, token, enrollment)
+        return RawReply(status, text, parsed, token, enrollment)
+    }
+
+    private fun post(origin: String, path: String, body: JSONObject, cookie: String? = null): Reply {
+        val reply = send(origin, path, body, cookie)
+        if (reply.status !in 200..299) throw AuthFailure(Problems.signIn(reply.status, reply.body.optString("message")))
+        return Reply(reply.body, reply.cookie, reply.enrollment)
     }
 
     /*
@@ -420,20 +429,85 @@ object Auth {
         return userId
     }
 
-    /* Under SessionGuard: a removal wipe never runs while a sign-in stores its session, in any screen of the app. */
+    /*
+     * Signs in and returns who signed in, for a caller with no step screen (a new account's first
+     * sign-in): an account that asks for a second step is told to sign in from the app's own screen.
+     */
     fun signIn(context: Context, origin: String, email: String, password: String): SessionUser =
-        SessionGuard.signingIn { signInNow(context, origin, email, password) }
+        when (val result = startSignIn(context, origin, email, password)) {
+            is SignIn.SignedIn -> result.user
+            is SignIn.Step -> throw AuthFailure(StepWords.OPEN_APP)
+        }
 
-    private fun signInNow(context: Context, origin: String, email: String, password: String): SessionUser {
+    /* Where a sign-in stands after the password: signed in, or stopped at the account's second step. */
+    sealed class SignIn {
+        data class SignedIn(val user: SessionUser) : SignIn()
+        class Step(val pending: PendingSignIn) : SignIn()
+    }
+
+    /* Under SessionGuard: a removal wipe never runs while a sign-in stores its session, in any screen of the app. */
+    fun startSignIn(context: Context, origin: String, email: String, password: String): SignIn =
+        SessionGuard.signingIn { startSignInNow(context, origin, email, password) }
+
+    /*
+     * The password's half of a sign-in (docs/two-step-design.md 4). `twoStep: 1` says this build can
+     * answer a second step; an account that has one gets no session, no cookie and no envelope here,
+     * only the step, and what the password opened waits in `PendingSignIn` for the answer. The reply
+     * is read whole by the core: one that is neither the session nor the step is a `LostReply`.
+     */
+    private fun startSignInNow(context: Context, origin: String, email: String, password: String): SignIn {
         val start = opaqueStartLogin(password)
         val started = post(origin, "/api/auth/login/start", JSONObject().put("email", email).put("startLoginRequest", start.request)).body
         val attemptToken = started.optString("attemptToken").ifEmpty { throw AuthFailure("HushOS didn’t answer as expected. Try again in a moment.") }
         val loginResponse = started.optString("loginResponse").ifEmpty { throw AuthFailure("HushOS didn’t answer as expected. Try again in a moment.") }
         val finish = opaqueFinishLogin(password, start.state, loginResponse) ?: throw AuthFailure(MISMATCH)
-        val finishBody = JSONObject().put("attemptToken", attemptToken).put("finishLoginRequest", finish.request)
+        val finishBody = JSONObject().put("attemptToken", attemptToken).put("finishLoginRequest", finish.request).put("twoStep", 1)
         // The device key's proof, only for the account it was made for: the same device comes back.
         deviceProof(Shared.deviceIdentity(context), email, attemptToken)?.let { finishBody.put("device", it) }
-        val finished = post(origin, "/api/auth/login/finish", finishBody)
+        val reply = send(origin, "/api/auth/login/finish", finishBody)
+        return when (val read = signInReply(reply, StepWords.LOST_SIGN_IN)) {
+            null -> SignIn.SignedIn(openSession(context, origin, email, finish.exportKey, reply))
+            else -> SignIn.Step(PendingSignIn(origin, email, read, finish.exportKey))
+        }
+    }
+
+    /*
+     * What `login/finish` or `login/two-step` answered, as the core reads it: null for the session,
+     * the step to answer, or a throw. A wrong password and the limiter's 429 are a sign-in's own
+     * refusals, in the server's words as before; a step's refusal is a `StepRefused` with its code; a
+     * reply that is not the server's answer is a `LostReply`, never a sign-in.
+     */
+    internal fun signInReply(reply: RawReply, lost: String, answering: Boolean = false): com.hushos.core.StepChallenge? =
+        when (val read = com.hushos.core.signInReplyRead(reply.status.toUShort(), reply.text)) {
+            is com.hushos.core.StepReply.Done -> null
+            // Another step in place of the session is not what the step's own route answers.
+            is com.hushos.core.StepReply.Step -> if (answering) throw LostReply(lost) else read.challenge
+            is com.hushos.core.StepReply.Refused ->
+                if (!answering && (read.refusal == com.hushos.core.StepRefusal.OTHER || read.refusal == com.hushos.core.StepRefusal.BUSY))
+                    throw AuthFailure(Problems.signIn(reply.status, read.message), reply.status)
+                else throw StepRefused(read.refusal, read.message, reply.status)
+            is com.hushos.core.StepReply.Lost -> throw LostReply(lost)
+        }
+
+    /*
+     * The step's answer: on a right one the server answers exactly what `login/finish` answers
+     * without a step, and the envelope opens under what the password gave. A wrong answer, an ended
+     * step and a lost reply are thrown; `StepOutcome` says what the screen does next.
+     */
+    fun answerStep(context: Context, pending: PendingSignIn, proof: com.hushos.core.StepProof): SessionUser = SessionGuard.signingIn {
+        val reply = answerStepAt(pending.origin, pending.challenge.token, proof)
+        openSession(context, pending.origin, pending.email, pending.exportKey, reply)
+    }
+
+    /* The request itself: the reply when it is the session's, a throw for anything else. */
+    internal fun answerStepAt(origin: String, token: String, proof: com.hushos.core.StepProof): RawReply {
+        val reply = send(origin, "/api/auth/login/two-step", StepAnswer(token, proof).json())
+        signInReply(reply, StepWords.LOST_STEP, answering = true)
+        return reply
+    }
+
+    /* The session's reply, whole (the core checked): the session and the device memory are stored, and the account returned. */
+    private fun openSession(context: Context, origin: String, email: String, exportKey: ByteArray, finished: RawReply): SessionUser {
         val user = finished.body.optJSONObject("user")?.let(SessionUser::from) ?: throw AuthFailure("Signed in, but the session was not returned.")
         val envelopeJson = finished.body.optJSONObject("envelope") ?: throw AuthFailure("Signed in, but the session was not returned.")
         val token = finished.cookie ?: throw AuthFailure("Signed in, but the session was not returned.")
@@ -453,11 +527,28 @@ object Auth {
         )
         val existing = Shared.device(context)
         if (existing != null && existing.bundle.userId.equals(user.id, ignoreCase = true) && existing.bundle.credentialVersion == envelope.credentialVersion) return user
-        val accountKey = accountUnlock(user.id, finish.exportKey, envelope)
+        val accountKey = accountUnlock(user.id, exportKey, envelope)
         val memory = deviceRemember(user.id, accountKey, envelope.keyVersion, envelope.credentialVersion, UUID.randomUUID().toString())
         Shared.writeDevice(context, memory)
         return user
     }
+
+    /*
+     * The sign-in that follows a phrase reset. An account with two-step sign-in (docs/two-step-design.md
+     * 4, 5) is asked for its step there, and the recovery phrase passes it: the account's phrase is now
+     * `freshPhrase`, just made on this phone, which the person has not seen yet. It answers, so a person
+     * with only their phrase is not asked for a method they may have lost.
+     */
+    fun signInAfterRecovery(context: Context, origin: String, email: String, password: String, freshPhrase: String): SessionUser =
+        when (val result = startSignIn(context, origin, email, password)) {
+            is SignIn.SignedIn -> result.user
+            is SignIn.Step -> {
+                val challenge = result.pending.challenge
+                val signing = challenge.phrase?.takeIf { com.hushos.core.StepMethod.PHRASE in challenge.methods } ?: throw AuthFailure(StepWords.CANNOT_ANSWER)
+                val signature = com.hushos.core.twoStepPhraseSign(freshPhrase, signing.wrappingSalt, signing.userId, challenge.token)
+                answerStep(context, result.pending, com.hushos.core.StepProof.Phrase(signature))
+            }
+        }
 
     /*
      * The device key's proof for `attemptToken`, when `identity` was made for the email being signed
@@ -552,8 +643,14 @@ object Auth {
         (if (session.origin.startsWith("https:")) "__Host-hushos-session" else "hushos-session") + "=" + session.token
 
     /* `as` names the session to send: a vault's own, so what it writes never goes out under another account's. */
-    private fun call(context: Context, path: String, body: JSONObject? = null, method: String? = null, `as`: Shared.Session? = null): JSONObject {
-        val session = `as` ?: Shared.session(context) ?: throw AuthFailure("Sign in first.")
+    private fun call(context: Context, path: String, body: JSONObject? = null, method: String? = null, `as`: Shared.Session? = null, whole: Boolean = false): JSONObject =
+        callAt(`as` ?: Shared.session(context) ?: throw AuthFailure("Sign in first."), path, body, method, whole)
+
+    /* A reply under a session, as it arrived. */
+    internal class SessionReply(val status: Int, val text: String, val body: JSONObject)
+
+    /* Sends under `session` and returns whatever came back, any status; throws only when nothing did. */
+    internal fun requestAt(session: Shared.Session, path: String, body: JSONObject? = null, method: String? = null): SessionReply {
         val connection = URL(session.origin + path).openConnection() as HttpURLConnection
         connection.requestMethod = method ?: if (body == null) "GET" else "POST"
         connection.setRequestProperty("Cookie", cookie(session))
@@ -575,10 +672,33 @@ object Auth {
         } catch (error: java.io.IOException) {
             throw AuthUnreachable()
         }
-        val parsed = runCatching { JSONObject(text) }.getOrDefault(JSONObject())
-        if (status == 401) throw NotAuthenticated()
-        if (status !in 200..299) throw AuthFailure(Problems.signIn(status, parsed.optString("message")), status)
-        return parsed
+        return SessionReply(status, text, runCatching { JSONObject(text) }.getOrDefault(JSONObject()))
+    }
+
+    /*
+     * `whole` is for a change that may carry a second step: its 200 must be the server's own JSON
+     * object, or the reply is lost (`LostReply`) and nothing says whether the change went through; so
+     * is a 5xx that does not name `step-unavailable`. A refusal that names one of the step's codes is
+     * thrown as `StepRefused` from any route, in the server's words; a bare 429 stays the route's own.
+     */
+    internal fun callAt(session: Shared.Session, path: String, body: JSONObject? = null, method: String? = null, whole: Boolean = false): JSONObject {
+        val reply = requestAt(session, path, body, method)
+        if (reply.status !in 200..299) {
+            val read = com.hushos.core.stepChangeReplyRead(reply.status.toUShort(), reply.text)
+            if (read is com.hushos.core.StepReply.Refused && stepNamed(read.refusal)) throw StepRefused(read.refusal, read.message, reply.status)
+            // A server error without the step's code (a 503 from something in the way): the change may have gone through.
+            if (whole && read is com.hushos.core.StepReply.Lost && reply.status >= 500) throw LostReply(StepWords.LOST_CHANGE)
+            if (reply.status == 401) throw NotAuthenticated()
+            throw AuthFailure(Problems.signIn(reply.status, reply.body.optString("message")), reply.status)
+        }
+        if (whole && com.hushos.core.stepChangeReplyRead(reply.status.toUShort(), reply.text) !is com.hushos.core.StepReply.Done) throw LostReply(StepWords.LOST_CHANGE)
+        return reply.body
+    }
+
+    /* Thrown as the step's own refusal: when the server named one of its codes. The address's own 429 and anything else stay the route's error. */
+    private fun stepNamed(refusal: com.hushos.core.StepRefusal): Boolean = when (refusal) {
+        com.hushos.core.StepRefusal.BUSY, com.hushos.core.StepRefusal.OTHER -> false
+        else -> true
     }
 
     /* The identity envelope the server keeps for this account. */
@@ -718,7 +838,14 @@ object Auth {
      * minted. The server ends every session, so the caller signs in again.
      * Returns the phrase to show once.
      */
-    fun rotateKeys(context: Context, password: String): String {
+    fun rotateKeys(context: Context, password: String, twoStep: StepAnswer? = null): String = rotateKeysKit(context, password, twoStep).first
+
+    /*
+     * The same, with the new recovery key as the server now holds it: what the kit file carries. An
+     * account with two-step sign-in has no session to read it back with until it has signed in again,
+     * and the kit is saved before that.
+     */
+    fun rotateKeysKit(context: Context, password: String, twoStep: StepAnswer? = null): Pair<String, JSONObject> {
         val login = opaqueStartLogin(password)
         val registration = opaqueStartRegistration(password)
         val challenge = call(context, "/api/auth/security/start", JSONObject().put("action", "master-key")
@@ -750,9 +877,10 @@ object Auth {
                 .put("credentialVersion", sealed.credentialVersion.toLong()).put("wrappingSalt", sealed.wrappingSalt)
                 .put("wrappingNonce", sealed.wrappingNonce).put("encryptedKey", sealed.encryptedKey))
             .put("recovery", json(recovery.envelope)).put("identity", json(identity)).put("workspaces", workspaces)
-            .put("identityHistory", history).apply { settingsKey?.let { put("settingsKey", json(it)) } })
+            .put("identityHistory", history).apply { settingsKey?.let { put("settingsKey", json(it)) } }
+            .apply { twoStep?.let { put("twoStep", it.json()) } }, whole = true)
         Shared.writeDevice(context, deviceRemember(userId, newRoot, sealed.keyVersion, sealed.credentialVersion, UUID.randomUUID().toString()))
-        return recovery.phrase
+        return recovery.phrase to json(recovery.envelope)
     }
 
     /*
@@ -801,8 +929,13 @@ object Auth {
         json.getString("wrappingSalt"), json.getString("wrappingNonce"), json.getString("encryptedKey"),
     )
 
-    /* The old password opens the account key; the new one seals it again one credential version up. */
-    fun changePassword(context: Context, current: String, new: String) {
+    /*
+     * The old password opens the account key; the new one seals it again one credential version up.
+     * `twoStep` is the second step's answer, for an account that has it on: without one the server
+     * refuses with `two-step` (`StepRefused`) and nothing changes. No replacement session is asked for
+     * (`keepSession`): this phone signs in again, and is asked for the step.
+     */
+    fun changePassword(context: Context, current: String, new: String, twoStep: StepAnswer? = null) {
         val login = opaqueStartLogin(current)
         val registration = opaqueStartRegistration(new)
         val challenge = call(context, "/api/auth/security/start", JSONObject().put("action", "password")
@@ -817,16 +950,18 @@ object Auth {
             .put("finishLoginRequest", finish.request).put("registrationRecord", registered.record)
             .put("envelope", JSONObject().put("envelopeVersion", sealed.envelopeVersion.toInt()).put("keyVersion", sealed.keyVersion.toLong())
                 .put("credentialVersion", sealed.credentialVersion.toLong()).put("wrappingSalt", sealed.wrappingSalt)
-                .put("wrappingNonce", sealed.wrappingNonce).put("encryptedKey", sealed.encryptedKey)))
+                .put("wrappingNonce", sealed.wrappingNonce).put("encryptedKey", sealed.encryptedKey))
+            .apply { twoStep?.let { put("twoStep", it.json()) } }, whole = true)
         Shared.writeDevice(context, deviceRemember(userId, accountKey, sealed.keyVersion, sealed.credentialVersion, UUID.randomUUID().toString()))
     }
 
     /* Proves the password once more, then the server removes the account; every local trace goes with it. */
-    fun deleteAccount(context: Context, password: String) {
+    fun deleteAccount(context: Context, password: String, twoStep: StepAnswer? = null) {
         val login = opaqueStartLogin(password)
         val started = call(context, "/api/auth/delete/start", JSONObject().put("startLoginRequest", login.request))
         val finish = opaqueFinishLogin(password, login.state, started.getString("loginResponse")) ?: throw AuthFailure("The password is not right.")
-        call(context, "/api/auth/delete/finish", JSONObject().put("attemptToken", started.getString("attemptToken")).put("finishLoginRequest", finish.request))
+        call(context, "/api/auth/delete/finish", JSONObject().put("attemptToken", started.getString("attemptToken")).put("finishLoginRequest", finish.request)
+            .apply { twoStep?.let { put("twoStep", it.json()) } }, whole = true)
         Shared.clearSession(context)
         Shared.clearDevice(context)
         AccountStore.of(context).wipe()

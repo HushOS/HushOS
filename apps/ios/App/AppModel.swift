@@ -133,15 +133,86 @@ final class AppModel {
     /* The stored session `start` last found ended, so `checkAccount` only follows a new one. */
     private var declinedToken: String?
 
-    func signIn(email: String, password: String) async throws {
+    /*
+     * A sign-in stopped at the account's second step (docs/two-step-design.md 4): the step screen is
+     * on the sign-in stack until it is answered, given up, or over. What the password opened waits
+     * in it, in memory only.
+     */
+    private(set) var pendingStep: PendingSignIn?
+    /* Why the last step went back to the password, in the server's words; sign-in shows it once. */
+    var stepNotice = ""
+
+    /*
+     * The new recovery words were checked on this phone while no session was left to say so (Rotate
+     * account key on an account with two-step sign-in): recorded once signed in.
+     */
+    var wordsCheckedBeforeSignIn = false
+    /*
+     * Rotate account key is showing the new recovery words while the session the rotation ended is still on
+     * screen behind them: nothing signs the app out from under them until they are saved (ResetKeysSheet).
+     */
+    var wordsHeld = false
+
+    /*
+     * Returns whether the app is signed in: false when the account asked for its second step. With
+     * `stepLater` the step is not shown and nothing changes (the caller still has something on screen
+     * that the step screen would replace, and signs in again when it is done).
+     */
+    @discardableResult
+    func signIn(email: String, password: String, stepLater: Bool = false) async throws -> Bool {
         removedNotice = false
         signInGeneration += 1
         await wiping?.value
         let previous = AccountStore.shared.owner()
-        // Auth.signIn removes another account's data (AccountStore.claim) before the new session is stored.
-        let user = try await Auth.signIn(origin: origin, email: email, password: password)
+        // The session is stored only once signed in; another account's data goes then (AccountStore.claim).
+        switch try await Auth.startSignIn(origin: origin, email: email, password: password) {
+        case .signedIn(let user):
+            await anotherAccount(since: previous)
+            signedIn(user)
+            return true
+        case .step(let pending):
+            if !stepLater { awaitStep(pending) }
+            return false
+        }
+    }
+
+    /*
+     * The account asks for its second step. Signed out, the step screen goes on the sign-in stack.
+     * Signed in, this is the sign-in after this phone's own password change or rotation: the server
+     * ended every session with it, so the app goes to sign-in as it does when a session ends (the
+     * address filled, what the phone holds kept) and asks for the step there.
+     */
+    private func awaitStep(_ pending: PendingSignIn) {
+        if state == .signedIn {
+            sessionClosed()
+            if let email = user?.email, !email.isEmpty { lastEmail = email }
+            lastOwner = owner
+            SharedKeychain.delete(SharedKeychain.sessionAccount)
+            user = nil
+            vault = nil
+            owner = nil
+            state = .signedOut
+        }
+        if lastEmail.isEmpty { lastEmail = pending.email }
+        stepNotice = ""
+        pendingStep = pending
+    }
+
+    /* The step's answer: on a right one the app is signed in, as a sign-in without a step leaves it. */
+    func answerStep(_ proof: StepProof) async throws {
+        guard let pending = pendingStep else { throw StepError.refused(.expired, StepWords.over) }
+        signInGeneration += 1
+        await wiping?.value
+        let previous = AccountStore.shared.owner()
+        let user = try await Auth.answerStep(pending, proof: proof)
         await anotherAccount(since: previous)
         signedIn(user)
+    }
+
+    /* Back to the password: the person chose to start again (no reason), or the step is over (the server's reason). */
+    func cancelStep(_ reason: String = "") {
+        stepNotice = reason
+        pendingStep = nil
     }
 
     /*
@@ -157,6 +228,9 @@ final class AppModel {
     }
 
     private func signedIn(_ user: SessionUser) {
+        // A step left waiting (answered now, or passed over by a sign-in from the Files sheet) is done with.
+        pendingStep = nil
+        stepNotice = ""
         sessionCheck = .none
         lastOwner = nil
         // The queue opens its own vault from the keychain until the drive hands it the new one.
@@ -172,6 +246,11 @@ final class AppModel {
         wordsWaiting = WordsWaiting.isWaiting(for: user.id)
         state = .signedIn
         if let owner { Task { await FilesDomain.register(for: owner) } }
+        if wordsCheckedBeforeSignIn {
+            wordsCheckedBeforeSignIn = false
+            // Best effort: unrecorded, the words are only asked about again.
+            Task { if let version = try? await Auth.recoveryKey().envelope.recoveryVersion { try? await Auth.confirmRecovery(recoveryVersion: version) } }
+        }
         // Notifications this account turned on here: the token again, in case iOS replaced it, then what no push showed.
         Task {
             await PhonePush.shared.refresh()
@@ -283,6 +362,7 @@ final class AppModel {
      * the account on the phone goes as well, as on sign-out.
      */
     func sessionLost(ended: SharedKeychain.Session? = nil) {
+        guard !wordsHeld else { return }
         // The session said to have ended is no longer the one stored (a sign-in since replaced it): nothing of the
         // stored one goes. The account is looked at again instead, which adopts the stored session.
         if let ended, let stored = SharedKeychain.session, stored != ended {
@@ -308,6 +388,9 @@ final class AppModel {
      * cleared if anyone signed in meanwhile.
      */
     func sessionEnded() async {
+        // A rotation's new words are on screen (wordsHeld): "You've been signed out" would take them away, and the
+        // sign-in that follows them is already planned. The check stays unanswered, so its alert never shows.
+        guard !wordsHeld else { return }
         guard !checkingRemoval else { return }
         guard let ended = SharedKeychain.session else {
             sessionCheck = .kept

@@ -315,7 +315,19 @@ extension Auth {
         }
         let user: SessionUser
         do {
-            user = try await signIn(origin: origin, email: enrollment.email, password: password)
+            switch try await startSignIn(origin: origin, email: enrollment.email, password: password) {
+            case .signedIn(let signedIn):
+                user = signedIn
+            case .step(let pending):
+                // An account with two-step sign-in (docs/two-step-design.md 4, 5): the recovery phrase passes the
+                // step, and the account's phrase is now the one just made here, which the person has not seen yet.
+                // It answers, so a person with only their phrase is not asked for a method they may have lost.
+                guard let signing = pending.challenge.phrase, pending.challenge.methods.contains(.phrase) else {
+                    throw AuthError.message(StepWords.cannotAnswer)
+                }
+                let signature = try twoStepPhraseSign(phrase: fresh.phrase, wrappingSalt: signing.wrappingSalt, userId: signing.userId, stepToken: pending.challenge.token)
+                user = try await answerStep(pending, proof: .phrase(signature: signature))
+            }
         } catch {
             throw AuthError.message("Your password was changed. Sign in with your new password.")
         }

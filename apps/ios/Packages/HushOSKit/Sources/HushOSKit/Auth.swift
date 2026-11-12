@@ -1,4 +1,5 @@
 import Foundation
+import HushOSCore
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -91,7 +92,16 @@ public enum Auth {
         let cookie: String?
     }
 
-    private static func post(_ origin: String, _ path: String, _ body: [String: Any], cookie: String? = nil) async throws -> Reply {
+    /* A reply as it arrived: the status, the body as text for the core to read, and the session cookie if one came. */
+    struct RawReply {
+        let status: Int
+        let text: String
+        let body: [String: Any]
+        let cookie: String?
+    }
+
+    /* Sends and returns whatever came back, any status; throws only when nothing did. */
+    static func send(_ origin: String, _ path: String, _ body: [String: Any], cookie: String? = nil) async throws -> RawReply {
         guard let url = URL(string: origin + path) else { throw AuthError.message("Bad HushOS address.") }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -104,17 +114,25 @@ public enum Auth {
         request.timeoutInterval = 30
         let (data, response): (Data, URLResponse)
         do {
-            (data, response) = try await URLSession(configuration: .ephemeral).data(for: request)
+            (data, response) = try await URLSession(configuration: testTransport ?? .ephemeral).data(for: request)
         } catch {
             if ErrorWords.isCancellation(error) { throw CancellationError() }
             throw AuthError.message(AuthError.unreachable)
         }
         let http = response as? HTTPURLResponse
         let parsed = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
-        guard let http, (200 ..< 300).contains(http.statusCode) else {
-            throw AuthError.message(parsed["message"] as? String ?? "Something went wrong on HushOS. Try again in a moment.")
+        return RawReply(
+            status: http?.statusCode ?? 0, text: String(data: data, encoding: .utf8) ?? "", body: parsed,
+            cookie: sessionToken(setCookie: http?.value(forHTTPHeaderField: "Set-Cookie"))
+        )
+    }
+
+    private static func post(_ origin: String, _ path: String, _ body: [String: Any], cookie: String? = nil) async throws -> Reply {
+        let reply = try await send(origin, path, body, cookie: cookie)
+        guard (200 ..< 300).contains(reply.status) else {
+            throw AuthError.message(reply.body["message"] as? String ?? "Something went wrong on HushOS. Try again in a moment.")
         }
-        return Reply(body: parsed, cookie: sessionToken(setCookie: http.value(forHTTPHeaderField: "Set-Cookie")))
+        return Reply(body: reply.body, cookie: reply.cookie)
     }
 
     /*
@@ -138,9 +156,32 @@ public enum Auth {
         return token
     }
 
-    /* Signs in, stores the session and (when needed) a new device memory; returns who signed in. */
+    /*
+     * Signs in, stores the session and (when needed) a new device memory; returns who signed in.
+     * For callers with no step screen (the Files sign-in sheet, a new account's first sign-in): an
+     * account that asks for a second step is told to sign in from the app.
+     */
     @discardableResult
     public static func signIn(origin: String, email: String, password: String) async throws -> SessionUser {
+        switch try await startSignIn(origin: origin, email: email, password: password) {
+        case .signedIn(let user): return user
+        case .step: throw AuthError.message(StepWords.openApp)
+        }
+    }
+
+    /* Where a sign-in stands after the password: signed in, or stopped at the account's second step. */
+    public enum SignIn: Sendable {
+        case signedIn(SessionUser)
+        case step(PendingSignIn)
+    }
+
+    /*
+     * The password's half of a sign-in (docs/two-step-design.md 4). `twoStep: 1` says this build can
+     * answer a second step; an account that has one gets no session, no cookie and no envelope here,
+     * only the step, and what the password opened waits in `PendingSignIn` for the answer. The reply
+     * is read whole by the core: one that is neither the session nor the step is `StepError.lost`.
+     */
+    public static func startSignIn(origin: String, email: String, password: String) async throws -> SignIn {
         let start = try opaqueStartLogin(password: password)
         let started = try await post(origin, "/api/auth/login/start", ["email": email, "startLoginRequest": start.request]).body
         guard let attemptToken = started["attemptToken"] as? String, let loginResponse = started["loginResponse"] as? String else {
@@ -149,16 +190,58 @@ public enum Auth {
         guard let finish = try opaqueFinishLogin(password: password, state: start.state, loginResponse: loginResponse) else {
             throw AuthError.wrongPassword
         }
-        var finishBody: [String: Any] = ["attemptToken": attemptToken, "finishLoginRequest": finish.request]
+        var finishBody: [String: Any] = ["attemptToken": attemptToken, "finishLoginRequest": finish.request, "twoStep": 1]
         // The device key's proof, only for the account it was made for: the same device comes back.
         if let proof = deviceProof(identity: SharedKeychain.deviceIdentity, email: email, attemptToken: attemptToken) {
             finishBody["device"] = proof
         }
-        let finished = try await post(origin, "/api/auth/login/finish", finishBody)
-        guard let userJson = finished.body["user"] as? [String: Any] else { throw AuthError.message("Signed in, but HushOS returned no account.") }
+        let reply = try await send(origin, "/api/auth/login/finish", finishBody)
+        switch signInReplyRead(status: UInt16(clamping: reply.status), body: reply.text) {
+        case .done:
+            return .signedIn(try await openSession(origin: origin, email: email, exportKey: finish.exportKey, reply: reply))
+        case .step(let challenge):
+            return .step(PendingSignIn(origin: origin, email: email, challenge: challenge, exportKey: finish.exportKey))
+        case .refused(let refusal, let message):
+            // A wrong password and the limiter's 429 are a sign-in's own refusals, in the server's words as before.
+            throw refusal == .other || refusal == .busy ? AuthError.message(message) : StepError.refused(refusal, message)
+        case .lost:
+            throw StepError.lost(StepWords.lostSignIn)
+        }
+    }
+
+    /*
+     * The step's answer: on a right one the server answers exactly what `login/finish` answers
+     * without a step, and the envelope opens under what the password gave. A wrong answer, an ended
+     * step and a lost reply are thrown as `StepError`; `StepOutcome` says what the screen does next.
+     */
+    public static func answerStep(_ pending: PendingSignIn, proof: StepProof) async throws -> SessionUser {
+        let body = try StepAnswer(token: pending.challenge.token, proof: proof).json()
+        let reply = try await send(pending.origin, "/api/auth/login/two-step", body)
+        switch signInReplyRead(status: UInt16(clamping: reply.status), body: reply.text) {
+        case .done:
+            return try await openSession(origin: pending.origin, email: pending.email, exportKey: pending.exportKey, reply: reply)
+        case .refused(let refusal, let message):
+            throw StepError.refused(refusal, message)
+        case .step, .lost:
+            // Another step in place of the session is not this route's answer either.
+            throw StepError.lost(StepWords.lostStep)
+        }
+    }
+
+    /* The session's reply, whole (the core checked): the session and the device memory are stored, and the account returned. */
+    private static func openSession(origin: String, email: String, exportKey: Data, reply: RawReply) async throws -> SessionUser {
+        guard let userJson = reply.body["user"] as? [String: Any] else { throw AuthError.message("Signed in, but HushOS returned no account.") }
         let user = try JSONDecoder().decode(SessionUser.self, from: JSONSerialization.data(withJSONObject: userJson))
-        guard let envelopeJson = finished.body["envelope"] as? [String: Any] else { throw AuthError.message("Signed in, but HushOS returned no account key.") }
-        guard let token = finished.cookie else { throw AuthError.noSession }
+        guard let envelopeJson = reply.body["envelope"] as? [String: Any] else { throw AuthError.message("Signed in, but HushOS returned no account key.") }
+        guard let token = reply.cookie else { throw AuthError.noSession }
+        let envelope = AccountKeyEnvelope(
+            envelopeVersion: UInt32((envelopeJson["envelopeVersion"] as? NSNumber)?.intValue ?? 0),
+            keyVersion: (envelopeJson["keyVersion"] as? NSNumber)?.uint64Value ?? 0,
+            credentialVersion: (envelopeJson["credentialVersion"] as? NSNumber)?.uint64Value ?? 0,
+            wrappingSalt: envelopeJson["wrappingSalt"] as? String ?? "",
+            wrappingNonce: envelopeJson["wrappingNonce"] as? String ?? "",
+            encryptedKey: envelopeJson["encryptedKey"] as? String ?? ""
+        )
         // Another account's data on this phone goes before this one's session exists, and that account's session goes
         // first, so nothing still at work for it (a rollback mark, in this process or an extension) writes after the wipe.
         let owner = AccountOwner(userId: user.id, origin: origin)
@@ -169,25 +252,16 @@ public enum Auth {
         try SharedKeychain.write(SharedKeychain.configAccount, SharedKeychain.Config(origin: origin))
         try SharedKeychain.write(SharedKeychain.sessionAccount, SharedKeychain.Session(origin: origin, token: token, userId: user.id))
         // A device the proof did not bring back describes itself and gets a key; a failure waits for the next launch.
-        if let device = SessionDevice(json: finished.body["device"] as? [String: Any]) {
+        if let device = SessionDevice(json: reply.body["device"] as? [String: Any]) {
             try? await registerDevice(if: device, userId: user.id, email: user.email.isEmpty ? email : user.email)
         }
-
-        let envelope = AccountKeyEnvelope(
-            envelopeVersion: UInt32((envelopeJson["envelopeVersion"] as? NSNumber)?.intValue ?? 0),
-            keyVersion: (envelopeJson["keyVersion"] as? NSNumber)?.uint64Value ?? 0,
-            credentialVersion: (envelopeJson["credentialVersion"] as? NSNumber)?.uint64Value ?? 0,
-            wrappingSalt: envelopeJson["wrappingSalt"] as? String ?? "",
-            wrappingNonce: envelopeJson["wrappingNonce"] as? String ?? "",
-            encryptedKey: envelopeJson["encryptedKey"] as? String ?? ""
-        )
         // A remembered device for this user and credential is kept; otherwise make one now.
         if let existing = try? SharedKeychain.device?.open(),
            existing.bundle.userId.lowercased() == user.id.lowercased(),
            existing.bundle.credentialVersion == envelope.credentialVersion {
             return user
         }
-        let accountKey = try accountUnlock(userId: user.id, exportKey: finish.exportKey, envelope: envelope)
+        let accountKey = try accountUnlock(userId: user.id, exportKey: exportKey, envelope: envelope)
         let memory = try deviceRemember(
             userId: user.id, accountKey: accountKey, keyVersion: envelope.keyVersion,
             credentialVersion: envelope.credentialVersion, deviceKeyId: UUID().uuidString.lowercased()

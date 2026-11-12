@@ -318,6 +318,24 @@ Markdown files (`text/markdown`, or `.md`, `.markdown`, `.mdx`) up to 2 MB open 
 - A password change or key rotation ends every session on the server, so the sheets sign in again with the new password themselves.
 - `Account.swift` rotates the master key and reads the recovery key.
 
+### Two-step sign-in
+
+`docs/two-step-design.md` 4 to 6. `TwoStep.swift` in HushOSKit holds the requests and the rules; `App/TwoStep.swift` the screens.
+
+- `Auth.startSignIn` sends `twoStep: 1` and returns `.signedIn` or `.step(PendingSignIn)`. What the password opened waits in `PendingSignIn`, in memory, for `Auth.answerStep`.
+    - `Auth.signIn` is for callers with no step screen (the Files sheet, a new account): a step there is "This account asks for a second step. Open HushOS and sign in there."
+- The core reads every reply (`signInReplyRead`, `stepChangeReplyRead`). A reply that is not the server's answer is `StepError.lost`, never a sign-in.
+- `StepOutcome.after` says what the step screen does with a failure: ask again, narrow the methods, go back to the password, or offer the same answer again. `StepUp` is the same for a step inside a form. Change these with their tests (`TwoStepTests`).
+- The step screen (`SignInStepView`) is pushed on sign-in's own stack while `AppModel.pendingStep` is set. Back is "Start again".
+    - Signed in already (after this phone's own password change or rotation), `AppModel.awaitStep` goes to sign-in first, keeping what the phone holds.
+- The code field is `.oneTimeCode`. Codes, the key and backup codes are monospaced, copied to this phone only for two minutes, and hidden while the screen is recorded.
+- The phrase is signed in the core (`twoStepPhraseSign`); only the signature is sent.
+- Change password, Rotate account key and Delete account hold a `StepUpModel` and show `StepUpSections`. No `keepSession` is sent.
+- Rotate account key on an account with the step shows the new words before the sign-in that follows: `AppModel.wordsHeld` keeps "You’ve been signed out" away meanwhile, `CheckWordsView(records: false)` checks them without a session, and the check is recorded once signed in (`wordsCheckedBeforeSignIn`).
+- `Auth.recover` answers the step of the sign-in that follows a phrase reset with the phrase it just made.
+- Account › Two-step sign-in (`TwoStepView`) shows nothing on a server that has two-step off (`TwoStep.status()` is nil for 501).
+- "Open in authenticator app" opens only an `otpauth://totp/` address (`TotpEnrolment.link`).
+
 ### Sign-up
 
 - "Create an account" on the sign-in screen opens `SignupView` (`App/SignupView.swift`, a full-screen cover like `RecoveryView`). Steps:
