@@ -2380,5 +2380,6 @@ psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f packages/db/drizzle/2026111
         Either form needs a connection that keeps its session for the whole run: a direct one, as `MIGRATION_DATABASE_URL` is meant to be, or a pooler in session mode. Through a pooler in transaction mode the setting may not reach the script, which then refuses as if it were never given.
 
 - It locks `two_step_factors` and `opaque_login_attempts` exclusively until it commits, so sign-ins wait for it: milliseconds. The first lock is taken before the accounts are counted, so no method can be confirmed between the count and the drop.
+- Because it locks `two_step_factors` first, it can deadlock with a sign-in that is under way. Postgres then aborts one of the two. The script is one transaction, so it applies whole or not at all: stop the app first, or run it again.
 - Then run the previous release's images only: this release's worker waits for the migrations and exits without them.
 - `packages/db/src/two-step.migration.test.ts` runs both scripts against a migrated database and checks that the schema is exactly what it was before.

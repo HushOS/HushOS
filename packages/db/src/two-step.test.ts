@@ -518,10 +518,11 @@ describe('enrolling an authenticator app', () => {
         await take(login);
         expect(
             await start({ sessionTokenHash: maya.session.token, tokenHash: login, spend: PHRASE }),
-        ).toMatchObject({ status: 'two-step' });
+        ).toEqual({ status: 'two-step', reason: 'gone' });
         const others = await stepUp(maya.userId, other);
-        expect(await start({ ...others, sessionTokenHash: maya.session.token })).toMatchObject({
+        expect(await start({ ...others, sessionTokenHash: maya.session.token })).toEqual({
             status: 'two-step',
+            reason: 'gone',
         });
         expect(await start(await stepUp(maya.userId, maya.session, 'password'))).toEqual({
             status: 'two-step',
@@ -785,7 +786,11 @@ describe('a code’s time step', () => {
                 factorId: maya.factorId,
                 step: await stepUp(maya.userId, laptop, 'two-step', spend),
             }),
-        ).toMatchObject({ status: 'two-step' });
+        ).toMatchObject({
+            status: 'two-step',
+            reason: 'spent',
+            failure: { status: 'counted', pool: 'device', consecutiveFailures: 1 },
+        });
         expect(await twoStep.hasTwoStep(maya.userId)).toBe(true);
         // The replay was counted against the device that tried it.
         expect(await deviceFailures(laptop.deviceId)).toBe(1);
@@ -916,8 +921,9 @@ describe('backup codes', () => {
         const salt = (await twoStep.getBackupCodes(maya.userId))!.salt;
         const next = codeSet('new');
         // Without the step, or with another session's, the old set stands.
-        expect(await twoStep.replaceBackupCodes({ userId: maya.userId, ...next })).toMatchObject({
+        expect(await twoStep.replaceBackupCodes({ userId: maya.userId, ...next })).toEqual({
             status: 'two-step',
+            reason: 'required',
         });
         const other = await steppedSignIn(maya.userId);
         expect(
@@ -929,7 +935,7 @@ describe('backup codes', () => {
                     sessionTokenHash: maya.session.token,
                 },
             }),
-        ).toMatchObject({ status: 'two-step' });
+        ).toEqual({ status: 'two-step', reason: 'gone' });
         expect(await unusedHashes(maya.userId)).toEqual(hex(maya.codes.hashes));
 
         // With the step, passed by one of the old codes: that code and the new set commit together.
@@ -1237,7 +1243,7 @@ describe('step tokens', () => {
                 factorId: maya.factorId,
                 step: { ...proof, sessionTokenHash: maya.session.token },
             }),
-        ).toMatchObject({ status: 'two-step' });
+        ).toEqual({ status: 'two-step', reason: 'gone' });
         const change = (session: Session, action: 'password' | 'recovery-key' = 'password') =>
             auth.changeAccountSecurity({
                 userId: maya.userId,
@@ -1253,7 +1259,7 @@ describe('step tokens', () => {
                 },
                 twoStep: proof,
             });
-        expect(await change(other)).toMatchObject({ status: 'two-step' });
+        expect(await change(other)).toEqual({ status: 'two-step', reason: 'gone' });
         expect(await twoStep.hasTwoStep(maya.userId)).toBe(true);
         expect(await twoStep.getStepAttempt(tokenHash)).toMatchObject({ answers: 1, failures: 0 });
         // For what it was made for, from the session it was made for, it passes.
@@ -1270,10 +1276,10 @@ describe('step tokens', () => {
             const step = { sessionTokenHash: maya.session.token, tokenHash, spend: PHRASE };
             expect(
                 await twoStep.removeFactor({ userId: maya.userId, factorId: maya.factorId, step }),
-            ).toMatchObject({ status: 'two-step' });
+            ).toEqual({ status: 'two-step', reason: 'gone' });
             expect(
                 await twoStep.replaceBackupCodes({ userId: maya.userId, ...codeSet('new'), step }),
-            ).toMatchObject({ status: 'two-step' });
+            ).toEqual({ status: 'two-step', reason: 'gone' });
             expect(
                 await auth.deleteAccount({
                     userId: maya.userId,
@@ -1281,7 +1287,7 @@ describe('step tokens', () => {
                     sessionTokenHash: maya.session.token,
                     twoStep: step,
                 }),
-            ).toMatchObject({ status: 'two-step' });
+            ).toEqual({ status: 'two-step', reason: 'gone' });
         }
         // `enrol` is refused as `login`, and `login` as `enrol`.
         expect(
@@ -1351,7 +1357,7 @@ describe('step tokens', () => {
                     spend: PHRASE,
                 },
             }),
-        ).toMatchObject({ status: 'two-step' });
+        ).toEqual({ status: 'two-step', reason: 'gone' });
         expect(await twoStep.hasTwoStep(maya.userId)).toBe(true);
     });
 
@@ -1364,7 +1370,7 @@ describe('step tokens', () => {
         expect(await twoStep.getStepAttempt(step.tokenHash)).toBeNull();
         expect(
             await twoStep.removeFactor({ userId: maya.userId, factorId: maya.factorId, step }),
-        ).toMatchObject({ status: 'two-step' });
+        ).toEqual({ status: 'two-step', reason: 'gone' });
         expect(await twoStep.hasTwoStep(maya.userId)).toBe(true);
     });
 
@@ -1595,7 +1601,7 @@ describe('a step and what it authorises commit together', () => {
                     .from(opaqueCredentials)
                     .where(eq(opaqueCredentials.userId, maya.userId))
             )[0]!.version;
-        expect(await change({})).toMatchObject({ status: 'two-step' });
+        expect(await change({})).toEqual({ status: 'two-step', reason: 'required' });
         expect(await version()).toBe(1);
 
         const spend = { method: 'totp', factorId: maya.factorId, step: 1_001 } as const;
@@ -1611,7 +1617,11 @@ describe('a step and what it authorises commit together', () => {
 
         // A step answered with a code already used: refused, counted, and nothing changed.
         await steppedSignIn(maya.userId, { spend });
-        expect(await change({ twoStep: step })).toMatchObject({ status: 'two-step' });
+        expect(await change({ twoStep: step })).toMatchObject({
+            status: 'two-step',
+            reason: 'spent',
+            failure: { status: 'counted', pool: 'device', consecutiveFailures: 1 },
+        });
         expect(await version()).toBe(1);
         expect(await deviceFailures(maya.session.deviceId)).toBe(1);
 
@@ -1653,7 +1663,7 @@ describe('a step and what it authorises commit together', () => {
                 sessionTokenHash: maya.session.token,
                 twoStep: input.twoStep,
             });
-        expect(await remove({})).toMatchObject({ status: 'two-step' });
+        expect(await remove({})).toEqual({ status: 'two-step', reason: 'required' });
         const spend = { method: 'backup', codeHash: maya.codes.hashes[0]! } as const;
         const step = await stepUp(maya.userId, maya.session, 'delete', spend);
         expect(await remove({ twoStep: step, credentialVersion: 2 })).toBe(false);
@@ -1927,7 +1937,7 @@ describe('removing a method', () => {
         const maya = await withApp('maya', 1_000);
         expect(
             await twoStep.removeFactor({ userId: maya.userId, factorId: maya.factorId }),
-        ).toMatchObject({ status: 'two-step' });
+        ).toEqual({ status: 'two-step', reason: 'required' });
         expect(await twoStep.hasTwoStep(maya.userId)).toBe(true);
         // The step, passed by the app being removed: its last code and its removal, together.
         const spend = { method: 'totp', factorId: maya.factorId, step: 1_001 } as const;
