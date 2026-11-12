@@ -19,7 +19,13 @@ import {
 } from '@hushos/crypto/recovery';
 import { authEnv } from '@hushos/env/auth';
 import { createHash, randomBytes } from 'node:crypto';
-import { adminRepository, authRepository, billingRepository, groupsRepository } from '@hushos/db';
+import {
+    adminRepository,
+    authRepository,
+    billingRepository,
+    groupsRepository,
+    twoStepRepository,
+} from '@hushos/db';
 import type { SignupIntent } from '@hushos/db/schema';
 import {
     sendAccountNotice,
@@ -576,6 +582,10 @@ export async function finishLogin(
     if (!result) throw failure();
     if ('suspended' in result)
         throw new AuthError('This account is suspended. Contact whoever runs this instance.', 403);
+    // The account asks for a second step (docs/two-step-design.md 4), and this server has no
+    // route to answer one yet: no session was made, and the envelope stays where it is.
+    if ('twoStep' in result)
+        throw new AuthError('Update HushOS to sign in. This account asks for a second step.', 409);
     const { key, user } = result;
     return {
         user,
@@ -1992,6 +2002,12 @@ export async function finishAccountDeletion(
         new AuthError('Could not delete your account. Check your password and try again.');
     await refuseWhileHoldingGroups(user.id);
     await consumeBoundAttempt('delete', user, token, input, failure);
+    // An account with two-step sign-in on is deleted only with its second step
+    // (docs/two-step-design.md 4), and this server has no way to take one yet. Refused here,
+    // before anything billed to the account is touched: the repository refuses too, but by
+    // then the plan would be revoked and the account left behind without it.
+    if (await twoStepRepository.hasTwoStep(user.id))
+        throw new AuthError('Your account was not deleted: it asks for a second step.', 403);
     // Anything billed to the account stops before the account goes; an outage there
     // leaves the account in place rather than a subscription without an owner.
     await beforeDelete?.(user.id);
@@ -2022,6 +2038,9 @@ export async function finishAccountDeletion(
             `${stopped} account was not deleted: another change to your family’s plan is in progress. Try again in a moment.`,
             409,
         );
+    // The step was turned on between the check above and here: the repository held the line.
+    if (typeof deleted === 'object')
+        throw new AuthError(`${stopped} account was not deleted: it asks for a second step.`, 403);
     if (!deleted) throw failure();
     return { success: true };
 }
@@ -2192,6 +2211,9 @@ export async function finishSecurityChange(
             decodeWorkspaceGrant({ id: grant.workspaceId, grant }, keyVersion),
         ),
     });
+    // The account has two-step sign-in on, and this server cannot ask for the step yet.
+    if (typeof changed === 'object')
+        throw new AuthError('This change needs your second step, and nothing was changed.', 403);
     if (!changed) throw failure();
     return { success: true };
 }

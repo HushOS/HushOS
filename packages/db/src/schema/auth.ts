@@ -142,6 +142,12 @@ export const accountDevices = pgTable(
         createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
         lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).defaultNow().notNull(),
         revokedAt: timestamp('revoked_at', { withTimezone: true }),
+        /*
+         * Wrong second-step answers in a row from this device, counted only when the
+         * sign-in proved the device's key or came from its session
+         * (docs/two-step-design.md 2). A success from the device resets it.
+         */
+        twoStepFailures: integer('two_step_failures').notNull().default(0),
     },
     (table) => [
         // Behind the self-reference's on-delete-set-null, so a sweep's deletes don't scan the table.
@@ -179,6 +185,7 @@ export const accountDevices = pgTable(
             'account_devices_approval_pair',
             sql`(${table.approvedBy} is null) = (${table.approvedAt} is null)`,
         ),
+        check('account_devices_two_step_failures_valid', sql`${table.twoStepFailures} >= 0`),
     ],
 );
 
@@ -200,6 +207,14 @@ export const sessions = pgTable(
         createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
         expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
         lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).defaultNow().notNull(),
+        /*
+         * When this session, or the session it replaced at an unlock, passed the second
+         * step (docs/two-step-design.md 4); null when it never did. The trigger
+         * `sessions_two_step_guard` (a hand-written migration: Drizzle does not model
+         * triggers) refuses a new session without it for an account that has a confirmed
+         * factor, so a release that does not know the step cannot sign such an account in.
+         */
+        twoStepAt: timestamp('two_step_at', { withTimezone: true }),
     },
     (table) => [
         index('sessions_user_idx').on(table.userId),
@@ -244,7 +259,7 @@ export const opaqueLoginAttempts = pgTable(
     (table) => [
         check(
             'opaque_login_attempts_purpose_binding',
-            sql`(${table.purpose} = 'login' and ${table.sessionTokenHash} is null) or (${table.purpose} in ('delete', 'password', 'master-key', 'recovery-key', 'devices') and ${table.sessionTokenHash} is not null and octet_length(${table.sessionTokenHash}) = 32)`,
+            sql`(${table.purpose} = 'login' and ${table.sessionTokenHash} is null) or (${table.purpose} in ('delete', 'password', 'master-key', 'recovery-key', 'devices', 'two-step') and ${table.sessionTokenHash} is not null and octet_length(${table.sessionTokenHash}) = 32)`,
         ),
         index('opaque_login_attempts_user_idx').on(table.userId),
         index('opaque_login_attempts_expiry_idx').on(table.expiresAt),
