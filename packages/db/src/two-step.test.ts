@@ -1,12 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, test, vi } from 'vitest';
-import { bytes, registered, sha256 } from '../test/accounts';
+import { bytes, registered, registration, sha256 } from '../test/accounts';
 import { closeDatabase, lockObserver, resetDatabase, signingKeyFromSeed } from '../test/helpers';
 import * as auth from './auth';
 import { db } from './client';
 import {
     accountDevices,
+    accountRecoveryKeys,
     accountSecurityEvents,
     opaqueCredentials,
     sessions,
@@ -1015,6 +1016,33 @@ describe('step tokens', () => {
         expect(await db.select().from(twoStepAttempts)).toHaveLength(0);
     });
 
+    test('a slot whose answer the server could not look at goes back; one that was counted wrong does not', async () => {
+        const maya = await withApp('maya');
+        const tokenHash = await loginToken(maya.userId);
+        const another = () => twoStep.takeStepAnswer({ tokenHash, method: 'backup', ...LOGIN });
+        const answers = async () => (await db.select().from(twoStepAttempts))[0]!.answers;
+        // Counted wrong, then handed back: it stays used, or five answers would become six.
+        const counted = await take(tokenHash);
+        await twoStep.recordStepFailure(counted);
+        await twoStep.returnStepAnswer(counted);
+        expect(await answers()).toBe(1);
+        // Taken and never checked (the server had no key for the row): handed back, it is free again.
+        const unchecked = await take(tokenHash);
+        expect(await answers()).toBe(2);
+        await twoStep.returnStepAnswer(unchecked);
+        expect(await answers()).toBe(1);
+        // Four are left, as if the unchecked one was never asked; and nothing was counted for it.
+        for (let slot = 0; slot < 4; slot++) expect((await another()).status).toBe('ok');
+        expect((await another()).status).toBe('gone');
+        expect((await stateRow(maya.userId))!.consecutiveFailures).toBe(1);
+        // Another account's token is not touched by a slot that names it.
+        const sam = await withApp('sam');
+        const theirs = await loginToken(sam.userId);
+        await take(theirs);
+        await twoStep.returnStepAnswer({ ...unchecked, tokenHash: theirs });
+        expect((await twoStep.getStepAttempt(theirs))!.answers).toBe(1);
+    });
+
     test('a token passes once: five right answers at once open one session', async () => {
         const maya = await withApp('maya');
         const tokenHash = await loginToken(maya.userId);
@@ -1932,6 +1960,43 @@ describe('wrong answers in a row', () => {
     }, 60_000);
 });
 
+describe('the recovery key of an account with the step on', () => {
+    test('cannot be added from a session by account setup: the phrase passes the step, so it is not stored past it', async () => {
+        const recoveryOf = (userId: string) =>
+            db.select().from(accountRecoveryKeys).where(eq(accountRecoveryKeys.userId, userId));
+        const setUp = (userId: string, session: Session) =>
+            auth.initializeAccount({
+                userId,
+                credentialVersion: 1,
+                sessionTokenHash: session.token,
+                initialQuotaBytes: 1_073_741_824n,
+                recovery: registration().recovery,
+            });
+        // The step on and, as only an account from before this rule could be, no recovery key.
+        const maya = await withApp('maya');
+        await db.delete(accountRecoveryKeys).where(eq(accountRecoveryKeys.userId, maya.userId));
+        expect(await setUp(maya.userId, maya.session)).toBe(true);
+        expect(await recoveryOf(maya.userId)).toHaveLength(0);
+
+        // Without the step, setup stores it as it always has.
+        const { user: sam } = await registered();
+        const session = await passwordSignIn(sam.id);
+        await db.delete(accountRecoveryKeys).where(eq(accountRecoveryKeys.userId, sam.id));
+        expect(await setUp(sam.id, session)).toBe(true);
+        expect(await recoveryOf(sam.id)).toHaveLength(1);
+
+        // And once the step is off again, maya's can be stored.
+        const removed = await twoStep.removeFactor({
+            userId: maya.userId,
+            factorId: maya.factorId,
+            step: await stepUp(maya.userId, maya.session),
+        });
+        expect(removed.status).toBe('ok');
+        expect(await setUp(maya.userId, maya.session)).toBe(true);
+        expect(await recoveryOf(maya.userId)).toHaveLength(1);
+    });
+});
+
 describe('removing a method', () => {
     test('needs the step for a confirmed method, and the answer is spent only if the method goes', async () => {
         const maya = await withApp('maya', 1_000);
@@ -2233,5 +2298,85 @@ describe('what the tables refuse', () => {
         await expect(
             db.insert(accountSecurityEvents).values({ userId: maya.userId, kind: 'Maya’s iPhone' }),
         ).rejects.toMatchObject(refused('account_security_events_kind_valid'));
+    });
+});
+
+describe('the security log', () => {
+    const DAY = 24 * HOUR;
+
+    test('lists the account’s own lines, newest first, with a device only when it is the account’s own', async () => {
+        const maya = await withApp('maya');
+        const sam = await withApp('sam');
+        const phone = await steppedSignIn(maya.userId);
+        await auth.registerDevice({
+            sessionTokenHash: phone.token,
+            kind: 'ios',
+            name: 'Maya’s iPhone',
+            signingPublicKey: null,
+        });
+        await twoStep.recordSecurityEvent({
+            userId: maya.userId,
+            kind: 'two-step-on',
+            method: 'totp',
+        });
+        await twoStep.recordSecurityEvent({
+            userId: maya.userId,
+            kind: 'sign-in',
+            method: 'backup',
+            deviceId: phone.deviceId,
+        });
+        // A line naming another account's device: recorded, without the link.
+        await twoStep.recordSecurityEvent({
+            userId: maya.userId,
+            kind: 'step-failed',
+            deviceId: sam.session.deviceId,
+        });
+        await twoStep.recordSecurityEvent({
+            userId: sam.userId,
+            kind: 'phrase-used',
+            method: 'phrase',
+        });
+        await db
+            .update(accountSecurityEvents)
+            .set({ createdAt: new Date(Date.now() - 2 * HOUR) })
+            .where(eq(accountSecurityEvents.kind, 'two-step-on'));
+        await db
+            .update(accountSecurityEvents)
+            .set({ createdAt: new Date(Date.now() - HOUR) })
+            .where(eq(accountSecurityEvents.kind, 'sign-in'));
+
+        const lines = await twoStep.listSecurityEvents(maya.userId);
+        expect(lines.map(({ id: _id, createdAt: _at, ...line }) => line)).toEqual([
+            { kind: 'step-failed', method: null, deviceId: null, deviceKind: null },
+            { kind: 'sign-in', method: 'backup', deviceId: phone.deviceId, deviceKind: 'ios' },
+            { kind: 'two-step-on', method: 'totp', deviceId: null, deviceKind: null },
+        ]);
+        // Nothing of the device but its kind: the name it gave itself is not in a line.
+        expect(JSON.stringify(lines)).not.toContain('iPhone');
+        expect((await twoStep.listSecurityEvents(sam.userId)).map((line) => line.kind)).toEqual([
+            'phrase-used',
+        ]);
+    });
+
+    test('keeps ninety days: older lines are not listed, and the sweep deletes them and only them', async () => {
+        const maya = await withApp('maya');
+        for (const kind of ['sign-in', 'step-failed', 'two-step-off'] as const)
+            await twoStep.recordSecurityEvent({ userId: maya.userId, kind });
+        await db
+            .update(accountSecurityEvents)
+            .set({ createdAt: new Date(Date.now() - 90 * DAY - HOUR) })
+            .where(eq(accountSecurityEvents.kind, 'sign-in'));
+        await db
+            .update(accountSecurityEvents)
+            .set({ createdAt: new Date(Date.now() - 90 * DAY + HOUR) })
+            .where(eq(accountSecurityEvents.kind, 'step-failed'));
+        expect((await twoStep.listSecurityEvents(maya.userId)).map((line) => line.kind)).toEqual([
+            'two-step-off',
+            'step-failed',
+        ]);
+        expect((await auth.cleanupExpired()).securityEvents).toBe(1);
+        expect(
+            (await db.select().from(accountSecurityEvents)).map((row) => row.kind).sort(),
+        ).toEqual(['step-failed', 'two-step-off']);
     });
 });

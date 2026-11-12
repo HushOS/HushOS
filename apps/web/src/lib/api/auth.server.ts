@@ -22,7 +22,9 @@ import {
     securityActionSchema,
     settingsKeySchema,
     signatureSchema,
+    stepAnswerSchema,
     tokenSchema,
+    twoStepChangeSchema,
     uuidSchema,
     workspaceKeySchema,
     workspaceSetupSchema,
@@ -30,6 +32,7 @@ import {
 import {
     accountSetupResponse,
     authUserResponse,
+    backupCodesResponse,
     consentStoredResponse,
     contactResponse,
     contactSuccessionResponse,
@@ -42,20 +45,27 @@ import {
     identityHistoryResponse,
     identityResponse,
     loginChallengeResponse,
+    loginFinishResponse,
     loginResponse,
+    methodRemovedResponse,
     profileResponse,
     recoveryBackupResponse,
     recoveryChallengeResponse,
     registrationChallengeResponse,
     securityChallengeResponse,
+    securityEventsResponse,
     sessionResponse,
     settingsKeyStoredResponse,
     settingsResponse,
     settingsSavedResponse,
     setupResponse,
+    stepChallengeResponse,
     storageResponse,
     successionResponse,
     successResponse,
+    totpConfirmedResponse,
+    totpEnrolmentResponse,
+    twoStepResponse,
     verifiedEnrollmentResponse,
 } from '@/lib/api/auth-responses.server';
 
@@ -168,25 +178,43 @@ export const authApi = new Elysia()
                 finishLoginRequest: opaqueMessage,
                 // A device key's proof for this attempt (docs/devices-design.md, step 1).
                 device: t.Optional(t.Object({ id: uuidSchema, signature: signatureSchema })),
+                // Sent by a client that can answer a second step (docs/two-step-design.md 4).
+                twoStep: t.Optional(t.Literal(1)),
             }),
-            response: { 200: loginResponse },
+            response: { 200: loginFinishResponse },
         },
         async ({ sessionToken, body, set, log }) => {
+            const result = await auth.finishLogin(
+                body.attemptToken,
+                body.finishLoginRequest,
+                sessionToken,
+                body.device,
+                { twoStep: body.twoStep === 1 },
+            );
+            // The account asks for a second step: no session yet, so no cookie and no envelope.
+            if (result.twoStep) return { twoStep: result.twoStep };
+            const { user, envelope, device, newDevice, sessionToken: token } = result;
+            set.headers['set-cookie'] = authCookie('session', token);
+            // A device that came in with the password alone: the account's email hears of it.
+            if (newDevice) notifyDevices(log, user.id, 'new-device');
+            return { user, envelope, device };
+        },
+    )
+    // The second step of a sign-in: on a right answer, exactly what /auth/login/finish answers.
+    .post(
+        '/auth/login/two-step',
+        { body: stepAnswerSchema, response: { 200: loginResponse } },
+        async ({ body, set, log }) => {
             const {
                 user,
                 envelope,
                 device,
                 newDevice,
+                signedInWith,
                 sessionToken: token,
-            } = await auth.finishLogin(
-                body.attemptToken,
-                body.finishLoginRequest,
-                sessionToken,
-                body.device,
-            );
+            } = await auth.finishLoginStep(body);
             set.headers['set-cookie'] = authCookie('session', token);
-            // A device that came in with the password alone: the account's email hears of it.
-            if (newDevice) notifyDevices(log, user.id, 'new-device');
+            if (newDevice) notifyDevices(log, user.id, 'new-device', undefined, signedInWith);
             return { user, envelope, device };
         },
     )
@@ -246,7 +274,12 @@ export const authApi = new Elysia()
     .post(
         '/auth/delete/finish',
         {
-            body: t.Object({ attemptToken: tokenSchema, finishLoginRequest: opaqueMessage }),
+            body: t.Object({
+                attemptToken: tokenSchema,
+                finishLoginRequest: opaqueMessage,
+                // The second step, for an account that has it on (docs/two-step-design.md 4).
+                twoStep: t.Optional(stepAnswerSchema),
+            }),
             response: { 200: successResponse },
         },
         async ({ sessionToken, body, set }) => {
@@ -297,6 +330,8 @@ export const authApi = new Elysia()
                 ),
                 settingsKey: t.Optional(settingsKeySchema),
                 workspaces: t.Optional(t.Array(workspaceKeySchema, { maxItems: 200 })),
+                // The second step, for an account that has it on (docs/two-step-design.md 4).
+                twoStep: t.Optional(stepAnswerSchema),
             }),
             response: { 200: successResponse },
         },
@@ -307,6 +342,92 @@ export const authApi = new Elysia()
                 authCookie('enrollment', null),
             ];
             return result;
+        },
+    )
+    // Two-step sign-in (docs/two-step-design.md). Setting it up and managing it answer 501 while
+    // TWO_STEP_ENABLED is off; an account that already has the step is asked for it regardless.
+    .get('/auth/two-step', { response: { 200: twoStepResponse } }, ({ sessionToken, set }) => {
+        set.headers['Cache-Control'] = 'no-store';
+        return auth.getTwoStep(sessionToken);
+    })
+    // Changing the step asks for the password again: the first half of that OPAQUE exchange.
+    .post(
+        '/auth/two-step/reauth',
+        {
+            body: t.Object({ startLoginRequest: opaqueMessage }),
+            response: { 200: loginChallengeResponse },
+        },
+        ({ request, sessionToken, body }) => {
+            guardAuthMutation(request);
+            return auth.startTwoStepReauth(sessionToken, body.startLoginRequest);
+        },
+    )
+    // A step token for this session and one purpose; the action's own request carries the answer.
+    .post(
+        '/auth/two-step/challenge',
+        {
+            body: t.Object({
+                purpose: t.Union([
+                    t.Literal('password'),
+                    t.Literal('master-key'),
+                    t.Literal('recovery-key'),
+                    t.Literal('delete'),
+                    t.Literal('two-step'),
+                ]),
+            }),
+            response: { 200: stepChallengeResponse },
+        },
+        ({ request, sessionToken, body }) => {
+            guardAuthMutation(request);
+            return auth.startStepChallenge(sessionToken, body.purpose);
+        },
+    )
+    .post(
+        '/auth/two-step/totp',
+        { body: twoStepChangeSchema, response: { 200: totpEnrolmentResponse } },
+        ({ request, sessionToken, body }) => {
+            guardAuthMutation(request);
+            return auth.startTotpEnrolment(sessionToken, body);
+        },
+    )
+    .post(
+        '/auth/two-step/totp/:id/confirm',
+        {
+            params: t.Object({ id: uuidSchema }),
+            body: t.Object({ code: t.String({ minLength: 6, maxLength: 16 }) }),
+            response: { 200: totpConfirmedResponse },
+        },
+        ({ request, sessionToken, params, body }) => {
+            guardAuthMutation(request);
+            return auth.confirmTotpEnrolment(sessionToken, params.id, body.code);
+        },
+    )
+    .delete(
+        '/auth/two-step/methods/:id',
+        {
+            params: t.Object({ id: uuidSchema }),
+            body: twoStepChangeSchema,
+            response: { 200: methodRemovedResponse },
+        },
+        ({ request, sessionToken, params, body }) => {
+            guardAuthMutation(request);
+            return auth.removeTwoStepMethod(sessionToken, params.id, body);
+        },
+    )
+    .post(
+        '/auth/two-step/backup-codes',
+        { body: twoStepChangeSchema, response: { 200: backupCodesResponse } },
+        ({ request, sessionToken, body }) => {
+            guardAuthMutation(request);
+            return auth.makeBackupCodes(sessionToken, body);
+        },
+    )
+    .get(
+        '/auth/security-events',
+        { response: { 200: securityEventsResponse } },
+        ({ sessionToken, set }) => {
+            set.headers['Cache-Control'] = 'no-store';
+            return auth.listSecurityEvents(sessionToken);
         },
     )
     .get('/auth/storage', { response: { 200: storageResponse } }, ({ sessionToken }) =>

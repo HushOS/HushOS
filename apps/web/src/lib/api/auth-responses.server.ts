@@ -260,6 +260,93 @@ export const loginResponse = t.Object({
     device: t.Object({ id: t.String(), attached: t.Boolean(), registered: t.Boolean() }),
 });
 
+/*
+ * What a client must answer before a session or a change (StepChallenge, docs/two-step-design.md
+ * 4): the step token, which methods can answer it, when it ends, and what the device needs to
+ * sign with the recovery phrase. Told only to someone who has just proved the password.
+ */
+const stepChallenge = t.Object({
+    token: t.String(),
+    methods: t.Array(t.Union([t.Literal('totp'), t.Literal('backup'), t.Literal('phrase')])),
+    expiresAt: t.String(),
+    phrase: t.Optional(
+        t.Object({ userId: t.String(), recoveryVersion: t.Integer(), wrappingSalt: t.String() }),
+    ),
+});
+
+/*
+ * POST /auth/login/finish, whole: the session's reply, or, for an account that asks for a
+ * second step, the step to answer and nothing else. No cookie goes with the second.
+ */
+export const loginFinishResponse = t.Union([loginResponse, t.Object({ twoStep: stepChallenge })]);
+
+/* POST /auth/two-step/challenge: the step a signed-in session answers before a change. */
+export const stepChallengeResponse = stepChallenge;
+
+/*
+ * GET /auth/two-step: whether the step is on, its methods by kind (a name only where one was
+ * given), how many backup codes are left, and whether the app is paused for new devices.
+ * Never a secret, a credential id or a public key.
+ */
+export const twoStepResponse = t.Object({
+    on: t.Boolean(),
+    methods: t.Array(
+        t.Object({
+            id: t.String(),
+            kind: t.Union([t.Literal('totp'), t.Literal('webauthn')]),
+            name: t.Nullable(t.String()),
+            createdAt: t.String(),
+            lastUsedAt: t.Nullable(t.String()),
+            synced: t.Boolean(),
+        }),
+    ),
+    backupCodesLeft: t.Integer(),
+    totpFrozen: t.Boolean(),
+});
+
+/* POST /auth/two-step/totp: the pending app's secret, shown once, and its key URI for the QR code. */
+export const totpEnrolmentResponse = t.Object({
+    id: t.String(),
+    secret: t.String(),
+    uri: t.String(),
+    expiresAt: t.String(),
+});
+
+/* POST /auth/two-step/totp/:id/confirm: the backup codes, only when this turned the step on. */
+export const totpConfirmedResponse = t.Object({ backupCodes: t.Optional(t.Array(t.String())) });
+
+/* DELETE /auth/two-step/methods/:id: gone, and whether the step is still on. */
+export const methodRemovedResponse = t.Object({ removed: t.Boolean(), on: t.Boolean() });
+
+/* POST /auth/two-step/backup-codes: the new set, shown once. */
+export const backupCodesResponse = t.Object({ codes: t.Array(t.String()) });
+
+/*
+ * GET /auth/security-events: the last 90 days, newest first. A kind of event, a kind of method
+ * and a kind of device; never a name, an address or a browser.
+ */
+export const securityEventsResponse = t.Object({
+    events: t.Array(
+        t.Object({
+            id: t.String(),
+            kind: t.String(),
+            method: t.Nullable(
+                t.Union([
+                    t.Literal('totp'),
+                    t.Literal('webauthn'),
+                    t.Literal('backup'),
+                    t.Literal('phrase'),
+                ]),
+            ),
+            deviceId: t.Nullable(t.String()),
+            deviceKind: t.Nullable(
+                t.Union([t.Literal('web'), t.Literal('ios'), t.Literal('android')]),
+            ),
+            createdAt: t.String(),
+        }),
+    ),
+});
+
 /* POST /auth/recover/start: the OPAQUE registration response and the recovery envelope to open. */
 export const recoveryChallengeResponse = t.Object({
     registrationResponse: t.String(),

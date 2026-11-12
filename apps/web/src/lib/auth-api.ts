@@ -11,7 +11,13 @@ export const authApi: AuthApi = {
     registerStart: (input) => unwrap(api().register.start.post(input)),
     registerFinish: (input) => unwrap(api().register.finish.post(input)),
     loginStart: (input) => unwrap(api().login.start.post(input)),
-    loginFinish: (input) => unwrap(api().login.finish.post(input)),
+    loginFinish: async (input) => {
+        const result = await unwrap(api().login.finish.post(input));
+        // Only a client that says it can answer a second step is sent one (`twoStep: 1`), and
+        // this one does not say so yet: the server answers it `update-required` instead.
+        if (!('user' in result)) throw new Error('Update HushOS to sign in.');
+        return result;
+    },
     session: () => unwrap(api().session.get()),
     forgetSession: () => unwrap(api().session.forget.post({})),
     devices: () => unwrap(api().devices.get()),

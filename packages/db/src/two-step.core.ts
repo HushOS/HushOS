@@ -31,6 +31,8 @@ export const STEP_NOTICE_FAILURES = 5;
 export const TOTP_FREEZE_FAILURES = 100;
 /* A set of backup codes. */
 export const BACKUP_CODE_COUNT = 10;
+/* How long a line of the security log is kept (docs/two-step-design.md 7). */
+export const SECURITY_EVENT_DAYS = 90;
 /* How long a second-step method may wait to be confirmed (docs/two-step-design.md 2). */
 export const PENDING_FACTOR_SECONDS = 10 * 60;
 /* RFC 6238's time step, which the key URI fixes at 30 seconds. */
@@ -333,6 +335,27 @@ export async function recordStepFailure(answer: StepAttempt): Promise<StepFailur
             notice: consecutiveFailures >= STEP_NOTICE_FAILURES,
             froze,
         };
+    });
+}
+
+/*
+ * Gives back the slot an answer took, when the answer could not be looked at for a reason of
+ * the server's own (a key it no longer has): nothing was guessed, so nothing is used up. Only
+ * a slot that is still open goes back; one already counted wrong stays counted.
+ */
+export async function returnStepAnswer(answer: StepAttempt) {
+    await db.transaction(async (tx) => {
+        if (!(await lockAccount(tx, answer.userId))) return;
+        await tx
+            .update(twoStepAttempts)
+            .set({ answers: sql`${twoStepAttempts.answers} - 1` })
+            .where(
+                and(
+                    eq(twoStepAttempts.tokenHash, answer.tokenHash),
+                    eq(twoStepAttempts.userId, answer.userId),
+                    sql`${twoStepAttempts.answers} > ${twoStepAttempts.failures}`,
+                ),
+            );
     });
 }
 

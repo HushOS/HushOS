@@ -11,6 +11,8 @@
         "./device": "./src/device.ts",
         "./device-identity": "./src/device-identity.ts",
         "./recovery": "./src/recovery.ts",
+        "./two-step": "./src/two-step.ts",
+        "./two-step/server": "./src/two-step-server.ts",
         "./identity": "./src/identity.ts",
         "./consent-due": "./src/consent-due.ts",
         "./drive": "./src/drive.ts",
