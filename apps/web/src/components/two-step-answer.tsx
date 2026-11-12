@@ -1,6 +1,6 @@
 import type { StepMethod } from '@hushos/auth/api';
 import { cn } from 'cn';
-import { useId } from 'react';
+import { useEffect, useId, useRef } from 'react';
 import { authLink } from '@/components/auth-layout';
 import { SECRET_FIELD } from '@/components/password-input';
 import { Input } from '@/components/ui/input';
@@ -37,6 +37,8 @@ export function StepFields({
     error,
     disabled,
     focus = false,
+    refocus = 0,
+    reload = false,
 }: {
     /* What can answer this step, in the order to offer it. */
     methods: readonly StepMethod[];
@@ -47,19 +49,41 @@ export function StepFields({
     disabled?: boolean;
     /* Put the cursor in the field as it appears: where the step is the whole form. */
     focus?: boolean;
+    /* Raised after an answer was refused: the field takes the cursor back, its text selected. */
+    refocus?: number;
+    /*
+     * The step offered nothing this page can answer from the start, which a newer page might:
+     * only then is reloading worth suggesting. When the ways ran out after refusals, it is not.
+     */
+    reload?: boolean;
 }) {
     const id = useId();
-    // A method that stopped being offered (a paused app) gives way to the next one.
+    const field = useRef<HTMLInputElement & HTMLTextAreaElement>(null);
+    // The draft follows the methods on offer (`draftFor`); this only guards a render between.
     const method = methods.includes(draft.method) ? draft.method : methods[0];
+    // After the person switched to another way, or the one they used was withdrawn, or an
+    // answer was refused: the cursor goes to the field now shown, so the next thing typed
+    // lands there and a screen reader is not left on a control that is gone.
+    const shown = useRef(method);
+    const asked = useRef(refocus);
+    useEffect(() => {
+        if (shown.current === method && asked.current === refocus) return;
+        const refused = asked.current !== refocus;
+        shown.current = method;
+        asked.current = refocus;
+        field.current?.focus();
+        if (refused) field.current?.select();
+    }, [method, refocus]);
     if (!method)
         return (
             <p role="alert" className="text-sm text-destructive">
-                This browser can’t answer this account’s second step. Reload the page to update
-                HushOS, then try again.
+                {reload
+                    ? 'This page can’t answer this account’s second step. Reload it to get the latest HushOS, then sign in again.'
+                    : 'There is no other way to answer this step from here right now. Start again in a while.'}
             </p>
         );
     const describedBy = `${id}-note`;
-    const field = 'font-mono text-[15px]';
+    const mono = 'font-mono text-[15px]';
     const count = phraseWords(draft.phrase).length;
     return (
         <div className="flex flex-col gap-2.5" data-step-method={method}>
@@ -88,8 +112,10 @@ export function StepFields({
                         autoComplete="one-time-code"
                         maxLength={7}
                         placeholder="000000"
+                        ref={field}
                         value={draft.totp}
-                        disabled={disabled}
+                        // Read-only while it is checked, not disabled: the cursor stays in it.
+                        readOnly={disabled}
                         aria-invalid={Boolean(error)}
                         aria-describedby={describedBy}
                         onChange={(event) =>
@@ -99,7 +125,7 @@ export function StepFields({
                                 totp: event.target.value.replace(/[^\d\s]/g, ''),
                             })
                         }
-                        className={cn(field, 'tracking-[0.2em]')}
+                        className={cn(mono, 'tracking-[0.2em]')}
                         {...SECRET_FIELD}
                     />
                 )}
@@ -111,14 +137,15 @@ export function StepFields({
                         autoComplete="off"
                         maxLength={16}
                         placeholder="XXXXX-XXXXX"
+                        ref={field}
                         value={draft.backup}
-                        disabled={disabled}
+                        readOnly={disabled}
                         aria-invalid={Boolean(error)}
                         aria-describedby={describedBy}
                         onChange={(event) =>
                             onChange({ ...draft, method, backup: event.target.value.toUpperCase() })
                         }
-                        className={cn(field, 'tracking-[0.08em]')}
+                        className={cn(mono, 'tracking-[0.08em]')}
                         {...SECRET_FIELD}
                     />
                 )}
@@ -128,14 +155,15 @@ export function StepFields({
                         // oxlint-disable-next-line jsx-a11y/no-autofocus -- the one field the step asks for
                         autoFocus={focus}
                         autoComplete="off"
+                        ref={field}
                         value={draft.phrase}
-                        disabled={disabled}
+                        readOnly={disabled}
                         aria-invalid={Boolean(error)}
                         aria-describedby={describedBy}
                         onChange={(event) =>
                             onChange({ ...draft, method, phrase: event.target.value })
                         }
-                        className={cn(field, 'min-h-24')}
+                        className={cn(mono, 'min-h-24')}
                         {...SECRET_FIELD}
                     />
                 )}
@@ -188,6 +216,7 @@ export function StepUpFields({ step, disabled }: { step: StepUp; disabled?: bool
                 onChange={step.setDraft}
                 error={step.invalid || step.error}
                 disabled={disabled}
+                refocus={step.refocus}
             />
         </div>
     );

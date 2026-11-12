@@ -419,7 +419,10 @@ export async function getSession(
         );
     if (!result) return null;
     // Slide the idle deadline on activity, at most every five minutes, never past the cap; the
-    // device's last-seen moves with its own session, and only then.
+    // device's last-seen moves with its own session, and only then. A replacement session
+    // (`changeAccountSecurity`) is never slid: it is written to end within
+    // REPLACEMENT_SESSION_SECONDS of its creation, which is how it is told apart here, and
+    // being used must not turn its ten minutes into an ordinary session's days.
     const absoluteExpiry = new Date(result.createdAt.getTime() + lifetime.maxSeconds * 1000);
     const idleExpiry = new Date(now.getTime() + lifetime.idleSeconds * 1000);
     const expiresAt = idleExpiry < absoluteExpiry ? idleExpiry : absoluteExpiry;
@@ -427,7 +430,12 @@ export async function getSession(
     await db.execute(sql`
         with touched as (
             update ${sessions}
-            set last_seen_at = ${now}, expires_at = ${expiresAt}
+            set last_seen_at = ${now},
+                expires_at = case
+                    when ${sessions.expiresAt} <= ${sessions.createdAt} + make_interval(secs => ${REPLACEMENT_SESSION_SECONDS})
+                    then ${sessions.expiresAt}
+                    else ${expiresAt}
+                end
             where ${sessions.id} = ${result.sessionId}
               and (${sessions.lastSeenAt} is null or ${sessions.lastSeenAt} < ${throttle})
             returning ${sessions.deviceId} as device_id
@@ -1631,6 +1639,10 @@ async function changeSecurity(
             credentialVersion: version,
             tokenHash: input.replacement.tokenHash,
             deviceId: device.id,
+            // Its creation is written from the same clock as its end, not left to the
+            // database's: the two are at most the cap apart, exactly, and that distance is
+            // what keeps `getSession` from ever extending it.
+            createdAt: now,
             expiresAt: input.replacement.expiresAt < latest ? input.replacement.expiresAt : latest,
             lastSeenAt: now,
             twoStepAt: now,

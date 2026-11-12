@@ -107,6 +107,9 @@ describe('unlocking an account that asks for a second step', () => {
         await user.click(screen.getByRole('button', { name: 'Continue' }));
         await screen.findByText('That code didn’t work.');
         expect(onUnlocked).not.toHaveBeenCalled();
+        // The cursor is back in the field, though the button was what was pressed: the next
+        // code can be typed at once, and a screen reader is not left on nothing.
+        await vi.waitFor(() => expect(code).toHaveFocus());
 
         answerStep.mockResolvedValueOnce(undefined);
         await user.clear(code);
@@ -114,6 +117,29 @@ describe('unlocking an account that asks for a second step', () => {
         await user.click(screen.getByRole('button', { name: 'Continue' }));
         await vi.waitFor(() => expect(onUnlocked).toHaveBeenCalledTimes(1));
         expect(answerStep).toHaveBeenLastCalledWith({ kind: 'totp', code: '654321' });
+    });
+
+    test('choosing another way moves the cursor to its field, and what the address limit refused can be sent again', async () => {
+        const { user, code } = await toStep();
+        await user.click(screen.getByRole('button', { name: 'Use your recovery phrase' }));
+        const phrase = await screen.findByLabelText('Recovery phrase');
+        await vi.waitFor(() => expect(phrase).toHaveFocus());
+        await user.click(screen.getByRole('button', { name: 'Use your authenticator app' }));
+        await vi.waitFor(() =>
+            expect(screen.getByLabelText('Code from your authenticator app')).toHaveFocus(),
+        );
+        expect(code.isConnected).toBe(false);
+
+        answerStep.mockRejectedValueOnce(new StepFailure('busy', 'Too many requests. Try again.'));
+        const field = screen.getByLabelText('Code from your authenticator app');
+        await user.type(field, '123456');
+        await user.click(screen.getByRole('button', { name: 'Continue' }));
+        await screen.findByText('Too many requests. Try again.');
+        // The step is still here, with every way still offered.
+        expect(screen.getByRole('button', { name: 'Use a backup code' })).toBeEnabled();
+        answerStep.mockResolvedValueOnce(undefined);
+        await user.click(screen.getByRole('button', { name: 'Continue' }));
+        await vi.waitFor(() => expect(answerStep).toHaveBeenCalledTimes(2));
     });
 
     test('a paused app stops being offered, and a step that is over goes back to the password with the reason', async () => {
@@ -124,9 +150,16 @@ describe('unlocking an account that asks for a second step', () => {
         await user.type(code, '123456');
         await user.click(screen.getByRole('button', { name: 'Continue' }));
         await screen.findByText('Your authenticator app is paused on this device.');
-        // The backup code field took its place; the app is not among the ways offered.
-        await screen.findByLabelText('Backup code');
+        // The backup code field took its place and the cursor with it; the app is not among
+        // the ways offered.
+        const backup = await screen.findByLabelText('Backup code');
         expect(screen.queryByRole('button', { name: 'Use your authenticator app' })).toBeNull();
+        await vi.waitFor(() => expect(backup).toHaveFocus());
+        // Continue, pressed before anything is typed there: the app's code from before is
+        // still in the draft, and must not go out again under a field that shows no app.
+        await user.click(screen.getByRole('button', { name: 'Continue' }));
+        await screen.findByText('Enter one of your backup codes, 10 characters.');
+        expect(answerStep).toHaveBeenCalledTimes(1);
 
         answerStep.mockRejectedValueOnce(
             new StepFailure('over', 'This sign-in timed out. Enter your password again.'),
@@ -134,6 +167,8 @@ describe('unlocking an account that asks for a second step', () => {
         await user.type(screen.getByLabelText('Backup code'), '7KQ2M-9XD4P');
         await user.click(screen.getByRole('button', { name: 'Continue' }));
         await screen.findByText('This sign-in timed out. Enter your password again.');
+        // What was sent is the backup code that was shown, not the app's code typed before it.
+        expect(answerStep).toHaveBeenLastCalledWith({ kind: 'backup', code: '7KQ2M-9XD4P' });
         expect(screen.getByLabelText('Password')).toHaveValue('');
         expect(screen.getByRole('button', { name: 'Unlock' })).toBeEnabled();
     });

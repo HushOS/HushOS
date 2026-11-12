@@ -290,7 +290,7 @@ That is the web's unlock after a lock. The new session inherits `two_step_at` an
 - **Not removing a device.** Removal already needs the password. Its worst case, signing devices out, is something the owner fixes by signing in again. Adding the step there would make the owner's response to an intrusion slower than the intruder's.
 
 - **The device that made the change stays signed in.** A password change or a rotation ends every session, and the device that made it signs in again at once. With the step on it would then be asked for the step a second time, with a code it has to wait for, having passed it seconds earlier. So a client may send `keepSession: 1` with `/auth/security/finish`:
-    - the server then writes a session for that device in the transaction that makes the change, only when the change passed the step, with `two_step_at` set, and for ten minutes at most;
+    - the server then writes a session for that device in the transaction that makes the change, only when the change passed the step, with `two_step_at` set, and for ten minutes at most. Using it never extends it: its deadline does not slide as an ordinary session's does;
     - its token goes out as the cookie and nowhere else. The sign-in that follows replaces it and inherits its step, as any sign-in from a device that keeps its session does;
     - a client that does not ask gets none: the phone apps and older web bundles keep today's behaviour, and are asked for the step when they sign in again. An account without the step gets none either;
     - if the reply is lost, the cookie never arrives and the device is asked for the step like any other.

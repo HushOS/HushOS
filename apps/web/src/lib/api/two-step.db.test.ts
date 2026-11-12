@@ -1216,6 +1216,25 @@ describe('the session of the device that made a security change', () => {
         expect(stranger.session).toBeUndefined();
     }, 90_000);
 
+    test('lasts its ten minutes and no longer, however much its cookie is used', async () => {
+        const { who, cookie, secret } = await stepped();
+        const changed = await changePassword(cookie, next, await code(cookie, secret), {
+            keepSession: 1,
+        });
+        const kept = changed.session!;
+        const session = () => edge.call('GET', '/session', undefined, { cookie: kept });
+        const start = Date.now();
+        expect((await session()).body.user.id).toBe(who.userId);
+        // Minute six: used, which slides an ordinary session's deadline by days.
+        vi.setSystemTime(start + 6 * 60_000);
+        expect((await session()).body.user.id).toBe(who.userId);
+        const [row] = await rows.sessions();
+        expect(row!.expiresAt.getTime()).toBeLessThanOrEqual(start + 10 * 60_000);
+        // Minute eleven: gone.
+        vi.setSystemTime(start + 11 * 60_000);
+        expect((await session()).body.user).toBeNull();
+    }, 90_000);
+
     test('is not written for a client that did not ask, for a change the step refused, or for an account without the step', async () => {
         // The phone apps and older bundles: today's reply, every session ended, the cookie cleared.
         const quiet = await stepped();

@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { authClient } from '@/lib/auth-client';
 import { authError } from '@/lib/form';
 import { cue } from '@/lib/sounds';
-import { draftAnswer, draftError, emptyDraft, methodsAfter } from '@/lib/two-step';
+import { draftAnswer, draftError, draftFor, emptyDraft, methodsAfter } from '@/lib/two-step';
 
 /*
  * The second step of a sign-in (docs/two-step-design.md 4): the password was right, and the
@@ -34,11 +34,15 @@ export function SignInStep({
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
     const [refused, setRefused] = useState('');
+    const [refocus, setRefocus] = useState(0);
     async function submit() {
         const invalid = draftError(draft);
         setError(invalid);
         setRefused('');
-        if (invalid) return;
+        if (invalid) {
+            setRefocus((count) => count + 1);
+            return;
+        }
         setPending(true);
         try {
             await authClient.answerStep(draftAnswer(draft));
@@ -48,8 +52,12 @@ export function SignInStep({
         } catch (cause) {
             cue('error');
             if (cause instanceof StepFailure && cause.again) {
+                // What is offered and what the draft is for change together: an answer is
+                // never sent for a method that is no longer shown.
                 const left = methodsAfter(methods, cause.reason);
                 setMethods(left);
+                setDraft((typed) => draftFor(typed, left));
+                setRefocus((count) => count + 1);
                 // A wrong answer is the field's own error; anything else is said above it.
                 if (cause.reason === 'wrong') setError(cause.message);
                 else setRefused(cause.message);
@@ -81,6 +89,8 @@ export function SignInStep({
                     error={error}
                     disabled={pending}
                     focus
+                    refocus={refocus}
+                    reload={challenge.methods.length === 0}
                 />
                 <div className={wide ? 'mt-1 flex flex-col gap-3' : 'flex justify-end gap-2'}>
                     {!wide && (

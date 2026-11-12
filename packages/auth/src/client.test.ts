@@ -353,7 +353,8 @@ describe('a device store that does not answer at sign-in', () => {
                 action,
                 attemptToken: 'security',
             }),
-            securityFinish: async () => ({}),
+            // The server's own answer: nothing less is read as a change that was made.
+            securityFinish: async () => ({ success: true }),
         } as unknown as AuthApi;
         const auth = createAuthClient(() => transport, keyStore([]).store, signing, {
             identities,

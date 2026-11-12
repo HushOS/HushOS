@@ -68,6 +68,17 @@ export function draftAnswer(draft: StepDraft): StepAnswer {
 }
 
 /*
+ * The draft, for the methods now on offer: when the method it was typed for is no longer
+ * among them (a paused app, a spent budget), it moves to the first that is. What is shown and
+ * what is sent must be the same method, or a code typed earlier goes out under a field the
+ * person can no longer see.
+ */
+export function draftFor(draft: StepDraft, methods: readonly StepMethod[]): StepDraft {
+    const first = methods[0];
+    return methods.includes(draft.method) || !first ? draft : { ...draft, method: first };
+}
+
+/*
  * After an answer was refused: which methods are still worth offering on this step. A paused
  * app is not; after too many wrong codes, or when the server cannot check codes, only the
  * recovery phrase is.
@@ -93,13 +104,18 @@ export function useStepUp(purpose: StepPurpose) {
     const [draft, setDraft] = useState<StepDraft>(emptyDraft([]));
     const [error, setError] = useState('');
     const [tried, setTried] = useState(false);
+    // Raised when an answer was refused, so the field takes the cursor back.
+    const [refocus, setRefocus] = useState(0);
     const start = useCallback(
         async (keep = false) => {
             const next = await authClient.stepChallenge(purpose);
             setChallenge(next);
             setMethods(next?.methods ?? []);
             setTried(false);
-            if (next && !keep) setDraft(emptyDraft(next.methods));
+            if (next)
+                setDraft((typed) =>
+                    keep ? draftFor(typed, next.methods) : emptyDraft(next.methods),
+                );
             return next;
         },
         [purpose],
@@ -109,6 +125,7 @@ export function useStepUp(purpose: StepPurpose) {
         methods,
         draft,
         error,
+        refocus,
         /* The field's own complaint, once the person has tried to send it. */
         invalid: tried && challenge ? draftError(draft) : '',
         setDraft: (next: StepDraft) => {
@@ -130,7 +147,10 @@ export function useStepUp(purpose: StepPurpose) {
         prove: async (): Promise<StepInput | undefined | null> => {
             if (!challenge) return undefined;
             setTried(true);
-            if (draftError(draft)) return null;
+            if (draftError(draft)) {
+                setRefocus((count) => count + 1);
+                return null;
+            }
             return authClient.proveStep(challenge, draftAnswer(draft));
         },
         /* True when the error was about the step: its words are shown beside the fields. */
@@ -144,7 +164,13 @@ export function useStepUp(purpose: StepPurpose) {
             if (code === 'two-step' || !failure.again) {
                 // The step was not asked yet, or this one is over: a new one, what was typed kept.
                 await start(true).catch(() => setChallenge(null));
-            } else setMethods((current) => methodsAfter(current, failure.reason));
+            } else {
+                // What is offered and what the draft is for change together.
+                const left = methodsAfter(methods, failure.reason);
+                setMethods(left);
+                setDraft((typed) => draftFor(typed, left));
+            }
+            setRefocus((count) => count + 1);
             return true;
         },
         reset: () => {

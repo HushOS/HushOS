@@ -279,15 +279,14 @@ export interface AuthApi {
     twoStepReauth(input: { startLoginRequest: string }): Promise<LoginChallenge>;
     /* A step for a change this session is about to make. 409 when the account has no step. */
     twoStepChallenge(purpose: StepPurpose): Promise<StepChallenge>;
-    twoStepStartTotp(
-        input: TwoStepChange,
-    ): Promise<{ id: string; secret: string; uri: string; expiresAt: string }>;
-    twoStepConfirmTotp(id: string, code: string): Promise<{ backupCodes?: string[] }>;
-    twoStepRemoveMethod(
-        id: string,
-        input: TwoStepChange,
-    ): Promise<{ removed: boolean; on: boolean }>;
-    twoStepBackupCodes(input: TwoStepChange): Promise<{ codes: string[] }>;
+    /*
+     * The replies below, and a security change's and a deletion's, are handed over unread too:
+     * only the server's own answer says the change was made (login-reply.ts).
+     */
+    twoStepStartTotp(input: TwoStepChange): Promise<unknown>;
+    twoStepConfirmTotp(id: string, code: string): Promise<unknown>;
+    twoStepRemoveMethod(id: string, input: TwoStepChange): Promise<unknown>;
+    twoStepBackupCodes(input: TwoStepChange): Promise<unknown>;
     securityEvents(): Promise<{ events: SecurityEvent[] }>;
     /* No user: `removed` when this session ended because its device was removed. */
     session(): Promise<{

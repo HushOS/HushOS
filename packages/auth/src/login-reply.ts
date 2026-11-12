@@ -87,3 +87,35 @@ export function readLoginReply(reply: unknown): LoginReply {
 export function readStepChallenge(reply: unknown) {
     return challenge(reply);
 }
+
+/*
+ * The replies that say a change was made, read the same way: only the server's own answer
+ * counts as done. A portal's page with a 200 after "Change password" or "Delete forever" must
+ * not be read as a changed password or a deleted account, and one after a code is confirmed
+ * must not be read as two-step sign-in turned on.
+ */
+const texts = (value: unknown): value is string[] =>
+    Array.isArray(value) && value.length > 0 && value.every(text);
+
+/* `{ success: true }`: a security change or a deletion that the server says it made. */
+export function readDone(reply: unknown) {
+    return record(reply) && reply.success === true;
+}
+/* A pending authenticator app: its id, its key and the address the QR code holds. */
+export function readEnrolment(reply: unknown) {
+    if (!record(reply) || !text(reply.id) || !text(reply.secret) || !text(reply.uri)) return null;
+    return { id: reply.id, secret: reply.secret, uri: reply.uri };
+}
+/* A confirmed app: the backup codes when this turned the step on, none when it replaced an app. */
+export function readConfirmed(reply: unknown) {
+    if (!record(reply)) return null;
+    if (reply.backupCodes === undefined) return {};
+    return texts(reply.backupCodes) ? { backupCodes: reply.backupCodes } : null;
+}
+export function readBackupCodes(reply: unknown) {
+    return record(reply) && texts(reply.codes) ? { codes: reply.codes } : null;
+}
+export function readRemoved(reply: unknown) {
+    if (!record(reply) || reply.removed !== true || typeof reply.on !== 'boolean') return null;
+    return { removed: true as const, on: reply.on };
+}

@@ -8,9 +8,25 @@ import { mailSubjects, newPage, PASSWORD, registerAccount } from './helpers';
  * (TWO_STEP_ENABLED=true): turning it on with an authenticator app whose codes the test
  * computes itself from the key the page shows, signing in with a code, a backup code and the
  * recovery phrase, a wrong code, the step inside Change password, a second browser, a reply
- * that never arrives, and turning it off again. On a server with two-step off, the settings
- * never show and these tests skip.
+ * that never arrives, a browser signed in before the step was on, and turning it off again.
+ *
+ * Whether two-step sign-in is on is this run's TWO_STEP_ENABLED (from the environment or .env,
+ * as the server reads it). The server must agree: one that says otherwise fails the file
+ * rather than letting it skip. With it off, the one test left checks that nothing is offered.
  */
+
+// As the server reads it: off unless set to true.
+const twoStepOn = process.env.TWO_STEP_ENABLED === 'true';
+
+test.beforeAll(async ({ request }) => {
+    // Asked without a session: a server with two-step off answers 501 before it looks for
+    // one, and a server with it on answers that nobody is signed in.
+    const answer = await request.get('/api/auth/two-step');
+    expect(
+        answer.status() !== 501,
+        `TWO_STEP_ENABLED is ${twoStepOn ? 'on' : 'off'} here, and the server must say the same`,
+    ).toBe(twoStepOn);
+});
 
 const dialog = (p: Page) => p.locator('[data-slot=dialog-content]');
 const section = (p: Page) => p.getByRole('region', { name: 'Two-step sign-in' });
@@ -40,12 +56,14 @@ class Authenticator {
     /*
      * A code the server will take now and has not taken before: the previous step's, this
      * one's or the next one's, whichever is the earliest unused. Three in a row can be had
-     * at once; a fourth waits for the clock.
+     * at once; a fourth waits for the clock. The previous step's is left alone in the last
+     * seconds of a step: by the time the server looked, it would be two steps old.
      */
     async next() {
-        let step = Math.max(this.used + 1, Authenticator.now() - 1);
-        while (step > Authenticator.now() + 1) await new Promise((done) => setTimeout(done, 1_000));
-        step = Math.max(step, Authenticator.now() - 1);
+        const earliest = () => Authenticator.now() - ((Date.now() / 1000) % 30 < 20 ? 1 : 0);
+        while (this.used + 1 > Authenticator.now() + 1)
+            await new Promise((done) => setTimeout(done, 1_000));
+        const step = Math.max(this.used + 1, earliest());
         this.used = step;
         return this.at(step);
     }
@@ -59,21 +77,24 @@ class Authenticator {
     }
 }
 
-/* A new account on its Account page, or a skip when this server has two-step off. */
+/* A new account on its Account page. */
 async function account(browser: Browser) {
     const page = await newPage(browser);
     const person = await registerAccount(page);
     await page.goto('/app/account', { waitUntil: 'networkidle' });
     await expect(page.getByRole('heading', { name: 'Your devices' })).toBeVisible();
-    test.skip(
-        (await section(page).count()) === 0,
-        'This server has TWO_STEP_ENABLED off: nothing about two-step sign-in is offered.',
-    );
     return { page, ...person };
 }
 
-/* Turns the step on as a person does: the password, the key from the page, a code, the codes. */
-async function turnOn(page: Page) {
+const toasts = (p: Page) => p.locator('[data-slot=toast]');
+const clipboard = (p: Page) => p.evaluate(() => navigator.clipboard.readText());
+
+/*
+ * Turns the step on as a person does: the password, the key from the page, a code, the codes.
+ * `copyKey` copies the key on the way and checks how it was copied; `keepOthers` unticks the
+ * offer to remove the account's other devices.
+ */
+async function turnOn(page: Page, options: { copyKey?: boolean; keepOthers?: boolean } = {}) {
     await section(page).getByRole('button', { name: 'Turn on' }).click();
     await dialog(page).getByLabel('Password', { exact: true }).fill(PASSWORD);
     await dialog(page).getByRole('button', { name: 'Continue' }).click();
@@ -82,6 +103,21 @@ async function turnOn(page: Page) {
     ).toBeVisible({ timeout: 60_000 });
     const key = await dialog(page).locator('[data-two-step-key]').innerText();
     expect(key.replace(/\s/g, '')).toMatch(/^[A-Z2-7]{32}$/);
+    if (options.copyKey) {
+        // The key is a secret: copied as the app types it, and cleared again like the others.
+        await dialog(page).getByRole('button', { name: 'Copy key' }).click();
+        await expect(toasts(page).filter({ hasText: 'Key copied' })).toContainText(
+            'Cleared from the clipboard in two minutes.',
+        );
+        expect(await clipboard(page)).toBe(key.replace(/\s/g, ''));
+    }
+    if (options.keepOthers) {
+        const others = dialog(page).getByRole('checkbox', { name: /Remove my other devices/ });
+        // Ticked unless the person says otherwise.
+        await expect(others).toBeChecked();
+        await others.click();
+        await expect(others).not.toBeChecked();
+    }
     const app = new Authenticator(key);
     await dialog(page)
         .getByLabel('Code from your authenticator app')
@@ -116,13 +152,27 @@ async function enterPassword(page: Page, email: string, password = PASSWORD) {
 const stepHeading = (p: Page) => p.getByRole('heading', { name: 'One more step' });
 const inApp = (p: Page) => expect(p).toHaveURL(/\/app/, { timeout: 60_000 });
 
+test('with two-step off, Account offers nothing about it', async ({ browser }) => {
+    test.skip(twoStepOn, 'Two-step sign-in is on (TWO_STEP_ENABLED).');
+    test.setTimeout(300_000);
+    const { page } = await account(browser);
+    await expect(section(page)).toHaveCount(0);
+    await expect(page.getByText('Two-step sign-in')).toHaveCount(0);
+    await page.context().close();
+});
+
 test('turning it on shows the codes once, and a code, a backup code or the phrase then signs in', async ({
     browser,
 }) => {
+    test.skip(!twoStepOn, 'Two-step sign-in is off (TWO_STEP_ENABLED).');
     test.setTimeout(420_000);
     const { page, email, phrase } = await account(browser);
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
     await expect(section(page).getByText('Off. Your password alone signs you in.')).toBeVisible();
-    const { app, codes } = await turnOn(page);
+    await expect(
+        section(page).getByText('It doesn’t change how your files are encrypted.'),
+    ).toBeVisible();
+    const { app, codes } = await turnOn(page, { copyKey: true });
 
     // Ten codes, shown once, to copy or to keep as a file made here.
     expect(codes).toHaveLength(10);
@@ -137,6 +187,12 @@ test('turning it on shows the codes once, and a code, a backup code or the phras
     for (const code of codes) expect(saved).toContain(code);
     expect(saved).toContain(email);
     await expect(dialog(page).getByRole('button', { name: 'Print' })).toHaveCount(0);
+    // Copied, they are ten lines on the clipboard, cleared again like any other secret.
+    await dialog(page).getByRole('button', { name: 'Copy', exact: true }).click();
+    await expect(toasts(page).filter({ hasText: 'Backup codes copied' })).toContainText(
+        'Cleared from the clipboard in two minutes.',
+    );
+    expect((await clipboard(page)).split('\n')).toEqual(codes);
     await dialog(page).getByRole('button', { name: 'Done' }).click();
     await expect(dialog(page)).toHaveCount(0);
 
@@ -160,11 +216,13 @@ test('turning it on shows the codes once, and a code, a backup code or the phras
     await expect(page).toHaveURL(/\/login/);
     const code = page.getByLabel('Code from your authenticator app');
     await code.fill(app.wrong());
-    await code.press('Enter');
+    await page.getByRole('button', { name: 'Continue' }).click();
     await expect(page.getByRole('alert')).toContainText('That code didn’t work', {
         timeout: 60_000,
     });
     await expect(stepHeading(page)).toBeVisible();
+    // The cursor is back in the field, though the button was pressed.
+    await expect(code).toBeFocused();
     await code.fill(await app.next());
     await code.press('Enter');
     await inApp(page);
@@ -174,6 +232,8 @@ test('turning it on shows the codes once, and a code, a backup code or the phras
     await enterPassword(page, email);
     await expect(stepHeading(page)).toBeVisible({ timeout: 60_000 });
     await page.getByRole('button', { name: 'Use a backup code' }).click();
+    // The button pressed is gone; the cursor is in the field that took its place.
+    await expect(page.getByLabel('Backup code')).toBeFocused();
     await page.getByLabel('Backup code').fill(codes[0]!.toLowerCase());
     await page.getByLabel('Backup code').press('Enter');
     await inApp(page);
@@ -204,6 +264,7 @@ test('turning it on shows the codes once, and a code, a backup code or the phras
 test('changing the password asks for the step in the same dialog, keeps this browser signed in, and a second browser is asked for it', async ({
     browser,
 }) => {
+    test.skip(!twoStepOn, 'Two-step sign-in is off (TWO_STEP_ENABLED).');
     test.setTimeout(420_000);
     const { page, email } = await account(browser);
     const { app } = await turnOn(page);
@@ -289,6 +350,7 @@ test('changing the password asks for the step in the same dialog, keeps this bro
 test('new backup codes replace the old ones, and turning it off needs the step and leaves the password alone', async ({
     browser,
 }) => {
+    test.skip(!twoStepOn, 'Two-step sign-in is off (TWO_STEP_ENABLED).');
     test.setTimeout(420_000);
     const { page, email } = await account(browser);
     const { app, codes } = await turnOn(page);
@@ -359,5 +421,76 @@ test('new backup codes replace the old ones, and turning it off needs the step a
     await enterPassword(page, email);
     await inApp(page);
     await expect(stepHeading(page)).toHaveCount(0);
+    await page.context().close();
+});
+
+test('a browser signed in before the step was on is asked for it when it unlocks, and is removed when the person says so', async ({
+    browser,
+}) => {
+    test.skip(!twoStepOn, 'Two-step sign-in is off (TWO_STEP_ENABLED).');
+    test.setTimeout(480_000);
+    const { page, email } = await account(browser);
+    // A second browser signs in while the password alone is enough.
+    const earlier = await newPage(browser);
+    await earlier.goto('/login', { waitUntil: 'networkidle' });
+    await enterPassword(earlier, email);
+    await inApp(earlier);
+
+    // The step is turned on, and the other browser is kept signed in.
+    await page.reload({ waitUntil: 'networkidle' });
+    const { app } = await turnOn(page, { keepOthers: true });
+    await dialog(page).getByRole('button', { name: 'Done' }).click();
+
+    // It is still signed in, on a session that never passed the step. Locked and unlocked
+    // again, which is a sign-in, it is asked for the step in the unlock dialog itself.
+    await earlier.goto('/app/account', { waitUntil: 'networkidle' });
+    await expect(section(earlier).locator('[data-two-step=on]')).toBeVisible({ timeout: 60_000 });
+    await earlier.getByRole('button', { name: 'Lock on this browser' }).click();
+    await earlier.getByRole('alertdialog').getByRole('button', { name: 'Lock' }).click();
+    await earlier.getByRole('button', { name: 'Unlock on this browser' }).click();
+    const unlock = dialog(earlier);
+    await expect(unlock.getByRole('heading', { name: 'Unlock HushOS' })).toBeVisible();
+    await unlock.getByLabel('Password', { exact: true }).fill(PASSWORD);
+    await unlock.getByRole('button', { name: 'Unlock', exact: true }).click();
+    const code = unlock.getByLabel('Code from your authenticator app');
+    await expect(code).toBeVisible({ timeout: 60_000 });
+    await expect(unlock.getByText('This account has two-step sign-in on.')).toBeVisible();
+    await code.fill(app.wrong());
+    await unlock.getByRole('button', { name: 'Continue' }).click();
+    await expect(unlock.getByRole('alert')).toContainText('That code didn’t work', {
+        timeout: 60_000,
+    });
+    await expect(code).toBeFocused();
+    await code.fill(await app.next());
+    await unlock.getByRole('button', { name: 'Continue' }).click();
+    await expect(dialog(earlier)).toHaveCount(0, { timeout: 60_000 });
+    await expect(earlier.getByRole('button', { name: 'Lock on this browser' })).toBeVisible({
+        timeout: 60_000,
+    });
+
+    // Off and on again, this time leaving the offer ticked: the codes are on screen first,
+    // and the other browser is then removed and has to sign in again.
+    await section(page).getByRole('button', { name: 'Turn off' }).click();
+    await dialog(page).getByLabel('Password', { exact: true }).fill(PASSWORD);
+    await dialog(page)
+        .getByLabel('Code from your authenticator app')
+        .fill(await app.next());
+    await dialog(page).getByRole('button', { name: 'Turn off' }).click();
+    await expect(section(page).getByText('Off. Your password alone signs you in.')).toBeVisible({
+        timeout: 60_000,
+    });
+    const again = await turnOn(page);
+    expect(again.codes).toHaveLength(10);
+    await expect(dialog(page).getByRole('button', { name: 'Done' })).toBeEnabled({
+        timeout: 60_000,
+    });
+    await expect(dialog(page).getByRole('alert')).toHaveCount(0);
+    await dialog(page).getByRole('button', { name: 'Done' }).click();
+    await expect(
+        page.getByRole('list', { name: 'Your devices' }).getByRole('listitem'),
+    ).toHaveCount(1, { timeout: 60_000 });
+    await earlier.goto('/app/account', { waitUntil: 'networkidle' });
+    await expect(earlier).toHaveURL(/\/login/, { timeout: 60_000 });
+    await earlier.context().close();
     await page.context().close();
 });

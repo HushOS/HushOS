@@ -1719,6 +1719,30 @@ describe('a step and what it authorises commit together', () => {
         );
         expect(twoStep.REPLACEMENT_SESSION_SECONDS).toBe(600);
 
+        // Using it does not extend it. An ordinary session's deadline slides when it is used,
+        // five minutes or more after it was last seen; this one keeps the end it was given.
+        const lifetime = { idleSeconds: 7 * 24 * 3600, maxSeconds: 30 * 24 * 3600 };
+        const end = left[0]!.expiresAt.getTime();
+        const ordinary = await passwordSignIn((await registered()).user.id);
+        const ordinaryEnd = (await sessionRow(ordinary.token))!.expiresAt.getTime();
+        const start = Date.now();
+        vi.useFakeTimers({ now: start + 6 * MINUTE, toFake: ['Date'] });
+        try {
+            expect((await auth.getSession(asked.tokenHash, lifetime))?.user.id).toBe(maya.userId);
+            expect((await sessionRow(asked.tokenHash))!.expiresAt.getTime()).toBe(end);
+            // The same use slides the ordinary one, so the check above is not vacuous.
+            expect(await auth.getSession(ordinary.token, lifetime)).not.toBeNull();
+            expect((await sessionRow(ordinary.token))!.expiresAt.getTime()).toBeGreaterThan(
+                ordinaryEnd + 5 * MINUTE,
+            );
+            // At minute eleven it is over, used or not.
+            vi.setSystemTime(start + 11 * MINUTE);
+            expect(await auth.getSession(asked.tokenHash, lifetime)).toBeNull();
+            expect(await auth.getSession(ordinary.token, lifetime)).not.toBeNull();
+        } finally {
+            vi.useRealTimers();
+        }
+
         // An account without the step: asked or not, a password change ends every session.
         const { user } = await registered();
         const sam = { userId: user.id, session: await passwordSignIn(user.id) };

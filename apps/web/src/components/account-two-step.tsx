@@ -1,10 +1,11 @@
 import type { SecurityEvent, TwoStepStatus } from '@hushos/auth/api';
+import { LostReply } from '@hushos/auth/client';
 import type { SessionUser } from '@hushos/auth/protocol';
 import { PASSWORD_MAX_LENGTH } from '@hushos/auth/protocol';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useId, useState, type ReactNode } from 'react';
 import { devicesQueryOptions } from '@/components/account-devices';
-import { CopyButton } from '@/components/copy-button';
+import { CopyCheckIcon } from '@/components/copy-button';
 import { SECRET_FIELD } from '@/components/password-input';
 import { QrCode } from '@/components/qr-code';
 import { DialogField, Done, Setting, SettingsGroup } from '@/components/settings';
@@ -22,7 +23,9 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
+import { toast } from '@/components/ui/toast';
 import { authClient } from '@/lib/auth-client';
+import { copySecret } from '@/lib/clipboard';
 import { formatDay, formatTime } from '@/lib/drive';
 import { authError } from '@/lib/form';
 import { saveBlob } from '@/lib/save-file';
@@ -70,7 +73,7 @@ export function AccountTwoStep({ user }: { user: SessionUser }) {
         <div id="two-step" className="scroll-mt-20">
             <SettingsGroup
                 title="Two-step sign-in"
-                description="A second step after your password when you sign in."
+                description="A second step stops someone who has your password from signing in. It doesn’t change how your files are encrypted."
             >
                 {status.isPending ? (
                     <div className="flex flex-col gap-2 py-3" aria-busy="true">
@@ -221,7 +224,7 @@ function eventWords(event: SecurityEvent) {
                 ? `Wrong answer to the second step, with ${method}`
                 : 'Wrong answer to the second step';
         case 'totp-frozen':
-            return 'Authenticator app paused after many wrong codes';
+            return 'Authenticator app paused after many wrong answers';
         case 'backup-code-used':
             return 'Backup code used';
         case 'phrase-used':
@@ -230,10 +233,19 @@ function eventWords(event: SecurityEvent) {
             return 'Two-step sign-in turned on';
         case 'two-step-off':
             return 'Two-step sign-in turned off';
+        // Said by the kind of method, so the line is right for a security key too.
         case 'method-added':
-            return 'Authenticator app replaced';
+            return event.method === 'webauthn'
+                ? 'Security key added'
+                : event.method === 'totp'
+                  ? 'Authenticator app replaced'
+                  : 'Second-step method added';
         case 'method-removed':
-            return 'Authenticator app removed';
+            return event.method === 'webauthn'
+                ? 'Security key removed'
+                : event.method === 'totp'
+                  ? 'Authenticator app removed'
+                  : 'Second-step method removed';
         case 'backup-codes-made':
             return 'New backup codes made';
         default:
@@ -369,6 +381,32 @@ function PasswordField({
     );
 }
 
+/*
+ * A secret copied the way the others are (lib/clipboard.ts): cleared from the clipboard two
+ * minutes later, and said so. Returns whether it was copied.
+ */
+async function copyAsSecret(value: string, what: string) {
+    try {
+        await copySecret(value);
+        cue('success', { volume: 0.4 });
+        toast.add({
+            type: 'success',
+            title: `${what} copied`,
+            description: 'Cleared from the clipboard in two minutes.',
+        });
+        return true;
+    } catch {
+        cue('error');
+        toast.add({
+            type: 'error',
+            title: 'Copy failed',
+            description:
+                'Your browser blocked clipboard access. Select the text and copy it instead.',
+        });
+        return false;
+    }
+}
+
 /* The ten codes, shown once: to copy, or to keep as a file made on this device. */
 function BackupCodes({ codes, email }: { codes: string[]; email: string }) {
     const [copied, setCopied] = useState(false);
@@ -378,13 +416,7 @@ function BackupCodes({ codes, email }: { codes: string[]; email: string }) {
         return () => window.clearTimeout(timer);
     }, [copied]);
     async function copy() {
-        try {
-            await navigator.clipboard.writeText(codes.join('\n'));
-            cue('success', { volume: 0.4 });
-            setCopied(true);
-        } catch {
-            cue('error');
-        }
+        setCopied(await copyAsSecret(codes.join('\n'), 'Backup codes'));
     }
     function download() {
         const made = new Intl.DateTimeFormat('en-GB', { dateStyle: 'long' }).format(new Date());
@@ -427,6 +459,27 @@ function BackupCodes({ codes, email }: { codes: string[]; email: string }) {
     );
 }
 
+/* Copies the app's key: a secret, so by `copyAsSecret`. Looks as CopyButton does. */
+function CopyKey({ value }: { value: string }) {
+    const [copied, setCopied] = useState(false);
+    useEffect(() => {
+        if (!copied) return;
+        const timer = window.setTimeout(() => setCopied(false), 1_600);
+        return () => window.clearTimeout(timer);
+    }, [copied]);
+    return (
+        <button
+            type="button"
+            onClick={() => void copyAsSecret(value, 'Key').then(setCopied)}
+            aria-label={copied ? 'Copied' : 'Copy key'}
+            title="Copy key"
+            className={`grid size-8 shrink-0 cursor-pointer place-items-center rounded-md border border-input bg-card text-muted-foreground transition-colors hover:bg-muted hover:text-foreground ${copied ? 'text-success' : ''}`}
+        >
+            <CopyCheckIcon done={copied} className="size-3.5" />
+        </button>
+    );
+}
+
 /* The app's key in groups of four, as authenticator apps show it for typing. */
 const grouped = (secret: string) => secret.match(/.{1,4}/g)?.join(' ') ?? secret;
 
@@ -461,7 +514,9 @@ function AppDialog({
     const [code, setCode] = useState('');
     const [signOutOthers, setSignOutOthers] = useState(true);
     const [codes, setCodes] = useState<string[] | null>(null);
-    const [othersKept, setOthersKept] = useState(false);
+    // Removing the other devices, after the codes are on screen: running, done, or failed.
+    const [removing, setRemoving] = useState<'no' | 'running' | 'failed'>('no');
+    const codeNote = useId();
     const replacing = mode === 'replace';
     // Replacing needs the step from the start: its fields are there when the dialog opens.
     const { ask } = step;
@@ -504,11 +559,21 @@ function AppDialog({
                 onClose();
                 return;
             }
-            // The other devices signed in before the step was on: gone unless the person keeps them.
-            if (others > 0 && signOutOthers)
-                await authClient.removeOtherDevices(password).catch(() => setOthersKept(true));
+            // The codes first: they are shown once, and nothing that follows may cost them.
             setCodes(backupCodes);
             onDone('');
+            // Then the other devices, which signed in before the step was on: removed unless
+            // the person kept them. A failure here is said beside the codes, not instead of them.
+            if (others > 0 && signOutOthers) {
+                setRemoving('running');
+                void authClient.removeOtherDevices(password).then(
+                    () => {
+                        setRemoving('no');
+                        onDone('');
+                    },
+                    () => setRemoving('failed'),
+                );
+            }
         } catch (cause) {
             cue('error');
             // The setup ran out (ten minutes): back to the start, with why.
@@ -517,6 +582,9 @@ function AppDialog({
                 setCode('');
                 setTried(false);
             }
+            // A reply that was not the server's own says nothing: the section behind this
+            // dialog is read again, and shows whether the step is on.
+            if (cause instanceof LostReply) onDone('');
             setError(authError(cause));
         } finally {
             setPending(false);
@@ -540,13 +608,21 @@ function AppDialog({
                     onDone('Two-step sign-in is on.');
                     onClose();
                 }}
-                footer={<Button type="submit">Done</Button>}
+                footer={
+                    <Button type="submit" disabled={removing === 'running'}>
+                        Done
+                    </Button>
+                }
             >
                 <BackupCodes codes={codes} email={user.email} />
-                {othersKept && (
-                    <p className="text-[13px] text-muted-foreground">
-                        Your other devices are still signed in. You can remove them under Your
-                        devices.
+                {removing === 'running' && (
+                    <output className="text-[13px] text-muted-foreground">
+                        Removing your other devices
+                    </output>
+                )}
+                {removing === 'failed' && (
+                    <p role="alert" className="text-[13px] text-destructive">
+                        Your other devices weren’t removed. You can remove them under Your devices.
                     </p>
                 )}
             </Shell>
@@ -590,7 +666,7 @@ function AppDialog({
                             >
                                 {grouped(app.secret)}
                             </span>
-                            <CopyButton value={app.secret} label="Copy key" />
+                            <CopyKey value={app.secret} />
                         </span>
                     </div>
                 </div>
@@ -605,8 +681,10 @@ function AppDialog({
                         maxLength={7}
                         placeholder="000000"
                         value={code}
-                        disabled={pending}
+                        // Read-only while it is checked, not disabled: the cursor stays in it.
+                        readOnly={pending}
                         aria-invalid={invalid || Boolean(error)}
+                        aria-describedby={invalid || error ? codeNote : undefined}
                         onChange={(event) => {
                             setCode(event.target.value.replace(/[^\d\s]/g, ''));
                             setError('');
@@ -614,7 +692,11 @@ function AppDialog({
                         className="font-mono text-[15px] tracking-[0.2em]"
                         {...SECRET_FIELD}
                     />
-                    {invalid && <Problem>Enter the 6-digit code the app shows.</Problem>}
+                    {(invalid || error) && (
+                        <p id={codeNote} role="alert" className="text-[13px] text-destructive">
+                            {invalid ? 'Enter the 6-digit code the app shows.' : error}
+                        </p>
+                    )}
                 </div>
                 {!replacing && others > 0 && (
                     <div className="flex items-start gap-3">
@@ -626,17 +708,17 @@ function AppDialog({
                             className="mt-0.5"
                         />
                         <label htmlFor={othersId} className="flex flex-col gap-0.5 text-sm">
-                            <span className="font-semibold">Sign out my other devices</span>
+                            <span className="font-semibold">Remove my other devices</span>
                             <span className="text-[13px] text-muted-foreground">
                                 {others === 1
                                     ? 'One other device is'
                                     : `${others} other devices are`}{' '}
-                                signed in without the second step. Signing in again asks for it.
+                                signed in without the second step. They’ll need to sign in again,
+                                and will be asked for it.
                             </span>
                         </label>
                     </div>
                 )}
-                <Problem>{error}</Problem>
             </Shell>
         );
     }
@@ -648,7 +730,7 @@ function AppDialog({
             description={
                 replacing
                     ? 'The new app takes over once you confirm it. Your backup codes stay as they are.'
-                    : 'After your password, HushOS will ask for a code from an authenticator app on your phone. Your recovery phrase works as the second step too.'
+                    : 'After your password, HushOS will ask for a code from an authenticator app on your phone. Your recovery phrase works as the second step too, so keep it apart from your password.'
             }
             onClose={onClose}
             onSubmit={() => void start()}

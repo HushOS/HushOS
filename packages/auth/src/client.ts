@@ -11,7 +11,15 @@ export { pinVerified, settingsRolledBack } from '@hushos/crypto/pins';
 import type { IdentityEnvelope } from '@hushos/crypto/identity';
 import type { AuthApi, LoginSession, StepChallenge, StepInput, StepPurpose } from './api';
 import type { CryptoTransport, RequestOptions } from './crypto-transport';
-import { readLoginReply, readStepChallenge } from './login-reply';
+import {
+    readBackupCodes,
+    readConfirmed,
+    readDone,
+    readEnrolment,
+    readLoginReply,
+    readRemoved,
+    readStepChallenge,
+} from './login-reply';
 import { ordinaryFailure } from './ordinary-failure';
 import { createAuthStore } from './store';
 import { withStorageEvents } from './with-storage-events';
@@ -109,6 +117,8 @@ export type StepAnswer =
  * - `limited`: too many wrong codes for now; the phrase still works;
  * - `unavailable`: the server cannot check this method right now; the phrase still works;
  * - `offline`: no answer came back at all; the same answer can be sent again;
+ * - `busy`: too many requests from this address just now; the same answer can be sent again
+ *   in a moment;
  * - `over`: the step has ended (five answers, five minutes, or it was used): start again;
  * - `lost`: a reply came that was not the server's answer. The step may have passed there
  *   or not, so it is over here too, and a code that was sent may be spent.
@@ -120,6 +130,7 @@ export type StepFailureReason =
     | 'limited'
     | 'unavailable'
     | 'offline'
+    | 'busy'
     | 'over'
     | 'lost';
 export class StepFailure extends Error {
@@ -160,6 +171,9 @@ export function stepFailure(error: unknown): StepFailure {
     // The worker refused a mistyped phrase before anything was sent.
     if (kept === true) return new StepFailure('wrong', message, { cause: error });
     if (status === 503) return new StepFailure('unavailable', message, { cause: error });
+    // The address's own limit, not the step's (that one has a code): nothing about the step
+    // was looked at, and it is still there when the limit lets the next request through.
+    if (status === 429) return new StepFailure('busy', message, { cause: error });
     if (typeof status !== 'number')
         return new StepFailure(
             'offline',
@@ -180,6 +194,26 @@ export function stepRefused(error: unknown) {
     const code = (error as { code?: unknown } | null)?.code;
     return typeof code === 'string' && STEP_REFUSALS.has(code);
 }
+/*
+ * A refusal the server answered before doing anything: the step's own, the address's limit
+ * (429), or a method it cannot check right now (503). Nothing was changed, so nothing this
+ * browser keeps needs clearing and no other tab needs locking.
+ */
+export function nothingChanged(error: unknown) {
+    const status = (error as { status?: unknown } | null)?.status;
+    return stepRefused(error) || status === 429 || status === 503;
+}
+/* A 200 that was not the server's answer to a change: what was asked for may or may not be done. */
+export class LostReply extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'LostReply';
+    }
+}
+const lostChange = (what: string) =>
+    new LostReply(
+        `The server’s answer didn’t arrive, so HushOS can’t tell whether ${what}. Check before you try again.`,
+    );
 
 export function createAuthClient(
     createTransport: () => CryptoTransport,
@@ -197,6 +231,14 @@ export function createAuthClient(
      * the answer brings the envelope. Like a running sign-in, it owns the worker (`owned`).
      */
     let pendingStep: { challenge: StepChallenge; epoch: number; until: number } | undefined;
+    /*
+     * The sign-in a page is waiting on, by number; 0 when the page that asked has gone
+     * (`cancelStep`). A reply that arrives after that finds nobody to ask for the step, so
+     * its challenge is refused instead of being left to hold the worker with no form to
+     * answer it.
+     */
+    let signIns = 0;
+    let askedBy = 0;
     let channel: BroadcastChannel | undefined;
     let listening = false;
     function lock() {
@@ -539,6 +581,8 @@ export function createAuthClient(
         step: 'ask' | 'refuse' = 'refuse',
     ) {
         const loginEpoch = epoch;
+        const attempt = ++signIns;
+        if (step === 'ask') askedBy = attempt;
         const stored = identities && !options.asNewDevice ? await storedIdentity(identities) : null;
         const start = await own('loginStart', { password });
         const challenge = await api.loginStart({ email, ...start });
@@ -558,6 +602,8 @@ export function createAuthClient(
             if (step === 'refuse') throw new Error('This account asks for a second step.');
             if (epoch !== loginEpoch)
                 throw new Error('Your account was locked. Please sign in again.');
+            // The page that asked left while the reply was on its way: nobody can answer.
+            if (askedBy !== attempt) throw new Error('This sign-in was left. Sign in again.');
             pendingStep = {
                 challenge: reply.challenge,
                 epoch: loginEpoch,
@@ -878,11 +924,12 @@ export function createAuthClient(
                 const start = await own('loginStart', { password });
                 const challenge = await api.deleteStart(start);
                 const finish = await own('loginFinish', challenge);
-                await api.deleteFinish({
+                const reply = await api.deleteFinish({
                     attemptToken: challenge.attemptToken,
                     ...finish,
                     ...(twoStep ? { twoStep } : {}),
                 });
+                if (!readDone(reply)) throw lostChange('your account was deleted');
                 lock();
                 store.setState({
                     device: null,
@@ -977,7 +1024,7 @@ export function createAuthClient(
                 let committed = true;
                 let failure: unknown;
                 try {
-                    await api.securityFinish({
+                    const reply = await api.securityFinish({
                         action,
                         attemptToken: challenge.attemptToken,
                         ...finish,
@@ -987,10 +1034,13 @@ export function createAuthClient(
                         // asked for a second code a moment after the first.
                         keepSession: 1,
                     });
+                    // A 200 that is not the server's answer says nothing either way: it is
+                    // handled below as a reply that never came.
+                    if (!readDone(reply)) throw lostChange('your change was saved');
                 } catch (error) {
-                    // The step's own refusal is the server's answer: nothing was changed, and
-                    // nothing this browser keeps needs clearing.
-                    if (stepRefused(error)) throw error;
+                    // The server answered, and refused before changing anything: nothing this
+                    // browser keeps needs clearing, and no other tab needs locking.
+                    if (nothingChanged(error)) throw error;
                     // A lost response leaves the outcome unknown: the server may have
                     // replaced the credentials and revoked every session. Clean up as if it
                     // had, then let the live session say which it was.
@@ -1059,6 +1109,8 @@ export function createAuthClient(
         answerStep,
         /* Leaves a sign-in that is waiting at its step: what the worker held for it goes. */
         cancelStep() {
+            // A sign-in still on its way to the server is no longer anyone's to answer either.
+            askedBy = 0;
             if (pendingStep) lock();
         },
         /*
@@ -1084,21 +1136,46 @@ export function createAuthClient(
         startAuthenticator: (password: string, twoStep?: StepInput) =>
             withPassword(
                 password,
-                (proof) => api.twoStepStartTotp({ ...proof, ...(twoStep ? { twoStep } : {}) }),
+                async (proof) => {
+                    const app = readEnrolment(
+                        await api.twoStepStartTotp({ ...proof, ...(twoStep ? { twoStep } : {}) }),
+                    );
+                    if (!app) throw lostChange('the setup was started');
+                    return app;
+                },
                 (input) => api.twoStepReauth(input),
             ),
-        confirmAuthenticator: (id: string, code: string) => api.twoStepConfirmTotp(id, code.trim()),
+        /* Only the server's own answer says the app was confirmed: anything else is a lost reply. */
+        async confirmAuthenticator(id: string, code: string) {
+            const confirmed = readConfirmed(await api.twoStepConfirmTotp(id, code.trim()));
+            if (!confirmed) throw lostChange('your authenticator app was added');
+            return confirmed;
+        },
         removeTwoStepMethod: (id: string, password: string, twoStep?: StepInput) =>
             withPassword(
                 password,
-                (proof) =>
-                    api.twoStepRemoveMethod(id, { ...proof, ...(twoStep ? { twoStep } : {}) }),
+                async (proof) => {
+                    const removed = readRemoved(
+                        await api.twoStepRemoveMethod(id, {
+                            ...proof,
+                            ...(twoStep ? { twoStep } : {}),
+                        }),
+                    );
+                    if (!removed) throw lostChange('two-step sign-in was turned off');
+                    return removed;
+                },
                 (input) => api.twoStepReauth(input),
             ),
         newBackupCodes: (password: string, twoStep: StepInput) =>
             withPassword(
                 password,
-                (proof) => api.twoStepBackupCodes({ ...proof, twoStep }),
+                async (proof) => {
+                    const made = readBackupCodes(
+                        await api.twoStepBackupCodes({ ...proof, twoStep }),
+                    );
+                    if (!made) throw lostChange('new backup codes were made');
+                    return made;
+                },
                 (input) => api.twoStepReauth(input),
             ),
         securityEvents: () => api.securityEvents(),
