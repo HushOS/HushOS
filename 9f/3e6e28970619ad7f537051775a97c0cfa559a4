@@ -1,0 +1,31 @@
+.github/workflows/ci.yml
+  s_566b8e0c4467a4::t_bf52e71c56df66 431-433,435
+apps/web/nitro.config.ts
+  s_566b8e0c4467a4::t_e266157513b4a6 7-16
+apps/web/package.json
+  s_566b8e0c4467a4::t_601f0418eb6a06 9,44
+apps/web/scripts/check-server-deps.ts
+  s_566b8e0c4467a4::t_44a9950f32ab11 1-67
+apps/web/vite.config.ts
+  s_566b8e0c4467a4::t_b8a8a4621c60a4 171-173
+bun.lock
+  s_566b8e0c4467a4::t_94ff3bad5932d7 50
+e2e/two-step-passkeys.spec.ts
+  s_566b8e0c4467a4::t_bdd9ff6f4b153e 24-40,133-135,155,341,344-345
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9f3e6e28970619ad7f537051775a97c0cfa559a4",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
