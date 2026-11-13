@@ -14,6 +14,7 @@ import { getRecoveryEnrollment } from '@/lib/auth';
 import { authClient } from '@/lib/auth-client';
 import { authError } from '@/lib/form';
 import { whenPageLeaves } from '@/lib/new-phrase';
+import { whenBrowserLocks } from '@/lib/show-new-phrase';
 import { phraseFromKit, WORDS } from '@/lib/recovery-kit';
 import { cue } from '@/lib/sounds';
 
@@ -57,8 +58,18 @@ function RecoverForm({ enrollment }: { enrollment: { email: string } }) {
         storage: string | null;
     } | null>(null);
     // Held in this page's memory, so gone when the page is: brought back by the Back button
-    // from the back-forward cache, it would otherwise show them to whoever pressed it.
-    useEffect(() => (made ? whenPageLeaves(() => setMade(null)) : undefined), [made]);
+    // from the back-forward cache, it would otherwise show them to whoever pressed it. Gone too
+    // when this browser is locked or signed out, here or in another tab, as the words a
+    // rotation holds are (`keepNewPhrase`): never left on screen for whoever comes next.
+    useEffect(() => {
+        if (!made) return undefined;
+        const leaving = whenPageLeaves(() => setMade(null));
+        const locked = whenBrowserLocks(() => setMade(null));
+        return () => {
+            leaving();
+            locked();
+        };
+    }, [made]);
     const count = wordsOf(typed).length;
     const words = mode === 'kit' ? (kit?.words ?? null) : wordsOf(typed);
     const ready = mode === 'kit' ? kit !== null : true;

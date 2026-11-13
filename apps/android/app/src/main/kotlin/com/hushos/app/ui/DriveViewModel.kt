@@ -633,7 +633,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     suspend fun <T> twoStep(block: (Shared.Session) -> T): Result<T> {
         val session = Shared.session(context) ?: return Result.failure(com.hushos.app.data.AuthFailure("Sign in first."))
         val result = change { block(session) }
-        if (result.exceptionOrNull() is NotAuthenticated) sessionLost()
+        // Only if it is still the session the request was made under: a sign-out and a sign-in since (these run in the
+        // view model's scope, so leaving the screen doesn't stop them) must not be taken down by the old session's answer.
+        if (result.exceptionOrNull() is NotAuthenticated && Shared.session(context) == session) sessionLost()
         return result
     }
 

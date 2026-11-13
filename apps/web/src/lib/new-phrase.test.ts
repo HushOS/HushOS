@@ -4,6 +4,7 @@ import {
     keepNewPhrase,
     newPhrase,
     phraseShownOnItsPage,
+    whenLocked,
     type NewPhrase,
 } from './new-phrase';
 
@@ -111,5 +112,21 @@ describe('a new recovery phrase held for showing', () => {
         expect(newPhrase.getState().made).toEqual(next);
         second.set({ lockRevision: 2 });
         expect(newPhrase.getState().made).toBeNull();
+    });
+});
+
+describe('a new recovery phrase a page keeps itself (the reset page)', () => {
+    test('is told the moment the browser is locked or signed out, and no more once the page stops listening', () => {
+        const auth = authStore();
+        let gone = 0;
+        const stop = whenLocked(auth, () => gone++);
+        auth.set({ unlockedUserId: 'someone' });
+        expect(gone).toBe(0);
+        auth.set({ lockRevision: 2 });
+        expect(gone).toBe(1);
+        stop();
+        expect(auth.listeners()).toBe(0);
+        auth.set({ lockRevision: 3 });
+        expect(gone).toBe(1);
     });
 });

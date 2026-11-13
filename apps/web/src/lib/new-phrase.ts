@@ -45,14 +45,21 @@ let unwatch: (() => void) | undefined;
 export function keepNewPhrase(made: NewPhrase, auth: Locks) {
     unwatch?.();
     newPhrase.setState({ made });
-    const unsubscribe = auth.subscribe((state, previous) => {
-        if (state.lockRevision !== previous.lockRevision) forgetNewPhrase();
-    });
+    const unsubscribe = whenLocked(auth, forgetNewPhrase);
     const staying = whenPageLeaves(forgetNewPhrase);
     unwatch = () => {
         unsubscribe();
         staying();
     };
+}
+/*
+ * Runs `gone` the moment this browser is locked or signed out, here or in another tab. For
+ * anything showing a new phrase from its own memory. Returns what stops listening.
+ */
+export function whenLocked(auth: Locks, gone: () => void) {
+    return auth.subscribe((state, previous) => {
+        if (state.lockRevision !== previous.lockRevision) gone();
+    });
 }
 /*
  * Runs `gone` when this page is left: for another site, closed, or put in the back-forward
