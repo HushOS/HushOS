@@ -50,7 +50,7 @@ export type RoadmapSection = {
 };
 
 /* The day this file last changed what the page says (YYYY-MM-DD). */
-export const updated = '2026-11-13';
+export const updated = '2026-11-14';
 
 export const sections: RoadmapSection[] = [
     {
@@ -64,7 +64,7 @@ export const sections: RoadmapSection[] = [
                 month: 'November 2026',
                 area: 'Platform',
                 title: 'Two-step sign-in',
-                body: 'After your password, a code from an authenticator app, one of ten backup codes, or your recovery phrase. It’s asked for at sign-in and before you change your password, your keys or the step, or delete your account. Turn it on in Account → Two-step sign-in; phones need version 1.6 to sign in once it’s on.',
+                body: 'After your password, a passkey or security key, a code from an authenticator app, one of ten backup codes, or your recovery phrase. You choose which is asked for first. It’s asked for at sign-in and before you change your password, your keys or the step, or delete your account. Turn it on in Account → Two-step sign-in; phones need version 1.6 to sign in once it’s on, and the next version to use a passkey.',
                 links: [
                     {
                         kind: 'blog',
@@ -260,8 +260,8 @@ export const sections: RoadmapSection[] = [
                 id: 'security-keys-and-device-approval',
                 status: 'now',
                 area: 'Platform',
-                title: 'Passkeys and approving from another device',
-                body: 'Confirm a new sign-in with a passkey or security key, the one kind a fake sign-in page can’t get past, or by approving it on a device you already use, beside the authenticator app. You choose which one HushOS asks for first.',
+                title: 'Approving a sign-in from another device',
+                body: 'Confirm a new sign-in by approving it on a device you already use, beside a passkey and the authenticator app. You choose which one HushOS asks for first.',
                 links: [
                     {
                         kind: 'docs',
