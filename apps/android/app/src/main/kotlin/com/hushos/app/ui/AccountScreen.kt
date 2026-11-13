@@ -238,10 +238,11 @@ fun AccountScreen(model: DriveViewModel, state: DriveState) {
 }
 
 @Composable
-internal fun AccountRow(title: String, detail: String?, icon: ImageVector, danger: Boolean = false, onClick: (() -> Unit)?) {
+internal fun AccountRow(title: String, detail: String?, icon: ImageVector, danger: Boolean = false, label: String? = null, onClick: (() -> Unit)?) {
     val alpine = Alpine.colors
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 56.dp).then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier).padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2),
+        // `label`: what the press does, for a screen reader, where the title alone (one of two rows that say "Add") does not say it.
+        Modifier.fillMaxWidth().heightIn(min = 56.dp).then(if (onClick != null) Modifier.clickable(onClickLabel = label, onClick = onClick) else Modifier).padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(icon, null, tint = if (danger) alpine.danger else alpine.inkMuted)
@@ -481,6 +482,7 @@ private fun PasswordScreen(model: DriveViewModel, onBack: () -> Unit) {
     val mismatch = repeat.isNotEmpty() && new != repeat
     // The second step, for an account that has it on: its fields sit under the passwords.
     val step = retain { StepUpHolder(model, com.hushos.app.data.StepPurpose.PASSWORD) }
+    val sheet = rememberKeySheet()
     val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) { step.prepare() }
     AccountPage("Change password", onBack = if (pending) null else onBack) {
@@ -491,14 +493,15 @@ private fun PasswordScreen(model: DriveViewModel, onBack: () -> Unit) {
             StepUpFields(step, enabled = !pending)
             Text("Your other devices will be signed out. Your recovery phrase stays the same.", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
             Button(
-                enabled = !pending && current.isNotEmpty() && new.length >= 12 && new == repeat,
+                enabled = !pending && !step.asking && current.isNotEmpty() && new.length >= 12 && new == repeat,
                 onClick = {
-                    val (ready, twoStep) = step.prove()
-                    if (!ready) return@Button
-                    pending = true
-                    model.changePassword(current, new, twoStep) { failure ->
-                        if (failure == null) { pending = false; model.notify("Your password was changed."); onBack() }
-                        else scope.launch { error = step.failed(failure); pending = false }
+                    // A passkey or security key, when it is the step's way, is asked by this press; the change goes once it answered.
+                    scope.withStep(step, sheet) { twoStep ->
+                        pending = true
+                        model.changePassword(current, new, twoStep) { failure ->
+                            if (failure == null) { pending = false; model.notify("Your password was changed."); onBack() }
+                            else scope.launch { error = step.failed(failure); pending = false }
+                        }
                     }
                 },
                 modifier = Modifier.fillMaxWidth().height(48.dp),
@@ -729,6 +732,7 @@ private fun AdvancedScreen(model: DriveViewModel, state: DriveState, onReset: ()
         var error by remember { mutableStateOf<String?>(null) }
         // The second step, for an account that has it on: asked for in the same dialog, before anything is deleted.
         val step = retain { StepUpHolder(model, com.hushos.app.data.StepPurpose.DELETE) }
+        val sheet = rememberKeySheet()
         val scope = rememberCoroutineScope()
         LaunchedEffect(Unit) { step.prepare() }
         AlertDialog(
@@ -749,12 +753,12 @@ private fun AdvancedScreen(model: DriveViewModel, state: DriveState, onReset: ()
                 }
             },
             confirmButton = {
-                TextButton(enabled = !pending && password.isNotEmpty() && typed == "DELETE", onClick = {
-                    val (ready, twoStep) = step.prove()
-                    if (!ready) return@TextButton
-                    pending = true
-                    model.deleteAccount(password, twoStep) { failure ->
-                        if (failure == null) pending = false else scope.launch { error = step.failed(failure); pending = false }
+                TextButton(enabled = !pending && !step.asking && password.isNotEmpty() && typed == "DELETE", onClick = {
+                    scope.withStep(step, sheet) { twoStep ->
+                        pending = true
+                        model.deleteAccount(password, twoStep) { failure ->
+                            if (failure == null) pending = false else scope.launch { error = step.failed(failure); pending = false }
+                        }
                     }
                 }) { Text(if (pending) "Deleting…" else "Delete forever", color = alpine.danger) }
             },
@@ -777,6 +781,7 @@ private fun ResetKeysScreen(model: DriveViewModel, onBack: () -> Unit) {
     // so it never lands in the saved-instance bundle (which the system writes to disk).
     var reset by rememberSaveable { mutableStateOf(false) }
     val step = retain { StepUpHolder(model, com.hushos.app.data.StepPurpose.MASTER_KEY) }
+    val sheet = rememberKeySheet()
     val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) { step.prepare() }
     if (reset) {
@@ -792,19 +797,19 @@ private fun ResetKeysScreen(model: DriveViewModel, onBack: () -> Unit) {
             PasswordField(password, { password = it; error = null }, "Password", error = error, enabled = !pending)
             Text("Enter your password to confirm.", style = MaterialTheme.typography.bodySmall, color = alpine.inkMuted)
             StepUpFields(step, enabled = !pending)
-            Button(enabled = !pending && password.isNotEmpty(), onClick = {
-                val (ready, twoStep) = step.prove()
-                if (!ready) return@Button
-                pending = true
-                model.rotateKeys(password, twoStep) { made, failure ->
-                    if (made) {
-                        // The password has done its work: it is not left in a form that comes back after the sign-in.
-                        password = ""
-                        pending = false
-                        // Signed straight back in: the new words, read from the account. Otherwise the app's shell is
-                        // showing them from memory (DriveViewModel.heldWords), and this page is done with.
-                        if (model.heldWords == null) reset = true else onBack()
-                    } else scope.launch { error = failure?.let { step.failed(it) }; pending = false }
+            Button(enabled = !pending && !step.asking && password.isNotEmpty(), onClick = {
+                scope.withStep(step, sheet) { twoStep ->
+                    pending = true
+                    model.rotateKeys(password, twoStep) { made, failure ->
+                        if (made) {
+                            // The password has done its work: it is not left in a form that comes back after the sign-in.
+                            password = ""
+                            pending = false
+                            // Signed straight back in: the new words, read from the account. Otherwise the app's shell is
+                            // showing them from memory (DriveViewModel.heldWords), and this page is done with.
+                            if (model.heldWords == null) reset = true else onBack()
+                        } else scope.launch { error = failure?.let { step.failed(it) }; pending = false }
+                    }
                 }
             }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(if (pending) "Rotating…" else "Rotate") }
         }

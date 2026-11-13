@@ -11,3 +11,8 @@
 # ML Kit started half set up and Scan document crashed the app (debug builds aren't shrunk, so it only showed
 # from Play).
 -keep class * implements com.google.firebase.components.ComponentRegistrar { <init>(); }
+
+# Credential Manager (passkeys and security keys) finds its Play services provider by class name, on phones
+# before Android 14.
+-if class androidx.credentials.CredentialManager
+-keep class androidx.credentials.playservices.** { *; }

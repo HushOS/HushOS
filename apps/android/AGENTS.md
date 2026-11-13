@@ -195,7 +195,7 @@ Design: `docs/devices-design.md` 5; as built: `docs/push-relay-plan.md`, PR 4.
 
 ### Two-step sign-in
 
-`docs/two-step-design.md` 4 to 6. `data/TwoStep.kt` holds the requests and the rules; `ui/TwoStepScreen.kt` the screens.
+`docs/two-step-design.md` 4 to 6, and 12. `data/TwoStep.kt` holds the requests and the rules; `ui/TwoStepScreen.kt` the screens.
 
 - `Auth.startSignIn` sends `twoStep: 1` (`Auth.finishBody`) and returns `SignIn.SignedIn` or `SignIn.Step(PendingSignIn)`. What the password opened waits in `PendingSignIn`, in the view model's memory, for `Auth.answerStep`.
     - It is dropped six minutes after it arrived (`PendingSignIn.dropIn`, `DriveViewModel.awaitStep`), counted on the clock since boot (`uptime`), never against the step's `expiresAt`: a phone with a wrong date must still be able to sign in. An answer still out is waited for.
@@ -221,20 +221,40 @@ Design: `docs/devices-design.md` 5; as built: `docs/push-relay-plan.md`, PR 4.
     - After held words, `Auth.signInHolding` answers a step that names their recovery key with them; any other step is the person's.
 - `OwnChange` is what mutes "You’ve been signed out" for this phone's own rotation, password change or reset: raised before the request (`begin`), dropped on failure, held while the words are up and the sign-in after is out. `signedIn` clears it.
     - `CheckedWords` (account, server, the phrase's own `recoveryVersion`) is what a check made without a session records at the next sign-in, and only for a matching one.
-- `TwoStep.confirmAuthenticator` takes only the server's two answers (`TwoStep.confirmed`): `{ backupCodes }` turned the step on, `{ replaced: true }` replaced the app. Anything else with a 200, `{}` included, is a lost reply: the page says it can't tell whether the app was added, and the settings are read again.
+- `TwoStep.confirmAuthenticator` takes only the server's two answers (`TwoStep.confirmed`): `{ backupCodes }` turned the step on, `{ replaced: true }` replaced the app, or added one beside keys (`AppSetup`). Anything else with a 200, `{}` included, is a lost reply: the page says it can't tell whether the app was added, and the settings are read again.
 - A lost change says what is unknown, in the web's sentence (`StepWords.lost`).
 - The other replies are read the same way, by the web's readers: `Auth.done` (`{ success: true }`), `TwoStep.enrolment`, `TwoStep.removed`, `TwoStep.codes`. Turning the step on without codes in the reply is lost too.
-- "Remove my other devices" is offered whenever the step is turned on, whatever the device list said, and removes when ticked; never when the app is replaced (`TwoStepFlow.removesOthers`). The codes show first; the removal runs behind them (`DriveViewModel.removeOtherDevices`), Done closes the codes meanwhile, and a failure is a notice.
+- "Remove my other devices" is offered whenever the step is turned on (by an app or a key), whatever the device list said, and removes when ticked; never when the app is replaced or a method is added beside another (`TwoStepFlow.removesOthers`). The codes show first; the removal runs behind them (`DriveViewModel.removeOtherDevices`), Done closes the codes meanwhile, and a failure is a notice.
 - Account › Two-step sign-in's changes run in the view model's scope and their results live in `DriveViewModel.twoStepFlow` (`TwoStepFlow`), not in a screen: the key and the codes are shown once, and a screen rebuilt while the request is out must find them. A lost reply reads the settings again (`reread`).
     - Backup codes stay in the flow until the person presses Done (`TwoStepFlow.seen`); `cleared` never drops unseen ones, and `TwoStepScreen` shows them first whichever page it was on. Back is held while a request is out.
 - A copied key or set of codes leaves the clipboard after two minutes, as the recovery phrase does (`SensitiveClipboard`); sharing the codes watches the clipboard for them too.
-- What a refusal withdraws is `StepOutcome.left`: a paused app, the app; a spent budget, both kinds of code together; `step-unavailable`, only the method that was tried.
+- What a refusal withdraws is `StepOutcome.left`: a paused app, the app; a spent budget, both kinds of code together (a key and the phrase stay); `step-unavailable`, only the method that was tried.
 - Password re-checks go one at a time, in the order asked (`Auth.passwordTurn`): the removal of other devices behind the backup codes, and whatever password action the person starts meanwhile, never overlap.
     - The view model runs them through `change`, which tells a waiting one when its scope has gone (`Auth.cancellable`): it gives up its place and never runs late. Any throw while waiting gives the place up, and so does a minute's wait (`StepWords.TOO_LONG`).
     - Each has an `…At(session)` form that takes the turn (`changePasswordAt`, `rotateKeysAt`, `deleteAccountAt`, `removeOtherDevicesAt`), which is what the tests call.
 - Account › Two-step sign-in shows nothing on a server that has two-step off (`TwoStep.status` is null for 501).
 - The key and the backup codes are on a secure window (no screenshots), as the recovery phrase is.
 - "Open in authenticator app" opens only an `otpauth://totp/` address (`TotpEnrolment.link`).
+
+#### Passkeys, security keys and the default
+
+`docs/two-step-design.md` 3 and 12. `data/Passkeys.kt` holds the rules, `ui/PasskeySheet.kt` the system's sheet. Tests: `PasskeysTest`, `PasskeySheetTest`.
+
+- The app can use a key only for the server it is linked to: `Passkeys.usable` is https and the build's `BuildConfig.LINK_HOST` (the `appLinkHost` placeholder; hushos.com for the store app, localhost for debug, so never in a debug build).
+    - Anywhere else it names no methods, so the server never lists a key at a step. Settings still list, rename and remove keys and change the default; there is no Add, and one line says keys are added in a browser. The browser path for self-hosted servers is not built.
+- `twoStepMethods` goes only to a server that reads it (`StepNames`). `twoStep: 1` never changes.
+    - `login/finish` (`Auth.finishNamed`): sent when this sign-in's `login/start` reply advertised it (the core's `stepMethodsAdvertised`); a 422 or 400 sends the same request once more without it, on the same attempt.
+    - `two-step/challenge` (`TwoStep.challenge`): by what the server last said, kept per origin in `Shared` (`StepAdverts`, key `step-adverts`): yes, no, or never heard. Never heard sends it once; a refusal is asked again without and remembered as no, unless the request without the field is refused the same way.
+- The step opens on `methods.first()`, the server's order (`StepDraft.of`); the rest are behind one Use another way menu (`StepFields`). `StepChallenge.offered` drops a key that came with nothing to ask it, or on a server the app can't use one for.
+- A key has no field. Its answer is made by `StepDraft.proved`, which is the only caller of `KeySheet.assertion`: from `SignInStep.pressed` at sign-in and `StepUp.prove` inside a change, both on a button's press. Never ask the sheet from a `LaunchedEffect` or when a screen appears.
+    - A closed sheet, no key, or any Credential Manager error is null (`KeyUnused`): nothing is sent, the step stays, and it says the key wasn't used.
+    - The forms' presses go through `withStep`, which starts at once and suspends only while the sheet is up (`StepUpHolder.asking`).
+- `StepNote.of` is the one line above the fields: Update HushOS when something was withheld though this phone named a key, else the usual-way line. Never both, never why.
+- After `step-limited` only the key and the phrase are left (`StepOutcome.left`).
+- Adding a key is two requests (`TwoStep.keyOptions`, `TwoStep.addKey`) with the sheet between them (`KeySetup.pressed`). The view model keeps the pending `KeyCreation` in `TwoStepFlow.creation`. A closed sheet keeps the setup; anything the server answers ends it (`TwoStepFlow.keyAdded`), since a registration is good for one answer.
+- `PasskeySheet` sets no `origin`: Android reports `android:apk-key-hash:…` for the signing certificate, which the server checks against `WEBAUTHN_ANDROID_ORIGINS`, and hushos.com's `assetlinks.json` names the app with `get_login_creds`.
+- R8 keeps `androidx.credentials.playservices` (`proguard-rules.pro`): the provider for phones before Android 14 is found by name.
+- A real ceremony needs a real phone with Play services, a build signed with the certificate `assetlinks.json` and `WEBAUTHN_ANDROID_ORIGINS` name, and hushos.com as the server. An emulator, a debug build or a self-hosted server can't run one. Not yet run on a device: the sheet itself, a USB or NFC key, a synced passkey, and what the sheet does across a rotation.
 
 ### Account and plan
 

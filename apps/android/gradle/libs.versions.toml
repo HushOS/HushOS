@@ -26,6 +26,8 @@ firebaseMessaging = "26.0.1"
 playServicesTasks = "18.4.0"
 commonmark = "0.32.0"
 browser = "1.10.0"
+# Credential Manager: passkeys and security keys as the second step. The Play services module is what answers before Android 14.
+credentials = "1.6.0"
 orgJson = "20260814"
 robolectric = "4.17"
 
@@ -62,6 +64,8 @@ kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-
 
 zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxing" }
 androidx-browser = { group = "androidx.browser", name = "browser", version.ref = "browser" }
+androidx-credentials = { group = "androidx.credentials", name = "credentials", version.ref = "credentials" }
+androidx-credentials-play-services-auth = { group = "androidx.credentials", name = "credentials-play-services-auth", version.ref = "credentials" }
 androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "camerax" }
 androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camerax" }
 androidx-camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "camerax" }

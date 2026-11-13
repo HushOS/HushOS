@@ -699,15 +699,73 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     fun newBackupCodes(password: String, twoStep: com.hushos.app.data.StepAnswer?, failed: suspend (Throwable) -> String?) =
         twoStepChange(failed, { com.hushos.app.data.TwoStep.newBackupCodes(it, password, twoStep) }) { newCodes(it) }
 
-    fun removeTwoStepMethod(id: String, password: String, twoStep: com.hushos.app.data.StepAnswer?, failed: suspend (Throwable) -> String?) =
-        twoStepChange(failed, { com.hushos.app.data.TwoStep.removeMethod(it, id, password, twoStep) }) { removed(it) }
+    /* `app`: the method is the authenticator app, not a key (for the words once it is gone). */
+    fun removeTwoStepMethod(id: String, app: Boolean, password: String, twoStep: com.hushos.app.data.StepAnswer?, failed: suspend (Throwable) -> String?) =
+        twoStepChange(failed, { com.hushos.app.data.TwoStep.removeMethod(it, id, password, twoStep) }) { removed(it, app) }
+
+    /* Whether this phone can use a passkey or security key for the server it is on (Passkeys.usable): its app-link host, over https. */
+    val passkeys: Boolean get() = com.hushos.app.data.Passkeys.usable(state.value.origin)
+
+    /* A step for a change this session makes, naming what this phone can answer to a server that reads it (StepNames.atChange). */
+    suspend fun stepChallenge(purpose: com.hushos.app.data.StepPurpose): Result<com.hushos.core.StepChallenge?> =
+        twoStep { com.hushos.app.data.TwoStep.challenge(it, purpose, com.hushos.app.data.StepAdverts.stored(context)) }
+
+    /* Starts adding a passkey or security key: the password and, once the step is on, the step. What the phone's sheet is asked waits in the flow. */
+    fun startKey(password: String, twoStep: com.hushos.app.data.StepAnswer?, failed: suspend (Throwable) -> String?) =
+        twoStepChange(failed, { com.hushos.app.data.TwoStep.keyOptions(it, password, twoStep) }) { keyStarted(it) }
+
+    /*
+     * Sends the answer a key gave the phone's sheet (the sheet itself is asked by the screen, on the press,
+     * since it needs the Activity). The backup codes are kept the moment they arrive; only then, and only
+     * when this key turned the step on with the box ticked, are the other devices removed, behind the codes.
+     */
+    fun addKey(registration: com.hushos.core.KeyRegistration, name: String?, first: Boolean, signOutOthers: Boolean, password: String) {
+        val creation = twoStepFlow.creation ?: return
+        if (twoStepFlow.pending) return
+        twoStepFlow = twoStepFlow.started()
+        val session = twoStepSession
+        viewModelScope.launch {
+            val result = twoStep { com.hushos.app.data.TwoStep.addKey(it, creation.registrationToken, name, registration) }
+            if (session != twoStepSession) return@launch
+            twoStepFlow = twoStepFlow.keyAdded(result, first)
+            val added = result.getOrNull() ?: return@launch
+            if (com.hushos.app.data.TwoStepFlow.removesOthers(added.backupCodes.isNotEmpty(), signOutOthers, first)) {
+                twoStepFlow = twoStepFlow.copy(removing = true)
+                removeOtherDevices(password) { removed ->
+                    if (session == twoStepSession && twoStepFlow.codes != null) twoStepFlow = twoStepFlow.copy(removing = false, notRemoved = !removed)
+                }
+            }
+        }
+    }
+
+    /*
+     * A key's name, and which kind is asked for first: neither needs the password. `done` gets null when the
+     * server made the change, else its words (or what went wrong). Either way the settings are read again:
+     * a failure may hide a change that went through.
+     */
+    private fun twoStepEdit(request: (Shared.Session) -> Unit, done: (String?) -> Unit) {
+        val session = twoStepSession
+        viewModelScope.launch {
+            val result = twoStep(request)
+            if (session != twoStepSession) return@launch
+            twoStepFlow = twoStepFlow.copy(reread = twoStepFlow.reread + 1)
+            // A session that ended is said by sign-in, which is on screen by now.
+            if (result.exceptionOrNull() !is NotAuthenticated) done(result.exceptionOrNull()?.let { com.hushos.app.data.Problems.say(it, com.hushos.app.data.Problems.SERVER) })
+        }
+    }
+
+    fun renameTwoStepMethod(id: String, name: String, done: (String?) -> Unit) =
+        twoStepEdit({ com.hushos.app.data.TwoStep.renameMethod(it, id, name) }, done)
+
+    fun makeTwoStepDefault(kind: String, done: (String?) -> Unit) =
+        twoStepEdit({ com.hushos.app.data.TwoStep.makeDefault(it, kind) }, done)
 
     /*
      * Confirms the pending app with a code from it. The backup codes are kept the moment they arrive;
      * only then, and only when the step was being turned on with the box ticked, are the other devices
      * removed (TwoStepFlow.removesOthers), behind the codes.
      */
-    fun confirmAuthenticator(code: String, replacing: Boolean, signOutOthers: Boolean, password: String) {
+    fun confirmAuthenticator(code: String, setup: com.hushos.app.data.AppSetup, signOutOthers: Boolean, password: String) {
         val app = twoStepFlow.enrolment ?: return
         if (twoStepFlow.pending) return
         twoStepFlow = twoStepFlow.started()
@@ -715,9 +773,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         viewModelScope.launch {
             val result = twoStep { com.hushos.app.data.TwoStep.confirmAuthenticator(it, app.id, code) }
             if (session != twoStepSession) return@launch
-            twoStepFlow = twoStepFlow.confirmed(result, replacing)
+            twoStepFlow = twoStepFlow.confirmed(result, setup)
             val confirmed = result.getOrNull() ?: return@launch
-            if (com.hushos.app.data.TwoStepFlow.removesOthers(confirmed, signOutOthers, replacing)) {
+            if (com.hushos.app.data.TwoStepFlow.removesOthers(confirmed is com.hushos.app.data.TwoStep.Confirmed.TurnedOn, signOutOthers, setup == com.hushos.app.data.AppSetup.ON)) {
                 twoStepFlow = twoStepFlow.copy(removing = true)
                 // The page may have been closed with Done by the time this ends: the notice says a failure wherever the person is.
                 removeOtherDevices(password) { removed ->

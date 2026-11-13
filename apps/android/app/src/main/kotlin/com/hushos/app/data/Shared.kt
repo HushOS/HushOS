@@ -27,6 +27,7 @@ object Shared {
     private const val DEVICE_IDENTITY = "device-identity"
     private const val PUSH = "push-registration"
     private const val PUSH_PENDING = "push-pending-deletions"
+    private const val STEP_ADVERTS = "step-adverts"
 
     /* `email`: for the Files app's root, which names the account; empty for a session saved before it was kept. */
     data class Session(val origin: String, val token: String, val userId: String, val email: String = "")
@@ -137,6 +138,18 @@ object Shared {
     fun writePushPending(context: Context, list: JSONArray?): Boolean = runCatching {
         prefs(context).edit().apply { if (list == null) remove(PUSH_PENDING) else putString(PUSH_PENDING, list.toString()) }.commit()
     }.getOrDefault(false)
+
+    /*
+     * Whether the server at `origin` said it reads `twoStepMethods` (StepAdverts): true, false, or null when this
+     * phone never heard. Per server, not per account, so it outlives a sign-out as the server's address does.
+     */
+    fun stepAdvert(context: Context, origin: String): Boolean? = read(context, STEP_ADVERTS)?.opt(origin) as? Boolean
+
+    /* Read, changed and written under one lock: two servers' answers never overwrite each other. */
+    fun writeStepAdvert(context: Context, origin: String, advertised: Boolean) = synchronized(this) {
+        runCatching { write(context, STEP_ADVERTS, (read(context, STEP_ADVERTS) ?: JSONObject()).put(origin, advertised)) }
+        Unit
+    }
 
     fun origin(context: Context): String? = read(context, CONFIG)?.optString("origin")?.takeIf { it.isNotEmpty() }
 

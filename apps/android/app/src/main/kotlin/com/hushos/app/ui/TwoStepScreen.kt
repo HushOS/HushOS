@@ -25,13 +25,17 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Block
+import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Pin
-import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.Sync
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -53,8 +57,10 @@ import androidx.compose.ui.autofill.ContentType
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentType
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -63,12 +69,16 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hushos.app.data.AppSetup
+import com.hushos.app.data.KeyName
+import com.hushos.app.data.KeySetup
+import com.hushos.app.data.KeySheet
 import com.hushos.app.data.Problems
 import com.hushos.app.data.SecurityEvent
-import com.hushos.app.data.SetupTimedOut
+import com.hushos.app.data.SignInStep
 import com.hushos.app.data.StepAnswer
 import com.hushos.app.data.StepDraft
-import com.hushos.app.data.StepOutcome
+import com.hushos.app.data.StepNote
 import com.hushos.app.data.StepPurpose
 import com.hushos.app.data.StepUp
 import com.hushos.app.data.StepWords
@@ -77,6 +87,7 @@ import com.hushos.app.data.TwoStep
 import com.hushos.app.data.TwoStepStatus
 import com.hushos.core.StepMethod
 import com.hushos.tokens.AlpineSpace
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.ZoneId
@@ -84,26 +95,31 @@ import java.time.format.DateTimeFormatter
 
 /*
  * Two-step sign-in (docs/two-step-design.md 4 to 7), as the web has it: the step a sign-in stops at,
- * the step a security change asks for, and Account › Two-step sign-in, where it is turned on with an
- * authenticator app, its backup codes are shown once, the app is replaced or removed, new codes are
- * made, and the account's recent security activity is listed. Codes are checked on the server; the
- * recovery phrase is signed on this phone and never leaves it. The words are the web's and the
+ * the step a security change asks for, and Account › Two-step sign-in, where it is turned on with a
+ * passkey or security key or an authenticator app, its backup codes are shown once, methods are
+ * added, named, replaced and removed, one kind is made the default, new codes are made, and the
+ * account's recent security activity is listed. Codes are checked on the server; the recovery phrase
+ * is signed on this phone and never leaves it; a passkey or security key answers through the
+ * system's own sheet (`PasskeySheet`), which opens only on a press. The words are the web's and the
  * server's own.
  */
 
 private val StepMethod.label: String get() = when (this) {
+    StepMethod.WEBAUTHN -> "Passkey or security key"
     StepMethod.TOTP -> "Code from your authenticator app"
     StepMethod.BACKUP -> "Backup code"
     StepMethod.PHRASE -> "Recovery phrase"
 }
 
 private val StepMethod.other: String get() = when (this) {
+    StepMethod.WEBAUTHN -> "Use your passkey or security key"
     StepMethod.TOTP -> "Use your authenticator app"
     StepMethod.BACKUP -> "Use a backup code"
     StepMethod.PHRASE -> "Use your recovery phrase"
 }
 
 private val StepMethod.hint: String get() = when (this) {
+    StepMethod.WEBAUTHN -> "Your phone asks for it when you continue."
     StepMethod.TOTP -> "The 6-digit code. It changes every 30 seconds."
     StepMethod.BACKUP -> "One of the ten codes you saved. Each works once."
     StepMethod.PHRASE -> "All 24 words, in order. They stay on this device."
@@ -112,12 +128,17 @@ private val StepMethod.hint: String get() = when (this) {
 private val mono @Composable get() = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Monospace)
 
 /*
- * The one field a step's answer is typed in (a code, filled from a password manager or a message; a
- * backup code; or the phrase), what is wrong with it or what to type under it, and the other ways
- * offered beneath in plain words.
+ * What a step is answered with, one way at a time: the account's usual way first (the server's
+ * order), the field its answer is typed in (a code, filled from a password manager or a message; a
+ * backup code; or the phrase) with what is wrong with it or what to type beneath, and the other ways
+ * behind one control. A passkey or security key has no field: the form's own button asks for it.
+ * `note`: the one line above the fields when the server left something out (StepNote).
  */
 @Composable
-internal fun StepFields(methods: List<StepMethod>, draft: StepDraft, onDraft: (StepDraft) -> Unit, problem: String, enabled: Boolean, focus: Boolean = false, offered: Boolean = true, onGo: (() -> Unit)? = null) {
+internal fun StepFields(
+    methods: List<StepMethod>, draft: StepDraft, onDraft: (StepDraft) -> Unit, problem: String, enabled: Boolean,
+    focus: Boolean = false, offered: Boolean = true, onGo: (() -> Unit)? = null, note: String = "",
+) {
     val alpine = Alpine.colors
     val method = draft.shown(methods)
     // Nothing this build knows was offered: update. The ways ran out after refusals: updating would not help.
@@ -125,9 +146,9 @@ internal fun StepFields(methods: List<StepMethod>, draft: StepDraft, onDraft: (S
     // The phrase on screen opens the account: out of screenshots, recordings and the recents preview, as it is everywhere else it is typed or shown.
     if (method == StepMethod.PHRASE) SecureWindow()
     val focusRequester = remember { FocusRequester() }
-    if (focus) LaunchedEffect(method) { runCatching { focusRequester.requestFocus() } }
+    if (focus && method != StepMethod.WEBAUTHN) LaunchedEffect(method) { runCatching { focusRequester.requestFocus() } }
     val go = KeyboardActions(onGo = { onGo?.invoke() })
-    val note: @Composable () -> Unit = {
+    val fieldNote: @Composable () -> Unit = {
         Column {
             if (method == StepMethod.PHRASE) StepDraft.words(draft.phrase).size.let { count ->
                 Text("$count of 24 words", color = if (count == 24) alpine.success else alpine.inkMuted)
@@ -135,33 +156,49 @@ internal fun StepFields(methods: List<StepMethod>, draft: StepDraft, onDraft: (S
             Text(problem.ifEmpty { method.hint })
         }
     }
+    if (note.isNotEmpty()) Text(note, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
     // What is typed here opens an account: the keyboard is asked not to learn it.
     NoKeyboardLearning {
         when (method) {
+            // No field, and nothing asked yet: the phone's sheet opens when the form's button is pressed.
+            StepMethod.WEBAUTHN -> Column(verticalArrangement = Arrangement.spacedBy(AlpineSpace.S1)) {
+                FieldLabel(method.label)
+                Text(
+                    problem.ifEmpty { method.hint }, style = MaterialTheme.typography.bodyMedium, color = if (problem.isEmpty()) alpine.inkMuted else alpine.danger,
+                    // A key that wasn't used is said aloud: nothing else on the screen changed.
+                    modifier = if (problem.isEmpty()) Modifier else Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                )
+            }
             StepMethod.TOTP -> OutlinedTextField(
                 value = draft.totp, onValueChange = { typed -> onDraft(draft.copy(method = method, totp = typed.filter { it in '0'..'9' || it == ' ' }.take(7))) },
-                label = { Text(method.label) }, placeholder = { Text("000000") }, singleLine = true, enabled = enabled, isError = problem.isNotEmpty(), supportingText = note,
+                label = { Text(method.label) }, placeholder = { Text("000000") }, singleLine = true, enabled = enabled, isError = problem.isNotEmpty(), supportingText = fieldNote,
                 textStyle = mono.copy(letterSpacing = 3.sp),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Go, autoCorrectEnabled = false), keyboardActions = go,
                 modifier = Modifier.fillMaxWidth().focusRequester(focusRequester).semantics { contentType = ContentType.SmsOtpCode },
             )
             StepMethod.BACKUP -> OutlinedTextField(
                 value = draft.backup, onValueChange = { typed -> onDraft(draft.copy(method = method, backup = typed.take(16))) },
-                label = { Text(method.label) }, placeholder = { Text("XXXXX-XXXXX") }, singleLine = true, enabled = enabled, isError = problem.isNotEmpty(), supportingText = note,
+                label = { Text(method.label) }, placeholder = { Text("XXXXX-XXXXX") }, singleLine = true, enabled = enabled, isError = problem.isNotEmpty(), supportingText = fieldNote,
                 textStyle = mono.copy(letterSpacing = 1.sp),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, capitalization = KeyboardCapitalization.Characters, imeAction = ImeAction.Go, autoCorrectEnabled = false),
                 keyboardActions = go, modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
             )
             StepMethod.PHRASE -> OutlinedTextField(
                 value = draft.phrase, onValueChange = { typed -> onDraft(draft.copy(method = method, phrase = typed)) },
-                label = { Text(method.label) }, minLines = 4, enabled = enabled, isError = problem.isNotEmpty(), supportingText = note, textStyle = mono,
+                label = { Text(method.label) }, minLines = 4, enabled = enabled, isError = problem.isNotEmpty(), supportingText = fieldNote, textStyle = mono,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false),
                 modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
             )
         }
     }
-    Column {
-        for (other in methods.filter { it != method }) TextButton(enabled = enabled, onClick = { onDraft(draft.copy(method = other)) }) { Text(other.other) }
+    // The other ways, in the server's order, behind one control: a menu, as the platform offers a choice.
+    val others = methods.filter { it != method }
+    if (others.isNotEmpty()) Box {
+        var choosing by remember { mutableStateOf(false) }
+        TextButton(enabled = enabled, onClick = { choosing = true }) { Text("Use another way") }
+        DropdownMenu(expanded = choosing, onDismissRequest = { choosing = false }) {
+            for (other in others) DropdownMenuItem(text = { Text(other.other) }, onClick = { choosing = false; onDraft(draft.copy(method = other)) })
+        }
     }
 }
 
@@ -173,19 +210,38 @@ internal fun StepFields(methods: List<StepMethod>, draft: StepDraft, onDraft: (S
 internal class StepUpHolder(private val model: DriveViewModel, purpose: StepPurpose) {
     var step by mutableStateOf(StepUp(purpose))
 
+    /* The phone's sheet is up for this step's key: the form waits for it, and sends nothing meanwhile. */
+    var asking by mutableStateOf(false)
+        private set
+
+    /* The one line above the step's fields, when the server left something out. */
+    val note: String get() = step.challenge?.let { StepNote.of(it, model.passkeys, change = true) }.orEmpty()
+
     /* The form opened: an account with the step sees its fields from the start. Quiet when that can't be told; the change's own refusal asks then. */
     suspend fun prepare() {
         if (step.asked) return
         val status = model.twoStep { TwoStep.status(it) }.getOrNull() ?: return
         if (!status.on) return
-        model.twoStep { TwoStep.challenge(it, step.purpose) }.getOrNull()?.let { step = step.take(it) }
+        model.stepChallenge(step.purpose).getOrNull()?.let { step = step.take(it) }
     }
 
-    /* What the change carries (null when no step is asked). `ready` is false when what was typed cannot be sent yet: the field says why. */
-    fun prove(): Pair<Boolean, StepAnswer?> = when (val proof = step.prove()) {
-        StepUp.Proof.None -> true to null
-        is StepUp.Proof.Ready -> true to proof.answer
-        is StepUp.Proof.Unready -> { step = proof.step; false to null }
+    /*
+     * What the change carries (null when no step is asked). `ready` is false when it cannot be sent yet: what was typed
+     * is not ready, or the key did not answer, and the field says why. A passkey or security key is asked here, by the
+     * press that makes the change, through `sheet`.
+     */
+    suspend fun prove(sheet: KeySheet): Pair<Boolean, StepAnswer?> {
+        if (asking) return false to null
+        asking = true
+        try {
+            return when (val proof = step.prove(sheet)) {
+                StepUp.Proof.None -> true to null
+                is StepUp.Proof.Ready -> true to proof.answer
+                is StepUp.Proof.Unready -> { step = proof.step; false to null }
+            }
+        } finally {
+            asking = false
+        }
     }
 
     /* After a failed change: null when the step's own fields say what happened, else the words for the form. */
@@ -195,7 +251,7 @@ internal class StepUpHolder(private val model: DriveViewModel, purpose: StepPurp
         return when (next) {
             StepUp.Next.NOT_STEP -> Problems.say(error, Problems.SERVER)
             StepUp.Next.AGAIN -> null
-            StepUp.Next.RENEW -> model.twoStep { TwoStep.challenge(it, step.purpose) }.fold(
+            StepUp.Next.RENEW -> model.stepChallenge(step.purpose).fold(
                 { fresh -> step = step.take(fresh, keep = true); null },
                 { Problems.say(it, Problems.SERVER) },
             )
@@ -209,55 +265,59 @@ internal fun StepUpFields(holder: StepUpHolder, enabled: Boolean) {
     val step = holder.step
     if (!step.asked) return
     Text("Two-step sign-in is on, so this needs your second step too.", style = MaterialTheme.typography.bodyMedium, color = Alpine.colors.inkMuted)
-    StepFields(step.methods, step.draft, { holder.step = step.typed(it) }, step.problem, enabled, offered = step.challenge?.methods?.isNotEmpty() == true)
+    StepFields(step.methods, step.draft, { holder.step = step.typed(it) }, step.problem, enabled && !holder.asking, offered = step.challenge?.methods?.isNotEmpty() == true, note = holder.note)
+}
+
+/*
+ * A form's press that may carry the step: started at once (a second press finds the first under way), and suspended
+ * only while the phone's sheet is up for a key. `send` runs with the step's answer once there is one to send.
+ */
+internal fun kotlinx.coroutines.CoroutineScope.withStep(holder: StepUpHolder, sheet: KeySheet, send: (StepAnswer?) -> Unit) {
+    launch(start = CoroutineStart.UNDISPATCHED) {
+        val (ready, twoStep) = holder.prove(sheet)
+        if (ready) send(twoStep)
+    }
 }
 
 /* MARK: Signing in */
 
 /*
- * The second step of a sign-in: the password was right, and the account asks for a code, a backup
- * code or the recovery phrase before anything is handed over. A wrong answer stays here; a step
+ * The second step of a sign-in: the password was right, and the account asks for its passkey or
+ * security key, a code, a backup code or the recovery phrase before anything is handed over. It opens
+ * on the account's usual way, with the rest behind Use another way. A wrong answer stays here; a step
  * that is over goes back to the password with why (DriveViewModel.answerStep); a reply that never
- * arrived offers the same answer again. Nothing leaves the person on a screen that can no longer
- * be answered.
+ * arrived offers the same answer again. Nothing leaves the person on a screen that can no longer be
+ * answered. What the screen holds and does with a press is `SignInStep`, tested away from it.
  */
 @Composable
 fun SignInStepScreen(model: DriveViewModel, challenge: com.hushos.core.StepChallenge) {
     val alpine = Alpine.colors
-    // In memory only, and new for each step: saved state is written to disk when the process is put away.
-    var methods by retain(challenge.token) { mutableStateOf(challenge.methods) }
-    var draft by retain(challenge.token) { mutableStateOf(StepDraft.of(challenge.methods)) }
+    // In memory only, and new for each step: saved state is written to disk when the process is put away. Retained:
+    // the answer's callback writes to it, and may come back to a rebuilt screen.
+    var step by retain(challenge.token) { mutableStateOf(SignInStep(challenge)) }
     // Held by the view model, with the request: a screen rebuilt while the answer is out still shows it, and sends no second one.
     val busy = model.stepBusy
-    /* The field's own complaint. Retained, as what follows is: the answer's callback writes to them, and may come back to a rebuilt screen. */
-    var fieldError by retain(challenge.token) { mutableStateOf("") }
-    /* What the server, or a lost reply, said: above the field. */
-    var notice by retain(challenge.token) { mutableStateOf("") }
-    /* The last reply was lost: the same answer goes again. */
-    var lost by retain(challenge.token) { mutableStateOf<StepAnswer?>(null) }
-    val method = draft.shown(methods)
+    // The system's sheet for a key. Having it asks nothing: only the press below does.
+    val sheet = rememberKeySheet()
+    val scope = rememberCoroutineScope()
+    /* The phone's sheet is up. This screen's own: one rebuilt meanwhile has left the sheet, and nothing was sent. */
+    var asking by remember(challenge.token) { mutableStateOf(false) }
+    val method = step.shown
 
     fun submit() {
-        if (busy || method == null) return
-        val answer = lost ?: run {
-            draft.problem(method)?.let { fieldError = it; return }
+        if (busy || asking || method == null) return
+        asking = true
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
             try {
-                draft.answer(challenge, method)
-            } catch (error: Exception) {
-                // A mistyped phrase, refused here before anything is sent.
-                (StepOutcome.after(error, methods) as? StepOutcome.Again)?.let { fieldError = it.message }
-                return
-            }
-        }
-        fieldError = ""
-        notice = ""
-        model.answerStep(answer, methods) { outcome ->
-            lost = null
-            when (outcome) {
-                is StepOutcome.Again -> { methods = outcome.methods; if (outcome.field) fieldError = outcome.message else notice = outcome.message }
-                is StepOutcome.Retry -> { notice = outcome.message; lost = answer }
-                // Over, or signed in: the view model has already moved on.
-                is StepOutcome.Over, null -> {}
+                when (val pressed = step.pressed(sheet)) {
+                    is SignInStep.Pressed.Stay -> step = pressed.step
+                    is SignInStep.Pressed.Send -> {
+                        step = pressed.step
+                        model.answerStep(pressed.answer, pressed.step.methods) { outcome -> step = step.after(outcome, pressed.answer) }
+                    }
+                }
+            } finally {
+                asking = false
             }
         }
     }
@@ -270,13 +330,16 @@ fun SignInStepScreen(model: DriveViewModel, challenge: com.hushos.core.StepChall
         Text("One more step", style = MaterialTheme.typography.headlineLarge)
         Text("This account has two-step sign-in on.", style = MaterialTheme.typography.bodyLarge, color = alpine.inkMuted)
         Spacer(Modifier.height(AlpineSpace.S2))
-        if (notice.isNotEmpty()) Text(
-            notice, color = alpine.warning, style = MaterialTheme.typography.bodyMedium,
+        if (step.notice.isNotEmpty()) Text(
+            step.notice, color = alpine.warning, style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.fillMaxWidth().background(alpine.warningSoft, RoundedCornerShape(16.dp)).padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S3),
         )
-        StepFields(methods, draft, { draft = it; fieldError = ""; lost = null }, fieldError, enabled = !busy, focus = true, offered = challenge.methods.isNotEmpty(), onGo = ::submit)
-        if (method != null) Button(onClick = ::submit, enabled = !busy, modifier = Modifier.fillMaxWidth().padding(top = AlpineSpace.S2).height(48.dp)) {
-            Text(if (busy) "Checking" else if (lost == null) "Continue" else "Try again")
+        StepFields(
+            step.methods, step.draft, { step = step.typed(it) }, step.fieldError, enabled = !busy && !asking, focus = true, offered = challenge.methods.isNotEmpty(), onGo = ::submit,
+            note = StepNote.of(challenge, model.passkeys, change = false),
+        )
+        if (method != null) Button(onClick = ::submit, enabled = !busy && !asking, modifier = Modifier.fillMaxWidth().padding(top = AlpineSpace.S2).height(48.dp)) {
+            Text(step.button(busy))
         }
         TextButton(onClick = { model.cancelStep() }, enabled = !busy, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("Start again") }
     }
@@ -284,7 +347,7 @@ fun SignInStepScreen(model: DriveViewModel, challenge: com.hushos.core.StepChall
 
 /* MARK: Account › Two-step sign-in */
 
-private enum class TwoStepPage { MAIN, ON, REPLACE, OFF, CODES }
+private enum class TwoStepPage { MAIN, ON, REPLACE, ADD_APP, KEY, REMOVE, CODES }
 
 /* "13 Nov", and the minute as the emails carry it: "13 Nov, 14:08". */
 private fun day(iso: String?): String? = iso?.let {
@@ -302,6 +365,39 @@ private fun minute(context: android.content.Context, iso: String?): String? = is
     }.getOrNull()
 }
 
+/* The kind asked for first, in a word on a quiet fill beside its heading. */
+@Composable
+private fun DefaultBadge() {
+    val alpine = Alpine.colors
+    Text("Default", style = MaterialTheme.typography.labelSmall, color = alpine.ink, maxLines = 1,
+        modifier = Modifier.padding(end = AlpineSpace.S3).background(alpine.fill, RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 1.dp))
+}
+
+/* A line of the settings: what is so, said plainly under its heading. */
+@Composable
+private fun SettingLine(text: String, danger: Boolean = false, strong: Boolean = false) {
+    val alpine = Alpine.colors
+    Text(text, style = MaterialTheme.typography.bodyLarge, fontWeight = if (strong) FontWeight.SemiBold else null,
+        color = if (danger) alpine.danger else if (strong) alpine.ink else alpine.inkMuted,
+        modifier = Modifier.padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2))
+}
+
+/* One key: its name, where it lives and when it was added and last used, and its two actions, as a device's row has them. */
+@Composable
+private fun KeyRow(method: TwoStepStatus.Method, removeWords: String, onRename: () -> Unit, onRemove: () -> Unit) {
+    val alpine = Alpine.colors
+    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = AlpineSpace.S4, end = AlpineSpace.S2, top = AlpineSpace.S2, bottom = AlpineSpace.S2),
+        verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(method.shownName, style = MaterialTheme.typography.bodyLarge, color = alpine.ink)
+            val detail = method.detail(::day)
+            if (detail.isNotEmpty()) Text(detail, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
+        }
+        TextButton(onClick = onRename) { Text("Rename") }
+        TextButton(onClick = onRemove) { Text(removeWords, color = alpine.danger) }
+    }
+}
+
 @Composable
 fun TwoStepScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) {
     val alpine = Alpine.colors
@@ -313,7 +409,20 @@ fun TwoStepScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) 
     var events by remember { mutableStateOf<List<SecurityEvent>>(emptyList()) }
     var allEvents by rememberSaveable { mutableStateOf(false) }
     var attempt by remember { mutableStateOf(0) }
+    /*
+     * The method a removal page was opened for, and whether it was the account's only one (then it is Turn off).
+     * Retained, as the page's password is: a rotation or a fold keeps the page; a process put away does not.
+     */
+    var removing by retain { mutableStateOf<Pair<TwoStepStatus.Method, Boolean>?>(null) }
+    /* Whether the key being added is the account's first method: it turns the step on. Decided when its page opens. */
+    var keyFirst by rememberSaveable { mutableStateOf(false) }
+    var renaming by retain { mutableStateOf<TwoStepStatus.Method?>(null) }
+    /* Changing which kind is asked first: under way, and what the server said if it refused. */
+    var moving by remember { mutableStateOf(false) }
+    var moveProblem by remember { mutableStateOf<String?>(null) }
     val email = state.user?.email.orEmpty()
+    // Whether this phone can use a passkey or security key for this server: only then is there an Add.
+    val passkeys = model.passkeys
 
     val flow = model.twoStepFlow
     // Read again after every change, and whenever a reply was lost: nothing else says what the account now is.
@@ -327,14 +436,22 @@ fun TwoStepScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) 
             { failure -> if (failure !is com.hushos.app.data.NotAuthenticated) problem = Problems.say(failure, "Two-step sign-in couldn’t be loaded.") },
         )
     }
-    fun open(next: TwoStepPage) { model.twoStepReset(); page = next }
-    fun leave() { model.twoStepReset(); page = TwoStepPage.MAIN; attempt++ }
+    fun open(next: TwoStepPage) { model.twoStepReset(); moveProblem = null; page = next }
+    fun leave() { model.twoStepReset(); page = TwoStepPage.MAIN; removing = null; attempt++ }
     fun finish(said: String) { if (said.isNotEmpty()) model.notify(said); leave() }
-    // A change that has nothing more to show (the app replaced, a method removed) closes its page and says so.
+    // A change that has nothing more to show (the app replaced, a method added or removed) closes its page and says so.
     LaunchedEffect(flow.finished) { flow.finished?.let(::finish) }
-    // Turning off with the reply lost, and the settings read again say it is off: the page has nothing left to turn off.
-    LaunchedEffect(page, status?.on, flow.pending) {
-        if (page == TwoStepPage.OFF && loaded && status?.on == false && !flow.pending) finish("Two-step sign-in is off.")
+    // A removal page with nothing left to remove. Its reply was lost and the settings, read again, say the step is off
+    // or the method is gone; or the page came back from saved state without the method it was opened for.
+    LaunchedEffect(page, status, flow.pending, removing) {
+        if (page != TwoStepPage.REMOVE || flow.pending) return@LaunchedEffect
+        val target = removing?.first
+        when {
+            target == null -> leave()
+            !loaded -> {}
+            status?.on == false -> finish("Two-step sign-in is off.")
+            status?.methods?.none { it.id == target.id } == true -> finish(if (target.isApp) "Authenticator app removed." else "Passkey or security key removed.")
+        }
     }
 
     // Backup codes nobody has seen yet come before everything else here, whichever page asked for them and wherever
@@ -349,8 +466,11 @@ fun TwoStepScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) 
         return
     }
     when (page) {
-        TwoStepPage.ON, TwoStepPage.REPLACE -> { AuthenticatorScreen(model, replacing = page == TwoStepPage.REPLACE, onBack = ::leave); return }
-        TwoStepPage.OFF -> { TurnOffScreen(model, status?.app?.id ?: status?.methods?.firstOrNull()?.id, onBack = ::leave); return }
+        TwoStepPage.ON -> { AuthenticatorScreen(model, AppSetup.ON, onBack = ::leave); return }
+        TwoStepPage.REPLACE -> { AuthenticatorScreen(model, AppSetup.REPLACE, onBack = ::leave); return }
+        TwoStepPage.ADD_APP -> { AuthenticatorScreen(model, AppSetup.ADD, onBack = ::leave); return }
+        TwoStepPage.KEY -> { KeyScreen(model, first = keyFirst, onBack = ::leave); return }
+        TwoStepPage.REMOVE -> removing?.let { (method, last) -> RemoveScreen(model, method, last, onBack = ::leave); return }
         TwoStepPage.CODES -> { NewCodesScreen(model, onBack = ::leave); return }
         TwoStepPage.MAIN -> {}
     }
@@ -365,34 +485,59 @@ fun TwoStepScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) 
             }
             !loaded -> Box(Modifier.fillMaxWidth().padding(AlpineSpace.S8), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             current == null -> {}
-            !current.on -> {
-                Text("Off. Your password alone signs you in.", style = MaterialTheme.typography.bodyLarge, color = alpine.inkMuted,
-                    modifier = Modifier.padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S4))
-                AccountRow("Turn on", null, Icons.Outlined.Security) { open(TwoStepPage.ON) }
-            }
             else -> {
-                Subheader("Authenticator app")
-                for (method in current.methods) {
-                    // The app is the section's own name; a kind added later (a security key) is listed by its name.
-                    val paused = method.kind == "totp" && current.totpFrozen
-                    Column(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2), verticalArrangement = Arrangement.Center) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
-                            if (method.kind != "totp") Text(method.name ?: "Security key", style = MaterialTheme.typography.bodyLarge)
-                            Text(if (paused) "Paused" else "On", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = if (paused) alpine.warning else alpine.ink)
-                        }
-                        val used = listOfNotNull(day(method.createdAt)?.let { "Added $it" }, day(method.lastUsedAt)?.let { "Last used $it" }).joinToString(" · ")
-                        if (used.isNotEmpty()) Text(used, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
+                fun remove(method: TwoStepStatus.Method) { removing = method to current.last(method); open(TwoStepPage.REMOVE) }
+                fun makeDefault(kind: String) {
+                    if (moving) return
+                    moving = true
+                    moveProblem = null
+                    model.makeTwoStepDefault(kind) { failure ->
+                        moving = false
+                        moveProblem = failure
+                        if (failure == null) model.notify(TwoStepStatus.defaultSaid(kind))
                     }
                 }
-                if (current.totpFrozen) Text(
-                    "Its codes are refused on devices HushOS doesn’t recognise, after many wrong ones. A backup code or your recovery phrase works there, and lifts the pause.",
-                    style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, modifier = Modifier.padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2),
-                )
-                if (current.app != null) AccountRow("Replace", null, Icons.Outlined.Sync) { open(TwoStepPage.REPLACE) }
-                AccountRow("Turn off", null, Icons.Outlined.Block, danger = true) { open(TwoStepPage.OFF) }
-                Subheader("Backup codes")
-                Text(current.codesLeft, style = MaterialTheme.typography.bodyLarge, color = alpine.inkMuted, modifier = Modifier.padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2))
-                AccountRow("New codes", null, Icons.Outlined.Pin) { open(TwoStepPage.CODES) }
+                Subheader("Status")
+                if (current.on) SettingLine("On", strong = true) else SettingLine("Off. Your password alone signs you in.")
+                moveProblem?.let { SettingLine(it, danger = true) }
+
+                Subheader(TwoStepStatus.kindWords(TwoStepStatus.WEBAUTHN)) { if (current.isDefault(TwoStepStatus.WEBAUTHN)) DefaultBadge() }
+                val keys = current.keys
+                if (keys.isEmpty()) SettingLine("Not added. It stops fake sign-in pages, which a code can’t.")
+                for (key in keys) KeyRow(key, current.removeWords(key), onRename = { renaming = key }, onRemove = { remove(key) })
+                // Only where this phone can use one for this server; elsewhere the note below says where they are added.
+                if (current.canAddKey(passkeys)) AccountRow("Add", null, Icons.Outlined.Add, label = "Add passkey or security key") { keyFirst = !current.on; open(TwoStepPage.KEY) }
+                if (current.canMakeDefault(TwoStepStatus.WEBAUTHN))
+                    AccountRow("Make default", null, Icons.Outlined.CheckCircle, label = "Make passkey or security key the default") { makeDefault(TwoStepStatus.WEBAUTHN) }
+                for (line in current.keyNotes(passkeys))
+                    Text(line, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, modifier = Modifier.padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S1))
+
+                Subheader(TwoStepStatus.kindWords(TwoStepStatus.TOTP)) { if (current.isDefault(TwoStepStatus.TOTP)) DefaultBadge() }
+                val app = current.app
+                if (app == null) {
+                    SettingLine("Not added. A 6-digit code from an app on your phone.")
+                    // The account's first method turns the step on; beside keys it is one more way to pass it.
+                    AccountRow("Add", null, Icons.Outlined.Add, label = "Add authenticator app") { open(if (current.on) TwoStepPage.ADD_APP else TwoStepPage.ON) }
+                } else {
+                    Column(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2), verticalArrangement = Arrangement.Center) {
+                        Text(if (current.totpFrozen) "Paused" else "On", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = if (current.totpFrozen) alpine.warning else alpine.ink)
+                        val used = app.detail(::day)
+                        if (used.isNotEmpty()) Text(used, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
+                    }
+                    if (current.totpFrozen) Text(
+                        "Its codes are refused on devices HushOS doesn’t recognise, after many wrong ones. A backup code or your recovery phrase works there, and lifts the pause.",
+                        style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, modifier = Modifier.padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2),
+                    )
+                    AccountRow("Replace", null, Icons.Outlined.Sync, label = "Replace authenticator app") { open(TwoStepPage.REPLACE) }
+                    if (current.canMakeDefault(TwoStepStatus.TOTP))
+                        AccountRow("Make default", null, Icons.Outlined.CheckCircle, label = "Make authenticator app the default") { makeDefault(TwoStepStatus.TOTP) }
+                    AccountRow(current.removeWords(app), null, Icons.Outlined.Block, danger = true, label = "${current.removeWords(app)} authenticator app") { remove(app) }
+                }
+                if (current.on) {
+                    Subheader("Backup codes")
+                    SettingLine(current.codesLeft)
+                    AccountRow("New codes", null, Icons.Outlined.Pin) { open(TwoStepPage.CODES) }
+                }
             }
         }
         if (current != null && problem == null && events.isNotEmpty()) {
@@ -409,6 +554,41 @@ fun TwoStepScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) 
             }
         }
     }
+
+    renaming?.let { key -> RenameKeyDialog(model, key) { renaming = null } }
+}
+
+/*
+ * A key's name: shown in this list only. No password: any session of the account may change it, and the server
+ * checks the name again, in its own words.
+ */
+@Composable
+private fun RenameKeyDialog(model: DriveViewModel, key: TwoStepStatus.Method, onClose: () -> Unit) {
+    var name by remember(key.id) { mutableStateOf(key.name.orEmpty()) }
+    var error by remember(key.id) { mutableStateOf<String?>(null) }
+    var saving by remember(key.id) { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = { if (!saving) onClose() },
+        title = { Text("Rename passkey or security key") },
+        text = {
+            Column {
+                Text("Shown in this list only. Names aren’t encrypted.", modifier = Modifier.padding(bottom = AlpineSpace.S3))
+                OutlinedTextField(value = name, onValueChange = { name = it; error = null }, singleLine = true, label = { Text("Name") }, enabled = !saving,
+                    isError = error != null, supportingText = error?.let { { Text(it) } })
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = !saving, onClick = {
+                KeyName.problem(name)?.let { error = it; return@TextButton }
+                saving = true
+                model.renameTwoStepMethod(key.id, name.trim()) { failure ->
+                    saving = false
+                    if (failure == null) onClose() else error = failure
+                }
+            }) { Text(if (saving) "Saving" else "Save name") }
+        },
+        dismissButton = { TextButton(enabled = !saving, onClick = onClose) { Text("Cancel") } },
+    )
 }
 
 /* The password, asked again before any change to the step. */
@@ -462,19 +642,37 @@ private fun BackupCodes(model: DriveViewModel, codes: List<String>, email: Strin
     }
 }
 
+/* "Remove my other devices", offered (ticked) whenever a method turns the step on: those devices signed in without it. */
+@Composable
+private fun OthersOffer(checked: Boolean, onChange: (Boolean) -> Unit, others: Int?, enabled: Boolean) {
+    Row(Modifier.fillMaxWidth().toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = onChange), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Remove my other devices", style = MaterialTheme.typography.bodyLarge)
+            Text(TotpEnrolment.othersLine(others), style = MaterialTheme.typography.bodyMedium, color = Alpine.colors.inkMuted)
+        }
+        Switch(checked = checked, onCheckedChange = null, modifier = Modifier.padding(start = AlpineSpace.S3))
+    }
+}
+
 /*
- * Turning the step on, or replacing the app: the password (and the step, once it is on), the key to
- * add to an authenticator app, a code from the app to confirm, and, the first time, the backup codes.
- * The requests run in the view model, which keeps what they made (DriveViewModel.twoStepFlow): this
- * page only shows it, so it can be rebuilt at any moment without losing the key or the codes.
+ * An authenticator app: turning the step on with one, replacing the one the account has, or adding
+ * one beside its passkeys and security keys (`setup`). The password (and the step, once it is on),
+ * the key to add to the app, a code from the app to confirm, and, when it turned the step on, the
+ * backup codes. The requests run in the view model, which keeps what they made
+ * (DriveViewModel.twoStepFlow): this page only shows it, so it can be rebuilt at any moment without
+ * losing the key or the codes.
  */
 @Composable
-private fun AuthenticatorScreen(model: DriveViewModel, replacing: Boolean, onBack: () -> Unit) {
+private fun AuthenticatorScreen(model: DriveViewModel, setup: AppSetup, onBack: () -> Unit) {
     val alpine = Alpine.colors
     val context = LocalContext.current
     val holder = retain { StepUpHolder(model, StepPurpose.TWO_STEP) }
+    val sheet = rememberKeySheet()
+    val scope = rememberCoroutineScope()
+    val replacing = setup == AppSetup.REPLACE
+    val first = setup == AppSetup.ON
     val flow = model.twoStepFlow
-    val pending = flow.pending
+    val pending = flow.pending || holder.asking
     // Passwords and the code stay in memory, never in saved state (which outlives the process on disk).
     var password by retain { mutableStateOf("") }
     var tried by remember { mutableStateOf(false) }
@@ -487,8 +685,8 @@ private fun AuthenticatorScreen(model: DriveViewModel, replacing: Boolean, onBac
     var signOutOthers by rememberSaveable { mutableStateOf(true) }
     val codeReady = code.filterNot { it.isWhitespace() }.let { it.length == 6 && it.all { digit -> digit in '0'..'9' } }
 
-    // Replacing needs the step from the start: its fields are there when the page opens.
-    LaunchedEffect(Unit) { if (replacing) holder.prepare() else others = model.otherDevices() }
+    // Once the step is on, a change to it needs the step from the start: its fields are there when the page opens.
+    LaunchedEffect(Unit) { if (first) others = model.otherDevices() else holder.prepare() }
     // The setup ran out and went back to the start: the code typed for the old key goes with it.
     LaunchedEffect(flow.enrolment == null) { if (flow.enrolment == null) { code = ""; tried = false } }
 
@@ -532,16 +730,8 @@ private fun AuthenticatorScreen(model: DriveViewModel, replacing: Boolean, onBac
                         )
                     }
                     // Offered whenever the step is being turned on, whatever the device list said or didn't. Never when
-                    // replacing the app: those devices have passed the step already.
-                    if (!replacing) {
-                        Row(Modifier.fillMaxWidth().toggleable(value = signOutOthers, enabled = !pending, role = Role.Switch) { signOutOthers = it }, verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text("Remove my other devices", style = MaterialTheme.typography.bodyLarge)
-                                Text(TotpEnrolment.othersLine(others), style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
-                            }
-                            Switch(checked = signOutOthers, onCheckedChange = null, modifier = Modifier.padding(start = AlpineSpace.S3))
-                        }
-                    }
+                    // replacing the app or adding one beside a key: those devices have passed the step already.
+                    if (first) OthersOffer(signOutOthers, { signOutOthers = it }, others, enabled = !pending)
                     error?.let { Text(it, color = alpine.danger, style = MaterialTheme.typography.bodyMedium) }
                     Button(enabled = !pending, onClick = {
                         tried = true
@@ -549,17 +739,23 @@ private fun AuthenticatorScreen(model: DriveViewModel, replacing: Boolean, onBac
                         local = null
                         // The codes come first and are kept by the view model; the other devices are removed behind them, only
                         // when the step is being turned on with the box ticked (TwoStepFlow.removesOthers).
-                        model.confirmAuthenticator(code, replacing, signOutOthers, password)
-                    }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(if (pending) "Checking" else if (replacing) "Replace app" else "Turn on") }
+                        model.confirmAuthenticator(code, setup, signOutOthers, password)
+                    }, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                        Text(if (pending) "Checking" else when (setup) { AppSetup.ON -> "Turn on"; AppSetup.REPLACE -> "Replace app"; AppSetup.ADD -> "Add app" })
+                    }
                 }
             }
         }
         else -> {
-            AccountPage(if (replacing) "Replace your authenticator app?" else "Turn on two-step sign-in?", onBack = if (pending) null else onBack) {
+            val title = when (setup) { AppSetup.ON -> "Turn on two-step sign-in?"; AppSetup.REPLACE -> "Replace your authenticator app?"; AppSetup.ADD -> "Add an authenticator app?" }
+            AccountPage(title, onBack = if (pending) null else onBack) {
                 FormBody {
                     Text(
-                        if (replacing) "The new app takes over once you confirm it. Your backup codes stay as they are."
-                        else "After your password, HushOS will ask for a code from an authenticator app on your phone. Your recovery phrase works as the second step too, so keep it apart from your password.",
+                        when (setup) {
+                            AppSetup.ON -> "After your password, HushOS will ask for a code from an authenticator app on your phone. Your recovery phrase works as the second step too, so keep it apart from your password."
+                            AppSetup.REPLACE -> "The new app takes over once you confirm it. Your backup codes stay as they are."
+                            AppSetup.ADD -> "A code from the app will pass your second step too. Your other ways to sign in stay as they are."
+                        },
                         style = MaterialTheme.typography.bodyLarge,
                     )
                     ConfirmPassword(password, { password = it; local = null }, tried, enabled = !pending)
@@ -568,33 +764,134 @@ private fun AuthenticatorScreen(model: DriveViewModel, replacing: Boolean, onBac
                     Button(enabled = !pending, onClick = {
                         tried = true
                         if (password.isEmpty()) return@Button
-                        val (ready, twoStep) = holder.prove()
-                        if (!ready) return@Button
-                        local = null
-                        tried = false
-                        model.startAuthenticator(password, twoStep, holder::failed)
-                    }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(if (pending) "Checking" else "Continue") }
+                        // A passkey or security key, when it is the step's way, is asked by this press.
+                        scope.withStep(holder, sheet) { twoStep ->
+                            local = null
+                            tried = false
+                            model.startAuthenticator(password, twoStep, holder::failed)
+                        }
+                    }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(if (flow.pending) "Checking" else "Continue") }
                 }
             }
         }
     }
 }
 
-/* Turning the step off is removing its last method: the password and the step itself. The page closes from the view model's answer (TwoStepFlow.finished). */
+/*
+ * A passkey or security key (docs/two-step-design.md 3, 12). First the password (and the step, once it
+ * is on); then the key itself, with a name for it if the person wants one. The phone's sheet opens on
+ * the press that adds it, never before. A closed sheet sends nothing and the same setup stands; anything
+ * the server answers ends the setup (a registration is good for one answer) and goes back to the
+ * password with its words. `first`: the account has no method yet, so this key turns the step on, with
+ * the backup codes and the offer to remove the other devices, exactly as the authenticator app does.
+ */
 @Composable
-private fun TurnOffScreen(model: DriveViewModel, methodId: String?, onBack: () -> Unit) {
+private fun KeyScreen(model: DriveViewModel, first: Boolean, onBack: () -> Unit) {
     val alpine = Alpine.colors
     val holder = retain { StepUpHolder(model, StepPurpose.TWO_STEP) }
+    val sheet = rememberKeySheet()
+    val scope = rememberCoroutineScope()
     val flow = model.twoStepFlow
-    val pending = flow.pending
+    // Passwords stay in memory, never in saved state (which outlives the process on disk).
+    var password by retain { mutableStateOf("") }
+    var tried by remember { mutableStateOf(false) }
+    /* This page's own complaint (the sheet was closed, a name too long); the view model's is the request's. */
+    var local by remember { mutableStateOf<String?>(null) }
+    val error = local ?: flow.error
+    var name by rememberSaveable { mutableStateOf("") }
+    var others by remember { mutableStateOf<Int?>(null) }
+    var signOutOthers by rememberSaveable { mutableStateOf(true) }
+    /* The phone's sheet is up for the new key. */
+    var waiting by remember { mutableStateOf(false) }
+    val pending = flow.pending || waiting || holder.asking
+
+    LaunchedEffect(Unit) { if (first) others = model.otherDevices() else holder.prepare() }
+
+    val creation = flow.creation
+    // Back is held while a request is out or the sheet is up, not let through to the page behind.
+    BackHandler { if (!pending) onBack() }
+    if (creation != null) {
+        AccountPage("Add your passkey or security key", onBack = if (pending) null else onBack) {
+            FormBody {
+                Text("Your phone will ask for it. Have your security key ready, or choose where to save a passkey.", style = MaterialTheme.typography.bodyLarge)
+                OutlinedTextField(
+                    value = name, onValueChange = { name = it; local = null }, label = { Text("Name") }, placeholder = { Text("Security key") }, singleLine = true, enabled = !pending,
+                    supportingText = { Text("Optional. It tells your keys apart in this list. Names aren’t encrypted.") },
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences), modifier = Modifier.fillMaxWidth(),
+                )
+                if (first) OthersOffer(signOutOthers, { signOutOthers = it }, others, enabled = !pending)
+                error?.let { Text(it, color = alpine.danger, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }) }
+                Button(enabled = !pending, onClick = {
+                    local = null
+                    waiting = true
+                    // The system's sheet opens here, on this press. Only a key that answered is sent.
+                    scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                        try {
+                            when (val pressed = KeySetup.pressed(creation, name, sheet)) {
+                                is KeySetup.Pressed.Stay -> local = pressed.error
+                                is KeySetup.Pressed.Send -> model.addKey(pressed.registration, pressed.name, first, signOutOthers, password)
+                            }
+                        } finally {
+                            waiting = false
+                        }
+                    }
+                }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(if (pending) "Waiting for your key" else if (first) "Add and turn on" else "Add") }
+            }
+        }
+        return
+    }
+    AccountPage(if (first) "Turn on two-step sign-in?" else "Add a passkey or security key?", onBack = if (pending) null else onBack) {
+        FormBody {
+            Text(
+                if (first) "After your password, HushOS will ask for your passkey or security key. Your recovery phrase works as the second step too, so keep it apart from your password."
+                else "It will pass your second step too. Your other ways to sign in stay as they are.",
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            ConfirmPassword(password, { password = it; local = null }, tried, enabled = !pending)
+            StepUpFields(holder, enabled = !pending)
+            error?.let { Text(it, color = alpine.danger, style = MaterialTheme.typography.bodyMedium) }
+            Button(enabled = !pending, onClick = {
+                tried = true
+                if (password.isEmpty()) return@Button
+                scope.withStep(holder, sheet) { twoStep ->
+                    local = null
+                    tried = false
+                    model.startKey(password, twoStep, holder::failed)
+                }
+            }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(if (flow.pending) "Checking" else "Continue") }
+        }
+    }
+}
+
+/*
+ * Removing a method: the password and the step, by any way, the one being removed included. Removing the
+ * account's only method (`last`) is turning the step off, and is said so. The page closes from the view
+ * model's answer (TwoStepFlow.finished).
+ */
+@Composable
+private fun RemoveScreen(model: DriveViewModel, method: TwoStepStatus.Method, last: Boolean, onBack: () -> Unit) {
+    val alpine = Alpine.colors
+    val holder = retain { StepUpHolder(model, StepPurpose.TWO_STEP) }
+    val sheet = rememberKeySheet()
+    val scope = rememberCoroutineScope()
+    val flow = model.twoStepFlow
+    val pending = flow.pending || holder.asking
     var password by retain { mutableStateOf("") }
     var tried by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { holder.prepare() }
     // Held while the request is out, not let through to the page behind.
     BackHandler { if (!pending) onBack() }
-    AccountPage("Turn off two-step sign-in?", onBack = if (pending) null else onBack) {
+    val title = if (last) "Turn off two-step sign-in?" else if (method.isApp) "Remove your authenticator app?" else "Remove this passkey or security key?"
+    AccountPage(title, onBack = if (pending) null else onBack) {
         FormBody {
-            Text("Your password alone will sign you in, and your backup codes will stop working.", style = MaterialTheme.typography.bodyLarge)
+            Text(
+                when {
+                    last -> "Your password alone will sign you in, and your backup codes will stop working."
+                    method.isApp -> "Its codes will stop passing your second step. Your other ways to sign in stay as they are."
+                    else -> "${method.name ?: "This key"} will stop passing your second step. Your other ways to sign in stay as they are."
+                },
+                style = MaterialTheme.typography.bodyLarge,
+            )
             ConfirmPassword(password, { password = it }, tried, enabled = !pending)
             StepUpFields(holder, enabled = !pending)
             flow.error?.let { Text(it, color = alpine.danger, style = MaterialTheme.typography.bodyMedium) }
@@ -602,13 +899,11 @@ private fun TurnOffScreen(model: DriveViewModel, methodId: String?, onBack: () -
                 enabled = !pending, colors = ButtonDefaults.buttonColors(containerColor = alpine.danger, contentColor = androidx.compose.ui.graphics.Color.White),
                 onClick = {
                     tried = true
-                    if (password.isEmpty() || methodId == null) return@Button
-                    val (ready, twoStep) = holder.prove()
-                    if (!ready) return@Button
-                    // A reply that is lost says so here, and the settings behind this page are read again: they show whether the step is still on.
-                    model.removeTwoStepMethod(methodId, password, twoStep, holder::failed)
+                    if (password.isEmpty()) return@Button
+                    // A reply that is lost says so here, and the settings behind this page are read again: they show what is left.
+                    scope.withStep(holder, sheet) { twoStep -> model.removeTwoStepMethod(method.id, method.isApp, password, twoStep, holder::failed) }
                 }, modifier = Modifier.fillMaxWidth().height(48.dp),
-            ) { Text(if (pending) "Turning off" else "Turn off") }
+            ) { Text(if (last) { if (flow.pending) "Turning off" else "Turn off" } else if (flow.pending) "Removing" else "Remove") }
         }
     }
 }
@@ -618,8 +913,10 @@ private fun TurnOffScreen(model: DriveViewModel, methodId: String?, onBack: () -
 private fun NewCodesScreen(model: DriveViewModel, onBack: () -> Unit) {
     val alpine = Alpine.colors
     val holder = retain { StepUpHolder(model, StepPurpose.TWO_STEP) }
+    val sheet = rememberKeySheet()
+    val scope = rememberCoroutineScope()
     val flow = model.twoStepFlow
-    val pending = flow.pending
+    val pending = flow.pending || holder.asking
     var password by retain { mutableStateOf("") }
     var tried by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { holder.prepare() }
@@ -634,10 +931,8 @@ private fun NewCodesScreen(model: DriveViewModel, onBack: () -> Unit) {
             Button(enabled = !pending, onClick = {
                 tried = true
                 if (password.isEmpty()) return@Button
-                val (ready, twoStep) = holder.prove()
-                if (!ready) return@Button
-                model.newBackupCodes(password, twoStep, holder::failed)
-            }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(if (pending) "Making" else "Make new codes") }
+                scope.withStep(holder, sheet) { twoStep -> model.newBackupCodes(password, twoStep, holder::failed) }
+            }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(if (flow.pending) "Making" else "Make new codes") }
         }
     }
 }
