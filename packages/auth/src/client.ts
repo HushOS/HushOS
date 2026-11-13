@@ -18,6 +18,7 @@ import {
     readEnrolment,
     readLoginReply,
     readRemoved,
+    readReset,
     readStepChallenge,
 } from './login-reply';
 import { ordinaryFailure } from './ordinary-failure';
@@ -162,10 +163,12 @@ const STEP_CODES: Record<string, StepFailureReason> = {
 };
 /*
  * A failed answer as the page needs it. A refusal with a code is the server's own. No status
- * at all means no answer came back, and a 503 without the server's code is a proxy's, which
- * says as little: the answer may or may not have reached the server, so the same one can be
- * sent again and the server says what became of the step. Anything else the server answered
- * ends the step: it is not a wrong answer to try again.
+ * at all means no answer came back, and a 5xx without the server's code (a 500, a gateway's
+ * 502, 503 or 504) says as little: the answer may or may not have reached the server, and the
+ * step's token may still be good. So the step stays, the same answer can be sent again, and
+ * the server says what became of it: a token that was used or ran out answers `step-expired`,
+ * and only that ends the step. Any other refusal the server answered ends it too: it is not a
+ * wrong answer to try again.
  */
 export function stepFailure(error: unknown): StepFailure {
     if (error instanceof StepFailure) return error;
@@ -182,10 +185,16 @@ export function stepFailure(error: unknown): StepFailure {
     // The address's own limit, not the step's (that one has a code): nothing about the step
     // was looked at, and it is still there when the limit lets the next request through.
     if (status === 429) return new StepFailure('busy', message, { cause: error });
-    if (typeof status !== 'number' || status === 503)
+    if (typeof status !== 'number')
         return new StepFailure(
             'offline',
             'We couldn’t reach HushOS. Check your connection, then try again.',
+            { cause: error },
+        );
+    if (status >= 500)
+        return new StepFailure(
+            'offline',
+            'Something went wrong on our side. Send your answer again.',
             { cause: error },
         );
     return new StepFailure('over', message || STEP_OVER, { cause: error });
@@ -594,13 +603,18 @@ export function createAuthClient(
      * `step`: what to do when the account asks for a second step. A page that can ask the
      * person (`ask`) gets TwoStepRequired and answers with `answerStep`. A sign-in made on
      * the person's behalf after something else (a new account, a reset, a security change)
-     * has nobody to ask, so it stops (`refuse`) and the person signs in themselves.
+     * has nobody to ask, so it stops (`refuse`) and the person signs in themselves. The one
+     * that follows a reset answers the step itself, with the recovery phrase the reset just
+     * made (`{ phrase }`): the reset was authorised by the old phrase, the phrase answers any
+     * step, and nobody else holds the new one yet. `passwordProved` is called once the server's
+     * record has matched the password, whatever happens after.
      */
     async function login(
         email: string,
         password: string,
         options: LoginOptions = {},
-        step: 'ask' | 'refuse' = 'refuse',
+        step: 'ask' | 'refuse' | { phrase: string } = 'refuse',
+        passwordProved?: () => void,
     ) {
         const loginEpoch = epoch;
         const attempt = ++signIns;
@@ -609,6 +623,7 @@ export function createAuthClient(
         const start = await own('loginStart', { password });
         const challenge = await api.loginStart({ email, ...start });
         const finish = await own('loginFinish', challenge);
+        passwordProved?.();
         const device = await deviceProof(stored, email, challenge.attemptToken);
         // A lock here has already dropped the export key; do not create a session for it.
         if (epoch !== loginEpoch) throw new Error('Your account was locked. Please sign in again.');
@@ -624,6 +639,19 @@ export function createAuthClient(
             if (step === 'refuse') throw new Error('This account asks for a second step.');
             if (epoch !== loginEpoch)
                 throw new Error('Your account was locked. Please sign in again.');
+            if (typeof step === 'object') {
+                const answered = readLoginReply(
+                    await api.loginTwoStep(
+                        await proveStep(
+                            reply.challenge,
+                            { kind: 'phrase', phrase: step.phrase },
+                            own,
+                        ),
+                    ),
+                );
+                if (answered.kind !== 'session') throw new StepFailure('lost', LOST_REPLY);
+                return openSession(answered.session, loginEpoch);
+            }
             // The page that asked left while the reply was on its way: nobody can answer.
             if (askedBy?.attempt !== attempt)
                 throw new Error('This sign-in was left. Sign in again.');
@@ -1016,24 +1044,42 @@ export function createAuthClient(
         saveSettings: (input: Parameters<AuthApi['saveSettings']>[0]) => api.saveSettings(input),
         saveSettingsKey: (input: Parameters<AuthApi['saveSettingsKey']>[0]) =>
             api.saveSettingsKey(input),
+        /*
+         * Resets the password with the recovery phrase. A reset replaces the phrase: the old
+         * one stops working the moment the server accepts the reset, so the new one is taken
+         * out of the worker first and comes back with the result whatever follows. `user` is
+         * null when the sign-in after the reset did not happen here; `applied` is 'unknown'
+         * when the server's answer to the reset was lost and signing in could not settle it.
+         * Either way the page shows the new words: for someone whose only second step is the
+         * phrase, they are the one way back in.
+         */
         recover: (email: string, password: string, phrase: string) =>
             exclusive(async () => {
                 const start = await own('registerStart', { password });
                 const challenge = await api.recoverStart(start);
                 const finish = await own('recoverFinish', { ...challenge, phrase });
+                const { phrase: fresh } = await own('recoveredPhrase', {});
+                // Whether the server said it applied the reset; false when its answer was lost.
+                let confirmed = true;
                 try {
-                    await api.recoverFinish({
+                    const reply = await api.recoverFinish({
                         userId: challenge.userId,
                         attemptToken: challenge.attemptToken,
                         credentialVersion: challenge.credentialVersion,
                         ...finish,
                     });
+                    if (!readReset(reply)) throw lostChange('your password was changed');
                 } catch (error) {
-                    // The server may have committed before the response was lost. Retrying
-                    // with the old phrase would then fail for the wrong reason.
-                    throw new Error(
-                        `${error instanceof Error ? error.message : 'Please try again.'} If it keeps failing, try signing in with your new password first: the reset may already have been applied.`,
-                    );
+                    const status = (error as { status?: unknown } | null)?.status;
+                    // The server answered and refused: nothing changed, and the old phrase
+                    // is still the phrase.
+                    if (typeof status === 'number' && status < 500)
+                        throw new Error(
+                            `${error instanceof Error ? error.message : 'Please try again.'} If it keeps failing, try signing in with your new password first: the reset may already have been applied.`,
+                        );
+                    // No answer, or not the server's: it may have applied the reset before the
+                    // reply was lost. Signing in with the new password, below, says which.
+                    confirmed = false;
                 }
                 lock();
                 store.setState({
@@ -1042,16 +1088,39 @@ export function createAuthClient(
                 });
                 broadcastLock();
                 await deviceKeys.clear().catch(() => {});
+                // The new password matching the server's record proves the reset was applied.
+                let applied = confirmed;
                 try {
-                    return await login(email, password);
+                    // A second step is answered with the new phrase: nobody has seen it yet,
+                    // and someone whose only step is the phrase could not answer it otherwise.
+                    const user = await login(email, password, {}, { phrase: fresh }, () => {
+                        applied = true;
+                    });
+                    return { user, phrase: fresh, applied: true as const, storage: null };
                 } catch (error) {
-                    // The new password is in place either way; say why it did not sign in here.
-                    if (error instanceof DeviceStorageUnreadable)
-                        throw new Error(
-                            `Your password was changed, but ${error.why}, so you weren’t signed in here. Sign in with your new password.`,
-                            { cause: error },
-                        );
-                    throw new Error('Your password was changed. Sign in with your new password.');
+                    lock();
+                    if (!applied) {
+                        // The server's own record refused the new password: the reset never
+                        // reached it, and the old password and phrase are as they were.
+                        if (error instanceof Error && error.message.startsWith('Unable to sign in'))
+                            throw new Error(
+                                'Your password was not changed: the server never got the request. Please try again.',
+                            );
+                        return {
+                            user: null,
+                            phrase: fresh,
+                            applied: 'unknown' as const,
+                            storage: null,
+                        };
+                    }
+                    // The new password is in place; `storage` says when this browser's device
+                    // key was why it did not sign in here.
+                    return {
+                        user: null,
+                        phrase: fresh,
+                        applied: true as const,
+                        storage: error instanceof DeviceStorageUnreadable ? error.why : null,
+                    };
                 }
             }),
         changeSecurity: (

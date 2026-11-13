@@ -1,7 +1,15 @@
 import { createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { expect, test, type Browser, type Page } from '@playwright/test';
-import { mailSubjects, newPage, PASSWORD, registerAccount } from './helpers';
+import {
+    hydrated,
+    mailSubjects,
+    newPage,
+    PASSWORD,
+    registerAccount,
+    saveKit,
+    verificationLink,
+} from './helpers';
 
 /*
  * Two-step sign-in in the web app (docs/two-step-design.md), against a server that offers it
@@ -492,5 +500,119 @@ test('a browser signed in before the step was on is asked for it when it unlocks
     await earlier.goto('/app/account', { waitUntil: 'networkidle' });
     await expect(earlier).toHaveURL(/\/login/, { timeout: 60_000 });
     await earlier.context().close();
+    await page.context().close();
+});
+
+/* From "Forgot your password?" to a reset sent with the typed phrase and a new password. */
+async function resetWithPhrase(page: Page, email: string, phrase: string, password: string) {
+    await page.goto('/recover', { waitUntil: 'networkidle' });
+    const field = page.getByRole('textbox', { name: /email/i });
+    await hydrated(field);
+    await field.fill(email);
+    await page.getByRole('button', { name: 'Send link' }).click();
+    await expect(page.getByText('Check your inbox')).toBeVisible({ timeout: 60_000 });
+    const link = new URL(await verificationLink(email, '/recover/complete'));
+    await page.goto(link.pathname + link.search + link.hash, { waitUntil: 'networkidle' });
+    await page.getByRole('button', { name: 'Type the 24 words instead' }).click();
+    await page.getByLabel('Recovery phrase').fill(phrase);
+    const passwords = page.locator('input[autocomplete=new-password]');
+    await passwords.nth(0).fill(password);
+    await passwords.nth(1).fill(password);
+    await page.getByRole('button', { name: 'Reset password' }).click();
+}
+const wordsOn = async (p: Page) =>
+    (await p.getByRole('list', { name: 'Recovery phrase' }).getByRole('listitem').allInnerTexts())
+        .map((item) => item.trim().split(/\s+/).at(-1))
+        .join(' ');
+
+test('someone with only their recovery phrase resets the password and is not stranded: the new phrase passes the step and is shown', async ({
+    browser,
+}) => {
+    test.skip(!twoStepOn, 'Two-step sign-in is off (TWO_STEP_ENABLED).');
+    test.setTimeout(480_000);
+    const { page, email, phrase } = await account(browser);
+    await turnOn(page);
+    await dialog(page).getByRole('button', { name: 'Done' }).click();
+    await signOut(page);
+    // The phone with the app is gone, the backup codes with it, and the password is forgotten.
+    // The phrase resets the password, which also replaces the phrase: the old one is dead
+    // from here on, and the new one is the only thing left that can answer the step.
+    const next = `${PASSWORD}-after-reset`;
+    await resetWithPhrase(page, email, phrase, next);
+
+    // Signed in by the reset itself, on the page that shows the new words: the step that
+    // sign-in met was answered with the new phrase, which the person has not seen yet.
+    await expect(page).toHaveURL(/\/setup\/recovery-key/, { timeout: 120_000 });
+    await expect(page.getByRole('list', { name: 'Recovery phrase' })).toBeVisible({
+        timeout: 60_000,
+    });
+    await expect.poll(() => wordsOn(page), { timeout: 60_000 }).not.toBe(phrase);
+    const fresh = await wordsOn(page);
+    expect(fresh.split(' ')).toHaveLength(24);
+    await saveKit(page);
+    await expect(page).toHaveURL(/\/app/, { timeout: 60_000 });
+
+    // Later, on a browser that knows nothing: the old phrase no longer answers the step, and
+    // the new one does.
+    const other = await newPage(browser);
+    await other.goto('/login', { waitUntil: 'networkidle' });
+    await enterPassword(other, email, next);
+    await expect(stepHeading(other)).toBeVisible({ timeout: 60_000 });
+    await other.getByRole('button', { name: 'Use your recovery phrase' }).click();
+    await other.getByLabel('Recovery phrase').fill(phrase);
+    await other.getByRole('button', { name: 'Continue' }).click();
+    await expect(other.getByRole('alert')).toContainText('That recovery phrase didn’t work', {
+        timeout: 60_000,
+    });
+    await other.getByLabel('Recovery phrase').fill(fresh);
+    await other.getByRole('button', { name: 'Continue' }).click();
+    await inApp(other);
+    await other.context().close();
+    await page.context().close();
+});
+
+test('when the sign-in after a reset does not happen, the new phrase is shown on the reset page, and it is what gets the person back in', async ({
+    browser,
+}) => {
+    test.skip(!twoStepOn, 'Two-step sign-in is off (TWO_STEP_ENABLED).');
+    test.setTimeout(480_000);
+    const { page, email, phrase } = await account(browser);
+    await turnOn(page);
+    await dialog(page).getByRole('button', { name: 'Done' }).click();
+    await signOut(page);
+
+    // The reset reaches the server; the sign-in that follows it does not (the connection drops).
+    await page.route('**/api/auth/login/start', (route) => route.abort());
+    const next = `${PASSWORD}-after-reset`;
+    await resetWithPhrase(page, email, phrase, next);
+
+    // Not an error and not a dead end: the words that replaced the old phrase, shown once.
+    await expect(page.getByRole('heading', { name: 'Save your new recovery phrase' })).toBeVisible({
+        timeout: 120_000,
+    });
+    await expect(page.getByText('your old recovery phrase no longer works')).toBeVisible();
+    const fresh = await wordsOn(page);
+    expect(fresh.split(' ')).toHaveLength(24);
+    expect(fresh).not.toBe(phrase);
+    await page.unroute('**/api/auth/login/start');
+
+    // On to sign-in, with the new password. The step is asked for; the old phrase is refused,
+    // and the words just shown pass it.
+    await page.getByRole('link', { name: 'Continue to sign in' }).click();
+    await expect(page.getByRole('heading', { name: 'Welcome back' })).toBeVisible({
+        timeout: 60_000,
+    });
+    await expect(page.getByText('Sign in with your new password.')).toBeVisible();
+    await enterPassword(page, email, next);
+    await expect(stepHeading(page)).toBeVisible({ timeout: 60_000 });
+    await page.getByRole('button', { name: 'Use your recovery phrase' }).click();
+    await page.getByLabel('Recovery phrase').fill(phrase);
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await expect(page.getByRole('alert')).toContainText('That recovery phrase didn’t work', {
+        timeout: 60_000,
+    });
+    await page.getByLabel('Recovery phrase').fill(fresh);
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await inApp(page);
     await page.context().close();
 });

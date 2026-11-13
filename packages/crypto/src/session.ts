@@ -165,6 +165,13 @@ type BaseRequests = {
         recovery: RecoveryEnvelope;
         phrase: string;
     };
+    /*
+     * The recovery phrase a reset just made (`recoverFinish`), taken once. A reset replaces
+     * the phrase, and the old one stops working the moment the server accepts the reset: the
+     * new words must reach the person whatever happens to the sign-in that follows, and they
+     * are what answers that sign-in's second step (docs/two-step-design.md 5).
+     */
+    recoveredPhrase: Record<string, never>;
     registerFinish: { registrationResponse: string; userId: string; profileVersion: number };
     loginStart: { password: string };
     loginFinish: { loginResponse: string; profileVersion: number };
@@ -797,6 +804,7 @@ type BaseResults = {
         recovery: RecoveryEnvelope;
         signature: string;
     };
+    recoveredPhrase: { phrase: string };
     remember: RememberedAccount;
     restore: { userId: string };
     registerStart: { registrationRequest: string };
@@ -952,6 +960,9 @@ export function createCryptoSession() {
     // The re-authentication's own OPAQUE state: never the sign-in's, never the root's.
     let reauthPassword = '';
     let reauthState = '';
+    // The phrase a reset made, until the client takes it (`recoveredPhrase`). Kept apart from
+    // what `clearState` drops: the reset's own tidying-up runs before it can be asked for.
+    let resetPhrase = '';
     let accountKey: Uint8Array<ArrayBuffer> | undefined;
     let unlockedUserId: string | null = null;
     /*
@@ -1494,6 +1505,7 @@ export function createCryptoSession() {
     function reset() {
         generation++;
         clearState();
+        resetPhrase = '';
         forgetDriveKeys();
         const error = new Error('Your account was locked. Please try again.');
         for (const reject of pending) reject(error);
@@ -1636,12 +1648,14 @@ export function createCryptoSession() {
                         nonce,
                         accountKeyContext(message.input.userId, keyVersion, credentialVersion),
                     );
-                    const { recovery } = await createRecovery(
+                    const { recovery, phrase: madePhrase } = await createRecovery(
                         root,
                         message.input.userId,
                         recovering ? message.input.recovery.recoveryVersion + 1 : 1,
                         keyVersion,
                     );
+                    // A reset's new words, for the client to take: see `recoveredPhrase`.
+                    resetPhrase = recovering ? madePhrase : '';
                     const output = {
                         recovery,
                         registrationRecord: result.registrationRecord,
@@ -1687,6 +1701,12 @@ export function createCryptoSession() {
                     key?.fill(0);
                     clearState();
                 }
+            }
+            case 'recoveredPhrase': {
+                const phrase = resetPhrase;
+                resetPhrase = '';
+                if (!phrase) throw new RefusedError('There is no new recovery phrase to show.');
+                return { phrase };
             }
             case 'loginStart': {
                 clearState();

@@ -12,7 +12,12 @@ import {
 } from './protocol';
 import { createRecovery } from './recovery';
 import { createCryptoSession } from './session';
-import { stepTokenDigest, verifyTwoStepPhrase } from './two-step';
+import {
+    recoveryStepKey,
+    signTwoStepPhrase,
+    stepTokenDigest,
+    verifyTwoStepPhrase,
+} from './two-step';
 
 /*
  * The recovery phrase as a second step, in the worker (docs/two-step-design.md 5). A sign-in
@@ -126,5 +131,78 @@ describe('answering the second step with the recovery phrase', () => {
                 made.recovery.publicKey,
             ),
         ).toBe(false);
+    });
+});
+
+/*
+ * A reset with the recovery phrase makes a new phrase, and the old one stops working once the
+ * server accepts the reset. The worker hands the new words over once, so they reach the
+ * person whatever becomes of the sign-in that follows, and so that sign-in's second step can
+ * be answered with them.
+ */
+describe('the phrase a reset makes', () => {
+    async function reset() {
+        await ready;
+        const serverSetup = server.createSetup();
+        const root = crypto.getRandomValues(new Uint8Array(32));
+        const old = await createRecovery(root.slice(), USER);
+        const session = createCryptoSession();
+        let id = 0;
+        const call = (operation: string, input: unknown) =>
+            session.handle({ id: ++id, operation, input } as Parameters<typeof session.handle>[0]);
+        const start = (await call('registerStart', { password: 'a new password entirely' })) as {
+            registrationRequest: string;
+        };
+        const { registrationResponse } = server.createRegistrationResponse({
+            serverSetup,
+            userIdentifier: USER,
+            registrationRequest: start.registrationRequest,
+        });
+        const finished = (await call('recoverFinish', {
+            registrationResponse,
+            userId: USER,
+            profileVersion: OPAQUE_PROFILE_VERSION,
+            credentialVersion: 1,
+            attemptToken: STEP_TOKEN,
+            recovery: old.recovery,
+            phrase: old.phrase,
+        })) as { recovery: { publicKey: string; wrappingSalt: string; recoveryVersion: number } };
+        return { call, old, finished };
+    }
+
+    test('is handed over once, and is the phrase of the recovery key the reset sends: it answers a step where the old one does not', async () => {
+        const { call, old, finished } = await reset();
+        const { phrase } = (await call('recoveredPhrase', {})) as { phrase: string };
+        expect(phrase.split(' ')).toHaveLength(24);
+        expect(phrase).not.toBe(old.phrase);
+        expect(finished.recovery.recoveryVersion).toBe(2);
+        const statement = { userId: USER, tokenDigest: await stepTokenDigest(STEP_TOKEN) };
+        const sign = async (words: string) =>
+            signTwoStepPhrase(await recoveryStepKey(words, finished.recovery.wrappingSalt), {
+                userId: USER,
+                stepToken: STEP_TOKEN,
+            });
+        // Checked against the public key the server stores with the reset.
+        expect(
+            await verifyTwoStepPhrase(statement, await sign(phrase), finished.recovery.publicKey),
+        ).toBe(true);
+        expect(
+            await verifyTwoStepPhrase(
+                statement,
+                await sign(old.phrase),
+                finished.recovery.publicKey,
+            ),
+        ).toBe(false);
+        // Once: nothing of it stays in the worker for a later caller.
+        await expect(call('recoveredPhrase', {})).rejects.toBeInstanceOf(RefusedError);
+    });
+
+    test('there is none without a reset', async () => {
+        const session = createCryptoSession();
+        await expect(
+            session.handle({ id: 1, operation: 'recoveredPhrase', input: {} } as Parameters<
+                typeof session.handle
+            >[0]),
+        ).rejects.toBeInstanceOf(RefusedError);
     });
 });

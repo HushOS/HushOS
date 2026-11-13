@@ -243,7 +243,7 @@ Today `login/finish` checks OPAQUE, creates the session and returns the password
 | `setup-required`   | The account has no recovery key yet, so the step cannot be turned on (409)                                                         | Sends the person to finish account setup               |
 | `update-required`  | The account asks for a step and this client cannot answer one (409, below)                                                         | Says to update                                         |
 
-A 503 without `step-unavailable` is not the server's answer but a proxy's. It says nothing about the step or the change, so a client treats it as a reply that never came: at sign-in the same answer can be sent again, and after a change the client checks its session before saying what happened.
+A 5xx without a code (a bare 500, a gateway's 502, 503 or 504) is not the server's answer to the step. It says nothing about the step or the change, so a client treats it as a reply that never came: at sign-in the step stays and the same answer can be sent again, which a token that was used or ran out answers with `step-expired`; after a change the client checks its session before saying what happened.
 
 **The step comes after OPAQUE, never before.**
 
@@ -299,6 +299,12 @@ That is the web's unlock after a lock. The new session inherits `two_step_at` an
 What this protects is narrow but real: someone with a live session and the password, such as a shared computer where the owner stayed signed in and the password was watched. They cannot change the password, rotate the phrase, delete the account or remove the step.
 
 **A phrase reset** (`/auth/recover/finish`: the email link and the phrase) is not a session flow and asks for no step. It changes the password and signs every device out, and the next sign-in asks for the step as usual. The phrase can answer it (section 5).
+
+A reset also **replaces the phrase**, so the phrase that answers is the new one, which the person has not seen yet. Someone whose only second step is their phrase would otherwise be locked out for good: the old words refused, the new ones behind a sign-in they cannot finish. So a client that makes a reset:
+
+- answers the step of the sign-in that follows with the new phrase. The reset was authorised by the old phrase's signature, and the phrase answers any step, so nothing is skipped;
+- shows the new words as soon as the server has accepted the reset, whether or not that sign-in works;
+- keeps the new words when the server's answer to the reset is lost, and signs in with the new password to learn whether it was applied: the server's record matching the new password says it was.
 
 ### Turning the step on and off
 

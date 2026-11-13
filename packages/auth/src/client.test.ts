@@ -347,7 +347,8 @@ describe('a device store that does not answer at sign-in', () => {
                 attemptToken: 'recover',
                 credentialVersion: 1,
             }),
-            recoverFinish: async () => ({}),
+            // The server's own answer to a reset it applied.
+            recoverFinish: async () => ({ user }),
             securityStart: async ({ action }: { action: string }) => ({
                 userId: user.id,
                 action,
@@ -444,13 +445,13 @@ describe('a device store that does not answer at sign-in', () => {
 
     test('a reset with the recovery phrase says why it did not sign in here', async () => {
         const { auth, calls } = await client([unavailable]);
-        const error = await auth.recover('maya@example.com', 'new horse', 'words').then(
-            () => null,
-            (caught: unknown) => caught as Error,
-        );
-        expect(error?.message).toBe(
-            'Your password was changed, but this browser’s storage for HushOS can’t be read, so you weren’t signed in here. Sign in with your new password.',
-        );
+        // Not an error: the reset was applied, and the page still has the new phrase to show.
+        // It is told why this browser was not signed in, to say so beside the words.
+        expect(await auth.recover('maya@example.com', 'new horse', 'words')).toMatchObject({
+            user: null,
+            applied: true,
+            storage: 'this browser’s storage for HushOS can’t be read',
+        });
         expect(calls).toEqual([]);
     });
 

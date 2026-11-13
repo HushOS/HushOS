@@ -175,6 +175,34 @@ describe('unlocking an account that asks for a second step', () => {
         );
     });
 
+    test('too many wrong codes on an account with no phrase to offer: both code fields go, and the form says there is nothing left to try', async () => {
+        // An account whose step offers no recovery phrase.
+        login.mockReset();
+        login.mockRejectedValueOnce(
+            new TwoStepRequired({ ...challenge, methods: ['totp', 'backup'] }),
+        );
+        answerStep.mockReset();
+        const user = userEvent.setup();
+        render(<UnlockDevice user={{ email: 'maya@example.com' }} />);
+        await user.type(screen.getByLabelText('Password'), 'correct horse');
+        await user.click(screen.getByRole('button', { name: 'Unlock' }));
+        const code = await screen.findByLabelText('Code from your authenticator app');
+        answerStep.mockRejectedValueOnce(
+            new StepFailure('limited', 'Too many wrong codes. Try again in 15 minutes.'),
+        );
+        await user.type(code, '123456');
+        await user.click(screen.getByRole('button', { name: 'Continue' }));
+        await screen.findByText('Too many wrong codes. Try again in 15 minutes.');
+        await screen.findByText(
+            'There is no other way to answer this step from here right now. Start again in a while.',
+        );
+        // No field is left that could only be refused, and nothing to send.
+        expect(screen.queryByLabelText('Code from your authenticator app')).toBeNull();
+        expect(screen.queryByLabelText('Backup code')).toBeNull();
+        expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull();
+        expect(screen.getByRole('button', { name: 'Start again' })).toBeEnabled();
+    });
+
     test('a paused app stops being offered, and a step that is over goes back to the password with the reason', async () => {
         const { user, code } = await toStep();
         answerStep.mockRejectedValueOnce(

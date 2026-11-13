@@ -82,7 +82,8 @@ export function draftFor(draft: StepDraft, methods: readonly StepMethod[]): Step
  * After an answer was refused: which methods are still worth offering on this step.
  * - A paused app is not (`frozen`).
  * - After too many wrong codes (`limited`) only the recovery phrase is: the app's codes and
- *   the backup codes share one budget.
+ *   the backup codes share one budget. Without a phrase nothing is: the budget lasts 15
+ *   minutes and a step five, so a code field left on screen could only be refused again.
  * - A method the server cannot check right now (`unavailable`) is withdrawn alone, the one
  *   that was `tried`: the app's secret and the backup codes can sit under different keys, so
  *   one being unreadable says nothing of the other.
@@ -94,7 +95,7 @@ export function methodsAfter(
 ): StepMethod[] {
     if (reason === 'frozen') return methods.filter((method) => method !== 'totp');
     if (reason === 'unavailable') return methods.filter((method) => method !== tried);
-    if (reason === 'limited' && methods.includes('phrase')) return ['phrase'];
+    if (reason === 'limited') return methods.filter((method) => method === 'phrase');
     return [...methods];
 }
 

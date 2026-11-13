@@ -81,8 +81,10 @@ describe('what is still offered after a refusal', () => {
     test('after too many wrong codes only the phrase is: the app and the backup codes share one budget', () => {
         expect(methodsAfter(all, 'limited', 'totp')).toEqual(['phrase']);
         expect(methodsAfter(all, 'limited', 'backup')).toEqual(['phrase']);
-        // An account with no recovery key has no phrase to fall back to: the codes stay.
-        expect(methodsAfter(['totp', 'backup'], 'limited', 'totp')).toEqual(['totp', 'backup']);
+        // Without a phrase nothing is left: the budget outlasts the step, so a code field
+        // kept on screen could only be refused again.
+        expect(methodsAfter(['totp', 'backup'], 'limited', 'totp')).toEqual([]);
+        expect(methodsAfter(['backup'], 'limited', 'backup')).toEqual([]);
     });
     test('a method the server cannot check is withdrawn alone: the other, under its own key, is still offered', () => {
         // The app's secret is under a key the server lost; the backup codes are not.

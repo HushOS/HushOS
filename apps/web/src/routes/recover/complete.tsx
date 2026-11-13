@@ -1,5 +1,5 @@
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '@hushos/auth/protocol';
-import { createFileRoute, useRouter } from '@tanstack/react-router';
+import { createFileRoute, Link, useRouter } from '@tanstack/react-router';
 import { cn } from 'cn';
 import { CircleCheckIcon, FileTextIcon } from 'lucide-react';
 import { useId, useState } from 'react';
@@ -7,10 +7,11 @@ import { AuthInput, StrengthHint } from '@/components/auth-input';
 import { AuthActions, AuthFields, AuthLayout, AuthNote, authLink } from '@/components/auth-layout';
 import { PhraseGrid } from '@/components/recovery-phrase';
 import { VerifiedEmailStep } from '@/components/verified-email-step';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { getRecoveryEnrollment } from '@/lib/auth';
 import { authClient } from '@/lib/auth-client';
+import { copySecret } from '@/lib/clipboard';
 import { authError } from '@/lib/form';
 import { phraseFromKit, WORDS } from '@/lib/recovery-kit';
 import { cue } from '@/lib/sounds';
@@ -47,6 +48,13 @@ function RecoverForm({ enrollment }: { enrollment: { email: string } }) {
     const [tried, setTried] = useState(false);
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
+    // The reset went through, or may have, and this browser was not signed in by it: the new
+    // phrase is shown here, since nothing else will show it to someone who cannot sign in.
+    const [made, setMade] = useState<{
+        phrase: string;
+        applied: true | 'unknown';
+        storage: string | null;
+    } | null>(null);
     const count = wordsOf(typed).length;
     const words = mode === 'kit' ? (kit?.words ?? null) : wordsOf(typed);
     const ready = mode === 'kit' ? kit !== null : true;
@@ -84,9 +92,14 @@ function RecoverForm({ enrollment }: { enrollment: { email: string } }) {
         setPending(true);
         setError('');
         try {
-            await authClient.recover(enrollment.email, password, words.join(' '));
+            const reset = await authClient.recover(enrollment.email, password, words.join(' '));
             cue('success');
             router.options.context.queryClient.clear();
+            if (!reset.user) {
+                setMade(reset);
+                setPending(false);
+                return;
+            }
             await router.navigate({ to: '/setup/recovery-key', replace: true });
         } catch (cause) {
             cue('error');
@@ -96,6 +109,7 @@ function RecoverForm({ enrollment }: { enrollment: { email: string } }) {
     }
 
     const choosing = mode === 'kit' && !kit;
+    if (made) return <NewPhrase {...made} />;
     return (
         <AuthLayout
             wide
@@ -313,6 +327,89 @@ function RecoverForm({ enrollment }: { enrollment: { email: string } }) {
                     )}
                 </AuthFields>
             </form>
+        </AuthLayout>
+    );
+}
+
+/*
+ * The recovery phrase a reset made, for someone the reset did not sign in here. A reset
+ * replaces the phrase, and the page that normally shows the new one is behind the sign-in.
+ * Someone whose only second step is their phrase could then never get there: the old words
+ * are dead and the new ones were never shown. So they are shown here, once.
+ */
+function NewPhrase({
+    phrase,
+    applied,
+    storage,
+}: {
+    phrase: string;
+    applied: true | 'unknown';
+    storage: string | null;
+}) {
+    const [copied, setCopied] = useState(false);
+    const [blocked, setBlocked] = useState(false);
+    async function copy() {
+        try {
+            await copySecret(phrase);
+            cue('success', { volume: 0.4 });
+            setCopied(true);
+            setBlocked(false);
+        } catch {
+            cue('error');
+            setBlocked(true);
+        }
+    }
+    const sure = applied === true;
+    return (
+        <AuthLayout
+            wide
+            title="Save your new recovery phrase"
+            art="KEYS"
+            description={
+                sure
+                    ? 'Your password is changed, and your old recovery phrase no longer works. These 24 words replace it.'
+                    : 'We couldn’t confirm that your password was changed. If it was, these 24 words are your recovery phrase now. If it wasn’t, your old phrase still is. Keep both until you have signed in.'
+            }
+        >
+            <AuthFields>
+                {storage && (
+                    <AuthNote tone="warning">
+                        {storage.replace(/^./, (first) => first.toUpperCase())}, so you weren’t
+                        signed in here.
+                    </AuthNote>
+                )}
+                <PhraseGrid phrase={phrase} />
+                <p className="text-sm text-muted-foreground">
+                    They are shown here once. If your account asks for a second step when you sign
+                    in, these words answer it.
+                </p>
+                <div className="flex flex-wrap items-center gap-3">
+                    <Button type="button" variant="outline" onClick={() => void copy()}>
+                        {copied ? 'Copied' : 'Copy'}
+                    </Button>
+                    {copied && (
+                        <output className="text-[13px] text-muted-foreground">
+                            Cleared from the clipboard in two minutes.
+                        </output>
+                    )}
+                    {blocked && (
+                        <span role="alert" className="text-[13px] text-destructive">
+                            Copying isn’t available here. Write the words down instead.
+                        </span>
+                    )}
+                </div>
+                <AuthActions
+                    action={
+                        <Link
+                            to="/login"
+                            search={{ securityChanged: sure ? 'password' : 'uncertain' }}
+                            className={buttonVariants({ size: 'lg' })}
+                        >
+                            Continue to sign in
+                        </Link>
+                    }
+                />
+            </AuthFields>
         </AuthLayout>
     );
 }

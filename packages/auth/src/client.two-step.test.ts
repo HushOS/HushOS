@@ -174,8 +174,12 @@ describe('a sign-in that stops at its second step', () => {
             refusal('Unavailable right now.', 503, 'step-unavailable'),
             'unavailable',
         ],
-        // A proxy's 503 says nothing of the step: the same answer goes again.
-        ['a gateway’s 503', refusal('Bad gateway.', 503), 'offline'],
+        // A 5xx without the server's code says nothing of the step, and its token may still be
+        // good: the same answer goes again, and the server says if the step is over.
+        ['a gateway’s 503', refusal('Service unavailable.', 503), 'offline'],
+        ['a bare 500', refusal('Please try again.', 500), 'offline'],
+        ['a gateway’s 502', refusal('Please try again.', 502), 'offline'],
+        ['a gateway’s 504', refusal('Please try again.', 504), 'offline'],
         ['no connection', new TypeError('Failed to fetch'), 'offline'],
         // The address's own limit at the HTTP edge, which carries no step code.
         ['too many requests from this address', refusal('Too many requests.', 429), 'busy'],
@@ -711,5 +715,185 @@ describe('proving the password again for two things at once', () => {
         expect(await client.startAuthenticator('the password')).toMatchObject({ id: 'app' });
         finishRemoval({ removed: 1 });
         expect(await removal).toEqual({ removed: 1 });
+    });
+});
+
+/*
+ * A reset with the recovery phrase replaces the phrase. The old words stop working the moment
+ * the server accepts the reset, and the page that shows the new ones is behind the sign-in.
+ * With two-step sign-in on, someone whose only second step is their phrase would be locked
+ * out for good: the old phrase refused, the new one never seen. So the reset's own sign-in
+ * answers the step with the new phrase, and the new words come back with the result whatever
+ * the sign-in does.
+ */
+describe('a reset with the recovery phrase', () => {
+    const fresh = 'fresh words made by the reset';
+    function resetting(
+        server: Partial<Record<keyof AuthApi, (...input: never[]) => unknown>>,
+        worker: { wrongPassword?: boolean } = {},
+    ) {
+        items.clear();
+        const signed: unknown[] = [];
+        const transport: CryptoTransport = {
+            request: async (operation, input) => {
+                if (operation === 'recoveredPhrase') return { phrase: fresh } as never;
+                if (operation === 'twoStepPhrase') {
+                    signed.push((input as { phrase: string }).phrase);
+                    return { signature: 's'.repeat(86) } as never;
+                }
+                // The server's record refuses the password: the worker finds out here.
+                if (operation === 'loginFinish' && worker.wrongPassword)
+                    throw new Error('Unable to sign in. Check your email and password.');
+                return {} as never;
+            },
+            lock() {},
+            onLock() {},
+        };
+        const keys: DeviceKeyStore = {
+            create: async () => ({ id: 'device-key-1', key: {} as CryptoKey }),
+            load: async () => null,
+            clear: async () => {},
+        };
+        const client = createAuthClient(() => transport, keys, {
+            recoverStart: async () => ({
+                userId: user.id,
+                attemptToken: 'a',
+                credentialVersion: 1,
+            }),
+            recoverFinish: async () => ({ user }),
+            loginStart: async () => ({ attemptToken: 'attempt' }),
+            loginFinish: async () => session,
+            ...server,
+        } as unknown as AuthApi);
+        return {
+            reset: () => client.recover(user.email, 'a new password', 'the old words'),
+            signed,
+            client,
+        };
+    }
+
+    test('signs in with the new password and hands back the new words', async () => {
+        const { reset } = resetting({});
+        expect(await reset()).toEqual({ user, phrase: fresh, applied: true, storage: null });
+    });
+
+    test('a second step at that sign-in is answered with the new phrase, never the old one', async () => {
+        const answers: unknown[] = [];
+        const { reset, signed, client } = resetting({
+            loginFinish: async () => ({ twoStep: step }),
+            loginTwoStep: async (answer: never) => {
+                answers.push(answer);
+                return session;
+            },
+        });
+        expect(await reset()).toMatchObject({ user, phrase: fresh, applied: true });
+        expect(signed).toEqual([fresh]);
+        expect(answers).toEqual([
+            { token: step.token, proof: { kind: 'phrase', signature: 's'.repeat(86) } },
+        ]);
+        expect(client.isAuthenticating()).toBe(false);
+    });
+
+    test.each([
+        [
+            'the step cannot be answered',
+            {
+                loginFinish: async () => ({
+                    twoStep: { ...step, methods: ['totp'], phrase: undefined },
+                }),
+            },
+        ],
+        [
+            'the step’s answer is refused',
+            {
+                loginFinish: async () => ({ twoStep: step }),
+                loginTwoStep: () => Promise.reject(refusal('No.', 401, 'step-wrong')),
+            },
+        ],
+        [
+            'the sign-in cannot reach the server',
+            { loginFinish: () => Promise.reject(new TypeError('Failed to fetch')) },
+        ],
+    ])(
+        'when %s, the reset still stands and the new words still come back',
+        async (_name, server) => {
+            const { reset, client } = resetting(server as never);
+            // Not signed in here, and not an error either: the page shows the words.
+            expect(await reset()).toEqual({
+                user: null,
+                phrase: fresh,
+                applied: true,
+                storage: null,
+            });
+            expect(client.isAuthenticating()).toBe(false);
+        },
+    );
+
+    test('a refusal the server answered is the reset not applied: it is thrown, and no new words are handed over', async () => {
+        const { reset } = resetting({
+            recoverFinish: () => Promise.reject(refusal('This link has expired.', 400)),
+        });
+        await expect(reset()).rejects.toThrow('This link has expired.');
+    });
+
+    describe('when the server’s answer to the reset is lost', () => {
+        const lost = [
+            ['no answer', () => Promise.reject(new TypeError('Failed to fetch'))],
+            ['a gateway’s 502', () => Promise.reject(refusal('Please try again.', 502))],
+            ['a portal’s page', async () => '<html>Sign in to Wi-Fi</html>'],
+        ] as const;
+
+        test.each(lost)(
+            'after %s, the new password signing in shows it was applied',
+            async (_name, recoverFinish) => {
+                const { reset } = resetting({ recoverFinish: recoverFinish as never });
+                expect(await reset()).toEqual({
+                    user,
+                    phrase: fresh,
+                    applied: true,
+                    storage: null,
+                });
+            },
+        );
+
+        test.each(lost)(
+            'after %s, the new password being refused shows it was not: the old phrase is still the phrase',
+            async (_name, recoverFinish) => {
+                const { reset } = resetting(
+                    { recoverFinish: recoverFinish as never },
+                    { wrongPassword: true },
+                );
+                await expect(reset()).rejects.toThrow('Your password was not changed');
+            },
+        );
+
+        test.each(lost)(
+            'after %s, with the server still out of reach, the new words are kept and nothing is claimed',
+            async (_name, recoverFinish) => {
+                const { reset } = resetting({
+                    recoverFinish: recoverFinish as never,
+                    loginStart: () => Promise.reject(new TypeError('Failed to fetch')),
+                });
+                expect(await reset()).toEqual({
+                    user: null,
+                    phrase: fresh,
+                    applied: 'unknown',
+                    storage: null,
+                });
+            },
+        );
+
+        test('the password matching and the sign-in then failing still means it was applied', async () => {
+            const { reset } = resetting({
+                recoverFinish: () => Promise.reject(new TypeError('Failed to fetch')),
+                loginFinish: () => Promise.reject(new TypeError('Failed to fetch')),
+            });
+            expect(await reset()).toEqual({
+                user: null,
+                phrase: fresh,
+                applied: true,
+                storage: null,
+            });
+        });
     });
 });

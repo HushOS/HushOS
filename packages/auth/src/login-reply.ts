@@ -97,6 +97,10 @@ export function readStepChallenge(reply: unknown) {
 const texts = (value: unknown): value is string[] =>
     Array.isArray(value) && value.length > 0 && value.every(text);
 
+/* `{ user }`: a reset the server says it applied. */
+export function readReset(reply: unknown) {
+    return record(reply) && record(reply.user) && text(reply.user.id);
+}
 /* `{ success: true }`: a security change or a deletion that the server says it made. */
 export function readDone(reply: unknown) {
     return record(reply) && reply.success === true;
