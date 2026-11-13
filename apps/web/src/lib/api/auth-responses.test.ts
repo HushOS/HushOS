@@ -12,6 +12,7 @@ import {
     consentStoredResponse,
     contactResponse,
     contactSuccessionResponse,
+    defaultKindResponse,
     deviceResponse,
     devicesRemovedResponse,
     devicesResponse,
@@ -20,10 +21,14 @@ import {
     forgottenResponse,
     identityHistoryResponse,
     identityResponse,
+    keyAddedResponse,
+    keyOptionsResponse,
     loginChallengeResponse,
     loginFinishResponse,
     loginResponse,
+    loginStartResponse,
     methodRemovedResponse,
+    methodResponse,
     profileResponse,
     recoveryBackupResponse,
     recoveryChallengeResponse,
@@ -129,6 +134,16 @@ const stepChallenge: auth.StepChallenge = {
     methods: ['totp', 'backup', 'phrase'],
     expiresAt: '2026-11-12T10:05:00.000Z',
     phrase: { userId, recoveryVersion: 2, wrappingSalt: b64(32, 6) },
+};
+const keyRequest: NonNullable<auth.StepChallenge['webauthn']> = {
+    challenge: b64(32, 7),
+    rpId: 'hushos.com',
+    timeout: 300_000,
+    userVerification: 'discouraged',
+    allowCredentials: [
+        { id: b64(32, 9), type: 'public-key', transports: ['usb', 'nfc'] },
+        { id: b64(16, 3), type: 'public-key' },
+    ],
 };
 const accountKey: SignedIn['envelope'] = {
     envelopeVersion: 1,
@@ -477,7 +492,19 @@ const cases: Record<string, Case> = {
         stray: (v) => v.user,
         required: ['registered', (v) => delete v.user.id],
     },
-    'POST /auth/login/start, /auth/devices/reauth and /auth/delete/start': {
+    'POST /auth/login/start': {
+        schema: loginStartResponse,
+        samples: {
+            // What the route adds to the package's reply: the word that it reads `twoStepMethods`.
+            'sign-in': { ...loginChallenge, twoStepMethods: true as const } satisfies Reply<
+                typeof auth.startLogin
+            > & { twoStepMethods: true },
+        },
+        stray: (v) => v,
+        // Without it a client names no methods, and is shown no passkey: never sent short.
+        required: ['sign-in', (v) => delete (v as { twoStepMethods?: true }).twoStepMethods],
+    },
+    'POST /auth/devices/reauth and /auth/delete/start': {
         schema: loginChallengeResponse,
         samples: {
             'sign-in': loginChallenge satisfies Reply<typeof auth.startLogin>,
@@ -520,6 +547,15 @@ const cases: Record<string, Case> = {
             'the app paused, no codes left': {
                 twoStep: { ...stepChallenge, methods: ['phrase'] },
             } satisfies Exclude<Reply<typeof auth.finishLogin>, SignedIn>,
+            'a key first, and something left out': {
+                twoStep: {
+                    ...stepChallenge,
+                    methods: ['webauthn', 'totp', 'backup', 'phrase'],
+                    webauthn: keyRequest,
+                    withheld: true,
+                    defaultUnavailable: true,
+                },
+            } satisfies Exclude<Reply<typeof auth.finishLogin>, SignedIn>,
         },
         stray: (v) => v.twoStep.phrase,
         required: ['every method', (v) => delete v.twoStep.token],
@@ -545,9 +581,27 @@ const cases: Record<string, Case> = {
                 methods: ['totp', 'backup'],
                 expiresAt: '2026-11-12T10:05:00.000Z',
             } satisfies Reply<typeof auth.startStepChallenge>,
+            'a key, with what it is asked': {
+                ...stepChallenge,
+                methods: ['webauthn', 'backup', 'phrase'],
+                webauthn: keyRequest,
+            } satisfies Reply<typeof auth.startStepChallenge>,
         },
         stray: (v) => v,
         required: ['every method', (v) => delete v.expiresAt],
+    },
+    'POST /auth/two-step/challenge, a key’s options': {
+        schema: stepChallengeResponse,
+        samples: {
+            'a key, with what it is asked': {
+                ...stepChallenge,
+                methods: ['webauthn'],
+                webauthn: keyRequest,
+            } satisfies Reply<typeof auth.startStepChallenge>,
+        },
+        stray: (v) => v.webauthn,
+        // A key asked without its challenge can only fail: such a reply is not sent.
+        required: ['a key, with what it is asked', (v) => delete v.webauthn.challenge],
     },
     'GET /auth/two-step': {
         schema: twoStepResponse,
@@ -581,9 +635,122 @@ const cases: Record<string, Case> = {
                 backupCodesLeft: 9,
                 totpFrozen: true,
             } satisfies Reply<typeof auth.getTwoStep>,
+            'for a client that named its methods: the default too': {
+                on: true,
+                methods: [
+                    {
+                        id: userId,
+                        kind: 'webauthn',
+                        name: 'Passkey',
+                        createdAt: '2026-11-02T09:00:00.000Z',
+                        lastUsedAt: null,
+                        synced: true,
+                    },
+                ],
+                backupCodesLeft: 10,
+                totpFrozen: false,
+                defaultKind: 'webauthn',
+            } satisfies Reply<typeof auth.getTwoStep>,
+            'named, with the step off': {
+                on: false,
+                methods: [],
+                backupCodesLeft: 0,
+                totpFrozen: false,
+                defaultKind: null,
+            } satisfies Reply<typeof auth.getTwoStep>,
         },
         stray: (v) => v.methods[0] ?? v,
         required: ['off', (v) => delete v.backupCodesLeft],
+    },
+    'POST /auth/two-step/keys/options': {
+        schema: keyOptionsResponse,
+        samples: {
+            'a second key': {
+                registrationToken: b64(32, 6),
+                expiresAt: '2026-11-12T10:05:00.000Z',
+                options: {
+                    challenge: b64(32, 7),
+                    rp: { id: 'hushos.com', name: 'HushOS' },
+                    user: {
+                        id: b64(32, 8),
+                        name: 'ada@example.com',
+                        displayName: 'ada@example.com',
+                    },
+                    pubKeyCredParams: [
+                        { type: 'public-key', alg: -8 },
+                        { type: 'public-key', alg: -7 },
+                        { type: 'public-key', alg: -257 },
+                    ],
+                    timeout: 300_000,
+                    attestation: 'none',
+                    excludeCredentials: [
+                        { id: b64(32, 9), type: 'public-key', transports: ['usb', 'nfc'] },
+                        { id: b64(16, 3), type: 'public-key' },
+                    ],
+                    authenticatorSelection: {
+                        residentKey: 'discouraged',
+                        userVerification: 'discouraged',
+                        requireResidentKey: false,
+                    },
+                },
+            } satisfies Reply<typeof auth.startKeyEnrolment>,
+        },
+        stray: (v) => v.options,
+        required: ['a second key', (v) => delete v.options.challenge],
+    },
+    'POST /auth/two-step/keys': {
+        schema: keyAddedResponse,
+        samples: {
+            'the first method, with its codes': {
+                method: {
+                    id: deviceId,
+                    kind: 'webauthn',
+                    name: 'Security key',
+                    createdAt: '2026-11-12T10:00:00.000Z',
+                    lastUsedAt: null,
+                    synced: false,
+                },
+                backupCodes: ['7KQ2M-9XD4P', '0A1B2-C3D4E'],
+            } satisfies Reply<typeof auth.finishKeyEnrolment>,
+            'another key': {
+                method: {
+                    id: deviceId,
+                    kind: 'webauthn',
+                    name: 'Passkey',
+                    createdAt: '2026-11-12T10:00:00.000Z',
+                    lastUsedAt: null,
+                    synced: true,
+                },
+            } satisfies Reply<typeof auth.finishKeyEnrolment>,
+        },
+        stray: (v) => v.method,
+        required: ['another key', (v) => delete (v as { method?: object }).method],
+    },
+    'PUT /auth/two-step/methods/:id': {
+        schema: methodResponse,
+        samples: {
+            renamed: {
+                method: {
+                    id: deviceId,
+                    kind: 'webauthn',
+                    name: 'Blue key',
+                    createdAt: '2026-11-12T10:00:00.000Z',
+                    lastUsedAt: '2026-11-12T11:00:00.000Z',
+                    synced: false,
+                },
+            } satisfies Reply<typeof auth.renameTwoStepMethod>,
+        },
+        stray: (v) => v.method,
+        required: ['renamed', (v) => delete (v.method as { name?: string }).name],
+    },
+    'PUT /auth/two-step/default': {
+        schema: defaultKindResponse,
+        samples: {
+            'the app': { defaultKind: 'totp' } satisfies Reply<typeof auth.setTwoStepDefault>,
+            'a key': { defaultKind: 'webauthn' } satisfies Reply<typeof auth.setTwoStepDefault>,
+        },
+        stray: (v) => v,
+        required: ['a key', (v) => delete (v as { defaultKind?: string }).defaultKind],
     },
     'POST /auth/two-step/totp': {
         schema: totpEnrolmentResponse,
@@ -1025,7 +1192,7 @@ const expectedSchemas: Record<string, { 200: AnySchema }> = {
     'GET /api/auth/register': { 200: enrollmentResponse },
     'POST /api/auth/register/start': { 200: registrationChallengeResponse },
     'POST /api/auth/register/finish': { 200: authUserResponse },
-    'POST /api/auth/login/start': { 200: loginChallengeResponse },
+    'POST /api/auth/login/start': { 200: loginStartResponse },
     'POST /api/auth/login/finish': { 200: loginFinishResponse },
     'POST /api/auth/login/two-step': { 200: loginResponse },
     'POST /api/auth/recover/email': { 200: emailSentResponse },
@@ -1066,6 +1233,10 @@ const expectedSchemas: Record<string, { 200: AnySchema }> = {
     'POST /api/auth/two-step/totp/:id/confirm': { 200: totpConfirmedResponse },
     'DELETE /api/auth/two-step/methods/:id': { 200: methodRemovedResponse },
     'POST /api/auth/two-step/backup-codes': { 200: backupCodesResponse },
+    'POST /api/auth/two-step/keys/options': { 200: keyOptionsResponse },
+    'POST /api/auth/two-step/keys': { 200: keyAddedResponse },
+    'PUT /api/auth/two-step/methods/:id': { 200: methodResponse },
+    'PUT /api/auth/two-step/default': { 200: defaultKindResponse },
     'GET /api/auth/security-events': { 200: securityEventsResponse },
 };
 /*

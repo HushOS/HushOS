@@ -8,6 +8,7 @@ import { authApi } from '@/lib/auth-api';
 import { watchSignOutElsewhere } from '@/lib/device-data';
 import { afterSignOut } from '@/lib/sign-in-gate';
 import { describeBrowser } from '@/lib/device-name';
+import { passkeys } from '@/lib/passkeys';
 
 export const authClient = afterSignOut(
     createAuthClient(
@@ -24,6 +25,7 @@ export const authClient = afterSignOut(
             // and a failure is reported so the wipe is tried again. Loaded on demand; the dynamic
             // import keeps sign-out.ts out of this module.
             onRemoved: () => import('@/lib/sign-out').then(({ clearDevice }) => clearDevice()),
+            passkeys,
         },
     ),
 );

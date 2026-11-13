@@ -41,7 +41,10 @@ export const securityEventsQueryOptions = queryOptions({
     retry: false,
 });
 
-/* What a person has typed for a step: one field for each method, so switching loses nothing. */
+/*
+ * What a person has typed for a step: one field for each method, so switching loses nothing.
+ * A passkey or security key has no field: its answer is made when the step is sent.
+ */
 export type StepDraft = { method: StepMethod; totp: string; backup: string; phrase: string };
 export const emptyDraft = (methods: readonly StepMethod[]): StepDraft => ({
     method: methods[0] ?? 'totp',
@@ -52,6 +55,7 @@ export const emptyDraft = (methods: readonly StepMethod[]): StepDraft => ({
 export const phraseWords = (text: string) => text.trim().toLowerCase().split(/\s+/).filter(Boolean);
 /* Why the draft cannot be sent yet, in the field's own words; empty when it can. */
 export function draftError(draft: StepDraft) {
+    if (draft.method === 'webauthn') return '';
     if (draft.method === 'totp')
         return /^\d{6}$/.test(draft.totp.replace(/\s/g, ''))
             ? ''
@@ -64,6 +68,7 @@ export function draftError(draft: StepDraft) {
     return count === 24 ? '' : `Enter all 24 words of your recovery phrase. ${count} so far.`;
 }
 export function draftAnswer(draft: StepDraft): StepAnswer {
+    if (draft.method === 'webauthn') return { kind: 'webauthn' };
     if (draft.method === 'totp') return { kind: 'totp', code: draft.totp.replace(/\s/g, '') };
     if (draft.method === 'backup') return { kind: 'backup', code: draft.backup.trim() };
     return { kind: 'phrase', phrase: phraseWords(draft.phrase).join(' ') };
@@ -83,9 +88,10 @@ export function draftFor(draft: StepDraft, methods: readonly StepMethod[]): Step
 /*
  * After an answer was refused: which methods are still worth offering on this step.
  * - A paused app is not (`frozen`).
- * - After too many wrong codes (`limited`) only the recovery phrase is: the app's codes and
- *   the backup codes share one budget. Without a phrase nothing is: the budget lasts 15
- *   minutes and a step five, so a code field left on screen could only be refused again.
+ * - After too many wrong codes (`limited`) only a passkey or security key and the recovery
+ *   phrase are: the app's codes and the backup codes share one budget, and those two have
+ *   none. Without either nothing is: the budget lasts 15 minutes and a step five, so a code
+ *   field left on screen could only be refused again.
  * - A method the server cannot check right now (`unavailable`) is withdrawn alone, the one
  *   that was `tried`: the app's secret and the backup codes can sit under different keys, so
  *   one being unreadable says nothing of the other.
@@ -97,7 +103,8 @@ export function methodsAfter(
 ): StepMethod[] {
     if (reason === 'frozen') return methods.filter((method) => method !== 'totp');
     if (reason === 'unavailable') return methods.filter((method) => method !== tried);
-    if (reason === 'limited') return methods.filter((method) => method === 'phrase');
+    if (reason === 'limited')
+        return methods.filter((method) => method === 'phrase' || method === 'webauthn');
     return [...methods];
 }
 
@@ -211,3 +218,23 @@ export function useStepUp(purpose: StepPurpose) {
     };
 }
 export type StepUp = ReturnType<typeof useStepUp>;
+
+/*
+ * What a step says above its fields when the server left something out (docs/two-step-design.md
+ * 12). One line, never the reason: someone who has only the password learns nothing about the
+ * owner's devices from it.
+ * - A way was left out though this browser named every kind it knows: a newer HushOS has it.
+ * - Otherwise, the account's usual way is not first: it can't be used here, whyever.
+ */
+export function stepNote(
+    challenge: Pick<StepChallenge, 'withheld' | 'defaultUnavailable'>,
+    flow: 'sign-in' | 'change',
+) {
+    if (challenge.withheld && authClient.canUsePasskeys())
+        return 'Update HushOS to use your passkey or another device.';
+    if (challenge.defaultUnavailable)
+        return flow === 'sign-in'
+            ? 'Your usual way isn’t available for this sign-in.'
+            : 'Your usual way isn’t available for this change.';
+    return '';
+}

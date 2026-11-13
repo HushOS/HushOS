@@ -39,6 +39,10 @@ export const NOTIFICATION_KINDS = {
     'step-failed': 'security',
     'change-step-failed': 'security',
     'totp-frozen': 'security',
+    // Passkeys and security keys (docs/two-step-design.md 3, 7).
+    'two-step-key-added': 'security',
+    'two-step-key-removed': 'security',
+    'key-counter': 'security',
     shared: 'other',
     'family-invitation': 'other',
     'family-waiting': 'other',
@@ -66,6 +70,9 @@ export type NotificationData = {
     'step-failed': Record<string, never>;
     'change-step-failed': Record<string, never>;
     'totp-frozen': Record<string, never>;
+    'two-step-key-added': Record<string, never>;
+    'two-step-key-removed': Record<string, never>;
+    'key-counter': Record<string, never>;
     shared: { granterUserId: string; shareId: string; role: 'viewer' | 'editor' };
     'family-invitation': { groupId: string; invitationId: string };
     'family-waiting': { groupId: string };

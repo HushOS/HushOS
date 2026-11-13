@@ -1,4 +1,9 @@
-import type { SecurityEvent, TwoStepStatus } from '@hushos/auth/api';
+import type {
+    KeyCreationOptions,
+    SecurityEvent,
+    TwoStepMethod,
+    TwoStepStatus,
+} from '@hushos/auth/api';
 import { LostReply } from '@hushos/auth/client';
 import type { SessionUser } from '@hushos/auth/protocol';
 import { PASSWORD_MAX_LENGTH } from '@hushos/auth/protocol';
@@ -28,6 +33,7 @@ import { authClient } from '@/lib/auth-client';
 import { copySecret } from '@/lib/clipboard';
 import { formatDay, formatTime } from '@/lib/drive';
 import { whenPageLeaves } from '@/lib/new-phrase';
+import { preloadPasskeys } from '@/lib/passkeys';
 import { whenBrowserLocks } from '@/lib/show-new-phrase';
 import { authError } from '@/lib/form';
 import { saveBlob } from '@/lib/save-file';
@@ -40,13 +46,27 @@ import {
 } from '@/lib/two-step';
 
 /*
- * Two-step sign-in in Account (docs/two-step-design.md 2, 4, 7): turning it on with an
- * authenticator app, the backup codes shown once, replacing the app, new codes, turning it
- * off, and the account's recent security activity. Every change asks for the password again,
- * and, once the step is on, for the step. Nothing shows on a server that has two-step off.
+ * Two-step sign-in in Account (docs/two-step-design.md 2, 3, 4, 7, 12): passkeys and security
+ * keys (add, name, remove, up to ten), the authenticator app, which of the two is offered
+ * first, the backup codes shown once, and the account's recent security activity. Every
+ * change asks for the password again and, once the step is on, for the step; choosing the
+ * default changes only an order and asks for neither. Nothing shows on a server that has
+ * two-step off.
  */
 
-type Open = 'on' | 'replace' | 'off' | 'codes' | null;
+type Open =
+    | { kind: 'app'; mode: 'on' | 'add' | 'replace' }
+    | { kind: 'key' }
+    | { kind: 'rename'; method: TwoStepMethod }
+    | { kind: 'remove'; method: TwoStepMethod }
+    | { kind: 'codes' }
+    | null;
+
+const KEY_LIMIT = 10;
+const kindWords = {
+    webauthn: 'Passkey or security key',
+    totp: 'Authenticator app',
+} as const;
 
 export function AccountTwoStep({ user }: { user: SessionUser }) {
     const enabled = useTwoStepEnabled();
@@ -54,6 +74,8 @@ export function AccountTwoStep({ user }: { user: SessionUser }) {
     const status = useQuery({ ...twoStepQueryOptions, enabled });
     const [open, setOpen] = useState<Open>(null);
     const [done, setDone] = useState('');
+    const [problem, setProblem] = useState('');
+    const [moving, setMoving] = useState(false);
     if (!enabled) return null;
     const refresh = () =>
         Promise.all([
@@ -67,10 +89,55 @@ export function AccountTwoStep({ user }: { user: SessionUser }) {
     };
     const begin = (next: Open) => {
         setDone('');
+        setProblem('');
         setOpen(next);
     };
     const close = () => setOpen(null);
-    const app = status.data?.methods.find((method) => method.kind === 'totp');
+    const methods = status.data?.methods ?? [];
+    const app = methods.find((method) => method.kind === 'totp');
+    const keys = methods.filter((method) => method.kind === 'webauthn');
+    const on = status.data?.on === true;
+    const defaultKind = status.data?.defaultKind ?? null;
+    // Which kind is offered first changes only an order: no password, no step.
+    async function makeDefault(kind: 'webauthn' | 'totp') {
+        setDone('');
+        setProblem('');
+        setMoving(true);
+        try {
+            await authClient.setTwoStepDefault(kind);
+            cue('success');
+            finish(`${kindWords[kind]} is now asked for first.`);
+        } catch (cause) {
+            cue('error');
+            setProblem(authError(cause));
+            void refresh();
+        } finally {
+            setMoving(false);
+        }
+    }
+    /*
+     * Default beside the kind offered first, Make default beneath the other, and neither with
+     * one kind. The badge sits with the method's own words and the button on a line of its
+     * own, so a phone's row never has more than two actions beside its text.
+     */
+    const choosing = on && Boolean(app) && keys.length > 0;
+    const isDefault = (kind: 'webauthn' | 'totp') =>
+        choosing && defaultKind === kind ? <Badge>Default</Badge> : null;
+    const makeIt = (kind: 'webauthn' | 'totp') =>
+        choosing && defaultKind !== kind ? (
+            <Button
+                variant="ghost"
+                className="-ms-3.5 self-start"
+                disabled={moving}
+                aria-label={`Make ${kindWords[kind].toLowerCase()} the default`}
+                onClick={() => void makeDefault(kind)}
+            >
+                Make default
+            </Button>
+        ) : null;
+    // The last method is not removed: turning it off is turning the step off.
+    const removeWords = methods.length === 1 ? 'Turn off' : 'Remove';
+    const canAdd = authClient.canUsePasskeys();
     return (
         <div id="two-step" className="scroll-mt-20">
             <SettingsGroup
@@ -95,41 +162,105 @@ export function AccountTwoStep({ user }: { user: SessionUser }) {
                             Two-step sign-in couldn’t be loaded.
                         </span>
                     </Setting>
-                ) : !status.data.on ? (
-                    <Setting
-                        label="Status"
-                        data={{ 'data-two-step': 'off' }}
-                        action={
-                            <Button variant="outline" onClick={() => begin('on')}>
-                                Turn on
-                            </Button>
-                        }
-                        below={done && <Done>{done}</Done>}
-                    >
-                        <span className="text-muted-foreground">
-                            Off. Your password alone signs you in.
-                        </span>
-                    </Setting>
                 ) : (
                     <>
                         <Setting
-                            label="Authenticator app"
-                            data={{ 'data-two-step': 'on' }}
-                            action={
-                                <>
-                                    <Button variant="ghost" onClick={() => begin('replace')}>
-                                        Replace
-                                    </Button>
-                                    <Button
-                                        variant="destructive-outline"
-                                        onClick={() => begin('off')}
-                                    >
-                                        Turn off
-                                    </Button>
-                                </>
-                            }
+                            label="Status"
+                            data={{ 'data-two-step': on ? 'on' : 'off' }}
                             below={
                                 <>
+                                    {done && <Done>{done}</Done>}
+                                    {problem && (
+                                        <p role="alert" className="text-[13px] text-destructive">
+                                            {problem}
+                                        </p>
+                                    )}
+                                </>
+                            }
+                        >
+                            {on ? (
+                                <span className="font-medium">On</span>
+                            ) : (
+                                <span className="text-muted-foreground">
+                                    Off. Your password alone signs you in.
+                                </span>
+                            )}
+                        </Setting>
+                        <Setting
+                            label={kindWords.webauthn}
+                            data={{ 'data-two-step-keys': String(keys.length) }}
+                            action={
+                                canAdd &&
+                                keys.length < KEY_LIMIT && (
+                                    <Button
+                                        variant="outline"
+                                        aria-label="Add passkey or security key"
+                                        onClick={() => begin({ kind: 'key' })}
+                                    >
+                                        Add
+                                    </Button>
+                                )
+                            }
+                            below={
+                                <div className="flex flex-col gap-1.5">
+                                    {makeIt('webauthn')}
+                                    <KeyNotes keys={keys} withApp={Boolean(app)} canAdd={canAdd} />
+                                </div>
+                            }
+                        >
+                            {keys.length === 0 ? (
+                                <span className="text-muted-foreground">
+                                    Not added. It stops fake sign-in pages, which a code can’t.
+                                </span>
+                            ) : (
+                                <KeyList badge={isDefault('webauthn')}>
+                                    {keys.map((key) => (
+                                        <KeyRow
+                                            key={key.id}
+                                            method={key}
+                                            removeWords={removeWords}
+                                            onRename={() => begin({ kind: 'rename', method: key })}
+                                            onRemove={() => begin({ kind: 'remove', method: key })}
+                                        />
+                                    ))}
+                                </KeyList>
+                            )}
+                        </Setting>
+                        <Setting
+                            label={kindWords.totp}
+                            data={{ 'data-two-step-app': app ? 'on' : 'off' }}
+                            action={
+                                app ? (
+                                    <>
+                                        <Button
+                                            variant="ghost"
+                                            onClick={() => begin({ kind: 'app', mode: 'replace' })}
+                                        >
+                                            Replace
+                                        </Button>
+                                        <Button
+                                            variant="destructive-outline"
+                                            aria-label={`${removeWords} authenticator app`}
+                                            onClick={() => begin({ kind: 'remove', method: app })}
+                                        >
+                                            {removeWords}
+                                        </Button>
+                                    </>
+                                ) : (
+                                    <Button
+                                        variant="outline"
+                                        aria-label="Add authenticator app"
+                                        onClick={() =>
+                                            begin({ kind: 'app', mode: on ? 'add' : 'on' })
+                                        }
+                                    >
+                                        Add
+                                    </Button>
+                                )
+                            }
+                            below={
+                                <div className="flex flex-col gap-1.5">
+                                    {makeIt('totp')}
                                     {status.data.totpFrozen && (
                                         <p className="text-[13px] text-muted-foreground">
                                             Its codes are refused on devices HushOS doesn’t
@@ -137,54 +268,80 @@ export function AccountTwoStep({ user }: { user: SessionUser }) {
                                             recovery phrase works there, and lifts the pause.
                                         </p>
                                     )}
-                                    {done && <Done>{done}</Done>}
-                                </>
+                                </div>
                             }
                         >
-                            <span className="flex min-w-0 flex-wrap items-center gap-2">
-                                <span className="font-medium">On</span>
-                                {status.data.totpFrozen && <Badge variant="warning">Paused</Badge>}
-                                {app && (
+                            {app ? (
+                                <span className="flex min-w-0 flex-wrap items-center gap-2">
+                                    <span className="font-medium">On</span>
+                                    {isDefault('totp')}
+                                    {status.data.totpFrozen && (
+                                        <Badge variant="warning">Paused</Badge>
+                                    )}
                                     <span className="text-[13px] text-muted-foreground">
                                         {used(app)}
                                     </span>
-                                )}
-                            </span>
+                                </span>
+                            ) : (
+                                <span className="text-muted-foreground">
+                                    Not added. A 6-digit code from an app on your phone.
+                                </span>
+                            )}
                         </Setting>
-                        <Setting
-                            label="Backup codes"
-                            action={
-                                <Button variant="outline" onClick={() => begin('codes')}>
-                                    New codes
-                                </Button>
-                            }
-                        >
-                            <span className="text-muted-foreground">{codesLeft(status.data)}</span>
-                        </Setting>
+                        {on && (
+                            <Setting
+                                label="Backup codes"
+                                action={
+                                    <Button
+                                        variant="outline"
+                                        onClick={() => begin({ kind: 'codes' })}
+                                    >
+                                        New codes
+                                    </Button>
+                                }
+                            >
+                                <span className="text-muted-foreground">
+                                    {codesLeft(status.data)}
+                                </span>
+                            </Setting>
+                        )}
                     </>
                 )}
                 {status.isSuccess && <SecurityActivity />}
             </SettingsGroup>
             <AppDialog
                 // A new dialog each time it opens: nothing of a secret or a password is kept.
-                key={`app-${open === 'on' || open === 'replace' ? open : 'closed'}`}
+                key={`app-${open?.kind === 'app' ? open.mode : 'closed'}`}
                 user={user}
-                mode={open === 'replace' ? 'replace' : 'on'}
-                open={open === 'on' || open === 'replace'}
+                mode={open?.kind === 'app' ? open.mode : 'on'}
+                open={open?.kind === 'app'}
                 onClose={close}
                 onDone={finish}
             />
-            <TurnOffDialog
-                key={`off-${open === 'off'}`}
-                factorId={app?.id ?? null}
-                open={open === 'off'}
+            <KeyDialog
+                key={`key-${open?.kind === 'key'}`}
+                user={user}
+                first={!on}
+                open={open?.kind === 'key'}
+                onClose={close}
+                onDone={finish}
+            />
+            <RenameKeyDialog
+                method={open?.kind === 'rename' ? open.method : null}
+                onClose={close}
+                onDone={finish}
+            />
+            <RemoveDialog
+                key={`remove-${open?.kind === 'remove' ? open.method.id : 'closed'}`}
+                method={open?.kind === 'remove' ? open.method : null}
+                last={methods.length === 1}
                 onClose={close}
                 onDone={finish}
             />
             <NewCodesDialog
-                key={`codes-${open === 'codes'}`}
+                key={`codes-${open?.kind === 'codes'}`}
                 user={user}
-                open={open === 'codes'}
+                open={open?.kind === 'codes'}
                 onClose={close}
                 onDone={finish}
             />
@@ -192,9 +349,100 @@ export function AccountTwoStep({ user }: { user: SessionUser }) {
     );
 }
 
-function used(app: TwoStepStatus['methods'][number]) {
-    const added = `Added ${formatDay(app.createdAt)}`;
-    return app.lastUsedAt ? `${added} · Last used ${formatDay(app.lastUsedAt)}` : added;
+function used(method: TwoStepMethod) {
+    const added = `Added ${formatDay(method.createdAt)}`;
+    return method.lastUsedAt ? `${added} · Last used ${formatDay(method.lastUsedAt)}` : added;
+}
+
+/* The account's keys, with Default above them while their kind is the one offered first. */
+function KeyList({ badge, children }: { badge: ReactNode; children: ReactNode }) {
+    return (
+        <div className="flex min-w-0 flex-col gap-2">
+            {badge}
+            <ul
+                aria-label="Passkeys and security keys"
+                className="m-0 flex list-none flex-col gap-3 p-0"
+            >
+                {children}
+            </ul>
+        </div>
+    );
+}
+
+/* One key: its name, where it lives, when it was added and last used, and its two actions. */
+function KeyRow({
+    method,
+    removeWords,
+    onRename,
+    onRemove,
+}: {
+    method: TwoStepMethod;
+    removeWords: string;
+    onRename: () => void;
+    onRemove: () => void;
+}) {
+    const name = method.name ?? 'Security key';
+    return (
+        <li data-two-step-key-row className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+            <div className="flex min-w-0 flex-1 basis-48 flex-col gap-0.5">
+                <span className="font-medium wrap-anywhere">{name}</span>
+                <span className="text-[13px] text-muted-foreground">
+                    {method.synced ? 'Saved in a password manager · ' : ''}
+                    {used(method)}
+                </span>
+            </div>
+            <div className="flex items-center gap-2">
+                <Button variant="ghost" onClick={onRename} aria-label={`Rename ${name}`}>
+                    Rename
+                </Button>
+                <Button
+                    variant="destructive-outline"
+                    onClick={onRemove}
+                    aria-label={`${removeWords} ${name}`}
+                >
+                    {removeWords}
+                </Button>
+            </div>
+        </li>
+    );
+}
+
+/*
+ * What the list says beneath itself, each line only while it is true (docs/two-step-design.md
+ * 3, 12): a synced passkey beside the password is one factor; a passkey stops a fake page
+ * only when it is the way used; one key alone is one loss from the backup codes; and where
+ * this browser cannot add one.
+ */
+function KeyNotes({
+    keys,
+    withApp,
+    canAdd,
+}: {
+    keys: TwoStepMethod[];
+    withApp: boolean;
+    canAdd: boolean;
+}) {
+    const lines = [
+        keys.some((key) => key.synced) &&
+            'A passkey saved in the same password manager as your password is one factor, not two: whoever opens the manager has both.',
+        keys.length > 0 &&
+            withApp &&
+            'A passkey stops a fake sign-in page only when you use it. A fake page can ask you to use another way instead.',
+        keys.length === 1 &&
+            'Add a second key and keep it somewhere else, in case this one is lost.',
+        keys.length >= KEY_LIMIT && 'You have ten, the most an account can have.',
+        !canAdd && 'This browser can’t use passkeys or security keys.',
+    ].filter((line): line is string => Boolean(line));
+    if (lines.length === 0) return null;
+    return (
+        <div className="flex flex-col gap-1.5">
+            {lines.map((line) => (
+                <p key={line} className="text-[13px] text-muted-foreground">
+                    {line}
+                </p>
+            ))}
+        </div>
+    );
 }
 
 function codesLeft(status: TwoStepStatus) {
@@ -211,7 +459,7 @@ const withMethod: Record<NonNullable<SecurityEvent['method']>, string> = {
     totp: 'an authenticator code',
     backup: 'a backup code',
     phrase: 'your recovery phrase',
-    webauthn: 'a security key',
+    webauthn: 'a passkey or security key',
 };
 const deviceWords = { web: 'Browser', ios: 'iPhone or iPad', android: 'Android' } as const;
 
@@ -235,19 +483,28 @@ function eventWords(event: SecurityEvent) {
             return 'Two-step sign-in turned on';
         case 'two-step-off':
             return 'Two-step sign-in turned off';
-        // Said by the kind of method, so the line is right for a security key too.
+        // Said by the kind of method, so the line is right for a key too. An app's line covers
+        // both an app added beside a key and one that replaced another.
         case 'method-added':
             return event.method === 'webauthn'
-                ? 'Security key added'
+                ? 'Passkey or security key added'
                 : event.method === 'totp'
-                  ? 'Authenticator app replaced'
+                  ? 'Authenticator app added'
                   : 'Second-step method added';
         case 'method-removed':
             return event.method === 'webauthn'
-                ? 'Security key removed'
+                ? 'Passkey or security key removed'
                 : event.method === 'totp'
                   ? 'Authenticator app removed'
                   : 'Second-step method removed';
+        case 'default-changed':
+            return event.method === 'webauthn'
+                ? 'Default changed to passkey or security key'
+                : event.method === 'totp'
+                  ? 'Default changed to authenticator app'
+                  : 'Default changed';
+        case 'key-counter':
+            return 'A security key was refused: it may have been copied';
         case 'backup-codes-made':
             return 'New backup codes made';
         default:
@@ -527,13 +784,13 @@ function AppDialog({
     onDone,
 }: {
     user: SessionUser;
-    mode: 'on' | 'replace';
+    /* `on`: the account's first method. `add`: an app beside its keys. `replace`: a new app for the old. */
+    mode: 'on' | 'add' | 'replace';
     open: boolean;
     onClose: () => void;
     onDone: (said: string) => void;
 }) {
     const codeId = useId();
-    const othersId = useId();
     const devices = useQuery({ ...devicesQueryOptions, enabled: open && mode === 'on' });
     // How many other devices the list shows, when it could be read. It only words the offer:
     // whether they are removed is the tick box's to say, since the list may have failed to
@@ -554,6 +811,7 @@ function AppDialog({
     const [removing, setRemoving] = useState<'no' | 'running' | 'failed'>('no');
     const codeNote = useId();
     const replacing = mode === 'replace';
+    const turningOn = mode === 'on';
     const era = useForgottenOnLock(open, () => {
         setApp(null);
         setCodes(null);
@@ -561,13 +819,13 @@ function AppDialog({
         setPassword('');
         onClose();
     });
-    // Replacing needs the step from the start: its fields are there when the dialog opens.
+    // With the step already on it is needed from the start: its fields are there when the dialog opens.
     const { ask } = step;
     useEffect(() => {
-        if (open && replacing) void ask().catch(() => {});
+        if (open && !turningOn) void ask().catch(() => {});
         // Only when the dialog opens.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [open, replacing]);
+    }, [open, turningOn]);
 
     async function start() {
         setTried(true);
@@ -607,11 +865,11 @@ function AppDialog({
                 // Turning the step on always comes back with the codes. An answer without
                 // them is not the server's answer to that: nothing is claimed, and the
                 // section behind this dialog is read again (below).
-                if (!replacing)
+                if (turningOn)
                     throw new LostReply(
                         'The server’s answer didn’t arrive, so HushOS can’t tell whether two-step sign-in was turned on. Check before you try again.',
                     );
-                onDone('Authenticator app replaced.');
+                onDone(replacing ? 'Authenticator app replaced.' : 'Authenticator app added.');
                 onClose();
                 return;
             }
@@ -622,10 +880,10 @@ function AppDialog({
             // the box is ticked, whatever the list said (the server removes none when there
             // are none). It runs behind the codes and never holds them or the dialog: a
             // failure is said beside the codes, and in a notice if the dialog has closed.
-            // Only when the step is being turned on. Replacing an app never removes a
-            // device, even when it comes back with codes: another tab removed the app
-            // meanwhile, and nobody was offered, or agreed to, any removal here.
-            if (!replacing && signOutOthers) {
+            // Only when the step is being turned on. Replacing or adding an app never removes
+            // a device, even when it comes back with codes: another tab removed the last
+            // method meanwhile, and nobody was offered, or agreed to, any removal here.
+            if (turningOn && signOutOthers) {
                 setRemoving('running');
                 void authClient.removeOtherDevices(password).then(
                     () => {
@@ -707,7 +965,13 @@ function AppDialog({
                     <>
                         {cancel}
                         <Button type="submit" disabled={pending}>
-                            {pending ? 'Checking' : replacing ? 'Replace app' : 'Turn on'}
+                            {pending
+                                ? 'Checking'
+                                : replacing
+                                  ? 'Replace app'
+                                  : turningOn
+                                    ? 'Turn on'
+                                    : 'Add app'}
                         </Button>
                     </>
                 }
@@ -764,24 +1028,13 @@ function AppDialog({
                         </p>
                     )}
                 </div>
-                {!replacing && (
-                    <div className="flex items-start gap-3">
-                        <Checkbox
-                            id={othersId}
-                            checked={signOutOthers}
-                            disabled={pending}
-                            onCheckedChange={(checked) => setSignOutOthers(checked === true)}
-                            className="mt-0.5"
-                        />
-                        <label htmlFor={othersId} className="flex flex-col gap-0.5 text-sm">
-                            <span className="font-semibold">Remove my other devices</span>
-                            <span className="text-[13px] text-muted-foreground">
-                                {others
-                                    ? `${others === 1 ? 'One other device is' : `${others} other devices are`} signed in without the second step. They’ll need to sign in again, and will be asked for it.`
-                                    : 'Any other device signed in to your account will need to sign in again, and will be asked for the second step.'}
-                            </span>
-                        </label>
-                    </div>
+                {turningOn && (
+                    <RemoveOthersOffer
+                        checked={signOutOthers}
+                        onChange={setSignOutOthers}
+                        disabled={pending}
+                        others={others}
+                    />
                 )}
             </Shell>
         );
@@ -790,11 +1043,19 @@ function AppDialog({
         <Shell
             open={open}
             pending={pending}
-            title={replacing ? 'Replace your authenticator app?' : 'Turn on two-step sign-in?'}
+            title={
+                replacing
+                    ? 'Replace your authenticator app?'
+                    : turningOn
+                      ? 'Turn on two-step sign-in?'
+                      : 'Add an authenticator app?'
+            }
             description={
                 replacing
                     ? 'The new app takes over once you confirm it. Your backup codes stay as they are.'
-                    : 'After your password, HushOS will ask for a code from an authenticator app on your phone. Your recovery phrase works as the second step too, so keep it apart from your password.'
+                    : turningOn
+                      ? 'After your password, HushOS will ask for a code from an authenticator app on your phone. Your recovery phrase works as the second step too, so keep it apart from your password.'
+                      : 'A code from the app will pass your second step too. Your other ways to sign in stay as they are.'
             }
             onClose={onClose}
             onSubmit={() => void start()}
@@ -819,18 +1080,372 @@ function AppDialog({
     );
 }
 
-/* Turning the step off is removing its last method: the password and the step itself. */
-function TurnOffDialog({
-    factorId,
+/* The offer made whenever the step is being turned on: the other devices never passed it. */
+function RemoveOthersOffer({
+    checked,
+    onChange,
+    disabled,
+    others,
+}: {
+    checked: boolean;
+    onChange: (checked: boolean) => void;
+    disabled: boolean;
+    /* How many other devices the list shows, when it could be read: it only words the offer. */
+    others: number | null;
+}) {
+    const id = useId();
+    return (
+        <div className="flex items-start gap-3">
+            <Checkbox
+                id={id}
+                checked={checked}
+                disabled={disabled}
+                onCheckedChange={(next) => onChange(next === true)}
+                className="mt-0.5"
+            />
+            <label htmlFor={id} className="flex flex-col gap-0.5 text-sm">
+                <span className="font-semibold">Remove my other devices</span>
+                <span className="text-[13px] text-muted-foreground">
+                    {others
+                        ? `${others === 1 ? 'One other device is' : `${others} other devices are`} signed in without the second step. They’ll need to sign in again, and will be asked for it.`
+                        : 'Any other device signed in to your account will need to sign in again, and will be asked for the second step.'}
+                </span>
+            </label>
+        </div>
+    );
+}
+
+/*
+ * Adding a passkey or security key: the password (and the step, once it is on), then the key
+ * itself, asked by the browser on the press of Add, with a name for it if the person wants
+ * one. The account's first method turns the step on, and its backup codes follow.
+ */
+function KeyDialog({
+    user,
+    first,
     open,
     onClose,
     onDone,
 }: {
-    factorId: string | null;
+    user: SessionUser;
+    /* The account has no method yet: this key turns the step on. */
+    first: boolean;
     open: boolean;
     onClose: () => void;
     onDone: (said: string) => void;
 }) {
+    const devices = useQuery({ ...devicesQueryOptions, enabled: open && first });
+    const others = devices.isSuccess
+        ? devices.data.devices.filter((device) => !device.current).length
+        : null;
+    const step = useStepUp('two-step');
+    const [password, setPassword] = useState('');
+    const [tried, setTried] = useState(false);
+    const [pending, setPending] = useState(false);
+    const [error, setError] = useState('');
+    const [started, setStarted] = useState<{
+        registrationToken: string;
+        options: KeyCreationOptions;
+    } | null>(null);
+    const [name, setName] = useState('');
+    const [signOutOthers, setSignOutOthers] = useState(true);
+    const [codes, setCodes] = useState<string[] | null>(null);
+    const [removing, setRemoving] = useState<'no' | 'running' | 'failed'>('no');
+    const era = useForgottenOnLock(open, () => {
+        setStarted(null);
+        setCodes(null);
+        setPassword('');
+        onClose();
+    });
+    const { ask } = step;
+    useEffect(() => {
+        if (!open) return;
+        // The browser's part is fetched now, so the press that adds the key goes straight to it.
+        preloadPasskeys();
+        if (!first) void ask().catch(() => {});
+        // Only when the dialog opens.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [open, first]);
+
+    async function start() {
+        setTried(true);
+        if (!password) return;
+        setPending(true);
+        setError('');
+        try {
+            if (await step.ask()) return;
+            const twoStep = await step.prove();
+            if (twoStep === null) return;
+            const at = era.current;
+            const next = await authClient.startPasskey(password, twoStep);
+            if (at !== era.current) return;
+            setStarted(next);
+            setTried(false);
+        } catch (cause) {
+            cue('error');
+            if (!(await step.failed(cause))) setError(authError(cause));
+        } finally {
+            setPending(false);
+        }
+    }
+    async function add() {
+        if (!started) return;
+        const label = name.trim();
+        if (Array.from(label).length > 40) return setError('Use no more than 40 characters.');
+        setPending(true);
+        setError('');
+        try {
+            const at = era.current;
+            // The browser's sheet opens here, on this press.
+            const added = await authClient.addPasskey(started, label || undefined);
+            if (at !== era.current) return;
+            cue('success');
+            if (!added.backupCodes) {
+                // Turning the step on always comes back with the codes: without them this is
+                // not the server's answer to that, and the section behind is read again.
+                if (first)
+                    throw new LostReply(
+                        'The server’s answer didn’t arrive, so HushOS can’t tell whether two-step sign-in was turned on. Check before you try again.',
+                    );
+                onDone('Passkey or security key added.');
+                onClose();
+                return;
+            }
+            // The codes first: they are shown once, and nothing that follows may cost them.
+            setCodes(added.backupCodes);
+            onDone('');
+            if (first && signOutOthers) {
+                setRemoving('running');
+                void authClient.removeOtherDevices(password).then(
+                    () => {
+                        setRemoving('no');
+                        onDone('');
+                    },
+                    () => {
+                        setRemoving('failed');
+                        toast.add({
+                            type: 'error',
+                            title: 'Your other devices weren’t removed',
+                            description: 'You can remove them under Your devices.',
+                        });
+                    },
+                );
+            }
+        } catch (cause) {
+            cue('error');
+            // Nothing was sent when the browser's sheet was closed: the same setup still stands.
+            // Anything the server answered ends it (a registration is good for one answer),
+            // and may hide a key that was added: the section behind is read again.
+            if ((cause as { kept?: unknown } | null)?.kept !== true) {
+                setStarted(null);
+                setTried(false);
+                onDone('');
+            }
+            setError(authError(cause));
+        } finally {
+            setPending(false);
+        }
+    }
+    const cancel = (
+        <Button type="button" variant="outline" disabled={pending} onClick={onClose}>
+            Cancel
+        </Button>
+    );
+    if (codes)
+        return (
+            <Shell
+                open={open}
+                locked
+                pending={false}
+                title="Save your backup codes"
+                description="Two-step sign-in is on."
+                onClose={onClose}
+                onSubmit={() => {
+                    onDone('Two-step sign-in is on.');
+                    onClose();
+                }}
+                footer={<Button type="submit">Done</Button>}
+            >
+                <BackupCodes codes={codes} email={user.email} />
+                {removing === 'running' && (
+                    <output className="text-[13px] text-muted-foreground">
+                        Removing your other devices
+                    </output>
+                )}
+                {removing === 'failed' && (
+                    <p role="alert" className="text-[13px] text-destructive">
+                        Your other devices weren’t removed. You can remove them under Your devices.
+                    </p>
+                )}
+            </Shell>
+        );
+    if (started)
+        return (
+            <Shell
+                open={open}
+                pending={pending}
+                title="Add your passkey or security key"
+                description="Your browser will ask for it. Have your security key ready, or choose where to save a passkey."
+                onClose={onClose}
+                onSubmit={() => void add()}
+                footer={
+                    <>
+                        {cancel}
+                        <Button type="submit" disabled={pending}>
+                            {pending ? 'Waiting for your key' : first ? 'Add and turn on' : 'Add'}
+                        </Button>
+                    </>
+                }
+            >
+                <DialogField
+                    label="Name"
+                    value={name}
+                    maxLength={40}
+                    autoComplete="off"
+                    placeholder="Security key"
+                    disabled={pending}
+                    onChange={(event) => {
+                        setName(event.target.value);
+                        setError('');
+                    }}
+                    hint="Optional. It tells your keys apart in this list. Names aren’t encrypted."
+                />
+                {first && (
+                    <RemoveOthersOffer
+                        checked={signOutOthers}
+                        onChange={setSignOutOthers}
+                        disabled={pending}
+                        others={others}
+                    />
+                )}
+                <Problem>{error}</Problem>
+            </Shell>
+        );
+    return (
+        <Shell
+            open={open}
+            pending={pending}
+            title={first ? 'Turn on two-step sign-in?' : 'Add a passkey or security key?'}
+            description={
+                first
+                    ? 'After your password, HushOS will ask for your passkey or security key. Your recovery phrase works as the second step too, so keep it apart from your password.'
+                    : 'It will pass your second step too. Your other ways to sign in stay as they are.'
+            }
+            onClose={onClose}
+            onSubmit={() => void start()}
+            footer={
+                <>
+                    {cancel}
+                    <Button type="submit" disabled={pending}>
+                        {pending ? 'Checking' : 'Continue'}
+                    </Button>
+                </>
+            }
+        >
+            <PasswordField
+                value={password}
+                onChange={setPassword}
+                disabled={pending}
+                tried={tried}
+            />
+            <StepUpFields step={step} disabled={pending} />
+            <Problem>{error}</Problem>
+        </Shell>
+    );
+}
+
+/* A key's name: a label for this list, by the device-name rules, and not encrypted. */
+function RenameKeyDialog({
+    method,
+    onClose,
+    onDone,
+}: {
+    method: TwoStepMethod | null;
+    onClose: () => void;
+    onDone: (said: string) => void;
+}) {
+    const [draft, setDraft] = useState('');
+    const [error, setError] = useState('');
+    const [saving, setSaving] = useState(false);
+    const [shownFor, setShownFor] = useState<string | null>(null);
+    // A dialog opened for another key starts from that key's name.
+    if (method && shownFor !== method.id) {
+        setShownFor(method.id);
+        setDraft(method.name ?? '');
+        setError('');
+    }
+    const leave = () => {
+        setShownFor(null);
+        onClose();
+    };
+    async function save() {
+        if (!method) return;
+        const name = draft.trim();
+        if (!name) return setError('Enter a name.');
+        if (Array.from(name).length > 40) return setError('Use no more than 40 characters.');
+        setSaving(true);
+        setError('');
+        try {
+            await authClient.renameTwoStepMethod(method.id, name);
+            cue('success');
+            onDone('');
+            leave();
+        } catch (cause) {
+            cue('error');
+            setError(authError(cause));
+        } finally {
+            setSaving(false);
+        }
+    }
+    return (
+        <Shell
+            open={method !== null}
+            pending={saving}
+            title="Rename passkey or security key"
+            description="Shown in this list only. Names aren’t encrypted."
+            onClose={leave}
+            onSubmit={() => void save()}
+            footer={
+                <>
+                    <Button type="button" variant="outline" disabled={saving} onClick={leave}>
+                        Cancel
+                    </Button>
+                    <Button type="submit" disabled={saving}>
+                        {saving ? 'Saving' : 'Save name'}
+                    </Button>
+                </>
+            }
+        >
+            <DialogField
+                label="Name"
+                value={draft}
+                maxLength={40}
+                autoComplete="off"
+                disabled={saving}
+                error={error}
+                onChange={(event) => setDraft(event.target.value)}
+            />
+        </Shell>
+    );
+}
+
+/*
+ * Removing a method: the password and the step, by any method, the one being removed
+ * included. Removing the last one is turning the step off, and is said so.
+ */
+function RemoveDialog({
+    method,
+    last,
+    onClose,
+    onDone,
+}: {
+    method: TwoStepMethod | null;
+    /* The account's only method: removing it turns the step off. */
+    last: boolean;
+    onClose: () => void;
+    onDone: (said: string) => void;
+}) {
+    const open = method !== null;
     const step = useStepUp('two-step');
     const [password, setPassword] = useState('');
     const [tried, setTried] = useState(false);
@@ -842,18 +1457,25 @@ function TurnOffDialog({
         // Only when the dialog opens.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [open]);
+    const app = method?.kind === 'totp';
     async function submit() {
         setTried(true);
-        if (!password || !factorId) return;
+        if (!password || !method) return;
         setPending(true);
         setError('');
         try {
             if (await step.ask()) return;
             const twoStep = await step.prove();
             if (twoStep === null) return;
-            await authClient.removeTwoStepMethod(factorId, password, twoStep);
+            const removed = await authClient.removeTwoStepMethod(method.id, password, twoStep);
             cue('success');
-            onDone('Two-step sign-in is off.');
+            onDone(
+                !removed.on
+                    ? 'Two-step sign-in is off.'
+                    : app
+                      ? 'Authenticator app removed.'
+                      : 'Passkey or security key removed.',
+            );
             onClose();
         } catch (cause) {
             cue('error');
@@ -869,8 +1491,20 @@ function TurnOffDialog({
         <Shell
             open={open}
             pending={pending}
-            title="Turn off two-step sign-in?"
-            description="Your password alone will sign you in, and your backup codes will stop working."
+            title={
+                last
+                    ? 'Turn off two-step sign-in?'
+                    : app
+                      ? 'Remove your authenticator app?'
+                      : 'Remove this passkey or security key?'
+            }
+            description={
+                last
+                    ? 'Your password alone will sign you in, and your backup codes will stop working.'
+                    : app
+                      ? 'Its codes will stop passing your second step. Your other ways to sign in stay as they are.'
+                      : `${method?.name ?? 'This key'} will stop passing your second step. Your other ways to sign in stay as they are.`
+            }
             onClose={onClose}
             onSubmit={() => void submit()}
             footer={
@@ -879,7 +1513,13 @@ function TurnOffDialog({
                         Cancel
                     </Button>
                     <Button type="submit" variant="destructive" disabled={pending}>
-                        {pending ? 'Turning off' : 'Turn off'}
+                        {last
+                            ? pending
+                                ? 'Turning off'
+                                : 'Turn off'
+                            : pending
+                              ? 'Removing'
+                              : 'Remove'}
                     </Button>
                 </>
             }

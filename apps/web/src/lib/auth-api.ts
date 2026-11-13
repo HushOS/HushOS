@@ -1,4 +1,5 @@
 import type { AuthApi } from '@hushos/auth/api';
+import { NAMED_STEP_METHODS } from '@hushos/auth/client';
 import { apiClient, unwrap } from '@/lib/api-client';
 
 const api = () => apiClient().auth;
@@ -15,9 +16,21 @@ export const authApi: AuthApi = {
     // reply is read by the auth client, which never takes a 200 on trust (login-reply.ts).
     loginFinish: (input) => unwrap(api().login.finish.post({ ...input, twoStep: 1 })),
     loginTwoStep: (input) => unwrap(api().login['two-step'].post(input)),
-    twoStep: () => unwrap(api()['two-step'].get()),
+    // Every kind of method this page can list, whether or not this browser can use one.
+    twoStep: () =>
+        unwrap(api()['two-step'].get({ query: { methods: NAMED_STEP_METHODS.join(',') } })),
     twoStepReauth: (input) => unwrap(api()['two-step'].reauth.post(input)),
-    twoStepChallenge: (purpose) => unwrap(api()['two-step'].challenge.post({ purpose })),
+    twoStepChallenge: (purpose, twoStepMethods) =>
+        unwrap(
+            api()['two-step'].challenge.post({
+                purpose,
+                ...(twoStepMethods ? { twoStepMethods } : {}),
+            }),
+        ),
+    twoStepKeyOptions: (input) => unwrap(api()['two-step'].keys.options.post(input)),
+    twoStepAddKey: (input) => unwrap(api()['two-step'].keys.post(input)),
+    twoStepRenameMethod: (id, name) => unwrap(api()['two-step'].methods({ id }).put({ name })),
+    twoStepSetDefault: (kind) => unwrap(api()['two-step'].default.put({ kind })),
     twoStepStartTotp: (input) => unwrap(api()['two-step'].totp.post(input)),
     twoStepConfirmTotp: (id, code) => unwrap(api()['two-step'].totp({ id }).confirm.post({ code })),
     twoStepRemoveMethod: (id, input) => unwrap(api()['two-step'].methods({ id }).delete(input)),

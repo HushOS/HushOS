@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import type { AuthApi } from './api';
+import type { AuthApi, KeyAssertion, KeyRequestOptions } from './api';
+import type { PasskeyDriver } from './client';
 import type { CryptoTransport } from './crypto-transport';
 import type { DeviceKeyStore } from './device-storage';
 import type { SessionUser } from './protocol';
@@ -25,8 +26,14 @@ Object.defineProperty(globalThis, 'window', {
     value: { localStorage, addEventListener() {}, removeEventListener() {} },
 });
 
-const { createAuthClient, LostReply, PASSWORD_EXCHANGE_MS, StepFailure, TwoStepRequired } =
-    await import('./client');
+const {
+    ADVERT_NO_MS,
+    createAuthClient,
+    LostReply,
+    PASSWORD_EXCHANGE_MS,
+    StepFailure,
+    TwoStepRequired,
+} = await import('./client');
 
 const user = {
     id: '0b7f1c2e-3d4a-4b5c-8d6e-7f8091a2b3c4',
@@ -58,7 +65,10 @@ const answered = (message: string, status: number) =>
     Object.assign(new Error(message), { status, answered: true });
 
 /* A client whose worker and server record what reaches them. */
-function setup(server: Partial<Record<keyof AuthApi, (...input: never[]) => unknown>>) {
+function setup(
+    server: Partial<Record<keyof AuthApi, (...input: never[]) => unknown>>,
+    passkeys?: PasskeyDriver,
+) {
     items.clear();
     const worker: string[] = [];
     let locks = 0;
@@ -82,7 +92,7 @@ function setup(server: Partial<Record<keyof AuthApi, (...input: never[]) => unkn
         loginFinish: async () => ({ twoStep: step }),
         ...server,
     } as unknown as AuthApi;
-    const client = createAuthClient(() => transport, keys, api);
+    const client = createAuthClient(() => transport, keys, api, { passkeys });
     const toStep = () => client.login(user.email, 'correct horse').catch((error: unknown) => error);
     return { client, worker, toStep, locks: () => locks, cleared: () => cleared };
 }
@@ -1344,5 +1354,364 @@ describe('a password exchange that never settles', () => {
         expect(await third).toMatchObject({ id: 'app' });
         expect(removed).toEqual([]);
         expect(worker.filter((operation) => operation === 'reauthFinish')).toHaveLength(2);
+    });
+});
+
+describe('passkeys, and what this client tells the server it can answer', () => {
+    const webauthn: KeyRequestOptions = {
+        challenge: 'Y2hhbGxlbmdl',
+        rpId: 'hushos.com',
+        timeout: 300_000,
+        userVerification: 'discouraged',
+        allowCredentials: [{ id: 'a2V5', type: 'public-key' }],
+    };
+    const keyStep = { ...step, methods: ['webauthn', 'backup', 'phrase'], webauthn };
+    const assertion: KeyAssertion = {
+        id: 'a2V5',
+        rawId: 'a2V5',
+        type: 'public-key',
+        response: { clientDataJSON: 'ZGF0YQ', authenticatorData: 'YXV0aA', signature: 'c2ln' },
+    };
+    /* A device with a key that answers, and a record of when its sheet was opened. */
+    function driver(overrides: Partial<PasskeyDriver> = {}) {
+        const asked: KeyRequestOptions[] = [];
+        const passkeys: PasskeyDriver = {
+            supported: () => true,
+            get: async (options) => {
+                asked.push(options);
+                return assertion;
+            },
+            create: async () => {
+                throw new Error('Not asked for in these tests.');
+            },
+            ...overrides,
+        };
+        return { passkeys, asked };
+    }
+    const advertising = {
+        loginStart: async () => ({ attemptToken: 'attempt', twoStepMethods: true }),
+    };
+
+    test('the key’s sheet opens only when its answer is sent, for this step’s challenge, and its assertion is what goes', async () => {
+        const sent: unknown[] = [];
+        const { passkeys, asked } = driver();
+        const { client, toStep } = setup(
+            {
+                ...advertising,
+                loginFinish: async () => ({ twoStep: keyStep }),
+                loginTwoStep: async (input: never) => {
+                    sent.push(input);
+                    return session;
+                },
+            },
+            passkeys,
+        );
+        const stopped = await toStep();
+        expect(stopped).toBeInstanceOf(TwoStepRequired);
+        // The step is on screen and nothing has asked the key yet: no sheet on page load.
+        expect(asked).toEqual([]);
+        expect(await client.answerStep({ kind: 'webauthn' })).toEqual(user);
+        expect(asked).toEqual([webauthn]);
+        expect(sent).toEqual([
+            { token: step.token, proof: { kind: 'webauthn', response: assertion } },
+        ]);
+    });
+
+    test('a sheet that was closed sends nothing and leaves the step, and what the worker holds, where they were', async () => {
+        const sent: unknown[] = [];
+        const { passkeys } = driver({
+            get: async () => {
+                throw new DOMException('The operation was cancelled.', 'NotAllowedError');
+            },
+        });
+        const { client, toStep, locks } = setup(
+            {
+                ...advertising,
+                loginFinish: async () => ({ twoStep: keyStep }),
+                loginTwoStep: async (input: never) => {
+                    sent.push(input);
+                    return session;
+                },
+            },
+            passkeys,
+        );
+        await toStep();
+        const failure = await client
+            .answerStep({ kind: 'webauthn' })
+            .catch((error: unknown) => error);
+        expect(failure).toBeInstanceOf(StepFailure);
+        expect(failure).toMatchObject({ reason: 'wrong', again: true });
+        expect(sent).toEqual([]);
+        expect(locks()).toBe(0);
+        // Another way still answers the same step.
+        expect(await client.answerStep({ kind: 'backup', code: '7KQ2M-9XD4P' })).toEqual(user);
+    });
+
+    test('methods are named only to a server that said it reads them, and only the ones this device can use', async () => {
+        const finish = async (server: object, passkeys?: PasskeyDriver) => {
+            const bodies: Record<string, unknown>[] = [];
+            const { toStep } = setup(
+                {
+                    ...server,
+                    loginFinish: async (input: never) => {
+                        bodies.push(input);
+                        return { twoStep: step };
+                    },
+                },
+                passkeys,
+            );
+            await toStep();
+            return bodies;
+        };
+        // A release from before passkeys says nothing at login/start, and is sent nothing new.
+        const old = await finish({}, driver().passkeys);
+        expect(old).toHaveLength(1);
+        expect('twoStepMethods' in old[0]!).toBe(false);
+        // One that advertises is told what this device can answer.
+        expect((await finish(advertising, driver().passkeys))[0]!.twoStepMethods).toEqual([
+            'webauthn',
+        ]);
+        // A device that cannot use a passkey for this server names none, so it is never shown one.
+        expect(
+            (await finish(advertising, driver({ supported: () => false }).passkeys))[0]!
+                .twoStepMethods,
+        ).toEqual([]);
+        expect((await finish(advertising))[0]!.twoStepMethods).toEqual([]);
+    });
+
+    test('a login/finish that refuses the field is asked once more without it, on the same attempt', async () => {
+        for (const status of [422, 400]) {
+            const bodies: Record<string, unknown>[] = [];
+            const { client, toStep } = setup(
+                {
+                    ...advertising,
+                    loginFinish: async (input: never) => {
+                        bodies.push(input);
+                        if ('twoStepMethods' in (input as object))
+                            throw refusal('Please check your information and try again.', status);
+                        return { twoStep: step };
+                    },
+                    loginTwoStep: async () => session,
+                },
+                driver().passkeys,
+            );
+            expect(await toStep()).toBeInstanceOf(TwoStepRequired);
+            expect(bodies.map((body) => 'twoStepMethods' in body)).toEqual([true, false]);
+            expect(bodies[1]!.attemptToken).toBe(bodies[0]!.attemptToken);
+            expect(await client.answerStep({ kind: 'totp', code: '123456' })).toEqual(user);
+        }
+        // A wrong password is not that: it is not sent twice.
+        let asked = 0;
+        const { toStep } = setup(
+            {
+                ...advertising,
+                loginFinish: async () => {
+                    asked += 1;
+                    throw refusal('Unable to sign in.', 401);
+                },
+            },
+            driver().passkeys,
+        );
+        await toStep();
+        expect(asked).toBe(1);
+    });
+
+    test('a change’s step names methods by what the server last said, tries once when it never said, and remembers a refusal', async () => {
+        const calls: unknown[][] = [];
+        let refuse = false;
+        const server = {
+            twoStepChallenge: async (...input: never[]) => {
+                calls.push(input);
+                if (refuse && input[1] !== undefined) throw refusal('Please check.', 400);
+                return keyStep;
+            },
+        };
+        // The server advertised at the last sign-in: named.
+        const signedIn = setup({ ...advertising, ...server }, driver().passkeys);
+        await signedIn.toStep();
+        await signedIn.client.stepChallenge('password');
+        expect(calls.at(-1)).toEqual(['password', ['webauthn']]);
+        // It said nothing (a release from before passkeys): not named.
+        const old = setup(server, driver().passkeys);
+        await old.toStep();
+        await old.client.stepChallenge('password');
+        expect(calls.at(-1)).toEqual(['password']);
+
+        // Never said either way (a session from before this client): tried, and a refusal is
+        // answered by asking again without, then remembered.
+        const unknown = setup(server, driver().passkeys);
+        refuse = true;
+        calls.length = 0;
+        expect(await unknown.client.stepChallenge('delete')).toMatchObject({ token: step.token });
+        expect(calls).toEqual([['delete', ['webauthn']], ['delete']]);
+        await unknown.client.stepChallenge('delete');
+        expect(calls.at(-1)).toEqual(['delete']);
+        expect(calls).toHaveLength(3);
+
+        // "Does not read it" lasts a day. The server is updated meanwhile, and the same
+        // session's next change, a day on, names its methods again and is offered its passkey.
+        refuse = false;
+        vi.useFakeTimers({ now: Date.now() + ADVERT_NO_MS - 60_000, toFake: ['Date'] });
+        await unknown.client.stepChallenge('delete');
+        expect(calls.at(-1)).toEqual(['delete']);
+        vi.setSystemTime(Date.now() + 2 * 60_000);
+        expect(await unknown.client.stepChallenge('delete')).toMatchObject({
+            methods: ['webauthn', 'backup', 'phrase'],
+        });
+        expect(calls.at(-1)).toEqual(['delete', ['webauthn']]);
+        vi.useRealTimers();
+    });
+});
+
+/*
+ * The browser's sheet for a key can stay open for minutes. A lock or a sign-out in that time
+ * leaves the server's session usable, so what the key hands back afterwards must not be sent:
+ * the page that asked has closed, and a key added then would turn the step on with nobody to
+ * show its backup codes to.
+ */
+describe('a key that answers after this browser was locked', () => {
+    const webauthn: KeyRequestOptions = {
+        challenge: 'Y2hhbGxlbmdl',
+        rpId: 'hushos.com',
+        timeout: 300_000,
+        userVerification: 'discouraged',
+        allowCredentials: [{ id: 'a2V5', type: 'public-key' }],
+    };
+    const keyStep = { ...step, methods: ['webauthn', 'backup', 'phrase'], webauthn };
+    const assertion: KeyAssertion = {
+        id: 'a2V5',
+        rawId: 'a2V5',
+        type: 'public-key',
+        response: { clientDataJSON: 'ZGF0YQ', authenticatorData: 'YXV0aA', signature: 'c2ln' },
+    };
+    /* A key whose sheet stays open until the test closes it with an answer. */
+    function slowKey() {
+        let answer!: () => void;
+        const opened = new Promise<void>((resolve) => {
+            answer = resolve;
+        });
+        let asked!: () => void;
+        const sheet = new Promise<void>((resolve) => {
+            asked = resolve;
+        });
+        const passkeys: PasskeyDriver = {
+            supported: () => true,
+            get: async () => {
+                asked();
+                await opened;
+                return assertion;
+            },
+            create: async () => {
+                asked();
+                await opened;
+                return {
+                    id: 'bmV3',
+                    rawId: 'bmV3',
+                    type: 'public-key',
+                    response: { clientDataJSON: 'ZGF0YQ', attestationObject: 'b2Jq' },
+                };
+            },
+        };
+        return { passkeys, sheet, answer };
+    }
+    const started = { registrationToken: 'r'.repeat(43), options: {} as never };
+
+    test('a registration is not sent, so the step is never turned on behind a closed dialog', async () => {
+        const sent: unknown[] = [];
+        const key = slowKey();
+        const { client } = setup(
+            {
+                twoStepAddKey: async (input: never) => {
+                    sent.push(input);
+                    return { method: {}, backupCodes: ['7KQ2M-9XD4P'] };
+                },
+            },
+            key.passkeys,
+        );
+        const adding = client.addPasskey(started, 'Desk key').catch((error: unknown) => error);
+        await key.sheet;
+        await client.lock();
+        key.answer();
+        const refused = await adding;
+        expect(refused).toBeInstanceOf(Error);
+        expect((refused as Error).message).toBe(
+            'This browser was locked or signed out meanwhile. Nothing was changed.',
+        );
+        expect(sent).toEqual([]);
+    });
+
+    test('with no lock, the same registration is sent', async () => {
+        const sent: unknown[] = [];
+        const key = slowKey();
+        const { client } = setup(
+            {
+                twoStepAddKey: async (input: never) => {
+                    sent.push(input);
+                    return {
+                        method: {
+                            id: 'f1',
+                            kind: 'webauthn',
+                            name: 'Desk key',
+                            createdAt: '2026-11-14T10:00:00.000Z',
+                            lastUsedAt: null,
+                            synced: false,
+                        },
+                    };
+                },
+            },
+            key.passkeys,
+        );
+        const adding = client.addPasskey(started, 'Desk key');
+        await key.sheet;
+        key.answer();
+        expect((await adding).method.name).toBe('Desk key');
+        expect(sent).toHaveLength(1);
+    });
+
+    test('an answer to a sign-in’s step is not sent, so no session is opened for a page that stopped waiting', async () => {
+        const sent: unknown[] = [];
+        const key = slowKey();
+        const { client, toStep } = setup(
+            {
+                loginStart: async () => ({ attemptToken: 'attempt', twoStepMethods: true }),
+                loginFinish: async () => ({ twoStep: keyStep }),
+                loginTwoStep: async (input: never) => {
+                    sent.push(input);
+                    return session;
+                },
+            },
+            key.passkeys,
+        );
+        await toStep();
+        const answering = client.answerStep({ kind: 'webauthn' }).catch((error: unknown) => error);
+        await key.sheet;
+        await client.lock();
+        key.answer();
+        const failure = await answering;
+        expect(failure).toBeInstanceOf(StepFailure);
+        expect(failure).toMatchObject({ reason: 'over' });
+        expect(sent).toEqual([]);
+        expect(client.store.getState().unlockedUserId).toBeNull();
+    });
+
+    test('an answer for a change is not handed to whatever is signed in after the lock', async () => {
+        const key = slowKey();
+        const { client } = setup({}, key.passkeys);
+        const proving = client
+            .proveStep(keyStep as never, { kind: 'webauthn' })
+            .catch((error: unknown) => error);
+        await key.sheet;
+        await client.lock();
+        key.answer();
+        const refused = await proving;
+        expect(refused).toBeInstanceOf(Error);
+        expect((refused as Error).message).toContain('locked or signed out meanwhile');
+        // Unlocked throughout, the same press hands the change its answer.
+        const again = slowKey();
+        const open = setup({}, again.passkeys);
+        const proved = open.client.proveStep(keyStep as never, { kind: 'webauthn' });
+        await again.sheet;
+        again.answer();
+        expect((await proved).proof).toEqual({ kind: 'webauthn', response: assertion });
     });
 });

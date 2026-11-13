@@ -1,4 +1,13 @@
-import type { LoginSession, StepChallenge, StepMethod } from './api';
+import type {
+    KeyCreationOptions,
+    KeyDescriptor,
+    KeyRequestOptions,
+    LoginSession,
+    NamedStepMethod,
+    StepChallenge,
+    StepMethod,
+    TwoStepMethod,
+} from './api';
 import { TOKEN_PATTERN } from './tokens';
 
 /*
@@ -15,7 +24,14 @@ export type LoginReply =
     | { kind: 'step'; challenge: StepChallenge }
     | { kind: 'lost' };
 
-const METHODS: readonly StepMethod[] = ['totp', 'backup', 'phrase'];
+/* What this client can answer a step with, when the reply carries what each needs. */
+const METHODS: ReadonlySet<unknown> = new Set<StepMethod>(['webauthn', 'totp', 'backup', 'phrase']);
+/*
+ * The kinds of method this client names to the server beyond the ones every client answers
+ * (docs/two-step-design.md 12): in `twoStepMethods`, when it can answer them here, and in
+ * `?methods=`, to list them in settings.
+ */
+export const NAMED_STEP_METHODS: readonly NamedStepMethod[] = ['webauthn'];
 const record = (value: unknown): value is Record<string, unknown> =>
     typeof value === 'object' && value !== null && !Array.isArray(value);
 const text = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
@@ -38,6 +54,36 @@ function session(reply: Record<string, unknown>): LoginSession | null {
     return reply as unknown as LoginSession;
 }
 
+function descriptors(value: unknown): KeyDescriptor[] | null {
+    if (!Array.isArray(value)) return null;
+    const list: KeyDescriptor[] = [];
+    for (const entry of value) {
+        if (!record(entry) || !text(entry.id) || entry.type !== 'public-key') return null;
+        const transports = Array.isArray(entry.transports) ? entry.transports.filter(text) : [];
+        list.push({
+            id: entry.id,
+            type: 'public-key',
+            ...(transports.length ? { transports } : {}),
+        });
+    }
+    return list;
+}
+
+/* What a key is asked at a step: the challenge, the RP ID and the account's keys, or null. */
+function keyRequest(value: unknown): KeyRequestOptions | null {
+    if (!record(value) || !text(value.challenge) || !text(value.rpId)) return null;
+    const allowCredentials = descriptors(value.allowCredentials);
+    // With no key to ask, there is nothing a key could answer.
+    if (!allowCredentials?.length) return null;
+    return {
+        challenge: value.challenge,
+        rpId: value.rpId,
+        timeout: count(value.timeout) ? value.timeout : 300_000,
+        userVerification: 'discouraged',
+        allowCredentials,
+    };
+}
+
 function challenge(value: unknown): StepChallenge | null {
     if (!record(value) || !text(value.token) || !TOKEN_PATTERN.test(value.token)) return null;
     if (!Array.isArray(value.methods)) return null;
@@ -47,18 +93,27 @@ function challenge(value: unknown): StepChallenge | null {
             ? value.expiresAt.toISOString()
             : value.expiresAt;
     if (!text(expiresAt) || Number.isNaN(Date.parse(expiresAt))) return null;
-    // A method this client does not know (a security key, later) is one it cannot answer.
-    const methods = METHODS.filter((method) => (value.methods as unknown[]).includes(method));
+    // A method this client does not know (another device, later) is one it cannot answer.
+    // The order is the server's: the account's usual way comes first (design 12).
+    const [first] = value.methods as unknown[];
+    const listed = [...new Set(value.methods as unknown[])].filter((method): method is StepMethod =>
+        METHODS.has(method),
+    );
     const phrase = value.phrase;
     const signs =
         record(phrase) &&
         text(phrase.userId) &&
         text(phrase.wrappingSalt) &&
         count(phrase.recoveryVersion);
+    const webauthn = listed.includes('webauthn') ? keyRequest(value.webauthn) : null;
+    // Without what a method answers with, it cannot answer, whatever the list says: the
+    // phrase without what it signs with, a key without its challenge.
+    const methods = listed.filter(
+        (method) => (method !== 'phrase' || signs) && (method !== 'webauthn' || webauthn),
+    );
     return {
         token: value.token,
-        // Without what the phrase signs with, the phrase cannot answer, whatever the list says.
-        methods: signs ? methods : methods.filter((method) => method !== 'phrase'),
+        methods,
         expiresAt,
         ...(signs
             ? {
@@ -68,6 +123,12 @@ function challenge(value: unknown): StepChallenge | null {
                       wrappingSalt: phrase.wrappingSalt as string,
                   },
               }
+            : {}),
+        ...(webauthn ? { webauthn } : {}),
+        ...(value.withheld === true ? { withheld: true as const } : {}),
+        // Also when a way the server put first was dropped here: the usual way is not on offer.
+        ...(value.defaultUnavailable === true || (first !== undefined && first !== methods[0])
+            ? { defaultUnavailable: true as const }
             : {}),
     };
 }
@@ -132,4 +193,92 @@ export function readBackupCodes(reply: unknown) {
 export function readRemoved(reply: unknown) {
     if (!record(reply) || reply.removed !== true || typeof reply.on !== 'boolean') return null;
     return { removed: true as const, on: reply.on };
+}
+
+/* A time as the server sent it. The web's API client hands one over as a Date; anything else sends the string. */
+function time(value: unknown) {
+    if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString();
+    return text(value) && !Number.isNaN(Date.parse(value)) ? value : null;
+}
+/* A method as the settings list shows it. */
+function method(value: unknown): TwoStepMethod | null {
+    if (!record(value) || !text(value.id) || (value.kind !== 'webauthn' && value.kind !== 'totp'))
+        return null;
+    const createdAt = time(value.createdAt);
+    if (!createdAt) return null;
+    return {
+        id: value.id,
+        kind: value.kind,
+        name: typeof value.name === 'string' ? value.name : null,
+        createdAt,
+        lastUsedAt: time(value.lastUsedAt),
+        synced: value.synced === true,
+    };
+}
+/*
+ * A key about to be added: the registration token and what the key is asked. Read whole: the
+ * options go to the browser or the phone as they are, so a reply that lacks any of what the
+ * server always sets is not its answer.
+ */
+export function readKeyOptions(
+    reply: unknown,
+): { registrationToken: string; options: KeyCreationOptions } | null {
+    if (!record(reply) || !text(reply.registrationToken) || !record(reply.options)) return null;
+    if (!TOKEN_PATTERN.test(reply.registrationToken)) return null;
+    const { challenge: asked, rp, user, pubKeyCredParams } = reply.options;
+    const exclude = descriptors(reply.options.excludeCredentials);
+    if (
+        !text(asked) ||
+        !record(rp) ||
+        !text(rp.id) ||
+        !text(rp.name) ||
+        !record(user) ||
+        !text(user.id) ||
+        !text(user.name) ||
+        !Array.isArray(pubKeyCredParams) ||
+        !exclude
+    )
+        return null;
+    const algorithms = pubKeyCredParams.flatMap((entry: unknown) =>
+        record(entry) && entry.type === 'public-key' && Number.isSafeInteger(entry.alg)
+            ? [{ type: 'public-key' as const, alg: entry.alg as number }]
+            : [],
+    );
+    if (algorithms.length === 0) return null;
+    return {
+        registrationToken: reply.registrationToken,
+        options: {
+            challenge: asked,
+            rp: { id: rp.id, name: rp.name },
+            user: {
+                id: user.id,
+                name: user.name,
+                displayName: text(user.displayName) ? user.displayName : user.name,
+            },
+            pubKeyCredParams: algorithms,
+            timeout: count(reply.options.timeout) ? reply.options.timeout : 300_000,
+            // Whatever a reply says, this client asks a key for no attestation, no resident
+            // key and no user verification: a second step needs none of them.
+            attestation: 'none',
+            excludeCredentials: exclude,
+            authenticatorSelection: {
+                residentKey: 'discouraged',
+                userVerification: 'discouraged',
+                requireResidentKey: false,
+            },
+        },
+    };
+}
+/*
+ * An added key, exactly as the server answers: the key as the list shows it, and the backup
+ * codes when this turned the step on. Anything else with a 200 is not a key added.
+ */
+export function readKeyAdded(
+    reply: unknown,
+): { method: TwoStepMethod; backupCodes?: string[] } | null {
+    if (!record(reply)) return null;
+    const added = method(reply.method);
+    if (!added || added.kind !== 'webauthn') return null;
+    if (reply.backupCodes === undefined) return { method: added };
+    return texts(reply.backupCodes) ? { method: added, backupCodes: reply.backupCodes } : null;
 }

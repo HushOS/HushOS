@@ -72,6 +72,7 @@ import {
     sessions,
     twoStepAttempts,
     twoStepFactors,
+    twoStepKeyRegistrations,
     userSettings,
     users,
     type DeviceKind,
@@ -884,6 +885,11 @@ export async function cleanupExpired(options: { batchSize?: number; signal?: Abo
             twoStepAttempts,
             twoStepAttempts.tokenHash,
             twoStepAttempts.expiresAt,
+        ),
+        keyRegistrations: await sweep(
+            twoStepKeyRegistrations,
+            twoStepKeyRegistrations.tokenHash,
+            twoStepKeyRegistrations.expiresAt,
         ),
         // A second-step method nobody confirmed in its ten minutes: its sealed secret goes. The
         // conditions are on the delete itself too: a row confirmed while this waited on it is

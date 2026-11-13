@@ -493,13 +493,16 @@ export async function startLogin(
  * (docs/two-step-design.md 4; the repository decides, under the account's lock). A client
  * that says it can answer a step (`twoStep`) gets a step token in place of the session:
  * no cookie, no envelope. One that does not is told to update, and nothing is made.
+ * `twoStepMethods` is the kinds of method the client says it can answer beyond a code and the
+ * phrase (docs/two-step-design.md 12): the step lists only those, so a client is never shown
+ * a passkey it cannot use. Null from a client that sent none.
  */
 export async function finishLogin(
     attemptToken: string,
     finishLoginRequest: string,
     previousSessionToken: string | null = null,
     device?: { id: string; signature: string },
-    options: { twoStep?: boolean } = {},
+    options: { twoStep?: boolean; twoStepMethods?: readonly string[] | null } = {},
 ) {
     const failure = () => new AuthError('Unable to sign in. Check your email and password.', 401);
     if (!TOKEN_PATTERN.test(attemptToken)) throw failure();
@@ -561,6 +564,7 @@ export async function finishLogin(
                 credentialVersion: attempt.credentialVersion,
                 previousTokenHash,
                 device: proof,
+                methods: options.twoStepMethods,
             }),
         };
     }

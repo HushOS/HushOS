@@ -260,6 +260,9 @@ const securitySubjects: Record<SecurityNoticeKind, (when: string) => string> = {
         `Someone tried to change your account and did not pass the second step · ${when} · HushOS`,
     'totp-frozen': (when) =>
         `Your authenticator app is paused on devices HushOS doesn’t recognise · ${when} · HushOS`,
+    'two-step-key-added': (when) => `A passkey or security key was added · ${when} · HushOS`,
+    'two-step-key-removed': (when) => `A passkey or security key was removed · ${when} · HushOS`,
+    'key-counter': (when) => `One of your security keys may have been copied · ${when} · HushOS`,
 };
 
 type SecurityInput = {

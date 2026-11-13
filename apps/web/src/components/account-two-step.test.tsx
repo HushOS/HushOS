@@ -41,8 +41,16 @@ const api = {
     })),
     confirmAuthenticator: vi.fn<() => Promise<{ backupCodes: string[] } | { replaced: true }>>(),
     removeOtherDevices: vi.fn<(password: string) => Promise<{ removed: number }>>(),
-    removeTwoStepMethod: vi.fn<() => Promise<void>>(),
+    removeTwoStepMethod: vi.fn<() => Promise<{ removed: true; on: boolean }>>(),
     stepChallenge: vi.fn(async () => null),
+    canUsePasskeys: () => true,
+    startPasskey: vi.fn(async () => ({ registrationToken: 'registration', options: {} })),
+    addPasskey:
+        vi.fn<
+            (started: unknown, name?: string) => Promise<{ method: object; backupCodes?: string[] }>
+        >(),
+    renameTwoStepMethod: vi.fn(async () => ({ method: {} })),
+    setTwoStepDefault: vi.fn(async (kind: string) => ({ defaultKind: kind })),
     store: locks,
 };
 vi.mock('@/lib/auth-client', () => ({ authClient: api }));
@@ -60,7 +68,16 @@ const { AccountTwoStep } = await import('./account-two-step');
 
 const user = { id: 'user-1', email: 'maya@example.com', name: 'Maya', credentialVersion: 1 };
 
-/* From "Turn on" to the screen with the QR code and the offer. */
+const view = () =>
+    render(
+        <QueryClientProvider
+            client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+        >
+            <AccountTwoStep user={user as never} />
+        </QueryClientProvider>,
+    );
+
+/* From the app's Add to the screen with the QR code and the offer. */
 async function toTheOffer() {
     const person = userEvent.setup();
     render(
@@ -70,7 +87,7 @@ async function toTheOffer() {
             <AccountTwoStep user={user as never} />
         </QueryClientProvider>,
     );
-    await person.click(await screen.findByRole('button', { name: 'Turn on' }));
+    await person.click(await screen.findByRole('button', { name: 'Add authenticator app' }));
     await person.type(screen.getByLabelText('Password'), password);
     await person.click(screen.getByRole('button', { name: 'Continue' }));
     const code = await screen.findByLabelText('Code from your authenticator app');
@@ -267,7 +284,9 @@ describe('turning two-step sign-in off', () => {
                     <AccountTwoStep user={user as never} />
                 </QueryClientProvider>,
             );
-            await person.click(await screen.findByRole('button', { name: 'Turn off' }));
+            await person.click(
+                await screen.findByRole('button', { name: 'Turn off authenticator app' }),
+            );
             const reads = api.twoStep.mock.calls.length;
             await person.type(screen.getByLabelText('Password'), password);
             await person.click(
@@ -323,7 +342,7 @@ describe('a lock while two-step secrets are on screen', () => {
                 <AccountTwoStep user={user as never} />
             </QueryClientProvider>,
         );
-        await person.click(await screen.findByRole('button', { name: 'Turn on' }));
+        await person.click(await screen.findByRole('button', { name: 'Add authenticator app' }));
         await person.type(screen.getByLabelText('Password'), password);
         await person.click(screen.getByRole('button', { name: 'Continue' }));
         await waitFor(() => expect(api.startAuthenticator).toHaveBeenCalled());
@@ -336,5 +355,228 @@ describe('a lock while two-step secrets are on screen', () => {
         await new Promise((resolve) => setTimeout(resolve, 50));
         expect(screen.queryByText(/JBSW/)).toBeNull();
         expect(screen.queryByLabelText('Code from your authenticator app')).toBeNull();
+    });
+});
+
+/*
+ * Passkeys and security keys, and the default (docs/two-step-design.md 3, 12). The list must
+ * say what each key is without claiming more than is true; a key is asked only on the press
+ * that adds it; the default is where the server says it is; and the last method is turned
+ * off, not removed.
+ */
+describe('passkeys, security keys and the default', () => {
+    const method = (id: string, kind: 'totp' | 'webauthn', extra: object = {}) => ({
+        id,
+        kind,
+        name: kind === 'webauthn' ? 'Desk key' : null,
+        createdAt: '2026-11-01T10:00:00.000Z',
+        lastUsedAt: null,
+        synced: false,
+        ...extra,
+    });
+    const account = (methods: object[], defaultKind: string | null = null) =>
+        api.twoStep.mockResolvedValue({
+            on: methods.length > 0,
+            methods,
+            backupCodesLeft: methods.length > 0 ? 10 : 0,
+            totpFrozen: false,
+            defaultKind,
+        } as never);
+    const keyRows = () =>
+        screen.getAllByRole('listitem').filter((row) => 'twoStepKeyRow' in row.dataset);
+
+    test('each key says where it lives, and each caution shows only while it is true', async () => {
+        account([method('k1', 'webauthn')], 'webauthn');
+        const { unmount } = view();
+        const [row] = await waitFor(keyRows);
+        expect(within(row!).getByText('Desk key')).toBeVisible();
+        // A key bound to one device is not called synced, and nothing is said about managers.
+        expect(screen.queryByText(/Saved in a password manager/)).toBeNull();
+        expect(screen.queryByText(/is one factor, not two/)).toBeNull();
+        // With no other method to be talked into, the phishing caution has nothing to warn of.
+        expect(screen.queryByText(/only when you use it/)).toBeNull();
+        expect(screen.getByText(/Add a second key and keep it somewhere else/)).toBeVisible();
+        unmount();
+
+        account(
+            [
+                method('k1', 'webauthn', { name: 'Passkey', synced: true }),
+                method('k2', 'webauthn', { name: 'Blue key' }),
+                method('app', 'totp'),
+            ],
+            'webauthn',
+        );
+        view();
+        const rows = await waitFor(() => {
+            expect(keyRows()).toHaveLength(2);
+            return keyRows();
+        });
+        expect(within(rows[0]!).getByText(/Saved in a password manager/)).toBeVisible();
+        expect(within(rows[1]!).queryByText(/Saved in a password manager/)).toBeNull();
+        expect(
+            screen.getByText(
+                /in the same password manager as your password is one factor, not two/,
+            ),
+        ).toBeVisible();
+        expect(screen.getByText(/stops a fake sign-in page only when you use it/)).toBeVisible();
+        expect(screen.queryByText(/Add a second key/)).toBeNull();
+    });
+
+    test('Default is beside the kind the server says comes first, and Make default asks for the other', async () => {
+        account([method('k1', 'webauthn'), method('app', 'totp')], 'totp');
+        const person = userEvent.setup();
+        view();
+        const make = await screen.findByRole('button', {
+            name: 'Make passkey or security key the default',
+        });
+        // One Default, on the app's row; no Make default there.
+        expect(screen.getAllByText('Default')).toHaveLength(1);
+        expect(
+            screen.queryByRole('button', { name: 'Make authenticator app the default' }),
+        ).toBeNull();
+        account([method('k1', 'webauthn'), method('app', 'totp')], 'webauthn');
+        await person.click(make);
+        expect(api.setTwoStepDefault).toHaveBeenCalledWith('webauthn');
+        // The page shows what the server now says, not what was pressed.
+        await screen.findByRole('button', { name: 'Make authenticator app the default' });
+        expect(screen.getByText('Passkey or security key is now asked for first.')).toBeVisible();
+    });
+
+    test('with one kind of method there is nothing to choose, so neither Default nor Make default shows', async () => {
+        account(
+            [method('k1', 'webauthn'), method('k2', 'webauthn', { name: 'Spare' })],
+            'webauthn',
+        );
+        view();
+        await waitFor(() => expect(keyRows()).toHaveLength(2));
+        expect(screen.queryByText('Default')).toBeNull();
+        expect(screen.queryByRole('button', { name: /the default$/ })).toBeNull();
+    });
+
+    test('a refused Make default is said, and nothing claims a change', async () => {
+        account([method('k1', 'webauthn'), method('app', 'totp')], 'totp');
+        api.setTwoStepDefault.mockRejectedValueOnce(
+            Object.assign(
+                new Error('Sign out and sign in again on this device to change your default.'),
+                { status: 403 },
+            ),
+        );
+        const person = userEvent.setup();
+        view();
+        await person.click(
+            await screen.findByRole('button', { name: 'Make passkey or security key the default' }),
+        );
+        expect(await screen.findByRole('alert')).toHaveTextContent('Sign out and sign in again');
+        expect(screen.queryByText(/is now asked for first/)).toBeNull();
+        expect(
+            screen.getByRole('button', { name: 'Make passkey or security key the default' }),
+        ).toBeVisible();
+    });
+
+    test('the last method is turned off, any other is removed, and each says which it did', async () => {
+        account([method('k1', 'webauthn'), method('app', 'totp')], 'webauthn');
+        api.removeTwoStepMethod.mockResolvedValue({ removed: true, on: true });
+        const person = userEvent.setup();
+        const { unmount } = view();
+        await person.click(await screen.findByRole('button', { name: 'Remove Desk key' }));
+        const dialog = screen.getByRole('dialog');
+        expect(
+            within(dialog).getByRole('heading', { name: 'Remove this passkey or security key?' }),
+        ).toBeVisible();
+        await person.type(within(dialog).getByLabelText('Password'), password);
+        await person.click(within(dialog).getByRole('button', { name: 'Remove' }));
+        await waitFor(() =>
+            expect(api.removeTwoStepMethod).toHaveBeenCalledWith('k1', password, undefined),
+        );
+        expect(await screen.findByText('Passkey or security key removed.')).toBeVisible();
+        unmount();
+
+        // The only method: the same press is turning the step off, and is worded so.
+        account([method('k1', 'webauthn')], 'webauthn');
+        view();
+        await person.click(await screen.findByRole('button', { name: 'Turn off Desk key' }));
+        expect(screen.queryByRole('button', { name: 'Remove Desk key' })).toBeNull();
+        expect(
+            within(screen.getByRole('dialog')).getByRole('heading', {
+                name: 'Turn off two-step sign-in?',
+            }),
+        ).toBeVisible();
+    });
+
+    test('a key is asked only on the press that adds it, and a closed sheet keeps the setup for another press', async () => {
+        account([method('app', 'totp')], 'totp');
+        const person = userEvent.setup();
+        view();
+        await person.click(
+            await screen.findByRole('button', { name: 'Add passkey or security key' }),
+        );
+        await person.type(screen.getByLabelText('Password'), password);
+        await person.click(screen.getByRole('button', { name: 'Continue' }));
+        await screen.findByRole('heading', { name: 'Add your passkey or security key' });
+        expect(api.startPasskey).toHaveBeenCalledTimes(1);
+        // The password was taken and the options are here: the key has still not been asked.
+        expect(api.addPasskey).not.toHaveBeenCalled();
+        // A second method turns nothing on, so no devices are offered for removal.
+        expect(screen.queryByRole('checkbox', { name: /Remove my other devices/ })).toBeNull();
+
+        // The sheet is closed: nothing was sent, and the same setup takes another press.
+        api.addPasskey.mockRejectedValueOnce(
+            Object.assign(new Error('Your passkey or security key wasn’t added. Try again.'), {
+                kept: true,
+            }),
+        );
+        await person.type(screen.getByLabelText('Name'), 'Blue key');
+        await person.click(screen.getByRole('button', { name: 'Add' }));
+        expect(await screen.findByRole('alert')).toHaveTextContent('wasn’t added');
+        api.addPasskey.mockResolvedValueOnce({ method: method('k9', 'webauthn') });
+        await person.click(screen.getByRole('button', { name: 'Add' }));
+        await waitFor(() => expect(api.addPasskey).toHaveBeenCalledTimes(2));
+        expect(api.addPasskey.mock.calls[1]![1]).toBe('Blue key');
+        // The password was asked once.
+        expect(api.startPasskey).toHaveBeenCalledTimes(1);
+        expect(await screen.findByText('Passkey or security key added.')).toBeVisible();
+    });
+
+    test('the first key turns the step on: the codes are shown, and the other devices go as ticked', async () => {
+        account([]);
+        api.addPasskey.mockResolvedValue({ method: method('k1', 'webauthn'), backupCodes: codes });
+        const person = userEvent.setup();
+        view();
+        await person.click(
+            await screen.findByRole('button', { name: 'Add passkey or security key' }),
+        );
+        await person.type(screen.getByLabelText('Password'), password);
+        await person.click(screen.getByRole('button', { name: 'Continue' }));
+        expect(
+            await screen.findByRole('checkbox', { name: /Remove my other devices/ }),
+        ).toBeChecked();
+        await person.click(screen.getByRole('button', { name: 'Add and turn on' }));
+        const list = await screen.findByRole('list', { name: 'Backup codes' });
+        expect(within(list).getAllByRole('listitem')).toHaveLength(10);
+        await waitFor(() => expect(api.removeOtherDevices).toHaveBeenCalledWith(password));
+    });
+
+    test('a refusal from the server ends the setup: the key’s one answer is used, and the password is asked again', async () => {
+        account([method('app', 'totp')], 'totp');
+        api.addPasskey.mockRejectedValue(
+            Object.assign(
+                new Error('That passkey or security key couldn’t be added. Start again.'),
+                { status: 400, code: 'key-refused' },
+            ),
+        );
+        const person = userEvent.setup();
+        view();
+        await person.click(
+            await screen.findByRole('button', { name: 'Add passkey or security key' }),
+        );
+        await person.type(screen.getByLabelText('Password'), password);
+        await person.click(screen.getByRole('button', { name: 'Continue' }));
+        await person.click(await screen.findByRole('button', { name: 'Add' }));
+        expect(await screen.findByRole('alert')).toHaveTextContent('Start again');
+        // Back at the password, not left on a press that can never work again.
+        expect(
+            screen.getByRole('heading', { name: 'Add a passkey or security key?' }),
+        ).toBeVisible();
+        expect(screen.queryByRole('button', { name: 'Add' })).toBeNull();
     });
 });

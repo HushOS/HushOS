@@ -8,12 +8,14 @@ import { authRepository, growthRepository } from '@hushos/db';
 import { intentSchema } from '@/lib/signup-intent';
 import { useLogger } from '@/lib/logging.server';
 import {
+    clientMethodsSchema,
     describeFailure,
     deviceRemovalSchema,
     emailSchema,
     envelopeSchema,
     hybridSignatureSchema,
     identitySchema,
+    keyRegistrationSchema,
     notifyDevices,
     opaqueMessage,
     recoverySchema,
@@ -36,6 +38,7 @@ import {
     consentStoredResponse,
     contactResponse,
     contactSuccessionResponse,
+    defaultKindResponse,
     deviceResponse,
     devicesRemovedResponse,
     devicesResponse,
@@ -44,10 +47,14 @@ import {
     forgottenResponse,
     identityHistoryResponse,
     identityResponse,
+    keyAddedResponse,
+    keyOptionsResponse,
     loginChallengeResponse,
     loginFinishResponse,
     loginResponse,
+    loginStartResponse,
     methodRemovedResponse,
+    methodResponse,
     profileResponse,
     recoveryBackupResponse,
     recoveryChallengeResponse,
@@ -165,10 +172,18 @@ export const authApi = new Elysia()
         '/auth/login/start',
         {
             body: t.Object({ email: emailSchema, startLoginRequest: opaqueMessage }),
-            response: { 200: loginChallengeResponse },
+            response: { 200: loginStartResponse },
         },
-        ({ body, request }) =>
-            auth.startLogin(body.email, body.startLoginRequest, undefined, requestAddress(request)),
+        async ({ body, request }) => ({
+            ...(await auth.startLogin(
+                body.email,
+                body.startLoginRequest,
+                undefined,
+                requestAddress(request),
+            )),
+            // This server reads `twoStepMethods`. Said to everyone, for any address, known or not.
+            twoStepMethods: true as const,
+        }),
     )
     .post(
         '/auth/login/finish',
@@ -180,6 +195,8 @@ export const authApi = new Elysia()
                 device: t.Optional(t.Object({ id: uuidSchema, signature: signatureSchema })),
                 // Sent by a client that can answer a second step (docs/two-step-design.md 4).
                 twoStep: t.Optional(t.Literal(1)),
+                // What else it can answer with: a passkey, another device (12).
+                twoStepMethods: t.Optional(clientMethodsSchema),
             }),
             response: { 200: loginFinishResponse },
         },
@@ -189,7 +206,7 @@ export const authApi = new Elysia()
                 body.finishLoginRequest,
                 sessionToken,
                 body.device,
-                { twoStep: body.twoStep === 1 },
+                { twoStep: body.twoStep === 1, twoStepMethods: body.twoStepMethods ?? null },
             );
             // The account asks for a second step: no session yet, so no cookie and no envelope.
             if (result.twoStep) return { twoStep: result.twoStep };
@@ -353,10 +370,24 @@ export const authApi = new Elysia()
     )
     // Two-step sign-in (docs/two-step-design.md). Setting it up and managing it answer 501 while
     // TWO_STEP_ENABLED is off; an account that already has the step is asked for it regardless.
-    .get('/auth/two-step', { response: { 200: twoStepResponse } }, ({ sessionToken, set }) => {
-        set.headers['Cache-Control'] = 'no-store';
-        return auth.getTwoStep(sessionToken);
-    })
+    .get(
+        '/auth/two-step',
+        {
+            // The kinds of method this client knows, comma-separated (12). Without it the
+            // reply is the one a client from before passkeys expects.
+            query: t.Object({
+                methods: t.Optional(t.String({ maxLength: 200, pattern: '^[a-z0-9,-]*$' })),
+            }),
+            response: { 200: twoStepResponse },
+        },
+        ({ sessionToken, set, query }) => {
+            set.headers['Cache-Control'] = 'no-store';
+            return auth.getTwoStep(
+                sessionToken,
+                query.methods === undefined ? null : query.methods.split(',').filter(Boolean),
+            );
+        },
+    )
     // Changing the step asks for the password again: the first half of that OPAQUE exchange.
     .post(
         '/auth/two-step/reauth',
@@ -381,12 +412,13 @@ export const authApi = new Elysia()
                     t.Literal('delete'),
                     t.Literal('two-step'),
                 ]),
+                twoStepMethods: t.Optional(clientMethodsSchema),
             }),
             response: { 200: stepChallengeResponse },
         },
         ({ request, sessionToken, body }) => {
             guardAuthMutation(request);
-            return auth.startStepChallenge(sessionToken, body.purpose);
+            return auth.startStepChallenge(sessionToken, body.purpose, body.twoStepMethods ?? null);
         },
     )
     .post(
@@ -407,6 +439,56 @@ export const authApi = new Elysia()
         ({ request, sessionToken, params, body }) => {
             guardAuthMutation(request);
             return auth.confirmTotpEnrolment(sessionToken, params.id, body.code);
+        },
+    )
+    // A passkey or security key: the password again (and the step, once it is on), then the
+    // key's own answer to the options that come back.
+    .post(
+        '/auth/two-step/keys/options',
+        { body: twoStepChangeSchema, response: { 200: keyOptionsResponse } },
+        ({ request, sessionToken, body }) => {
+            guardAuthMutation(request);
+            return auth.startKeyEnrolment(sessionToken, body);
+        },
+    )
+    .post(
+        '/auth/two-step/keys',
+        {
+            body: t.Object({
+                registrationToken: tokenSchema,
+                name: t.Optional(t.String({ minLength: 1, maxLength: 200 })),
+                response: keyRegistrationSchema,
+            }),
+            response: { 200: keyAddedResponse },
+        },
+        ({ request, sessionToken, body }) => {
+            guardAuthMutation(request);
+            return auth.finishKeyEnrolment(sessionToken, body);
+        },
+    )
+    // Which kind of method is offered first. Only an order, so no password; the session must
+    // have passed the step itself.
+    .put(
+        '/auth/two-step/default',
+        {
+            body: t.Object({ kind: t.Union([t.Literal('webauthn'), t.Literal('totp')]) }),
+            response: { 200: defaultKindResponse },
+        },
+        ({ request, sessionToken, body }) => {
+            guardAuthMutation(request);
+            return auth.setTwoStepDefault(sessionToken, body.kind);
+        },
+    )
+    .put(
+        '/auth/two-step/methods/:id',
+        {
+            params: t.Object({ id: uuidSchema }),
+            body: t.Object({ name: t.String({ minLength: 1, maxLength: 200 }) }),
+            response: { 200: methodResponse },
+        },
+        ({ request, sessionToken, params, body }) => {
+            guardAuthMutation(request);
+            return auth.renameTwoStepMethod(sessionToken, params.id, body);
         },
     )
     .delete(

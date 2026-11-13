@@ -280,7 +280,7 @@ object Auth {
     const val PHRASE_REFUSED = "These words didn’t open your account. Check you used your newest kit."
     const val PHRASE_UNCHECKED = "These words couldn’t be checked. Check you used your newest kit, then try again."
 
-    private class Reply(val body: JSONObject, val cookie: String?, val enrollment: String? = null)
+    private class Reply(val body: JSONObject, val cookie: String?, val enrollment: String? = null, val text: String = "")
 
     /* A reply as it arrived: the status, the body as text for the core to read, and the cookies if any came. */
     internal class RawReply(val status: Int, val text: String, val body: JSONObject, val cookie: String?, val enrollment: String?)
@@ -320,7 +320,7 @@ object Auth {
     private fun post(origin: String, path: String, body: JSONObject, cookie: String? = null): Reply {
         val reply = send(origin, path, body, cookie)
         if (reply.status !in 200..299) throw AuthFailure(Problems.signIn(reply.status, reply.body.optString("message")))
-        return Reply(reply.body, reply.cookie, reply.enrollment)
+        return Reply(reply.body, reply.cookie, reply.enrollment, reply.text)
     }
 
     /*
@@ -588,16 +588,35 @@ object Auth {
 
     private fun passwordHalf(context: Context, origin: String, email: String, password: String): Met {
         val start = opaqueStartLogin(password)
-        val started = post(origin, "/api/auth/login/start", JSONObject().put("email", email).put("startLoginRequest", start.request)).body
+        val heard = post(origin, "/api/auth/login/start", JSONObject().put("email", email).put("startLoginRequest", start.request))
+        val started = heard.body
         val attemptToken = started.optString("attemptToken").ifEmpty { throw AuthFailure("HushOS didn’t answer as expected. Try again in a moment.") }
         val loginResponse = started.optString("loginResponse").ifEmpty { throw AuthFailure("HushOS didn’t answer as expected. Try again in a moment.") }
         val finish = opaqueFinishLogin(password, start.state, loginResponse) ?: throw WrongPassword()
         // The device key's proof, only for the account it was made for: the same device comes back.
-        val reply = send(origin, "/api/auth/login/finish", finishBody(attemptToken, finish.request, deviceProof(Shared.deviceIdentity(context), email, attemptToken)))
+        val device = deviceProof(Shared.deviceIdentity(context), email, attemptToken)
+        val passkeys = Passkeys.usable(origin)
+        val reply = finishNamed(StepAdverts.stored(context), origin, heard.text, passkeys, { methods -> finishBody(attemptToken, finish.request, device, methods) }) {
+            send(origin, "/api/auth/login/finish", it)
+        }
         return when (val read = signInReply(reply, StepWords.LOST_SIGN_IN)) {
             null -> Met.Session(reply, finish.exportKey)
-            else -> Met.Step(PendingSignIn(origin, email, read, finish.exportKey))
+            else -> Met.Step(PendingSignIn(origin, email, read.offered(passkeys), finish.exportKey))
         }
+    }
+
+    /*
+     * Sends `login/finish`, naming what this phone can answer beyond codes and the phrase
+     * (`twoStepMethods`, docs/two-step-design.md 12) only to a server whose `login/start` reply
+     * (`startText`) said it reads the field. What it said is remembered for `origin`: the session that
+     * comes of this sign-in names methods at its changes too. A schema's refusal (a rolling update that
+     * answers the two requests from different releases) looked at nothing, so the same request, with the
+     * same attempt, goes once more without the field.
+     */
+    internal fun finishNamed(adverts: StepAdverts, origin: String, startText: String, passkeys: Boolean, body: (List<String>?) -> JSONObject, send: (JSONObject) -> RawReply): RawReply {
+        val advertised = com.hushos.core.stepMethodsAdvertised(startText)
+        adverts.write(origin, advertised)
+        return StepNames.atSignIn(advertised, { it.status }) { named -> send(body(if (named) com.hushos.core.stepMethodsNamed(passkeys) else null)) }
     }
 
     /*
@@ -620,8 +639,11 @@ object Auth {
     }
 
     /* What `login/finish` is sent. `twoStep: 1` is what lets an account with the step sign in here: without it the server answers `update-required`. */
-    internal fun finishBody(attemptToken: String, finishRequest: String, device: JSONObject?): JSONObject =
-        JSONObject().put("attemptToken", attemptToken).put("finishLoginRequest", finishRequest).put("twoStep", 1).apply { device?.let { put("device", it) } }
+    /* `methods`: `twoStepMethods`, for a server that said it reads the field; null leaves it out. `twoStep` itself never changes: an older server's schema takes 1 and nothing else. */
+    internal fun finishBody(attemptToken: String, finishRequest: String, device: JSONObject?, methods: List<String>? = null): JSONObject =
+        JSONObject().put("attemptToken", attemptToken).put("finishLoginRequest", finishRequest).put("twoStep", 1)
+            .apply { device?.let { put("device", it) } }
+            .apply { methods?.let { put("twoStepMethods", JSONArray(it)) } }
 
     /*
      * What `login/finish` or `login/two-step` answered, as the core reads it: null for the session,
@@ -886,16 +908,19 @@ object Auth {
      */
     internal fun callAt(session: Shared.Session, path: String, body: JSONObject? = null, method: String? = null, whole: Boolean = false, lost: String = StepWords.LOST_CHANGE): JSONObject {
         val reply = requestAt(session, path, body, method)
-        if (reply.status !in 200..299) {
-            val read = com.hushos.core.stepChangeReplyRead(reply.status.toUShort(), reply.text)
-            if (read is com.hushos.core.StepReply.Refused && stepNamed(read.refusal)) throw StepRefused(read.refusal, read.message, reply.status)
-            // A server error without the step's code (a 503 from something in the way): the change may have gone through.
-            if (whole && read is com.hushos.core.StepReply.Lost && reply.status >= 500) throw LostReply(lost)
-            if (reply.status == 401) throw NotAuthenticated()
-            throw AuthFailure(Problems.signIn(reply.status, reply.body.optString("message")), reply.status)
-        }
+        if (reply.status !in 200..299) refused(reply, whole, lost)
         if (whole && com.hushos.core.stepChangeReplyRead(reply.status.toUShort(), reply.text) !is com.hushos.core.StepReply.Done) throw LostReply(lost)
         return reply.body
+    }
+
+    /* What a reply that is not a 2xx is thrown as, by the rule above (`callAt`): for a route whose 2xx its caller reads itself. */
+    internal fun refused(reply: SessionReply, whole: Boolean, lost: String): Nothing {
+        val read = com.hushos.core.stepChangeReplyRead(reply.status.toUShort(), reply.text)
+        if (read is com.hushos.core.StepReply.Refused && stepNamed(read.refusal)) throw StepRefused(read.refusal, read.message, reply.status)
+        // A server error without the step's code (a 503 from something in the way): the change may have gone through.
+        if (whole && read is com.hushos.core.StepReply.Lost && reply.status >= 500) throw LostReply(lost)
+        if (reply.status == 401) throw NotAuthenticated()
+        throw AuthFailure(Problems.signIn(reply.status, reply.body.optString("message")), reply.status)
     }
 
     /* Thrown as the step's own refusal: when the server named one of its codes. The address's own 429 and anything else stay the route's error. */

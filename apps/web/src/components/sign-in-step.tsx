@@ -9,12 +9,20 @@ import { authError } from '@/lib/form';
 import { whenPageLeaves } from '@/lib/new-phrase';
 import { whenBrowserLocks } from '@/lib/show-new-phrase';
 import { cue } from '@/lib/sounds';
-import { draftAnswer, draftError, draftFor, emptyDraft, methodsAfter } from '@/lib/two-step';
+import {
+    draftAnswer,
+    draftError,
+    draftFor,
+    emptyDraft,
+    methodsAfter,
+    stepNote,
+} from '@/lib/two-step';
 
 /*
- * The second step of a sign-in (docs/two-step-design.md 4): the password was right, and the
- * account asks for a code, a backup code or the recovery phrase before anything is handed
- * over. A wrong answer stays here and can be tried again. A step that is over, or a reply
+ * The second step of a sign-in (docs/two-step-design.md 4, 12): the password was right, and
+ * the account asks for its passkey, a code, a backup code or the recovery phrase before
+ * anything is handed over. It opens on the account's usual way. A passkey is a button, Use
+ * your passkey: the browser's sheet opens on the press, never when the page loads. A wrong answer stays here and can be tried again. A step that is over, or a reply
  * that never arrived, goes back to the password with the reason (`onOver`): the person is
  * never left on a form that can no longer be answered.
  */
@@ -121,6 +129,7 @@ export function SignInStep({
                     focus
                     refocus={refocus}
                     reload={challenge.methods.length === 0}
+                    note={stepNote(challenge, 'sign-in')}
                 />
                 <div className={wide ? 'mt-1 flex flex-col gap-3' : 'flex justify-end gap-2'}>
                     {!wide && (
@@ -143,7 +152,11 @@ export function SignInStep({
                             disabled={pending}
                             className={wide ? 'h-11 w-full text-[15px]' : undefined}
                         >
-                            {pending ? 'Checking' : 'Continue'}
+                            {pending
+                                ? 'Checking'
+                                : draft.method === 'webauthn'
+                                  ? 'Use your passkey'
+                                  : 'Continue'}
                         </Button>
                     )}
                     {wide && (

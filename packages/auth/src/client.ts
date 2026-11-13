@@ -8,8 +8,20 @@ export {
     publicKeyBytes,
 } from '@hushos/crypto/fingerprint';
 export { pinVerified, settingsRolledBack } from '@hushos/crypto/pins';
+export { NAMED_STEP_METHODS } from './login-reply';
 import type { IdentityEnvelope } from '@hushos/crypto/identity';
-import type { AuthApi, LoginSession, StepChallenge, StepInput, StepPurpose } from './api';
+import type {
+    AuthApi,
+    KeyAssertion,
+    KeyCreationOptions,
+    KeyRegistration,
+    KeyRequestOptions,
+    LoginSession,
+    StepChallenge,
+    StepInput,
+    StepPurpose,
+    TwoStepDefaultKind,
+} from './api';
 import type { CryptoTransport, RequestOptions } from './crypto-transport';
 import {
     readBackupCodes,
@@ -19,6 +31,9 @@ import {
     readLoginReply,
     readRemoved,
     readReset,
+    NAMED_STEP_METHODS,
+    readKeyAdded,
+    readKeyOptions,
     readStepChallenge,
 } from './login-reply';
 import { ordinaryFailure } from './ordinary-failure';
@@ -51,6 +66,67 @@ export type AuthClientOptions = {
     identities?: DeviceIdentityStore;
     describeDevice?: () => { kind: DeviceKind; name: string };
     onRemoved?: () => Promise<void> | void;
+    /* How this device talks to passkeys and security keys; without it, it names none. */
+    passkeys?: PasskeyDriver;
+};
+
+/*
+ * Passkeys and security keys on this device (docs/two-step-design.md 3): WebAuthn in a
+ * browser, the platform's own sheet in an app. `supported` says whether this device can use
+ * one for this server at all; the two ceremonies resolve with the key's answer in WebAuthn's
+ * JSON form, and reject when the person closed the sheet or no key answered.
+ */
+export type PasskeyDriver = {
+    supported(): boolean;
+    get(options: KeyRequestOptions): Promise<KeyAssertion>;
+    create(options: KeyCreationOptions): Promise<KeyRegistration>;
+};
+/* Nothing was sent: the sheet was closed, timed out, or found no key it could use. */
+const PASSKEY_UNUSED = 'Your passkey or security key wasn’t used. Try again, or use another way.';
+const PASSKEY_NOT_ADDED = 'Your passkey or security key wasn’t added. Try again.';
+const passkeyUnused = (cause: unknown, message = PASSKEY_UNUSED) =>
+    // `kept`: refused on this device, before anything was sent, so the step is still there.
+    Object.assign(new Error(message, { cause }), { kept: true });
+
+/*
+ * Whether the server said it reads `twoStepMethods` (docs/two-step-design.md 12), as of this
+ * browser's last sign-in: remembered across reloads, because a session lasts up to 30 days
+ * and its step-ups name methods too. Never said (a session from before this client): the
+ * field is tried once, and a server that refuses it (422) is remembered as one that does not.
+ *
+ * "Does not" is kept for a day and no longer. A server is updated while sessions on it live
+ * on, and a session that went on believing the old answer would never be offered its passkey
+ * at a change. After a day the field is tried once more, and a refusal remembered again.
+ */
+const ADVERT_KEY = 'hushos-step-methods';
+export const ADVERT_NO_MS = 24 * 60 * 60 * 1000;
+function readAdvert(now = Date.now()): boolean | null {
+    try {
+        const saved = localStorage.getItem(ADVERT_KEY);
+        if (saved === '1') return true;
+        const since = saved?.startsWith('0:') ? Number(saved.slice(2)) : Number.NaN;
+        // A time from the future is a clock that moved: not trusted, and tried again.
+        return Number.isFinite(since) && now >= since && now - since < ADVERT_NO_MS ? false : null;
+    } catch {
+        return null;
+    }
+}
+function writeAdvert(advertised: boolean, now = Date.now()) {
+    try {
+        localStorage.setItem(ADVERT_KEY, advertised ? '1' : `0:${now}`);
+    } catch {
+        /* Storage may be disabled. The next sign-in says it again. */
+    }
+}
+/*
+ * The server's schema may have refused a field it does not know: a 422, or the 400 this
+ * server's auth routes answer a body they cannot read with. (A release from before passkeys
+ * drops an unknown field instead, so in practice this is a server that changed the field's
+ * shape, or something in front of it.) Asking once more without the field settles it.
+ */
+const unknownField = (error: unknown) => {
+    const status = (error as { status?: unknown } | null)?.status;
+    return status === 422 || status === 400;
 };
 
 const REMOVED_NOTICE = 'hushos-device-removed';
@@ -116,7 +192,9 @@ export class TwoStepRequired extends Error {
 export type StepAnswer =
     | { kind: 'totp'; code: string }
     | { kind: 'backup'; code: string }
-    | { kind: 'phrase'; phrase: string };
+    | { kind: 'phrase'; phrase: string }
+    /* A passkey or security key: its sheet opens when this is sent, never before. */
+    | { kind: 'webauthn' };
 /*
  * Why a step's answer did not pass, for the page to act on rather than read:
  * - `wrong`: the answer was wrong, and the step can be answered again;
@@ -268,8 +346,11 @@ export function createAuthClient(
     createTransport: () => CryptoTransport,
     deviceKeys: DeviceKeyStore,
     api: AuthApi,
-    { identities, describeDevice, onRemoved }: AuthClientOptions = {},
+    { identities, describeDevice, onRemoved, passkeys }: AuthClientOptions = {},
 ) {
+    /* What this device can answer a step with beyond a code and the phrase, as it tells the server. */
+    const namedMethods = () =>
+        NAMED_STEP_METHODS.filter((method) => method !== 'webauthn' || passkeys?.supported());
     let transport: CryptoTransport | undefined;
     let epoch = 0;
     const { store, canPersist } = createAuthStore();
@@ -677,15 +758,27 @@ export function createAuthClient(
         const stored = identities && !options.asNewDevice ? await storedIdentity(identities) : null;
         const start = await own('loginStart', { password });
         const challenge = await api.loginStart({ email, ...start });
+        // Whether this server reads `twoStepMethods`: said in every reply, for any address.
+        const advertised = challenge.twoStepMethods === true;
+        writeAdvert(advertised);
         const finish = await own('loginFinish', challenge);
         const device = await deviceProof(stored, email, challenge.attemptToken);
         // A lock here has already dropped the export key; do not create a session for it.
         if (epoch !== loginEpoch) throw new Error('Your account was locked. Please sign in again.');
-        const reply = readLoginReply(
-            await api.loginFinish({
+        const finishWith = (methods: boolean) =>
+            api.loginFinish({
                 attemptToken: challenge.attemptToken,
                 ...finish,
                 ...(device ? { device } : {}),
+                ...(methods ? { twoStepMethods: namedMethods() } : {}),
+            });
+        // A rolling update can answer `login/start` from a release that reads the field and
+        // `login/finish` from one whose schema refuses it. Refused there, nothing was looked
+        // at and the attempt is still good: the same request goes again without the field.
+        const reply = readLoginReply(
+            await finishWith(advertised).catch((error: unknown) => {
+                if (!advertised || !unknownField(error)) throw error;
+                return finishWith(false);
             }),
         );
         if (reply.kind === 'lost') throw new StepFailure('lost', LOST_REPLY);
@@ -794,6 +887,18 @@ export function createAuthClient(
         answer: StepAnswer,
         worker: typeof own,
     ): Promise<StepInput> {
+        if (answer.kind === 'webauthn') {
+            if (!challenge.webauthn || !passkeys?.supported())
+                throw new StepFailure(
+                    'wrong',
+                    'A passkey or security key can’t be used for this step here.',
+                );
+            // The sheet opens here, on the press that sent this answer.
+            const response = await passkeys.get(challenge.webauthn).catch((cause: unknown) => {
+                throw passkeyUnused(cause);
+            });
+            return { token: challenge.token, proof: { kind: 'webauthn', response } };
+        }
         if (answer.kind !== 'phrase')
             return {
                 token: challenge.token,
@@ -821,9 +926,11 @@ export function createAuthClient(
         busy = true;
         holding = true;
         try {
-            const reply = readLoginReply(
-                await api.loginTwoStep(await proveStep(pending.challenge, answer, own)),
-            );
+            const proof = await proveStep(pending.challenge, answer, own);
+            // A lock while the key's sheet was open let go of this sign-in: its answer is not
+            // sent, so no session is opened for a page that has stopped waiting for one.
+            if (epoch !== pending.epoch) throw new StepFailure('over', STEP_OVER);
+            const reply = readLoginReply(await api.loginTwoStep(proof));
             if (reply.kind !== 'session') throw new StepFailure('lost', LOST_REPLY);
             if (epoch !== pending.epoch) throw new StepFailure('over', STEP_OVER);
             // The step is passed: from here this is an ordinary sign-in's second half.
@@ -1394,8 +1501,20 @@ export function createAuthClient(
          */
         async stepChallenge(purpose: StepPurpose) {
             let reply: unknown;
+            // The methods are named to a server that said it reads them, and to one that never
+            // said either way (a session from before this client). One that refuses the field
+            // has been rolled back, or never knew it: asked again without, and remembered.
+            const advert = readAdvert();
             try {
-                reply = await api.twoStepChallenge(purpose);
+                reply = await (
+                    advert === false
+                        ? api.twoStepChallenge(purpose)
+                        : api.twoStepChallenge(purpose, namedMethods())
+                ).catch((error: unknown) => {
+                    if (advert === false || !unknownField(error)) throw error;
+                    writeAdvert(false);
+                    return api.twoStepChallenge(purpose);
+                });
             } catch (error) {
                 if ((error as { status?: unknown } | null)?.status === 409) return null;
                 throw error;
@@ -1404,8 +1523,17 @@ export function createAuthClient(
             if (!challenge) throw new Error('Please try again.');
             return challenge;
         },
-        proveStep: (challenge: StepChallenge, answer: StepAnswer) =>
-            proveStep(challenge, answer, rpc),
+        /*
+         * The answer a change carries. A key's sheet (or the worker's signing) can outlast a
+         * lock or a sign-out: an answer made under one session is not handed to whatever is
+         * signed in after it.
+         */
+        async proveStep(challenge: StepChallenge, answer: StepAnswer) {
+            const asked = epoch;
+            const proved = await proveStep(challenge, answer, rpc);
+            if (asked !== epoch) throw lockedSince();
+            return proved;
+        },
         twoStep: () => api.twoStep(),
         /* Starts adding an authenticator app: the password again and, once the step is on, the step. */
         startAuthenticator: (password: string, twoStep?: StepInput) =>
@@ -1441,6 +1569,55 @@ export function createAuthClient(
                 },
                 (input) => api.twoStepReauth(input),
             ),
+        /* Whether this device can use a passkey or security key for this server at all. */
+        canUsePasskeys: () => passkeys?.supported() === true,
+        /*
+         * Starts adding a passkey or security key: the password again and, once the step is
+         * on, the step. Answers what `addPasskey` then asks the key.
+         */
+        startPasskey: (password: string, twoStep?: StepInput) =>
+            withPassword(
+                password,
+                async (proof) => {
+                    const started = readKeyOptions(
+                        await api.twoStepKeyOptions({ ...proof, ...(twoStep ? { twoStep } : {}) }),
+                    );
+                    if (!started) throw lostChange('the setup was started');
+                    return started;
+                },
+                (input) => api.twoStepReauth(input),
+            ),
+        /*
+         * Asks the key (its sheet opens here, so this is called from the press that adds it)
+         * and sends its answer. Only the server's own answer says the key was added.
+         */
+        async addPasskey(
+            started: { registrationToken: string; options: KeyCreationOptions },
+            name?: string,
+        ) {
+            if (!passkeys?.supported()) throw passkeyUnused(null, PASSKEY_NOT_ADDED);
+            // The session the press was made under. The browser's sheet can stay open for
+            // minutes, and a lock or a sign-out meanwhile leaves the server's session usable:
+            // sent then, the key would be added (and the step turned on) for a page that has
+            // already closed its dialog, and would throw away the backup codes that came back.
+            const asked = epoch;
+            const response = await passkeys.create(started.options).catch((cause: unknown) => {
+                throw passkeyUnused(cause, PASSKEY_NOT_ADDED);
+            });
+            if (asked !== epoch) throw lockedSince();
+            const added = readKeyAdded(
+                await api.twoStepAddKey({
+                    registrationToken: started.registrationToken,
+                    ...(name?.trim() ? { name: name.trim() } : {}),
+                    response,
+                }),
+            );
+            if (!added) throw lostChange('your passkey or security key was added');
+            return added;
+        },
+        renameTwoStepMethod: (id: string, name: string) => api.twoStepRenameMethod(id, name),
+        setTwoStepDefault: (kind: Exclude<TwoStepDefaultKind, 'device'>) =>
+            api.twoStepSetDefault(kind),
         newBackupCodes: (password: string, twoStep: StepInput) =>
             withPassword(
                 password,

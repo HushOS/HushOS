@@ -113,6 +113,9 @@ pub enum PushEventKind {
     StepFailed,
     ChangeStepFailed,
     TotpFrozen,
+    TwoStepKeyAdded,
+    TwoStepKeyRemoved,
+    KeyCounter,
     Shared,
     FamilyInvitation,
     FamilyWaiting,
@@ -225,6 +228,9 @@ fn event_of(event: &Value) -> CoreResult<PushEvent> {
         Some("step-failed") => read.kind = PushEventKind::StepFailed,
         Some("change-step-failed") => read.kind = PushEventKind::ChangeStepFailed,
         Some("totp-frozen") => read.kind = PushEventKind::TotpFrozen,
+        Some("two-step-key-added") => read.kind = PushEventKind::TwoStepKeyAdded,
+        Some("two-step-key-removed") => read.kind = PushEventKind::TwoStepKeyRemoved,
+        Some("key-counter") => read.kind = PushEventKind::KeyCounter,
         Some("shared") => {
             read.kind = PushEventKind::Shared;
             read.granter_user_id = Some(field_uuid(data, "granterUserId", "sharer")?);
@@ -405,6 +411,15 @@ pub fn push_notice(event: PushEvent, checked_sender: Option<String>) -> PushNoti
             "Authenticator app paused",
             "Your authenticator app is paused on devices HushOS doesn’t recognise.",
         ),
+        PushEventKind::TwoStepKeyAdded => {
+            two_step("Two-step sign-in", "A passkey or security key was added.")
+        }
+        PushEventKind::TwoStepKeyRemoved => {
+            two_step("Two-step sign-in", "A passkey or security key was removed.")
+        }
+        PushEventKind::KeyCounter => {
+            two_step("Security key", "One of your security keys may have been copied.")
+        }
         PushEventKind::Shared => notice(
             "Shared with you",
             match checked_sender.as_deref().and_then(shown_name) {
@@ -699,6 +714,9 @@ mod tests {
                 "Authenticator app paused",
                 "Your authenticator app is paused on devices HushOS doesn’t recognise.",
             ),
+            ("two-step-key-added", "{}", "Two-step sign-in", "A passkey or security key was added."),
+            ("two-step-key-removed", "{}", "Two-step sign-in", "A passkey or security key was removed."),
+            ("key-counter", "{}", "Security key", "One of your security keys may have been copied."),
         ] {
             let read = push_event_read(event(kind, data), ID.into()).unwrap();
             assert_ne!(read.kind, PushEventKind::Other, "{kind}");

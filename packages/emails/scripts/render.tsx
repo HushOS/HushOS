@@ -137,6 +137,9 @@ const securityKinds: SecurityNoticeKind[] = [
     'step-failed',
     'change-step-failed',
     'totp-frozen',
+    'two-step-key-added',
+    'two-step-key-removed',
+    'key-counter',
 ];
 const securityRendered: Record<string, { html: string; text: string }> = {};
 for (const kind of securityKinds) {

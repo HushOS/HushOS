@@ -32,7 +32,15 @@ class TwoStepTest {
     private val all = listOf(StepMethod.TOTP, StepMethod.BACKUP, StepMethod.PHRASE)
 
     private fun challenge(methods: List<StepMethod> = all, phrase: StepPhrase? = null, token: String = this.token) =
-        StepChallenge(token, methods, "2026-11-13T10:00:00.000Z", phrase)
+        StepChallenge(token, methods, "2026-11-13T10:00:00.000Z", phrase, null, false, false)
+
+    /* No key is offered in these steps: a sheet that is asked anyway fails the test. */
+    private val noSheet = object : KeySheet {
+        override suspend fun assertion(request: com.hushos.core.StepKeyRequest): com.hushos.core.KeyAssertion? = throw AssertionError("no key was offered")
+        override suspend fun registration(creation: com.hushos.core.KeyCreation): com.hushos.core.KeyRegistration? = throw AssertionError("no key was being added")
+    }
+    private fun StepUp.proved(): StepUp.Proof = kotlinx.coroutines.runBlocking { prove(noSheet) }
+    private val adverts = StepAdverts.Memory()
 
     /* A server with one answer for every request, and what was asked of it. */
     private class Asked(val method: String, val path: String, val cookie: String?, val body: JSONObject)
@@ -562,7 +570,7 @@ class TwoStepTest {
         // fast found every step over before it was shown, and nobody with the step could sign in on it.
         now = 50_000
         for (expiresAt in listOf("2026-11-13T10:00:00.000Z", "1999-01-01T00:00:00.000Z", "2099-01-01T00:00:00.000Z", "soon")) {
-            val pending = PendingSignIn("https://step.test", "maya@example.org", StepChallenge(token, all, expiresAt, null), ByteArray(64))
+            val pending = PendingSignIn("https://step.test", "maya@example.org", StepChallenge(token, all, expiresAt, null, null, false, false), ByteArray(64))
             assertEquals(expiresAt, 360_000L, pending.dropIn())
             assertEquals(expiresAt, 1L, pending.dropIn(now = 50_000L + 359_999))
             // The server's five minutes and one more, and then it is over.
@@ -605,9 +613,9 @@ class TwoStepTest {
         // A spent budget on an account whose step offers no phrase here: updating HushOS would change nothing.
         val (_, spent) = StepUp(StepPurpose.PASSWORD).take(challenge(listOf(StepMethod.TOTP, StepMethod.BACKUP))).failed(StepRefused(StepRefusal.LIMITED, "Too many wrong codes."))
         assertTrue(spent.methods.isEmpty())
-        assertEquals(StepWords.NO_WAY_LEFT, (spent.prove() as StepUp.Proof.Unready).step.error)
+        assertEquals(StepWords.NO_WAY_LEFT, (spent.proved() as StepUp.Proof.Unready).step.error)
         // Nothing this build knows was offered at all: that is the one an update fixes.
-        assertEquals(StepWords.CANNOT_ANSWER, (StepUp(StepPurpose.PASSWORD).take(challenge(emptyList())).prove() as StepUp.Proof.Unready).step.error)
+        assertEquals(StepWords.CANNOT_ANSWER, (StepUp(StepPurpose.PASSWORD).take(challenge(emptyList())).proved() as StepUp.Proof.Unready).step.error)
     }
 
     @Test
@@ -615,40 +623,45 @@ class TwoStepTest {
         val codes = TwoStep.Confirmed.TurnedOn(listOf("7KQ2M-9XD4P"))
         // Only turning the step on with the box ticked removes the other devices. Replacing shows no box, and its
         // default (ticked) or a value left from an earlier visit signed every other device out unasked.
-        assertTrue(TwoStepFlow.removesOthers(codes, signOutOthers = true, replacing = false))
-        assertFalse(TwoStepFlow.removesOthers(codes, signOutOthers = true, replacing = true))
-        assertFalse(TwoStepFlow.removesOthers(TwoStep.Confirmed.Replaced, signOutOthers = true, replacing = true))
-        assertFalse(TwoStepFlow.removesOthers(TwoStep.Confirmed.Replaced, signOutOthers = true, replacing = false))
-        assertFalse(TwoStepFlow.removesOthers(codes, signOutOthers = false, replacing = false))
+        assertTrue(TwoStepFlow.removesOthers(turnedOn = true, signOutOthers = true, first = true))
+        assertFalse(TwoStepFlow.removesOthers(turnedOn = true, signOutOthers = true, first = false))
+        assertFalse(TwoStepFlow.removesOthers(turnedOn = false, signOutOthers = true, first = false))
+        assertFalse(TwoStepFlow.removesOthers(turnedOn = false, signOutOthers = true, first = true))
+        assertFalse(TwoStepFlow.removesOthers(turnedOn = true, signOutOthers = false, first = true))
 
         val out = TwoStepFlow().started()
         assertTrue(out.pending)
         // The codes are kept the moment they arrive, and the request is no longer out.
-        assertEquals(TwoStepFlow(codes = listOf("7KQ2M-9XD4P")), out.confirmed(Result.success(codes), replacing = false))
-        assertEquals("Authenticator app replaced.", out.confirmed(Result.success(TwoStep.Confirmed.Replaced), replacing = true).finished)
+        assertEquals(TwoStepFlow(codes = listOf("7KQ2M-9XD4P")), out.confirmed(Result.success(codes), AppSetup.ON))
+        assertEquals("Authenticator app replaced.", out.confirmed(Result.success(TwoStep.Confirmed.Replaced), AppSetup.REPLACE).finished)
         // "Replaced" for a step that was being turned on is not the server's answer to that: nothing is claimed, and the settings are read again.
-        val odd = out.confirmed(Result.success(TwoStep.Confirmed.Replaced), replacing = false)
+        val odd = out.confirmed(Result.success(TwoStep.Confirmed.Replaced), AppSetup.ON)
         assertEquals(TwoStepFlow(error = StepWords.LOST_TURNED_ON, reread = 1), odd)
         // A lost reply: said, and the settings read again to show which it was.
-        val lost = out.confirmed(Result.failure(LostReply(StepWords.LOST_APP_ADDED)), replacing = false)
+        val lost = out.confirmed(Result.failure(LostReply(StepWords.LOST_APP_ADDED)), AppSetup.ON)
         assertEquals(TwoStepFlow(error = StepWords.LOST_APP_ADDED, reread = 1), lost)
         // The setup ran out: back to the start, with the server's why, and the old key off the screen.
         val app = TotpEnrolment("factor", "JBSWY3DPEHPK3PXP", "otpauth://totp/HushOS")
-        val timedOut = out.enrolled(app).started().confirmed(Result.failure(SetupTimedOut("This setup timed out. Start again.")), replacing = false)
+        val timedOut = out.enrolled(app).started().confirmed(Result.failure(SetupTimedOut("This setup timed out. Start again.")), AppSetup.ON)
         assertEquals(TwoStepFlow(error = "This setup timed out. Start again."), timedOut)
         // A wrong code keeps the key on screen for another try.
-        assertEquals(app, out.enrolled(app).started().confirmed(Result.failure(StepRefused(StepRefusal.WRONG, "That code didn’t work.")), replacing = false).enrolment)
+        assertEquals(app, out.enrolled(app).started().confirmed(Result.failure(StepRefused(StepRefusal.WRONG, "That code didn’t work.")), AppSetup.ON).enrolment)
 
         // Turning off or making codes with the reply lost: nothing says what the account now is, so it is read again.
         assertEquals(1, out.failed(LostReply(StepWords.LOST_TURNED_OFF), StepWords.LOST_TURNED_OFF).reread)
         assertEquals(1, out.failed(LostReply(StepWords.LOST_NEW_CODES), StepWords.LOST_NEW_CODES).reread)
         // So is a dropped connection or a gateway's 502: the change may have gone through all the same.
         assertEquals(1, out.failed(java.io.IOException("connection reset"), "Couldn't reach the server.").reread)
-        assertEquals(1, out.confirmed(Result.failure(java.io.IOException("connection reset")), replacing = false).reread)
+        assertEquals(1, out.confirmed(Result.failure(java.io.IOException("connection reset")), AppSetup.ON).reread)
         // A refusal changed nothing: nothing is read again, and the step's own fields say why (no words for the form).
         assertEquals(TwoStepFlow(), out.failed(StepRefused(StepRefusal.WRONG, "That code didn’t work."), null))
         assertEquals("Two-step sign-in is off.", out.removed(on = false).finished)
         assertEquals("Authenticator app removed.", out.removed(on = true).finished)
+        // A key removed while another way is left is said as a key; the account's last one, whatever it was, turned the step off.
+        assertEquals("Passkey or security key removed.", out.removed(on = true, app = false).finished)
+        assertEquals("Two-step sign-in is off.", out.removed(on = false, app = false).finished)
+        // An app added beside keys: the server's "replaced" is its answer for any app that is not the first method.
+        assertEquals("Authenticator app added.", out.confirmed(Result.success(TwoStep.Confirmed.Replaced), AppSetup.ADD).finished)
         assertEquals(listOf("A", "B"), out.newCodes(listOf("A", "B")).codes)
 
         // Codes nobody has seen survive a page being opened or left: the server made them already, and nothing else
@@ -656,8 +669,8 @@ class TwoStepTest {
         val unseen = out.newCodes(listOf("A", "B"))
         assertEquals(unseen, unseen.cleared())
         assertTrue(unseen.codesReplace)
-        assertFalse(out.confirmed(Result.success(codes), replacing = false).codesReplace)
-        assertEquals(codes.backupCodes, out.confirmed(Result.success(codes), replacing = false).cleared().codes)
+        assertFalse(out.confirmed(Result.success(codes), AppSetup.ON).codesReplace)
+        assertEquals(codes.backupCodes, out.confirmed(Result.success(codes), AppSetup.ON).cleared().codes)
         // A request still out is not cleared either: its answer has to land.
         assertEquals(out, out.cleared())
         // Only Done forgets them, and the settings are read again then.
@@ -737,12 +750,12 @@ class TwoStepTest {
 
     @Test
     fun aChangeCarriesNoStepUntilOneIsAskedAndNothingIsSentUntilTheFieldCanBe() {
-        assertEquals(StepUp.Proof.None, StepUp(StepPurpose.PASSWORD).prove())
+        assertEquals(StepUp.Proof.None, StepUp(StepPurpose.PASSWORD).proved())
         val asked = StepUp(StepPurpose.PASSWORD).take(challenge())
         assertEquals("", asked.problem)
-        val unready = (asked.prove() as StepUp.Proof.Unready).step
+        val unready = (asked.proved() as StepUp.Proof.Unready).step
         assertEquals("Enter the 6-digit code from your authenticator app.", unready.problem)
-        val ready = unready.typed(unready.draft.copy(totp = "123456")).prove()
+        val ready = unready.typed(unready.draft.copy(totp = "123456")).proved()
         assertEquals(StepUp.Proof.Ready(StepAnswer(token, StepProof.Totp("123456"))), ready)
     }
 
@@ -764,7 +777,7 @@ class TwoStepTest {
         assertEquals("This confirmation timed out. Start again.", ended.error)
         val fresh = ended.take(challenge(token = "n".repeat(43)), keep = true)
         assertEquals("123456", fresh.draft.totp)
-        assertEquals("n".repeat(43), (fresh.prove() as StepUp.Proof.Ready).answer.token)
+        assertEquals("n".repeat(43), (fresh.proved() as StepUp.Proof.Ready).answer.token)
     }
 
     @Test
@@ -807,12 +820,20 @@ class TwoStepTest {
         assertEquals("Signed in", words("sign-in"))
         assertEquals("Wrong answer to the second step, with a backup code", words("step-failed", "backup"))
         assertEquals("Authenticator app paused after many wrong answers", words("totp-frozen", "totp"))
-        // Said by the kind of method: a security key added is not "Authenticator app replaced".
-        assertEquals("Authenticator app replaced", words("method-added", "totp"))
-        assertEquals("Security key added", words("method-added", "webauthn"))
+        // Said by the kind of method. An app is "added": with keys, one can be added beside a method as well as replace one.
+        assertEquals("Authenticator app added", words("method-added", "totp"))
+        assertEquals("Passkey or security key added", words("method-added", "webauthn"))
         assertEquals("Second-step method added", words("method-added"))
         assertEquals("Authenticator app removed", words("method-removed", "totp"))
-        assertEquals("Security key removed", words("method-removed", "webauthn"))
+        assertEquals("Passkey or security key removed", words("method-removed", "webauthn"))
+        assertEquals("Signed in with your password and a passkey or security key", words("sign-in", "webauthn"))
+        assertEquals("Wrong answer to the second step, with a passkey or security key", words("step-failed", "webauthn"))
+        // The default's line names the kind it moved to, which is the event's method.
+        assertEquals("Default changed to passkey or security key", words("default-changed", "webauthn"))
+        assertEquals("Default changed to authenticator app", words("default-changed", "totp"))
+        assertEquals("Default changed", words("default-changed", "device"))
+        assertEquals("Default changed", words("default-changed"))
+        assertEquals("A security key was refused: it may have been copied", words("key-counter", "webauthn"))
         assertEquals("Second-step method removed", words("method-removed"))
         assertEquals("Security change", words("something-new"))
         assertEquals("Android", SecurityEvent("e", "sign-in", null, "android", null).device)
@@ -956,7 +977,7 @@ class TwoStepTest {
     @Test
     fun aStepForAChangeIsAskedForUnderTheSessionAndAnAccountWithoutOneGetsNone() {
         var session = serving(200, JSONObject().put("token", token).put("methods", org.json.JSONArray(listOf("totp", "backup"))).put("expiresAt", "2026-11-13T10:00:00.000Z").toString())
-        val step = TwoStep.challenge(session, StepPurpose.MASTER_KEY)
+        val step = TwoStep.challenge(session, StepPurpose.MASTER_KEY, adverts)
         assertEquals(token, step?.token)
         assertEquals(listOf(StepMethod.TOTP, StepMethod.BACKUP), step?.methods)
         val sent = asked.single()
@@ -966,11 +987,11 @@ class TwoStepTest {
         // The step is off for this account (409). The route never answers 501: it does not look at the server's switch.
         for (status in listOf(409)) {
             session = serving(status, refusal("Two-step sign-in is off for this account."))
-            assertNull("$status", TwoStep.challenge(session, StepPurpose.PASSWORD))
+            assertNull("$status", TwoStep.challenge(session, StepPurpose.PASSWORD, adverts))
         }
         // Something in the way: not "no step", or the change would go without one and be refused again and again.
         session = serving(200, "<html>")
-        assertThrows(LostReply::class.java) { TwoStep.challenge(session, StepPurpose.PASSWORD) }
+        assertThrows(LostReply::class.java) { TwoStep.challenge(session, StepPurpose.PASSWORD, adverts) }
     }
 
     @Test

@@ -16,6 +16,8 @@ fun serves(type: com.android.build.api.dsl.ApplicationBuildType, fallback: Strin
     val origin = ((project.findProperty("defaultOrigin") as String?) ?: fallback).trimEnd('/')
     val uri = URI(origin)
     type.buildConfigField("String", "DEFAULT_ORIGIN", "\"$origin\"")
+    // The host the app's links are verified for: the only one it can use a passkey or security key for (data/Passkeys.kt).
+    type.buildConfigField("String", "LINK_HOST", "\"${uri.host}\"")
     type.manifestPlaceholders["appLinkScheme"] = uri.scheme
     type.manifestPlaceholders["appLinkHost"] = uri.host
     type.manifestPlaceholders["appLinkVerify"] = (uri.scheme == "https").toString()
@@ -191,6 +193,9 @@ dependencies {
     // Scanning a recovery kit's code: CameraX frames, decoded by ZXing on the phone.
     // Privacy policy and terms open in a Custom Tab.
     implementation(libs.androidx.browser)
+    // Passkeys and security keys as the second step: the system's own sheet, through Credential Manager.
+    implementation(libs.androidx.credentials)
+    implementation(libs.androidx.credentials.play.services.auth)
     implementation(libs.androidx.camera.camera2)
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)

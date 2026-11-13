@@ -89,7 +89,16 @@ export const ACCOUNT_DATA = {
  */
 export const KEPT = {
     cookies: ['hushos-theme', 'hushos-contrast', 'sidebar_state'],
-    local: ['hushos-sounds', 'hushos.drive.view', 'hushos.folder-sort', 'hushos-json-view'],
+    // `hushos-step-methods`: whether this server said it reads `twoStepMethods` at the last
+    // sign-in attempt here, by anyone, for any address (packages/auth/src/client.ts). A fact
+    // about the server's release, the same for every account, and nothing of who signed in.
+    local: [
+        'hushos-sounds',
+        'hushos.drive.view',
+        'hushos.folder-sort',
+        'hushos-json-view',
+        'hushos-step-methods',
+    ],
     // "This browser was removed from your account.": set by the removal's own wipe, read and
     // deleted once by the sign-in page that follows. It holds only that it happened.
     // TanStack Router's scroll positions for this tab (`tsr-scroll-restoration-v1_3`): element
@@ -160,7 +169,7 @@ export const STORAGE_OWNERS: Record<
     // The store is zustand's persist, which names its key itself ('hushos-device-unlock').
     'packages/auth/src/store.ts': { local: ['hushos-device-unlock'], passThrough: ['local'] },
     'packages/auth/src/client.ts': {
-        local: [],
+        local: ['hushos-step-methods'],
         session: ['hushos-device-removed'],
         passThrough: ['local'],
     },

@@ -11,7 +11,7 @@ import * as schema from './schema';
  */
 
 /* The newest migration this build knows; `readiness.test.ts` keeps it honest. */
-export const LATEST_MIGRATION = '20261113181124_two_step_key_readers';
+export const LATEST_MIGRATION = '20261113195154_two_step_passkeys';
 
 /* Every application table, in name order. */
 export const APP_TABLES = Object.values(schema)

@@ -26,7 +26,10 @@ export type TokenKind = 'session' | 'enrollment';
  * - `step-unavailable`: the server cannot check this method right now (a row under a key it
  *   no longer has); nothing was counted or changed, and the recovery phrase still works;
  * - `setup-required`: the account has no recovery key yet, so the step cannot be turned on:
- *   finish account setup first.
+ *   finish account setup first;
+ * - `limit`: the account has as many passkeys and security keys as it may;
+ * - `exists`: that passkey or security key is already on the account;
+ * - `key-refused`: a key's registration did not verify, and its one answer is used up.
  */
 export type AuthErrorCode =
     | 'current'
@@ -39,7 +42,10 @@ export type AuthErrorCode =
     | 'step-frozen'
     | 'step-limited'
     | 'step-unavailable'
-    | 'setup-required';
+    | 'setup-required'
+    | 'limit'
+    | 'exists'
+    | 'key-refused';
 
 export class AuthError extends Error {
     readonly code?: AuthErrorCode;

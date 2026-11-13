@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { readLoginReply } from './login-reply';
+import { readKeyAdded, readKeyOptions, readLoginReply } from './login-reply';
 
 /*
  * Reading a sign-in's reply. The defect this guards against: a 200 that is not the server's
@@ -67,11 +67,21 @@ describe('a sign-in’s reply', () => {
         expect(readLoginReply(reply)).toEqual({ kind: 'lost' });
     });
 
+    const keys = () => ({
+        challenge: 'Y2hhbGxlbmdl',
+        rpId: 'hushos.com',
+        timeout: 300_000,
+        userVerification: 'discouraged',
+        allowCredentials: [{ id: 'a2V5', type: 'public-key', transports: ['usb'] }],
+    });
+
     test('a step offers only what this client can answer', () => {
-        // A security key, which this client cannot use yet, is not offered.
-        expect(
-            readLoginReply({ twoStep: { ...step(), methods: ['webauthn', 'totp'] } }),
-        ).toMatchObject({ kind: 'step', challenge: { methods: ['totp'] } });
+        // Another device, which this client cannot use yet, is not offered; and since the
+        // server put it first, the account's usual way is not on offer here.
+        expect(readLoginReply({ twoStep: { ...step(), methods: ['device', 'totp'] } })).toEqual({
+            kind: 'step',
+            challenge: { ...step(), methods: ['totp'], defaultUnavailable: true },
+        });
         // The phrase cannot sign without the salt, whatever the list says.
         const withoutSalt = readLoginReply({ twoStep: { ...step(), phrase: undefined } });
         expect(withoutSalt).toMatchObject({
@@ -79,12 +89,170 @@ describe('a sign-in’s reply', () => {
             challenge: { methods: ['totp', 'backup'] },
         });
         expect(withoutSalt.kind === 'step' && withoutSalt.challenge.phrase).toBeUndefined();
+        // Nor can a key answer without its challenge and the keys to ask.
+        for (const webauthn of [
+            undefined,
+            { ...keys(), challenge: '' },
+            { ...keys(), allowCredentials: [] },
+        ])
+            expect(
+                readLoginReply({
+                    twoStep: { ...step(), methods: ['webauthn', 'totp'], webauthn },
+                }),
+            ).toEqual({
+                kind: 'step',
+                challenge: {
+                    token: TOKEN,
+                    methods: ['totp'],
+                    expiresAt: step().expiresAt,
+                    phrase: step().phrase,
+                    defaultUnavailable: true,
+                },
+            });
         // Nothing it can answer is still a step: the page says to update, it does not sign in.
         expect(
-            readLoginReply({ twoStep: { ...step(), methods: ['webauthn'], phrase: undefined } }),
+            readLoginReply({ twoStep: { ...step(), methods: ['device'], phrase: undefined } }),
         ).toEqual({
             kind: 'step',
-            challenge: { token: TOKEN, methods: [], expiresAt: step().expiresAt },
+            challenge: {
+                token: TOKEN,
+                methods: [],
+                expiresAt: step().expiresAt,
+                defaultUnavailable: true,
+            },
         });
+    });
+
+    test('the order is the server’s: the account’s usual way stays first', () => {
+        const read = (methods: string[], extra: Record<string, unknown> = {}) => {
+            const reply = readLoginReply({
+                twoStep: { ...step(), methods, webauthn: keys(), ...extra },
+            });
+            if (reply.kind !== 'step') throw new Error('Not a step.');
+            return reply.challenge;
+        };
+        // An account whose default is its app is not opened on its passkey, nor the reverse.
+        expect(read(['totp', 'webauthn', 'backup', 'phrase']).methods).toEqual([
+            'totp',
+            'webauthn',
+            'backup',
+            'phrase',
+        ]);
+        const keyFirst = read(['webauthn', 'totp', 'backup', 'phrase']);
+        expect(keyFirst.methods[0]).toBe('webauthn');
+        expect(keyFirst.webauthn).toEqual(keys());
+        expect(keyFirst.defaultUnavailable).toBeUndefined();
+        expect(keyFirst.withheld).toBeUndefined();
+        // A method listed twice is offered once.
+        expect(read(['totp', 'totp', 'backup']).methods).toEqual(['totp', 'backup']);
+        // What the server says about its list is kept; anything but `true` is not a yes.
+        expect(read(['totp'], { withheld: true, defaultUnavailable: true })).toMatchObject({
+            withheld: true,
+            defaultUnavailable: true,
+        });
+        const loose = read(['totp'], { withheld: 'no', defaultUnavailable: 1 });
+        expect(loose.withheld).toBeUndefined();
+        expect(loose.defaultUnavailable).toBeUndefined();
+        // A key's options are not handed on when no key is on offer.
+        expect(read(['totp', 'backup']).webauthn).toBeUndefined();
+    });
+});
+
+describe('a key being added', () => {
+    const REGISTRATION = 'a-registration_'.padEnd(43, 'y');
+    const options = () => ({
+        challenge: 'Y2hhbGxlbmdl',
+        rp: { id: 'hushos.com', name: 'HushOS' },
+        user: { id: 'aGFuZGxl', name: 'maya@hush.example', displayName: 'maya@hush.example' },
+        pubKeyCredParams: [
+            { type: 'public-key', alg: -8 },
+            { type: 'public-key', alg: -7 },
+        ],
+        timeout: 300_000,
+        attestation: 'none',
+        excludeCredentials: [{ id: 'a2V5', type: 'public-key' }],
+        authenticatorSelection: {
+            residentKey: 'discouraged',
+            userVerification: 'discouraged',
+            requireResidentKey: false,
+        },
+    });
+    const method = () => ({
+        id: 'factor-1',
+        kind: 'webauthn',
+        name: 'Security key',
+        createdAt: '2026-11-13T10:00:00.000Z',
+        lastUsedAt: null,
+        synced: false,
+    });
+
+    test('the server’s options are read whole, and a reply short of them is not one', () => {
+        expect(readKeyOptions({ registrationToken: REGISTRATION, options: options() })).toEqual({
+            registrationToken: REGISTRATION,
+            options: options(),
+        });
+        for (const reply of [
+            null,
+            '<!doctype html>',
+            {},
+            { registrationToken: REGISTRATION },
+            { registrationToken: 'short', options: options() },
+            { registrationToken: REGISTRATION, options: { ...options(), challenge: '' } },
+            { registrationToken: REGISTRATION, options: { ...options(), rp: { name: 'HushOS' } } },
+            { registrationToken: REGISTRATION, options: { ...options(), user: null } },
+            { registrationToken: REGISTRATION, options: { ...options(), pubKeyCredParams: [] } },
+            {
+                registrationToken: REGISTRATION,
+                options: { ...options(), excludeCredentials: [{ id: 'a2V5', type: 'password' }] },
+            },
+        ])
+            expect(readKeyOptions(reply)).toBeNull();
+    });
+
+    test('a key is never asked for more than a second step needs, whatever a reply says', () => {
+        const read = readKeyOptions({
+            registrationToken: REGISTRATION,
+            options: {
+                ...options(),
+                attestation: 'direct',
+                authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
+            },
+        });
+        expect(read?.options.attestation).toBe('none');
+        expect(read?.options.authenticatorSelection).toEqual({
+            residentKey: 'discouraged',
+            userVerification: 'discouraged',
+            requireResidentKey: false,
+        });
+    });
+
+    test('only the server’s own answer says a key was added, with codes exactly when it sent them', () => {
+        expect(readKeyAdded({ method: method() })).toEqual({ method: method() });
+        expect(readKeyAdded({ method: method(), backupCodes: ['7KQ2M-9XD4P'] })).toEqual({
+            method: method(),
+            backupCodes: ['7KQ2M-9XD4P'],
+        });
+        // The web's API client turns the server's times into Dates before anyone reads them.
+        expect(
+            readKeyAdded({
+                method: {
+                    ...method(),
+                    createdAt: new Date(method().createdAt),
+                    lastUsedAt: new Date('2026-11-13T11:00:00.000Z'),
+                },
+            }),
+        ).toEqual({ method: { ...method(), lastUsedAt: '2026-11-13T11:00:00.000Z' } });
+        for (const reply of [
+            null,
+            {},
+            { success: true },
+            { method: { ...method(), createdAt: new Date(Number.NaN) } },
+            { method: { ...method(), createdAt: 'soon' } },
+            { method: { ...method(), kind: 'totp' } },
+            { method: { ...method(), id: '' } },
+            { method: method(), backupCodes: [] },
+            { method: method(), backupCodes: 'none' },
+        ])
+            expect(readKeyAdded(reply)).toBeNull();
     });
 });

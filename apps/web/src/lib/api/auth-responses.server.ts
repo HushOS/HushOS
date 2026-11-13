@@ -240,6 +240,20 @@ export const loginChallengeResponse = t.Object({
     profileVersion: t.Integer(),
 });
 
+/*
+ * POST /auth/login/start: the same, and the server's word that it reads `twoStepMethods`
+ * (docs/two-step-design.md 12). A client names the methods it can answer only to a server that
+ * says this, so a release from before passkeys, whose schema would refuse the field, never
+ * sees it. It is in every reply, the decoy for an unknown address included: a constant, so it
+ * says nothing about the account.
+ */
+export const loginStartResponse = t.Object({
+    attemptToken: t.String(),
+    loginResponse: t.String(),
+    profileVersion: t.Integer(),
+    twoStepMethods: t.Literal(true),
+});
+
 /* The account key wrapped under the password's export key (AccountKeyEnvelope). */
 const accountKeyEnvelope = t.Object({
     envelopeVersion: t.Literal(1),
@@ -265,13 +279,45 @@ export const loginResponse = t.Object({
  * 4): the step token, which methods can answer it, when it ends, and what the device needs to
  * sign with the recovery phrase. Told only to someone who has just proved the password.
  */
+const stepMethod = t.Union([
+    t.Literal('webauthn'),
+    t.Literal('totp'),
+    t.Literal('backup'),
+    t.Literal('phrase'),
+]);
+const keyDescriptor = t.Object({
+    id: t.String(),
+    type: t.Literal('public-key'),
+    transports: t.Optional(t.Array(t.String())),
+});
+/*
+ * What a passkey or security key is asked (PublicKeyCredentialRequestOptionsJSON): the step
+ * token's own challenge, the RP ID, and the account's keys with their transports. No user
+ * verification: the password was the knowledge factor.
+ */
+const keyRequestOptions = t.Object({
+    challenge: t.String(),
+    rpId: t.String(),
+    timeout: t.Integer(),
+    userVerification: t.Literal('discouraged'),
+    allowCredentials: t.Array(keyDescriptor),
+});
+/*
+ * `methods` is ordered: the account's usual way first (docs/two-step-design.md 12). `webauthn`
+ * goes with the `webauthn` method. `withheld`: a way to answer was left out because the client
+ * did not name it. `defaultUnavailable`: the usual way is not first for this step, whatever the
+ * reason. Neither is sent to a client that named no methods.
+ */
 const stepChallenge = t.Object({
     token: t.String(),
-    methods: t.Array(t.Union([t.Literal('totp'), t.Literal('backup'), t.Literal('phrase')])),
+    methods: t.Array(stepMethod),
     expiresAt: t.String(),
     phrase: t.Optional(
         t.Object({ userId: t.String(), recoveryVersion: t.Integer(), wrappingSalt: t.String() }),
     ),
+    webauthn: t.Optional(keyRequestOptions),
+    withheld: t.Optional(t.Literal(true)),
+    defaultUnavailable: t.Optional(t.Literal(true)),
 });
 
 /*
@@ -283,26 +329,66 @@ export const loginFinishResponse = t.Union([loginResponse, t.Object({ twoStep: s
 /* POST /auth/two-step/challenge: the step a signed-in session answers before a change. */
 export const stepChallengeResponse = stepChallenge;
 
+/* A method as the list shows it: a name only where one was given, and whether a key is synced. */
+const twoStepMethod = t.Object({
+    id: t.String(),
+    kind: t.Union([t.Literal('totp'), t.Literal('webauthn')]),
+    name: t.Nullable(t.String()),
+    createdAt: t.String(),
+    lastUsedAt: t.Nullable(t.String()),
+    synced: t.Boolean(),
+});
+const defaultKind = t.Union([t.Literal('webauthn'), t.Literal('totp'), t.Literal('device')]);
+
 /*
- * GET /auth/two-step: whether the step is on, its methods by kind (a name only where one was
- * given), how many backup codes are left, and whether the app is paused for new devices.
- * Never a secret, a credential id or a public key.
+ * GET /auth/two-step: whether the step is on, its methods by kind, how many backup codes are
+ * left, and whether the app is paused for new devices. The list holds the app and the kinds
+ * the client named in `?methods=`; `defaultKind`, the kind offered first, is sent only to a
+ * client that named some. Never a secret, a credential id or a public key.
  */
 export const twoStepResponse = t.Object({
     on: t.Boolean(),
-    methods: t.Array(
-        t.Object({
-            id: t.String(),
-            kind: t.Union([t.Literal('totp'), t.Literal('webauthn')]),
-            name: t.Nullable(t.String()),
-            createdAt: t.String(),
-            lastUsedAt: t.Nullable(t.String()),
-            synced: t.Boolean(),
-        }),
-    ),
+    methods: t.Array(twoStepMethod),
     backupCodesLeft: t.Integer(),
     totpFrozen: t.Boolean(),
+    defaultKind: t.Optional(t.Nullable(defaultKind)),
 });
+
+/*
+ * POST /auth/two-step/keys/options: what `navigator.credentials.create` is given
+ * (PublicKeyCredentialCreationOptionsJSON), and the registration token the key's answer comes
+ * back with. No attestation, no resident key, no user verification.
+ */
+export const keyOptionsResponse = t.Object({
+    registrationToken: t.String(),
+    expiresAt: t.String(),
+    options: t.Object({
+        challenge: t.String(),
+        rp: t.Object({ id: t.String(), name: t.String() }),
+        user: t.Object({ id: t.String(), name: t.String(), displayName: t.String() }),
+        pubKeyCredParams: t.Array(t.Object({ type: t.Literal('public-key'), alg: t.Integer() })),
+        timeout: t.Integer(),
+        attestation: t.Literal('none'),
+        excludeCredentials: t.Array(keyDescriptor),
+        authenticatorSelection: t.Object({
+            residentKey: t.Literal('discouraged'),
+            userVerification: t.Literal('discouraged'),
+            requireResidentKey: t.Literal(false),
+        }),
+    }),
+});
+
+/* POST /auth/two-step/keys: the key as the list shows it, and the backup codes when this turned the step on. */
+export const keyAddedResponse = t.Object({
+    method: twoStepMethod,
+    backupCodes: t.Optional(t.Array(t.String())),
+});
+
+/* PUT /auth/two-step/methods/:id: the renamed key. */
+export const methodResponse = t.Object({ method: twoStepMethod });
+
+/* PUT /auth/two-step/default: the kind now offered first. */
+export const defaultKindResponse = t.Object({ defaultKind });
 
 /* POST /auth/two-step/totp: the pending app's secret, shown once, and its key URI for the QR code. */
 export const totpEnrolmentResponse = t.Object({

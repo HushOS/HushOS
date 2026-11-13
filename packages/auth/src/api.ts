@@ -142,18 +142,71 @@ export type AccountSecurityUpdate = SecurityUpdate & {
  * after its password: the step token, which methods can answer it, and what the device needs
  * to sign with the recovery phrase. `methods` holds only what this client can answer.
  */
-export type StepMethod = 'totp' | 'backup' | 'phrase';
+export type StepMethod = 'webauthn' | 'totp' | 'backup' | 'phrase';
+/*
+ * Passkeys and security keys (docs/two-step-design.md 3), in WebAuthn's JSON forms with every
+ * field the server sets present: what a key is asked at a step, what it is asked when it is
+ * added, and its two answers. Bytes are Base64url without padding.
+ */
+export type KeyDescriptor = { id: string; type: 'public-key'; transports?: string[] };
+export type KeyRequestOptions = {
+    challenge: string;
+    rpId: string;
+    timeout: number;
+    userVerification: 'discouraged';
+    allowCredentials: KeyDescriptor[];
+};
+export type KeyCreationOptions = {
+    challenge: string;
+    rp: { id: string; name: string };
+    user: { id: string; name: string; displayName: string };
+    pubKeyCredParams: { type: 'public-key'; alg: number }[];
+    timeout: number;
+    attestation: 'none';
+    excludeCredentials: KeyDescriptor[];
+    authenticatorSelection: {
+        residentKey: 'discouraged';
+        userVerification: 'discouraged';
+        requireResidentKey: false;
+    };
+};
+export type KeyAssertion = {
+    id: string;
+    rawId: string;
+    type: 'public-key';
+    response: { clientDataJSON: string; authenticatorData: string; signature: string };
+};
+export type KeyRegistration = {
+    id: string;
+    rawId: string;
+    type: 'public-key';
+    response: { clientDataJSON: string; attestationObject: string; transports?: string[] };
+};
+/*
+ * The kinds of method a client names beyond the ones every client answers (the app's code, a
+ * backup code, the phrase), in `twoStepMethods` and `?methods=` (docs/two-step-design.md 12).
+ * Approving on another device joins this when it is built.
+ */
+export type NamedStepMethod = 'webauthn';
 export type StepChallenge = {
     token: string;
+    /* In the order to offer them: the account's usual way first. */
     methods: StepMethod[];
     expiresAt: string;
     phrase?: { userId: string; recoveryVersion: number; wrappingSalt: string };
+    /* What a passkey or security key is asked. Present whenever `methods` has `webauthn`. */
+    webauthn?: KeyRequestOptions;
+    /* A way to answer was left out because this client did not name it. */
+    withheld?: true;
+    /* The account's usual way can't be used for this step. */
+    defaultUnavailable?: true;
 };
-/* An answer as the server takes it: a code, or the recovery phrase's signature. */
+/* An answer as the server takes it: a code, the recovery phrase's signature, or a key's assertion. */
 export type StepProof =
     | { kind: 'totp'; code: string }
     | { kind: 'backup'; code: string }
-    | { kind: 'phrase'; signature: string };
+    | { kind: 'phrase'; signature: string }
+    | { kind: 'webauthn'; response: KeyAssertion };
 export type StepInput = { token: string; proof: StepProof };
 /* What a change to the account sends its step for. */
 export type StepPurpose = SecurityAction | 'delete' | 'two-step';
@@ -163,18 +216,25 @@ export type LoginSession = {
     envelope: AccountKeyEnvelope;
     device: SessionDevice & { attached: boolean };
 };
+export type TwoStepMethod = {
+    id: string;
+    kind: 'totp' | 'webauthn';
+    /* A key's name, as whoever added it typed it; an app has none. */
+    name: string | null;
+    createdAt: string;
+    lastUsedAt: string | null;
+    /* A passkey a password manager syncs, as the key last reported it. */
+    synced: boolean;
+};
+/* The kind of method an account is offered first. `device` is named before it is built. */
+export type TwoStepDefaultKind = 'webauthn' | 'totp' | 'device';
 export type TwoStepStatus = {
     on: boolean;
-    methods: {
-        id: string;
-        kind: 'totp' | 'webauthn';
-        name: string | null;
-        createdAt: string;
-        lastUsedAt: string | null;
-        synced: boolean;
-    }[];
+    methods: TwoStepMethod[];
     backupCodesLeft: number;
     totpFrozen: boolean;
+    /* The kind offered first; null with the step off, absent from a server before defaults. */
+    defaultKind?: TwoStepDefaultKind | null;
 };
 export type SecurityEvent = {
     id: string;
@@ -254,7 +314,15 @@ export interface AuthApi {
     registerFinish(
         input: { name: string } & CryptoResults['registerFinish'],
     ): Promise<{ user: AuthUser }>;
-    loginStart(input: { email: string; startLoginRequest: string }): Promise<LoginChallenge>;
+    /*
+     * `twoStepMethods: true` is the server's word that it reads that field at `loginFinish`
+     * and `twoStepChallenge` (docs/two-step-design.md 12). A server from before passkeys says
+     * nothing, and is never sent it.
+     */
+    loginStart(input: {
+        email: string;
+        startLoginRequest: string;
+    }): Promise<LoginChallenge & { twoStepMethods?: boolean }>;
     /*
      * `device`: a device key's proof for this attempt. The reply says which
      * device the session is on, whether the proof brought it back (`attached`),
@@ -270,15 +338,21 @@ export interface AuthApi {
         attemptToken: string;
         finishLoginRequest: string;
         device?: { id: string; signature: string };
+        /* What else this client can answer a step with; only to a server that said it reads it. */
+        twoStepMethods?: string[];
     }): Promise<unknown>;
     /* A sign-in's answer to its step: the session, read the same way. */
     loginTwoStep(input: StepInput): Promise<unknown>;
-    /* The account's step as its settings show it. 501 on a server that has two-step off. */
+    /*
+     * The account's step as its settings show it, with the methods of the kinds this client
+     * names (the implementation names every kind it can show). 501 on a server that has
+     * two-step off.
+     */
     twoStep(): Promise<TwoStepStatus>;
     /* Changing the step asks for the password again: this starts that exchange. */
     twoStepReauth(input: { startLoginRequest: string }): Promise<LoginChallenge>;
     /* A step for a change this session is about to make. 409 when the account has no step. */
-    twoStepChallenge(purpose: StepPurpose): Promise<StepChallenge>;
+    twoStepChallenge(purpose: StepPurpose, twoStepMethods?: string[]): Promise<StepChallenge>;
     /*
      * The replies below, and a security change's and a deletion's, are handed over unread too:
      * only the server's own answer says the change was made (login-reply.ts).
@@ -287,6 +361,19 @@ export interface AuthApi {
     twoStepConfirmTotp(id: string, code: string): Promise<unknown>;
     twoStepRemoveMethod(id: string, input: TwoStepChange): Promise<unknown>;
     twoStepBackupCodes(input: TwoStepChange): Promise<unknown>;
+    /* Starts adding a passkey or security key: what the key is asked, and a registration token. */
+    twoStepKeyOptions(input: TwoStepChange): Promise<unknown>;
+    /* The key's answer: the key as the list shows it, and the backup codes when this turned the step on. */
+    twoStepAddKey(input: {
+        registrationToken: string;
+        name?: string;
+        response: KeyRegistration;
+    }): Promise<unknown>;
+    twoStepRenameMethod(id: string, name: string): Promise<{ method: TwoStepMethod }>;
+    /* Which kind is offered first. 403 from a session that never passed the step. */
+    twoStepSetDefault(
+        kind: Exclude<TwoStepDefaultKind, 'device'>,
+    ): Promise<{ defaultKind: TwoStepDefaultKind }>;
     securityEvents(): Promise<{ events: SecurityEvent[] }>;
     /* No user: `removed` when this session ended because its device was removed. */
     session(): Promise<{

@@ -37,6 +37,7 @@ async function startWith(env: Record<string, string>) {
         'TWO_STEP_KEY_FILE',
         'TWO_STEP_PREVIOUS_KEY',
         'TWO_STEP_PREVIOUS_KEY_FILE',
+        'WEBAUTHN_ANDROID_ORIGINS',
     ])
         vi.stubEnv(name, env[name] ?? '');
     return (await import('./two-step')).twoStepEnv;
@@ -131,5 +132,61 @@ describe('TWO_STEP_KEY_FILE and TWO_STEP_PREVIOUS_KEY_FILE', () => {
         // Compose passes unset variables as empty strings.
         const set = await startWith({ TWO_STEP_KEY: KEY, TWO_STEP_KEY_FILE: '' });
         expect(set.TWO_STEP_KEY).toBe(KEY);
+    });
+});
+
+describe('WEBAUTHN_ANDROID_ORIGINS', () => {
+    const APP = 'android:apk-key-hash:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8';
+    const DEBUG = 'android:apk-key-hash:_-7d3Nva2djX1tXU09LR0M_OzczLysrJyMfGxcTDwsE';
+
+    test('unset or empty, no Android origin is accepted; set, each origin is its own entry', async () => {
+        expect((await startWith({})).WEBAUTHN_ANDROID_ORIGINS).toEqual([]);
+        expect(
+            (await startWith({ WEBAUTHN_ANDROID_ORIGINS: ` ${APP} , ${DEBUG},` }))
+                .WEBAUTHN_ANDROID_ORIGINS,
+        ).toEqual([APP, DEBUG]);
+    });
+
+    test('unset, an origin is worked out from each certificate the server vouches for; set, it is the whole list', async () => {
+        const { androidOriginOf, androidOrigins } = await import('./two-step');
+        // SHA-256 of the empty string, as keytool prints a fingerprint, and the same 32 bytes
+        // in Base64url without padding: a pair known apart from this code.
+        const fingerprint =
+            'E3:B0:C4:42:98:FC:1C:14:9A:FB:F4:C8:99:6F:B9:24:27:AE:41:E4:64:9B:93:4C:A4:95:99:1B:78:52:B8:55';
+        const origin = 'android:apk-key-hash:47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU';
+        expect(androidOriginOf(fingerprint)).toBe(origin);
+        expect(androidOriginOf(fingerprint.toLowerCase())).toBe(origin);
+        // Hex of the digest's text, or Base64 with its padding and its + and /, would not be it.
+        expect(origin).not.toContain('=');
+        expect(androidOriginOf('E3:B0')).toBeNull();
+        expect(androidOriginOf('not a fingerprint')).toBeNull();
+
+        // Two certificates (Play's and the upload key), as ANDROID_APP_CERT_SHA256 lists them.
+        const upload = Array.from({ length: 32 }, () => 'AB').join(':');
+        const derived = androidOrigins([], `${fingerprint}, ${upload}`);
+        expect(derived).toEqual([origin, androidOriginOf(upload)]);
+        expect(androidOrigins([], undefined)).toEqual([]);
+        expect(androidOrigins([], `${fingerprint},${fingerprint}`)).toEqual([origin]);
+        // Listed, the setting is the whole answer: the certificate's own origin is not added.
+        expect(androidOrigins([APP], fingerprint)).toEqual([APP]);
+        // And an operator who vouches for an app's links but wants none of its keys can say so.
+        expect(androidOrigins('none', fingerprint)).toEqual([]);
+        expect(
+            (await startWith({ WEBAUTHN_ANDROID_ORIGINS: ' none ' })).WEBAUTHN_ANDROID_ORIGINS,
+        ).toBe('none');
+    });
+
+    test('anything that is not an app’s key-hash origin refuses to start: a web origin here would answer for this site', async () => {
+        vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        for (const value of [
+            'https://evil.example',
+            `${APP},https://hushos.com`,
+            'android:apk-key-hash:short',
+            `${APP}=`,
+            '*',
+        ])
+            await expect(startWith({ WEBAUTHN_ANDROID_ORIGINS: value })).rejects.toThrow(
+                'Invalid environment variables',
+            );
     });
 });

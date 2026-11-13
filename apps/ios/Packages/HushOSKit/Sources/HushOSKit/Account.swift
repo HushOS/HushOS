@@ -238,17 +238,21 @@ extension Auth {
     static func call(_ path: String, method: String = "GET", body: [String: Any]? = nil, as owner: SharedKeychain.Session? = nil,
                      whole: Bool = false, lost: String = StepWords.lostChange) async throws -> [String: Any] {
         let reply = try await request(path, method: method, body: body, as: owner)
-        guard (200 ..< 300).contains(reply.status) else {
-            let read = stepChangeReplyRead(status: UInt16(clamping: reply.status), body: reply.text)
-            if case .refused(let refusal, let message) = read, StepError.named(refusal) { throw StepError.refused(refusal, message) }
-            // A server error without the step's code (a 503 from something in the way): the change may have gone through.
-            if whole, read == .lost, reply.status >= 500 { throw StepError.lost(lost) }
-            if reply.status == 401 { throw AuthError.sessionEnded(session: reply.session.tag) }
-            if reply.status == 409 { throw AuthError.conflict(reply.body["message"] as? String ?? "This changed on another device. Try again.") }
-            throw AuthError.message(reply.body["message"] as? String ?? "Something went wrong on HushOS. Try again in a moment.")
-        }
+        if let refusal = refusal(reply, whole: whole, lost: lost) { throw refusal }
         if whole, stepChangeReplyRead(status: UInt16(clamping: reply.status), body: reply.text) != .done { throw StepError.lost(lost) }
         return reply.body
+    }
+
+    /* What a reply that is not a success is thrown as (`call`'s rule, for a route that reads its own 200); nil for a 2xx. */
+    static func refusal(_ reply: SessionReply, whole: Bool, lost: String) -> Error? {
+        guard !(200 ..< 300).contains(reply.status) else { return nil }
+        let read = stepChangeReplyRead(status: UInt16(clamping: reply.status), body: reply.text)
+        if case .refused(let refusal, let message) = read, StepError.named(refusal) { return StepError.refused(refusal, message) }
+        // A server error without the step's code (a 503 from something in the way): the change may have gone through.
+        if whole, read == .lost, reply.status >= 500 { return StepError.lost(lost) }
+        if reply.status == 401 { return AuthError.sessionEnded(session: reply.session.tag) }
+        if reply.status == 409 { return AuthError.conflict(reply.body["message"] as? String ?? "This changed on another device. Try again.") }
+        return AuthError.message(reply.body["message"] as? String ?? "Something went wrong on HushOS. Try again in a moment.")
     }
 
     struct SessionReply {

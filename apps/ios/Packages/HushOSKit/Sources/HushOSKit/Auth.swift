@@ -90,6 +90,8 @@ public enum Auth {
     private struct Reply {
         let body: [String: Any]
         let cookie: String?
+        /* The body as it arrived, for the core to read. */
+        let text: String
     }
 
     /* A reply as it arrived: the status, the body as text for the core to read, and the session cookie if one came. */
@@ -132,7 +134,7 @@ public enum Auth {
         guard (200 ..< 300).contains(reply.status) else {
             throw AuthError.message(reply.body["message"] as? String ?? "Something went wrong on HushOS. Try again in a moment.")
         }
-        return Reply(body: reply.body, cookie: reply.cookie)
+        return Reply(body: reply.body, cookie: reply.cookie, text: reply.text)
     }
 
     /*
@@ -183,8 +185,8 @@ public enum Auth {
      */
     public static func startSignIn(origin: String, email: String, password: String) async throws -> SignIn {
         switch try await passwordHalf(origin: origin, email: email, password: password) {
-        case .session(let reply, let exportKey):
-            return .signedIn(try await openSession(origin: origin, email: email, exportKey: exportKey, reply: reply))
+        case .session(let reply, let exportKey, let advertised):
+            return .signedIn(try await openSession(origin: origin, email: email, exportKey: exportKey, reply: reply, advertised: advertised))
         case .step(let pending):
             return .step(pending)
         }
@@ -214,13 +216,20 @@ public enum Auth {
 
     /* What the password's half met, with nothing stored yet: the session's reply (whole, with its cookie), or the step. */
     enum Met {
-        case session(RawReply, exportKey: Data)
+        case session(RawReply, exportKey: Data, advertised: Bool)
         case step(PendingSignIn)
     }
 
-    static func passwordHalf(origin: String, email: String, password: String) async throws -> Met {
+    /*
+     * `linkHost`: the host this build is associated with, which decides whether a passkey or security
+     * key is named to this server (`passkeysUsable`). The extensions carry none and name no key.
+     */
+    static func passwordHalf(origin: String, email: String, password: String, linkHost: String? = Passkeys.linkHost) async throws -> Met {
         let start = try opaqueStartLogin(password: password)
-        let started = try await post(origin, "/api/auth/login/start", ["email": email, "startLoginRequest": start.request]).body
+        let begun = try await post(origin, "/api/auth/login/start", ["email": email, "startLoginRequest": start.request])
+        let started = begun.body
+        // Whether this server reads `twoStepMethods`: said in every `login/start` reply, for any address.
+        let advertised = stepMethodsAdvertised(loginStartBody: begun.text)
         guard let attemptToken = started["attemptToken"] as? String, let loginResponse = started["loginResponse"] as? String else {
             throw AuthError.message("Unexpected reply from HushOS.")
         }
@@ -229,14 +238,24 @@ public enum Auth {
         }
         // The device key's proof, only for the account it was made for: the same device comes back.
         let proof = deviceProof(identity: SharedKeychain.deviceIdentity, email: email, attemptToken: attemptToken)
-        let reply = try await send(origin, "/api/auth/login/finish", finishBody(attemptToken: attemptToken, finishRequest: finish.request, device: proof))
+        // The methods this phone can answer with, named only to a server that said it reads them. A rolling update can
+        // answer `login/start` from a release that reads the field and `login/finish` from one whose schema refuses
+        // it: refused there, nothing was looked at and the attempt is still good, so the same request goes once
+        // more without the field.
+        let reply = try await StepMethodsField.send(
+            advert: advertised ? .advertised : .notAdvertised, named: stepMethodsNamed(passkeys: passkeysUsable(serverOrigin: origin, linkHost: linkHost)),
+            body: finishBody(attemptToken: attemptToken, finishRequest: finish.request, device: proof), status: \.status
+        ) { body in
+            try await send(origin, "/api/auth/login/finish", body)
+        }
+        .reply
         switch signInReplyRead(status: UInt16(clamping: reply.status), body: reply.text) {
         case .done:
             // The session is its body and its cookie: without the cookie nothing was handed over, whatever the body says.
             guard reply.cookie != nil else { throw StepError.lost(StepWords.lostSignIn) }
-            return .session(reply, exportKey: finish.exportKey)
+            return .session(reply, exportKey: finish.exportKey, advertised: advertised)
         case .step(let challenge):
-            return .step(PendingSignIn(origin: origin, email: email, challenge: challenge, exportKey: finish.exportKey))
+            return .step(PendingSignIn(origin: origin, email: email, challenge: challenge, exportKey: finish.exportKey, advertised: advertised))
         case .refused(let refusal, let message):
             // A wrong password and the limiter's 429 are a sign-in's own refusals, in the server's words as before.
             throw refusal == .other || refusal == .busy ? AuthError.message(message) : StepError.refused(refusal, message)
@@ -248,6 +267,8 @@ public enum Auth {
     /*
      * What `login/finish` is sent. `twoStep: 1` says this build can answer a second step: without it
      * the server tells an account that has one to update, and nobody with the step could sign in here.
+     * That field never changes (an older server's schema takes only `1`); what this phone can answer
+     * beyond codes and the phrase goes in `twoStepMethods`, added by `StepMethodsField`.
      */
     static func finishBody(attemptToken: String, finishRequest: String, device: [String: String]?) -> [String: Any] {
         var body: [String: Any] = ["attemptToken": attemptToken, "finishLoginRequest": finishRequest, "twoStep": 1]
@@ -266,7 +287,7 @@ public enum Auth {
         switch signInReplyRead(status: UInt16(clamping: reply.status), body: reply.text) {
         case .done:
             guard reply.cookie != nil else { throw StepError.lost(StepWords.lostStep) }
-            return try await openSession(origin: pending.origin, email: pending.email, exportKey: pending.exportKey, reply: reply)
+            return try await openSession(origin: pending.origin, email: pending.email, exportKey: pending.exportKey, reply: reply, advertised: pending.advertised)
         case .refused(let refusal, let message):
             throw StepError.refused(refusal, message)
         case .step, .lost:
@@ -275,8 +296,23 @@ public enum Auth {
         }
     }
 
+    /*
+     * Answers the step with what a press returned (`SignInStep.press`). A passkey or security key is
+     * asked here, by `key`, and nowhere before: when it does not answer, this throws `KeyUnused` and
+     * nothing is sent. `made` hears the answer before it goes, so a reply that is then lost can be
+     * followed by the same answer, without asking the key twice.
+     */
+    public static func answerStep(
+        _ pending: PendingSignIn, sending: StepSending, key: KeyAsker, isolation: isolated (any Actor)? = #isolation, made: (StepAnswer) -> Void = { _ in }
+    ) async throws -> SessionUser {
+        let answer = try await sending.answer(key: key)
+        made(answer)
+        return try await answerStep(pending, proof: answer.proof)
+    }
+
     /* The session's reply, whole (the core checked): the session and the device memory are stored, and the account returned. */
-    static func openSession(origin: String, email: String, exportKey: Data, reply: RawReply) async throws -> SessionUser {
+    /* `advertised`: what this sign-in's `login/start` said of `twoStepMethods`, kept for the session's changes once it is stored. */
+    static func openSession(origin: String, email: String, exportKey: Data, reply: RawReply, advertised: Bool? = nil, adverts: StepAdverts = .stored) async throws -> SessionUser {
         guard let userJson = reply.body["user"] as? [String: Any] else { throw AuthError.message("Signed in, but HushOS returned no account.") }
         let user = try JSONDecoder().decode(SessionUser.self, from: JSONSerialization.data(withJSONObject: userJson))
         guard let envelopeJson = reply.body["envelope"] as? [String: Any] else { throw AuthError.message("Signed in, but HushOS returned no account key.") }
@@ -298,6 +334,8 @@ public enum Auth {
         SessionChange.closeLastSession()
         try SharedKeychain.write(SharedKeychain.configAccount, SharedKeychain.Config(origin: origin))
         try SharedKeychain.write(SharedKeychain.sessionAccount, SharedKeychain.Session(origin: origin, token: token, userId: user.id))
+        // After the claim above, which wipes another account's state: this is the new session's.
+        if let advertised { adverts.remember(advertised, for: origin) }
         // A device the proof did not bring back describes itself and gets a key; a failure waits for the next launch.
         if let device = SessionDevice(json: reply.body["device"] as? [String: Any]) {
             try? await registerDevice(if: device, userId: user.id, email: user.email.isEmpty ? email : user.email)

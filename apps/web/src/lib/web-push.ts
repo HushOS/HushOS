@@ -220,6 +220,9 @@ const TWO_STEP_NOTICES = {
         'Authenticator app paused',
         'Your authenticator app is paused on devices HushOS doesn’t recognise.',
     ],
+    'two-step-key-added': ['Two-step sign-in', 'A passkey or security key was added.'],
+    'two-step-key-removed': ['Two-step sign-in', 'A passkey or security key was removed.'],
+    'key-counter': ['Security key', 'One of your security keys may have been copied.'],
 } as const;
 /* Where a tapped two-step notice opens: the account's two-step settings and security activity. */
 const TWO_STEP_URL = '/app/account#two-step';
@@ -274,7 +277,10 @@ async function noticeFor(id: string): Promise<Notice | null> {
         case 'account-key-rotated':
         case 'step-failed':
         case 'change-step-failed':
-        case 'totp-frozen': {
+        case 'totp-frozen':
+        case 'two-step-key-added':
+        case 'two-step-key-removed':
+        case 'key-counter': {
             const [title, body] = TWO_STEP_NOTICES[notification.kind];
             return { title, body, url: TWO_STEP_URL };
         }

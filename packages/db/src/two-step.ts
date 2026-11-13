@@ -21,8 +21,10 @@ import {
     twoStepBackupCodes,
     twoStepFactors,
     twoStepKeyReaders,
+    twoStepKeyRegistrations,
     twoStepState,
     type accountKeys,
+    type TwoStepDefaultKind,
     type TwoStepFactorKind,
     type TwoStepMethod,
     type TwoStepPurpose,
@@ -43,12 +45,15 @@ import {
     PENDING_FACTOR_SECONDS,
     SECURITY_EVENT_DAYS,
     STEP_TOKEN_ANSWERS,
+    WEBAUTHN_KEY_LIMIT,
     confirmedFactors,
     ensureState,
     hourOf,
+    kindOrder,
     passStep,
     passStepIfOn,
     readAttempt,
+    settleDefault,
     settleRefusal,
     stepIsOn,
     totpStepInReach,
@@ -71,7 +76,7 @@ import {
  * - a token allows five answers, each taken before it is checked, and passes once;
  * - what a right answer spends and what it authorises commit together or not at all: each
  *   gated action is one function here (`openSteppedSession`, `removeFactor`,
- *   `replaceBackupCodes`, `startTotpFactor`) or in the auth repository
+ *   `replaceBackupCodes`, `startTotpFactor`, `startKeyRegistration`) or in the auth repository
  *   (`changeAccountSecurity`, `deleteAccount`), and there is no other way to spend a step;
  * - a pending method never counts, and nothing reaches another account's rows.
  * Every write that changes an account's step takes the account's row lock first.
@@ -99,6 +104,8 @@ export {
     STEP_NOTICE_FAILURES,
     STEP_TOKEN_ANSWERS,
     TOTP_FREEZE_FAILURES,
+    WEBAUTHN_KEY_LIMIT,
+    kindOrder,
     recordStepFailure,
     returnStepAnswer,
 } from './two-step.core';
@@ -142,8 +149,10 @@ export async function hasTwoStep(userId: string) {
 
 /*
  * The account's step as its settings show it: the confirmed methods, oldest first, how many
- * backup codes are left, and whether the authenticator app is frozen for new devices. Never a
- * secret, a public key or a credential id.
+ * backup codes are left, whether the authenticator app is frozen for new devices, and the kind
+ * that is offered first (`defaultKind`: the person's choice while a factor of that kind is
+ * confirmed, else the first kind there is; null with the step off). Never a secret, a public
+ * key or a credential id.
  */
 export async function getTwoStep(userId: string) {
     const methods = await db
@@ -159,7 +168,10 @@ export async function getTwoStep(userId: string) {
         .where(and(eq(twoStepFactors.userId, userId), isNotNull(twoStepFactors.confirmedAt)))
         .orderBy(asc(twoStepFactors.createdAt), asc(twoStepFactors.id));
     const [state] = await db
-        .select({ totpFrozenAt: twoStepState.totpFrozenAt })
+        .select({
+            totpFrozenAt: twoStepState.totpFrozenAt,
+            defaultKind: twoStepState.defaultKind,
+        })
         .from(twoStepState)
         .where(eq(twoStepState.userId, userId));
     return {
@@ -167,6 +179,11 @@ export async function getTwoStep(userId: string) {
         methods: methods.map((method) => ({ ...method, synced: method.synced === true })),
         backupCodesLeft: await unusedBackupCodes(db, userId),
         totpFrozen: Boolean(state?.totpFrozenAt),
+        defaultKind:
+            kindOrder(
+                methods.map((method) => method.kind),
+                state?.defaultKind,
+            )[0] ?? null,
     };
 }
 
@@ -336,9 +353,10 @@ export type ConfirmTotpResult =
  *   account), and with it that app's freeze; nothing else about the step changes;
  * - the account's first method turns the step on. That needs `backupCodes` (`codes-required`
  *   without them, with nothing changed), stores them, stamps the session that enrolled as
- *   having passed the step, and deletes every other pending method of the account: one
- *   started while the step was off could otherwise be confirmed later without the step. A
- *   set passed when the step is already on is ignored.
+ *   having passed the step, makes the app the account's default, and deletes every other
+ *   pending method of the account, a key being added included: one started while the step
+ *   was off could otherwise be confirmed later without the step. A set passed when the step
+ *   is already on is ignored.
  * Once the step is on, a pending app exists only because `startTotpFactor` passed the step.
  */
 export async function confirmTotpFactor(input: {
@@ -396,6 +414,13 @@ export async function confirmTotpFactor(input: {
             .update(twoStepFactors)
             .set({ confirmedAt: now, totpLastStep: input.step, lastUsedAt: hourOf(now) })
             .where(eq(twoStepFactors.id, pending.id));
+        // The first method turned on is the default; a later one never moves it.
+        await settleDefault(
+            tx,
+            input.userId,
+            confirmed.map((factor) => factor.kind),
+            turnedOn ? 'totp' : undefined,
+        );
         if (turnedOn && codes) {
             await writeBackupCodes(tx, input.userId, codes);
             // A fresh start: counts from an earlier time the step was on mean nothing now.
@@ -412,6 +437,10 @@ export async function confirmTotpFactor(input: {
                         ne(twoStepFactors.id, pending.id),
                     ),
                 );
+            // And every key being added: its registration was handed out without the step.
+            await tx
+                .delete(twoStepKeyRegistrations)
+                .where(eq(twoStepKeyRegistrations.userId, input.userId));
             await tx
                 .update(sessions)
                 .set({ twoStepAt: sql`coalesce(${sessions.twoStepAt}, ${now})` })
@@ -427,8 +456,17 @@ export async function confirmTotpFactor(input: {
 }
 
 export type RemoveFactorResult =
-    /* `turnedOff`: it was the last method, so the step is off and its codes, tokens and counts are gone. */
-    | { status: 'ok'; kind: TwoStepFactorKind; turnedOff: boolean }
+    /*
+     * `turnedOff`: it was the last method, so the step is off and its codes, tokens and counts
+     * are gone. `defaultKind`: the kind offered first from now on, when removing the last
+     * method of the default's kind moved it; absent when the default stayed where it was.
+     */
+    | {
+          status: 'ok';
+          kind: TwoStepFactorKind;
+          turnedOff: boolean;
+          defaultKind?: TwoStepDefaultKind;
+      }
     | { status: 'missing' }
     | TwoStepRefusal;
 
@@ -440,6 +478,8 @@ export type RemoveFactorResult =
  * the backup codes and every step token of the account are deleted, its counts start over,
  * and its sessions lose their stamp.
  * Removing the app while other methods stay lifts its freeze, which has nothing left to freeze.
+ * Removing the last method of the default's kind clears the default in the same transaction,
+ * so an old choice never comes back when that kind is added again (docs/two-step-design.md 12).
  */
 export async function removeFactor(input: {
     userId: string;
@@ -465,9 +505,28 @@ export async function removeFactor(input: {
             });
         await tx.delete(twoStepFactors).where(eq(twoStepFactors.id, input.factorId));
         if (!factor.confirmedAt) return { status: 'ok', kind: factor.kind, turnedOff: false };
-        const turnedOff = !(await stepIsOn(tx, input.userId));
+        const left = (await confirmedFactors(tx, input.userId)).map(({ kind }) => kind);
+        const turnedOff = left.length === 0;
+        // The default goes with the last method of its kind. What is offered first moves
+        // whenever the kind that was first has no method left, chosen or not.
+        const [state] = await tx
+            .select({ defaultKind: twoStepState.defaultKind })
+            .from(twoStepState)
+            .where(eq(twoStepState.userId, input.userId));
+        const was = kindOrder([...left, factor.kind], state?.defaultKind)[0];
+        const now = kindOrder(left, null)[0];
+        const kindGone = !left.includes(factor.kind);
+        if (kindGone && state?.defaultKind === factor.kind)
+            await tx
+                .update(twoStepState)
+                .set({ defaultKind: null })
+                .where(eq(twoStepState.userId, input.userId));
+        const moved = kindGone && was === factor.kind && now ? { defaultKind: now } : {};
         if (turnedOff) {
             await tx.delete(twoStepAttempts).where(eq(twoStepAttempts.userId, input.userId));
+            await tx
+                .delete(twoStepKeyRegistrations)
+                .where(eq(twoStepKeyRegistrations.userId, input.userId));
             await tx.delete(twoStepBackupCodes).where(eq(twoStepBackupCodes.userId, input.userId));
             await tx
                 .update(accountDevices)
@@ -488,7 +547,336 @@ export async function removeFactor(input: {
                     ...(turnedOff ? { consecutiveFailures: 0 } : {}),
                 })
                 .where(eq(twoStepState.userId, input.userId));
-        return { status: 'ok', kind: factor.kind, turnedOff };
+        return { status: 'ok', kind: factor.kind, turnedOff, ...moved };
+    });
+}
+
+/* ------------------------------------------------------------------------- */
+/* Passkeys and security keys                                                 */
+/* ------------------------------------------------------------------------- */
+
+const methodFields = {
+    id: twoStepFactors.id,
+    kind: twoStepFactors.kind,
+    name: twoStepFactors.name,
+    createdAt: twoStepFactors.createdAt,
+    lastUsedAt: twoStepFactors.lastUsedAt,
+    synced: twoStepFactors.backupState,
+};
+
+/*
+ * The account's confirmed keys as an assertion is checked against them: the credential id, the
+ * COSE public key, the counter and the transports. Served to the server only; a client is told
+ * the ids and transports after the password, and never the keys.
+ */
+export async function listWebauthnCredentials(userId: string) {
+    const rows = await db
+        .select({
+            id: twoStepFactors.id,
+            credentialId: twoStepFactors.credentialId,
+            publicKey: twoStepFactors.publicKey,
+            signCount: twoStepFactors.signCount,
+            transports: twoStepFactors.transports,
+        })
+        .from(twoStepFactors)
+        .where(
+            and(
+                eq(twoStepFactors.userId, userId),
+                eq(twoStepFactors.kind, 'webauthn'),
+                isNotNull(twoStepFactors.confirmedAt),
+            ),
+        )
+        .orderBy(asc(twoStepFactors.createdAt), asc(twoStepFactors.id));
+    // The table's check keeps these present on every `webauthn` row.
+    return rows.flatMap((row) =>
+        row.credentialId && row.publicKey && row.signCount !== null
+            ? [
+                  {
+                      id: row.id,
+                      credentialId: row.credentialId,
+                      publicKey: row.publicKey,
+                      signCount: row.signCount,
+                      transports: row.transports ?? [],
+                  },
+              ]
+            : [],
+    );
+}
+
+export type StartKeyResult = { status: 'ok' } | { status: 'missing' | 'limit' } | TwoStepRefusal;
+
+/*
+ * Starts adding a key: stores the registration token's hash and the challenge the key must
+ * sign, for five minutes, bound to the session that asked. While the account has the step on,
+ * adding a method needs the step (`step`, a token for `two-step` from that session): without
+ * one that passes, nothing is stored. `limit` once the account has ten keys. A session has one
+ * registration at a time; starting again drops its earlier one.
+ */
+export async function startKeyRegistration(input: {
+    tokenHash: Buffer;
+    userId: string;
+    sessionTokenHash: Buffer;
+    credentialVersion: number;
+    challenge: Buffer;
+    expiresAt: Date;
+    step?: SessionStep;
+}): Promise<StartKeyResult> {
+    return gated<StartKeyResult>(async (tx) => {
+        if (!(await lockAccount(tx, input.userId)) || !(await sessionIsCurrent(tx, input)))
+            return { status: 'missing' };
+        const keys = (await confirmedFactors(tx, input.userId)).filter(
+            ({ kind }) => kind === 'webauthn',
+        );
+        if (keys.length >= WEBAUTHN_KEY_LIMIT) return { status: 'limit' };
+        await passStepIfOn(tx, {
+            userId: input.userId,
+            purpose: 'two-step',
+            sessionTokenHash: input.step?.sessionTokenHash ?? null,
+            proof: input.step,
+        });
+        await tx
+            .delete(twoStepKeyRegistrations)
+            .where(
+                and(
+                    eq(twoStepKeyRegistrations.userId, input.userId),
+                    eq(twoStepKeyRegistrations.sessionTokenHash, input.sessionTokenHash),
+                ),
+            );
+        await tx.insert(twoStepKeyRegistrations).values({
+            tokenHash: input.tokenHash,
+            userId: input.userId,
+            sessionTokenHash: input.sessionTokenHash,
+            credentialVersion: input.credentialVersion,
+            challenge: input.challenge,
+            expiresAt: input.expiresAt,
+        });
+        return { status: 'ok' };
+    });
+}
+
+const registrationOf = (input: { tokenHash: Buffer; userId: string; sessionTokenHash: Buffer }) =>
+    and(
+        eq(twoStepKeyRegistrations.tokenHash, input.tokenHash),
+        eq(twoStepKeyRegistrations.userId, input.userId),
+        eq(twoStepKeyRegistrations.sessionTokenHash, input.sessionTokenHash),
+        gt(twoStepKeyRegistrations.expiresAt, new Date()),
+    );
+
+/*
+ * The challenge a key's registration must have signed, while its token can still be used: the
+ * token must be this account's, from this session, and not expired. Reading uses nothing up.
+ */
+export async function getKeyRegistration(input: {
+    tokenHash: Buffer;
+    userId: string;
+    sessionTokenHash: Buffer;
+}) {
+    const [row] = await db
+        .select({ challenge: twoStepKeyRegistrations.challenge })
+        .from(twoStepKeyRegistrations)
+        .where(registrationOf(input));
+    return row ?? null;
+}
+
+/* Ends a registration whose answer did not verify: a token is good for one answer. */
+export async function dropKeyRegistration(tokenHash: Buffer) {
+    await db
+        .delete(twoStepKeyRegistrations)
+        .where(eq(twoStepKeyRegistrations.tokenHash, tokenHash));
+}
+
+export type WebauthnCredential = {
+    credentialId: Buffer;
+    publicKey: Buffer;
+    signCount: number;
+    transports: string[];
+    backupEligible: boolean;
+    backupState: boolean;
+};
+type StoredMethod = {
+    id: string;
+    kind: TwoStepFactorKind;
+    name: string | null;
+    createdAt: Date;
+    lastUsedAt: Date | null;
+    synced: boolean;
+};
+export type AddKeyResult =
+    /* `turnedOn`: this was the account's first method, so the step is now on and the codes were stored. */
+    | { status: 'ok'; turnedOn: boolean; method: StoredMethod }
+    | { status: 'session' | 'missing' | 'codes-required' | 'limit' | 'exists' };
+
+/*
+ * Adds a key, once the server has verified its registration against the challenge of
+ * `registrationTokenHash`. Under the account's lock:
+ * - the session asking must be the account's own, live and on its current credential;
+ * - the registration must still be there, this account's and this session's: it is deleted
+ *   here, so it adds one key and no more, however many requests carry it. One that anything
+ *   else ended (the step turned on or off meanwhile, five minutes) is `missing`;
+ * - the account has at most ten keys (`limit`), and never the same credential twice (`exists`);
+ * - the account's first method turns the step on, exactly as an app's does: it needs
+ *   `backupCodes` (`codes-required` without them, with nothing changed and the registration
+ *   kept), stores them, stamps the session, makes the key the account's default and deletes
+ *   every other pending method.
+ * The key is confirmed as it is stored: its registration was the proof it answers.
+ */
+export async function addWebauthnFactor(
+    input: {
+        userId: string;
+        sessionTokenHash: Buffer;
+        credentialVersion: number;
+        registrationTokenHash: Buffer;
+        name: string;
+        backupCodes?: BackupCodeSet;
+    } & WebauthnCredential,
+): Promise<AddKeyResult> {
+    const codes = input.backupCodes ? checkedSet(input.backupCodes) : null;
+    return db.transaction(async (tx): Promise<AddKeyResult> => {
+        if (!(await lockAccount(tx, input.userId)) || !(await sessionIsCurrent(tx, input)))
+            return { status: 'session' };
+        const registration = registrationOf({ ...input, tokenHash: input.registrationTokenHash });
+        const [pending] = await tx
+            .select({ tokenHash: twoStepKeyRegistrations.tokenHash })
+            .from(twoStepKeyRegistrations)
+            .where(registration)
+            .for('update');
+        if (!pending) return { status: 'missing' };
+        const confirmed = await confirmedFactors(tx, input.userId);
+        const turnedOn = confirmed.length === 0;
+        if (turnedOn && !codes) return { status: 'codes-required' };
+        await tx.delete(twoStepKeyRegistrations).where(registration);
+        if (confirmed.filter(({ kind }) => kind === 'webauthn').length >= WEBAUTHN_KEY_LIMIT)
+            return { status: 'limit' };
+        const [same] = await tx
+            .select({ id: twoStepFactors.id })
+            .from(twoStepFactors)
+            .where(
+                and(
+                    eq(twoStepFactors.userId, input.userId),
+                    eq(twoStepFactors.credentialId, input.credentialId),
+                ),
+            );
+        if (same) return { status: 'exists' };
+        const now = new Date();
+        const [method] = await tx
+            .insert(twoStepFactors)
+            .values({
+                userId: input.userId,
+                kind: 'webauthn',
+                name: input.name,
+                createdAt: now,
+                confirmedAt: now,
+                credentialId: input.credentialId,
+                publicKey: input.publicKey,
+                signCount: input.signCount,
+                transports: input.transports,
+                backupEligible: input.backupEligible,
+                backupState: input.backupState,
+            })
+            .returning(methodFields);
+        if (!method) throw new Error('The key could not be stored.');
+        await settleDefault(
+            tx,
+            input.userId,
+            confirmed.map((factor) => factor.kind),
+            turnedOn ? 'webauthn' : undefined,
+        );
+        if (turnedOn && codes) {
+            await writeBackupCodes(tx, input.userId, codes);
+            // A fresh start, as when an app turns the step on.
+            await tx
+                .update(twoStepState)
+                .set({ consecutiveFailures: 0, totpFrozenAt: null })
+                .where(eq(twoStepState.userId, input.userId));
+            await tx
+                .delete(twoStepFactors)
+                .where(
+                    and(
+                        eq(twoStepFactors.userId, input.userId),
+                        isNull(twoStepFactors.confirmedAt),
+                    ),
+                );
+            await tx
+                .delete(twoStepKeyRegistrations)
+                .where(eq(twoStepKeyRegistrations.userId, input.userId));
+            await tx
+                .update(sessions)
+                .set({ twoStepAt: sql`coalesce(${sessions.twoStepAt}, ${now})` })
+                .where(
+                    and(
+                        eq(sessions.tokenHash, input.sessionTokenHash),
+                        eq(sessions.userId, input.userId),
+                    ),
+                );
+        }
+        return { status: 'ok', turnedOn, method: { ...method, synced: method.synced === true } };
+    });
+}
+
+/*
+ * Renames one of the account's keys. Any session of the account may: a name is a label, shown
+ * only to the account, and not encrypted. An app has no name, and a pending method none to
+ * change. Answers the method as the list shows it, or null when it is not this account's key.
+ */
+export async function renameFactor(input: { userId: string; factorId: string; name: string }) {
+    const [method] = await db
+        .update(twoStepFactors)
+        .set({ name: input.name })
+        .where(
+            and(
+                eq(twoStepFactors.id, input.factorId),
+                eq(twoStepFactors.userId, input.userId),
+                eq(twoStepFactors.kind, 'webauthn'),
+                isNotNull(twoStepFactors.confirmedAt),
+            ),
+        )
+        .returning(methodFields);
+    return method ? { ...method, synced: method.synced === true } : null;
+}
+
+/* ------------------------------------------------------------------------- */
+/* The default                                                                */
+/* ------------------------------------------------------------------------- */
+
+export type SetDefaultResult =
+    /* `changed`: false when that kind was already what the account is offered first. */
+    { status: 'ok'; changed: boolean } | { status: 'session' | 'step' | 'missing' };
+
+/*
+ * Chooses the kind of method the account is offered first (docs/two-step-design.md 12). It
+ * changes only an order, so it asks for no password and no fresh step. But the session asking
+ * must have passed the step itself (`step` otherwise): one that signed in before the step was
+ * turned on never did. The account must have a confirmed method of that kind (`missing`).
+ */
+export async function setDefaultKind(input: {
+    userId: string;
+    kind: TwoStepDefaultKind;
+    sessionTokenHash: Buffer;
+    credentialVersion: number;
+}): Promise<SetDefaultResult> {
+    return db.transaction(async (tx): Promise<SetDefaultResult> => {
+        if (!(await lockAccount(tx, input.userId)) || !(await sessionIsCurrent(tx, input)))
+            return { status: 'session' };
+        const [session] = await tx
+            .select({ twoStepAt: sessions.twoStepAt })
+            .from(sessions)
+            .where(
+                and(
+                    eq(sessions.tokenHash, input.sessionTokenHash),
+                    eq(sessions.userId, input.userId),
+                ),
+            );
+        if (!session?.twoStepAt) return { status: 'step' };
+        const kinds = (await confirmedFactors(tx, input.userId)).map(({ kind }) => kind);
+        if (!kinds.some((kind) => kind === input.kind)) return { status: 'missing' };
+        const state = await ensureState(tx, input.userId);
+        const changed = kindOrder(kinds, state.defaultKind)[0] !== input.kind;
+        if (state.defaultKind !== input.kind)
+            await tx
+                .update(twoStepState)
+                .set({ defaultKind: input.kind })
+                .where(eq(twoStepState.userId, input.userId));
+        return { status: 'ok', changed };
     });
 }
 
@@ -666,8 +1054,12 @@ export type SteppedSession =
      * is one no code could be for yet. None of the three is counted.
      */
     | { status: 'gone' | 'frozen' | 'step' | 'suspended' }
-    /* The code was already used. It was counted as a wrong answer, once: `failure` is that count. */
-    | { status: 'spent'; failure: StepFailure };
+    /*
+     * The code was already used, or a key's counter did not go up (`counter`: found here,
+     * under the lock, when another answer of the same key moved it first). It was counted as a
+     * wrong answer, once: `failure` is that count.
+     */
+    | { status: 'spent'; failure: StepFailure; counter?: boolean };
 
 /*
  * Opens the session a sign-in's step token was made for, once the server has checked the
@@ -732,7 +1124,13 @@ export async function openSteppedSession(input: {
     } catch (error) {
         const refusal = await settleRefusal(error);
         if (!refusal) throw error;
-        if (refusal.reason === 'spent') return { status: 'spent', failure: refusal.failure };
+        if (refusal.reason === 'spent')
+            return {
+                status: 'spent',
+                failure: refusal.failure,
+                // Carried on: the account is told its key may have been copied only if this is.
+                ...(refusal.counter ? { counter: true } : {}),
+            };
         return { status: refusal.reason === 'required' ? 'gone' : refusal.reason };
     }
 }
@@ -950,7 +1348,8 @@ export async function dropStaleKeyReaders(at?: Date) {
 
 /*
  * What the log records so far: a sign-in that passed the step, a failed step after a correct
- * password, and each change to the step. A line carries a kind of event and a kind of
+ * password, each change to the step (the default among them, with the kind it moved to as its
+ * method), and a key whose counter did not go up. A line carries a kind of event and a kind of
  * method, never a name, an address or a browser.
  */
 export const SECURITY_EVENT_KINDS = [
@@ -964,6 +1363,8 @@ export const SECURITY_EVENT_KINDS = [
     'backup-code-used',
     'phrase-used',
     'totp-frozen',
+    'default-changed',
+    'key-counter',
 ] as const;
 export type SecurityEventKind = (typeof SECURITY_EVENT_KINDS)[number];
 

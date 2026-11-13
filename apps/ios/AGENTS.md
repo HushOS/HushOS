@@ -320,7 +320,7 @@ Markdown files (`text/markdown`, or `.md`, `.markdown`, `.mdx`) up to 2 MB open 
 
 ### Two-step sign-in
 
-`docs/two-step-design.md` 4 to 6. `TwoStep.swift` in HushOSKit holds the requests and the rules; `App/TwoStep.swift` the screens.
+`docs/two-step-design.md` 3 to 6 and 12. `TwoStep.swift` in HushOSKit holds the requests and the rules; `App/TwoStep.swift` the screens. Passkeys and security keys: `Passkeys.swift` in HushOSKit, `App/PasskeySheet.swift`, and their own list below.
 
 - `Auth.startSignIn` sends `twoStep: 1` (`Auth.finishBody`) and returns `.signedIn` or `.step(PendingSignIn)`. What the password opened waits in `PendingSignIn`, in memory, for `Auth.answerStep`.
     - It is dropped six minutes after it arrived (`PendingSignIn.dropIn`, `AppModel.awaitStep`), counted on `ContinuousClock`, never against the step's `expiresAt`: a phone with a wrong date must still be able to sign in.
@@ -346,15 +346,40 @@ Markdown files (`text/markdown`, or `.md`, `.markdown`, `.mdx`) up to 2 MB open 
 - After a reset that gave no session, the words are shown all the same and sign-in follows (`AppModel.recoveredSignedOut`): the app leaves the session it showed (another account's is signed out) and opens sign-in with the recovered address filled. A reset nothing could confirm says `resetUncertain`, and then `signInAfterUncertainReset`.
     - From the reset's request until its words are saved, a sign-up or reset link waits (`AppModel.resetHolds`), as one does while an account is being made.
 - Backup codes are shared through `CodesShare`, whose sheet has no Copy: Copy on the page (`copyBriefly`) is the only way they reach the clipboard.
-- `TwoStep.confirmAuthenticator` takes only the server's two answers (`TwoStep.confirmed`): `{ backupCodes }` turned the step on, `{ replaced: true }` replaced the app. Anything else with a 200, `{}` included, is a lost reply: the sheet says it can't tell whether the app was added, and the settings are read again.
+- `TwoStep.confirmAuthenticator` takes only the server's two answers (`TwoStep.confirmed`): `{ backupCodes }` turned the step on, `{ replaced: true }` replaced the app, or added it beside a key (`AuthenticatorSheet.Mode.add`, said as "Authenticator app added."). Anything else with a 200, `{}` included, is a lost reply: the sheet says it can't tell whether the app was added, and the settings are read again.
 - A lost change says what is unknown, in the web's sentence (`StepWords.lost(whether:)`).
 - The other replies are read the same way, by the web's readers: `Auth.done` (`{ success: true }`), `TwoStep.enrolment`, `TwoStep.removed`, `TwoStep.codes`. Turning the step on without codes in the reply is lost too.
 - "Remove my other devices" is offered whenever the step is turned on, whatever the device list said, and removes when ticked; never when the app is replaced. The codes show first; the removal runs behind them (an unstructured task), Done closes the codes meanwhile, and a failure is a notice.
 - A copied key or set of codes leaves the clipboard after two minutes, as the recovery phrase does (the pasteboard's expiry, this phone only). The key is not selectable text: Copy key is the only way it reaches the clipboard.
-- What a refusal withdraws is `StepOutcome.left`: a paused app, the app; a spent budget, both kinds of code together; `step-unavailable`, only the method that was tried.
+- What a refusal withdraws is `StepOutcome.left`: a paused app, the app; a spent budget, both kinds of code together (a passkey or security key and the phrase stay); `step-unavailable`, only the method that was tried.
 - Password re-checks go one at a time (`PasswordTurn` (HushOSKit)): the removal of other devices behind the backup codes, and whatever password action the person starts meanwhile, never overlap. `PasswordTurn.take` gives the turn back and throws when its task was cancelled while waiting, and gives up after a minute's wait (`StepWords.tookTooLong`).
 - Account › Two-step sign-in (`TwoStepView`) shows nothing on a server that has two-step off (`TwoStep.status()` is nil for 501).
 - "Open in authenticator app" opens only an `otpauth://totp/` address (`TotpEnrolment.link`).
+
+#### Passkeys, security keys and the default
+
+`docs/two-step-design.md` 3, 6 and 12 ("What was built"). The web is the reference for behaviour and wording.
+
+- Native only for the host the build is associated with: `passkeysUsable(serverOrigin:linkHost:)` is https and host equal to `Passkeys.linkHost`, no other port.
+    - The link host is `HushOSLinkHost` in the app's Info.plist, from `HUSHOS_LINK_HOST` (the build setting the `webcredentials:` entitlement uses). The extensions carry none and name no key.
+    - On any other server (self-hosted, localhost) the app names no key, so the server never lists one. Settings still list keys, with Rename, Remove and Make default, no Add, and `StepWords.keysInBrowser`. The browser path for self-hosted servers is not built.
+- `twoStepMethods` (`StepMethodsField`) goes with `login/finish` and `two-step/challenge`, beside `twoStep: 1`, which never changes.
+    - Sent only to a server whose `login/start` advertised it (the core's `stepMethodsAdvertised`). Refused with 400 or 422, the same request goes once more without it.
+    - The advert is kept per server origin in `state/step-methods.json` (`StepAdverts`), written once the session is stored, wiped with the account. Never seen (a session from before this build): sent once, and a refusal remembered, unless the request is refused without the field too. A remembered "does not read it" is believed for a day (`StepAdverts.noFor`), then the server counts as never seen again: it may have been updated since.
+- A step's methods are the server's order, never reordered (`StepOffer.methods`). The screen opens on the first; the rest are behind one Menu, Use another way.
+    - A key is offered only with its `keyRequest`, on a phone that can use one for this server.
+    - The line above the fields is `StepOffer.note`: update, or usual way, never both.
+- The system's sheet opens only from a press. `SignInStep.press` and `StepUp.prove` return a `StepSending` and ask nothing; `StepSending.answer(key:)` asks the key, and is called by `AppModel.answerStep` and `StepUpModel.answer` inside the button's task.
+    - A closed sheet, or no key, is `KeyUnused`: nothing is sent, and the step or setup stays. Keep it that way with its tests.
+    - A lost reply keeps the key's answer and sends the same one again (`SignInStep.lost`).
+- `PasskeySheet`: one `ASAuthorizationController` with a platform request and a security-key request, for an assertion and for a registration.
+    - Both are held to the session they were asked under (`KeySession.held`, by the session's tag): signed out, or signed in as someone else, while the sheet was open, the key's answer is `KeyUnused` and nothing is sent. The web does the same with its lock count.
+    - `KeyAsk` and `KeyMake` (HushOSKit) turn the core's base64url into the `Data` the providers take; `KeyAssertion` and `KeyRegistration` are built from the raw bytes handed back.
+    - The security-key request names only keys that reported `usb`, `nfc` or `ble`, or nothing. It is left out when there are none: a request that named no key would take any.
+    - Registration asks ES256 only, no attestation, no resident key, no user verification.
+- Settings rules are `TwoStepStatus` (`choosing`, `isDefault`, `canMakeDefault`, `removeWords`, `canAddKey`, `keyNotes`). `GET two-step` always carries `?methods=` (`TwoStep.statusPath`).
+- Adding a key (`KeySheet`): `TwoStep.startKey`, the sheet on the press of Add, `TwoStep.addKey`. A server refusal (`KeyRefused`) or a lost reply goes back to the password; a closed sheet keeps the setup.
+- Not checked on a device: the system's sheet itself, for a passkey or a security key over NFC or USB. A simulator cannot run it against localhost. What a real iPhone signed in to hushos.com must show: both ceremonies complete, the server takes the answer, and a closed sheet leaves the step.
 
 ### Sign-up
 
@@ -1167,6 +1192,12 @@ Identity, trust and storage:
 - `SuccessionFollowTests`, `SignedShareTests`, `ReportOperatorTests`.
 - `ContactGuardStoreTests`, `ContactTrustTests` (stub server, `ContactServer`), `ContactSettingsTests`.
 - `AppGroupTests`, `CatalogueFeedTests`, `SharingRefreshTests`, `MarkdownDocumentTests`, `SaveTargetsTests`, `RotationTests`: see their sections above.
+- `TwoStepTests`, and `PasskeyStepTests` for keys and the default:
+    - which server can use a key; the step opening on the server's first method; a key never offered without its request;
+    - nothing asks the key before a press, and a closed sheet sends nothing and keeps the step;
+    - `twoStepMethods` sent only where advertised, the retry without it, the memory per origin;
+    - the sheet's bytes against `crates/hushos-core/fixtures/two-step-keys.json`;
+    - the settings' Default, Add, Remove and Turn off, and the notes under the keys.
 
 Families:
 

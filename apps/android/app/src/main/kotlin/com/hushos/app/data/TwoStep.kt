@@ -1,17 +1,26 @@
 package com.hushos.app.data
 
 import com.hushos.core.CoreException
+import com.hushos.core.KeyAdded
+import com.hushos.core.KeyAddedReply
+import com.hushos.core.KeyCreation
+import com.hushos.core.KeyOptionsReply
+import com.hushos.core.KeyRegistration
 import com.hushos.core.StepChallenge
 import com.hushos.core.StepMethod
 import com.hushos.core.StepProof
 import com.hushos.core.StepRefusal
 import com.hushos.core.StepReply
 import com.hushos.core.backupCodeNormalize
+import com.hushos.core.keyAddedReplyRead
+import com.hushos.core.keyOptionsReplyRead
+import com.hushos.core.keyRegistrationJson
 import com.hushos.core.opaqueFinishLogin
 import com.hushos.core.opaqueStartLogin
 import com.hushos.core.stepAnswerJson
 import com.hushos.core.stepChallengeReplyRead
 import com.hushos.core.stepChangeReplyRead
+import com.hushos.core.stepMethodsShown
 import com.hushos.core.twoStepPhraseSign
 import org.json.JSONObject
 
@@ -181,6 +190,8 @@ data class TwoStepFlow(
     val error: String? = null,
     /* The pending authenticator app: its key, until it is confirmed or runs out. */
     val enrolment: TotpEnrolment? = null,
+    /* The pending passkey or security key: what the phone's sheet is asked, until a key answers or the server refuses one. */
+    val creation: KeyCreation? = null,
     /* Backup codes, shown once: kept until the person has said they are done with them, whatever page they were on when the codes arrived. */
     val codes: List<String>? = null,
     /* The codes replace an earlier set (New codes), rather than come with turning the step on. */
@@ -211,15 +222,18 @@ data class TwoStepFlow(
     /*
      * What confirming the app did. The codes are kept before anything else is done. A reply that is
      * neither of the server's answers, or "replaced" for a step that was being turned on (which always
-     * comes back with the codes), claims nothing: said so, and the settings are read again.
+     * comes back with the codes), claims nothing: said so, and the settings are read again. The server
+     * answers "replaced" for any app that is not the account's first method, one added beside keys too.
      */
-    fun confirmed(result: Result<TwoStep.Confirmed>, replacing: Boolean): TwoStepFlow = result.fold(
+    fun confirmed(result: Result<TwoStep.Confirmed>, setup: AppSetup): TwoStepFlow = result.fold(
         { confirmed ->
             when (confirmed) {
                 is TwoStep.Confirmed.TurnedOn -> copy(pending = false, codes = confirmed.backupCodes)
-                TwoStep.Confirmed.Replaced ->
-                    if (replacing) copy(pending = false, finished = "Authenticator app replaced.")
-                    else copy(pending = false, error = StepWords.LOST_TURNED_ON, reread = reread + 1)
+                TwoStep.Confirmed.Replaced -> when (setup) {
+                    AppSetup.REPLACE -> copy(pending = false, finished = "Authenticator app replaced.")
+                    AppSetup.ADD -> copy(pending = false, finished = "Authenticator app added.")
+                    AppSetup.ON -> copy(pending = false, error = StepWords.LOST_TURNED_ON, reread = reread + 1)
+                }
             }
         },
         { failure ->
@@ -240,8 +254,40 @@ data class TwoStepFlow(
     /* New codes, or why not. A lost reply may have replaced the old set: the count is read again. */
     fun newCodes(fresh: List<String>) = copy(pending = false, codes = fresh, codesReplace = true)
 
-    /* A method removed (`on`: whether the step is still on). */
-    fun removed(on: Boolean) = copy(pending = false, finished = if (on) "Authenticator app removed." else "Two-step sign-in is off.")
+    /* A method removed (`on`: whether the step is still on; `app`: it was the authenticator app, not a key). */
+    fun removed(on: Boolean, app: Boolean = true) = copy(pending = false, finished = when {
+        !on -> "Two-step sign-in is off."
+        app -> "Authenticator app removed."
+        else -> "Passkey or security key removed."
+    })
+
+    /* The pending key: the phone's sheet is asked from here, on the press that adds it. */
+    fun keyStarted(key: KeyCreation) = copy(pending = false, creation = key)
+
+    /*
+     * What sending the key's answer did. `first`: the account had no method, so this key turns the step on.
+     * - The codes come only with turning the step on, and are kept before anything else is done.
+     * - Turning it on without codes in the reply is not the server's answer to that: said so, and read again.
+     * - Anything else that came back ends the setup: a registration is good for one answer, so the person
+     *   starts again from the password, with the server's words. It may also hide a key that was added (a
+     *   lost reply, a dropped connection), so the settings are read again.
+     */
+    fun keyAdded(result: Result<KeyAdded>, first: Boolean): TwoStepFlow = result.fold(
+        { added ->
+            when {
+                added.backupCodes.isNotEmpty() -> copy(pending = false, creation = null, codes = added.backupCodes)
+                first -> copy(pending = false, creation = null, error = StepWords.LOST_TURNED_ON, reread = reread + 1)
+                else -> copy(pending = false, creation = null, finished = "Passkey or security key added.")
+            }
+        },
+        { failure ->
+            when (failure) {
+                // The session ended: sign-in is on screen, and says so.
+                is NotAuthenticated -> copy(pending = false, creation = null)
+                else -> copy(pending = false, creation = null, error = Problems.say(failure, Problems.SERVER), reread = reread + 1)
+            }
+        },
+    )
 
     /*
      * A change that failed (`said`: the form's words, null when the step's own fields say it). The step's own refusal
@@ -252,14 +298,20 @@ data class TwoStepFlow(
 
     companion object {
         /*
-         * Whether confirming the app also removes the other devices: only when the step is being turned on
-         * with the box ticked. Replacing the app shows no box, and a value left from an earlier visit must
-         * not sign anyone's devices out.
+         * Whether adding a method also removes the other devices: only when it turned the step on (`turnedOn`:
+         * the reply carried the codes), on a page that was turning it on (`first`), with the box ticked.
+         * Replacing the app or adding beside another method shows no box, and a value left from an earlier
+         * visit must not sign anyone's devices out.
          */
-        fun removesOthers(confirmed: TwoStep.Confirmed, signOutOthers: Boolean, replacing: Boolean): Boolean =
-            confirmed is TwoStep.Confirmed.TurnedOn && signOutOthers && !replacing
+        fun removesOthers(turnedOn: Boolean, signOutOthers: Boolean, first: Boolean): Boolean = turnedOn && signOutOthers && first
     }
 }
+
+/*
+ * What an authenticator app is being set up as: the account's first method (it turns the step on),
+ * a new app in place of the one it has, or an app beside its passkeys and security keys.
+ */
+enum class AppSetup { ON, REPLACE, ADD }
 
 /* A step's token and the answer to it, as `login/two-step` and a change's `twoStep` field take them. */
 data class StepAnswer(val token: String, val proof: StepProof) {
@@ -268,6 +320,7 @@ data class StepAnswer(val token: String, val proof: StepProof) {
         is StepProof.Totp -> StepMethod.TOTP
         is StepProof.Backup -> StepMethod.BACKUP
         is StepProof.Phrase -> StepMethod.PHRASE
+        is StepProof.Webauthn -> StepMethod.WEBAUTHN
     }
 
     /* The core writes the JSON, so both phones send the same bytes. */
@@ -287,6 +340,13 @@ object StepWords {
     val LOST_DELETED = lost("your account was deleted")
     val LOST_SETUP = lost("the setup was started")
     val LOST_APP_ADDED = lost("your authenticator app was added")
+    val LOST_KEY_ADDED = lost("your passkey or security key was added")
+    /* The phone's sheet was closed, or no key answered: nothing was sent, and the step is still there. */
+    const val PASSKEY_UNUSED = "Your passkey or security key wasn’t used. Try again, or use another way."
+    /* The same while adding one: the setup still stands. */
+    const val PASSKEY_NOT_ADDED = "Your passkey or security key wasn’t added. Try again."
+    /* On a server this app cannot use a key for: the list is still shown, named and pruned here. */
+    const val KEYS_IN_BROWSER = "Passkeys and security keys are added in a browser on this server. You can rename or remove them here."
     /* Turning the step on always comes back with the codes: an answer without them is not the server's answer to that. */
     val LOST_TURNED_ON = lost("two-step sign-in was turned on")
     val LOST_TURNED_OFF = lost("two-step sign-in was turned off")
@@ -354,13 +414,14 @@ sealed class StepOutcome {
         /*
          * What is still offered after a refusal that takes something away (shared with `StepUp`):
          * - a paused app: everything but the app;
-         * - a spent budget: the budget is one for the app's codes and the backup codes, so both go together;
+         * - a spent budget: the budget is one for the app's codes and the backup codes, so both go together, and
+         *   only what it does not cover stays (a passkey or security key, and the phrase), as the web's `methodsAfter`;
          * - a method the server cannot check: only that one, the one that was `tried`. The app's secret and
          *   the backup codes can sit under different server keys, so one failing says nothing of the other.
          */
         fun left(methods: List<StepMethod>, refusal: StepRefusal, tried: StepMethod?): List<StepMethod> = when (refusal) {
             StepRefusal.FROZEN -> methods.filter { it != StepMethod.TOTP }
-            StepRefusal.LIMITED -> methods.filter { it != StepMethod.TOTP && it != StepMethod.BACKUP }
+            StepRefusal.LIMITED -> methods.filter { it == StepMethod.WEBAUTHN || it == StepMethod.PHRASE }
             StepRefusal.UNAVAILABLE -> methods.filter { it != tried }
             else -> methods
         }
@@ -383,13 +444,18 @@ sealed class StepOutcome {
             }
             // A mistyped phrase, refused on this phone before anything was sent.
             is CoreException -> Again(StepDraft.phraseRefused(error), true, methods)
+            // The phone's sheet was closed, or no key answered: nothing was sent, and everything stays offered.
+            is KeyUnused -> Again(error.message ?: StepWords.PASSKEY_UNUSED, true, methods)
             // Nothing came back at all, or something failed here: the same answer can be sent again.
             else -> Again(Problems.say(error, Problems.SERVER), false, methods)
         }
     }
 }
 
-/* What a person has typed for a step: one field for each method, so switching loses nothing. */
+/*
+ * What a person has typed for a step: one field for each method, so switching loses nothing. A
+ * passkey or security key has no field: its answer is made when the step is sent (`proved`).
+ */
 data class StepDraft(val method: StepMethod, val totp: String = "", val backup: String = "", val phrase: String = "") {
     /* The method shown: the chosen one while it is still offered, else the first that is; null when none is. */
     fun shown(methods: List<StepMethod>): StepMethod? = if (method in methods) method else methods.firstOrNull()
@@ -401,10 +467,24 @@ data class StepDraft(val method: StepMethod, val totp: String = "", val backup: 
         }
         StepMethod.BACKUP -> if (backupCodeNormalize(backup) != null) null else "Enter one of your backup codes, 10 characters."
         StepMethod.PHRASE -> words(phrase).size.let { count -> if (count == 24) null else "Enter all 24 words of your recovery phrase. $count so far." }
+        StepMethod.WEBAUTHN -> null
+    }
+
+    /*
+     * The answer to `challenge`, made as it is sent. A key is asked here and nowhere else: the phone's
+     * sheet opens on the press that sends the answer, never when the step appears. One that did not
+     * answer (a closed sheet, no key) is `KeyUnused`: nothing goes out, and the step stays.
+     */
+    suspend fun proved(challenge: StepChallenge, method: StepMethod, sheet: KeySheet): StepAnswer {
+        if (method != StepMethod.WEBAUTHN) return answer(challenge, method)
+        val request = challenge.keyRequest ?: throw KeyUnused()
+        return StepAnswer(challenge.token, StepProof.Webauthn(sheet.assertion(request) ?: throw KeyUnused()))
     }
 
     /* The answer to `challenge`. The phrase is signed here (the core) and only its signature goes; a mistyped one throws the core's refusal. */
     fun answer(challenge: StepChallenge, method: StepMethod): StepAnswer = when (method) {
+        // A key's answer is not typed: `proved` asks the key.
+        StepMethod.WEBAUTHN -> throw KeyUnused()
         StepMethod.TOTP -> StepAnswer(challenge.token, StepProof.Totp(totp))
         StepMethod.BACKUP -> StepAnswer(challenge.token, StepProof.Backup(backup))
         StepMethod.PHRASE -> {
@@ -463,13 +543,18 @@ data class StepUp(
         data class Unready(val step: StepUp) : Proof()
     }
 
-    fun prove(): Proof {
+    /*
+     * What the change carries. A passkey or security key is asked here, on the press that makes the
+     * change, after everything typed has been checked; one that did not answer leaves the step as it
+     * was, with why beside it, and the change is not sent.
+     */
+    suspend fun prove(sheet: KeySheet): Proof {
         val challenge = challenge ?: return Proof.None
         // Nothing this build knows was offered: update. The ways ran out after refusals: updating would not help.
         val method = shown ?: return Proof.Unready(copy(error = if (challenge.methods.isEmpty()) StepWords.CANNOT_ANSWER else StepWords.NO_WAY_LEFT))
         if (draft.problem(method) != null) return Proof.Unready(copy(tried = true))
         return try {
-            Proof.Ready(draft.answer(challenge, method))
+            Proof.Ready(draft.proved(challenge, method, sheet))
         } catch (error: CoreException) {
             // A mistyped phrase: the core's words, beside the field.
             Proof.Unready(copy(error = StepDraft.phraseRefused(error), tried = false))
@@ -504,13 +589,55 @@ data class StepUp(
     }
 }
 
-/* GET /api/auth/two-step: whether the step is on, its methods, the codes left, and whether the app is paused for new devices. */
-data class TwoStepStatus(val on: Boolean, val methods: List<Method>, val backupCodesLeft: Int, val totpFrozen: Boolean) {
-    /* `kind`: "totp", or "webauthn" once security keys exist. */
-    data class Method(val id: String, val kind: String, val name: String?, val createdAt: String?, val lastUsedAt: String?)
+/*
+ * GET /api/auth/two-step: whether the step is on, its methods, the codes left, whether the app is
+ * paused for new devices, and which kind is asked for first (`defaultKind`: "webauthn", "totp",
+ * "device", or null).
+ */
+data class TwoStepStatus(val on: Boolean, val methods: List<Method>, val backupCodesLeft: Int, val totpFrozen: Boolean, val defaultKind: String? = null) {
+    /* `kind`: "totp", or "webauthn" for a passkey or security key. `synced`: a passkey a password manager keeps. */
+    data class Method(val id: String, val kind: String, val name: String?, val createdAt: String?, val lastUsedAt: String?, val synced: Boolean = false) {
+        val isApp: Boolean get() = kind == TOTP
+
+        /* A key's name in the list; one the server sent without a name is still listed. */
+        val shownName: String get() = name ?: "Security key"
+
+        /* "Saved in a password manager · Added 14 Nov · Last used 14 Nov": where it lives only for a synced key, and each date only when there is one. `day` words a date. */
+        fun detail(day: (String?) -> String?): String =
+            listOfNotNull("Saved in a password manager".takeIf { synced }, day(createdAt)?.let { "Added $it" }, day(lastUsedAt)?.let { "Last used $it" }).joinToString(" · ")
+    }
 
     /* The authenticator app, if one is confirmed: an account has at most one. */
-    val app: Method? get() = methods.firstOrNull { it.kind == "totp" }
+    val app: Method? get() = methods.firstOrNull { it.isApp }
+
+    /* The account's passkeys and security keys, in the server's order. */
+    val keys: List<Method> get() = methods.filter { it.kind == WEBAUTHN }
+
+    /* The account's only method is not removed: turning it off is turning the step off. */
+    fun last(method: Method): Boolean = methods.size == 1 && methods.single().id == method.id
+    fun removeWords(method: Method): String = if (last(method)) "Turn off" else "Remove"
+
+    /* Which kind is asked for first is a choice only with both kinds. */
+    private val choosing: Boolean get() = on && app != null && keys.isNotEmpty()
+    /* The Default badge sits on the kind `defaultKind` names, and Make default on the other; neither with one kind. */
+    fun isDefault(kind: String): Boolean = choosing && defaultKind == kind
+    fun canMakeDefault(kind: String): Boolean = choosing && defaultKind != kind
+
+    /* Add is offered only where this phone can use a key for this server (`passkeys`), and below the limit. */
+    fun canAddKey(passkeys: Boolean): Boolean = passkeys && keys.size < Passkeys.LIMIT
+
+    /*
+     * What the key list says beneath itself, each line only while it is true (docs/two-step-design.md 3, 12):
+     * a synced passkey beside the password is one factor; a passkey stops a fake page only when it is the
+     * way used; one key alone is one loss from the backup codes; the limit; and where this phone can't add one.
+     */
+    fun keyNotes(passkeys: Boolean): List<String> = listOfNotNull(
+        "A passkey saved in the same password manager as your password is one factor, not two: whoever opens the manager has both.".takeIf { keys.any { it.synced } },
+        "A passkey stops a fake sign-in page only when you use it. A fake page can ask you to use another way instead.".takeIf { keys.isNotEmpty() && app != null },
+        "Add a second key and keep it somewhere else, in case this one is lost.".takeIf { keys.size == 1 },
+        "You have ten, the most an account can have.".takeIf { keys.size >= Passkeys.LIMIT },
+        StepWords.KEYS_IN_BROWSER.takeIf { !passkeys },
+    )
 
     /* "7 of 10 left", with what to do when they run low, as the web says it. */
     val codesLeft: String get() = when {
@@ -520,16 +647,27 @@ data class TwoStepStatus(val on: Boolean, val methods: List<Method>, val backupC
     }
 
     companion object {
+        const val TOTP = "totp"
+        const val WEBAUTHN = "webauthn"
+
+        /* A kind's name, as the settings' rows and the default's line say it. */
+        fun kindWords(kind: String): String = if (kind == WEBAUTHN) "Passkey or security key" else "Authenticator app"
+
+        /* What changing the default says once the server has. */
+        fun defaultSaid(kind: String): String = "${kindWords(kind)} is now asked for first."
+
+        /* One method as the server lists it; null without an id or a kind. */
+        fun method(row: JSONObject): Method? {
+            fun text(key: String): String? = if (!row.has(key) || row.isNull(key)) null else row.optString(key).ifEmpty { null }
+            return Method(text("id") ?: return null, text("kind") ?: return null, text("name"), text("createdAt"), text("lastUsedAt"), row.opt("synced") == true)
+        }
+
         /* Null when the body is not the settings' shape: nothing is shown as "off" on a guess. */
         fun from(json: JSONObject): TwoStepStatus? {
             if (json.opt("on") !is Boolean) return null
             val rows = json.optJSONArray("methods") ?: return null
-            fun JSONObject.text(key: String): String? = if (!has(key) || isNull(key)) null else optString(key).ifEmpty { null }
-            val methods = (0 until rows.length()).mapNotNull { index ->
-                val row = rows.optJSONObject(index) ?: return@mapNotNull null
-                Method(row.text("id") ?: return@mapNotNull null, row.text("kind") ?: return@mapNotNull null, row.text("name"), row.text("createdAt"), row.text("lastUsedAt"))
-            }
-            return TwoStepStatus(json.getBoolean("on"), methods, json.optInt("backupCodesLeft"), json.optBoolean("totpFrozen"))
+            val methods = (0 until rows.length()).mapNotNull { index -> rows.optJSONObject(index)?.let(::method) }
+            return TwoStepStatus(json.getBoolean("on"), methods, json.optInt("backupCodesLeft"), json.optBoolean("totpFrozen"), json.opt("defaultKind") as? String)
         }
     }
 }
@@ -560,7 +698,7 @@ data class SecurityEvent(val id: String, val kind: String, val method: String?, 
             "totp" -> "an authenticator code"
             "backup" -> "a backup code"
             "phrase" -> "your recovery phrase"
-            "webauthn" -> "a security key"
+            "webauthn" -> "a passkey or security key"
             else -> null
         }
         return when (kind) {
@@ -571,10 +709,13 @@ data class SecurityEvent(val id: String, val kind: String, val method: String?, 
             "phrase-used" -> "Recovery phrase used for the second step"
             "two-step-on" -> "Two-step sign-in turned on"
             "two-step-off" -> "Two-step sign-in turned off"
-            // Said by the kind of method, so the line is right for a security key too.
-            "method-added" -> when (method) { "webauthn" -> "Security key added"; "totp" -> "Authenticator app replaced"; else -> "Second-step method added" }
-            "method-removed" -> when (method) { "webauthn" -> "Security key removed"; "totp" -> "Authenticator app removed"; else -> "Second-step method removed" }
+            // Said by the kind of method. An app is "added", not "replaced": with keys, one can be added beside a method too.
+            "method-added" -> when (method) { "webauthn" -> "Passkey or security key added"; "totp" -> "Authenticator app added"; else -> "Second-step method added" }
+            "method-removed" -> when (method) { "webauthn" -> "Passkey or security key removed"; "totp" -> "Authenticator app removed"; else -> "Second-step method removed" }
             "backup-codes-made" -> "New backup codes made"
+            // The kind the default moved to is the line's method.
+            "default-changed" -> when (method) { "webauthn" -> "Default changed to passkey or security key"; "totp" -> "Default changed to authenticator app"; else -> "Default changed" }
+            "key-counter" -> "A security key was refused: it may have been copied"
             else -> "Security change"
         }
     }
@@ -599,9 +740,13 @@ data class SecurityEvent(val id: String, val kind: String, val method: String?, 
 object TwoStep {
     private fun status(code: Int) = code.toUShort()
 
-    /* The account's two-step settings; null on a server that has two-step off (501), where Account shows nothing of it. */
+    /*
+     * The account's two-step settings; null on a server that has two-step off (501), where Account shows nothing of it.
+     * `?methods=` names the kinds this build can list beyond the app, on every server (an older one ignores it), and
+     * whether or not this phone can use them here: a key added in a browser is still shown, named and removed.
+     */
     fun status(at: Shared.Session): TwoStepStatus? {
-        val reply = Auth.requestAt(at, "/api/auth/two-step")
+        val reply = Auth.requestAt(at, "/api/auth/two-step?methods=" + stepMethodsShown().joinToString(","))
         if (reply.status == 501) return null
         if (reply.status == 401) throw NotAuthenticated()
         val status = if (reply.status == 200) TwoStepStatus.from(reply.body) else null
@@ -620,16 +765,27 @@ object TwoStep {
      * managing it answer 501 while that is off): an account that has the step is asked for it on
      * every server.
      */
-    fun challenge(at: Shared.Session, purpose: StepPurpose): StepChallenge? {
-        val reply = Auth.requestAt(at, "/api/auth/two-step/challenge", JSONObject().put("purpose", purpose.wire))
+    /*
+     * `adverts` and `passkeys`: the step names what this phone can answer beyond codes and the phrase
+     * (`twoStepMethods`) to a server that reads the field, by the rule in `StepNames.atChange`, and a
+     * passkey or security key is offered only where this phone can use one (`offered`).
+     */
+    fun challenge(at: Shared.Session, purpose: StepPurpose, adverts: StepAdverts, passkeys: Boolean = Passkeys.usable(at.origin)): StepChallenge? {
+        val reply = StepNames.atChange<Auth.SessionReply>(adverts, at.origin, { it.status }) { named ->
+            Auth.requestAt(at, "/api/auth/two-step/challenge", challengeBody(purpose, if (named) com.hushos.core.stepMethodsNamed(passkeys) else null))
+        }
         if (reply.status == 401) throw NotAuthenticated()
         if (reply.status == 409) return null
         return when (val read = stepChallengeReplyRead(status(reply.status), reply.text)) {
-            is StepReply.Step -> read.challenge
+            is StepReply.Step -> read.challenge.offered(passkeys)
             is StepReply.Refused -> throw StepRefused(read.refusal, read.message, reply.status)
             else -> throw LostReply(StepWords.LOST_CHANGE)
         }
     }
+
+    /* What `two-step/challenge` is sent; `methods` null for a server that does not read the field. */
+    internal fun challengeBody(purpose: StepPurpose, methods: List<String>?): JSONObject =
+        JSONObject().put("purpose", purpose.wire).apply { methods?.let { put("twoStepMethods", org.json.JSONArray(it)) } }
 
     /* Changing the step proves the password again: an OPAQUE exchange bound to this session (`two-step/reauth`). */
     private fun change(at: Shared.Session, password: String, twoStep: StepAnswer?): JSONObject {
@@ -705,6 +861,52 @@ object TwoStep {
     fun removeMethod(at: Shared.Session, id: String, password: String, twoStep: StepAnswer?): Boolean = Auth.passwordTurn {
         removed(Auth.callAt(at, "/api/auth/two-step/methods/$id", change(at, password, twoStep), "DELETE", whole = true, lost = StepWords.LOST_TURNED_OFF))
             ?: throw LostReply(StepWords.LOST_TURNED_OFF)
+    }
+
+    /*
+     * Starts adding a passkey or security key: the password again and, once the step is on, the step.
+     * Answers what the phone's sheet is then asked, with the registration token its answer goes back
+     * with. The core reads the reply whole: options short of what the server always sets are lost.
+     */
+    fun keyOptions(at: Shared.Session, password: String, twoStep: StepAnswer? = null): KeyCreation = Auth.passwordTurn {
+        keyCreation(Auth.requestAt(at, "/api/auth/two-step/keys/options", change(at, password, twoStep)))
+    }
+
+    /* What `two-step/keys/options` answered: the options whole, the step's or the route's own refusal thrown as every change's is, or a lost reply. */
+    internal fun keyCreation(reply: Auth.SessionReply): KeyCreation {
+        if (reply.status !in 200..299) Auth.refused(reply, whole = true, lost = StepWords.LOST_SETUP)
+        return (keyOptionsReplyRead(status(reply.status), reply.text) as? KeyOptionsReply.Options)?.creation ?: throw LostReply(StepWords.LOST_SETUP)
+    }
+
+    /*
+     * Sends the key's answer. Only the server's own answer says the key was added (the core's
+     * `keyAddedReplyRead`); its refusals (ten keys already, this key already added, a key that did not
+     * verify, a setup that ran out) come in its own words, and each ends the setup: a registration is
+     * good for one answer. `name`: null for the server's own name for the key.
+     */
+    fun addKey(at: Shared.Session, registrationToken: String, name: String?, registration: KeyRegistration): KeyAdded {
+        val reply = Auth.requestAt(at, "/api/auth/two-step/keys", JSONObject(keyRegistrationJson(registrationToken, name, registration)))
+        return when (val read = keyAddedReplyRead(status(reply.status), reply.text)) {
+            is KeyAddedReply.Added -> read.key
+            is KeyAddedReply.Refused -> if (reply.status == 401) throw NotAuthenticated() else throw KeyRefused(Problems.signIn(reply.status, read.message), reply.status)
+            KeyAddedReply.Lost -> throw LostReply(StepWords.LOST_KEY_ADDED)
+        }
+    }
+
+    /* A key's name in the list: any session may change it, and the server checks it (1 to 40 characters), in its own words. */
+    fun renameMethod(at: Shared.Session, id: String, name: String): TwoStepStatus.Method {
+        val body = Auth.callAt(at, "/api/auth/two-step/methods/$id", JSONObject().put("name", name.trim()), "PUT")
+        return body.optJSONObject("method")?.let(TwoStepStatus::method) ?: throw LostReply(StepWords.LOST_SAVED)
+    }
+
+    /*
+     * Which kind is asked for first. No password: it changes only an order. Returns the kind the server
+     * now names; a 403 (a session that never passed the step) and a 404 are said in the server's words.
+     */
+    fun makeDefault(at: Shared.Session, kind: String): String? {
+        val body = Auth.callAt(at, "/api/auth/two-step/default", JSONObject().put("kind", kind), "PUT")
+        if (!body.has("defaultKind")) throw LostReply(StepWords.LOST_SAVED)
+        return body.opt("defaultKind") as? String
     }
 
     /* A new set of ten backup codes, which replaces the old one, shown once. */
