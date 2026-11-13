@@ -429,10 +429,10 @@ pub fn push_notice(event: PushEvent, checked_sender: Option<String>) -> PushNoti
             two_step("Security key", "One of your security keys may have been copied.")
         }
         PushEventKind::TwoStepDeviceAdded => {
-            two_step("Two-step sign-in", "Approve on another device was turned on.")
+            two_step("Two-step sign-in", "Approve on another device is on.")
         }
         PushEventKind::TwoStepDeviceRemoved => {
-            two_step("Two-step sign-in", "Approve on another device was turned off.")
+            two_step("Two-step sign-in", "Approve on another device is off.")
         }
         // The prompt names no device and no place: the app shows those, from its own session,
         // where the person answers (Account, Your devices).
@@ -739,12 +739,12 @@ mod tests {
             ("two-step-key-added", "{}", "Two-step sign-in", "A passkey or security key was added."),
             ("two-step-key-removed", "{}", "Two-step sign-in", "A passkey or security key was removed."),
             ("key-counter", "{}", "Security key", "One of your security keys may have been copied."),
-            ("two-step-device-added", "{}", "Two-step sign-in", "Approve on another device was turned on."),
+            ("two-step-device-added", "{}", "Two-step sign-in", "Approve on another device is on."),
             (
                 "two-step-device-removed",
                 "{}",
                 "Two-step sign-in",
-                "Approve on another device was turned off.",
+                "Approve on another device is off.",
             ),
         ] {
             let read = push_event_read(event(kind, data), ID.into()).unwrap();

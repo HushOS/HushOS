@@ -140,6 +140,8 @@ const securityKinds: SecurityNoticeKind[] = [
     'two-step-key-added',
     'two-step-key-removed',
     'key-counter',
+    'two-step-device-added',
+    'two-step-device-removed',
 ];
 const securityRendered: Record<string, { html: string; text: string }> = {};
 for (const kind of securityKinds) {

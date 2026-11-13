@@ -45,7 +45,9 @@ export type SecurityNoticeKind =
     | 'totp-frozen'
     | 'two-step-key-added'
     | 'two-step-key-removed'
-    | 'key-counter';
+    | 'key-counter'
+    | 'two-step-device-added'
+    | 'two-step-device-removed';
 
 /* Hidden everywhere, Outlook included; a variable, since React's types lack mso-hide. */
 const hidden = { display: 'none', msoHide: 'all' };
@@ -228,6 +230,22 @@ const copy: Record<
         preview: 'A passkey or security key was removed from your HushOS account.',
         heading: 'A passkey or security key was removed.',
         body: 'It no longer passes your second step. Your other ways to pass it still work.',
+        facts: [['When', '{{when}}']],
+        foot: 'If you didn’t do this, someone else may be signed in to your account. Check your devices and change your password.',
+        action: 'Review your account',
+    },
+    'two-step-device-added': {
+        preview: 'Approve on another device was turned on for your HushOS account.',
+        heading: 'Approve on another device is on.',
+        body: 'A device signed in to your account can now confirm a sign-in on another one, by typing or scanning the code the other device shows. Your other ways to pass your second step still work.',
+        facts: [['When', '{{when}}']],
+        foot: 'If you didn’t do this, someone else may be signed in to your account. Check your devices and change your password.',
+        action: 'Review your account',
+    },
+    'two-step-device-removed': {
+        preview: 'Approve on another device was turned off for your HushOS account.',
+        heading: 'Approve on another device is off.',
+        body: 'Your devices can no longer confirm a sign-in for each other. Your other ways to pass your second step still work.',
         facts: [['When', '{{when}}']],
         foot: 'If you didn’t do this, someone else may be signed in to your account. Check your devices and change your password.',
         action: 'Review your account',

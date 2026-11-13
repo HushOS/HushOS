@@ -34,6 +34,10 @@ export const notificationSchema = t.Union([
             t.Literal('two-step-key-added'),
             t.Literal('two-step-key-removed'),
             t.Literal('key-counter'),
+            // Approving on another device (12): the method's notices, and the prompt.
+            t.Literal('two-step-device-added'),
+            t.Literal('two-step-device-removed'),
+            t.Literal('approval-request'),
         ]),
         data: t.Object({}),
     }),

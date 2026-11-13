@@ -131,6 +131,14 @@ const authActions = new Set([
     'two-step/keys/options',
     'two-step/keys',
     'two-step/default',
+    'two-step/device',
+    'two-step/device/:id/confirm',
+    'approvals',
+    'approvals/:id',
+    'approvals/:id/reveal',
+    'approvals/:id/open',
+    'approvals/:id/approve',
+    'approvals/:id/deny',
     'security-events',
 ]);
 const FAILURE_TOKEN = /^[A-Za-z0-9_.:-]{1,64}$/;
@@ -244,7 +252,9 @@ export function authLogAction(pathname: string) {
         .replace(/^contacts\/[0-9a-f-]{36}\/succession$/, 'contacts/:userId/succession')
         .replace(/^devices\/[0-9a-f-]{36}$/, 'devices/:id')
         .replace(/^two-step\/totp\/[0-9a-f-]{36}\/confirm$/, 'two-step/totp/:id/confirm')
-        .replace(/^two-step\/methods\/[0-9a-f-]{36}$/, 'two-step/methods/:id');
+        .replace(/^two-step\/methods\/[0-9a-f-]{36}$/, 'two-step/methods/:id')
+        .replace(/^two-step\/device\/[0-9a-f-]{36}\/confirm$/, 'two-step/device/:id/confirm')
+        .replace(/^approvals\/[0-9a-f-]{36}(\/(?:reveal|open|approve|deny))?$/, 'approvals/:id$1');
     return authActions.has(action) ? action : 'unknown';
 }
 

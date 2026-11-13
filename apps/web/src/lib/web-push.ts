@@ -223,6 +223,8 @@ const TWO_STEP_NOTICES = {
     'two-step-key-added': ['Two-step sign-in', 'A passkey or security key was added.'],
     'two-step-key-removed': ['Two-step sign-in', 'A passkey or security key was removed.'],
     'key-counter': ['Security key', 'One of your security keys may have been copied.'],
+    'two-step-device-added': ['Two-step sign-in', 'Approve on another device is on.'],
+    'two-step-device-removed': ['Two-step sign-in', 'Approve on another device is off.'],
 } as const;
 /* Where a tapped two-step notice opens: the account's two-step settings and security activity. */
 const TWO_STEP_URL = '/app/account#two-step';
@@ -280,10 +282,20 @@ async function noticeFor(id: string): Promise<Notice | null> {
         case 'totp-frozen':
         case 'two-step-key-added':
         case 'two-step-key-removed':
+        case 'two-step-device-added':
+        case 'two-step-device-removed':
         case 'key-counter': {
             const [title, body] = TWO_STEP_NOTICES[notification.kind];
             return { title, body, url: TWO_STEP_URL };
         }
+        // Another device is asking this one to approve (docs/two-step-design.md 12). The prompt
+        // names no device and no place: the account page shows those, where it is answered.
+        case 'approval-request':
+            return {
+                title: 'Confirm it’s you',
+                body: 'Another device is asking to confirm it’s you. Open HushOS to answer.',
+                url: '/app/account#devices',
+            };
         case 'backup-code-used':
             return {
                 title: 'Backup codes',

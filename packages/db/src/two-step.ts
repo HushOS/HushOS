@@ -130,6 +130,7 @@ export {
     createDeviceRequest,
     denyDeviceRequest,
     deviceStepUsable,
+    endRequestsOfToken,
     getDeviceRequest,
     listApprovalPrompts,
     openDeviceRequest,

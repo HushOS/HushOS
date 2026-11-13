@@ -142,7 +142,7 @@ export type AccountSecurityUpdate = SecurityUpdate & {
  * after its password: the step token, which methods can answer it, and what the device needs
  * to sign with the recovery phrase. `methods` holds only what this client can answer.
  */
-export type StepMethod = 'webauthn' | 'totp' | 'backup' | 'phrase';
+export type StepMethod = 'webauthn' | 'totp' | 'device' | 'backup' | 'phrase';
 /*
  * Passkeys and security keys (docs/two-step-design.md 3), in WebAuthn's JSON forms with every
  * field the server sets present: what a key is asked at a step, what it is asked when it is
@@ -185,9 +185,8 @@ export type KeyRegistration = {
 /*
  * The kinds of method a client names beyond the ones every client answers (the app's code, a
  * backup code, the phrase), in `twoStepMethods` and `?methods=` (docs/two-step-design.md 12).
- * Approving on another device joins this when it is built.
  */
-export type NamedStepMethod = 'webauthn';
+export type NamedStepMethod = 'webauthn' | 'device';
 export type StepChallenge = {
     token: string;
     /* In the order to offer them: the account's usual way first. */
@@ -206,7 +205,9 @@ export type StepProof =
     | { kind: 'totp'; code: string }
     | { kind: 'backup'; code: string }
     | { kind: 'phrase'; signature: string }
-    | { kind: 'webauthn'; response: KeyAssertion };
+    | { kind: 'webauthn'; response: KeyAssertion }
+    /* The request another device approved. */
+    | { kind: 'device'; requestId: string };
 export type StepInput = { token: string; proof: StepProof };
 /* What a change to the account sends its step for. */
 export type StepPurpose = SecurityAction | 'delete' | 'two-step';
@@ -218,15 +219,15 @@ export type LoginSession = {
 };
 export type TwoStepMethod = {
     id: string;
-    kind: 'totp' | 'webauthn';
-    /* A key's name, as whoever added it typed it; an app has none. */
+    kind: 'totp' | 'webauthn' | 'device';
+    /* A key's name, as whoever added it typed it; an app and another device have none. */
     name: string | null;
     createdAt: string;
     lastUsedAt: string | null;
     /* A passkey a password manager syncs, as the key last reported it. */
     synced: boolean;
 };
-/* The kind of method an account is offered first. `device` is named before it is built. */
+/* The kind of method an account is offered first. */
 export type TwoStepDefaultKind = 'webauthn' | 'totp' | 'device';
 export type TwoStepStatus = {
     on: boolean;
@@ -235,11 +236,13 @@ export type TwoStepStatus = {
     totpFrozen: boolean;
     /* The kind offered first; null with the step off, absent from a server before defaults. */
     defaultKind?: TwoStepDefaultKind | null;
+    /* Whether this device could turn on Approve on another device now: another one could approve it. */
+    otherDevice?: boolean;
 };
 export type SecurityEvent = {
     id: string;
     kind: string;
-    method: 'totp' | 'webauthn' | 'backup' | 'phrase' | null;
+    method: 'totp' | 'webauthn' | 'device' | 'backup' | 'phrase' | null;
     deviceId: string | null;
     deviceKind: DeviceKind | null;
     createdAt: string;
@@ -371,9 +374,34 @@ export interface AuthApi {
     }): Promise<unknown>;
     twoStepRenameMethod(id: string, name: string): Promise<{ method: TwoStepMethod }>;
     /* Which kind is offered first. 403 from a session that never passed the step. */
-    twoStepSetDefault(
-        kind: Exclude<TwoStepDefaultKind, 'device'>,
-    ): Promise<{ defaultKind: TwoStepDefaultKind }>;
+    twoStepSetDefault(kind: TwoStepDefaultKind): Promise<{ defaultKind: TwoStepDefaultKind }>;
+    /*
+     * Approve on another device (docs/two-step-design.md 12). Every reply is handed over unread
+     * (device-step.ts reads them). Turning it on: the pending method and the step token its one
+     * approval runs from, then the confirmation once another device approved.
+     */
+    twoStepStartDevice(input: TwoStepChange): Promise<unknown>;
+    twoStepConfirmDevice(id: string, input: { token: string; requestId: string }): Promise<unknown>;
+    /* The device that holds a step token asks, polls (the token in a header) and reveals. */
+    approvalStart(input: {
+        stepToken: string;
+        commitment: string;
+        kind?: DeviceKind;
+        name?: string;
+    }): Promise<unknown>;
+    approvalStatus(id: string, stepToken: string): Promise<unknown>;
+    approvalReveal(
+        id: string,
+        input: { stepToken: string; deviceSigningKey: string; nonce: string },
+    ): Promise<unknown>;
+    /* The device that approves, from its own session. */
+    approvals(): Promise<unknown>;
+    approvalOpen(id: string, ephemeralKey: string): Promise<unknown>;
+    approvalApprove(id: string, signature: string): Promise<unknown>;
+    approvalDeny(
+        id: string,
+        reason: 'denied' | 'wrong-code' | 'not-me' | 'mismatch',
+    ): Promise<unknown>;
     securityEvents(): Promise<{ events: SecurityEvent[] }>;
     /* No user: `removed` when this session ended because its device was removed. */
     session(): Promise<{
