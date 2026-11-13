@@ -340,6 +340,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         // So are new words still held, and this phone's own change: a sign-in by any road ends both.
         heldWords = null
         signingInAfterWords = false
+        // Whatever Two-step sign-in held belonged to the session before this one.
+        endTwoStepFlow()
         val (cleared, checkedVersion) = ownChange.signedIn(user.id, state.value.origin)
         ownChange = cleared
         showingOwnWords = false
@@ -654,6 +656,18 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     var twoStepFlow by mutableStateOf(com.hushos.app.data.TwoStepFlow())
         private set
 
+    /*
+     * The session the flow belongs to. A sign-out, a session that ended, or any sign-in moves it on and drops
+     * the flow whole, codes included: one account's key or backup codes are never drawn for whoever signs in
+     * next. An answer that comes back after it moved is dropped too, so a late reply cannot put them back.
+     */
+    private var twoStepSession = 0
+
+    private fun endTwoStepFlow() {
+        twoStepSession++
+        twoStepFlow = com.hushos.app.data.TwoStepFlow()
+    }
+
     /* A page of it was opened or left: nothing of the last one is carried over. Not while a request is out: its answer still has to land. */
     fun twoStepReset() { twoStepFlow = twoStepFlow.cleared() }
 
@@ -664,11 +678,15 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     private fun <T> twoStepChange(failed: suspend (Throwable) -> String?, request: (Shared.Session) -> T, made: com.hushos.app.data.TwoStepFlow.(T) -> com.hushos.app.data.TwoStepFlow) {
         if (twoStepFlow.pending) return
         twoStepFlow = twoStepFlow.started()
+        val session = twoStepSession
         viewModelScope.launch {
-            twoStep(request).fold(
+            val answer = twoStep(request)
+            val words = answer.exceptionOrNull()?.let { if (it is NotAuthenticated) null else failed(it) }
+            if (session != twoStepSession) return@launch
+            answer.fold(
                 { result -> twoStepFlow = twoStepFlow.made(result) },
                 // A session that ended is said by sign-in, which is on screen by now.
-                { failure -> twoStepFlow = twoStepFlow.failed(failure, if (failure is NotAuthenticated) null else failed(failure)) },
+                { failure -> twoStepFlow = twoStepFlow.failed(failure, words) },
             )
         }
     }
@@ -691,14 +709,18 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         val app = twoStepFlow.enrolment ?: return
         if (twoStepFlow.pending) return
         twoStepFlow = twoStepFlow.started()
+        val session = twoStepSession
         viewModelScope.launch {
             val result = twoStep { com.hushos.app.data.TwoStep.confirmAuthenticator(it, app.id, code) }
+            if (session != twoStepSession) return@launch
             twoStepFlow = twoStepFlow.confirmed(result, replacing)
             val confirmed = result.getOrNull() ?: return@launch
             if (com.hushos.app.data.TwoStepFlow.removesOthers(confirmed, signOutOthers, replacing)) {
                 twoStepFlow = twoStepFlow.copy(removing = true)
                 // The page may have been closed with Done by the time this ends: the notice says a failure wherever the person is.
-                removeOtherDevices(password) { removed -> if (twoStepFlow.codes != null) twoStepFlow = twoStepFlow.copy(removing = false, notRemoved = !removed) }
+                removeOtherDevices(password) { removed ->
+                    if (session == twoStepSession && twoStepFlow.codes != null) twoStepFlow = twoStepFlow.copy(removing = false, notRemoved = !removed)
+                }
             }
         }
     }
@@ -725,6 +747,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     }
 
     fun signOut() {
+        endTwoStepFlow()
         showingOwnWords = false
         contactStep = null
         signup = null
@@ -759,6 +782,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         // words are on screen (nothing else shows them before the sign-in that follows), and until that sign-in has
         // answered. "You've been signed out" would be wrong, and would take the words off the screen.
         if (ownChange.mutesSessionEnd) return
+        endTwoStepFlow()
         showingOwnWords = false
         contactStep = null
         signup = null
