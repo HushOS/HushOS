@@ -94,7 +94,7 @@ test('two browsers on one account list, rename and remove each other', async ({ 
     // Behind the dialog (hidden from roles while it is open): B is still listed, and the wrong
     // password left this browser unlocked.
     await expect(a.locator(`li[data-device-id="${bId}"]`)).toBeVisible();
-    await expect(a.locator('button', { hasText: 'Lock on this browser' })).toBeVisible();
+    await expect(a.locator('button[aria-label="Lock on this browser"]')).toBeVisible();
     await confirm.getByLabel('Your password', { exact: true }).fill(PASSWORD);
     await remove.click();
     await expect(bRow).toHaveCount(0);
@@ -163,7 +163,9 @@ test('two browsers on one account list, rename and remove each other', async ({ 
     await change.getByLabel('New password', { exact: true }).fill(newPassword);
     await change.getByLabel('Confirm new password', { exact: true }).fill(newPassword);
     await change.getByRole('button', { name: 'Change password' }).click();
-    await expect(a.getByText('Password changed.')).toBeVisible({ timeout: 120_000 });
+    await expect(a.getByText('Password changed', { exact: true })).toBeVisible({
+        timeout: 120_000,
+    });
     expect(await currentId(a)).toBe(aId);
     const bSignedOut = devices(a).locator(`[data-device-id="${bAgain}"]`);
     await expect(bSignedOut).toContainText('Signed out');

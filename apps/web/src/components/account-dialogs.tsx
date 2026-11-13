@@ -222,7 +222,7 @@ export function ChangePasswordDialog({
                 </p>
             )}
             <p className="text-[13px] text-muted-foreground">
-                Your other devices will be signed out. Your recovery phrase stays the same.
+                Your other devices will be signed out.
             </p>
         </Shell>
     );
@@ -480,7 +480,6 @@ export function NewKeyDialog({
                 value={password}
                 disabled={pending}
                 onChange={(event) => setPassword(event.target.value)}
-                hint="Enter your password to confirm."
                 error={tried && !password ? 'Enter your password.' : undefined}
             />
             <StepUpFields step={step} disabled={pending} />

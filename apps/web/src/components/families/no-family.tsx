@@ -6,7 +6,7 @@ import { DeclineInvitation } from '@/components/families/decline-invitation';
 import { NoticeList } from '@/components/families/family-alerts';
 import { ServerKnowsLine } from '@/components/families/server-knows';
 import { PageHeader } from '@/components/page-header';
-import { Setting, SettingsGroup } from '@/components/settings';
+import { Setting, SettingsGroup, SettingsPage } from '@/components/settings';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { myInvitationsQueryOptions } from '@/lib/families-shell';
 import { defaultFamilyName, familyCheckoutCurrency } from '@/lib/family-signup';
@@ -64,7 +64,7 @@ export function NoFamily({
     const [dismissed, setDismissed] = useState(false);
     const open = creating || (Boolean(chosen) && !dismissed && waiting.length === 0);
     return (
-        <div className="flex flex-1 flex-col" data-no-family>
+        <SettingsPage className="flex-1" data-no-family>
             <PageHeader
                 title="Family"
                 description={
@@ -78,7 +78,7 @@ export function NoFamily({
                     <Button onClick={() => setCreating(true)}>Create a family</Button>
                 )}
             </PageHeader>
-            <div className="flex max-w-3xl flex-col gap-9 px-5 pb-10 sm:px-8">
+            <div className="flex flex-col gap-9 px-5 pb-10 sm:px-8">
                 {notices.length > 0 && <NoticeList notices={notices} nameOf={nameOf} />}
                 {waiting.length > 0 && (
                     <SettingsGroup title="Waiting to join">
@@ -163,6 +163,6 @@ export function NoFamily({
                     'the family’s plan starts',
                 )}
             />
-        </div>
+        </SettingsPage>
     );
 }

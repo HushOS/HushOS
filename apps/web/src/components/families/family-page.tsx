@@ -18,7 +18,7 @@ import {
 import { ServerKnowsLine } from '@/components/families/server-knows';
 import { PendingLabel } from '@/components/motion';
 import { PageHeader } from '@/components/page-header';
-import { Setting, SettingsGroup } from '@/components/settings';
+import { Setting, SettingsGroup, SettingsPage } from '@/components/settings';
 import { StoreLinks } from '@/components/store-links';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
@@ -229,7 +229,7 @@ export function FamilyPage({
     const places = seats && !plan.waiting ? `${seats.used} of ${seats.limit} places taken.` : null;
 
     return (
-        <div className="flex flex-1 flex-col">
+        <SettingsPage className="flex-1">
             {/* Who is in the family; its folders are one click away, here and from the sidebar's family item. */}
             <PageHeader
                 title={family}
@@ -252,7 +252,7 @@ export function FamilyPage({
             </PageHeader>
 
             {/* One column, as Account's: every section a heading, then rows told apart by spacing. */}
-            <div className="flex max-w-3xl flex-col gap-9 px-5 sm:px-8">
+            <div className="flex flex-col gap-9 px-5 sm:px-8">
                 <div className="flex flex-col gap-2 empty:hidden">
                     {sync.isPlaceholderData && result?.status === 'accepted' && (
                         <CheckingLine family={family} />
@@ -541,7 +541,7 @@ export function FamilyPage({
                     </div>
                 </SettingsGroup>
             </div>
-            <ServerKnowsLine className="mt-auto max-w-3xl" />
+            <ServerKnowsLine className="mt-auto" />
 
             {manager && renaming && (
                 <RenameFamilyDialog
@@ -569,7 +569,7 @@ export function FamilyPage({
                 open={leaving}
                 onOpenChange={setLeaving}
             />
-        </div>
+        </SettingsPage>
     );
 }
 

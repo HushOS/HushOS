@@ -14,11 +14,12 @@ import { AccountTwoStep } from '@/components/account-two-step';
 import { CopyValue } from '@/components/copy-value';
 import { openDeviceDialog } from '@/components/device-control';
 import { PageHeader } from '@/components/page-header';
-import { Done, Segmented, Setting, SettingsGroup } from '@/components/settings';
+import { Segmented, Setting, SettingsGroup, SettingsPage } from '@/components/settings';
 import { useTheme } from '@/components/theme-provider';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
+import { toast } from '@/components/ui/toast';
 import { authClient } from '@/lib/auth-client';
 import { useAuthView } from '@/lib/auth-view';
 import { authError } from '@/lib/form';
@@ -34,10 +35,14 @@ export const Route = createFileRoute('/_authenticated/app/account')({
 
 /*
  * Account: somewhere people come rarely and want to leave quickly. Name and
- * password, the recovery phrase, two-step sign-in, your family (or making one), the devices signed in, what this browser does, and, folded away,
- * the heavy things: replacing sharing keys, rotating the account key, the
- * account ID, deleting the
+ * password, the recovery phrase, two-step sign-in, your family (or making one), the
+ * devices signed in, what this browser does, and, folded away, the heavy things:
+ * replacing sharing keys, rotating the account key, the account ID, deleting the
  * account. Each of those asks once, in a dialog.
+ *
+ * A row is its label, what it is now, and its action: no sentence under a title, none
+ * beside a switch. What an action costs is said by the dialog it opens, and the security
+ * caveats are on /security. What just happened is a toast, not a line that stays.
  */
 
 const themes = [
@@ -51,14 +56,13 @@ function AccountPage() {
     const [dialog, setDialog] = useState<
         'password' | 'recovery-key' | 'master-key' | 'identity' | 'delete' | null
     >(null);
-    const [passwordChanged, setPasswordChanged] = useState(false);
     const [advanced, setAdvanced] = useState(false);
     const close = (open: boolean) => !open && setDialog(null);
     return (
-        <div className="flex flex-col pb-10">
+        <SettingsPage className="pb-10">
             <PageHeader title="Account" />
-            <div className="flex max-w-3xl flex-col gap-9 px-5 sm:px-8">
-                <SettingsGroup title="You" description="Your name, email and password.">
+            <div className="flex flex-col gap-9 px-5 sm:px-8">
+                <SettingsGroup title="You">
                     <NameSetting name={user.name} />
                     <Setting label="Email">
                         <span className="text-muted-foreground wrap-anywhere">{user.email}</span>
@@ -70,11 +74,6 @@ function AccountPage() {
                                 Change password
                             </Button>
                         }
-                        below={
-                            passwordChanged && (
-                                <Done>Password changed. Your other devices are signed out.</Done>
-                            )
-                        }
                     >
                         <span aria-hidden="true" className="tracking-[0.2em] text-muted-foreground">
                             ••••••••••
@@ -82,15 +81,12 @@ function AccountPage() {
                     </Setting>
                 </SettingsGroup>
 
-                <SettingsGroup
-                    title="If you forget your password"
-                    description="Your recovery phrase is the only way back in."
-                >
+                <SettingsGroup title="If you forget your password">
                     <Setting
                         label="Recovery phrase"
                         action={
                             <>
-                                <Button variant="ghost" onClick={() => setDialog('recovery-key')}>
+                                <Button variant="outline" onClick={() => setDialog('recovery-key')}>
                                     Make a new phrase
                                 </Button>
                                 <Link
@@ -118,60 +114,46 @@ function AccountPage() {
 
                 <SettingsGroup
                     title="Advanced"
-                    description="Rarely needed."
                     action={
-                        <button
-                            type="button"
+                        <Button
+                            variant="outline"
                             aria-expanded={advanced}
                             aria-controls="advanced-settings"
                             onClick={() => setAdvanced((value) => !value)}
-                            className="-me-3.5 flex h-9 cursor-pointer items-center gap-1.5 rounded-md px-3 text-sm font-semibold text-primary outline-none hover:bg-muted focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring"
                         >
                             {advanced ? 'Hide' : 'Show'}
                             <ChevronDownIcon
-                                className={`size-4 transition-transform ${advanced ? 'rotate-180' : ''}`}
+                                className={`transition-transform ${advanced ? 'rotate-180' : ''}`}
                                 aria-hidden="true"
                             />
-                        </button>
+                        </Button>
                     }
                 >
                     <div id="advanced-settings" hidden={!advanced}>
                         <Setting
                             label="Sharing keys"
                             action={
-                                <Button variant="outline" onClick={() => setDialog('identity')}>
-                                    Replace sharing keys
+                                <Button
+                                    variant="outline"
+                                    aria-label="Replace sharing keys"
+                                    onClick={() => setDialog('identity')}
+                                >
+                                    Replace
                                 </Button>
                             }
-                            below={
-                                <p className="text-[13px] text-muted-foreground">
-                                    New keys for sharing, signed by your current ones, so the people
-                                    you share with follow the change without comparing words again.
-                                </p>
-                            }
-                        >
-                            <span className="text-muted-foreground">
-                                What people share with you is sealed to
-                            </span>
-                        </Setting>
+                        />
                         <Setting
                             label="Account key"
                             action={
-                                <Button variant="outline" onClick={() => setDialog('master-key')}>
-                                    Rotate account key
+                                <Button
+                                    variant="outline"
+                                    aria-label="Rotate account key"
+                                    onClick={() => setDialog('master-key')}
+                                >
+                                    Rotate
                                 </Button>
                             }
-                            below={
-                                <p className="text-[13px] text-muted-foreground">
-                                    A new master key for your account. Your files, sharing keys and
-                                    links stay as they are.
-                                </p>
-                            }
-                        >
-                            <span className="text-muted-foreground">
-                                Locks your other keys, under your password and phrase
-                            </span>
-                        </Setting>
+                        />
                         <Setting label="Account ID">
                             <span className="font-mono text-sm">
                                 <CopyValue value={user.id} label="Account ID" />
@@ -180,16 +162,15 @@ function AccountPage() {
                         <Setting
                             label="Delete account"
                             action={
-                                <Button variant="destructive" onClick={() => setDialog('delete')}>
-                                    Delete account
+                                <Button
+                                    variant="destructive-outline"
+                                    aria-label="Delete account"
+                                    onClick={() => setDialog('delete')}
+                                >
+                                    Delete
                                 </Button>
                             }
-                        >
-                            <span className="text-muted-foreground">
-                                Every file, every earlier version and the account. It can’t be
-                                undone.
-                            </span>
-                        </Setting>
+                        />
                     </div>
                 </SettingsGroup>
             </div>
@@ -200,7 +181,7 @@ function AccountPage() {
                 user={user}
                 open={dialog === 'password'}
                 onOpenChange={close}
-                onChanged={() => setPasswordChanged(true)}
+                onChanged={() => toast.add({ type: 'success', title: 'Password changed' })}
             />
             <NewKeyDialog
                 user={user}
@@ -220,7 +201,7 @@ function AccountPage() {
                 onOpenChange={close}
             />
             <DeleteAccountDialog open={dialog === 'delete'} onOpenChange={close} />
-        </div>
+        </SettingsPage>
     );
 }
 
@@ -256,7 +237,6 @@ function NameSetting({ name }: { name: string }) {
     const router = useRouter();
     const [editing, setEditing] = useState(false);
     const [draft, setDraft] = useState(name);
-    const [saved, setSaved] = useState(false);
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
     async function save() {
@@ -278,7 +258,7 @@ function NameSetting({ name }: { name: string }) {
             forgetSession(router.options.context.queryClient);
             await router.invalidate();
             setEditing(false);
-            setSaved(true);
+            toast.add({ type: 'success', title: 'Name saved' });
         } catch (cause) {
             cue('error');
             setError(authError(cause));
@@ -321,7 +301,6 @@ function NameSetting({ name }: { name: string }) {
                             aria-label="Edit name"
                             onClick={() => {
                                 setDraft(name);
-                                setSaved(false);
                                 setEditing(true);
                             }}
                         >
@@ -330,15 +309,15 @@ function NameSetting({ name }: { name: string }) {
                     )
                 }
                 below={
-                    editing ? (
+                    editing &&
+                    error && (
                         <p
-                            className={`text-[13px] ${error ? 'text-destructive' : 'text-muted-foreground'}`}
-                            role={error ? 'alert' : undefined}
+                            id="settings-name-error"
+                            role="alert"
+                            className="text-[13px] text-destructive"
                         >
-                            {error || 'Shown to people you share with.'}
+                            {error}
                         </p>
-                    ) : (
-                        saved && <Done>Name saved.</Done>
                     )
                 }
             >
@@ -352,6 +331,7 @@ function NameSetting({ name }: { name: string }) {
                         value={draft}
                         disabled={pending}
                         aria-invalid={Boolean(error)}
+                        aria-describedby={error ? 'settings-name-error' : undefined}
                         onChange={(event) => setDraft(event.target.value)}
                         className="text-[15px]"
                     />
@@ -371,7 +351,7 @@ function BrowserSettings() {
     const { user } = Route.useRouteContext();
     const unlocked = useAuthView((state) => state.unlockedUserId) === user.id;
     return (
-        <SettingsGroup title="On this browser" description="These stay on this browser only.">
+        <SettingsGroup title="On this browser">
             <Setting
                 label="Appearance"
                 below={
@@ -400,12 +380,7 @@ function BrowserSettings() {
                         onCheckedChange={setContrast}
                     />
                 }
-            >
-                <span className="text-muted-foreground">
-                    Darker text and stronger edges. It also turns on when this computer asks for
-                    more contrast.
-                </span>
-            </Setting>
+            />
             <Setting
                 label={<label htmlFor="settings-sounds">Interface sounds</label>}
                 action={
@@ -415,26 +390,21 @@ function BrowserSettings() {
                         onCheckedChange={setSoundsEnabled}
                     />
                 }
-            >
-                <span className="text-muted-foreground">
-                    Short sounds when you copy, unlock or save something
-                </span>
-            </Setting>
+            />
             <Setting
                 label="Lock"
                 action={
-                    <Button variant="outline" disabled={restoring} onClick={openDeviceDialog}>
+                    <Button
+                        variant="outline"
+                        disabled={restoring}
+                        aria-label={unlocked ? 'Lock on this browser' : 'Unlock on this browser'}
+                        onClick={openDeviceDialog}
+                    >
                         {unlocked ? <LockKeyholeIcon /> : <LockKeyholeOpenIcon />}
-                        {unlocked ? 'Lock on this browser' : 'Unlock on this browser'}
+                        {unlocked ? 'Lock' : 'Unlock'}
                     </Button>
                 }
-            >
-                <span className="text-muted-foreground">
-                    {unlocked
-                        ? 'Ask for your password before showing your files here'
-                        : 'Locked. Your password opens your files here again.'}
-                </span>
-            </Setting>
+            />
         </SettingsGroup>
     );
 }

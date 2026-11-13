@@ -203,9 +203,7 @@ test('a security key turns the step on, signs in on a press, and is the step for
         timeout: 60_000,
     });
     await off.getByRole('button', { name: 'Turn off' }).click();
-    await expect(section(page).getByText('Off. Your password alone signs you in.')).toBeVisible({
-        timeout: 60_000,
-    });
+    await expect(section(page).locator('[data-two-step=off]')).toBeVisible({ timeout: 60_000 });
     await expect(keyRows(page)).toHaveCount(0);
     await expect
         .poll(async () => (await mailSubjects(email)).join('\n'), { timeout: 30_000 })
@@ -260,9 +258,10 @@ test('the step opens on the default, the rest wait behind Use another way, and M
     const keysRow = section(page).locator('[data-two-step-keys]');
     await expect(appRow.getByText('Default', { exact: true })).toBeVisible();
     await expect(keysRow.getByText('Default', { exact: true })).toHaveCount(0);
-    // With the app also on, the page says what a passkey does and does not stop.
+    // The key is a row of its own; Add stays on the kind's row, for another.
+    await expect(keyRows(page)).toHaveCount(1);
     await expect(
-        section(page).getByText(/stops a fake sign-in page only when you use it/),
+        keysRow.getByRole('button', { name: 'Add passkey or security key' }),
     ).toBeVisible();
 
     // So a sign-in opens on the code, and the key is one of the other ways.
@@ -289,9 +288,9 @@ test('the step opens on the default, the rest wait behind Use another way, and M
     await section(page)
         .getByRole('button', { name: 'Make passkey or security key the default' })
         .click();
-    await expect(
-        section(page).getByText('Passkey or security key is now asked for first.'),
-    ).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByText('Passkey or security key is now the default')).toBeVisible({
+        timeout: 60_000,
+    });
     await expect(
         section(page).locator('[data-two-step-keys]').getByText('Default', { exact: true }),
     ).toBeVisible();
@@ -324,7 +323,7 @@ test('the step opens on the default, the rest wait behind Use another way, and M
         timeout: 60_000,
     });
     await remove.getByRole('button', { name: 'Remove', exact: true }).click();
-    await expect(section(page).getByText('Passkey or security key removed.')).toBeVisible({
+    await expect(page.getByText('Passkey or security key removed')).toBeVisible({
         timeout: 60_000,
     });
     await expect(keyRows(page)).toHaveCount(0);

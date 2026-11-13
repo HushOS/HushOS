@@ -18,7 +18,7 @@ import { FamilyPlan, FamilyStorage } from '@/components/families/family-billing'
 import { PageHeader } from '@/components/page-header';
 import { PersonAvatar } from '@/components/person-avatar';
 import { PortalLink } from '@/components/portal-link';
-import { Done, Segmented, Setting, SettingsGroup } from '@/components/settings';
+import { Segmented, Setting, SettingsGroup } from '@/components/settings';
 import { StorageMeter } from '@/components/storage-card';
 import { Button } from '@/components/ui/button';
 import { Demo, Row, Sample, SheetFrame, States } from '@/dev/demo';
@@ -299,7 +299,7 @@ export function SettingsDemo() {
         <Demo
             id="settings"
             title="Settings rows, storage and Card and invoices"
-            note="A group with its title and rule; rows with the label left and the action right. Card and invoices (PortalLink) opens Polar's portal, so it is a link: muted words beside the blue icon."
+            note="A group with its title and its state beside it; rows with the label left and the actions right, one column down the page. What just happened is a toast, not a line under the row. Card and invoices (PortalLink) opens Polar's portal, so it is a link: muted words beside the blue icon."
         >
             <SheetFrame className="px-5 py-6 sm:px-8">
                 <div className="max-w-2xl">
@@ -334,7 +334,6 @@ export function SettingsDemo() {
                         <Setting
                             label="Payment"
                             action={<PortalLink busy={false} onOpen={() => {}} />}
-                            below={<Done>Saved</Done>}
                         >
                             Visa ending 4242
                         </Setting>

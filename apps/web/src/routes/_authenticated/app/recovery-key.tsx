@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { NewKeyDialog } from '@/components/account-dialogs';
 import { Spinner } from '@/components/motion';
 import { PageHeader } from '@/components/page-header';
+import { SettingsPage } from '@/components/settings';
 import {
     downloadKit,
     KitSheet,
@@ -76,9 +77,9 @@ function RecoveryKeyPage() {
     }
 
     return (
-        <div className="flex flex-col pb-10">
+        <SettingsPage className="pb-10">
             <PageHeader title="Recovery phrase" />
-            <div className="flex max-w-3xl flex-col gap-5 px-5 sm:px-8">
+            <div className="flex flex-col gap-5 px-5 sm:px-8">
                 <p className="text-[15px] text-muted-foreground">
                     These 24 words get you back in if you forget your password. Keep them somewhere
                     private and offline. HushOS can’t recover them for you.
@@ -166,6 +167,6 @@ function RecoveryKeyPage() {
                 open={making}
                 onOpenChange={setMaking}
             />
-        </div>
+        </SettingsPage>
     );
 }

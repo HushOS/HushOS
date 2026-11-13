@@ -36,7 +36,7 @@ Once you’re in, your browser holds a session that ends after 7 days unused, or
 
 Each session belongs to a device. Your devices, in Account, lists every browser and phone signed in to your account. Removing one asks for your password and signs it out at once. The next time that device checks in, it learns it was removed and clears what it kept for your account; we can’t promise that, because a device kept offline never checks in. When a device we haven’t seen before signs in with your password, we email you.
 
-You can also turn on two-step sign-in, in Account. After your password, the server then asks for a passkey or security key, a code from an authenticator app, a backup code or your recovery phrase before it opens a session or sends your account key. The one you chose as your default is asked for first. It asks whenever a device gets a new session, and at most once in 30 days on a device that keeps its session, and again before you change your password or keys, change the step, or delete your account. It is a rule our server keeps: it stops someone who has your password from signing in, and it doesn’t change how anything is encrypted. No support tool, admin page or email link turns it off.
+You can also turn on two-step sign-in, in Account. After your password, the server then asks for a passkey or security key, a code from an authenticator app, a backup code or your recovery phrase before it opens a session or sends your account key. The one you chose as your default is asked for first. Your recovery phrase and your backup codes pass the step too, so keep them apart from your password, and if you use a security key, add a second and keep it somewhere else in case one is lost. It asks whenever a device gets a new session, and at most once in 30 days on a device that keeps its session, and again before you change your password or keys, change the step, or delete your account. It is a rule our server keeps: it stops someone who has your password from signing in, and it doesn’t change how anything is encrypted. No support tool, admin page or email link turns it off.
 
 <Exact open>
 
@@ -108,7 +108,7 @@ OPAQUE produces two secrets. The **session key** is shared with the server; Hush
         ],
         [
             'Limits',
-            'Five answers per sign-in. Ten wrong codes in 15 minutes per known device, and ten for all other sign-ins together. Five failures in a row send a notice, at most one an hour; 100 in a row from devices HushOS doesn’t recognise pause the authenticator app for them',
+            'Five answers per sign-in. Ten wrong codes in 15 minutes per known device, and ten for all other sign-ins together. Five failures in a row send a notice, at most one an hour; 100 in a row from devices HushOS doesn’t recognise pause the authenticator app for them, until a backup code or the recovery phrase is used there, which lifts the pause',
         ],
         [
             'Security changes',

@@ -1,24 +1,55 @@
 import { cn } from 'cn';
-import { CircleCheckIcon } from 'lucide-react';
 import { useId, useState, type ComponentProps, type ReactNode } from 'react';
 import { Input } from '@/components/ui/input';
 import { SECRET_FIELD } from '@/components/password-input';
 import { segmentOn, segmentTrack } from '@/components/ui/segment';
 
 /*
- * The pieces Account and Plan and storage are built from: a group with its
- * title and no rule beneath, rows with the label left and the action right, a
- * line that confirms what just happened, a segmented choice, and a labelled
- * field for the dialogs that ask for a password.
+ * The pieces Account, Plan and storage and Family are built from: the page's one
+ * centred column, a group with its title and no rule beneath, rows with the label
+ * left and the actions right, a segmented choice, and a labelled field for the
+ * dialogs that ask for a password.
  */
 
+const pageWidths = { narrow: 'max-w-2xl', column: 'max-w-3xl', wide: 'max-w-4xl' } as const;
+
+/*
+ * A settings page: its header and its content in one column, centred in the pane. The
+ * header sits inside the column, so the title starts where the rows do. Files and the
+ * other lists fill the pane; a column of settings does not, and hugging one edge of a
+ * wide pane it reads as a page that failed to load its other half.
+ */
+export function SettingsPage({
+    width = 'column',
+    className,
+    children,
+    ...props
+}: ComponentProps<'div'> & { width?: keyof typeof pageWidths }) {
+    return (
+        <div
+            className={cn('mx-auto flex w-full flex-col', pageWidths[width], className)}
+            {...props}
+        >
+            {children}
+        </div>
+    );
+}
+
+/*
+ * A group of rows under its title. `status` says the group's state once, beside the
+ * title (On, Off); `action` is the group's own, at the end of that line. A group says
+ * what it is in its title and has no sentence beneath: `description` is for the pages
+ * that explain a choice (a plan, a family), not for Account.
+ */
 export function SettingsGroup({
     title,
+    status,
     description,
     action,
     children,
 }: {
     title: string;
+    status?: ReactNode;
     description?: string;
     action?: ReactNode;
     children?: ReactNode;
@@ -28,9 +59,12 @@ export function SettingsGroup({
         <section aria-labelledby={id} className="flex flex-col">
             <div className="hang-end flex items-end justify-between gap-4 pb-1">
                 <div className="flex min-w-0 flex-col gap-0.5">
-                    <h2 id={id} className="text-lg font-bold tracking-[-0.01em]">
-                        {title}
-                    </h2>
+                    <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
+                        <h2 id={id} className="text-lg font-bold tracking-[-0.01em]">
+                            {title}
+                        </h2>
+                        {status}
+                    </div>
                     {description && <p className="text-sm text-muted-foreground">{description}</p>}
                 </div>
                 {action}
@@ -41,45 +75,71 @@ export function SettingsGroup({
 }
 
 /*
- * One row: label, what it is now, and the action. On a phone they stack. Rows, and groups,
- * are told apart by their spacing, not by rules. The label
- * column fits the longest fixed label ("Member list version") on one line; a long name wraps.
+ * One row: label, what it is now, and its actions. Rows, and groups, are told apart by
+ * their spacing, not by rules. The label column fits the longest fixed label ("Member
+ * list version") on one line; a long name wraps.
+ *
+ * The actions are one column down the whole page: every row's end at the same right
+ * edge, centred on the row, each a 36px button (44px for a finger) with the same gap.
+ * Use `outline` for an action and `destructive-outline` for one that removes, so a row
+ * of them has one shape and one baseline. (A quiet button that ends a row still hangs its
+ * padding, `hang-end`, for the pages that have one: its words end on the same edge.) A row without a label (a key under its kind,
+ * a device) keeps the columns: its text starts where the values do.
+ *
+ * On a phone the label has a line of its own and the actions stay at the right edge:
+ * beside the value while they fit, on a line beneath it when they don't. A row with no
+ * value (a switch) keeps its label and its action on one line.
  */
 export function Setting({
     label,
     children,
     action,
     below,
+    top = false,
     data,
 }: {
-    label: ReactNode;
+    label?: ReactNode;
     children?: ReactNode;
     action?: ReactNode;
     below?: ReactNode;
+    /* A value many lines tall (a list): the label sits beside its first line, not its middle. */
+    top?: boolean;
     /* `data-*` attributes for the row, which tests and verification find it by. */
     data?: Record<`data-${string}`, string | boolean>;
 }) {
+    const bare = children === undefined || children === null || children === false;
     return (
         <div {...data} className="flex flex-col gap-2 py-3">
-            <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-6 gap-y-1 sm:grid-cols-[8.5rem_minmax(0,1fr)_auto]">
-                <span className="text-sm font-semibold wrap-break-word max-sm:col-span-2">
-                    {label}
-                </span>
-                <div className="min-w-0 text-[15px]">{children}</div>
-                <div className="hang-end flex items-center justify-end gap-2">{action}</div>
+            <div
+                className={cn(
+                    'flex flex-wrap gap-x-4 gap-y-1.5 sm:grid sm:grid-cols-[8.5rem_minmax(0,1fr)_auto] sm:gap-x-6',
+                    top ? 'items-start' : 'items-center',
+                )}
+            >
+                {label !== undefined && (
+                    <span
+                        className={cn(
+                            'text-sm font-semibold wrap-break-word',
+                            bare ? 'min-w-0 flex-1 sm:col-span-2' : 'w-full sm:w-auto',
+                        )}
+                    >
+                        {label}
+                    </span>
+                )}
+                {!bare && (
+                    <div className="min-w-0 flex-1 basis-28 text-[15px] sm:col-start-2">
+                        {children}
+                    </div>
+                )}
+                <div
+                    data-setting-actions
+                    className="hang-end ms-auto flex flex-wrap items-center justify-end gap-2 empty:hidden sm:col-start-3"
+                >
+                    {action}
+                </div>
             </div>
             {below && <div className="sm:pl-[calc(8.5rem+1.5rem)]">{below}</div>}
         </div>
-    );
-}
-
-/* What just happened, said once beside the row it concerns. */
-export function Done({ children }: { children: ReactNode }) {
-    return (
-        <output className="flex items-start gap-1.5 text-sm font-semibold text-success">
-            <CircleCheckIcon className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-            {children}
-        </output>
     );
 }
 
