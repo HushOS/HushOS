@@ -32,11 +32,14 @@ export type NewPhrase = {
     from: 'reset' | 'rotation';
 };
 
-/* The auth store, as far as this needs it: a lock or a sign-out anywhere raises `lockRevision`. */
+/*
+ * The auth store, as far as this needs it: a lock or a sign-out anywhere raises `lockRevision`
+ * once it has finished, and `locks` the moment one is sent or heard, even when the sign-out's
+ * request then fails and the revision never moves.
+ */
+type LockState = { lockRevision: number; locks?: number };
 type Locks = {
-    subscribe(
-        listener: (state: { lockRevision: number }, previous: { lockRevision: number }) => void,
-    ): () => void;
+    subscribe(listener: (state: LockState, previous: LockState) => void): () => void;
 };
 
 export const newPhrase = createStore<{ made: NewPhrase | null }>(() => ({ made: null }));
@@ -58,7 +61,7 @@ export function keepNewPhrase(made: NewPhrase, auth: Locks) {
  */
 export function whenLocked(auth: Locks, gone: () => void) {
     return auth.subscribe((state, previous) => {
-        if (state.lockRevision !== previous.lockRevision) gone();
+        if (state.lockRevision !== previous.lockRevision || state.locks !== previous.locks) gone();
     });
 }
 /*

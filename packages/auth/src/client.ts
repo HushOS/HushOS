@@ -350,7 +350,9 @@ export function createAuthClient(
             if ('BroadcastChannel' in window) {
                 channel = new BroadcastChannel('hushos-auth');
                 channel.onmessage = (event) => {
-                    if (event.data === 'lock') lock();
+                    if (event.data !== 'lock') return;
+                    lock();
+                    store.setState({ locks: store.getState().locks + 1 });
                 };
             }
         } catch {
@@ -373,6 +375,7 @@ export function createAuthClient(
         }
     }
     function broadcastLock() {
+        store.setState({ locks: store.getState().locks + 1 });
         try {
             channel?.postMessage('lock');
         } catch {

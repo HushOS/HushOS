@@ -813,6 +813,9 @@ function TurnOffDialog({
             onClose();
         } catch (cause) {
             cue('error');
+            // A reply that was not the server's own says nothing: the removal may have gone
+            // through, so the section behind this dialog is read again and shows whether it did.
+            if (cause instanceof LostReply) onDone('');
             if (!(await step.failed(cause))) setError(authError(cause));
         } finally {
             setPending(false);
@@ -888,6 +891,8 @@ function NewCodesDialog({
             onDone('');
         } catch (cause) {
             cue('error');
+            // As above: new codes may have been made, so how many are left is read again.
+            if (cause instanceof LostReply) onDone('');
             if (!(await step.failed(cause))) setError(authError(cause));
         } finally {
             setPending(false);

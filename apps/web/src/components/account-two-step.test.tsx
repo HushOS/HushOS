@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -24,6 +24,7 @@ const api = {
     })),
     confirmAuthenticator: vi.fn<() => Promise<{ backupCodes: string[] } | { replaced: true }>>(),
     removeOtherDevices: vi.fn<(password: string) => Promise<{ removed: number }>>(),
+    removeTwoStepMethod: vi.fn<() => Promise<void>>(),
     stepChallenge: vi.fn(async () => null),
 };
 vi.mock('@/lib/auth-client', () => ({ authClient: api }));
@@ -199,5 +200,52 @@ describe('replacing the authenticator app', () => {
         // The codes are shown, since the step was turned on after all.
         await screen.findByRole('heading', { name: 'Save your backup codes' });
         expect(api.removeOtherDevices).not.toHaveBeenCalled();
+    });
+});
+
+/*
+ * Turning it off, when the server's answer does not arrive: the removal may have gone through,
+ * so the section behind the dialog must be read again, or Account keeps saying the step is
+ * on for an account that no longer has one.
+ */
+describe('turning two-step sign-in off', () => {
+    test('a lost answer reads the settings again, so the page never keeps claiming the step is on', async () => {
+        const { LostReply } = await import('@hushos/auth/client');
+        api.twoStep.mockResolvedValue({
+            on: true,
+            methods: [
+                {
+                    id: 'app-0',
+                    kind: 'totp',
+                    name: null,
+                    createdAt: '2026-11-01T10:00:00.000Z',
+                    lastUsedAt: null,
+                    synced: false,
+                },
+            ],
+            backupCodesLeft: 10,
+            totpFrozen: false,
+        } as never);
+        api.removeTwoStepMethod.mockRejectedValue(
+            new LostReply(
+                'The server’s answer didn’t arrive, so HushOS can’t tell whether two-step sign-in was turned off. Check before you try again.',
+            ),
+        );
+        const person = userEvent.setup();
+        render(
+            <QueryClientProvider
+                client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+            >
+                <AccountTwoStep user={user as never} />
+            </QueryClientProvider>,
+        );
+        await person.click(await screen.findByRole('button', { name: 'Turn off' }));
+        const reads = api.twoStep.mock.calls.length;
+        await person.type(screen.getByLabelText('Password'), password);
+        await person.click(
+            within(screen.getByRole('dialog')).getByRole('button', { name: 'Turn off' }),
+        );
+        await screen.findByText(/can’t tell whether two-step sign-in was turned off/);
+        await waitFor(() => expect(api.twoStep.mock.calls.length).toBeGreaterThan(reads));
     });
 });

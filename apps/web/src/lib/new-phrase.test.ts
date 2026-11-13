@@ -24,7 +24,7 @@ const made: NewPhrase = {
 
 /* The auth store, as far as a lock or a sign-out shows in it: here or from another tab. */
 function authStore() {
-    let state = { lockRevision: 1, unlockedUserId: null as string | null };
+    let state = { lockRevision: 1, locks: 0, unlockedUserId: null as string | null };
     const listeners = new Set<(next: typeof state, previous: typeof state) => void>();
     return {
         subscribe(listener: (next: typeof state, previous: typeof state) => void) {
@@ -127,6 +127,15 @@ describe('a new recovery phrase a page keeps itself (the reset page)', () => {
         stop();
         expect(auth.listeners()).toBe(0);
         auth.set({ lockRevision: 3 });
+        expect(gone).toBe(1);
+    });
+
+    test('is told of a lock the moment it is sent or heard, before a sign-out has finished or when it fails', () => {
+        const auth = authStore();
+        let gone = 0;
+        whenLocked(auth, () => gone++);
+        // Another tab's sign-out broadcast its lock; its request then failed, so the revision never moved.
+        auth.set({ locks: 1 });
         expect(gone).toBe(1);
     });
 });
