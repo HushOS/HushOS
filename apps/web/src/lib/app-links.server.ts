@@ -50,7 +50,9 @@ export function appleAppSiteAssociation() {
     if (!appIDs.length) return new Response('Not found', { status: 404 });
     return json({
         applinks: { details: [{ appIDs, components: appPaths }] },
-        // Passwords saved for this site are offered at sign-in in the app.
+        // Passwords saved for this site are offered at sign-in in the app, and the app may ask
+        // for this site's passkeys and security keys (docs/two-step-design.md 6): Apple's
+        // providers refuse an RP ID the app is not associated with.
         webcredentials: { apps: appIDs },
     });
 }
@@ -61,6 +63,8 @@ export function assetLinks() {
     return json(
         [
             'delegate_permission/common.handle_all_urls',
+            // Saved passwords, and this site's passkeys through Credential Manager. The server
+            // takes the app's answers only from the origins in WEBAUTHN_ANDROID_ORIGINS.
             'delegate_permission/common.get_login_creds',
         ].map((relation) => ({
             relation: [relation],

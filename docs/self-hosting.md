@@ -866,10 +866,27 @@ Off by default while the apps that show them are built: `NOTIFICATIONS_ENABLED=t
 
 Off by default: `TWO_STEP_ENABLED=true` lets accounts turn it on. Only `true` and `false` are accepted; any other value (`1`, `yes`) fails the environment check, so the web service answers 500 and fails its health check. Only the web service reads it. The web service and the worker both read the two keys below, and must be given the same ones: the worker re-seals authenticator secrets after a key rotation, and trims the security log. The design is `docs/two-step-design.md`.
 
-- **What it is.** After the password, an account that has the step on gets no session and no keys until it passes a second step: a code from an authenticator app, a backup code, or its recovery phrase. The same step is asked before a password change, a key rotation, deleting the account, and any change to the step itself.
+- **What it is.** After the password, an account that has the step on gets no session and no keys until it passes a second step: a passkey or security key, a code from an authenticator app, a backup code, or its recovery phrase. The account's usual way (its default) is offered first, and the others are one press away. The same step is asked before a password change, a key rotation, deleting the account, and any change to the step itself.
 - **What it protects.** It is the server's rule. It stops someone who has a password from signing in to your server. It does not change how files are encrypted, and it does nothing against whoever controls the server, or holds a copy of its database with the OPAQUE setup.
 - **With the flag off,** nobody can turn the step on, and the routes that set it up or manage it answer 501. An account that already has the step is still asked for it: turning the flag off is never a way past someone's second step. Such an account also cannot remove its step until the flag is on again.
 - **Clients.** A client that cannot answer the step is told to update (409 `update-required`) when it signs in to an account that has it. The web app and the iPhone and Android apps from version 1.6 offer the settings and answer the step. An older phone app is told to update when it signs in to an account that has the step on.
+    - **A client says what it can answer.** From the release with passkeys, a client names the methods it can use beyond a code and the phrase (`twoStepMethods`), and the server lists only those. A 1.6 app names none, so it is never shown a passkey: on an account with a passkey and an app it is asked for the app's code; on one with only passkeys it is asked for a backup code or the recovery phrase, which every account with the step has.
+    - The server says it reads that field in every `login/start` reply, for any address, and a client sends it only to a server that says so. A 1.6 server ignores the field if it ever arrives.
+- **Passkeys and security keys** (WebAuthn). A person adds up to ten, from the web app or, on hushos.com, from the phone apps. Synced passkeys are allowed.
+    - **The domain is part of every key.** The RP ID is the host of `APP_ORIGIN`, and a key's answer must come from `APP_ORIGIN` exactly. **Move the instance to another domain and every registered key stops working there.** Nothing can carry them over. People sign in with their authenticator app, a backup code or their recovery phrase, and add their keys again. Changing only the port or the scheme of `APP_ORIGIN` changes the origin too: a key added on `http://localhost:5173` does not answer for `https://localhost`.
+    - Keys need a secure context: HTTPS, or `localhost`. On plain HTTP elsewhere the browser offers none, and the page says so.
+    - The server asks for no attestation, so it learns no maker or model. It keeps each key's credential id, public key, use counter, transports, whether it is synced, and the name the person gave it, which is not encrypted.
+    - **A counter that does not go up** is refused, the account is told its key may have been copied, and the log gets a line. Synced passkeys report 0 every time, and give no such signal.
+    - **`WEBAUTHN_ANDROID_ORIGINS`** (optional): the Android apps this server takes a key's answer from, beside `APP_ORIGIN`. An Android app's answer names the app as its origin, not the site: `android:apk-key-hash:` followed by the SHA-256 of the app's signing certificate in Base64url without padding. Comma-separated, up to eight. Anything else in it (a web origin, a malformed value) fails the environment check: a web origin there would let a page on another site answer for yours. Only the web service reads it.
+        - Leave it empty unless your own domain vouches for an Android app: `ANDROID_APP_CERT_SHA256` set, so `/.well-known/assetlinks.json` names the app with `get_login_creds`, and an app built with your domain as its link host. From the fingerprint you already have:
+
+            ```bash
+            printf 'android:apk-key-hash:%s\n' "$(printf '%s' "$ANDROID_APP_CERT_SHA256" | tr -d ':' | xxd -r -p | openssl base64 -A | tr '+/' '-_' | tr -d '=')"
+            ```
+
+        - It is not derived from `ANDROID_APP_CERT_SHA256` for you: the fingerprint says which app may open your links, this says which app may answer for your keys, and you decide each.
+    - **The phone apps on your own server.** The apps use the phone's own passkey sheet, and Apple and Google let an app ask only for the domains it is associated with: the store apps, for hushos.com. Signed in to your server, they list, rename and remove keys, but cannot use or add one. They do not name passkeys as something they can answer, so they are asked for the account's other methods, and say "Your usual way isn’t available for this sign-in." when a passkey was the default. The browser path the design describes for this case is not built. An app you build yourself, associated with your domain (`HUSHOS_LINK_HOST` on iOS, `ANDROID_APP_CERT_SHA256` and `WEBAUTHN_ANDROID_ORIGINS` for Android), uses them natively.
+- **The default.** The first method an account turns on is the one it is offered first. Settings shows Default beside it and Make default on the other; changing it needs a session that passed the step, and is a line in the security log. Removing the last method of the default's kind clears it. When the default cannot be used for a sign-in (the app paused, a client that cannot use a passkey here), the next method comes first and the client says so in one line that names no reason.
 - **`TWO_STEP_KEY`** (optional): 32 bytes, Base64url without padding. It seals authenticator secrets and keys the hash backup codes are stored under.
     - Unset, the key is derived from the OPAQUE server setup (HKDF-SHA-256, with its own `info`), wherever the setup lives. Moving the setup from the database to the environment changes nothing here.
     - Keep it outside the database, as you keep the setup. With the setup in `server_secrets`, the derived key sits beside what it seals and protects nothing against a copy of the database.
@@ -947,14 +964,15 @@ Off by default: `TWO_STEP_ENABLED=true` lets accounts turn it on. Only `true` an
     - **Backup codes are never re-keyed,** because the server never holds them in plain text. A set keeps verifying under its own key until its owner makes a new one, or has used every code. `backupCodesUnder` counts the accounts that still have unused codes under each older key. Dropping a key while that count is not 0 makes those accounts' backup codes unavailable, until they make a new set in their settings; their authenticator app and their recovery phrase still pass. Sets under the derived key are never lost: that key is always there.
     - A row whose key the server no longer has is never treated as a wrong answer. The person is told that two-step sign-in is unavailable on this server right now (503) and to use their recovery phrase, and nothing is counted against them. The server logs an error with the row's kind and the id of the key it was made under (`twoStep.row`, `twoStep.sealedWith`). Putting the missing key back as `TWO_STEP_PREVIOUS_KEY`, on the web service and the worker, repairs it, and the worker then moves the secret to the current key. Until then only the recovery phrase gets that person in. A backup-code set is unavailable only when none of its unused codes is under a key the server has.
 - **What the server keeps:**
-    - each method's kind, when it was added, and when it was last used, to the hour;
+    - each method's kind, when it was added, and when it was last used, to the hour, and which kind is the default;
+    - each passkey's or security key's credential id, public key, counter, transports, whether it is synced, and its name. None of these is a secret;
     - each authenticator secret, sealed under the key above, which the running server can open;
     - backup codes only as a keyed Argon2id hash;
     - a security log per account for 90 days: the kind of event, the kind of method and the kind of device, never a name, an address or a browser.
 - **Limits on wrong answers.** A step allows five answers. Codes, from an app or a backup set, have a budget of ten in 15 minutes. Each known device has its own, for sign-ins that prove the device's key and for changes made from its session; every sign-in that proves no device shares one. Wrong answers in a row are also counted, and the hundredth from devices HushOS doesn't recognise pauses the authenticator app on such devices until a backup code or the recovery phrase is used.
     - The 15-minute budgets are rate-limit buckets under [the server hash key](#the-server-hash-key). With the OPAQUE setup kept in the database, they count per process and start over when a process restarts. So do the hourly caps on the failed-step notice (one) and on failed-step lines in the security log (ten).
     - The count to 100 is a row in the database: it holds across processes and restarts, whatever the setup.
-- **Notices.** Every change to the step, a backup code or the recovery phrase used, and a run of wrong answers after a correct password are emailed to the account. They cannot be turned off, and they name only the kind of method and the time. With [notifications](#notifications) on, each also goes to the account's devices, as every security notice does: the push carries an event id, and the device writes the words ("Two-step sign-in is on."). A phone app from before this release shows "New activity in HushOS" for them. A change that signs devices out ends their push registrations too: a reset every device's, a password change or a rotation every device's but the one that made it. Those devices hear by email alone until they sign in again.
+- **Notices.** Every change to the step, a backup code or the recovery phrase used, a key whose counter did not go up, and a run of wrong answers after a correct password are emailed to the account. They cannot be turned off, and they name only the kind of method and the time. With [notifications](#notifications) on, each also goes to the account's devices, as every security notice does: the push carries an event id, and the device writes the words ("Two-step sign-in is on."). A phone app from before this release shows "New activity in HushOS" for them. A change that signs devices out ends their push registrations too: a reset every device's, a password change or a rotation every device's but the one that made it. Those devices hear by email alone until they sign in again.
 - **You can turn anyone's step off.** Anyone with write access to the database can delete a person's methods, because the step is a server rule. The management area has no button for it.
 - **Losing everything.** The recovery phrase passes the step. Someone who has lost every method, their backup codes and the phrase cannot sign in, and neither email nor the operator's pages can let them in.
 - **Rolling back** past the release that added the tables is covered under [Release migration notes](#release-migration-notes).
@@ -2515,3 +2533,38 @@ To roll back to the previous release:
 
 - The schema can stay: the previous release writes none of the new kinds, the wider check refuses nothing it writes, and it never looks at `two_step_key_readers`. This release's worker exits without the migration, and the previous worker does not look for it.
 - Keep `TWO_STEP_KEY` and `TWO_STEP_PREVIOUS_KEY` as they are. Secrets the worker moved to the current key stay readable, since the previous release reads under the same keys. It does not read the `_FILE` forms: put the keys in the variables before rolling back, or it seals under the derived key and cannot open what is under yours.
+
+#### Passkeys and the default method release (`20261113195154_two_step_passkeys`)
+
+This release adds passkeys and security keys as a second step, and the default method ([Two-step sign-in](#two-step-sign-in)). Nothing changes for an account until it adds a key.
+
+What the migration does:
+
+- Adds one empty table, `two_step_key_registrations`: a key being added, for the five minutes between the options the server hands out and the key's answer. The keys themselves are rows of `two_step_factors`, whose columns for them have been there since `20261112160538_two_step`.
+- Adds `two_step_state.default_kind` (nullable, no default, no rewrite), and sets it to `totp` for every account that has a confirmed authenticator app. That was the only method there was, so it is what those accounts are offered first, and adding a passkey later does not move it.
+- Replaces the check on `notification_events.kind` with one that also accepts `two-step-key-added`, `two-step-key-removed` and `key-counter`.
+- The session guard (`sessions_two_step_guard`) is untouched: it already counts a confirmed method of any kind, so an account whose only method is a key is covered by it.
+
+Locks:
+
+- `ADD COLUMN` and the new check take an exclusive lock on `two_step_state`; replacing the other check takes one on `notification_events` and reads it once; the new table's foreign key locks `users` against writes. All are held until drizzle's transaction commits: milliseconds. Each waits at most five seconds (`lock_timeout`); not had in time, the migration fails with nothing applied. Run it again.
+
+New setting: `WEBAUTHN_ANDROID_ORIGINS`, on the web service only. Unset, no Android app's answer is taken.
+
+Containers of the previous release beside the new ones:
+
+- A previous web container lists no key at a step and takes none as an answer. Someone whose sign-in reaches it is asked for their app's code, a backup code or the phrase, and their next try may reach a new container.
+- It ignores `twoStepMethods`, and its `login/start` does not advertise it. A client whose `login/start` and `login/finish` reach different releases asks again without the field if it is refused.
+- It cannot serve a notification event of the three new kinds, as with the kinds of the release before.
+- It still enforces the step for an account whose only method is a key: the guard refuses a session that did not pass it.
+
+To roll back to the previous release, run the undo script that ships beside the migration, as the role that migrates:
+
+```bash
+psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f packages/db/drizzle/20261113195154_two_step_passkeys/undo.sql
+```
+
+- It is one transaction. It deletes the notification events of the three new kinds (the previous release cannot serve them), every account's choice of default, and any key being added at that moment, and drops the table and the column.
+- **It leaves the keys.** The previous release does not offer them, so an account whose only method is a key signs in there with a backup code or its recovery phrase; the session guard still counts the key, so the password alone never signs it in. Rolled forward again, the keys work as before, and the migration makes the app the default again for accounts that have one.
+- `packages/db/src/two-step.migration.test.ts` runs the migration and the script against a migrated database and checks that the schema is exactly what it was before.
+- Run it before the undo scripts of the two migrations above it, if those are being taken back too.
