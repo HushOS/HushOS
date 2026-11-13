@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.6.0](https://github.com/HushOS/HushOS/compare/v1.5.0...v1.6.0) (2026-11-13)
+
+
+### Features
+
+* **apps:** two-step sign-in on the web, iPhone and Android, behind TWO_STEP_ENABLED ([#419](https://github.com/HushOS/HushOS/issues/419)) ([8e4a30d](https://github.com/HushOS/HushOS/commit/8e4a30d65e2fe22281be42be790dbf964b764499))
+* **auth:** ask for the second step at sign-in and before security changes, behind TWO_STEP_ENABLED ([#418](https://github.com/HushOS/HushOS/issues/418)) ([ec8ee11](https://github.com/HushOS/HushOS/commit/ec8ee11073f34c9a1be915575f1f74e789d7f804))
+* **db:** add the two-step sign-in tables, session guard and repository ([#416](https://github.com/HushOS/HushOS/issues/416)) ([1d4f513](https://github.com/HushOS/HushOS/commit/1d4f51358627a068d50bb8c5ce67c243413096e2))
+
 ## [1.5.0](https://github.com/HushOS/HushOS/compare/v1.4.1...v1.5.0) (2026-11-09)
 
 
