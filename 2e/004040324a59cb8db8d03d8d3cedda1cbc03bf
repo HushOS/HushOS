@@ -1,0 +1,344 @@
+packages/env/src/two-step.test.ts
+  s_566b8e0c4467a4::t_5bebc314048cdd 1-39,41-136
+  s_566b8e0c4467a4::t_45304623c80343 40,137-149,179-192
+  s_566b8e0c4467a4::t_2fcfd191e294a6 150-178
+packages/env/src/two-step.ts
+  s_566b8e0c4467a4::t_30ac915c0db3cd 1,16,25-27,97-124,135-136,138-140
+  s_566b8e0c4467a4::t_43510b08df2ad6 17-19,24,34-39,41-43,50,96,137
+  s_566b8e0c4467a4::t_26ba1545c62303 20-23,40,44-49,51-95,133
+turbo.json
+  s_566b8e0c4467a4::t_7e1b57fdbb9187 59-60,137-138
+  s_566b8e0c4467a4::t_2ec201bd1f9d3c 61,139
+packages/db/src/two-step.reseal.test.ts
+  s_566b8e0c4467a4::t_3b3dc61c350ae0 1-7,9-307,382-383,386
+  s_566b8e0c4467a4::t_399802b4c0c4f7 405-406
+apps/web/src/lib/api/two-step-reseal.db.test.ts
+  s_566b8e0c4467a4::t_568d6fcd8fbe5b 1-108,116-117,122-258,259-264,266-307
+  s_566b8e0c4467a4::t_3ef237de5bfd12 265
+apps/web/src/lib/api/system.server.ts
+  s_566b8e0c4467a4::t_2ae8921187d3b1 2,4,14,22,31,33,35-37,39-42,44-46
+bun.lock
+  s_566b8e0c4467a4::t_a190a441c9d286 287
+  s_e98362b3bd71d1::t_06183b168b40d9 49,127,505-506,617-618,775-804,953-956,1225-1226,1897-1900,1933-1934,2095-2096,2289-2290
+  s_566b8e0c4467a4::t_94ff3bad5932d7 50
+compose.yaml
+  s_566b8e0c4467a4::t_666f048f1018f7 138-140,177-185
+  s_566b8e0c4467a4::t_4df618a26a769f 141,143
+  s_566b8e0c4467a4::t_4f8e2d1dd6be64 142
+packages/auth/package.json
+  s_566b8e0c4467a4::t_c9e842d2ce26ef 15-16
+  s_566b8e0c4467a4::t_5abb0e2578c9c8 28
+packages/auth/src/two-step-keys.ts
+  s_566b8e0c4467a4::t_d44d988945c629 1-151,198-200,213-223,227-228,236-240,244-245,257-272
+packages/auth/src/two-step.ts
+  s_566b8e0c4467a4::t_4d1c93aebdb25d 32,110,112-115,116-117,126-127,134,142-143
+  s_566b8e0c4467a4::t_40e60fadc2effb 29,205-208,212-216,222-235
+  s_566b8e0c4467a4::t_3889bf4d16a03b 1,18-23,30,33-39,44-45,69,73-74,80-81,85-90,93-100,326-351,377-379,438,443,445-469,533,575-577,596,598,646,721-746,750,752-768,771-778,792-794,798-808,819,830,833,838,912,934,937,995-1010,1013-1014,1017-1020,1248-1253,1259-1488
+  s_566b8e0c4467a4::t_09e2dbe6fc1027 867-872
+packages/db/src/auth.ts
+  s_566b8e0c4467a4::t_67e84998532120 224-232
+  s_566b8e0c4467a4::t_43161ac0cac5ba 75,888-892
+packages/db/src/two-step.ts
+  s_566b8e0c4467a4::t_57a3fd20d60768 1-10,12-14,1138-1258,1278-1279,1285,1295,1304,1312-1314,1343-1344
+  s_566b8e0c4467a4::t_7a960db6b15b42 24,27,48,52,56,79,107-108,152-155,171-174,182-186,356-359,417-423,440-443,459-469,481-482,508-524,527-529,550-879,1351-1352,1366-1367
+  s_566b8e0c4467a4::t_6bcb15383f3d67 1057-1062,1127-1133
+packages/env/src/opaque.ts
+  s_566b8e0c4467a4::t_1fe0aea31cb781 6-7,18-19
+packages/jobs/Dockerfile
+  s_566b8e0c4467a4::t_cdc64561f04074 35-36
+packages/jobs/package.json
+  s_566b8e0c4467a4::t_0a6b13534b6fe7 18
+packages/jobs/src/client.ts
+  s_566b8e0c4467a4::t_a5527d184334a1 12,37,92-104
+packages/jobs/src/jobs/two-step.ts
+  s_566b8e0c4467a4::t_8779901d944c35 1-11,14-21,33-43,45-47,49,51,53-55,59-81,94-97
+packages/jobs/src/worker.ts
+  s_566b8e0c4467a4::t_647728d9c208cd 15,92,100,102-110
+  s_566b8e0c4467a4::t_1d7bdd4d5eeedb 93,101
+apps/web/src/lib/api/two-step-push.db.test.ts
+  s_566b8e0c4467a4::t_f3ac9e3dc584f2 1-234,244
+  s_566b8e0c4467a4::t_b02c09d8c6fc6a 279,442-443
+apps/android/app/src/main/kotlin/com/hushos/app/MainActivity.kt
+  s_566b8e0c4467a4::t_d5941fe0724956 70,73
+apps/android/app/src/main/kotlin/com/hushos/app/data/PushNotifications.kt
+  s_566b8e0c4467a4::t_0e0727f746f6b6 487,516
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HushOSApp.kt
+  s_566b8e0c4467a4::t_a7ec8b2baf0af9 269-270
+apps/ios/App/MainView.swift
+  s_566b8e0c4467a4::t_7be24620b656a9 144,149
+apps/ios/App/PhonePush.swift
+  s_566b8e0c4467a4::t_aeff0c0b80fc61 20
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/PushContent.swift
+  s_566b8e0c4467a4::t_20dfaba824f015 26
+apps/web/src/lib/api/notifications-responses.server.ts
+  s_566b8e0c4467a4::t_6e09b9856c0e24 21-33,40-45
+  s_566b8e0c4467a4::t_9489d7bb307641 34-36
+apps/web/src/lib/web-push.ts
+  s_566b8e0c4467a4::t_adbb8a069a7813 196-222,226-235,269-279,284-292
+  s_566b8e0c4467a4::t_5c71095bd8dd30 223-225,280-283
+apps/web/src/test/auth-edge.server.ts
+  s_566b8e0c4467a4::t_a6fc12161678bd 155-158,163-168,183-185
+  s_566b8e0c4467a4::t_963bbe10e3e081 363-364,389-394
+crates/hushos-core/src/notifications.rs
+  s_566b8e0c4467a4::t_389af783635ef4 102-115,131-132,209-230,269-270,346-347,377-413,567-576,682-716,720-746
+  s_566b8e0c4467a4::t_fb54acfd05a495 116-118,231-233,414-422,717-719
+packages/db/drizzle/20261113170753_two_step_notices/migration.sql
+  s_566b8e0c4467a4::t_cc481a13281ec1 1-11
+packages/db/drizzle/20261113170753_two_step_notices/snapshot.json
+  s_566b8e0c4467a4::t_cf6d5d14ec2bad 1-30
+packages/db/src/schema/notifications.ts
+  s_566b8e0c4467a4::t_704b90c92d689b 28-41,59-72
+  s_566b8e0c4467a4::t_adc7da99b66202 42-45,73-75
+.env.example
+  s_566b8e0c4467a4::t_1e6fd17abaa6b1 97,99-101
+  s_566b8e0c4467a4::t_d1fbfcedc25183 102-104,107
+  s_566b8e0c4467a4::t_2b42efad28b426 105-106
+.env.production.example
+  s_566b8e0c4467a4::t_b3c78c9a96cda0 121-122,124-126
+  s_566b8e0c4467a4::t_65b258d014771a 127-129,132
+  s_566b8e0c4467a4::t_943483b04f7200 130-131
+CONTRIBUTING.md
+  s_566b8e0c4467a4::t_3de606b564574b 375
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_bd511df89f336c 111,144,860,867,895-917,920,938-966,2504,2506-2508,2510,2513-2517,2521-2524,2526-2534,2536
+  s_566b8e0c4467a4::t_a268ae99dac8b5 869,873-879,884-885,887-888,890,968-969,2537,2539-2552,2554-2564,2566-2571
+  s_566b8e0c4467a4::t_0e4bf5099b1d5b 880-883,886,889,2553
+docs/two-step-design.md
+  s_566b8e0c4467a4::t_79b769e296c3b1 521,546-547,549,551-554,583,586-591,598-600,602-603,671,706,733,737,774,793-796
+  s_566b8e0c4467a4::t_003bf664891435 5,467-468,527,548,657-666,685-688,878,883-889,891-892,894-895,897-910
+  s_566b8e0c4467a4::t_d16e5f312dacaa 584,896
+  s_566b8e0c4467a4::t_4ada7965747ba5 890,893
+packages/db/src/two-step.keys.test.ts
+  s_566b8e0c4467a4::t_4dbb3af788ece4 1-428,430-431,433-457,463-468,474-487,500-676,678-679
+  s_566b8e0c4467a4::t_1014859342b05a 677,680-681
+  s_566b8e0c4467a4::t_89017e155e96c9 429,432,458-462,469-473,488-499
+packages/db/drizzle/20261113195154_two_step_passkeys/migration.sql
+  s_566b8e0c4467a4::t_b98baafd82a7c5 1-39
+packages/db/drizzle/20261113195154_two_step_passkeys/snapshot.json
+  s_566b8e0c4467a4::t_e545521d231b8a 1-4,7-359
+packages/db/drizzle/20261113195154_two_step_passkeys/undo.sql
+  s_566b8e0c4467a4::t_f26752301f12ef 2-25,27
+packages/db/src/schema/two-step.ts
+  s_566b8e0c4467a4::t_794277f8abcc28 28-34,61-62,80,213-217,229,236-271
+packages/db/src/two-step.core.ts
+  s_566b8e0c4467a4::t_f43fc8839e35ba 12-13,42-59,106-126,163-206,488-490,495-496,522-526,536-537,561,570,613-621
+packages/db/src/two-step.migration.test.ts
+  s_566b8e0c4467a4::t_a6a0d7591521f3 13,360-361,363,365-460
+packages/db/src/two-step.test.ts
+  s_566b8e0c4467a4::t_52e822c89d72a5 282,2129-2130,2135,2155
+packages/auth/src/webauthn.ts
+  s_566b8e0c4467a4::t_d313e4fb4571aa 1-13,15-21,25-58,63-249
+  s_566b8e0c4467a4::t_d7d1eba4820eac 250-291
+  s_566b8e0c4467a4::t_172e22a2278481 14,22-24,59-62
+apps/web/src/lib/api/auth-responses.server.ts
+  s_566b8e0c4467a4::t_cf41ba4501c347 243-256,282-310,313,318-320,332-342,344-347,351,354,357-392
+apps/web/src/lib/api/auth-responses.test.ts
+  s_566b8e0c4467a4::t_d114a0d058138f 15,24-25,29,31,138-147,495-507,550-558,584-588,593-605,638-660,665-754,1195,1236-1239
+apps/web/src/lib/api/auth.server.ts
+  s_566b8e0c4467a4::t_0aa99a18f6c918 11,18,41,50-51,55,57,175,177-186,198-199,209,373-390,415,421,444-493
+apps/web/src/lib/api/shared.server.ts
+  s_566b8e0c4467a4::t_349ee284a4135e 792-830,833-834,845,849-858
+apps/web/src/lib/api/two-step-passkeys.db.test.ts
+  s_566b8e0c4467a4::t_e31a914198c1c6 1-22,27-30,36-549,593-596,598-602,610-611,615-654,658-870
+  s_566b8e0c4467a4::t_51e3f98c5b252d 23-26,31-35,655-657
+  s_566b8e0c4467a4::t_1964a67a006546 550-553,587-592,597,603-609,612-614
+  s_e98362b3bd71d1::t_46fe13325c748e 554-586
+packages/auth/src/api.ts
+  s_566b8e0c4467a4::t_a50ea33483980f 145-190,193,197-202,204,208-209,219-230,233,236-237,317-325,341-342,346-350,355,364-376
+packages/auth/src/client.ts
+  s_566b8e0c4467a4::t_2fa313f04caaf3 11,13-24,34-36,69-95,100-101,104-105,110-113,115,117-129,195-197,349,351-353,761-763,768-769,773-781,890-901,1504-1507,1509-1517,1572-1598,1604-1606,1608-1620
+  s_566b8e0c4467a4::t_54814f7d487041 96-99,102-103,106-109,114,116
+  s_566b8e0c4467a4::t_9c044dbc99ebbe 929-933,1526-1536,1599-1603,1607
+packages/auth/src/client.two-step.test.ts
+  s_566b8e0c4467a4::t_7a99c49d9196a3 2-3,68-71,95,1359-1549,1716-1717
+  s_566b8e0c4467a4::t_92fbc43833a6db 29-36,1550-1562
+  s_566b8e0c4467a4::t_aa8c2de6ac9785 1565-1717
+packages/auth/src/login-reply.test.ts
+  s_566b8e0c4467a4::t_48848f620e3e22 2,70-77,79-84,92-111,114,117-233,245-248,251-256
+  s_566b8e0c4467a4::t_8892c6ae69a7ba 235-244,249-250
+packages/auth/src/login-reply.ts
+  s_566b8e0c4467a4::t_f319841163e9cd 1-10,27-34,57-86,96-101,108-113,116,127-132,197,203-204,206,209-212,215-284
+  s_566b8e0c4467a4::t_4103a6d0a0fbae 198-202,205,207-208,213-214
+packages/auth/src/server.ts
+  s_566b8e0c4467a4::t_a56ca68a8bfbf1 496-498,505,567
+packages/auth/src/tokens.ts
+  s_566b8e0c4467a4::t_2b985d855c0e21 29-32,45-48
+packages/auth/test/soft-key.ts
+  s_566b8e0c4467a4::t_e7199b90c8166f 1-158
+packages/emails/scripts/render.tsx
+  s_566b8e0c4467a4::t_0eca2669298fa6 140-142
+packages/emails/src/rendered/security-notice.ts
+  s_566b8e0c4467a4::t_cfd170773d5195 70-81
+packages/emails/src/service.ts
+  s_566b8e0c4467a4::t_2014c9060d6132 263-265
+packages/emails/src/templates/security-notice.tsx
+  s_566b8e0c4467a4::t_4e0ad6ba1f98ab 45-48,219-242
+packages/logging/src/privacy.ts
+  s_566b8e0c4467a4::t_790d054d22c396 131-133
+e2e/two-step-passkeys.spec.ts
+  s_566b8e0c4467a4::t_3a43075504b8c9 1-23,41-132,136-154,156-335,337,343
+  s_566b8e0c4467a4::t_f54937f634ce90 336,338-340,342,346-347
+  s_566b8e0c4467a4::t_bdd9ff6f4b153e 24-40,133-135,155,341,344-345
+apps/web/src/components/account-two-step.test.tsx
+  s_566b8e0c4467a4::t_878b29dc09515b 44,46-53,71-80,90,287-289,345,360-582
+apps/web/src/components/account-two-step.tsx
+  s_566b8e0c4467a4::t_b59b91a89db632 1-6,36,49-54,57-69,77-78,92,96-140,168-170,172-200,202-249,251-255,257,259,262-263,271,274-280,284-289,291-307,314-322,324-325,329-337,342,344,352-445,462,486-487,490,492,496,500-507,787-788,814,822,825,828,868,872,883-886,968-974,1031-1037,1046-1052,1056-1058,1083-1125,1130-1132,1137-1448,1460,1463,1470,1472-1478,1494-1507,1516-1522
+apps/web/src/components/sign-in-step.tsx
+  s_566b8e0c4467a4::t_cc2431b61f5679 12-19,22-25,132,155-159
+apps/web/src/components/two-step-answer.tsx
+  s_566b8e0c4467a4::t_41dd3687511141 3,8-9,12-16,20,26,32,47,65-66,69-75,105-109,112-118,207-233,258
+apps/web/src/components/unlock-device.test.tsx
+  s_566b8e0c4467a4::t_9180a49b958de1 45,48-49,112,115-120,122,160,163,175,177,196,237,249,319-458
+apps/web/src/lib/auth-api.ts
+  s_566b8e0c4467a4::t_78f224b1f8c82b 2,19-21,23-33
+apps/web/src/lib/auth-client.ts
+  s_566b8e0c4467a4::t_f7ec69bfd3209e 11,28
+apps/web/src/lib/device-data.ts
+  s_566b8e0c4467a4::t_6ccb3b9429629a 92-101,172
+apps/web/src/lib/passkeys.ts
+  s_566b8e0c4467a4::t_d37f063c52a0ab 1-77
+apps/web/src/lib/two-step.ts
+  s_566b8e0c4467a4::t_14aa780bd2100c 44-47,58,71,91-94,106-107,221-240
+e2e/two-step.spec.ts
+  s_566b8e0c4467a4::t_24e4c4f66ac044 3,97-102,112,248,264,270,413,567,614,643,682
+apps/web/package.json
+  s_e98362b3bd71d1::t_34916bb0e42458 43
+  s_566b8e0c4467a4::t_601f0418eb6a06 9,44
+apps/web/src/lib/api/two-step-keys-fixture.test.ts
+  s_566b8e0c4467a4::t_2dc12ee20c427e 1-6,8-26,28-90
+  s_566b8e0c4467a4::t_ba64344bc32ee3 7,27
+crates/hushos-core/AGENTS.md
+  s_566b8e0c4467a4::t_fc3b6eb6160fa1 87,343,353-360
+crates/hushos-core/fixtures/two-step-keys.json
+  s_566b8e0c4467a4::t_4f8117fe27a2a4 1-18,24-86,92-130
+  s_566b8e0c4467a4::t_c743dc2de535a9 19-23,87-91
+crates/hushos-core/src/two_step.rs
+  s_566b8e0c4467a4::t_03537e3f19ee64 22-27,154,165-186,205,210-227,231,238,326-359,372-375,377-387,389-408,466,468,566-568,573-1006,1182,1184-1189,1200,1204-1527
+crates/hushos-core/tests/two_step_keys.rs
+  s_566b8e0c4467a4::t_4c85de771049f6 1-72
+apps/web/src/lib/app-links.server.ts
+  s_566b8e0c4467a4::t_bf65a4308f6935 53-55,66
+  s_566b8e0c4467a4::t_7af7d2338445c0 67-68
+apps/android/app/src/main/kotlin/com/hushos/app/data/Passkeys.kt
+  s_566b8e0c4467a4::t_69e3dc749011a1 1-32,37-49,68-77,82-87,92-94,98-100,111,113,116-286
+  s_566b8e0c4467a4::t_9ab4cba23c8029 33-36,78-81,88-91,95-97,101-110,112,114-115
+  s_566b8e0c4467a4::t_31f6b7ccba6604 50-67
+apps/android/app/src/main/kotlin/com/hushos/app/ui/PasskeySheet.kt
+  s_566b8e0c4467a4::t_ade1e043134c62 1-14,16,18-36,39-86,92-94,98
+  s_566b8e0c4467a4::t_49e3b1cd91b391 37-38
+  s_566b8e0c4467a4::t_aa2443b0be5ab1 15,17,87-91,95-97
+apps/android/app/src/test/kotlin/com/hushos/app/data/PasskeysTest.kt
+  s_566b8e0c4467a4::t_b7932801247034 1-78,82-114,120-190,233-506,526-787
+  s_566b8e0c4467a4::t_23a331375e8426 115-119,507-525
+  s_566b8e0c4467a4::t_8e9620ac2dc755 79-81,191-232
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_e3a159f85e7f25 198,224,227,231,239-242,244-246,248-254,257,259
+  s_566b8e0c4467a4::t_bf54fc791f67b1 255,258
+  s_566b8e0c4467a4::t_da263cbdcc4e9b 243,247
+  s_566b8e0c4467a4::t_ab6b65535efe6d 256
+apps/android/app/build.gradle.kts
+  s_566b8e0c4467a4::t_c3c5f8ab705dfd 19-20,196-198
+apps/android/app/proguard-rules.pro
+  s_566b8e0c4467a4::t_2029b1dd71aca3 14-18
+apps/android/app/src/main/kotlin/com/hushos/app/data/Auth.kt
+  s_566b8e0c4467a4::t_479e297328f6cd 283,323,591-592,597-601,604,608-621,642-646,911,916-925
+apps/android/app/src/main/kotlin/com/hushos/app/data/Shared.kt
+  s_566b8e0c4467a4::t_24a2955e2f5dc6 30,142,146,148-149,152-154
+  s_566b8e0c4467a4::t_afb2372331740e 143-145,147,150-151
+apps/android/app/src/main/kotlin/com/hushos/app/data/TwoStep.kt
+  s_566b8e0c4467a4::t_e261c477823e94 4-8,15-17,23,193-194,225-226,228,232-236,257-290,301-304,306,310-315,323,343-349,417-418,424,447-448,455-458,470-481,486-487,546-551,557,592-608,611-640,650-664,669-670,701,712-714,716-718,743-747,749,768-776,780,786-789,866-911
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AccountScreen.kt
+  s_566b8e0c4467a4::t_91a93a25f3eb62 241,244-245,485,496,498-504,735,756-761,784,800-812
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_0ec29333a2749e 702-761,768,776,778
+apps/android/app/src/main/kotlin/com/hushos/app/ui/TwoStepScreen.kt
+  s_566b8e0c4467a4::t_270adc29c16f15 28,30,33,37-38,60,63,72-75,78,81,90,98-103,108,115,122,131-135,138-141,149,151,159,163-171,174,181,188,194-201,213-219,225,228-244,254,268-279,285-287,289-290,295-297,300-305,308-310,312-320,333-334,337-342,350,368-400,412-422,424-425,439-440,442,444-454,469-473,489-521,523-524,527-539,557-591,645-656,658-663,666,670-673,675,688-689,733-734,742-745,750-751,754-758,767-773,780-870,872,875-876,878,884-885,887-894,902-904,906,916-917,919,934-935
+apps/android/app/src/test/kotlin/com/hushos/app/data/JsonSame.kt
+  s_566b8e0c4467a4::t_1192b470c78716 1-18
+apps/android/app/src/test/kotlin/com/hushos/app/data/TwoStepTest.kt
+  s_566b8e0c4467a4::t_32b6c6b4a1cca9 35-43,573,616,618,626-630,635-636,638,641,645,648,655,660-664,672-673,753,756,758,780,823-825,828-836,980,990,994
+apps/android/app/src/test/kotlin/com/hushos/app/ui/PasskeySheetTest.kt
+  s_566b8e0c4467a4::t_916dcdc5247492 1-106,111-112
+  s_566b8e0c4467a4::t_e399d48219e6ce 107-110
+apps/android/gradle/libs.versions.toml
+  s_566b8e0c4467a4::t_16eaa66e7c2184 29-30,67-68
+apps/web/src/content/security.mdx
+  s_566b8e0c4467a4::t_16f83e621e4324 39,93-96,544,597
+apps/ios/App/PasskeySheet.swift
+  s_566b8e0c4467a4::t_93d611f968298a 1-14,17-20,22,24-159
+  s_566b8e0c4467a4::t_af86fadbbf8160 160-165
+  s_566b8e0c4467a4::t_6828ab7465b96f 15-16,21,23
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Passkeys.swift
+  s_566b8e0c4467a4::t_051ad889e6ab9f 1-191,215-228,234-235,248,250-251,253-255,257-258,264-267,272-303
+  s_566b8e0c4467a4::t_12b7645decd215 229-233,236-247,249,252,256,259-263,268-271
+  s_566b8e0c4467a4::t_827939aa78984c 192-214
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Auth.swift
+  s_566b8e0c4467a4::t_a73d7c82ce851e 223,226,299-308
+  s_566b8e0c4467a4::t_b39edfa9833ee8 93-94,137,188-189,219,224-225,227,229-232,241-251,256,258,270-271,290,309-312,314-315,337-338
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/PasskeyStepTests.swift
+  s_566b8e0c4467a4::t_a7073cae284792 1-466,537-542,546-548,553-897
+  s_566b8e0c4467a4::t_f9f0c631cbfe5d 898-911
+  s_566b8e0c4467a4::t_119689959a1408 467-491,543-545,549-552
+  s_566b8e0c4467a4::t_aed036c1d3846a 495-539
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_f8ac560ca40ce3 323,349,354,359-367,369-375,377-383,1195-1200
+  s_566b8e0c4467a4::t_f989158964da7a 368
+  s_566b8e0c4467a4::t_ceb28e6eb12298 376
+apps/ios/App/AccountView.swift
+  s_566b8e0c4467a4::t_46391a3d991e4a 732-733,738-739,1031-1032,1041,1182-1183,1188
+apps/ios/App/AppModel.swift
+  s_566b8e0c4467a4::t_d94a8040d70059 211-216,221
+apps/ios/App/Info.plist
+  s_566b8e0c4467a4::t_c08a365020ef47 41-42
+apps/ios/App/TwoStep.swift
+  s_566b8e0c4467a4::t_804e4b1f9c7258 6-12,23,32,41,46-63,89-91,134-139,141-142,147-150,155,158,178,181-191,202,214-219,224,229,236-244,247,255,258-265,267,269-272,275,284,286,301-307,311-312,315,317,319-321,340-350,352-360,379-389,409-416,423-445,447-454,456-464,468-498,500,502,539-555,559,602-656,735-736,739-742,758,761-762,772,815-816,818,820,829,832-834,841-853,859-860,865-866,887-889,899-900,935-942,951-968,972,978,988,997-999,1004-1008,1010-1012,1024-1234,1267,1277-1278,1283-1284
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Account.swift
+  s_566b8e0c4467a4::t_10469670a276e3 241,246-257
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Recovery.swift
+  s_566b8e0c4467a4::t_cf05bc541fcae0 477,480
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/TwoStep.swift
+  s_566b8e0c4467a4::t_14114b5c7360d4 19-20,22,28,125,191-201,246-247,254,264-266,292-361,391-393,410-412,415-515,588-607,611,616-635,642-643,647-648,655-658,662-688,757,768-772,796-802,805,826-838,959-1044,1070-1071,1084-1087,1096-1102,1104-1105,1110-1114,1117-1118,1121,1124,1127-1130,1150-1155
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/TwoStepTests.swift
+  s_566b8e0c4467a4::t_e923347c47111d 16,191,223,766-770,773,775-780,791,793-794,809-810
+apps/ios/project.yml
+  s_566b8e0c4467a4::t_132955451ad3e3 72-74
+apps/web/src/lib/api/two-step-android-origin.db.test.ts
+  s_566b8e0c4467a4::t_0944a3c9661a65 1-77
+.github/workflows/ci.yml
+  s_566b8e0c4467a4::t_bf52e71c56df66 431-433,435
+apps/web/nitro.config.ts
+  s_566b8e0c4467a4::t_e266157513b4a6 7-16
+apps/web/scripts/check-server-deps.ts
+  s_566b8e0c4467a4::t_44a9950f32ab11 1-16,22-41,51-63,72-89
+  s_566b8e0c4467a4::t_8922088dd14495 17-21,42-50,64-71
+apps/web/vite.config.ts
+  s_566b8e0c4467a4::t_b8a8a4621c60a4 171-173
+apps/web/src/content/blog/two-step-sign-in.mdx
+  s_566b8e0c4467a4::t_6a2dfcc6832445 12-13,87
+apps/web/src/content/roadmap.ts
+  s_566b8e0c4467a4::t_42428f6eec638d 53,67,263-264
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2e004040324a59cb8db8d03d8d3cedda1cbc03bf",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_e98362b3bd71d1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-ab85a3fcf233f1113",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
