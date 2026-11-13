@@ -6,7 +6,7 @@
     "type": "module",
     "scripts": {
         "dev": "bun --bun vite --strictPort",
-        "build": "bun --bun vite build && bun scripts/check-dev-only.ts",
+        "build": "bun --bun vite build && bun scripts/check-dev-only.ts && bun scripts/check-server-deps.ts",
         "start": "NODE_ENV=production PORT=${PORT:-5173} bun .output/server/index.mjs",
         "typecheck": "tsc --noEmit",
         "test": "vitest run",
@@ -41,6 +41,7 @@
         "@shikijs/langs": "4.6.0",
         "@shikijs/themes": "4.6.0",
         "@simplewebauthn/browser": "14.0.0",
+        "@simplewebauthn/server": "14.0.3",
         "@tanstack/react-form": "1.33.5",
         "@tanstack/react-hotkeys": "0.22.0",
         "@tanstack/react-query": "5.107.1",

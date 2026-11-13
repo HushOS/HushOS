@@ -21,8 +21,23 @@ test.beforeEach(({ browserName }) => {
     test.skip(browserName !== 'chromium', 'The virtual authenticator needs Chromium.');
 });
 
-/* The WebAuthn library, as the dev server names the module it serves it from. */
-const LIBRARY = /simplewebauthn/i;
+/*
+ * The WebAuthn library, told by what it carries and not by its file's name: a production build
+ * names the chunk by a hash, the dev server by the package. These are its own words, in either.
+ */
+const LIBRARY = 'WebAuthn is not supported in this browser';
+/* Every script the page fetches from here on; the answer is whether any of them is the library. */
+function scriptsFetched(page: Page) {
+    const bodies: Promise<string>[] = [];
+    page.on('response', (response) => {
+        const type = response.headers()['content-type'] ?? '';
+        if (/javascript/.test(type)) bodies.push(response.text().catch(() => ''));
+    });
+    return {
+        count: () => bodies.length,
+        library: async () => (await Promise.all(bodies)).some((body) => body.includes(LIBRARY)),
+    };
+}
 const dialog = (p: Page) => p.locator('[data-slot=dialog-content]');
 const section = (p: Page) => p.getByRole('region', { name: 'Two-step sign-in' });
 const stepHeading = (p: Page) => p.getByRole('heading', { name: 'One more step' });
@@ -115,10 +130,9 @@ test('a security key turns the step on, signs in on a press, and is the step for
     test.setTimeout(420_000);
     const { page, email } = await account(browser);
     const key = await plugIn(page);
-    // What the last test looks for on the sign-in page, seen here where it is used: the name
-    // it goes by in this build, so that test cannot pass by looking for the wrong thing.
-    const requested: string[] = [];
-    page.on('request', (request) => requested.push(request.url()));
+    // What the last test looks for on the sign-in page, seen here where it is used, so that
+    // test cannot pass by looking for the wrong thing.
+    const fetched = scriptsFetched(page);
 
     // Adding: the password, then the key, asked only on the press of Add.
     await section(page).getByRole('button', { name: 'Add passkey or security key' }).click();
@@ -138,7 +152,7 @@ test('a security key turns the step on, signs in on a press, and is the step for
     const codes = await saveCodes(page);
     expect(codes).toHaveLength(10);
     expect(await key.credentials()).toHaveLength(1);
-    expect(requested.some((url) => LIBRARY.test(url))).toBe(true);
+    expect(await fetched.library()).toBe(true);
 
     // The list: the key by its name, not synced, and the step on by it alone.
     await expect(section(page).locator('[data-two-step=on]')).toBeVisible();
@@ -324,11 +338,10 @@ test('the step opens on the default, the rest wait behind Use another way, and M
 test('the WebAuthn library is not part of the sign-in page’s first load', async ({ browser }) => {
     test.setTimeout(180_000);
     const page = await newPage(browser);
-    const requested: string[] = [];
-    page.on('request', (request) => requested.push(request.url()));
+    const fetched = scriptsFetched(page);
     await page.goto('/login', { waitUntil: 'networkidle' });
     await expect(page.getByRole('heading', { name: 'Welcome back' })).toBeVisible();
-    expect(requested.length).toBeGreaterThan(5);
-    expect(requested.filter((url) => LIBRARY.test(url))).toEqual([]);
+    expect(fetched.count()).toBeGreaterThan(3);
+    expect(await fetched.library()).toBe(false);
     await page.context().close();
 });

@@ -168,6 +168,9 @@ export default defineConfig({
         allowedHosts: ['.ts.net'],
     },
     resolve: { tsconfigPaths: true },
+    // Loaded by the runtime from the output's node_modules, never bundled: its dependencies
+    // need their own load order (nitro.config.ts, `traceDeps`).
+    ssr: { external: ['@simplewebauthn/server'] },
     optimizeDeps: {
         // Pre-bundle what the viewer loads lazily (highlighter, grammars, PDF,
         // video demuxing), so a cold dev server does not discover them on the
