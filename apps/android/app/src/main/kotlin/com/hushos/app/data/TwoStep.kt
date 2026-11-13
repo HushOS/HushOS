@@ -229,7 +229,10 @@ data class TwoStepFlow(
                 is LostReply -> copy(pending = false, error = failure.message, reread = reread + 1)
                 // The setup ran out (ten minutes): back to the start, with why.
                 is SetupTimedOut -> copy(pending = false, enrolment = null, error = Problems.say(failure, Problems.SERVER))
-                else -> copy(pending = false, error = Problems.say(failure, Problems.SERVER))
+                // The server's own refusal (a wrong code) changed nothing.
+                is StepRefused -> copy(pending = false, error = Problems.say(failure, Problems.SERVER))
+                // A dropped connection or a gateway's 502 may hide a confirmation that went through: read again too.
+                else -> copy(pending = false, error = Problems.say(failure, Problems.SERVER), reread = reread + 1)
             }
         },
     )
@@ -240,8 +243,12 @@ data class TwoStepFlow(
     /* A method removed (`on`: whether the step is still on). */
     fun removed(on: Boolean) = copy(pending = false, finished = if (on) "Authenticator app removed." else "Two-step sign-in is off.")
 
-    /* A change that failed (`said`: the form's words, null when the step's own fields say it). After a lost reply nothing says whether it was made, so the settings are read again. */
-    fun failed(failure: Throwable, said: String?) = copy(pending = false, error = said, reread = if (failure is LostReply) reread + 1 else reread)
+    /*
+     * A change that failed (`said`: the form's words, null when the step's own fields say it). The step's own refusal
+     * changed nothing; any other failure may hide a change that went through (a lost reply, a dropped connection, a
+     * gateway's 502), so the settings are read again.
+     */
+    fun failed(failure: Throwable, said: String?) = copy(pending = false, error = said, reread = if (failure is StepRefused) reread else reread + 1)
 
     companion object {
         /*

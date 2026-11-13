@@ -639,6 +639,9 @@ class TwoStepTest {
         // Turning off or making codes with the reply lost: nothing says what the account now is, so it is read again.
         assertEquals(1, out.failed(LostReply(StepWords.LOST_TURNED_OFF), StepWords.LOST_TURNED_OFF).reread)
         assertEquals(1, out.failed(LostReply(StepWords.LOST_NEW_CODES), StepWords.LOST_NEW_CODES).reread)
+        // So is a dropped connection or a gateway's 502: the change may have gone through all the same.
+        assertEquals(1, out.failed(java.io.IOException("connection reset"), "Couldn't reach the server.").reread)
+        assertEquals(1, out.confirmed(Result.failure(java.io.IOException("connection reset")), replacing = false).reread)
         // A refusal changed nothing: nothing is read again, and the step's own fields say why (no words for the form).
         assertEquals(TwoStepFlow(), out.failed(StepRefused(StepRefusal.WRONG, "That code didn’t work."), null))
         assertEquals("Two-step sign-in is off.", out.removed(on = false).finished)

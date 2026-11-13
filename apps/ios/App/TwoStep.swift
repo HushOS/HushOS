@@ -743,6 +743,8 @@ struct AuthenticatorSheet: View {
                 done("")
             } catch {
                 if let words = ErrorWords.say(error) { self.error = words }
+                // Any failure may hide a change that went through (a dropped connection, a gateway's 502): read them again too.
+                done("")
             }
             pending = false
         }
@@ -800,8 +802,9 @@ struct TurnOffSheet: View {
                 done(on ? "Authenticator app removed." : "Two-step sign-in is off.")
                 dismiss()
             } catch {
-                // Nothing says whether it was turned off: the settings behind are read again, so they never keep saying On on a guess.
-                if case StepError.lost = error { done("") }
+                // Any failure may hide a removal that went through (a lost reply, a dropped connection, a gateway's 502): the
+                // settings behind are read again, so they never keep saying On on a guess.
+                done("")
                 if let words = await step.failed(error) { self.error = words }
             }
             pending = false
@@ -862,6 +865,8 @@ struct NewCodesSheet: View {
                 password = ""
                 done("")
             } catch {
+                // New codes may have been made whatever the failure: how many are left is read again.
+                done("")
                 if let words = await step.failed(error) { self.error = words }
             }
             pending = false

@@ -607,9 +607,10 @@ function AppDialog({
                 setCode('');
                 setTried(false);
             }
-            // A reply that was not the server's own says nothing: the section behind this
-            // dialog is read again, and shows whether the step is on.
-            if (cause instanceof LostReply) onDone('');
+            // Any failure may hide a change that went through (a reply that was not the
+            // server's own, a dropped connection, a gateway's 502): the section behind this
+            // dialog is read again, and shows whether the step is on. Reading it costs nothing.
+            onDone('');
             setError(authError(cause));
         } finally {
             setPending(false);
@@ -813,9 +814,9 @@ function TurnOffDialog({
             onClose();
         } catch (cause) {
             cue('error');
-            // A reply that was not the server's own says nothing: the removal may have gone
-            // through, so the section behind this dialog is read again and shows whether it did.
-            if (cause instanceof LostReply) onDone('');
+            // Any failure may hide a removal that went through (a lost reply, a dropped
+            // connection, a gateway's 502): the section behind this dialog is read again.
+            onDone('');
             if (!(await step.failed(cause))) setError(authError(cause));
         } finally {
             setPending(false);
@@ -891,8 +892,8 @@ function NewCodesDialog({
             onDone('');
         } catch (cause) {
             cue('error');
-            // As above: new codes may have been made, so how many are left is read again.
-            if (cause instanceof LostReply) onDone('');
+            // As above, for any failure: new codes may have been made, so how many are left is read again.
+            onDone('');
             if (!(await step.failed(cause))) setError(authError(cause));
         } finally {
             setPending(false);

@@ -209,43 +209,53 @@ describe('replacing the authenticator app', () => {
  * on for an account that no longer has one.
  */
 describe('turning two-step sign-in off', () => {
-    test('a lost answer reads the settings again, so the page never keeps claiming the step is on', async () => {
-        const { LostReply } = await import('@hushos/auth/client');
-        api.twoStep.mockResolvedValue({
-            on: true,
-            methods: [
-                {
-                    id: 'app-0',
-                    kind: 'totp',
-                    name: null,
-                    createdAt: '2026-11-01T10:00:00.000Z',
-                    lastUsedAt: null,
-                    synced: false,
-                },
-            ],
-            backupCodesLeft: 10,
-            totpFrozen: false,
-        } as never);
-        api.removeTwoStepMethod.mockRejectedValue(
-            new LostReply(
-                'The server’s answer didn’t arrive, so HushOS can’t tell whether two-step sign-in was turned off. Check before you try again.',
-            ),
-        );
-        const person = userEvent.setup();
-        render(
-            <QueryClientProvider
-                client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
-            >
-                <AccountTwoStep user={user as never} />
-            </QueryClientProvider>,
-        );
-        await person.click(await screen.findByRole('button', { name: 'Turn off' }));
-        const reads = api.twoStep.mock.calls.length;
-        await person.type(screen.getByLabelText('Password'), password);
-        await person.click(
-            within(screen.getByRole('dialog')).getByRole('button', { name: 'Turn off' }),
-        );
-        await screen.findByText(/can’t tell whether two-step sign-in was turned off/);
-        await waitFor(() => expect(api.twoStep.mock.calls.length).toBeGreaterThan(reads));
-    });
+    test.each([
+        ['an answer that was not the server’s', 'lost'],
+        ['a gateway’s 502', 'gateway'],
+        ['a dropped connection', 'network'],
+    ])(
+        '%s reads the settings again, so the page never keeps claiming the step is on',
+        async (_name, kind) => {
+            const { LostReply } = await import('@hushos/auth/client');
+            api.twoStep.mockResolvedValue({
+                on: true,
+                methods: [
+                    {
+                        id: 'app-0',
+                        kind: 'totp',
+                        name: null,
+                        createdAt: '2026-11-01T10:00:00.000Z',
+                        lastUsedAt: null,
+                        synced: false,
+                    },
+                ],
+                backupCodesLeft: 10,
+                totpFrozen: false,
+            } as never);
+            api.removeTwoStepMethod.mockRejectedValue(
+                kind === 'lost'
+                    ? new LostReply(
+                          'The server’s answer didn’t arrive, so HushOS can’t tell whether two-step sign-in was turned off. Check before you try again.',
+                      )
+                    : kind === 'gateway'
+                      ? Object.assign(new Error('Bad gateway'), { status: 502 })
+                      : new TypeError('Failed to fetch'),
+            );
+            const person = userEvent.setup();
+            render(
+                <QueryClientProvider
+                    client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+                >
+                    <AccountTwoStep user={user as never} />
+                </QueryClientProvider>,
+            );
+            await person.click(await screen.findByRole('button', { name: 'Turn off' }));
+            const reads = api.twoStep.mock.calls.length;
+            await person.type(screen.getByLabelText('Password'), password);
+            await person.click(
+                within(screen.getByRole('dialog')).getByRole('button', { name: 'Turn off' }),
+            );
+            await waitFor(() => expect(api.twoStep.mock.calls.length).toBeGreaterThan(reads));
+        },
+    );
 });
