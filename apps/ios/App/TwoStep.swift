@@ -46,6 +46,9 @@ struct StepField: View {
     var submit: (() -> Void)?
     @FocusState private var focused: Bool
     var focus = false
+    // While the screen is recorded, mirrored or AirPlayed, what is typed is blurred: a code or a phrase in a
+    // recording outlives the moment, and a mirrored screen is someone else's (ScreenCapture). The field still works.
+    @State private var capture = ScreenCapture.shared
 
     var body: some View {
         Group {
@@ -65,6 +68,7 @@ struct StepField: View {
             }
         }
         .font(.body.monospaced()).foregroundStyle(Alpine.ink)
+        .blur(radius: capture.active ? 10 : 0)
         .autocorrectionDisabled()
         .focused($focused)
         .submitLabel(.go)

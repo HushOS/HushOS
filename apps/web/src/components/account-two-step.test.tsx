@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -12,6 +12,23 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
  */
 
 const password = 'correct horse battery staple';
+/* The auth client's store, as far as a lock shows in it: a lock or a sign-out, here or in another tab. */
+const locks = (() => {
+    let state = { lockRevision: 1, locks: 0 };
+    const listeners = new Set<(next: typeof state, previous: typeof state) => void>();
+    return {
+        subscribe(listener: (next: typeof state, previous: typeof state) => void) {
+            listeners.add(listener);
+            return () => listeners.delete(listener);
+        },
+        getState: () => state,
+        lock() {
+            const previous = state;
+            state = { ...state, locks: state.locks + 1 };
+            for (const listener of listeners) listener(state, previous);
+        },
+    };
+})();
 const codes = Array.from({ length: 10 }, (_, index) => `CODE${index}-AAAAA`);
 const api = {
     twoStep: vi.fn(async () => ({ on: false, methods: [], backupCodesLeft: 0, totpFrozen: false })),
@@ -26,6 +43,7 @@ const api = {
     removeOtherDevices: vi.fn<(password: string) => Promise<{ removed: number }>>(),
     removeTwoStepMethod: vi.fn<() => Promise<void>>(),
     stepChallenge: vi.fn(async () => null),
+    store: locks,
 };
 vi.mock('@/lib/auth-client', () => ({ authClient: api }));
 vi.mock('@/lib/sounds', () => ({ cue: vi.fn() }));
@@ -60,7 +78,7 @@ async function toTheOffer() {
 }
 
 beforeEach(() => {
-    for (const mock of Object.values(api)) mock.mockClear();
+    for (const mock of Object.values(api)) if ('mockClear' in mock) mock.mockClear();
     toasts.mockClear();
     api.devices.mockRejectedValue(new Error('offline'));
     api.confirmAuthenticator.mockResolvedValue({ backupCodes: codes });
@@ -258,4 +276,65 @@ describe('turning two-step sign-in off', () => {
             await waitFor(() => expect(api.twoStep.mock.calls.length).toBeGreaterThan(reads));
         },
     );
+});
+
+/*
+ * The setup key and the backup codes are secrets: a lock or a sign-out in another tab, while
+ * they are on screen, must take them off it, and an answer that arrives after must not put
+ * them back. Account stays mounted when the browser locks, so the dialog has to do it.
+ */
+describe('a lock while two-step secrets are on screen', () => {
+    test('closes the codes the moment the browser locks, and a late answer does not bring them back', async () => {
+        api.twoStep.mockResolvedValue({
+            on: false,
+            methods: [],
+            backupCodesLeft: 0,
+            totpFrozen: false,
+        });
+        const { person, code } = await toTheOffer();
+        await person.type(code, '123456');
+        await person.click(screen.getByRole('button', { name: 'Turn on' }));
+        await screen.findByRole('list', { name: 'Backup codes' });
+        act(() => locks.lock());
+        await waitFor(() =>
+            expect(screen.queryByRole('list', { name: 'Backup codes' })).toBeNull(),
+        );
+        expect(screen.queryByText(codes[0]!)).toBeNull();
+    });
+
+    test('an authenticator key that arrives after a lock is never shown', async () => {
+        api.twoStep.mockResolvedValue({
+            on: false,
+            methods: [],
+            backupCodesLeft: 0,
+            totpFrozen: false,
+        });
+        let answer!: (value: { id: string; secret: string; uri: string }) => void;
+        api.startAuthenticator.mockReturnValueOnce(
+            new Promise((resolve) => {
+                answer = resolve;
+            }),
+        );
+        const person = userEvent.setup();
+        render(
+            <QueryClientProvider
+                client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+            >
+                <AccountTwoStep user={user as never} />
+            </QueryClientProvider>,
+        );
+        await person.click(await screen.findByRole('button', { name: 'Turn on' }));
+        await person.type(screen.getByLabelText('Password'), password);
+        await person.click(screen.getByRole('button', { name: 'Continue' }));
+        await waitFor(() => expect(api.startAuthenticator).toHaveBeenCalled());
+        act(() => locks.lock());
+        answer({
+            id: 'app-1',
+            secret: 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP',
+            uri: 'otpauth://totp/HushOS:x?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP',
+        });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(screen.queryByText(/JBSW/)).toBeNull();
+        expect(screen.queryByLabelText('Code from your authenticator app')).toBeNull();
+    });
 });

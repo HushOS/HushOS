@@ -3,7 +3,7 @@ import { LostReply } from '@hushos/auth/client';
 import type { SessionUser } from '@hushos/auth/protocol';
 import { PASSWORD_MAX_LENGTH } from '@hushos/auth/protocol';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useId, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { devicesQueryOptions } from '@/components/account-devices';
 import { CopyCheckIcon } from '@/components/copy-button';
 import { SECRET_FIELD } from '@/components/password-input';
@@ -27,6 +27,8 @@ import { toast } from '@/components/ui/toast';
 import { authClient } from '@/lib/auth-client';
 import { copySecret } from '@/lib/clipboard';
 import { formatDay, formatTime } from '@/lib/drive';
+import { whenPageLeaves } from '@/lib/new-phrase';
+import { whenBrowserLocks } from '@/lib/show-new-phrase';
 import { authError } from '@/lib/form';
 import { saveBlob } from '@/lib/save-file';
 import { cue } from '@/lib/sounds';
@@ -488,6 +490,35 @@ const grouped = (secret: string) => secret.match(/.{1,4}/g)?.join(' ') ?? secret
  * QR code with the key to type beneath it, a code from the app to confirm, and, the first
  * time, the backup codes.
  */
+/*
+ * While a dialog is open with a secret on it (an authenticator key, backup codes): a lock or a
+ * sign-out anywhere, here or in another tab, or the page being left, closes it and forgets
+ * them. Account stays mounted when the browser locks, so nothing else would. The returned
+ * count moves each time: an answer that comes back after it moved is dropped, so a late
+ * reply cannot put the secret back on screen.
+ */
+function useForgottenOnLock(open: boolean, forget: () => void) {
+    const era = useRef(0);
+    const latest = useRef(forget);
+    useEffect(() => {
+        latest.current = forget;
+    });
+    useEffect(() => {
+        if (!open) return undefined;
+        const gone = () => {
+            era.current += 1;
+            latest.current();
+        };
+        const locked = whenBrowserLocks(gone);
+        const leaving = whenPageLeaves(gone);
+        return () => {
+            locked();
+            leaving();
+        };
+    }, [open]);
+    return era;
+}
+
 function AppDialog({
     user,
     mode,
@@ -523,6 +554,13 @@ function AppDialog({
     const [removing, setRemoving] = useState<'no' | 'running' | 'failed'>('no');
     const codeNote = useId();
     const replacing = mode === 'replace';
+    const era = useForgottenOnLock(open, () => {
+        setApp(null);
+        setCodes(null);
+        setCode('');
+        setPassword('');
+        onClose();
+    });
     // Replacing needs the step from the start: its fields are there when the dialog opens.
     const { ask } = step;
     useEffect(() => {
@@ -540,7 +578,10 @@ function AppDialog({
             if (await step.ask()) return;
             const twoStep = await step.prove();
             if (twoStep === null) return;
-            setApp(await authClient.startAuthenticator(password, twoStep));
+            const at = era.current;
+            const started = await authClient.startAuthenticator(password, twoStep);
+            if (at !== era.current) return;
+            setApp(started);
             setTried(false);
         } catch (cause) {
             cue('error');
@@ -557,7 +598,9 @@ function AppDialog({
         setPending(true);
         setError('');
         try {
+            const at = era.current;
             const confirmed = await authClient.confirmAuthenticator(app.id, typed);
+            if (at !== era.current) return;
             const backupCodes = 'backupCodes' in confirmed ? confirmed.backupCodes : null;
             cue('success');
             if (!backupCodes) {
@@ -871,6 +914,11 @@ function NewCodesDialog({
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
     const [codes, setCodes] = useState<string[] | null>(null);
+    const era = useForgottenOnLock(open, () => {
+        setCodes(null);
+        setPassword('');
+        onClose();
+    });
     const { ask } = step;
     useEffect(() => {
         if (open) void ask().catch(() => {});
@@ -887,7 +935,10 @@ function NewCodesDialog({
             const twoStep = await step.prove();
             if (twoStep === null) return;
             if (!twoStep) throw new Error('Turn on two-step sign-in first.');
-            setCodes((await authClient.newBackupCodes(password, twoStep)).codes);
+            const at = era.current;
+            const made = await authClient.newBackupCodes(password, twoStep);
+            if (at !== era.current) return;
+            setCodes(made.codes);
             cue('success');
             onDone('');
         } catch (cause) {
