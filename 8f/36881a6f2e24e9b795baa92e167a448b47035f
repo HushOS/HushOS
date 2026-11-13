@@ -1,0 +1,49 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/Passkeys.kt
+  s_566b8e0c4467a4::t_69e3dc749011a1 1-248
+apps/android/app/src/main/kotlin/com/hushos/app/ui/PasskeySheet.kt
+  s_566b8e0c4467a4::t_ade1e043134c62 1-89
+apps/android/app/src/test/kotlin/com/hushos/app/data/PasskeysTest.kt
+  s_566b8e0c4467a4::t_b7932801247034 1-718
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_e3a159f85e7f25 198,224,227,231,239-258
+apps/android/app/build.gradle.kts
+  s_566b8e0c4467a4::t_c3c5f8ab705dfd 19-20,196-198
+apps/android/app/proguard-rules.pro
+  s_566b8e0c4467a4::t_2029b1dd71aca3 14-18
+apps/android/app/src/main/kotlin/com/hushos/app/data/Auth.kt
+  s_566b8e0c4467a4::t_479e297328f6cd 283,323,591-592,597-601,604,608-621,642-646,911,916-925
+apps/android/app/src/main/kotlin/com/hushos/app/data/Shared.kt
+  s_566b8e0c4467a4::t_24a2955e2f5dc6 30,142-153
+apps/android/app/src/main/kotlin/com/hushos/app/data/TwoStep.kt
+  s_566b8e0c4467a4::t_e261c477823e94 4-8,15-17,23,193-194,225-226,228,232-236,257-290,301-304,306,310-315,323,343-349,417-418,424,447-448,455-458,470-481,486-487,546-551,557,592-608,611-640,650-664,669-670,701,712-714,716-718,743-747,749,768-776,780,786-789,866-911
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AccountScreen.kt
+  s_566b8e0c4467a4::t_91a93a25f3eb62 241,244-245,485,496,498-504,735,756-761,784,800-812
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_0ec29333a2749e 702-761,768,776,778
+apps/android/app/src/main/kotlin/com/hushos/app/ui/TwoStepScreen.kt
+  s_566b8e0c4467a4::t_270adc29c16f15 28,30,33,37-38,60,63,72-75,78,81,90,98-103,108,115,122,131-135,138-141,149,151,159,163-171,174,181,188,194-201,213-219,225,228-244,254,268-279,285-287,289-290,295-297,300-305,308-310,312-320,333-334,337-342,350,368-400,412-422,424-425,439-440,442,444-454,469-473,489-521,523-524,527-539,557-591,645-656,658-663,666,670-673,675,688-689,733-734,742-745,750-751,754-758,767-773,780-870,872,875-876,878,884-885,887-894,902-904,906,916-917,919,934-935
+apps/android/app/src/test/kotlin/com/hushos/app/data/JsonSame.kt
+  s_566b8e0c4467a4::t_1192b470c78716 1-18
+apps/android/app/src/test/kotlin/com/hushos/app/data/TwoStepTest.kt
+  s_566b8e0c4467a4::t_32b6c6b4a1cca9 35-43,573,616,618,626-630,635-636,638,641,645,648,655,660-664,672-673,753,756,758,780,823-825,828-836,980,990,994
+apps/android/app/src/test/kotlin/com/hushos/app/ui/PasskeySheetTest.kt
+  s_566b8e0c4467a4::t_916dcdc5247492 1-108
+apps/android/gradle/libs.versions.toml
+  s_566b8e0c4467a4::t_16eaa66e7c2184 29-30,67-68
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8f36881a6f2e24e9b795baa92e167a448b47035f",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
