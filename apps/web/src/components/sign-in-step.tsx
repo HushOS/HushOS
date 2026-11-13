@@ -6,6 +6,7 @@ import { StepFields } from '@/components/two-step-answer';
 import { Button } from '@/components/ui/button';
 import { authClient } from '@/lib/auth-client';
 import { authError } from '@/lib/form';
+import { whenPageLeaves } from '@/lib/new-phrase';
 import { whenBrowserLocks } from '@/lib/show-new-phrase';
 import { cue } from '@/lib/sounds';
 import { draftAnswer, draftError, draftFor, emptyDraft, methodsAfter } from '@/lib/two-step';
@@ -42,11 +43,19 @@ export function SignInStep({
     // A lock or a sign-out, here or in another tab, ends the step (the worker has let go of it)
     // and takes what was typed off the screen: a recovery phrase never stays on a locked page.
     useEffect(
-        () =>
-            whenBrowserLocks(() => {
+        () => {
+            const locked = whenBrowserLocks(() => {
                 setDraft(emptyDraft(challenge.methods));
                 onOver('This browser was locked. Sign in again.');
-            }),
+            });
+            // Leaving the page takes what was typed with it: one brought back by the Back button
+            // would show it again. The step itself is let go by the auth client on the same event.
+            const leaving = whenPageLeaves(() => setDraft(emptyDraft(challenge.methods)));
+            return () => {
+                locked();
+                leaving();
+            };
+        },
         // Only while this step is on screen.
         // eslint-disable-next-line react-hooks/exhaustive-deps
         [],

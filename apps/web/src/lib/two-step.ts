@@ -6,6 +6,7 @@ import { createServerFn } from '@tanstack/react-start';
 import { useCallback, useEffect, useState } from 'react';
 import { authClient } from '@/lib/auth-client';
 import { authError } from '@/lib/form';
+import { whenPageLeaves } from '@/lib/new-phrase';
 import { whenBrowserLocks } from '@/lib/show-new-phrase';
 
 /*
@@ -118,16 +119,21 @@ export function useStepUp(purpose: StepPurpose) {
     const [refocus, setRefocus] = useState(0);
     // A lock or a sign-out, here or in another tab, takes what was typed (a recovery phrase,
     // perhaps) off the screen with the step itself: the page stays mounted when it locks.
-    useEffect(
-        () =>
-            whenBrowserLocks(() => {
-                setChallenge(null);
-                setMethods([]);
-                setDraft(emptyDraft([]));
-                setTried(false);
-            }),
-        [],
-    );
+    // So does leaving the page: one brought back by the Back button would show it again.
+    useEffect(() => {
+        const forget = () => {
+            setChallenge(null);
+            setMethods([]);
+            setDraft(emptyDraft([]));
+            setTried(false);
+        };
+        const locked = whenBrowserLocks(forget);
+        const leaving = whenPageLeaves(forget);
+        return () => {
+            locked();
+            leaving();
+        };
+    }, []);
     const start = useCallback(
         async (keep = false) => {
             const next = await authClient.stepChallenge(purpose);

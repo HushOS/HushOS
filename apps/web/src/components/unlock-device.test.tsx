@@ -233,6 +233,19 @@ describe('unlocking an account that asks for a second step', () => {
         expect(screen.getByLabelText('Password')).toHaveValue('');
     });
 
+    test('leaving the page takes a typed recovery phrase with it, so the Back button cannot bring it back', async () => {
+        const { user } = await toStep();
+        await user.click(screen.getByRole('button', { name: 'Use your recovery phrase' }));
+        await user.type(
+            await screen.findByLabelText('Recovery phrase'),
+            'abandon ability able about above',
+        );
+        act(() => {
+            window.dispatchEvent(new Event('pagehide'));
+        });
+        expect(screen.queryByDisplayValue(/abandon ability/)).toBeNull();
+    });
+
     test('a paused app stops being offered, and a step that is over goes back to the password with the reason', async () => {
         const { user, code } = await toStep();
         answerStep.mockRejectedValueOnce(
