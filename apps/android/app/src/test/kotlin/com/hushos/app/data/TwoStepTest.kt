@@ -337,6 +337,9 @@ class TwoStepTest {
         assertEquals(Reset.Sent.Unknown, Auth.finishSent(reply(502, "<html>Bad gateway</html>")))
         assertEquals(Reset.Sent.Unknown, Auth.finishSent(reply(200, "{}")))
         assertEquals(Reset.Sent.Unknown, Auth.finishSent(reply(429, "")))
+        // A 401 that is not the server's own (a page, an empty body) says nothing about the session: the words stay.
+        assertEquals(Reset.Sent.Unknown, Auth.finishSent(reply(401, "<html>Unauthorized</html>")))
+        assertEquals(Reset.Sent.Unknown, Auth.finishSent(reply(401, "")))
         // The server answered, and refused: the step's own refusals go to the form's step fields with their code,
         // an ended session to sign-in, and anything else is a refusal in the server's words.
         assertEquals(StepRefusal.WRONG, assertThrows(StepRefused::class.java) { Auth.finishSent(reply(401, refusal("That code didn’t work.", "step-wrong"))) }.refusal)

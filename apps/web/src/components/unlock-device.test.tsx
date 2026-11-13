@@ -1,5 +1,5 @@
 import { DeviceStorageUnreadable, StepFailure, TwoStepRequired } from '@hushos/auth/client';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -18,8 +18,26 @@ const login =
     >();
 const answerStep = vi.fn<(answer: unknown) => Promise<void>>();
 const cancelStep = vi.fn<(owner?: object) => void>();
+/* The auth client's store, as far as a lock shows in it: a lock or a sign-out, here or in another tab. */
+const locks = (() => {
+    let state = { lockRevision: 1, locks: 0 };
+    const listeners = new Set<(next: typeof state, previous: typeof state) => void>();
+    return {
+        subscribe(listener: (next: typeof state, previous: typeof state) => void) {
+            listeners.add(listener);
+            return () => listeners.delete(listener);
+        },
+        getState: () => state,
+        lock() {
+            const previous = state;
+            state = { ...state, locks: state.locks + 1 };
+            for (const listener of listeners) listener(state, previous);
+        },
+    };
+})();
 vi.mock('@/lib/auth-client', () => ({
     authClient: {
+        store: locks,
         login: (...args: Parameters<typeof login>) => login(...args),
         answerStep: (answer: unknown) => answerStep(answer),
         // Leaving the form lets go of a sign-in waiting at its second step.
@@ -201,6 +219,18 @@ describe('unlocking an account that asks for a second step', () => {
         expect(screen.queryByLabelText('Backup code')).toBeNull();
         expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull();
         expect(screen.getByRole('button', { name: 'Start again' })).toBeEnabled();
+    });
+
+    test('a lock in another tab takes a typed recovery phrase off the screen and goes back to the password', async () => {
+        const { user } = await toStep();
+        await user.click(screen.getByRole('button', { name: 'Use your recovery phrase' }));
+        const phrase = await screen.findByLabelText('Recovery phrase');
+        await user.type(phrase, 'abandon ability able about above');
+        act(() => locks.lock());
+        await screen.findByText('This browser was locked. Sign in again.');
+        expect(screen.queryByLabelText('Recovery phrase')).toBeNull();
+        expect(screen.queryByDisplayValue(/abandon ability/)).toBeNull();
+        expect(screen.getByLabelText('Password')).toHaveValue('');
     });
 
     test('a paused app stops being offered, and a step that is over goes back to the password with the reason', async () => {

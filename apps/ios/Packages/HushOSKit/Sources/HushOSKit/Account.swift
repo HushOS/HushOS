@@ -605,10 +605,15 @@ extension Auth {
     static func finishSent(_ reply: SessionReply?) throws -> Reset.Sent {
         guard let reply else { return .unknown }
         if !(200 ..< 300).contains(reply.status) {
-            if case .refused(let refusal, let message) = stepChangeReplyRead(status: UInt16(clamping: reply.status), body: reply.text), StepError.named(refusal) {
+            let read = stepChangeReplyRead(status: UInt16(clamping: reply.status), body: reply.text)
+            if case .refused(let refusal, let message) = read, StepError.named(refusal) {
                 throw StepError.refused(refusal, message)
             }
-            if reply.status == 401 { throw AuthError.sessionEnded(session: reply.session.tag) }
+            // An ended session only when it is the server's own 401: one from something in the way (a page, an empty
+            // body) says nothing, and the rotation may have been made, so its words are kept (unknown, below).
+            if reply.status == 401 {
+                if case .lost = read {} else { throw AuthError.sessionEnded(session: reply.session.tag) }
+            }
         }
         return Reset.sent(status: reply.status, body: reply.body) { ($0["success"] as AnyObject) === kCFBooleanTrue }
     }

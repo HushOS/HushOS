@@ -988,7 +988,8 @@ struct ResetKeysSheet: View {
             .scrollDismissesKeyboard(.interactively)
             .navigationTitle(phrase == nil ? "Rotate account key" : signInAfter ? StepWords.newPhraseTitle : "Your new recovery phrase")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { if phrase == nil { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } } }
+            // Not while the rotation is out: its new words come back to this sheet, and dismissed it would show them nowhere.
+            .toolbar { if phrase == nil { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(pending) } } }
             .interactiveDismissDisabled(phrase != nil || pending)
             .navigationDestination(isPresented: $checking) {
                 if let phrase {

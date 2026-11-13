@@ -301,6 +301,9 @@ private func challenge(_ methods: [StepMethod] = [.totp, .backup, .phrase], phra
         #expect(try Auth.finishSent(reply(200, [:])) == .unknown)
         #expect(try Auth.finishSent(reply(200, ["success": 1])) == .unknown)
         #expect(try Auth.finishSent(reply(429, [:], text: "")) == .unknown)
+        // A 401 that is not the server's own (a page, an empty body) says nothing about the session: the words stay.
+        #expect(try Auth.finishSent(reply(401, [:], text: "<html>Unauthorized</html>")) == .unknown)
+        #expect(try Auth.finishSent(reply(401, [:], text: "")) == .unknown)
         // The server answered, and refused: the step's own refusals go to the form's step fields with their code,
         // an ended session to sign-in, and anything else is a refusal in the server's words.
         #expect(throws: StepError.refused(.wrong, "That code didn’t work.")) { try Auth.finishSent(reply(401, ["message": "That code didn’t work.", "code": "step-wrong"])) }

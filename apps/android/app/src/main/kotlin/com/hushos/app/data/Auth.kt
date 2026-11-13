@@ -1158,7 +1158,9 @@ object Auth {
         if (reply.status !in 200..299) {
             val read = com.hushos.core.stepChangeReplyRead(reply.status.toUShort(), reply.text)
             if (read is com.hushos.core.StepReply.Refused && stepNamed(read.refusal)) throw StepRefused(read.refusal, read.message, reply.status)
-            if (reply.status == 401) throw NotAuthenticated()
+            // An ended session only when it is the server's own 401: one from something in the way (a page, an empty
+            // body) says nothing, and the rotation may have been made, so its words are kept (unknown, below).
+            if (reply.status == 401 && read !is com.hushos.core.StepReply.Lost) throw NotAuthenticated()
         }
         return Reset.sent(reply.status, reply.body) { it.opt("success") == true }
     }

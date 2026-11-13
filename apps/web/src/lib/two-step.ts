@@ -3,9 +3,10 @@ import { stepFailure, stepRefused, type StepAnswer } from '@hushos/auth/client';
 import { twoStepEnv } from '@hushos/env/two-step';
 import { queryOptions, useQuery } from '@tanstack/react-query';
 import { createServerFn } from '@tanstack/react-start';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { authClient } from '@/lib/auth-client';
 import { authError } from '@/lib/form';
+import { whenBrowserLocks } from '@/lib/show-new-phrase';
 
 /*
  * Two-step sign-in in the web app (docs/two-step-design.md): whether this server offers it,
@@ -115,6 +116,18 @@ export function useStepUp(purpose: StepPurpose) {
     const [tried, setTried] = useState(false);
     // Raised when an answer was refused, so the field takes the cursor back.
     const [refocus, setRefocus] = useState(0);
+    // A lock or a sign-out, here or in another tab, takes what was typed (a recovery phrase,
+    // perhaps) off the screen with the step itself: the page stays mounted when it locks.
+    useEffect(
+        () =>
+            whenBrowserLocks(() => {
+                setChallenge(null);
+                setMethods([]);
+                setDraft(emptyDraft([]));
+                setTried(false);
+            }),
+        [],
+    );
     const start = useCallback(
         async (keep = false) => {
             const next = await authClient.stepChallenge(purpose);

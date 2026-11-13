@@ -1,11 +1,12 @@
 import type { StepChallenge } from '@hushos/auth/api';
 import { StepFailure } from '@hushos/auth/client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AuthNote } from '@/components/auth-layout';
 import { StepFields } from '@/components/two-step-answer';
 import { Button } from '@/components/ui/button';
 import { authClient } from '@/lib/auth-client';
 import { authError } from '@/lib/form';
+import { whenBrowserLocks } from '@/lib/show-new-phrase';
 import { cue } from '@/lib/sounds';
 import { draftAnswer, draftError, draftFor, emptyDraft, methodsAfter } from '@/lib/two-step';
 
@@ -38,6 +39,18 @@ export function SignInStep({
     const [error, setError] = useState('');
     const [refused, setRefused] = useState('');
     const [refocus, setRefocus] = useState(0);
+    // A lock or a sign-out, here or in another tab, ends the step (the worker has let go of it)
+    // and takes what was typed off the screen: a recovery phrase never stays on a locked page.
+    useEffect(
+        () =>
+            whenBrowserLocks(() => {
+                setDraft(emptyDraft(challenge.methods));
+                onOver('This browser was locked. Sign in again.');
+            }),
+        // Only while this step is on screen.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [],
+    );
     async function submit() {
         const invalid = draftError(draft);
         setError(invalid);
