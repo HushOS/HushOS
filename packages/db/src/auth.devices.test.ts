@@ -4,6 +4,7 @@ import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import { closeDatabase, resetDatabase, signingKeyFromSeed } from '../test/helpers';
 import * as auth from './auth';
 import { db } from './client';
+import * as notifications from './notifications';
 import {
     accountDevices,
     accountEnrollments,
@@ -575,11 +576,31 @@ describe('last seen, and what one account sees', () => {
     });
 });
 
+/* Registers a device for pushes, as its app does once signed in. */
+async function pushesTo(userId: string, deviceId: string, letter: string) {
+    await notifications.putRegistration({
+        userId,
+        deviceId,
+        target: { handle: letter.repeat(43) },
+    });
+    return letter.repeat(43);
+}
+/* The handles a security notice to the account is pinged to now. */
+async function pinged(userId: string) {
+    const sent = await notifications.recordEvent({ userId, kind: 'phrase-replaced' });
+    return sent!.handles;
+}
+
 describe('what happens to devices around them', () => {
     test('a password change ends every session but keeps every device, and keys bring them back', async () => {
         const user = await account();
         const laptop = await keyedDevice(user.id, 'laptop');
         const phone = await keyedDevice(user.id, 'phone');
+        const tablet = await keyedDevice(user.id, 'tablet');
+        const toLaptop = await pushesTo(user.id, laptop.deviceId, 'L');
+        const toPhone = await pushesTo(user.id, phone.deviceId, 'P');
+        await pushesTo(user.id, tablet.deviceId, 'T');
+        expect((await pinged(user.id)).sort()).toEqual([toLaptop, toPhone, 'T'.repeat(43)].sort());
         expect(
             await auth.changeAccountSecurity({
                 userId: user.id,
@@ -600,17 +621,31 @@ describe('what happens to devices around them', () => {
         expect(await auth.wasRemoved(phone.token)).toBe(false);
         for (const device of [laptop, phone])
             expect((await deviceRow(device.deviceId))?.revokedAt).toBeNull();
+        // The devices it signed out are pushed to no more: a notice on the lock screen of a
+        // phone that no longer has the account's password is what signing it out ends. The
+        // laptop made the change with the password, and signs in again as the same device.
+        expect(await pinged(user.id)).toEqual([toLaptop]);
         const back = await signIn(user.id, {
             credentialVersion: 2,
             proof: { deviceId: phone.deviceId, signer: phone.signer },
         });
         expect(back.device).toMatchObject({ id: phone.deviceId, attached: true });
-        expect(await db.select().from(accountDevices)).toHaveLength(2);
+        // Signing in again does not bring the pushes back by itself: the phone asks again.
+        expect(await pinged(user.id)).toEqual([toLaptop]);
+        expect(await db.select().from(accountDevices)).toHaveLength(3);
     });
 
     test('a phrase reset ends every session but keeps every device', async () => {
         const user = await account();
         const laptop = await keyedDevice(user.id, 'laptop');
+        const phone = await keyedDevice(user.id, 'phone');
+        const toLaptop = await pushesTo(user.id, laptop.deviceId, 'L');
+        const toPhone = await pushesTo(user.id, phone.deviceId, 'P');
+        expect((await pinged(user.id)).sort()).toEqual([toLaptop, toPhone].sort());
+        // Another account's device keeps its own: a reset reaches one account's devices only.
+        const other = await account();
+        const theirs = await keyedDevice(other.id, 'theirs');
+        const toTheirs = await pushesTo(other.id, theirs.deviceId, 'O');
         const verification = randomUUID();
         const enrollment = randomUUID();
         await auth.createEnrollment({
@@ -652,6 +687,10 @@ describe('what happens to devices around them', () => {
         expect(reset?.id).toBe(user.id);
         expect(await resolves(laptop.token)).toBe(false);
         expect((await deviceRow(laptop.deviceId))?.revokedAt).toBeNull();
+        // Whoever reset it came with no session: every device is signed out, and none is
+        // pushed to until it signs in and asks again. The account hears of a reset by email.
+        expect(await pinged(user.id)).toEqual([]);
+        expect(await pinged(other.id)).toEqual([toTheirs]);
         const back = await signIn(user.id, {
             credentialVersion: 2,
             proof: { deviceId: laptop.deviceId, signer: laptop.signer },

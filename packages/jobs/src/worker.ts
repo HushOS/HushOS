@@ -12,6 +12,7 @@ import { groupsEnv } from '@hushos/env/groups';
 import { evidenceConfigured, replicaConfigured } from '@hushos/env/storage';
 import { cleanupExpired } from './jobs/cleanup-expired';
 import { groupsDissolveNotices, groupsPurgeDissolved } from './jobs/groups';
+import { twoStepReseal } from './jobs/two-step';
 import {
     driveAuditObjects,
     driveAuditReplica,
@@ -85,6 +86,25 @@ await boss.work<JobPayloads[typeof queues.cleanupExpired]>(
     { batchSize: 1, pollingIntervalSeconds: 5 },
     async ([job]) => {
         if (job) await cleanupExpired(job);
+    },
+);
+
+/*
+ * Every ten minutes, and once now: authenticator secrets sealed under an older two-step key
+ * move to the current one (docs/two-step-design.md 8), once every running web process has
+ * sealed under that key for 30 minutes. So after a rotation the first runs wait, and say
+ * why; the schedule is what finishes it. It also catches a secret that a web process still
+ * on the old settings sealed under the old key meanwhile. A run with nothing to move reads
+ * the table once. Whether accounts may turn the step on (TWO_STEP_ENABLED) changes nothing
+ * here: the secrets that exist are still read at every sign-in.
+ */
+await boss.schedule(queues.twoStepReseal, '*/10 * * * *', {}, { tz: 'UTC' });
+await boss.send(queues.twoStepReseal, {});
+await boss.work<JobPayloads[typeof queues.twoStepReseal]>(
+    queues.twoStepReseal,
+    { batchSize: 1, pollingIntervalSeconds: 30 },
+    async ([job]) => {
+        if (job) await twoStepReseal(job);
     },
 );
 

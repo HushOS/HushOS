@@ -9,6 +9,7 @@ import { PgBoss } from 'pg-boss';
  */
 export const queues = {
     cleanupExpired: 'auth.cleanup-expired',
+    twoStepReseal: 'auth.two-step-reseal',
     reconcileBilling: 'billing.reconcile',
     billingReissueCut: 'billing.reissue-cut',
     billingReissuePending: 'billing.reissue-pending',
@@ -33,6 +34,7 @@ export type QueueName = (typeof queues)[keyof typeof queues];
 
 export type JobPayloads = {
     [queues.cleanupExpired]: { batchSize?: number };
+    [queues.twoStepReseal]: { batchSize?: number };
     [queues.reconcileBilling]: Record<string, never>;
     [queues.billingReissueCut]: { groupId: string };
     [queues.billingReissuePending]: { groupId: string };
@@ -85,6 +87,19 @@ export async function ensureQueues(boss: PgBoss) {
         retryDelay: 30,
         retryBackoff: true,
         expireInSeconds: 10 * 60,
+        retentionSeconds: 7 * 24 * 60 * 60,
+    });
+    /*
+     * Authenticator secrets moved to the current two-step key after a rotation
+     * (docs/two-step-design.md 8). Idempotent, and each row is replaced only if it is still
+     * the row that was read, so a retry or a second run is harmless; one at a time is enough.
+     */
+    await boss.createQueue(queues.twoStepReseal, {
+        policy: 'singleton',
+        retryLimit: 3,
+        retryDelay: 60,
+        retryBackoff: true,
+        expireInSeconds: 30 * 60,
         retentionSeconds: 7 * 24 * 60 * 60,
     });
     await boss.createQueue(queues.reconcileBilling, {

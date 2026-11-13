@@ -12,7 +12,8 @@
         "./device-storage": "./src/device-storage.ts",
         "./crypto-transport": "./src/crypto-transport.ts",
         "./api": "./src/api.ts",
-        "./http": "./src/http.ts"
+        "./http": "./src/http.ts",
+        "./two-step-keys": "./src/two-step-keys.ts"
     },
     "scripts": {
         "typecheck": "tsc --noEmit",

@@ -6,7 +6,6 @@ import {
 } from '@hushos/crypto/two-step';
 import {
     base32,
-    deriveTwoStepKey,
     generateBackupCodes,
     generateTotpSecret,
     hashBackupCode,
@@ -14,7 +13,6 @@ import {
     sealTotpSecret,
     totpMatches,
     totpUri,
-    twoStepKeyId,
 } from '@hushos/crypto/two-step/server';
 import { authRepository, twoStepRepository } from '@hushos/db';
 import type { TwoStepMethod, TwoStepSessionPurpose } from '@hushos/db/schema';
@@ -23,8 +21,10 @@ import { authEnv } from '@hushos/env/auth';
 import { twoStepEnv } from '@hushos/env/two-step';
 import { log as serverLog } from '@hushos/logging';
 import { hash, noticeWhen, randomToken, serverSetup, supportedEnvelope } from './internal';
+import { notify } from './notifications';
 import { consumeBoundAttempt, requireSession, startLogin } from './server';
 import { AuthError, SESSION_IDLE_SECONDS, TOKEN_PATTERN } from './tokens';
+import { twoStepKeyringFromEnv, type TwoStepKeyring } from './two-step-keys';
 
 /*
  * Two-step sign-in, the server's rule (docs/two-step-design.md). After the password, an
@@ -78,46 +78,39 @@ const CODE_BUDGET_MS = 15 * 60_000;
 /* The two-step key                                                           */
 /* ------------------------------------------------------------------------- */
 
-export type TwoStepKeyring = {
-    current: { key: Uint8Array; id: Buffer };
-    byId: Map<string, Uint8Array>;
-};
-
-/*
- * The key new secrets and codes are made under, and every key older rows may name: the
- * operator's TWO_STEP_KEY when set, its predecessor during a rotation, and always the key
- * derived from the OPAQUE server setup, which is what an instance used before it set one.
- * Nothing re-seals older rows yet, so a key that is in none of the three places is gone, and
- * what was sealed or hashed under it with it: only one rotation of an explicit key is safe.
- */
-export async function twoStepKeyring(input: {
-    serverSetup: string;
-    key?: string;
-    previousKey?: string;
-}): Promise<TwoStepKeyring> {
-    const decode = (value: string) => new Uint8Array(Buffer.from(value, 'base64url'));
-    const derived = await deriveTwoStepKey(decode(input.serverSetup));
-    const explicit = input.key ? decode(input.key) : null;
-    const previous = input.previousKey ? decode(input.previousKey) : null;
-    const byId = new Map<string, Uint8Array>();
-    for (const key of [derived, previous, explicit])
-        if (key) byId.set(Buffer.from(await twoStepKeyId(key)).toString('hex'), key);
-    const current = explicit ?? derived;
-    return { current: { key: current, id: Buffer.from(await twoStepKeyId(current)) }, byId };
-}
-
 let keyring: Promise<TwoStepKeyring> | undefined;
+/* This server's keys, built once. */
 function keys() {
-    keyring ??= (async () =>
-        twoStepKeyring({
-            serverSetup: await serverSetup(),
-            key: twoStepEnv.TWO_STEP_KEY,
-            previousKey: twoStepEnv.TWO_STEP_PREVIOUS_KEY,
-        }))().catch((error: unknown) => {
+    keyring ??= (async () => {
+        const ring = await twoStepKeyringFromEnv(await serverSetup());
+        // With a setup there is always a key: the derived one, when the operator set none.
+        if (!ring) throw new Error('This server has no two-step key.');
+        return ring;
+    })().catch((error: unknown) => {
         keyring = undefined;
         throw error;
     });
     return keyring;
+}
+
+/* This process, as the worker tells one web process from another: new at every start. */
+const INSTANCE_ID = randomUUID();
+
+/*
+ * Says which key this process seals new secrets under and which keys it can read (their ids,
+ * never the keys), and that it is running now. The web service calls it at its readiness
+ * checks for as long as it runs: the worker re-seals older secrets towards a key only when
+ * every web process seen lately seals under it and has for a while
+ * (docs/two-step-design.md 8), so a process that is still on the old key, or back on it, is
+ * never handed a secret it cannot open. It throws when the word could not be written.
+ */
+export async function reportTwoStepKeys() {
+    const ring = await keys();
+    await twoStepRepository.reportKeyReader({
+        instanceId: INSTANCE_ID,
+        sealingKeyId: ring.current.id,
+        readableKeyIds: [...ring.byId.keys()].map((id) => Buffer.from(id, 'hex')),
+    });
 }
 
 async function keyFor(keyId: Buffer) {
@@ -181,17 +174,37 @@ type StepNotice = Exclude<
 >;
 
 /*
- * A security notice about the step, by email, sent after the action and never awaited: the
- * action already happened, and a mail problem is the operator's. Changes to the step are
- * never dropped: each needs the password and the step, so nobody can flood them. Only the
+ * A security notice about the step, by email and to the account's devices
+ * (docs/two-step-design.md 7), sent after the action and never awaited: the action already
+ * happened, and a mail or push problem is the operator's. Changes to the step are never
+ * dropped: each needs the password and the step, so nobody can flood them. Only the
  * failed-step notice has a budget, its own (one an hour), so a run of failures cannot use up
  * anything a later "step turned off" would need. It names the kind of method and the time,
  * never a name anyone chose.
+ *
+ * The push names an event of the same kind as the email, and carries nothing else: each
+ * device fetches the event over its own session and writes the words itself. Like every
+ * security notice it cannot be turned off. A device the action signed out (a reset signs out
+ * all of them) has no registration left, so it hears by email alone.
  */
 function notice(userId: string, kind: StepNotice, extra: { count?: number; method?: string } = {}) {
     void (async () => {
         const user = await authRepository.getUserById(userId);
         if (!user) return;
+        // A push problem is never the mail's, and the mail does not wait for it.
+        const pushed =
+            kind === 'backup-code-used'
+                ? notify(userId, kind, { left: extra.count ?? 0 })
+                : notify(userId, kind, {});
+        void pushed.catch((error: unknown) =>
+            serverLog.error({
+                message: 'Two-step notice push failed.',
+                notifications: {
+                    kind,
+                    failure: error instanceof Error ? error.name : typeof error,
+                },
+            }),
+        );
         await sendSecurityNotice(user.email, {
             kind,
             when: noticeWhen(),
@@ -445,6 +458,11 @@ type Checked = {
      * checked, before whatever the answer authorises replaces it.
      */
     freshPhrase: boolean;
+    /*
+     * What spending the answer left, as the repository said it while it spent it (`proof.spent`):
+     * how many backup codes the account had left then. Null until the answer is spent.
+     */
+    spent: twoStepRepository.StepSpent | null;
 };
 
 /*
@@ -502,7 +520,16 @@ async function checkAnswer(input: {
         );
     }
     const { freshPhrase = false, ...spend } = right;
-    return { attempt, proof: { tokenHash, spend }, method: proof.kind, flow, bucket, freshPhrase };
+    const checked: Checked = {
+        attempt,
+        proof: { tokenHash, spend, spent: (left) => (checked.spent = left) },
+        method: proof.kind,
+        flow,
+        bucket,
+        freshPhrase,
+        spent: null,
+    };
+    return checked;
 }
 
 /*
@@ -515,11 +542,18 @@ async function settle(
     checked: Checked,
     refusal: twoStepRepository.TwoStepRefusal | null,
     passed: {
-        backupCodesLeft?: number | null;
         deviceId?: string | null;
         signIn?: boolean;
         /* The action deleted the account: nobody is left to log for or to tell. */
         accountGone?: boolean;
+        /*
+         * The action left none of the backup codes the answer could have come from: it made
+         * a new set, or turned the step off and deleted the set. A code that answered the
+         * step was one of those, so "a backup code was used, N are left" would count codes
+         * that no longer work. The action's own notice says what happened ("new backup codes
+         * were made", "two-step sign-in is off"); the use is still written to the security log.
+         */
+        codesGone?: boolean;
     } = {},
 ) {
     const { attempt, method, flow, freshPhrase } = checked;
@@ -547,10 +581,17 @@ async function settle(
         const { userId } = attempt;
         const deviceId = passed.deviceId ?? poolDevice(attempt);
         if (method === 'backup') {
-            const left =
-                passed.backupCodesLeft ?? (await twoStepRepository.countBackupCodes(userId));
             if (!passed.signIn)
                 await record({ userId, kind: 'backup-code-used', method, deviceId });
+            if (passed.codesGone) return;
+            // How many were left when the code was spent, as the repository counted it in that
+            // transaction. Never counted again here: the action the code authorised may have
+            // made a new set (ten) or deleted the set, and that would be another set's count.
+            const left = checked.spent?.backupCodesLeft;
+            if (typeof left !== 'number')
+                throw new Error(
+                    'A backup code passed the step and its count did not come with it.',
+                );
             notice(userId, 'backup-code-used', { count: left });
         }
         if (method === 'phrase') {
@@ -683,7 +724,6 @@ export async function finishLoginStep(input: StepInput) {
     const { user, key, device } = result;
     await record({ userId: user.id, kind: 'sign-in', method: checked.method, deviceId: device.id });
     await settle(checked, null, {
-        backupCodesLeft: result.backupCodesLeft,
         deviceId: device.id,
         signIn: true,
     });
@@ -771,7 +811,7 @@ export async function settleChangeStep(
     checked: Checked | null,
     result: unknown,
     done: boolean,
-    options: { accountGone?: boolean } = {},
+    options: { accountGone?: boolean; codesGone?: boolean } = {},
 ) {
     const refusal =
         typeof result === 'object' &&
@@ -1027,7 +1067,9 @@ export async function removeTwoStepMethod(
             step: checked ? { sessionTokenHash: hash(token), ...checked.proof } : undefined,
         }),
     );
-    await settleChangeStep(checked, removed, removed.status === 'ok');
+    await settleChangeStep(checked, removed, removed.status === 'ok', {
+        codesGone: removed.status === 'ok' && removed.turnedOff,
+    });
     if (removed.status !== 'ok') throw new AuthError('This method isn’t on your account.', 404);
     if (removed.turnedOff) {
         await record({ userId: user.id, kind: 'two-step-off', method: removed.kind });
@@ -1059,7 +1101,7 @@ export async function makeBackupCodes(sessionToken: string | null, input: TwoSte
         });
         return { fresh, replaced };
     });
-    await settleChangeStep(checked, replaced, replaced.status === 'ok');
+    await settleChangeStep(checked, replaced, replaced.status === 'ok', { codesGone: true });
     if (replaced.status !== 'ok') throw new AuthError('Turn on two-step sign-in first.', 409);
     await record({ userId: user.id, kind: 'backup-codes-made' });
     notice(user.id, 'backup-codes-made');

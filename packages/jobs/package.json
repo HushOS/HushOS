@@ -15,6 +15,7 @@
         "build": "NODE_ENV=production bun build src/worker.ts --target=bun --outdir dist --sourcemap=none"
     },
     "dependencies": {
+        "@hushos/auth": "workspace:*",
         "@hushos/billing": "workspace:*",
         "@hushos/db": "workspace:*",
         "@hushos/drive": "workspace:*",

@@ -23,6 +23,7 @@ extension PushNotifications {
         let open: String
         switch notice.open {
         case .devices: open = "devices"
+        case .account: open = "account"
         case .shared: open = "shared"
         case .families: open = "families"
         case .app: open = "app"

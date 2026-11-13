@@ -25,6 +25,20 @@ export const NOTIFICATION_KINDS = {
     'device-removed': 'security',
     'devices-removed': 'security',
     'password-attempts': 'security',
+    // Two-step sign-in's notices (docs/two-step-design.md 7), each under the name its email has.
+    'two-step-on': 'security',
+    'two-step-off': 'security',
+    'two-step-app-added': 'security',
+    'two-step-app-removed': 'security',
+    'backup-codes-made': 'security',
+    'backup-code-used': 'security',
+    'phrase-used': 'security',
+    'phrase-replaced': 'security',
+    'password-reset': 'security',
+    'account-key-rotated': 'security',
+    'step-failed': 'security',
+    'change-step-failed': 'security',
+    'totp-frozen': 'security',
     shared: 'other',
     'family-invitation': 'other',
     'family-waiting': 'other',
@@ -38,10 +52,60 @@ export type NotificationData = {
     'device-removed': Record<string, never>;
     'devices-removed': { count: number };
     'password-attempts': Record<string, never>;
+    'two-step-on': Record<string, never>;
+    'two-step-off': Record<string, never>;
+    'two-step-app-added': Record<string, never>;
+    'two-step-app-removed': Record<string, never>;
+    'backup-codes-made': Record<string, never>;
+    /* How many backup codes the account has left, as the email says it. */
+    'backup-code-used': { left: number };
+    'phrase-used': Record<string, never>;
+    'phrase-replaced': Record<string, never>;
+    'password-reset': Record<string, never>;
+    'account-key-rotated': Record<string, never>;
+    'step-failed': Record<string, never>;
+    'change-step-failed': Record<string, never>;
+    'totp-frozen': Record<string, never>;
     shared: { granterUserId: string; shareId: string; role: 'viewer' | 'editor' };
     'family-invitation': { groupId: string; invitationId: string };
     'family-waiting': { groupId: string };
 };
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const isUuid = (value: unknown) => typeof value === 'string' && UUID.test(value);
+const isCount = (value: unknown, least: number, most: number) =>
+    typeof value === 'number' && Number.isInteger(value) && value >= least && value <= most;
+
+/* What each kind's data must be, field by field. A kind with no entry records nothing. */
+const DATA_FIELDS: Partial<Record<NotificationKind, Record<string, (value: unknown) => boolean>>> =
+    {
+        'devices-removed': { count: (value) => isCount(value, 1, Number.MAX_SAFE_INTEGER) },
+        // A set is ten codes and one was just used: nine at most are left, and none can be.
+        'backup-code-used': { left: (value) => isCount(value, 0, 9) },
+        shared: {
+            granterUserId: isUuid,
+            shareId: isUuid,
+            role: (value) => value === 'viewer' || value === 'editor',
+        },
+        'family-invitation': { groupId: isUuid, invitationId: isUuid },
+        'family-waiting': { groupId: isUuid },
+    };
+
+/*
+ * Whether `data` is exactly what an event of `kind` records: every field its kind has, in
+ * range, and no other. An event is refused before it is stored unless this holds, because a
+ * device cannot use one that does not: its app refuses the event, and a field no kind has
+ * could carry words to a lock screen.
+ */
+export function notificationDataValid(kind: NotificationKind, data: unknown) {
+    if (typeof data !== 'object' || data === null || Array.isArray(data)) return false;
+    const fields = DATA_FIELDS[kind] ?? {};
+    const given = Object.keys(data);
+    return (
+        given.length === Object.keys(fields).length &&
+        given.every((name) => fields[name]?.((data as Record<string, unknown>)[name]) === true)
+    );
+}
 
 const kinds = Object.keys(NOTIFICATION_KINDS)
     .map((kind) => `'${kind}'`)

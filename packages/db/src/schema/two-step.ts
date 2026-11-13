@@ -261,3 +261,36 @@ export const accountSecurityEvents = pgTable(
         ),
     ],
 );
+
+/*
+ * The web processes that read two-step rows, one row each (docs/two-step-design.md 8): the key
+ * a process seals new secrets under and the keys it can read, as key ids (the first 8 bytes of
+ * a key's SHA-256, in hex; never a key), and when it last said so. Each process writes its
+ * own row at its readiness checks. The worker re-seals secrets towards a key only when every
+ * process seen lately seals under it and has for a while, so a rollout that is half way, or
+ * about to be taken back, moves nothing to a key some process cannot read.
+ *
+ * - `instance_id` is random, made when the process starts: a restart is a new reader.
+ * - `sealing_since` is when this process first said it seals under `sealing_key_id`.
+ * - A row not seen for an hour is deleted by the worker.
+ */
+export const twoStepKeyReaders = pgTable(
+    'two_step_key_readers',
+    {
+        instanceId: uuid('instance_id').primaryKey(),
+        sealingKeyId: text('sealing_key_id').notNull(),
+        readableKeyIds: text('readable_key_ids').array().notNull(),
+        sealingSince: timestamp('sealing_since', { withTimezone: true }).notNull(),
+        seenAt: timestamp('seen_at', { withTimezone: true }).notNull(),
+    },
+    (table) => [
+        index('two_step_key_readers_seen_idx').on(table.seenAt),
+        check('two_step_key_readers_sealing_valid', sql`${table.sealingKeyId} ~ '^[0-9a-f]{16}$'`),
+        // The keys a process has are at most three: the current one, the previous one, the derived one.
+        check(
+            'two_step_key_readers_readable_valid',
+            sql`cardinality(${table.readableKeyIds}) between 1 and 8 and ${table.sealingKeyId} = any(${table.readableKeyIds})`,
+        ),
+        check('two_step_key_readers_times_valid', sql`${table.sealingSince} <= ${table.seenAt}`),
+    ],
+);

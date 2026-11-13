@@ -1,4 +1,17 @@
-import { and, asc, desc, eq, gt, isNotNull, isNull, ne, sql } from 'drizzle-orm';
+import {
+    and,
+    asc,
+    count,
+    countDistinct,
+    desc,
+    eq,
+    gt,
+    isNotNull,
+    isNull,
+    lt,
+    ne,
+    sql,
+} from 'drizzle-orm';
 import { db } from './client';
 import {
     accountDevices,
@@ -7,6 +20,7 @@ import {
     twoStepAttempts,
     twoStepBackupCodes,
     twoStepFactors,
+    twoStepKeyReaders,
     twoStepState,
     type accountKeys,
     type TwoStepFactorKind,
@@ -94,6 +108,7 @@ export type {
     StepPool,
     StepProof,
     StepSpend,
+    StepSpent,
     TwoStepRefusal,
 } from './two-step.core';
 export { REPLACEMENT_SESSION_SECONDS, TWO_STEP_REMEMBER_SECONDS } from './sessions';
@@ -668,6 +683,7 @@ export type SteppedSession =
 export async function openSteppedSession(input: {
     tokenHash: Buffer;
     spend: StepSpend;
+    spent?: StepProof['spent'];
     session: { tokenHash: Buffer; expiresAt: Date };
 }): Promise<SteppedSession> {
     try {
@@ -687,7 +703,7 @@ export async function openSteppedSession(input: {
                 userId: seen.userId,
                 purpose: 'login',
                 sessionTokenHash: null,
-                proof: { tokenHash: input.tokenHash, spend: input.spend },
+                proof: { tokenHash: input.tokenHash, spend: input.spend, spent: input.spent },
             });
             const { attempt } = passed;
             const device = await writeSession(tx, {
@@ -719,6 +735,213 @@ export async function openSteppedSession(input: {
         if (refusal.reason === 'spent') return { status: 'spent', failure: refusal.failure };
         return { status: refusal.reason === 'required' ? 'gone' : refusal.reason };
     }
+}
+
+/* ------------------------------------------------------------------------- */
+/* Re-sealing after a key rotation                                            */
+/* ------------------------------------------------------------------------- */
+
+/*
+ * After the two-step key is rotated, the worker moves each authenticator secret to the
+ * current key (docs/two-step-design.md 8). The repository still opens nothing: the worker
+ * reads sealed rows here, opens and seals them itself, and hands back sealed bytes. What is
+ * guaranteed here is that a row is replaced only if it is still, byte for byte, the row that
+ * was read, and that nothing but its seal changes.
+ */
+
+/* An authenticator secret as stored: what the seal's associated data names, and the sealed bytes. */
+export type SealedTotp = {
+    id: string;
+    userId: string;
+    keyId: Buffer;
+    nonce: Buffer;
+    sealedSecret: Buffer;
+};
+type Seal = Pick<SealedTotp, 'keyId' | 'nonce' | 'sealedSecret'>;
+
+/* The most rows one page hands over. */
+export const RESEAL_PAGE_LIMIT = 500;
+
+/*
+ * A page of the authenticator secrets sealed under any key but `keyId`, in id order, after
+ * `after`. Pending apps are included: one confirmed a minute later would otherwise stay
+ * under the old key. The caller walks the whole table once by passing the last id it got, so
+ * a row it could not move (no key for it) is passed, not met again and again.
+ */
+export async function listTotpSealedOutside(input: {
+    keyId: Buffer;
+    after?: string | null;
+    limit?: number;
+}): Promise<SealedTotp[]> {
+    const limit = Math.max(1, Math.min(input.limit ?? RESEAL_PAGE_LIMIT, RESEAL_PAGE_LIMIT));
+    const rows = await db
+        .select({
+            id: twoStepFactors.id,
+            userId: twoStepFactors.userId,
+            keyId: twoStepFactors.totpKeyId,
+            nonce: twoStepFactors.totpNonce,
+            sealedSecret: twoStepFactors.totpSecret,
+        })
+        .from(twoStepFactors)
+        .where(
+            and(
+                eq(twoStepFactors.kind, 'totp'),
+                ne(twoStepFactors.totpKeyId, input.keyId),
+                input.after ? gt(twoStepFactors.id, input.after) : undefined,
+            ),
+        )
+        .orderBy(asc(twoStepFactors.id))
+        .limit(limit);
+    return rows.flatMap((row) =>
+        row.keyId && row.nonce && row.sealedSecret
+            ? [{ ...row, keyId: row.keyId, nonce: row.nonce, sealedSecret: row.sealedSecret }]
+            : [],
+    );
+}
+
+/*
+ * Replaces one secret's seal: `to` is written only while the row still holds exactly `from`
+ * (its key id, nonce and sealed bytes), in one statement. So a row that was re-sealed by
+ * another run, replaced by a new app, removed, or changed by anything else since it was read
+ * is left as it is, and the answer says so (`false`). Only the three columns of the seal are
+ * written: the last accepted time step is never touched, so a re-seal cannot make a used code
+ * good again, and a sign-in that accepts a code at the same moment loses nothing.
+ */
+export async function resealTotpSecret(input: { id: string; from: Seal; to: Seal }) {
+    const moved = await db
+        .update(twoStepFactors)
+        .set({
+            totpKeyId: input.to.keyId,
+            totpNonce: input.to.nonce,
+            totpSecret: input.to.sealedSecret,
+        })
+        .where(
+            and(
+                eq(twoStepFactors.id, input.id),
+                eq(twoStepFactors.kind, 'totp'),
+                eq(twoStepFactors.totpKeyId, input.from.keyId),
+                eq(twoStepFactors.totpNonce, input.from.nonce),
+                eq(twoStepFactors.totpSecret, input.from.sealedSecret),
+            ),
+        )
+        .returning({ id: twoStepFactors.id });
+    return moved.length === 1;
+}
+
+/*
+ * How much is sealed or hashed under each key, by key id: authenticator secrets (pending ones
+ * too), and the accounts that still have an unused backup code under it. It is what tells an
+ * operator when an old key can go: backup codes are never re-keyed, so a set stays under the
+ * key it was made with until its owner makes a new one or uses it up.
+ */
+export async function sealedUnder() {
+    const [totp, backupCodes] = await Promise.all([
+        db
+            .select({ keyId: twoStepFactors.totpKeyId, secrets: count() })
+            .from(twoStepFactors)
+            .where(eq(twoStepFactors.kind, 'totp'))
+            .groupBy(twoStepFactors.totpKeyId),
+        db
+            .select({
+                keyId: twoStepBackupCodes.keyId,
+                accounts: countDistinct(twoStepBackupCodes.userId),
+            })
+            .from(twoStepBackupCodes)
+            .where(isNull(twoStepBackupCodes.usedAt))
+            .groupBy(twoStepBackupCodes.keyId),
+    ]);
+    return {
+        totp: totp.flatMap((row) =>
+            row.keyId ? [{ keyId: row.keyId, secrets: row.secrets }] : [],
+        ),
+        backupCodes,
+    };
+}
+
+/* A web process counts as running while it has been seen in this long. */
+export const KEY_READER_LIVE_SECONDS = 5 * 60;
+/* A row not seen for this long is deleted. */
+export const KEY_READER_KEPT_SECONDS = 60 * 60;
+
+/* A web process as the worker sees it: key ids in hex, never a key. */
+export type KeyReader = {
+    instanceId: string;
+    sealingKeyId: string;
+    readableKeyIds: string[];
+    sealingSince: Date;
+    seenAt: Date;
+};
+
+const keyIdHex = (keyId: Buffer) => {
+    // 8 bytes is an id. Anything longer could be a key, and must never be written here.
+    if (keyId.length !== 8) throw new Error('A two-step key id is 8 bytes.');
+    return keyId.toString('hex');
+};
+
+/*
+ * A web process's word on its keys, said again at every readiness check: the key it seals
+ * new secrets under, and every key it can read, by id. The first word starts
+ * `sealing_since`; each later one only moves `seen_at`, unless the process now seals under
+ * another key (it cannot, short of a restart), which starts `sealing_since` again. Times are
+ * the database's clock, so web processes and the worker on different hosts agree on them.
+ */
+export async function reportKeyReader(input: {
+    instanceId: string;
+    sealingKeyId: Buffer;
+    readableKeyIds: Buffer[];
+    now?: Date;
+}) {
+    const sealingKeyId = keyIdHex(input.sealingKeyId);
+    const readableKeyIds = [...new Set(input.readableKeyIds.map(keyIdHex))].sort();
+    const now = input.now ?? sql<Date>`now()`;
+    await db
+        .insert(twoStepKeyReaders)
+        .values({
+            instanceId: input.instanceId,
+            sealingKeyId,
+            readableKeyIds,
+            sealingSince: now,
+            seenAt: now,
+        })
+        .onConflictDoUpdate({
+            target: twoStepKeyReaders.instanceId,
+            set: {
+                sealingKeyId,
+                readableKeyIds,
+                sealingSince: sql`case when ${twoStepKeyReaders.sealingKeyId} = excluded.sealing_key_id then ${twoStepKeyReaders.sealingSince} else excluded.sealing_since end`,
+                seenAt: sql`greatest(${twoStepKeyReaders.seenAt}, excluded.seen_at)`,
+            },
+        });
+}
+
+/*
+ * The web processes seen in the last five minutes, and the moment that was read at, by the
+ * database's clock. A process that stopped saying so (it exited, or cannot reach the
+ * database) is no reader any more once those five minutes have passed.
+ */
+export async function liveKeyReaders(at?: Date): Promise<{ now: Date; readers: KeyReader[] }> {
+    const now =
+        at ?? new Date((await db.execute<{ now: Date }>(sql`select now() as now`)).rows[0]!.now);
+    const readers = await db
+        .select()
+        .from(twoStepKeyReaders)
+        .where(
+            gt(twoStepKeyReaders.seenAt, new Date(now.getTime() - KEY_READER_LIVE_SECONDS * 1000)),
+        )
+        .orderBy(asc(twoStepKeyReaders.instanceId));
+    return { now, readers };
+}
+
+/* Deletes the rows of processes not seen for an hour; how many went. */
+export async function dropStaleKeyReaders(at?: Date) {
+    const cutoff = at
+        ? new Date(at.getTime() - KEY_READER_KEPT_SECONDS * 1000)
+        : sql<Date>`now() - make_interval(secs => ${KEY_READER_KEPT_SECONDS})`;
+    const gone = await db
+        .delete(twoStepKeyReaders)
+        .where(lt(twoStepKeyReaders.seenAt, cutoff))
+        .returning({ instanceId: twoStepKeyReaders.instanceId });
+    return gone.length;
 }
 
 /* ------------------------------------------------------------------------- */

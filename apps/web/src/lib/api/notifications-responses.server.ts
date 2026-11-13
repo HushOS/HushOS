@@ -18,8 +18,27 @@ export const notificationSchema = t.Union([
             t.Literal('new-device'),
             t.Literal('device-removed'),
             t.Literal('password-attempts'),
+            // Two-step sign-in's notices (docs/two-step-design.md 7): the kind says it all.
+            t.Literal('two-step-on'),
+            t.Literal('two-step-off'),
+            t.Literal('two-step-app-added'),
+            t.Literal('two-step-app-removed'),
+            t.Literal('backup-codes-made'),
+            t.Literal('phrase-used'),
+            t.Literal('phrase-replaced'),
+            t.Literal('password-reset'),
+            t.Literal('account-key-rotated'),
+            t.Literal('step-failed'),
+            t.Literal('change-step-failed'),
+            t.Literal('totp-frozen'),
         ]),
         data: t.Object({}),
+    }),
+    // How many backup codes are left, as the email says it: none to nine.
+    t.Object({
+        ...at,
+        kind: t.Literal('backup-code-used'),
+        data: t.Object({ left: t.Integer({ minimum: 0, maximum: 9 }) }),
     }),
     t.Object({
         ...at,

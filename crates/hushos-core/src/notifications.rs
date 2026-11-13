@@ -99,6 +99,20 @@ pub enum PushEventKind {
     DeviceRemoved,
     DevicesRemoved,
     PasswordAttempts,
+    /// Two-step sign-in's notices (docs/two-step-design.md 7), one for each email it sends.
+    TwoStepOn,
+    TwoStepOff,
+    TwoStepAppAdded,
+    TwoStepAppRemoved,
+    BackupCodesMade,
+    BackupCodeUsed,
+    PhraseUsed,
+    PhraseReplaced,
+    PasswordReset,
+    AccountKeyRotated,
+    StepFailed,
+    ChangeStepFailed,
+    TotpFrozen,
     Shared,
     FamilyInvitation,
     FamilyWaiting,
@@ -111,7 +125,8 @@ pub enum PushEventKind {
 pub struct PushEvent {
     pub id: String,
     pub kind: PushEventKind,
-    /// `devices-removed`: how many went; 0 for every other kind.
+    /// `devices-removed`: how many went. `backup-code-used`: how many codes are left, which can
+    /// be none. 0 for every other kind.
     pub count: u32,
     /// `shared`: whose share it is, to name them from this phone's own pins.
     pub granter_user_id: Option<String>,
@@ -188,6 +203,28 @@ fn event_of(event: &Value) -> CoreResult<PushEvent> {
                 .ok_or_else(|| input("Invalid number of devices."))?;
         }
         Some("password-attempts") => read.kind = PushEventKind::PasswordAttempts,
+        Some("two-step-on") => read.kind = PushEventKind::TwoStepOn,
+        Some("two-step-off") => read.kind = PushEventKind::TwoStepOff,
+        Some("two-step-app-added") => read.kind = PushEventKind::TwoStepAppAdded,
+        Some("two-step-app-removed") => read.kind = PushEventKind::TwoStepAppRemoved,
+        Some("backup-codes-made") => read.kind = PushEventKind::BackupCodesMade,
+        Some("backup-code-used") => {
+            read.kind = PushEventKind::BackupCodeUsed;
+            // A set is ten codes and this one was just used: nine at most are left.
+            read.count = data
+                .get("left")
+                .and_then(Value::as_u64)
+                .filter(|left| *left <= 9)
+                .and_then(|left| u32::try_from(left).ok())
+                .ok_or_else(|| input("Invalid number of backup codes."))?;
+        }
+        Some("phrase-used") => read.kind = PushEventKind::PhraseUsed,
+        Some("phrase-replaced") => read.kind = PushEventKind::PhraseReplaced,
+        Some("password-reset") => read.kind = PushEventKind::PasswordReset,
+        Some("account-key-rotated") => read.kind = PushEventKind::AccountKeyRotated,
+        Some("step-failed") => read.kind = PushEventKind::StepFailed,
+        Some("change-step-failed") => read.kind = PushEventKind::ChangeStepFailed,
+        Some("totp-frozen") => read.kind = PushEventKind::TotpFrozen,
         Some("shared") => {
             read.kind = PushEventKind::Shared;
             read.granter_user_id = Some(field_uuid(data, "granterUserId", "sharer")?);
@@ -223,6 +260,8 @@ pub enum PushChannel {
 pub enum PushOpen {
     /// Account, Devices.
     Devices,
+    /// Account, where two-step sign-in and the rest of sign-in are.
+    Account,
     /// Shared, With me.
     Shared,
     /// Account, Families.
@@ -298,6 +337,8 @@ pub fn push_notice(event: PushEvent, checked_sender: Option<String>) -> PushNoti
         channel,
         open,
     };
+    let two_step =
+        |title: &str, body: &str| notice(title, body.to_owned(), PushChannel::Security, PushOpen::Account);
     match event.kind {
         PushEventKind::NewDevice => notice(
             "New sign-in",
@@ -326,6 +367,43 @@ pub fn push_notice(event: PushEvent, checked_sender: Option<String>) -> PushNoti
             "Someone kept trying to confirm your password.".to_owned(),
             PushChannel::Security,
             PushOpen::Devices,
+        ),
+        // Two-step sign-in's notices: each says what its email's subject says, and never names a
+        // device or a method anyone named (docs/two-step-design.md 7).
+        PushEventKind::TwoStepOn => two_step("Two-step sign-in", "Two-step sign-in is on."),
+        PushEventKind::TwoStepOff => two_step("Two-step sign-in", "Two-step sign-in is off."),
+        PushEventKind::TwoStepAppAdded => two_step("Two-step sign-in", "An authenticator app was added."),
+        PushEventKind::TwoStepAppRemoved => two_step("Two-step sign-in", "An authenticator app was removed."),
+        PushEventKind::BackupCodesMade => two_step("Backup codes", "New backup codes were made."),
+        PushEventKind::BackupCodeUsed => notice(
+            "Backup codes",
+            match event.count {
+                0 => "A backup code was used. None are left.".to_owned(),
+                1 => "A backup code was used. 1 is left.".to_owned(),
+                left => format!("A backup code was used. {left} are left."),
+            },
+            PushChannel::Security,
+            PushOpen::Account,
+        ),
+        PushEventKind::PhraseUsed => {
+            two_step("Recovery phrase", "Your recovery phrase was used as your second step.")
+        }
+        PushEventKind::PhraseReplaced => two_step("Recovery phrase", "Your recovery phrase was replaced."),
+        PushEventKind::PasswordReset => {
+            two_step("Password reset", "Your password was reset with your recovery phrase.")
+        }
+        PushEventKind::AccountKeyRotated => two_step("Account key", "Your account key was rotated."),
+        PushEventKind::StepFailed => two_step(
+            "Sign-in attempt",
+            "Someone signed in with your password but did not pass the second step.",
+        ),
+        PushEventKind::ChangeStepFailed => two_step(
+            "Change attempt",
+            "Someone tried to change your account and did not pass the second step.",
+        ),
+        PushEventKind::TotpFrozen => two_step(
+            "Authenticator app paused",
+            "Your authenticator app is paused on devices HushOS doesn’t recognise.",
         ),
         PushEventKind::Shared => notice(
             "Shared with you",
@@ -471,6 +549,16 @@ mod tests {
         assert!(push_event_read(event("shared", "{}"), ID.into()).is_err());
         assert!(push_event_read(event("shared", r#"{"granterUserId":"Maya"}"#), ID.into()).is_err());
         assert!(push_event_read(event("devices-removed", r#"{"count":0}"#), ID.into()).is_err());
+        // A backup code used: how many are left, none included, and never more than a set holds.
+        for left in [0, 1, 9] {
+            let used =
+                push_event_read(event("backup-code-used", &format!(r#"{{"left":{left}}}"#)), ID.into())
+                    .unwrap();
+            assert_eq!((used.kind, used.count), (PushEventKind::BackupCodeUsed, left));
+        }
+        for data in ["{}", r#"{"left":10}"#, r#"{"left":-1}"#, r#"{"left":"3"}"#, r#"{"count":3}"#] {
+            assert!(push_event_read(event("backup-code-used", data), ID.into()).is_err(), "{data}");
+        }
         assert!(push_event_read("not json".into(), ID.into()).is_err());
         assert!(push_event_read(r#"{"notifications":[]}"#.into(), ID.into()).is_err());
         // An event that names no kind is not taken for one of a kind this build doesn't know.
@@ -574,6 +662,68 @@ mod tests {
                 "{kind}"
             );
         }
+    }
+
+    // The words are the web's (apps/web/src/lib/web-push.ts) and say what each email's subject
+    // says. A stranger's words (a "checked sender" that has no place here) never reach them.
+    #[test]
+    fn two_step_notices_say_what_their_email_says_and_open_the_account() {
+        for (kind, data, title, body) in [
+            ("two-step-on", "{}", "Two-step sign-in", "Two-step sign-in is on."),
+            ("two-step-off", "{}", "Two-step sign-in", "Two-step sign-in is off."),
+            ("two-step-app-added", "{}", "Two-step sign-in", "An authenticator app was added."),
+            ("two-step-app-removed", "{}", "Two-step sign-in", "An authenticator app was removed."),
+            ("backup-codes-made", "{}", "Backup codes", "New backup codes were made."),
+            ("backup-code-used", r#"{"left":7}"#, "Backup codes", "A backup code was used. 7 are left."),
+            ("backup-code-used", r#"{"left":1}"#, "Backup codes", "A backup code was used. 1 is left."),
+            ("backup-code-used", r#"{"left":0}"#, "Backup codes", "A backup code was used. None are left."),
+            ("phrase-used", "{}", "Recovery phrase", "Your recovery phrase was used as your second step."),
+            ("phrase-replaced", "{}", "Recovery phrase", "Your recovery phrase was replaced."),
+            ("password-reset", "{}", "Password reset", "Your password was reset with your recovery phrase."),
+            ("account-key-rotated", "{}", "Account key", "Your account key was rotated."),
+            (
+                "step-failed",
+                "{}",
+                "Sign-in attempt",
+                "Someone signed in with your password but did not pass the second step.",
+            ),
+            (
+                "change-step-failed",
+                "{}",
+                "Change attempt",
+                "Someone tried to change your account and did not pass the second step.",
+            ),
+            (
+                "totp-frozen",
+                "{}",
+                "Authenticator app paused",
+                "Your authenticator app is paused on devices HushOS doesn’t recognise.",
+            ),
+        ] {
+            let read = push_event_read(event(kind, data), ID.into()).unwrap();
+            assert_ne!(read.kind, PushEventKind::Other, "{kind}");
+            let notice = push_notice(read, Some("Maya".into()));
+            assert_eq!(
+                (notice.title.as_str(), notice.body.as_str(), notice.channel, notice.open),
+                (title, body, PushChannel::Security, PushOpen::Account),
+                "{kind}"
+            );
+            assert!(!notice.body.contains("Maya"), "{kind}");
+        }
+        // A method's or a device's name is whatever its owner typed. Sent along with an event, it
+        // is not read: the words stay the ones above.
+        let named = push_notice(
+            push_event_read(
+                event(
+                    "two-step-app-removed",
+                    r#"{"name":"HushOS Support, call 5550100","device":"evil.example"}"#,
+                ),
+                ID.into(),
+            )
+            .unwrap(),
+            None,
+        );
+        assert_eq!(named.body, "An authenticator app was removed.");
     }
 
     #[test]

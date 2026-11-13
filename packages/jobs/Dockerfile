@@ -32,6 +32,8 @@ COPY packages/billing ./packages/billing
 # Billing mails a dissolved family's payer, and the groups job its last member and invitees; bundled.
 COPY packages/emails ./packages/emails
 COPY packages/crypto ./packages/crypto
+# The two-step keys and the re-seal after a rotation (packages/auth/src/two-step-keys.ts); bundled.
+COPY packages/auth ./packages/auth
 COPY packages/drive ./packages/drive
 COPY packages/jobs ./packages/jobs
 RUN bun run --cwd packages/jobs build

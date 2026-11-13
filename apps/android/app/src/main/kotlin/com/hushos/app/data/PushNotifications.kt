@@ -484,7 +484,7 @@ object PushNotices {
         val system = context.getSystemService(NotificationManager::class.java) ?: return
         system.createNotificationChannels(listOf(
             NotificationChannel(SECURITY, "Security", NotificationManager.IMPORTANCE_HIGH).apply {
-                description = "New sign-ins, removed devices and password attempts"
+                description = "New sign-ins, removed devices, password attempts and changes to two-step sign-in"
             },
             NotificationChannel(SHARED, "Shared with you", NotificationManager.IMPORTANCE_DEFAULT).apply {
                 description = "When someone shares something with you"
@@ -513,6 +513,7 @@ object PushNotices {
         }
         val open = when (notice.open) {
             PushOpen.DEVICES -> "devices"
+            PushOpen.ACCOUNT -> "account"
             PushOpen.SHARED -> "shared:false"
             PushOpen.FAMILIES -> "families"
             PushOpen.APP -> "app"

@@ -266,8 +266,8 @@ private fun Main(model: DriveViewModel, state: DriveState) {
             request.startsWith("link:") || request.startsWith("shared:") -> tab = Tab.SHARED
             request.startsWith("files:") -> tab = Tab.FILES
             request == "trash" || request == "words" || request.startsWith("family:") || request == "devices" -> tab = Tab.ACCOUNT
-            // A tapped families notice: Account, where the families are listed.
-            request == "families" -> { tab = Tab.ACCOUNT; model.clearRequest() }
+            // A tapped families or two-step notice: Account, where the families and sign-in settings are.
+            request == "families" || request == "account" -> { tab = Tab.ACCOUNT; model.clearRequest() }
             request.startsWith("node:") -> scope.launch {
                 // A file or a folder, whichever it is: a folder opens, a file opens in its folder.
                 model.clearRequest()

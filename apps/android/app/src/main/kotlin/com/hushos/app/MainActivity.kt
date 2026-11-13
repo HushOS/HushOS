@@ -67,10 +67,10 @@ class MainActivity : ComponentActivity() {
             com.hushos.app.data.TransferNotices.OPEN_PHONE -> { model.openRequest("phone"); return }
             com.hushos.app.data.TransferNotices.OPEN_FILES -> { model.openRequest("files::"); return }
         }
-        // A tapped push notice: Devices, Shared (with me), the families in Account, or the app as it was.
+        // A tapped push notice: Devices, Account (two-step sign-in), Shared (with me), the families in Account, or the app as it was.
         intent?.action?.takeIf { it.startsWith(com.hushos.app.data.PushNotices.OPEN + ":") }?.let {
             when (val open = it.removePrefix(com.hushos.app.data.PushNotices.OPEN + ":")) {
-                "devices", "families" -> model.openRequest(open)
+                "devices", "families", "account" -> model.openRequest(open)
                 "shared:false" -> model.openRequest(open)
             }
             return

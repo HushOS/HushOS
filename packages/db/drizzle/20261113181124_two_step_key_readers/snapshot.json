@@ -1,0 +1,198 @@
+{
+    "type": "diff",
+    "version": "9",
+    "dialect": "postgres",
+    "id": "4e6e4001-d860-4b63-a17c-8ade0835c412",
+    "prevIds": ["9cc6a256-fe9e-4bca-98e3-61c1de9de5ba"],
+    "footprints": [
+        {
+            "statementType": "create_table",
+            "statementTarget": ["table", "public", "two_step_key_readers"],
+            "writes": [
+                "s|tbl|public.two_step_key_readers",
+                "n|tbl|public.two_step_key_readers",
+                "e|tbl|public.two_step_key_readers",
+                "n|rel|public.two_step_key_readers",
+                "n|type|public.two_step_key_readers",
+                "n|rel|public.two_step_key_readers_pkey"
+            ],
+            "reads": ["n|sch|public"]
+        },
+        {
+            "statementType": "create_index",
+            "statementTarget": [
+                "index",
+                "public",
+                "two_step_key_readers",
+                "two_step_key_readers_seen_idx"
+            ],
+            "writes": [
+                "s|idx|public.two_step_key_readers_seen_idx",
+                "n|idx|public.two_step_key_readers_seen_idx",
+                "e|idx|public.two_step_key_readers_seen_idx",
+                "n|rel|public.two_step_key_readers_seen_idx"
+            ],
+            "reads": [
+                "n|tbl|public.two_step_key_readers",
+                "n|sch|public",
+                "n|col|public.two_step_key_readers.seen_at"
+            ]
+        }
+    ],
+    "deltas": [
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "name": "two_step_key_readers",
+                "isRlsEnabled": false,
+                "entityType": "tables"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_key_readers",
+                "name": "instance_id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_key_readers",
+                "name": "sealing_key_id",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_key_readers",
+                "name": "readable_key_ids",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 1,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_key_readers",
+                "name": "sealing_since",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_key_readers",
+                "name": "seen_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_key_readers",
+                "name": "two_step_key_readers_seen_idx",
+                "nameExplicit": true,
+                "columns": [
+                    {
+                        "value": "seen_at",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": false,
+                        "opclass": null
+                    }
+                ],
+                "isUnique": false,
+                "where": null,
+                "with": "",
+                "method": "btree",
+                "concurrently": false,
+                "entityType": "indexes"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_key_readers",
+                "name": "two_step_key_readers_pkey",
+                "columns": ["instance_id"],
+                "nameExplicit": false,
+                "entityType": "pks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_key_readers",
+                "name": "two_step_key_readers_sealing_valid",
+                "value": "\"sealing_key_id\" ~ '^[0-9a-f]{16}$'",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_key_readers",
+                "name": "two_step_key_readers_readable_valid",
+                "value": "cardinality(\"readable_key_ids\") between 1 and 8 and \"sealing_key_id\" = any(\"readable_key_ids\")",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_key_readers",
+                "name": "two_step_key_readers_times_valid",
+                "value": "\"sealing_since\" <= \"seen_at\"",
+                "entityType": "checks"
+            }
+        }
+    ]
+}
