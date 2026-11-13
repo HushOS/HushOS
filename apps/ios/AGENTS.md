@@ -365,7 +365,7 @@ Markdown files (`text/markdown`, or `.md`, `.markdown`, `.mdx`) up to 2 MB open 
     - On any other server (self-hosted, localhost) the app names no key, so the server never lists one. Settings still list keys, with Rename, Remove and Make default, no Add, and `StepWords.keysInBrowser`. The browser path for self-hosted servers is not built.
 - `twoStepMethods` (`StepMethodsField`) goes with `login/finish` and `two-step/challenge`, beside `twoStep: 1`, which never changes.
     - Sent only to a server whose `login/start` advertised it (the core's `stepMethodsAdvertised`). Refused with 400 or 422, the same request goes once more without it.
-    - The advert is kept per server origin in `state/step-methods.json` (`StepAdverts`), written once the session is stored, wiped with the account. Never seen (a session from before this build): sent once, and a refusal remembered, unless the request is refused without the field too.
+    - The advert is kept per server origin in `state/step-methods.json` (`StepAdverts`), written once the session is stored, wiped with the account. Never seen (a session from before this build): sent once, and a refusal remembered, unless the request is refused without the field too. A remembered "does not read it" is believed for a day (`StepAdverts.noFor`), then the server counts as never seen again: it may have been updated since.
 - A step's methods are the server's order, never reordered (`StepOffer.methods`). The screen opens on the first; the rest are behind one Menu, Use another way.
     - A key is offered only with its `keyRequest`, on a phone that can use one for this server.
     - The line above the fields is `StepOffer.note`: update, or usual way, never both.

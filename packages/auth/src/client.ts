@@ -93,19 +93,27 @@ const passkeyUnused = (cause: unknown, message = PASSKEY_UNUSED) =>
  * browser's last sign-in: remembered across reloads, because a session lasts up to 30 days
  * and its step-ups name methods too. Never said (a session from before this client): the
  * field is tried once, and a server that refuses it (422) is remembered as one that does not.
+ *
+ * "Does not" is kept for a day and no longer. A server is updated while sessions on it live
+ * on, and a session that went on believing the old answer would never be offered its passkey
+ * at a change. After a day the field is tried once more, and a refusal remembered again.
  */
 const ADVERT_KEY = 'hushos-step-methods';
-function readAdvert(): boolean | null {
+export const ADVERT_NO_MS = 24 * 60 * 60 * 1000;
+function readAdvert(now = Date.now()): boolean | null {
     try {
         const saved = localStorage.getItem(ADVERT_KEY);
-        return saved === '1' ? true : saved === '0' ? false : null;
+        if (saved === '1') return true;
+        const since = saved?.startsWith('0:') ? Number(saved.slice(2)) : Number.NaN;
+        // A time from the future is a clock that moved: not trusted, and tried again.
+        return Number.isFinite(since) && now >= since && now - since < ADVERT_NO_MS ? false : null;
     } catch {
         return null;
     }
 }
-function writeAdvert(advertised: boolean) {
+function writeAdvert(advertised: boolean, now = Date.now()) {
     try {
-        localStorage.setItem(ADVERT_KEY, advertised ? '1' : '0');
+        localStorage.setItem(ADVERT_KEY, advertised ? '1' : `0:${now}`);
     } catch {
         /* Storage may be disabled. The next sign-in says it again. */
     }

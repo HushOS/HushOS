@@ -26,8 +26,14 @@ Object.defineProperty(globalThis, 'window', {
     value: { localStorage, addEventListener() {}, removeEventListener() {} },
 });
 
-const { createAuthClient, LostReply, PASSWORD_EXCHANGE_MS, StepFailure, TwoStepRequired } =
-    await import('./client');
+const {
+    ADVERT_NO_MS,
+    createAuthClient,
+    LostReply,
+    PASSWORD_EXCHANGE_MS,
+    StepFailure,
+    TwoStepRequired,
+} = await import('./client');
 
 const user = {
     id: '0b7f1c2e-3d4a-4b5c-8d6e-7f8091a2b3c4',
@@ -1541,5 +1547,18 @@ describe('passkeys, and what this client tells the server it can answer', () => 
         await unknown.client.stepChallenge('delete');
         expect(calls.at(-1)).toEqual(['delete']);
         expect(calls).toHaveLength(3);
+
+        // "Does not read it" lasts a day. The server is updated meanwhile, and the same
+        // session's next change, a day on, names its methods again and is offered its passkey.
+        refuse = false;
+        vi.useFakeTimers({ now: Date.now() + ADVERT_NO_MS - 60_000, toFake: ['Date'] });
+        await unknown.client.stepChallenge('delete');
+        expect(calls.at(-1)).toEqual(['delete']);
+        vi.setSystemTime(Date.now() + 2 * 60_000);
+        expect(await unknown.client.stepChallenge('delete')).toMatchObject({
+            methods: ['webauthn', 'backup', 'phrase'],
+        });
+        expect(calls.at(-1)).toEqual(['delete', ['webauthn']]);
+        vi.useRealTimers();
     });
 });

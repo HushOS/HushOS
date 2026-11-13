@@ -464,18 +464,46 @@ private final class Key: @unchecked Sendable {
         #expect(adverts.state(for: "https://drive.example.org") == .notAdvertised)
         // What a later launch reads is what was kept, not what this object remembers.
         #expect(memory.adverts.state(for: "https://hushos.com") == .notAdvertised)
-        #expect(memory.kept == ["https://hushos.com": false, "https://drive.example.org": false])
+        #expect(memory.kept.mapValues(\.advertised) == ["https://hushos.com": false, "https://drive.example.org": false])
+    }
+
+    @Test func aServerThatDidNotReadTheFieldIsBelievedForADayAndThenAskedAgain() {
+        let memory = AdvertMemory()
+        let heard = Date(timeIntervalSince1970: 1_800_000_000)
+        memory.adverts(at: heard).remember(false, for: "https://hushos.com")
+        memory.adverts(at: heard).remember(true, for: "https://drive.example.org")
+        // Within the day the answer stands, and hearing it again does not stretch the day.
+        let nearly = heard.addingTimeInterval(StepAdverts.noFor - 1)
+        #expect(memory.adverts(at: nearly).state(for: "https://hushos.com") == .notAdvertised)
+        memory.adverts(at: nearly).remember(false, for: "https://hushos.com")
+        #expect(memory.kept["https://hushos.com"]?.at == heard)
+        // A day on, the server may have been updated: never heard again, so the field is tried once
+        // more. Believed for ever, a session's passkey would never be offered at a change.
+        let later = heard.addingTimeInterval(StepAdverts.noFor)
+        #expect(memory.adverts(at: later).state(for: "https://hushos.com") == .neverSeen)
+        // "It reads the field" has no such end: every sign-in says it again.
+        #expect(memory.adverts(at: later.addingTimeInterval(30 * 24 * 60 * 60)).state(for: "https://drive.example.org") == .advertised)
+        // Refused again after the day: remembered again, from now.
+        memory.adverts(at: later).remember(false, for: "https://hushos.com")
+        #expect(memory.kept["https://hushos.com"]?.at == later)
+        #expect(memory.adverts(at: later.addingTimeInterval(60)).state(for: "https://hushos.com") == .notAdvertised)
+        // A clock set back does not stretch the day: a time from the future is not believed.
+        #expect(memory.adverts(at: heard).state(for: "https://hushos.com") == .neverSeen)
     }
 }
 
 /* What a launch keeps of the adverts, in memory. */
 final class AdvertMemory: @unchecked Sendable {
     private let lock = NSLock()
-    private var all: [String: Bool]
-    init(_ kept: [String: Bool] = [:]) { all = kept }
-    var kept: [String: Bool] { lock.withLock { all } }
+    private var all: [String: StepAdverts.Kept]
+    init(_ kept: [String: Bool] = [:], at: Date = Date()) { all = kept.mapValues { StepAdverts.Kept(advertised: $0, at: at) } }
+    var kept: [String: StepAdverts.Kept] { lock.withLock { all } }
     var adverts: StepAdverts {
         StepAdverts(load: { self.lock.withLock { self.all } }, save: { next in self.lock.withLock { self.all = next } })
+    }
+    /* The same memory, read and written as at `moment`. */
+    func adverts(at moment: Date) -> StepAdverts {
+        StepAdverts(load: { self.lock.withLock { self.all } }, save: { next in self.lock.withLock { self.all = next } }, now: { moment })
     }
 }
 

@@ -203,31 +203,49 @@ public enum StepAdvert: Sendable, Equatable {
  * What each server said, kept across launches: a session lasts 30 days, and its changes name
  * methods too. One entry per server origin, in the account's own state (`state/`), so it goes with
  * the account at sign-out; every sign-in hears it again from `login/start`.
+ *
+ * "Does not read it" is believed for a day and no longer (`noFor`). A server is updated while
+ * sessions on it live on, and a session that went on believing the old answer would never be
+ * offered its passkey at a change. After a day the server counts as never heard: the field is
+ * tried once more, and a refusal remembered again.
  */
 public struct StepAdverts: Sendable {
-    let load: @Sendable () -> [String: Bool]
-    let save: @Sendable ([String: Bool]) -> Void
+    /* What is kept for one server: its answer, and when it was heard. */
+    public struct Kept: Codable, Equatable, Sendable {
+        public let advertised: Bool
+        public let at: Date
+    }
 
-    init(load: @escaping @Sendable () -> [String: Bool], save: @escaping @Sendable ([String: Bool]) -> Void) {
+    /* How long "does not read it" is believed. */
+    public static let noFor: TimeInterval = 24 * 60 * 60
+
+    let load: @Sendable () -> [String: Kept]
+    let save: @Sendable ([String: Kept]) -> Void
+    let now: @Sendable () -> Date
+
+    init(load: @escaping @Sendable () -> [String: Kept], save: @escaping @Sendable ([String: Kept]) -> Void, now: @escaping @Sendable () -> Date = { Date() }) {
         self.load = load
         self.save = save
+        self.now = now
     }
 
     static let file = "step-methods.json"
-    public static let stored = StepAdverts(load: { Unbacked.read([String: Bool].self, file) ?? [:] }, save: { Unbacked.write($0, file) })
+    public static let stored = StepAdverts(load: { Unbacked.read([String: Kept].self, file) ?? [:] }, save: { Unbacked.write($0, file) })
 
     public func state(for origin: String) -> StepAdvert {
-        switch load()[origin] {
-        case true?: .advertised
-        case false?: .notAdvertised
-        case nil: .neverSeen
-        }
+        guard let kept = load()[origin] else { return .neverSeen }
+        if kept.advertised { return .advertised }
+        // A time from the future is a clock that moved: not believed, and tried again.
+        let age = now().timeIntervalSince(kept.at)
+        return age >= 0 && age < Self.noFor ? .notAdvertised : .neverSeen
     }
 
     public func remember(_ advertised: Bool, for origin: String) {
         var all = load()
-        guard all[origin] != advertised else { return }
-        all[origin] = advertised
+        // The same answer again is kept as first heard, while it still stands: a "no" heard a
+        // day ago and heard again now starts its day over.
+        if let kept = all[origin], kept.advertised == advertised, advertised || state(for: origin) == .notAdvertised { return }
+        all[origin] = Kept(advertised: advertised, at: now())
         save(all)
     }
 }
