@@ -1,0 +1,21 @@
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_f51e88d78c6d02 900,903-919,957,2486,2490,2492-2493,2499-2501,2506,2516
+docs/two-step-design.md
+  s_566b8e0c4467a4::t_7d51aca3052c54 549,591-596,600,668,704,731-733,772-773
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "df6f88dbc756f593f90f56b57431d6b7a6c0e0f2",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
