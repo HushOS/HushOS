@@ -4,7 +4,7 @@ This document adds devices to HushOS accounts: a list of the devices signed in t
 
 Revised on 15 October after the independent review in `docs/archive/pq-devices-crypto-review.md`, and on 16 October for step 1 as built (section 12).
 
-**Revised on 13 November 2026:** Approve new devices is now one way to confirm a sign-in, beside passkeys and the authenticator app, not a level asked after them (`docs/two-step-design.md` 12). Its request (section 2) is unchanged; its 72-hour email wait is dropped. Keys need a device (section 3) is unchanged.
+**Revised on 13 November 2026:** Approve new devices is now one way to confirm a sign-in, beside passkeys and the authenticator app, not a level asked after them (`docs/two-step-design.md` 12). It runs from the step token, binds the purpose and the token in what it signs, and has its own budgets; `docs/two-step-design.md` 12 overrides sections 2, 4, 6, 8 and 9 here where they disagree. Its 72-hour email wait is dropped. Keys need a device (section 3) is unchanged.
 
 Decisions settled with the owner (2026-10-15):
 
