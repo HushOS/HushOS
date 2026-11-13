@@ -428,9 +428,7 @@ pub fn push_notice(event: PushEvent, checked_sender: Option<String>) -> PushNoti
         PushEventKind::KeyCounter => {
             two_step("Security key", "One of your security keys may have been copied.")
         }
-        PushEventKind::TwoStepDeviceAdded => {
-            two_step("Two-step sign-in", "Approve on another device is on.")
-        }
+        PushEventKind::TwoStepDeviceAdded => two_step("Two-step sign-in", "Approve on another device is on."),
         PushEventKind::TwoStepDeviceRemoved => {
             two_step("Two-step sign-in", "Approve on another device is off.")
         }
@@ -740,12 +738,7 @@ mod tests {
             ("two-step-key-removed", "{}", "Two-step sign-in", "A passkey or security key was removed."),
             ("key-counter", "{}", "Security key", "One of your security keys may have been copied."),
             ("two-step-device-added", "{}", "Two-step sign-in", "Approve on another device is on."),
-            (
-                "two-step-device-removed",
-                "{}",
-                "Two-step sign-in",
-                "Approve on another device is off.",
-            ),
+            ("two-step-device-removed", "{}", "Two-step sign-in", "Approve on another device is off."),
         ] {
             let read = push_event_read(event(kind, data), ID.into()).unwrap();
             assert_ne!(read.kind, PushEventKind::Other, "{kind}");
