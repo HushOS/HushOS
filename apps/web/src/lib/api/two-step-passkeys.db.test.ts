@@ -547,24 +547,38 @@ describe('a key at sign-in', () => {
         expect(told[0]!.to).toBe(who.email);
         expect(await events(cookie)).toContain('key-counter:webauthn');
 
-        // A wrong signature with a low counter is not a copied key: no second notice of any kind.
-        edge.outbox.length = 0;
-        const forged = softKey();
+        // The real key, one use on, still signs in.
+        expect((await withKeyAnswer(await toStep(who), key, { counter: 6 })).status).toBe(200);
+    });
+
+    test('the account’s credential id signed by another key opens nothing, moves no counter, and is not called a copied key', async () => {
+        // A fresh account, so no notice of any kind has been sent or spent, and a counter far
+        // ahead of the stored one: the only thing wrong with this answer is whose key signed it.
+        const { who, key, factorId } = await withKey({ counter: 5 });
+        const before = (await factors()).find((row) => row.id === factorId)!.signCount;
+        const forger = softKey();
         const step = await toStep(who);
         const reply = await answer(step.token, {
             kind: 'webauthn',
             response: {
-                ...forged.assert(step.webauthn!, { counter: 1 }),
+                ...forger.assert(step.webauthn!, { counter: 99 }),
                 id: key.id,
                 rawId: key.id,
             },
         });
         expect(reply.status).toBe(401);
+        expect(reply.body.code).toBe('step-wrong');
+        expect(reply.session).toBeUndefined();
+        expect(reply.body.envelope).toBeUndefined();
+        // Only the session that added the key exists, and the key's counter is where it was.
+        expect(await edge.db.select().from(edge.schema.sessions)).toHaveLength(1);
+        expect((await factors()).find((row) => row.id === factorId)!.signCount).toBe(before);
+        // A wrong signature says nothing about the real key: nobody is told it was copied.
         await edge.quiet();
         expect(edge.outbox.filter((notice) => notice.kind === 'key-counter')).toEqual([]);
-
-        // The real key, one use on, still signs in.
-        expect((await withKeyAnswer(await toStep(who), key, { counter: 6 })).status).toBe(200);
+        const logged = await edge.db.select().from(edge.schema.accountSecurityEvents);
+        expect(logged.filter((line) => line.kind === 'key-counter')).toEqual([]);
+        expect(logged.filter((line) => line.kind === 'sign-in')).toEqual([]);
     });
 
     test('a synced passkey reports 0 every time, and passes every time', async () => {
