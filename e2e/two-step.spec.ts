@@ -309,9 +309,9 @@ test('changing the password asks for the step in the same dialog, keeps this bro
 
     await code.fill(await app.next());
     await change.click();
-    await expect(page.getByText('Password changed', { exact: true })).toBeVisible({
-        timeout: 90_000,
-    });
+    await expect(
+        page.locator('[data-slot=toast]').getByText('Password changed', { exact: true }),
+    ).toBeVisible({ timeout: 90_000 });
     // This browser is still signed in and open, and was not asked for a second code.
     await expect(page).toHaveURL(/\/app\/account/);
     await expect(stepHeading(page)).toHaveCount(0);
@@ -420,7 +420,9 @@ test('new backup codes replace the old ones, and turning it off needs the step a
     await off.getByLabel('Backup code').fill(made[0]!);
     await off.getByRole('button', { name: 'Turn off' }).click();
     await expect(section(page).locator('[data-two-step=off]')).toBeVisible({ timeout: 60_000 });
-    await expect(page.getByText('Two-step sign-in is off', { exact: true })).toBeVisible();
+    await expect(
+        page.locator('[data-slot=toast]').getByText('Two-step sign-in is off', { exact: true }),
+    ).toBeVisible();
     await expect
         .poll(async () => (await mailSubjects(email)).join('\n'), { timeout: 30_000 })
         .toContain('Two-step sign-in is off');

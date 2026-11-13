@@ -69,6 +69,8 @@ type Open =
     | null;
 
 const KEY_LIMIT = 10;
+/* At this many backup codes or fewer, the count is shown as a warning: time to make new ones. */
+const CODES_LOW = 2;
 const kindWords = {
     webauthn: 'Passkey or security key',
     totp: 'Authenticator app',
@@ -265,8 +267,14 @@ export function AccountTwoStep({ user }: { user: SessionUser }) {
                         >
                             {app ? (
                                 <span className="flex min-w-0 flex-wrap items-center gap-2">
-                                    <span className="text-[13px] text-muted-foreground">
-                                        {used(app)}
+                                    {/* Each fact whole: a narrow row breaks between them, never inside a date. */}
+                                    <span className="flex min-w-0 flex-wrap gap-x-1.5 text-muted-foreground">
+                                        {usedParts(app).map((part, index, parts) => (
+                                            <span key={part} className="whitespace-nowrap">
+                                                {part}
+                                                {index < parts.length - 1 ? ' ·' : ''}
+                                            </span>
+                                        ))}
                                     </span>
                                     {isDefault('totp')}
                                     {status.data.totpFrozen && (
@@ -289,9 +297,16 @@ export function AccountTwoStep({ user }: { user: SessionUser }) {
                                     </Button>
                                 }
                             >
-                                <span className="text-muted-foreground">
-                                    {codesLeft(status.data)}
-                                </span>
+                                {/* Two or fewer: the same words, in the warning tone, and no sentence. */}
+                                {status.data.backupCodesLeft <= CODES_LOW ? (
+                                    <Badge variant="warning" data-codes-low>
+                                        {codesLeft(status.data)}
+                                    </Badge>
+                                ) : (
+                                    <span className="text-muted-foreground">
+                                        {codesLeft(status.data)}
+                                    </span>
+                                )}
                             </Setting>
                         )}
                     </>
@@ -338,10 +353,11 @@ export function AccountTwoStep({ user }: { user: SessionUser }) {
     );
 }
 
-function used(method: TwoStepMethod) {
+function usedParts(method: TwoStepMethod) {
     const added = `Added ${formatDay(method.createdAt)}`;
-    return method.lastUsedAt ? `${added} · Last used ${formatDay(method.lastUsedAt)}` : added;
+    return method.lastUsedAt ? [added, `Last used ${formatDay(method.lastUsedAt)}`] : [added];
 }
+const used = (method: TwoStepMethod) => usedParts(method).join(' · ');
 
 /*
  * How many keys, where a count is the value: none, some, or all an account can have, which

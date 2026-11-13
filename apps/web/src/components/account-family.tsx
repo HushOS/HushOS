@@ -23,8 +23,8 @@ export function AccountFamily({ userId }: { userId: string }) {
     const yours = activeFamily(families.data);
     return (
         <SettingsGroup title="Family">
+            {/* No label: the group is already called Family, and the row is the family itself. */}
             <Setting
-                label="Family"
                 action={
                     families.isSuccess && (
                         <Link

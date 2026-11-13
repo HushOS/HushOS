@@ -163,7 +163,9 @@ test('two browsers on one account list, rename and remove each other', async ({ 
     await change.getByLabel('New password', { exact: true }).fill(newPassword);
     await change.getByLabel('Confirm new password', { exact: true }).fill(newPassword);
     await change.getByRole('button', { name: 'Change password' }).click();
-    await expect(a.getByText('Password changed', { exact: true })).toBeVisible({
+    await expect(
+        a.locator('[data-slot=toast]').getByText('Password changed', { exact: true }),
+    ).toBeVisible({
         timeout: 120_000,
     });
     expect(await currentId(a)).toBe(aId);

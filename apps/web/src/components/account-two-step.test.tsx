@@ -475,6 +475,8 @@ describe('passkeys, security keys and the default', () => {
         expect(on.closest('section')).toBe(
             screen.getByRole('region', { name: /Two-step sign-in/ }),
         );
+        // Read out with what it is the state of, not as a bare "On".
+        expect(on.parentElement).toHaveTextContent('Two-step sign-in: On');
         expect(screen.getAllByText('On')).toHaveLength(1);
         expect(screen.queryByText('Status')).toBeNull();
         unmount();
@@ -508,6 +510,31 @@ describe('passkeys, security keys and the default', () => {
         said('Passkey or security key is now the default');
         // Said in the toast only: no line of it stays on the page.
         expect(screen.queryByText(/is now the default/)).toBeNull();
+    });
+
+    test('two backup codes or fewer are shown as a warning, in the same words and with no sentence', async () => {
+        const left = (count: number) =>
+            api.twoStep.mockResolvedValue({
+                on: true,
+                methods: [method('app', 'totp')],
+                backupCodesLeft: count,
+                totpFrozen: false,
+                defaultKind: 'totp',
+            } as never);
+        const warned = () => document.querySelector('[data-codes-low]');
+        for (const [count, words, low] of [
+            [3, '3 of 10 left', false],
+            [2, '2 of 10 left', true],
+            [0, 'None left', true],
+        ] as const) {
+            left(count);
+            const { unmount } = view();
+            const value = await screen.findByText(words);
+            expect(warned() !== null).toBe(low);
+            if (low) expect(warned()).toBe(value);
+            expect(screen.queryByText(/Make a new set/)).toBeNull();
+            unmount();
+        }
     });
 
     test('with one kind of method there is nothing to choose, so neither Default nor Make default shows', async () => {

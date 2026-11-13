@@ -281,7 +281,7 @@ function NameSetting({ name }: { name: string }) {
                         <>
                             <Button
                                 type="button"
-                                variant="ghost"
+                                variant="outline"
                                 disabled={pending}
                                 onClick={() => {
                                     setEditing(false);
@@ -343,10 +343,20 @@ function NameSetting({ name }: { name: string }) {
     );
 }
 
+/* Whether this computer asks for more contrast (its own accessibility setting), and when that changes. */
+const CONTRAST_QUERY = '(prefers-contrast: more)';
+const wantsContrast = () => window.matchMedia(CONTRAST_QUERY).matches;
+function watchContrast(changed: () => void) {
+    const query = window.matchMedia(CONTRAST_QUERY);
+    query.addEventListener('change', changed);
+    return () => query.removeEventListener('change', changed);
+}
+
 /* What this browser does: how it looks, whether it makes sounds, and locking it. */
 function BrowserSettings() {
     const { theme, setTheme, contrast, setContrast, isPending, error } = useTheme();
     const sounds = useSoundsEnabled();
+    const forced = useSyncExternalStore(watchContrast, wantsContrast, () => false);
     const restoring = useAuthView((state) => state.restoring);
     const { user } = Route.useRouteContext();
     const unlocked = useAuthView((state) => state.unlockedUserId) === user.id;
@@ -370,17 +380,31 @@ function BrowserSettings() {
                     onChange={setTheme}
                 />
             </Setting>
+            {/*
+             * Off here follows the computer, which may ask for more contrast itself. Then the
+             * page is in high contrast whatever this switch was: it shows on, can't be turned
+             * off from here, and says whose setting it is.
+             */}
             <Setting
                 label={<label htmlFor="settings-contrast">High contrast</label>}
                 action={
                     <Switch
                         id="settings-contrast"
-                        checked={contrast}
-                        disabled={isPending}
+                        checked={contrast || forced}
+                        disabled={isPending || (forced && !contrast)}
+                        aria-describedby={
+                            forced && !contrast ? 'settings-contrast-forced' : undefined
+                        }
                         onCheckedChange={setContrast}
                     />
                 }
-            />
+            >
+                {forced && !contrast && (
+                    <span id="settings-contrast-forced" className="text-muted-foreground">
+                        Set by this computer
+                    </span>
+                )}
+            </Setting>
             <Setting
                 label={<label htmlFor="settings-sounds">Interface sounds</label>}
                 action={
@@ -392,7 +416,7 @@ function BrowserSettings() {
                 }
             />
             <Setting
-                label="Lock"
+                label="Your files"
                 action={
                     <Button
                         variant="outline"

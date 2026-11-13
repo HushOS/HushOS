@@ -63,7 +63,13 @@ export function SettingsGroup({
                         <h2 id={id} className="text-lg font-bold tracking-[-0.01em]">
                             {title}
                         </h2>
-                        {status}
+                        {status && (
+                            // Read with its title: "Two-step sign-in: On", not a bare "On".
+                            <span className="contents">
+                                <span className="sr-only">{title}: </span>
+                                {status}
+                            </span>
+                        )}
                     </div>
                     {description && <p className="text-sm text-muted-foreground">{description}</p>}
                 </div>
@@ -87,8 +93,10 @@ export function SettingsGroup({
  * a device) keeps the columns: its text starts where the values do.
  *
  * On a phone the label has a line of its own and the actions stay at the right edge:
- * beside the value while they fit, on a line beneath it when they don't. A row with no
- * value (a switch) keeps its label and its action on one line.
+ * beside the value while they fit, on a line beneath it when they don't. The value keeps
+ * 160px beside them, so one action sits beside it and two go beneath: a name is never
+ * squeezed until it breaks inside a word. A row with no value (a switch) keeps its label
+ * and its action on one line.
  */
 export function Setting({
     label,
@@ -127,7 +135,7 @@ export function Setting({
                     </span>
                 )}
                 {!bare && (
-                    <div className="min-w-0 flex-1 basis-28 text-[15px] sm:col-start-2">
+                    <div className="min-w-0 flex-1 basis-40 text-[15px] sm:col-start-2">
                         {children}
                     </div>
                 )}

@@ -43,6 +43,9 @@ const section = (p: Page) => p.getByRole('region', { name: 'Two-step sign-in' })
 const stepHeading = (p: Page) => p.getByRole('heading', { name: 'One more step' });
 const inApp = (p: Page) => expect(p).toHaveURL(/\/app/, { timeout: 60_000 });
 const keyRows = (p: Page) => section(p).locator('[data-two-step-key-row]');
+/* What a change said, in its toast: the same words may also be a line of Recent activity. */
+const toast = (p: Page, words: string) =>
+    p.locator('[data-slot=toast]').getByText(words, { exact: true });
 
 /*
  * A security key plugged into this page: a CTAP2 key over USB that holds no resident keys and
@@ -288,7 +291,7 @@ test('the step opens on the default, the rest wait behind Use another way, and M
     await section(page)
         .getByRole('button', { name: 'Make passkey or security key the default' })
         .click();
-    await expect(page.getByText('Passkey or security key is now the default')).toBeVisible({
+    await expect(toast(page, 'Passkey or security key is now the default')).toBeVisible({
         timeout: 60_000,
     });
     await expect(
@@ -323,7 +326,7 @@ test('the step opens on the default, the rest wait behind Use another way, and M
         timeout: 60_000,
     });
     await remove.getByRole('button', { name: 'Remove', exact: true }).click();
-    await expect(page.getByText('Passkey or security key removed')).toBeVisible({
+    await expect(toast(page, 'Passkey or security key removed')).toBeVisible({
         timeout: 60_000,
     });
     await expect(keyRows(page)).toHaveCount(0);
