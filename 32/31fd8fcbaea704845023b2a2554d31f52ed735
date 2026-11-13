@@ -1,0 +1,55 @@
+DESIGN.md
+  s_566b8e0c4467a4::t_066621dbd94e61 333
+apps/web/src/components/account-devices.tsx
+  s_566b8e0c4467a4::t_f70932dee00b08 103,181,269,283,369-370
+apps/web/src/components/account-dialogs.tsx
+  s_566b8e0c4467a4::t_bfdb7a4f1e2903 225
+apps/web/src/components/account-family.tsx
+  s_566b8e0c4467a4::t_5355d57258ecd3 25,52
+apps/web/src/components/account-notifications.tsx
+  s_566b8e0c4467a4::t_f4525f53b5af4d 85,96,98-100,108
+apps/web/src/components/account-two-step.test.tsx
+  s_566b8e0c4467a4::t_a450e9f0a61c64 97-100,115-116,127,143,188,231-233,392,394,397-400,402,404,422-454,456-488,508-510,538,559,605
+apps/web/src/components/account-two-step.tsx
+  s_566b8e0c4467a4::t_713458daf673b7 16,55-60,91,93,113,123-125,133,148-157,178-182,187,189-198,201,203,205-206,208-223,230,232-233,259-263,268-270,277,346-354,357-360,374-398,405,483,487,667,824,887,1007,1009-1010,1062-1063,1162,1216,1240,1263,1283-1284,1357,1426,1428-1429,1457-1458,1555
+apps/web/src/components/families/family-page.tsx
+  s_566b8e0c4467a4::t_b2eba4dc3be93b 21,232,255,544,572
+apps/web/src/components/families/no-family.tsx
+  s_566b8e0c4467a4::t_2a31621753200e 9,67,81,166
+apps/web/src/components/settings.tsx
+  s_566b8e0c4467a4::t_8f6379ee22d6f0 8-11,14-43,46,52,62-67,78-91,98,101,105-106,110,113-139
+apps/web/src/content/security.mdx
+  s_566b8e0c4467a4::t_f65d7f289bd058 39,111
+apps/web/src/dev/demos/app.tsx
+  s_566b8e0c4467a4::t_3a59c821eb5a9a 21,302
+apps/web/src/routes/_authenticated/app/account.tsx
+  s_566b8e0c4467a4::t_0e519240685906 17,22,38-40,42-45,62,64-65,84,89,118-119,126,129,136-141,144,148-153,156,165-170,173,184,204,261,312-313,315-317,319,334,354,383,393,397-402,404,407
+apps/web/src/routes/_authenticated/app/billing.tsx
+  s_566b8e0c4467a4::t_0b946d74b30a61 6,446,448,856
+apps/web/src/routes/_authenticated/app/recovery-key.tsx
+  s_566b8e0c4467a4::t_3a279c24edf890 8,80,82,170
+docs/two-step-design.md
+  s_566b8e0c4467a4::t_078cf683e177e9 190,195,382,807,861
+e2e/devices.spec.ts
+  s_566b8e0c4467a4::t_6a714321ed30ae 97,166-168
+e2e/two-step-passkeys.spec.ts
+  s_566b8e0c4467a4::t_4c9b618dcec551 206,261-262,264,291-293,326
+e2e/two-step.spec.ts
+  s_566b8e0c4467a4::t_0c1e0a9ead5da9 185,312-314,422-423,488
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3231fd8fcbaea704845023b2a2554d31f52ed735",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
