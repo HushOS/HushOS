@@ -756,7 +756,7 @@ One change per pull request, as AGENTS.md asks:
 8. **`feat(auth)` and `feat(web)`:** security keys, registration and assertion, with the virtual-authenticator tests.
 9. **`feat(ios)` and `feat(android)`:** security keys natively on hushos.com, and the browser path for self-hosted servers (the static `/two-step/key` page; the verified `https://hushos.com/two-step/return` link, with `hushos://two-step-key` as the fallback).
 
-Approve new devices (`docs/devices-design.md` 10, milestone 2) then builds on the step's place in the sign-in: password, step, approval.
+Section 12 (13 November) replaces that order: passkeys and a default method next, then approving on another device as a method of the step, not a check after it.
 
 ## 11. Open questions
 
@@ -769,6 +769,59 @@ Approve new devices (`docs/devices-design.md` 10, milestone 2) then builds on th
 7. **Where does the two-step key come from when the operator sets none?** _Recommendation: derived from the OPAQUE server setup wherever it lives, with its own HKDF `info`._ Moving the setup from the database to the environment, as the guide advises, then leaves the key unchanged. The cost: an instance that keeps the setup in the database keeps the key beside the secrets it seals, where it protects nothing against a copy of the database.
 8. **A key whose counter does not go up: refuse it, or accept it with a notice?** _Recommendation: refuse, by the specification's rule (either counter non-zero and the new one not greater), and notify._ The person has other methods, and a cloned key is worth a sign-in's friction. Synced passkeys, always at 0, are unaffected.
 9. **Is the database trigger acceptable as the repository's first?** _Recommendation: yes._ hushos.com does not need it: it deploys each release in order, and only switches the step on (release B) once no container of an earlier release runs. Self-hosters do. One who skips releases, rolling from before release A straight to B or later, runs old and new containers side by side while people can turn the step on, and one who rolls back runs old code against accounts that have it. Without the guard, either silently signs those accounts in with the password alone. It covers sign-in only, not step-ups (section 10).
+
+## 12. One way to confirm a sign-in (revision of 13 November 2026)
+
+The owner asked for passkeys, authenticator codes and device approval to be **alternatives**, with one of them chosen as the default and the others a tap away ("set passkeys, 2fa and device approvals, then it should use the default one i set as default but still let me change it"). Asked whether the default should choose only between second steps, with approval asked after them as section 1 had it, the owner chose one way to confirm (2026-11-13). Synced passkeys count (2026-11-13), as section 3 already allows. This section overrides the earlier sections where they disagree.
+
+### The methods
+
+| Method                        | What it is                                                                                                                                       | Can be the default                        |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------- |
+| **Passkey or security key**   | Section 3, unchanged: WebAuthn, synced passkeys allowed, up to ten                                                                               | Yes                                       |
+| **Authenticator app**         | Section 2, unchanged                                                                                                                             | Yes                                       |
+| **Approve on another device** | `docs/devices-design.md` 2's request, run as the step: one of the account's devices types the code shown on the new screen, or scans its QR code | Yes, while the account has another device |
+| **Backup code**               | Section 2, unchanged                                                                                                                             | No: a way back                            |
+| **Recovery phrase**           | Section 5, unchanged                                                                                                                             | No: a way back                            |
+
+- **The step is on** when the account has at least one of the first three. Turning on any of them for the first time turns the step on, makes the backup codes (section 2) and offers to sign out the other devices (section 4), as the authenticator app does today.
+- **Approve on another device** is turned on in settings like the others. It needs at least one other device on the account (`account_devices`, not revoked), and settings says so when there is none. Removing the last other device leaves it on but unusable until a device is added again; the step screen then offers the remaining methods, and settings says why it can't be used.
+- **No email path.** `docs/devices-design.md` 2's 72-hour email wait is not a way to confirm: section 5 refuses email for the step, and this revision keeps that. With no other device, the person uses another method, a backup code or the phrase.
+
+### The default
+
+- **One per account,** stored on the server (`users.two_step_default`: `webauthn`, `totp` or `device`), so every device opens the same way. The first method turned on becomes the default. Settings shows **Default** beside it and **Make default** on the others.
+- **Removing the default** makes the next one the default, in the order passkey, app, device.
+- **The step screen opens on the default** and offers **Use another way**, which lists every method this sign-in can use, backup codes and the phrase last. The choice is for this sign-in only; it does not change the default.
+- **When the default can't be used** for this sign-in (the app frozen for new devices, no other device to approve, a phone that can't use a passkey for this server), the screen opens on the next usable method in the order above and says why in one line.
+- **Passkey as the default** shows **Use your passkey** as a button; the browser's or phone's passkey sheet opens on the press, never on page load (Safari requires a gesture, and a sheet that opens by itself reads as an attack).
+
+### Approve on another device, as the step
+
+`docs/devices-design.md` 2's request, with these changes:
+
+1. It starts from the step token (section 4) instead of a pending session: `login/finish` returns `methods` including `device` and the step token; the new device calls `POST /api/auth/approvals` with the step token and its commitment. Nothing else in the request protocol changes: commitment, open, reveal, the code of two digits and a word, typed or scanned, signed by the approving device's key.
+2. **When it is approved,** the server marks the step token passed by `device` and answers the new device's next `POST /api/auth/login/two-step { token, proof: { kind: 'device', requestId } }` with the session and envelope, under the same checks as any other proof (credential version unchanged, under the user's lock).
+3. **The approving device** is any approved device of the account with a live session that passed the step. Its prompt says what is asked: "Sign-in on Chrome on Windows, near Lyon, France".
+4. **Limits** are `docs/devices-design.md` 2's: one open request per account, ten minutes, five a day; a denied or wrong code ends the request and counts as a failed step (section 2's counters and notices). **This wasn't me** ends it and sends the failed-step notice.
+5. **At security changes** (section 4), `device` is also a method: the request names the change ("Change your password on Chrome on Windows?") and is bound to the step-up token and its purpose.
+6. **What it protects:** like the authenticator app, it stops a stolen password at an honest server, and it is phishable in real time (a fake page can show the real code). Passkeys remain the one method a fake page can't relay; settings says so.
+7. **Keys need a device** (`docs/devices-design.md` 3) is unchanged and stays separate: it is a cryptographic level, not a way to confirm, and is not part of this revision.
+
+### Older apps
+
+`login/finish`'s `twoStep` field becomes a version: `1` answers `totp`, `backup` and `phrase`; `2` adds `webauthn` and `device`. The server lists only the methods the client can answer. A client at `1` whose account has only methods it can't answer still gets `backup` and `phrase`, and the response carries `update: true`, so the app says "Update HushOS to use your passkey or another device. You can use a backup code or your recovery phrase now." Every account with the step has backup codes and a phrase, so no older client is locked out.
+
+### On the phones
+
+Section 6's plan for security keys stands: native passkeys on hushos.com (Associated Domains `webcredentials:hushos.com` on iOS, Digital Asset Links and Credential Manager on Android, `WEBAUTHN_ANDROID_ORIGINS`), and the browser path for self-hosted servers. Approving on a phone adds a prompt (from push, and in the app's Account → Your devices) that scans or types the new device's code.
+
+### Build order
+
+1. **Passkeys and the default** (sections 3 and 12), on the web, iPhone and Android together, with the default stored and honoured.
+2. **Approve on another device** as a method, on all three, with its push prompt.
+
+Both are behind no new flag: `TWO_STEP_ENABLED` already decides whether accounts can turn the step on.
 
 ## Owner decisions (2026-10-21)
 
