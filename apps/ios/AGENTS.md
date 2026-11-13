@@ -377,7 +377,7 @@ Markdown files (`text/markdown`, or `.md`, `.markdown`, `.mdx`) up to 2 MB open 
     - `KeyAsk` and `KeyMake` (HushOSKit) turn the core's base64url into the `Data` the providers take; `KeyAssertion` and `KeyRegistration` are built from the raw bytes handed back.
     - The security-key request names only keys that reported `usb`, `nfc` or `ble`, or nothing. It is left out when there are none: a request that named no key would take any.
     - Registration asks ES256 only, no attestation, no resident key, no user verification.
-- Settings rules are `TwoStepStatus` (`choosing`, `isDefault`, `canMakeDefault`, `removeWords`, `canAddKey`, `keyNotes`). `GET two-step` always carries `?methods=` (`TwoStep.statusPath`).
+- Settings rules are `TwoStepStatus` (`choosing`, `isDefault`, `canMakeDefault`, `removeWords`, `canAddKey`, `addKeyWords`, `keyNotes`). The screen is a label, what it is now and its actions: one Status row, no sentence under a heading, and `keyNotes` only says why Add is not there (ten keys, or a server this iPhone can't make a key for). The Add row reads `Add another` once there is a key. The cautions are on hushos.com/security. `GET two-step` always carries `?methods=` (`TwoStep.statusPath`).
 - Adding a key (`KeySheet`): `TwoStep.startKey`, the sheet on the press of Add, `TwoStep.addKey`. A server refusal (`KeyRefused`) or a lost reply goes back to the password; a closed sheet keeps the setup.
 - Not checked on a device: the system's sheet itself, for a passkey or a security key over NFC or USB. A simulator cannot run it against localhost. What a real iPhone signed in to hushos.com must show: both ceremonies complete, the server takes the answer, and a closed sheet leaves the step.
 

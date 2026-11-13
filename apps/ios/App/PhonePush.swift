@@ -305,18 +305,18 @@ struct NotificationsSection: View {
         if let toggles = model.toggles, model.relay != nil {
             Section {
                 Toggle(isOn: Binding(get: { model.phone }, set: { on in Task { await model.setPhone(on) } })) {
-                    label("On this phone", "Notices here while HushOS is closed")
+                    label("On this phone")
                 }
                 .disabled(model.busy)
                 .tint(Alpine.primary)
                 .alpineRow()
                 Toggle(isOn: Binding(get: { toggles.shared }, set: { on in Task { await model.set(\.shared, on) } })) {
-                    label("Shared with you", "When someone shares something with you")
+                    label("Shared with you")
                 }
                 .tint(Alpine.primary)
                 .alpineRow()
                 Toggle(isOn: Binding(get: { toggles.family }, set: { on in Task { await model.set(\.family, on) } })) {
-                    label("Families", "Invitations, and people waiting to join your family")
+                    label("Family invitations and requests")
                 }
                 .tint(Alpine.primary)
                 .alpineRow()
@@ -328,10 +328,6 @@ struct NotificationsSection: View {
         }
     }
 
-    private func label(_ title: String, _ detail: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title).foregroundStyle(Alpine.ink)
-            Text(detail).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
-        }
-    }
+    /* A switch says what it is for in its label, and has no line beneath. */
+    private func label(_ title: String) -> some View { Text(title).foregroundStyle(Alpine.ink) }
 }

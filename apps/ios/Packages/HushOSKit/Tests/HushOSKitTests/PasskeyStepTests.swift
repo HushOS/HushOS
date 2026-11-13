@@ -599,8 +599,8 @@ final class AdvertMemory: @unchecked Sendable {
         // A default this build cannot show (another device): no badge here, and either kind can be made the default.
         let device = try status(keys: 1, app: true, defaultKind: "device")
         for kind in [StepKind.webauthn, .totp] { #expect(!device.isDefault(kind) && device.canMakeDefault(kind)) }
-        #expect(StepKind.webauthn.nowFirst == "Passkey or security key is now asked for first.")
-        #expect(StepKind.totp.nowFirst == "Authenticator app is now asked for first.")
+        #expect(StepKind.webauthn.nowFirst == "Passkey or security key is now the default.")
+        #expect(StepKind.totp.nowFirst == "Authenticator app is now the default.")
     }
 
     @Test func theLastMethodIsTurnedOffAndAnyOtherIsRemoved() throws {
@@ -623,24 +623,30 @@ final class AdvertMemory: @unchecked Sendable {
         // A self-hosted server: its keys are listed, renamed and removed here, never added.
         #expect(try !status().canAddKey(passkeys: false))
         #expect(try !status(keys: 1).canAddKey(passkeys: false))
-        let browser = "Passkeys and security keys are added in a browser on this server. You can rename or remove them here."
+        let browser = "Passkeys and security keys are added in a browser on this server."
         #expect(try status().keyNotes(passkeys: false) == [browser])
         #expect(try status().keyNotes(passkeys: true) == [])
     }
 
-    @Test func eachNoteUnderTheKeysIsThereOnlyWhileItIsTrue() throws {
-        let synced = "A passkey saved in the same password manager as your password is one factor, not two: whoever opens the manager has both."
-        let another = "A passkey stops a fake sign-in page only when you use it. A fake page can ask you to use another way instead."
-        let second = "Add a second key and keep it somewhere else, in case this one is lost."
+    @Test func theOnlyNotesUnderTheKeysSayWhyAddIsNotThere() throws {
         let ten = "You have ten, the most an account can have."
-        #expect(try status(keys: 1).keyNotes(passkeys: true) == [second])
-        #expect(try status(keys: 2).keyNotes(passkeys: true) == [])
-        #expect(try status(keys: 1, synced: true).keyNotes(passkeys: true) == [synced, second])
-        #expect(try status(keys: 2, app: true).keyNotes(passkeys: true) == [another])
-        // The app alone: a fake page has no key to steer anyone away from.
-        #expect(try status(app: true).keyNotes(passkeys: true) == [])
+        // Add is there: nothing is said, with one key or several, synced or not, beside an app or not.
+        #expect(try status(keys: 1).keyNotes(passkeys: true) == [])
+        #expect(try status(keys: 1, synced: true).keyNotes(passkeys: true) == [])
+        #expect(try status(keys: 2, app: true).keyNotes(passkeys: true) == [])
+        #expect(try status(keys: 9).keyNotes(passkeys: true) == [])
+        // Add is gone, and each reason is said while it is the reason.
         #expect(try status(keys: 10).keyNotes(passkeys: true) == [ten])
-        #expect(try status(keys: 1, app: true, synced: true).keyNotes(passkeys: false) == [synced, another, second, StepWords.keysInBrowser])
+        #expect(try !status(keys: 10).canAddKey(passkeys: true))
+        #expect(try status(keys: 1, app: true, synced: true).keyNotes(passkeys: false) == [StepWords.keysInBrowser])
+        #expect(try status(keys: 10).keyNotes(passkeys: false) == [ten, StepWords.keysInBrowser])
+    }
+
+    @Test func addReadsAsAnotherOnceThereIsAKey() throws {
+        #expect(try status().addKeyWords == "Add")
+        #expect(try status(app: true).addKeyWords == "Add")
+        #expect(try status(keys: 1).addKeyWords == "Add another")
+        #expect(try status(keys: 3, app: true).addKeyWords == "Add another")
     }
 
     @Test func aKeysNameIsCheckedHereAsTheServerCountsIt() {
