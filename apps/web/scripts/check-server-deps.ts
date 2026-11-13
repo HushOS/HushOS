@@ -14,6 +14,11 @@
  * - no server chunk outside node_modules carries tsyringe's own words;
  * - the library and the two packages the order is about are in the output's node_modules;
  * - the library loads from there, as the server will load it.
+ *
+ * And one that keeps the arrangement honest. The library is a dependency twice: of
+ * packages/auth, whose code calls it and whose tests run against it, and of this app, so the
+ * build can find it to copy. Pinned apart, the tests would verify one version and the server
+ * run another. The two pins, and the copy in the output, must be the same version.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -34,6 +39,15 @@ function* chunks(dir: string): Generator<string> {
 }
 
 const problems: string[] = [];
+const pinned = (manifest: string) =>
+    (JSON.parse(readFileSync(manifest, 'utf8')) as { dependencies?: Record<string, string> })
+        .dependencies?.['@simplewebauthn/server'];
+const here = pinned(join(import.meta.dir, '..', 'package.json'));
+const auth = pinned(join(import.meta.dir, '..', '..', '..', 'packages', 'auth', 'package.json'));
+if (!here || here !== auth)
+    problems.push(
+        `@simplewebauthn/server is pinned to ${here ?? 'nothing'} in apps/web and ${auth ?? 'nothing'} in packages/auth: pin both to one exact version`,
+    );
 try {
     for (const file of chunks(server))
         if (readFileSync(file, 'utf8').includes(BUNDLED))
@@ -47,6 +61,14 @@ try {
 for (const name of NEEDED)
     if (!existsSync(join(traced, name, 'package.json')))
         problems.push(`${name} is not in the output's node_modules: the server could not load it`);
+const copied = join(traced, '@simplewebauthn/server/package.json');
+if (existsSync(copied)) {
+    const { version } = JSON.parse(readFileSync(copied, 'utf8')) as { version?: string };
+    if (version !== here)
+        problems.push(
+            `the output carries @simplewebauthn/server ${version ?? '?'}, and apps/web pins ${here ?? 'nothing'}`,
+        );
+}
 if (problems.length === 0) {
     try {
         const library = (await import(
