@@ -153,6 +153,50 @@ pub fn device_step_code(step: DeviceStep, approver_key: String, nonce: String) -
     Ok(format!("{number:02} {}", wordlist()[index]))
 }
 
+/// The code an approving device expects the person to type, once the asking device has
+/// revealed. `commitment` is the one this device saw before it posted its own value (or
+/// scanned from the other screen): what was revealed must be what was committed to, for
+/// this purpose and token, or there is no honest device on the other side. Then it is an
+/// error, and the app ends the request (`mismatch`) instead of showing a field.
+///
+/// ```
+/// use hushos_core::*;
+/// let (key, nonce, approver) = (base64url_encode(vec![1; 32]), base64url_encode(vec![2; 32]), base64url_encode(vec![3; 32]));
+/// let step = DeviceStep {
+///     user_id: "0f8fad5b-d9cb-469f-a165-70867728950e".into(),
+///     request_id: "7c9e6679-7425-40de-944b-e07fc1f90ae7".into(),
+///     purpose: "login".into(),
+///     token_digest: step_token_digest("token".into()),
+///     device_signing_key: key.clone(),
+/// };
+/// let commitment = device_step_commitment("login".into(), step.token_digest.clone(), key, nonce.clone())?;
+/// let code = approval_code_expected(step.clone(), commitment.clone(), approver.clone(), nonce.clone())?;
+/// assert_eq!(code, device_step_code(step.clone(), approver.clone(), nonce.clone())?);
+/// // Another key than the committed one: refused, never a code to type.
+/// let mut swapped = step;
+/// swapped.device_signing_key = base64url_encode(vec![9; 32]);
+/// assert!(approval_code_expected(swapped, commitment, approver, nonce).is_err());
+/// # Ok::<(), hushos_core::CoreError>(())
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn approval_code_expected(
+    step: DeviceStep,
+    commitment: String,
+    approver_key: String,
+    nonce: String,
+) -> CoreResult<String> {
+    let committed = device_step_commitment(
+        step.purpose.clone(),
+        step.token_digest.clone(),
+        step.device_signing_key.clone(),
+        nonce.clone(),
+    )?;
+    if field("commitment", &commitment)? != field("commitment", &committed)? {
+        return Err(input("The other device didn’t match its request."));
+    }
+    device_step_code(step, approver_key, nonce)
+}
+
 /// The bytes the approving device signs with its device key.
 ///
 /// ```
