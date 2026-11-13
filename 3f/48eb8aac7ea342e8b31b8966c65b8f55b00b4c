@@ -1,0 +1,31 @@
+.env.example
+  s_566b8e0c4467a4::t_d1fbfcedc25183 102-106
+.env.production.example
+  s_566b8e0c4467a4::t_65b258d014771a 127-131
+apps/web/src/lib/app-links.server.ts
+  s_566b8e0c4467a4::t_bf65a4308f6935 53-55,66-67
+compose.yaml
+  s_566b8e0c4467a4::t_4df618a26a769f 141-142
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_a268ae99dac8b5 869,873-889,967-968,2536,2538-2563,2565-2570
+docs/two-step-design.md
+  s_566b8e0c4467a4::t_003bf664891435 5,467-468,527,548,657-666,685-688,878,883-907
+turbo.json
+  s_566b8e0c4467a4::t_2ec201bd1f9d3c 61,139
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3f48eb8aac7ea342e8b31b8966c65b8f55b00b4c",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}

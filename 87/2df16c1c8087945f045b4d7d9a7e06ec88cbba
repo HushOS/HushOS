@@ -1,0 +1,29 @@
+apps/web/src/lib/api/two-step-keys-fixture.test.ts
+  s_566b8e0c4467a4::t_2dc12ee20c427e 1-89
+crates/hushos-core/AGENTS.md
+  s_566b8e0c4467a4::t_fc3b6eb6160fa1 87,343,353-360
+crates/hushos-core/fixtures/two-step-keys.json
+  s_566b8e0c4467a4::t_4f8117fe27a2a4 1-122
+crates/hushos-core/src/notifications.rs
+  s_566b8e0c4467a4::t_fb54acfd05a495 116-118,231-233,414-422,717-719
+crates/hushos-core/src/two_step.rs
+  s_566b8e0c4467a4::t_03537e3f19ee64 22-27,154,165-186,205,210-227,231,238,326-359,372-375,377-387,389-408,466,468,566-568,573-1006,1182,1184-1189,1200,1204-1527
+crates/hushos-core/tests/two_step_keys.rs
+  s_566b8e0c4467a4::t_4c85de771049f6 1-72
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "872df16c1c8087945f045b4d7d9a7e06ec88cbba",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
