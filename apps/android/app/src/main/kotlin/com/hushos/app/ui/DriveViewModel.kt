@@ -635,7 +635,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         val result = change { block(session) }
         // Only if it is still the session the request was made under: a sign-out and a sign-in since (these run in the
         // view model's scope, so leaving the screen doesn't stop them) must not be taken down by the old session's answer.
-        if (result.exceptionOrNull() is NotAuthenticated && Shared.session(context) == session) sessionLost()
+        if (result.exceptionOrNull() is NotAuthenticated && com.hushos.app.data.Auth.stillSignedIn(Shared.session(context), session)) sessionLost()
         return result
     }
 
@@ -742,7 +742,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
             val removed = change { Auth.removeOtherDevices(context, password) }
             // A session that ended under it is said as everywhere, but only if it is still the one stored: a sign-in
             // since (after a password change made meanwhile) must not be taken down by the old session's answer.
-            if (removed.exceptionOrNull() is NotAuthenticated && Shared.session(context) == asked) { sessionLost(); return@launch }
+            if (removed.exceptionOrNull() is NotAuthenticated && asked != null && com.hushos.app.data.Auth.stillSignedIn(Shared.session(context), asked)) { sessionLost(); return@launch }
             if (removed.isFailure) notifyUntilRead(com.hushos.app.data.StepWords.OTHERS_NOT_REMOVED)
             done(removed.isSuccess)
         }

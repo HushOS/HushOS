@@ -545,6 +545,13 @@ private func challenge(_ methods: [StepMethod] = [.totp, .backup, .phrase], phra
         #expect(change.mutesSessionEnd && !change.wordsHeld)
         change.settled()
         #expect(!change.mutesSessionEnd)
+        // A rotation that kept its session but could not be confirmed: muted while its words are on screen (the
+        // session may end if it landed), and released once they are saved, with no sign-in to wait for.
+        change.begin()
+        change.hold()
+        #expect(change.mutesSessionEnd)
+        change.released()
+        #expect(!change.mutesSessionEnd && !change.wordsHeld)
     }
 
     @Test func aSignInEndsWhateverWasHeldAndRecordsTheCheckOnlyForItsOwnWords() {

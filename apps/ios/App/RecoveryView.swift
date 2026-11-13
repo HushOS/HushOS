@@ -54,7 +54,8 @@ struct RecoveryView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if !finished {
-                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { model.recoveryDone() } }
+                    // Not while a reset is out: its new words come back to this screen, and closed it would show them nowhere.
+                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { model.recoveryDone() }.disabled(model.resetHolds) }
                 }
             }
         }

@@ -363,7 +363,8 @@ object Auth {
         var proved: Reset.Proved = Reset.Proved.Unknown
         if (made.sent !is Reset.Sent.Refused) {
             sent(made.userId)
-            proved = Reset.prove { proveReset(context, origin, enrollment.email, password, made) }
+            // Nothing after the reset's request may throw but an answered refusal: the new phrase may be the account's.
+            proved = runCatching { Reset.prove { proveReset(context, origin, enrollment.email, password, made) } }.getOrDefault(Reset.Proved.Unknown)
         }
         return when (val settled = Reset.settle(made.sent, proved)) {
             is Reset.Settled.Refused -> throw AuthFailure(Reset.refusal(settled.said, StepWords.NOT_RESET))
@@ -1246,7 +1247,10 @@ object Auth {
 
     /* Proves the password once more, then the server removes the account; every local trace goes with it. */
     fun deleteAccount(context: Context, password: String, twoStep: StepAnswer? = null) {
-        deleteAccountAt(sessionOf(context), password, twoStep)
+        val session = sessionOf(context)
+        deleteAccountAt(session, password, twoStep)
+        // What is cleared is the deleted account's: a sign-in by someone else while this waited is left alone.
+        if (!stillSignedIn(Shared.session(context), session)) return
         Shared.clearSession(context)
         Shared.clearDevice(context)
         AccountStore.of(context).wipe()

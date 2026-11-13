@@ -300,7 +300,7 @@ object StepWords {
     /* A rotation the server refused, after its own words: nothing changed. Said only after an answered refusal. */
     const val NOT_ROTATED = "Your account key was not rotated. Nothing changed, and your recovery phrase is still the one you have. Please try again."
     /* A rotation whose request left without an answered refusal, and nothing showed it was made: the words are shown, and the old ones kept. */
-    const val ROTATION_UNCERTAIN = "We couldn’t confirm that your recovery phrase was replaced. If it was, these 24 words are your recovery phrase now. If it wasn’t, your old phrase still is. Keep both until you have signed in."
+    const val ROTATION_UNCERTAIN = "We couldn’t confirm that your recovery phrase was replaced. If it was, these 24 words are your recovery phrase now. If it wasn’t, your old phrase still is. Keep both until you know which one your account uses."
     /* A phrase reset the server refused, after its own words: nothing changed. Said only after an answered refusal. */
     const val NOT_RESET = "Your password was not changed. Nothing changed, and your recovery phrase is still the one you have. Please try again."
     /* A phrase reset whose request left without an answered refusal, and nothing showed it was made. */

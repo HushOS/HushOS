@@ -998,7 +998,11 @@ struct ResetKeysSheet: View {
                     // Nothing confirmed the rotation: the account may still hold its old phrase, and a check of these words is not recorded against it.
                     CheckWordsView(phrase: phrase, recoveryVersion: nil, records: !signInAfter && !uncertain) {
                         NoticeCenter.shared.show("Recovery phrase saved")
-                        guard signInAfter, let email = model.user?.email, let userId = model.user?.id else { dismiss(); return }
+                        guard signInAfter, let email = model.user?.email, let userId = model.user?.id else {
+                            model.ownChange.released()
+                            dismiss()
+                            return
+                        }
                         // Whose words were checked, where, and which: recorded only at a sign-in that is theirs.
                         model.ownChange.wordsChecked(uncertain ? nil : CheckedWords(userId: userId, origin: model.origin, recoveryVersion: recoveryVersion))
                         let (model, password) = (model, password)
@@ -1037,7 +1041,9 @@ struct ResetKeysSheet: View {
                 // No session came of it (the sign-in didn't happen, its step did not pass, or nothing confirmed the
                 // rotation): the sign-in waits until the words are saved, and their end of the session stays this phone's own.
                 signInAfter = made.user == nil
-                if signInAfter { model.ownChange.hold() } else { model.ownChange.ended() }
+                // Held too when a session was kept but nothing confirmed the rotation: if it landed after all, that session
+                // ends, and "You've been signed out" must not come up over words nobody has saved yet.
+                if signInAfter || uncertain { model.ownChange.hold() } else { model.ownChange.ended() }
             } catch {
                 model.ownChange.ended()
                 if let words = await step.failed(error) { self.error = words }

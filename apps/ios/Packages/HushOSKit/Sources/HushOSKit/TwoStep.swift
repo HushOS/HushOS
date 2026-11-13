@@ -89,6 +89,8 @@ public struct OwnChange: Sendable, Equatable {
     public mutating func ended() { underWay = false }
     /* It went through and the new words are on screen, with the sign-in still to come. */
     public mutating func hold() { underWay = false; wordsHeld = true }
+    /* Words shown with a session kept (the rotation could not be confirmed) were saved, or their sheet closed: nothing is held. */
+    public mutating func released() { underWay = false; wordsHeld = false }
     /* The words were saved and checked: the sign-in that waited goes out. */
     public mutating func wordsChecked(_ words: CheckedWords?) { wordsHeld = false; signingIn = true; checked = words }
     /* That sign-in answered, whatever it said. */
@@ -155,7 +157,7 @@ public enum StepWords {
     /* A rotation whose reply was lost, and the session then said it had not happened. */
     public static let notRotated = "Your account key was not rotated. Nothing changed, and your recovery phrase is still the one you have. Please try again."
     /* A rotation whose reply was lost, and nothing could say whether it happened: the words are shown, and the old ones kept. */
-    public static let rotationUncertain = "We couldn’t confirm that your recovery phrase was replaced. If it was, these 24 words are your recovery phrase now. If it wasn’t, your old phrase still is. Keep both until you have signed in."
+    public static let rotationUncertain = "We couldn’t confirm that your recovery phrase was replaced. If it was, these 24 words are your recovery phrase now. If it wasn’t, your old phrase still is. Keep both until you know which one your account uses."
     /* A phrase reset whose reply was lost, and the account still shows its old versions: nothing changed, and the new words are not handed over. */
     public static let notReset = "Your password was not changed. Nothing changed, and your recovery phrase is still the one you have. Please try again."
     /* A phrase reset whose reply was lost, and nothing could say whether it happened. */
