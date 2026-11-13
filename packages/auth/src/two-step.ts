@@ -547,12 +547,13 @@ async function settle(
         /* The action deleted the account: nobody is left to log for or to tell. */
         accountGone?: boolean;
         /*
-         * The action replaced the account's backup codes: a code that answered the step was
-         * one of the set that is gone now, so "a backup code was used, N are left" would
-         * count codes that no longer work. The "new backup codes were made" notice says what
-         * happened; the use is still written to the security log.
+         * The action left none of the backup codes the answer could have come from: it made
+         * a new set, or turned the step off and deleted the set. A code that answered the
+         * step was one of those, so "a backup code was used, N are left" would count codes
+         * that no longer work. The action's own notice says what happened ("new backup codes
+         * were made", "two-step sign-in is off"); the use is still written to the security log.
          */
-        codesReplaced?: boolean;
+        codesGone?: boolean;
     } = {},
 ) {
     const { attempt, method, flow, freshPhrase } = checked;
@@ -582,7 +583,7 @@ async function settle(
         if (method === 'backup') {
             if (!passed.signIn)
                 await record({ userId, kind: 'backup-code-used', method, deviceId });
-            if (passed.codesReplaced) return;
+            if (passed.codesGone) return;
             // How many were left when the code was spent, as the repository counted it in that
             // transaction. Never counted again here: the action the code authorised may have
             // made a new set (ten) or deleted the set, and that would be another set's count.
@@ -810,7 +811,7 @@ export async function settleChangeStep(
     checked: Checked | null,
     result: unknown,
     done: boolean,
-    options: { accountGone?: boolean; codesReplaced?: boolean } = {},
+    options: { accountGone?: boolean; codesGone?: boolean } = {},
 ) {
     const refusal =
         typeof result === 'object' &&
@@ -1066,7 +1067,9 @@ export async function removeTwoStepMethod(
             step: checked ? { sessionTokenHash: hash(token), ...checked.proof } : undefined,
         }),
     );
-    await settleChangeStep(checked, removed, removed.status === 'ok');
+    await settleChangeStep(checked, removed, removed.status === 'ok', {
+        codesGone: removed.status === 'ok' && removed.turnedOff,
+    });
     if (removed.status !== 'ok') throw new AuthError('This method isn’t on your account.', 404);
     if (removed.turnedOff) {
         await record({ userId: user.id, kind: 'two-step-off', method: removed.kind });
@@ -1098,7 +1101,7 @@ export async function makeBackupCodes(sessionToken: string | null, input: TwoSte
         });
         return { fresh, replaced };
     });
-    await settleChangeStep(checked, replaced, replaced.status === 'ok', { codesReplaced: true });
+    await settleChangeStep(checked, replaced, replaced.status === 'ok', { codesGone: true });
     if (replaced.status !== 'ok') throw new AuthError('Turn on two-step sign-in first.', 409);
     await record({ userId: user.id, kind: 'backup-codes-made' });
     notice(user.id, 'backup-codes-made');

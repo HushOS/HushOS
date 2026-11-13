@@ -298,6 +298,59 @@ describe('two-step notices on the account’s devices', () => {
         ).toBe(10);
     }, 90_000);
 
+    test('turning the step off with a backup code: one notice, that the step is off, and the use is in the security log', async () => {
+        const who = await edge.account();
+        const laptop = await device(who);
+        const { codes } = await turnOn(laptop.cookie);
+        await pinged(1);
+        pings.length = 0;
+        edge.outbox.length = 0;
+        const status = await edge.call('GET', '/two-step', undefined, { cookie: laptop.cookie });
+        const methodId = status.body.methods[0].id as string;
+
+        // The last method removed, the step answered with a backup code: the codes go with it.
+        const step = await edge.call(
+            'POST',
+            '/two-step/challenge',
+            { purpose: 'two-step' },
+            { cookie: laptop.cookie },
+        );
+        const { proof } = await edge.passwordProof('/two-step/reauth', {}, laptop);
+        const removed = await edge.call(
+            'DELETE',
+            `/two-step/methods/${methodId}`,
+            {
+                ...proof,
+                twoStep: { token: step.body.token, proof: { kind: 'backup', code: codes[0] } },
+            },
+            { cookie: laptop.cookie },
+        );
+        expect(removed).toMatchObject({ status: 200, body: { removed: true, on: false } });
+        expect(await edge.db.select().from(edge.schema.twoStepBackupCodes)).toEqual([]);
+
+        // "A backup code was used, 9 are left" would count codes that were deleted with the
+        // step. The one notice says the step is off, and that the codes no longer work.
+        const [mail] = await edge.notices('two-step-off');
+        expect(mail!.text).toContain('backup codes no longer work');
+        await pinged(1);
+        await edge.quiet();
+        expect(edge.outbox.map((notice) => notice.kind)).toEqual(['two-step-off']);
+        const events = await listed(laptop.cookie);
+        expect(events.map((event) => event.kind)).toEqual(['two-step-on', 'two-step-off']);
+        expect(pings.map((ping) => ping.id)).toEqual([events[1]!.id]);
+
+        // The use is not lost: the account's security log has it, beside the step going off.
+        const log = await edge.call('GET', '/security-events', undefined, {
+            cookie: laptop.cookie,
+        });
+        expect(
+            (log.body.events as { kind: string; method: string | null }[])
+                .filter((line) => line.kind !== 'two-step-on' && line.kind !== 'sign-in')
+                .map((line) => `${line.kind}:${line.method}`)
+                .sort(),
+        ).toEqual(['backup-code-used:backup', 'two-step-off:totp']);
+    }, 90_000);
+
     test('a backup code that passes another change still says how many are left, from when it was used', async () => {
         const who = await edge.account();
         const laptop = await device(who);
