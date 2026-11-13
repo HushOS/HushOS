@@ -191,8 +191,9 @@ function LoginPage() {
                     onOver={(reason) => {
                         setStep(null);
                         setError(reason);
-                        // The password is asked for again: nothing of the old one is kept.
-                        form.setFieldValue('password', '');
+                        // The password is asked for again: nothing of the old one is kept, and
+                        // the empty field is not an error until the person tries again.
+                        form.setFieldValue('password', '', { dontValidate: true });
                     }}
                 />
             </AuthLayout>
