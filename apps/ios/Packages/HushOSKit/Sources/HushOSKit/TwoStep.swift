@@ -14,21 +14,31 @@ public struct PendingSignIn: Sendable {
     public let email: String
     public let challenge: StepChallenge
     let exportKey: Data
+    /* When the step arrived, on the clock that runs since boot (sleep included) and that nobody can set. */
+    let received: ContinuousClock.Instant
 
-    public init(origin: String, email: String, challenge: StepChallenge, exportKey: Data) {
+    public init(origin: String, email: String, challenge: StepChallenge, exportKey: Data, received: ContinuousClock.Instant = .now) {
         self.origin = origin
         self.email = email
         self.challenge = challenge
         self.exportKey = exportKey
+        self.received = received
     }
 
+    /* The server's five minutes and one more, as the web allows. */
+    public static let life: Duration = .seconds(360)
+
     /*
-     * When this is dropped unanswered, with what the password opened: a minute after the step's own
-     * end, as the web drops its own. A step whose end can't be read is given the server's five
-     * minutes from `now`. Nothing of a password's work stays in memory behind a screen left open.
+     * How long until this is dropped unanswered, with what the password opened (zero or less: now).
+     * Nothing can answer it by then, and nothing of a password's work stays in memory behind a screen
+     * left open.
+     *
+     * Counted from when the step arrived, never against its own `expiresAt`: that is the server's
+     * wall clock, and a phone whose date is set a few minutes fast would find every step over before
+     * it was shown, and could never sign in.
      */
-    public func dropAt(now: Date = Date()) -> Date {
-        (TwoStep.date(challenge.expiresAt) ?? now.addingTimeInterval(300)).addingTimeInterval(60)
+    public func dropIn(now: ContinuousClock.Instant = .now) -> Duration {
+        Self.life - received.duration(to: now)
     }
 }
 
@@ -143,11 +153,11 @@ public enum StepWords {
     /* The ways ran out after refusals (a paused app, a spent budget): updating would not help. */
     public static let noWayLeft = "There is no other way to answer this step from here right now. Start again in a while."
     /* A rotation whose reply was lost, and the session then said it had not happened. */
-    public static let notRotated = "Your account key was not rotated: the server never got the request. Please try again."
+    public static let notRotated = "Your account key was not rotated. Nothing changed, and your recovery phrase is still the one you have. Please try again."
     /* A rotation whose reply was lost, and nothing could say whether it happened: the words are shown, and the old ones kept. */
     public static let rotationUncertain = "We couldn’t confirm that your recovery phrase was replaced. If it was, these 24 words are your recovery phrase now. If it wasn’t, your old phrase still is. Keep both until you have signed in."
     /* A phrase reset whose reply was lost, and the account still shows its old versions: nothing changed, and the new words are not handed over. */
-    public static let notReset = "Your password was not changed: the server never got the request. Please try again."
+    public static let notReset = "Your password was not changed. Nothing changed, and your recovery phrase is still the one you have. Please try again."
     /* A phrase reset whose reply was lost, and nothing could say whether it happened. */
     public static let resetUncertain = "We couldn’t confirm that your password was changed. If it was, these 24 words are your recovery phrase now. If it wasn’t, your old phrase still is. Keep both until you have signed in."
     /*
@@ -160,10 +170,14 @@ public enum StepWords {
     public static let newPhraseAfterRotation = "Your old recovery phrase no longer works. These 24 words replace it."
     public static let newPhraseOnce = "They are shown here once. If your account asks for a second step when you sign in, these words answer it."
     public static let newPhraseSaved = "I’ve saved these words"
+    /* After a reset nothing confirmed: the password is not said to have changed. */
+    public static let signInAfterUncertainReset = "Sign in with your new password. If it doesn’t work, your old one still does."
     /* After a reset whose sign-in didn't happen. */
     public static let signInAfterReset = "Your password was changed. Sign in with your new password."
     /* The removal of other devices, asked for while turning the step on, did not happen. */
     public static let othersNotRemoved = "Your other devices weren’t removed. You can remove them under Devices."
+    /* A password exchange that waited a minute for its turn behind another: nothing was sent. The web's words for its own timeout. */
+    public static let tookTooLong = "This took too long. Please try again."
     /* A step that ended with nothing said. */
     public static let over = "This sign-in timed out. Enter your password again."
 }
@@ -312,16 +326,30 @@ public struct StepDraft: Sendable, Equatable {
 actor PasswordTurn {
     static let shared = PasswordTurn()
     private var busy = false
-    private var waiting: [CheckedContinuation<Void, Never>] = []
+    private var waiting: [(id: UUID, resume: CheckedContinuation<Bool, Never>)] = []
 
-    func enter() async {
-        if !busy { busy = true; return }
-        await withCheckedContinuation { waiting.append($0) }
+    /* How long a change waits for its turn before it gives up, with nothing sent. */
+    static let wait: Duration = .seconds(60)
+
+    /* True with the turn taken. False when `within` ran out first: the caller has no turn, and its place in the line is gone. */
+    @discardableResult
+    func enter(within limit: Duration? = nil) async -> Bool {
+        if !busy { busy = true; return true }
+        let id = UUID()
+        if let limit {
+            Task { try? await Task.sleep(for: limit); self.expire(id) }
+        }
+        return await withCheckedContinuation { waiting.append((id, $0)) }
+    }
+
+    private func expire(_ id: UUID) {
+        guard let at = waiting.firstIndex(where: { $0.id == id }) else { return }
+        waiting.remove(at: at).resume.resume(returning: false)
     }
 
     /* Hands the turn to whoever has waited longest, or frees it. */
     func leave() {
-        if waiting.isEmpty { busy = false } else { waiting.removeFirst().resume() }
+        if waiting.isEmpty { busy = false } else { waiting.removeFirst().resume.resume(returning: true) }
     }
 
     /* For a `defer`, which cannot wait. */
@@ -332,8 +360,9 @@ actor PasswordTurn {
      * turn straight back and throws: a change nobody is waiting for any more is not made late.
      * Pair with `defer { PasswordTurn.shared.leaveSoon() }`.
      */
-    static func take(_ turn: PasswordTurn = .shared) async throws {
-        await turn.enter()
+    static func take(_ turn: PasswordTurn = .shared, within limit: Duration = PasswordTurn.wait) async throws {
+        // The one ahead is taking a minute (a server that answers slowly, more than once): said, not sat through.
+        guard await turn.enter(within: limit) else { throw AuthError.message(StepWords.tookTooLong) }
         if Task.isCancelled {
             await turn.leave()
             throw CancellationError()
@@ -497,15 +526,15 @@ public enum TwoStep {
     }
 
     /*
-     * A step for a change this session makes. Nil when there is none to ask for here: the account
-     * has no step (409), or this server has two-step switched off and so hands out no challenge
-     * (501). On the second an account that turned the step on earlier is still asked for it: the
-     * change goes without an answer, the server refuses it with `two-step`, and the form says so.
+     * A step for a change this session makes. Nil when the account has no step (409): the change
+     * goes without one. The route does not look at TWO_STEP_ENABLED (only setting the step up and
+     * managing it answer 501 while that is off): an account that has the step is asked for it on
+     * every server.
      */
     public static func challenge(_ purpose: StepPurpose) async throws -> StepChallenge? {
         let reply = try await Auth.request("/api/auth/two-step/challenge", method: "POST", body: ["purpose": purpose.rawValue])
         if reply.status == 401 { throw AuthError.sessionEnded(session: reply.session.tag) }
-        if reply.status == 409 || reply.status == 501 { return nil }
+        if reply.status == 409 { return nil }
         switch stepChallengeReplyRead(status: UInt16(clamping: reply.status), body: reply.text) {
         case .step(let challenge): return challenge
         case .refused(let refusal, let message): throw StepError.refused(refusal, message)

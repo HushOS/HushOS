@@ -521,10 +521,35 @@ private struct BackupCodesList: View {
                 NoticeCenter.shared.show("Backup codes copied. Cleared from the clipboard in two minutes.")
             }
             .foregroundStyle(Alpine.primary).alpineRow()
-            ShareLink(item: TwoStep.codesNote(codes, email: email), subject: Text("HushOS backup codes")) { Text("Share") }
+            // The share sheet without its own Copy: that one puts the codes on the general pasteboard for good, where
+            // every app reads them and Universal Clipboard carries them to other devices. Copy above is the only way
+            // they reach the clipboard, on this phone only and for two minutes (`copyBriefly`).
+            Button("Share") { CodesShare.present(TwoStep.codesNote(codes, email: email)) }
                 .foregroundStyle(Alpine.primary).alpineRow()
         }
     }
+}
+
+/* The backup codes as a note, through the share sheet (Save to Files, Print, a password manager), never its Copy. */
+@MainActor
+enum CodesShare {
+    /* What the sheet may not do with them. */
+    static let excluded: [UIActivity.ActivityType] = [.copyToPasteboard]
+
+    static func present(_ note: String) {
+        let sheet = UIActivityViewController(activityItems: [CodesNote(text: note)], applicationActivities: nil)
+        sheet.excludedActivityTypes = excluded
+        TextPrompt.topController()?.present(sheet, animated: true)
+    }
+}
+
+/* The note with its subject, as the share sheet takes them. */
+private final class CodesNote: NSObject, UIActivityItemSource {
+    let text: String
+    init(text: String) { self.text = text }
+    func activityViewControllerPlaceholderItem(_: UIActivityViewController) -> Any { "" }
+    func activityViewController(_: UIActivityViewController, itemForActivityType _: UIActivity.ActivityType?) -> Any? { text }
+    func activityViewController(_: UIActivityViewController, subjectForActivityType _: UIActivity.ActivityType?) -> String { "HushOS backup codes" }
 }
 
 /*

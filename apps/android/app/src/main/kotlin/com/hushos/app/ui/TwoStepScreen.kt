@@ -337,10 +337,21 @@ fun TwoStepScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) 
         if (page == TwoStepPage.OFF && loaded && status?.on == false && !flow.pending) finish("Two-step sign-in is off.")
     }
 
+    // Backup codes nobody has seen yet come before everything else here, whichever page asked for them and wherever
+    // the person went while the request was out: the server has made them, and they are shown nowhere else.
+    flow.codes?.let { made ->
+        CodesScreen(model, flow, made, email) {
+            val said = if (flow.codesReplace) "New backup codes made." else "Two-step sign-in is on."
+            model.twoStepCodesSeen()
+            model.notify(said)
+            page = TwoStepPage.MAIN
+        }
+        return
+    }
     when (page) {
-        TwoStepPage.ON, TwoStepPage.REPLACE -> { AuthenticatorScreen(model, replacing = page == TwoStepPage.REPLACE, email = email, onBack = ::leave, onDone = ::finish); return }
+        TwoStepPage.ON, TwoStepPage.REPLACE -> { AuthenticatorScreen(model, replacing = page == TwoStepPage.REPLACE, onBack = ::leave); return }
         TwoStepPage.OFF -> { TurnOffScreen(model, status?.app?.id ?: status?.methods?.firstOrNull()?.id, onBack = ::leave); return }
-        TwoStepPage.CODES -> { NewCodesScreen(model, email, onBack = ::leave, onDone = ::finish); return }
+        TwoStepPage.CODES -> { NewCodesScreen(model, onBack = ::leave); return }
         TwoStepPage.MAIN -> {}
     }
     AccountPage("Two-step sign-in", onBack) {
@@ -458,7 +469,7 @@ private fun BackupCodes(model: DriveViewModel, codes: List<String>, email: Strin
  * page only shows it, so it can be rebuilt at any moment without losing the key or the codes.
  */
 @Composable
-private fun AuthenticatorScreen(model: DriveViewModel, replacing: Boolean, email: String, onBack: () -> Unit, onDone: (String) -> Unit) {
+private fun AuthenticatorScreen(model: DriveViewModel, replacing: Boolean, onBack: () -> Unit) {
     val alpine = Alpine.colors
     val context = LocalContext.current
     val holder = retain { StepUpHolder(model, StepPurpose.TWO_STEP) }
@@ -481,26 +492,13 @@ private fun AuthenticatorScreen(model: DriveViewModel, replacing: Boolean, email
     // The setup ran out and went back to the start: the code typed for the old key goes with it.
     LaunchedEffect(flow.enrolment == null) { if (flow.enrolment == null) { code = ""; tried = false } }
 
-    val made = flow.codes
     val enrolment = flow.enrolment
+    // Back is held while a request is out, not let through to the page behind: its answer (the key, the codes) is shown once.
+    BackHandler { if (!pending) onBack() }
     when {
-        made != null -> {
-            // Shown once: no way out but Done.
-            BackHandler {}
-            AccountPage("Save your backup codes", onBack = null) {
-                FormBody {
-                    Text("Two-step sign-in is on.", style = MaterialTheme.typography.bodyLarge)
-                    BackupCodes(model, made, email)
-                    if (flow.removing) Text("Removing your other devices", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
-                    if (flow.notRemoved) Text(StepWords.OTHERS_NOT_REMOVED, style = MaterialTheme.typography.bodyMedium, color = alpine.danger)
-                    Button(onClick = { onDone("Two-step sign-in is on.") }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text("Done") }
-                }
-            }
-        }
         enrolment != null -> {
             // The key is a secret until the app is confirmed: out of screenshots and the recents preview.
             SecureWindow()
-            BackHandler(enabled = !pending, onBack = onBack)
             AccountPage(if (replacing) "Add your new authenticator app" else "Add your authenticator app", onBack = if (pending) null else onBack) {
                 FormBody {
                     Text("Add HushOS to your authenticator app, then enter the code it shows.", style = MaterialTheme.typography.bodyLarge)
@@ -557,7 +555,6 @@ private fun AuthenticatorScreen(model: DriveViewModel, replacing: Boolean, email
             }
         }
         else -> {
-            BackHandler(enabled = !pending, onBack = onBack)
             AccountPage(if (replacing) "Replace your authenticator app?" else "Turn on two-step sign-in?", onBack = if (pending) null else onBack) {
                 FormBody {
                     Text(
@@ -593,7 +590,8 @@ private fun TurnOffScreen(model: DriveViewModel, methodId: String?, onBack: () -
     var password by retain { mutableStateOf("") }
     var tried by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { holder.prepare() }
-    BackHandler(enabled = !pending, onBack = onBack)
+    // Held while the request is out, not let through to the page behind.
+    BackHandler { if (!pending) onBack() }
     AccountPage("Turn off two-step sign-in?", onBack = if (pending) null else onBack) {
         FormBody {
             Text("Your password alone will sign you in, and your backup codes will stop working.", style = MaterialTheme.typography.bodyLarge)
@@ -615,9 +613,9 @@ private fun TurnOffScreen(model: DriveViewModel, methodId: String?, onBack: () -
     }
 }
 
-/* A new set of ten, which replaces the old one: the password and the step, then the codes once. */
+/* A new set of ten, which replaces the old one: the password and the step. The codes themselves are shown by `CodesScreen`, from the view model. */
 @Composable
-private fun NewCodesScreen(model: DriveViewModel, email: String, onBack: () -> Unit, onDone: (String) -> Unit) {
+private fun NewCodesScreen(model: DriveViewModel, onBack: () -> Unit) {
     val alpine = Alpine.colors
     val holder = retain { StepUpHolder(model, StepPurpose.TWO_STEP) }
     val flow = model.twoStepFlow
@@ -625,21 +623,8 @@ private fun NewCodesScreen(model: DriveViewModel, email: String, onBack: () -> U
     var password by retain { mutableStateOf("") }
     var tried by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { holder.prepare() }
-    val made = flow.codes
-    // The password has done its work once the codes are here.
-    LaunchedEffect(made != null) { if (made != null) password = "" }
-    if (made != null) {
-        BackHandler {}
-        AccountPage("Save your new backup codes", onBack = null) {
-            FormBody {
-                Text("Your earlier codes no longer work.", style = MaterialTheme.typography.bodyLarge)
-                BackupCodes(model, made, email)
-                Button(onClick = { onDone("New backup codes made.") }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text("Done") }
-            }
-        }
-        return
-    }
-    BackHandler(enabled = !pending, onBack = onBack)
+    // Held while "Making" is out, not let through to the page behind: the codes it makes are shown once.
+    BackHandler { if (!pending) onBack() }
     AccountPage("Make new backup codes?", onBack = if (pending) null else onBack) {
         FormBody {
             Text("You get ten new codes, and the ones you have now stop working.", style = MaterialTheme.typography.bodyLarge)
@@ -653,6 +638,26 @@ private fun NewCodesScreen(model: DriveViewModel, email: String, onBack: () -> U
                 if (!ready) return@Button
                 model.newBackupCodes(password, twoStep, holder::failed)
             }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(if (pending) "Making" else "Make new codes") }
+        }
+    }
+}
+
+/*
+ * The backup codes, once: after turning the step on, or a new set. Drawn from the view model's flow by
+ * `TwoStepScreen` itself, so they are found by whoever opens Two-step sign-in next if the page that
+ * asked for them was left while the request was out. No way out but Done.
+ */
+@Composable
+private fun CodesScreen(model: DriveViewModel, flow: com.hushos.app.data.TwoStepFlow, codes: List<String>, email: String, onDone: () -> Unit) {
+    val alpine = Alpine.colors
+    BackHandler {}
+    AccountPage(if (flow.codesReplace) "Save your new backup codes" else "Save your backup codes", onBack = null) {
+        FormBody {
+            Text(if (flow.codesReplace) "Your earlier codes no longer work." else "Two-step sign-in is on.", style = MaterialTheme.typography.bodyLarge)
+            BackupCodes(model, codes, email)
+            if (flow.removing) Text("Removing your other devices", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
+            if (flow.notRemoved) Text(StepWords.OTHERS_NOT_REMOVED, style = MaterialTheme.typography.bodyMedium, color = alpine.danger)
+            Button(onClick = onDone, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text("Done") }
         }
     }
 }

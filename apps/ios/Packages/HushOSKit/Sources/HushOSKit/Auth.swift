@@ -196,14 +196,15 @@ public enum Auth {
      * nobody is sent to a step they would need those words for. A step that names another key is left
      * for the person, and so is one whose answer did not come back as a session.
      */
-    public static func signInHolding(origin: String, email: String, password: String, phrase: String, recoveryVersion: UInt64) async throws -> SignIn {
-        await holding(try await startSignIn(origin: origin, email: email, password: password), phrase: phrase, recoveryVersion: recoveryVersion) { pending, proof in
+    public static func signInHolding(origin: String, email: String, password: String, phrase: String, recoverySalt: String) async throws -> SignIn {
+        await holding(try await startSignIn(origin: origin, email: email, password: password), phrase: phrase, recoverySalt: recoverySalt) { pending, proof in
             try await answerStep(pending, proof: proof)
         }
     }
 
-    static func holding(_ taken: SignIn, phrase: String, recoveryVersion: UInt64, answer: (PendingSignIn, StepProof) async throws -> SessionUser) async -> SignIn {
-        guard case .step(let pending) = taken, let signing = pending.challenge.phrase, signing.recoveryVersion == recoveryVersion,
+    /* `recoverySalt`: the held recovery key's own wrapping salt. The step names it only when that key is the account's. */
+    static func holding(_ taken: SignIn, phrase: String, recoverySalt: String, answer: (PendingSignIn, StepProof) async throws -> SessionUser) async -> SignIn {
+        guard case .step(let pending) = taken, let signing = pending.challenge.phrase, !recoverySalt.isEmpty, signing.wrappingSalt == recoverySalt,
               pending.challenge.methods.contains(.phrase),
               let signature = try? twoStepPhraseSign(phrase: phrase, wrappingSalt: signing.wrappingSalt, userId: signing.userId, stepToken: pending.challenge.token),
               let user = try? await answer(pending, .phrase(signature: signature))

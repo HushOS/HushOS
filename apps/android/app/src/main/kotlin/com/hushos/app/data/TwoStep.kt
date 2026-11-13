@@ -23,15 +23,25 @@ import org.json.JSONObject
  */
 
 /* A sign-in stopped at its second step: the step, and what the password opened, kept in memory until the answer brings the envelope. */
-class PendingSignIn(val origin: String, val email: String, val challenge: StepChallenge, internal val exportKey: ByteArray) {
+class PendingSignIn(val origin: String, val email: String, val challenge: StepChallenge, internal val exportKey: ByteArray, internal val received: Long = uptime()) {
     /*
-     * When this is dropped, with what the password opened: a minute after the step's own end, as the web
-     * does. Nothing can answer it by then, and the key must not sit in memory for as long as the app does.
-     * An end that can't be read still ends: the server's five minutes from `now`.
+     * How long until this is dropped, with what the password opened (zero or less: now): the server's
+     * five minutes and one more, as the web allows, counted from when the step arrived. Nothing can
+     * answer it by then, and the key must not sit in memory for as long as the app does.
+     *
+     * Counted on the clock that runs since boot, never against the step's own `expiresAt`: that is the
+     * server's wall clock, and a phone whose date is set a few minutes fast would find every step over
+     * before it was shown, and could never sign in.
      */
-    fun dropAt(now: java.time.Instant = java.time.Instant.now()): java.time.Instant =
-        (runCatching { java.time.Instant.parse(challenge.expiresAt) }.getOrNull() ?: now.plusSeconds(300)).plusSeconds(60)
+    fun dropIn(now: Long = uptime()): Long = LIFE_MILLIS - (now - received)
+
+    companion object {
+        const val LIFE_MILLIS = 6 * 60_000L
+    }
 }
+
+/* Milliseconds since boot, sleep included: unlike the wall clock nobody can set it. A test puts its own in. */
+internal var uptime: () -> Long = { android.os.SystemClock.elapsedRealtime() }
 
 /*
  * Recovery words a phone showed and checked with no session to tell the server so (a rotation's, or
@@ -90,55 +100,72 @@ object Reset {
     }
 
     /*
-     * What signing in with the new password showed, by the versions in its reply (Auth.proved). That it
-     * signed in shows nothing: a reset to the password the account already had signs in either way.
+     * What signing in with the new password showed, by what its reply carries of the change itself
+     * (Auth.proved): the salt this change generated, on the session's envelope or on the recovery key
+     * the second step names. That it signed in shows nothing: a reset to the password the account
+     * already had signs in either way.
      */
     sealed class Proved(internal val rank: Int) {
-        /* The session's envelope is the reset's, or the step named the reset's recovery key and the new phrase passed it. */
+        /* The session's envelope is this change's, or the step named this change's recovery key and the new phrase passed it. */
         data class SignedIn(val user: SessionUser) : Proved(3)
-        /* A reply showed the reset's version, but no session came of it. */
+        /*
+         * Signed in on the account as it was (a rotation only: the password is the same either way). Not proof
+         * that nothing changed, so the words are shown with "keep both", and the person stays in the app.
+         */
+        data class Unconfirmed(val user: SessionUser) : Proved(3)
+        /* A reply carried this change's salt, but no session came of it. */
         data object Applied : Proved(2)
-        /* A reply showed the old version, or the new password was refused: the reset was not made. */
+        /* A reply carried another salt, or the new password was refused. Not proof that nothing changed: the commit can land a second after the look. */
         data object NotApplied : Proved(1)
-        /* No reply showed a version. */
+        /* No reply carried a salt. */
         data object Unknown : Proved(0)
     }
 
     sealed class Settled {
-        /* Show the new words, signed in or not; `certain` false when nothing says the reset was made. */
+        /* Show the new words, signed in or not; `certain` false when nothing says the change was made. */
         data class Show(val user: SessionUser?, val certain: Boolean) : Settled()
-        /* Nothing changed: the server's words, or that the account is still as it was. */
+        /* The server answered a refusal, in these words: nothing changed, and the new words are not shown. */
         data class Refused(val said: String) : Settled()
     }
 
     /*
-     * The reset is the server's `{ user }` on a 2xx. A 4xx in its own words is a refusal, and nothing
-     * changed. Anything else (a 5xx, a page from something in the way, a 2xx without the account)
-     * says nothing either way.
+     * What the change's last request answered. `made` says whether a 2xx is the server's own answer
+     * (a reset's `{ user }`, a change's `{ success: true }`). A 4xx with the server's own words is an
+     * answered refusal: nothing changed. Anything else (a 5xx, a page from something in the way, a 2xx
+     * that is not the answer, a 4xx with nothing of the server's in it) says nothing either way.
      */
-    fun sent(status: Int, body: JSONObject): Sent = when {
-        status in 200..299 -> if (body.optJSONObject("user") != null) Sent.Accepted else Sent.Unknown
-        status in 400..499 -> (body.opt("message") as? String)?.takeIf { it.isNotEmpty() }?.let(Sent::Refused) ?: Sent.Unknown
+    fun sent(status: Int, body: JSONObject, made: (JSONObject) -> Boolean = { it.optJSONObject("user") != null }): Sent = when {
+        status in 200..299 -> if (made(body)) Sent.Accepted else Sent.Unknown
+        status in 400..499 -> (body.opt("message") as? String)?.takeIf { it.isNotBlank() }?.let(Sent::Refused) ?: Sent.Unknown
         else -> Sent.Unknown
     }
 
-    /* `notMade`: what is said when the account still shows its old versions (a reset's words, or a rotation's). */
-    fun settle(sent: Sent, proved: Proved, notMade: String = StepWords.NOT_RESET): Settled = when {
+    /*
+     * The new words are withheld only when the server answered a refusal. Once the request has left
+     * without one they are always shown: a look that found the account as it was is not proof, since
+     * the commit can land a second later, and words that were dropped cannot be shown again. Then
+     * they come with "keep both until you have signed in" (`certain` false).
+     */
+    fun settle(sent: Sent, proved: Proved): Settled = when {
         sent is Sent.Refused -> Settled.Refused(sent.said)
         proved is Proved.SignedIn -> Settled.Show(proved.user, certain = true)
+        // Signed in, on the account as the look found it: the server's own answer stands if there was one.
+        proved is Proved.Unconfirmed -> Settled.Show(proved.user, certain = sent is Sent.Accepted)
         sent is Sent.Accepted || proved is Proved.Applied -> Settled.Show(null, certain = true)
-        proved is Proved.NotApplied -> Settled.Refused(notMade)
         else -> Settled.Show(null, certain = false)
     }
 
+    /* An answered refusal's words: the server's why, then that nothing changed (`notMade`, the reset's sentence or the rotation's). */
+    fun refusal(said: String, notMade: String): String = if (said.isBlank()) notMade else "${said.trim()} $notMade"
+
     /*
      * Signs in after the reset, once more if the first try gave no session: a sign-in that failed
-     * for a moment's reason is tried again while the words are still held. The better answer of the
-     * two stands. An account that showed it was not reset is not asked again.
+     * for a moment's reason is tried again while the words are still held, and so is one that found
+     * the account as it was (the change may land a moment later). The better answer of the two stands.
      */
     fun prove(attempt: () -> Proved): Proved {
         val first = attempt()
-        if (first is Proved.SignedIn || first is Proved.NotApplied) return first
+        if (first is Proved.SignedIn || first is Proved.Unconfirmed) return first
         val second = attempt()
         return if (second.rank >= first.rank) second else first
     }
@@ -154,8 +181,10 @@ data class TwoStepFlow(
     val error: String? = null,
     /* The pending authenticator app: its key, until it is confirmed or runs out. */
     val enrolment: TotpEnrolment? = null,
-    /* Backup codes, shown once. */
+    /* Backup codes, shown once: kept until the person has said they are done with them, whatever page they were on when the codes arrived. */
     val codes: List<String>? = null,
+    /* The codes replace an earlier set (New codes), rather than come with turning the step on. */
+    val codesReplace: Boolean = false,
     /* The removal of other devices, behind the codes: under way, or failed. */
     val removing: Boolean = false,
     val notRemoved: Boolean = false,
@@ -165,6 +194,16 @@ data class TwoStepFlow(
     val reread: Int = 0,
 ) {
     fun started() = copy(pending = true, error = null)
+
+    /*
+     * A page of it was opened or left: nothing of the last one is carried over. Except a request
+     * still out, whose answer has to land, and codes nobody has seen yet: the server made them
+     * already, and they are shown nowhere else.
+     */
+    fun cleared(): TwoStepFlow = if (pending || codes != null) this else TwoStepFlow(reread = reread)
+
+    /* The codes were shown, and the person is done with them. */
+    fun seen(): TwoStepFlow = TwoStepFlow(reread = reread + 1)
 
     /* The pending app: its key is on screen from here. */
     fun enrolled(app: TotpEnrolment) = copy(pending = false, enrolment = app)
@@ -196,7 +235,7 @@ data class TwoStepFlow(
     )
 
     /* New codes, or why not. A lost reply may have replaced the old set: the count is read again. */
-    fun newCodes(fresh: List<String>) = copy(pending = false, codes = fresh)
+    fun newCodes(fresh: List<String>) = copy(pending = false, codes = fresh, codesReplace = true)
 
     /* A method removed (`on`: whether the step is still on). */
     fun removed(on: Boolean) = copy(pending = false, finished = if (on) "Authenticator app removed." else "Two-step sign-in is off.")
@@ -251,13 +290,13 @@ object StepWords {
     const val CANNOT_ANSWER = "This version of HushOS can’t answer this account’s second step. Update HushOS, then try again."
     /* The ways ran out after refusals (a paused app, a spent budget): updating would not help. */
     const val NO_WAY_LEFT = "There is no other way to answer this step from here right now. Start again in a while."
-    /* A rotation whose reply was lost, and the account still shows its old versions: nothing changed. */
-    const val NOT_ROTATED = "Your account key was not rotated: the server never got the request. Please try again."
-    /* A rotation whose reply was lost, and no reply showed a version either way: the words are shown, and the old ones kept. */
+    /* A rotation the server refused, after its own words: nothing changed. Said only after an answered refusal. */
+    const val NOT_ROTATED = "Your account key was not rotated. Nothing changed, and your recovery phrase is still the one you have. Please try again."
+    /* A rotation whose request left without an answered refusal, and nothing showed it was made: the words are shown, and the old ones kept. */
     const val ROTATION_UNCERTAIN = "We couldn’t confirm that your recovery phrase was replaced. If it was, these 24 words are your recovery phrase now. If it wasn’t, your old phrase still is. Keep both until you have signed in."
-    /* A phrase reset whose reply was lost, and the account still shows its old versions: nothing changed, and the new words are not handed over. */
-    const val NOT_RESET = "Your password was not changed: the server never got the request. Please try again."
-    /* A phrase reset whose reply was lost, and nothing could say whether it happened. */
+    /* A phrase reset the server refused, after its own words: nothing changed. Said only after an answered refusal. */
+    const val NOT_RESET = "Your password was not changed. Nothing changed, and your recovery phrase is still the one you have. Please try again."
+    /* A phrase reset whose request left without an answered refusal, and nothing showed it was made. */
     const val RESET_UNCERTAIN = "We couldn’t confirm that your password was changed. If it was, these 24 words are your recovery phrase now. If it wasn’t, your old phrase still is. Keep both until you have signed in."
     /*
      * The panel that shows new words to someone the change did not sign in again here, in the web's
@@ -269,10 +308,14 @@ object StepWords {
     const val NEW_PHRASE_AFTER_ROTATION = "Your old recovery phrase no longer works. These 24 words replace it."
     const val NEW_PHRASE_ONCE = "They are shown here once. If your account asks for a second step when you sign in, these words answer it."
     const val NEW_PHRASE_SAVED = "I’ve saved these words"
+    /* After a reset nothing confirmed: the password is not said to have changed. */
+    const val SIGN_IN_AFTER_UNCERTAIN_RESET = "Sign in with your new password. If it doesn’t work, your old one still does."
     /* After a reset whose sign-in didn't happen. */
     const val SIGN_IN_AFTER_RESET = "Your password was changed. Sign in with your new password."
     /* The removal of other devices, asked for while turning the step on, did not happen. */
     const val OTHERS_NOT_REMOVED = "Your other devices weren’t removed. You can remove them under Devices."
+    /* A password exchange that waited a minute for its turn behind another: nothing was sent. The web's words for its own timeout. */
+    const val TOO_LONG = "This took too long. Please try again."
     /* A step that ended with nothing said. */
     const val OVER = "This sign-in timed out. Enter your password again."
 }
@@ -565,15 +608,15 @@ object TwoStep {
     }
 
     /*
-     * A step for a change this session makes. Null when there is none to ask for here: the account
-     * has no step (409), or this server has two-step switched off and so hands out no challenge
-     * (501). On the second an account that turned the step on earlier is still asked for it: the
-     * change goes without an answer, the server refuses it with `two-step`, and the form says so.
+     * A step for a change this session makes. Null when the account has no step (409): the change
+     * goes without one. The route does not look at TWO_STEP_ENABLED (only setting the step up and
+     * managing it answer 501 while that is off): an account that has the step is asked for it on
+     * every server.
      */
     fun challenge(at: Shared.Session, purpose: StepPurpose): StepChallenge? {
         val reply = Auth.requestAt(at, "/api/auth/two-step/challenge", JSONObject().put("purpose", purpose.wire))
         if (reply.status == 401) throw NotAuthenticated()
-        if (reply.status == 409 || reply.status == 501) return null
+        if (reply.status == 409) return null
         return when (val read = stepChallengeReplyRead(status(reply.status), reply.text)) {
             is StepReply.Step -> read.challenge
             is StepReply.Refused -> throw StepRefused(read.refusal, read.message, reply.status)

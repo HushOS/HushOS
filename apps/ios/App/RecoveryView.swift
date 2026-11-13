@@ -10,6 +10,8 @@ import VisionKit
  * and check. The link still works on the web too, on any device.
  */
 struct RecoveryView: View {
+    /* Which start of the reset screen this is (`AppModel.recoveryRun`). */
+    let run: Int
     @Environment(AppModel.self) private var model
     @State private var step: Step = .email
     @State private var email = ""
@@ -45,7 +47,7 @@ struct RecoveryView: View {
                 case let .done(account):
                     NewPhraseStep(account: account) {
                         // Signed in: the drive. Not signed in (the sign-in after the reset didn't happen): sign-in, told why.
-                        if account.user != nil { model.wordsChecked(); model.recoveryDone() } else { model.recoveredSignedOut(account) }
+                        if account.user != nil { model.wordsChecked(); model.recoveryDone() } else { Task { await model.recoveredSignedOut(account) } }
                     }
                 }
             }
@@ -63,7 +65,8 @@ struct RecoveryView: View {
 
     /* The emailed link arrived (or opened the app): trade its token for the enrollment. */
     private func openLink() async {
-        guard let token = model.recoveryLink else { return }
+        // A screen the model has started over from (`recoveryRun`) is on its way out: the one-use link is the new screen's to spend.
+        guard run == model.recoveryRun, let token = model.recoveryLink else { return }
         step = .checking
         // Cleared only once the check is done: clearing it first changes the task's id, which
         // cancels this task and its request mid-flight.

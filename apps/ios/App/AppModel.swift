@@ -156,14 +156,14 @@ final class AppModel {
      */
     @discardableResult
     /* `holding`: new recovery words this phone still has in memory, which answer a second step that names them (`Auth.signInHolding`). */
-    func signIn(email: String, password: String, stepLater: Bool = false, holding: (phrase: String, recoveryVersion: UInt64)? = nil) async throws -> Bool {
+    func signIn(email: String, password: String, stepLater: Bool = false, holding: (phrase: String, recoverySalt: String)? = nil) async throws -> Bool {
         removedNotice = false
         signInGeneration += 1
         await wiping?.value
         let previous = AccountStore.shared.owner()
         // The session is stored only once signed in; another account's data goes then (AccountStore.claim).
         let taken = if let holding {
-            try await Auth.signInHolding(origin: origin, email: email, password: password, phrase: holding.phrase, recoveryVersion: holding.recoveryVersion)
+            try await Auth.signInHolding(origin: origin, email: email, password: password, phrase: holding.phrase, recoverySalt: holding.recoverySalt)
         } else {
             try await Auth.startSignIn(origin: origin, email: email, password: password)
         }
@@ -198,11 +198,11 @@ final class AppModel {
         if lastEmail.isEmpty { lastEmail = pending.email }
         stepNotice = ""
         pendingStep = pending
-        // Left unanswered, the step and what the password opened are dropped a minute after the step's own end.
+        // Left unanswered, the step and what the password opened are dropped six minutes after it arrived, on the clock
+        // since boot (`PendingSignIn.dropIn`): the date on the phone, right or wrong, has no say in it.
         let token = pending.challenge.token
-        let wait = max(0, pending.dropAt().timeIntervalSinceNow)
         Task { [weak self] in
-            try? await Task.sleep(for: .seconds(wait))
+            try? await Task.sleep(for: max(.zero, pending.dropIn()), clock: .continuous)
             guard let self, self.pendingStep?.challenge.token == token else { return }
             self.cancelStep(StepWords.over)
         }
@@ -210,7 +210,7 @@ final class AppModel {
 
     /* The step's answer: on a right one the app is signed in, as a sign-in without a step leaves it. */
     func answerStep(_ proof: StepProof) async throws {
-        guard let pending = pendingStep else { throw StepError.refused(.expired, StepWords.over) }
+        guard let pending = pendingStep, pending.dropIn() > .zero else { throw StepError.refused(.expired, StepWords.over) }
         signInGeneration += 1
         await wiping?.value
         let previous = AccountStore.shared.owner()
@@ -463,6 +463,10 @@ final class AppModel {
         // (The guard on each pattern: a `where` binds only to the pattern it follows.)
         case .success(.recover) where creatingAccount, .success(.register) where creatingAccount:
             linkAfterCreating = url
+        // Nor over a reset that is under way, or whose new words are on screen with no session: they are in this
+        // screen's memory only, and a link that replaced it would be the end of them. It opens once they are saved.
+        case .success(.recover) where resetHolds, .success(.register) where resetHolds:
+            linkAfterReset = url
         // The emailed reset link opens the reset here, signed in or not.
         case let .success(.recover(token)):
             signingUp = false
@@ -508,6 +512,8 @@ final class AppModel {
     func recoveryDone() {
         recovering = false
         recoveryLink = nil
+        // The reset's words are saved (or the reset was left before it began): a link that waited for them opens now.
+        resetReleased()
     }
 
     /* Create an account, in the app: shown over sign-in (or opened by the emailed link). Never over a signed-in drive. */
@@ -518,6 +524,24 @@ final class AppModel {
     private(set) var wordsWaiting = false
 
     func startSignup() { signingUp = true }
+
+    /*
+     * A phrase reset from its request until its new words are saved and its screen is done with (`recover`,
+     * `recoveryDone`), and a sign-up or reset link that arrived meanwhile, opened after it.
+     */
+    private(set) var resetHolds = false
+    private var linkAfterReset: URL?
+    /* Counts each time the reset screen must start over for a link that waited: its identity, so nothing of the reset before it stays on screen. */
+    private(set) var recoveryRun = 0
+
+    private func resetReleased() {
+        resetHolds = false
+        if let url = linkAfterReset {
+            linkAfterReset = nil
+            recoveryRun += 1
+            open(url)
+        }
+    }
 
     /* An account being made (createAccount), and a sign-up or reset link that arrived meanwhile, opened after it. */
     private var creatingAccount = false
@@ -583,14 +607,30 @@ final class AppModel {
         signInGeneration += 1
         await wiping?.value
         let previous = AccountStore.shared.owner()
-        let account = try await Auth.recover(enrollment, password: password, phrase: phrase)
+        // From here the reset's screen may come to hold the account's only phrase: no link replaces it (`open`).
+        resetHolds = true
+        // And the session this phone has is ended by the reset: its end is this phone's own doing from here, so no
+        // "You've been signed out" takes the reset's screen, and the words on it, away (`ownChange`).
+        ownChange.begin()
+        let account: RecoveredAccount
+        do {
+            account = try await Auth.recover(enrollment, password: password, phrase: phrase)
+        } catch {
+            ownChange.ended()
+            resetReleased()
+            throw error
+        }
         // The new words wait to be checked even if the app is stopped before they are (the drive shows them first).
         WordsWaiting.set(userId: account.userId)
-        // Not signed in (the sign-in after the reset failed, twice): the words are shown from here all the same.
+        // Not signed in (the sign-in after the reset failed, twice): the words are shown from here all the same, and
+        // held until they are saved (`recoveredSignedOut`).
         if let user = account.user {
             await anotherAccount(since: previous)
             signedIn(user)
+        } else {
+            ownChange.hold()
         }
+        // Either way the words are on the reset's screen now, and a link still waits until they are saved (`recoveryDone`).
         return account
     }
 
@@ -599,13 +639,30 @@ final class AppModel {
      * with the address filled and what to do said. The check is recorded at that sign-in, if it is
      * this account's on this server.
      */
-    func recoveredSignedOut(_ account: RecoveredAccount) {
+    func recoveredSignedOut(_ account: RecoveredAccount) async {
         WordsWaiting.clear()
         wordsWaiting = false
+        // A session this phone still shows is left before sign-in comes up, or the app would go back to the drive it
+        // had. The recovered account's own was ended by the reset (what the phone holds is kept, as when a session
+        // ends). Another account's is ended now, as signing in over it would have: properly, on the server too.
+        if state == .signedIn {
+            if let user, user.id.lowercased() == account.userId.lowercased() {
+                sessionClosed()
+                lastOwner = owner
+                SharedKeychain.delete(SharedKeychain.sessionAccount)
+                self.user = nil
+                vault = nil
+                owner = nil
+                state = .signedOut
+            } else {
+                await signOut()
+            }
+        }
         ownChange.wordsChecked(CheckedWords(userId: account.userId, origin: origin, recoveryVersion: account.certain ? account.recoveryVersion : 0))
         ownChange.settled()
         lastEmail = account.email
         recoveryDone()
-        NoticeCenter.shared.show(StepWords.signInAfterReset, important: true)
+        // Only a reset that is known to have been made says the password changed.
+        NoticeCenter.shared.show(account.certain ? StepWords.signInAfterReset : StepWords.signInAfterUncertainReset, important: true)
     }
 }

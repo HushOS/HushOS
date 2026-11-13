@@ -733,6 +733,12 @@ private fun AdvancedScreen(model: DriveViewModel, state: DriveState, onReset: ()
         LaunchedEffect(Unit) { step.prepare() }
         AlertDialog(
             onDismissRequest = { if (!pending) deleting = false },
+            // A dialog is a window of its own: the page's secure flag does not reach it. Whenever the step here can be
+            // answered with the recovery phrase, the dialog itself stays out of screenshots, recordings and recents.
+            properties = androidx.compose.ui.window.DialogProperties(
+                securePolicy = if (com.hushos.core.StepMethod.PHRASE in step.step.methods) androidx.compose.ui.window.SecureFlagPolicy.SecureOn
+                    else androidx.compose.ui.window.SecureFlagPolicy.Inherit,
+            ),
             title = { Text("Delete account") },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3)) {

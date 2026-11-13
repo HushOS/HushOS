@@ -994,7 +994,8 @@ struct ResetKeysSheet: View {
                 if let phrase {
                     // The new phrase's version: read after the reset, since the server made it.
                     // No session is left to record the check with while the sign-in waits: the app records it once signed in.
-                    CheckWordsView(phrase: phrase, recoveryVersion: nil, records: !signInAfter) {
+                    // Nothing confirmed the rotation: the account may still hold its old phrase, and a check of these words is not recorded against it.
+                    CheckWordsView(phrase: phrase, recoveryVersion: nil, records: !signInAfter && !uncertain) {
                         NoticeCenter.shared.show("Recovery phrase saved")
                         guard signInAfter, let email = model.user?.email, let userId = model.user?.id else { dismiss(); return }
                         // Whose words were checked, where, and which: recorded only at a sign-in that is theirs.
@@ -1004,7 +1005,7 @@ struct ResetKeysSheet: View {
                         Task {
                             // Muted until the sign-in has answered: a late 401 from the old session says nothing over it.
                             // A second step that names these words' recovery key is answered with them; any other is the person's.
-                            let signedIn = try? await model.signIn(email: email, password: password, holding: (phrase, recoveryVersion))
+                            let signedIn = try? await model.signIn(email: email, password: password, holding: (phrase, recovery.value?["wrappingSalt"] as? String ?? ""))
                             model.ownChange.settled()
                             // No sign-in (no connection): the ended session is said now, as it would have been.
                             if signedIn == nil { await model.sessionEnded() }

@@ -92,6 +92,8 @@ fun SignInScreen(model: DriveViewModel, state: DriveState) {
     // The account's second step, after the password. Back from it, the password is asked for again (nothing of the
     // old one is kept), with why if the step ended.
     state.step?.let { challenge -> SignInStepScreen(model, challenge); return }
+    // The account a reset just recovered: its address, filled in for the sign-in that follows the new words.
+    LaunchedEffect(state.signInEmail) { state.signInEmail?.let { address -> email = address; emailError = null; model.clearSignInEmail() } }
     LaunchedEffect(state.stepNotice) {
         state.stepNotice?.let { said -> password = ""; error = said.ifEmpty { null }; model.clearStepNotice() }
     }

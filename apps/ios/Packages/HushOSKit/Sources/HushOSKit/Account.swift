@@ -515,21 +515,15 @@ extension Auth {
         public let user: SessionUser?
     }
 
-    /* A change's request that got no answer of the server's own: it may have been made. */
-    static func unanswered(_ error: Error) -> Bool {
-        if case StepError.lost = error { return true }
-        if case AuthError.message(let said) = error { return said == AuthError.unreachable }
-        return false
-    }
-
     /*
      * Once the last request has gone out the new phrase is returned whatever happens next: the old one
      * may be dead already, and for someone whose only second step is the phrase, losing the new one is
-     * losing the account. Whether the rotation was made is read from versions, as a reset's is
-     * (`proveReset`): the sign-in after it, with `email`, shows the new credential version or names the
-     * new recovery key only if it was. That sign-in's step is answered with the new phrase, which nobody
-     * has seen yet, so no one is sent to a step they would need those words for. The old versions mean
-     * it was not made (`StepWords.notRotated`); no version at all means the words are shown with a caveat.
+     * losing the account. Only a refusal the server answered withholds it (`StepWords.notRotated`).
+     * Whether the rotation was made is read as a reset's is (`proveReset`): the sign-in after it, with
+     * `email`, carries this rotation's salts only if it was. That sign-in's step is answered with the new
+     * phrase, which nobody has seen yet, so no one is sent to a step they would need those words for. When
+     * nothing shows the rotation was made, the words are shown all the same, with "keep both until you
+     * have signed in".
      */
     public static func rotateKeysKit(email: String, password: String, twoStep: StepAnswer? = nil) async throws -> RotatedKeys {
         try await PasswordTurn.take()
@@ -580,30 +574,56 @@ extension Auth {
         if let settingsKey { body["settingsKey"] = json(settingsKey) }
         if let twoStep { body["twoStep"] = try twoStep.json() }
         let asked = try testSession ?? session()
-        var sent = Reset.Sent.accepted
-        do {
-            try done(try await call("/api/auth/security/finish", method: "POST", body: body, as: asked, whole: true, lost: StepWords.lostSaved), lost: StepWords.lostSaved)
-        } catch where unanswered(error) {
-            // The reply was lost, and with it the only showing of the new words unless they are kept. A refusal in the
-            // server's words changed nothing, and is thrown for the form to show.
-            sent = .unknown
-        }
+        // Everything the caller needs is made before the request goes: nothing after it may throw but an answered refusal.
         let phrase = recovery.phrase
-        let proved = await Reset.prove {
-            await proveReset(origin: asked.origin, email: email, password: password, phrase: phrase,
-                             credentialVersion: sealed.credentialVersion, recoveryVersion: recovery.envelope.recoveryVersion)
-        }
-        switch Reset.settle(sent: sent, proved: proved, notMade: StepWords.notRotated) {
-        case .refused(let said):
-            throw AuthError.message(said)
-        case .show(let user, let certain):
-            // What this phone remembers follows the server: written only once the rotation is known to have been made.
-            // (Signed in, the sign-in has written it already, from the envelope it was handed.)
-            if certain, user == nil {
-                let memory = try deviceRemember(userId: userId, accountKey: newRoot, keyVersion: sealed.keyVersion, credentialVersion: sealed.credentialVersion, deviceKeyId: UUID().uuidString.lowercased())
-                try SharedKeychain.write(SharedKeychain.deviceAccount, SharedKeychain.Device(memory: memory))
+        let kit = json(recovery.envelope)
+        let memory = try? deviceRemember(userId: userId, accountKey: newRoot, keyVersion: sealed.keyVersion, credentialVersion: sealed.credentialVersion, deviceKeyId: UUID().uuidString.lowercased())
+        // From here the new phrase may be the account's only one: a reply that never arrives must not cost it.
+        let sent = try finishSent(try? await request("/api/auth/security/finish", method: "POST", body: body, as: asked))
+        let proved: Reset.Proved
+        if case .refused = sent { proved = .unknown } else {
+            proved = await Reset.prove {
+                await proveReset(origin: asked.origin, email: email, password: password, phrase: phrase,
+                                 envelopeSalt: sealed.wrappingSalt, recoverySalt: recovery.envelope.wrappingSalt, keepsSession: true)
             }
-            return RotatedKeys(phrase: phrase, recovery: json(recovery.envelope), recoveryVersion: recovery.envelope.recoveryVersion, certain: certain, user: user)
+        }
+        return try rotated(phrase: phrase, recovery: kit, recoveryVersion: recovery.envelope.recoveryVersion, memory: memory,
+                           settled: Reset.settle(sent: sent, proved: proved)) { memory in
+            try SharedKeychain.write(SharedKeychain.deviceAccount, SharedKeychain.Device(memory: memory))
+        }
+    }
+
+    /*
+     * What `security/finish` answered to a rotation. The step's own refusals and an ended session are thrown as
+     * they always were (the server answered, and nothing changed): the form's step fields and the sign-in screen
+     * word those. Any other 4xx in the server's words is an answered refusal too. Everything else, no reply at
+     * all included, is unknown: the rotation may have been made.
+     */
+    static func finishSent(_ reply: SessionReply?) throws -> Reset.Sent {
+        guard let reply else { return .unknown }
+        if !(200 ..< 300).contains(reply.status) {
+            if case .refused(let refusal, let message) = stepChangeReplyRead(status: UInt16(clamping: reply.status), body: reply.text), StepError.named(refusal) {
+                throw StepError.refused(refusal, message)
+            }
+            if reply.status == 401 { throw AuthError.sessionEnded(session: reply.session.tag) }
+        }
+        return Reset.sent(status: reply.status, body: reply.body) { ($0["success"] as AnyObject) === kCFBooleanTrue }
+    }
+
+    /*
+     * What a rotation hands back once it is settled. What this phone remembers follows the server: written
+     * only once the rotation is known to have been made (signed in, the sign-in has written it already, from
+     * the envelope it was handed). Best effort: a keychain that refuses the write costs an unlock later, never
+     * the new phrase, which is returned whatever `remember` does.
+     */
+    static func rotated(phrase: String, recovery: [String: Any], recoveryVersion: UInt64, memory: DeviceMemory?, settled: Reset.Settled,
+                        remember: (DeviceMemory) throws -> Void) throws -> RotatedKeys {
+        switch settled {
+        case .refused(let said):
+            throw AuthError.message(Reset.refusal(said, notMade: StepWords.notRotated))
+        case .show(let user, let certain):
+            if certain, user == nil, let memory { try? remember(memory) }
+            return RotatedKeys(phrase: phrase, recovery: recovery, recoveryVersion: recoveryVersion, certain: certain, user: user)
         }
     }
 }

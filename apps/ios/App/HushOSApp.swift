@@ -72,7 +72,7 @@ struct RootView: View {
             #endif
             await model.start()
         }
-        .fullScreenCover(isPresented: Binding(get: { model.recovering }, set: { if !$0 { model.recoveryDone() } })) { RecoveryView() }
+        .fullScreenCover(isPresented: Binding(get: { model.recovering }, set: { if !$0 { model.recoveryDone() } })) { RecoveryView(run: model.recoveryRun).id(model.recoveryRun) }
         .fullScreenCover(isPresented: Binding(get: { model.signingUp }, set: { if !$0 { model.signupDone() } })) { SignupView() }
         // hushos:// links, and https links when the system hands them over as a URL.
         .onOpenURL { url in model.open(url) }

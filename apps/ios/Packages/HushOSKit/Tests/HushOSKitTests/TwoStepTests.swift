@@ -245,8 +245,8 @@ private func challenge(_ methods: [StepMethod] = [.totp, .backup, .phrase], phra
 @Suite struct KeptWordsTests {
     let user = SessionUser(id: "u", name: "Maya", email: "maya@example.org", credentialVersion: 3, role: "member")
 
-    @Test func onceTheResetIsTakenTheNewWordsAreShownWhateverTheSignInDoes() {
-        // The old phrase is dead the moment recover/finish succeeds, and the new one is only in memory. Dropped
+    @Test func onceTheChangeIsTakenTheNewWordsAreShownWhateverTheSignInDoes() {
+        // The old phrase is dead the moment the server takes the change, and the new one is only in memory. Dropped
         // because the sign-in after it failed (no network, a 429, a step that didn't pass), the account has no phrase
         // anyone has seen.
         for proved in [Reset.Proved.applied, .unknown, .notApplied] {
@@ -255,27 +255,58 @@ private func challenge(_ methods: [StepMethod] = [.totp, .backup, .phrase], phra
         #expect(Reset.settle(sent: .accepted, proved: .signedIn(user)) == .show(user, certain: true))
     }
 
-    @Test func aResetWhoseOwnReplyWasLostIsSettledByTheSignInWithTheNewPassword() {
-        // The new password signs in, or gets as far as the step: the reset was made, and the words are the account's.
+    @Test func theNewWordsAreWithheldOnlyWhenTheServerAnsweredARefusal() {
+        // The request left and nothing of the server's came back. A look that found the account as it was is not proof
+        // that nothing changed: the commit can land a second later, and words that were dropped can't be shown again.
+        // Before, this said "not changed" and threw the only copy of what may be the account's phrase away.
+        #expect(Reset.settle(sent: .unknown, proved: .notApplied) == .show(nil, certain: false))
+        #expect(Reset.settle(sent: .unknown, proved: .unknown) == .show(nil, certain: false))
+        // Something showed it was made: the words are the account's.
         #expect(Reset.settle(sent: .unknown, proved: .signedIn(user)) == .show(user, certain: true))
         #expect(Reset.settle(sent: .unknown, proved: .applied) == .show(nil, certain: true))
-        // It is not the account's password: nothing changed, and the new words are not shown as anyone's.
-        #expect(Reset.settle(sent: .unknown, proved: .notApplied) == .refused(StepWords.notReset))
-        // Nothing answers: the words are kept and shown, and said to be uncertain so the old ones are kept too.
-        #expect(Reset.settle(sent: .unknown, proved: .unknown) == .show(nil, certain: false))
-        // A refusal in the server's words changed nothing, whatever else is known.
-        #expect(Reset.settle(sent: .refused("This link has expired."), proved: .unknown) == .refused("This link has expired."))
+        // The server answered, and refused: nothing changed, whatever a look afterwards showed, and only then is that said.
+        for proved in [Reset.Proved.unknown, .notApplied, .applied] {
+            #expect(Reset.settle(sent: .refused("This link has expired."), proved: proved) == .refused("This link has expired."))
+        }
+        #expect(Reset.refusal("This link has expired.", notMade: StepWords.notReset) == "This link has expired. \(StepWords.notReset)")
+        #expect(Reset.refusal(" ", notMade: StepWords.notRotated) == StepWords.notRotated)
+        #expect(StepWords.notReset == "Your password was not changed. Nothing changed, and your recovery phrase is still the one you have. Please try again.")
+        #expect(StepWords.notRotated == "Your account key was not rotated. Nothing changed, and your recovery phrase is still the one you have. Please try again.")
     }
 
-    @Test func whatRecoverFinishAnsweredIsReadFromItsOwnShape() {
-        #expect(Auth.resetSent(status: 200, body: ["user": ["id": "u"]]) == .accepted)
+    @Test func onlyA4xxInTheServersOwnWordsIsAnAnsweredRefusal() {
+        #expect(Reset.sent(status: 200, body: ["user": ["id": "u"]]) == .accepted)
         // A 200 that is not the account (a proxy's page parsed as nothing), and any 5xx: nothing says either way.
-        #expect(Auth.resetSent(status: 200, body: [:]) == .unknown)
-        #expect(Auth.resetSent(status: 503, body: ["message": "Authentication is temporarily unavailable. Please try again."]) == .unknown)
-        #expect(Auth.resetSent(status: 502, body: [:]) == .unknown)
+        #expect(Reset.sent(status: 200, body: [:]) == .unknown)
+        #expect(Reset.sent(status: 200, body: ["user": "u"]) == .unknown)
+        #expect(Reset.sent(status: 503, body: ["message": "Authentication is temporarily unavailable. Please try again."]) == .unknown)
+        #expect(Reset.sent(status: 502, body: [:]) == .unknown)
         // A 4xx in the server's words is a refusal: the old phrase still works, and the new words are never shown.
-        #expect(Auth.resetSent(status: 401, body: ["message": "That recovery phrase isn’t right."]) == .refused("That recovery phrase isn’t right."))
-        #expect(Auth.resetSent(status: 429, body: [:]) == .unknown)
+        #expect(Reset.sent(status: 401, body: ["message": "That recovery phrase isn’t right."]) == .refused("That recovery phrase isn’t right."))
+        // A 4xx with nothing of the server's in it (something in the way) is not one: the words are kept.
+        #expect(Reset.sent(status: 429, body: [:]) == .unknown)
+        #expect(Reset.sent(status: 403, body: ["message": "  "]) == .unknown)
+    }
+
+    @Test func whatSecurityFinishAnsweredToARotationKeepsTheWordsUnlessItRefused() throws {
+        let session = SharedKeychain.Session(origin: "https://step.test", token: "t", userId: "u")
+        func reply(_ status: Int, _ body: [String: Any], text: String? = nil) -> Auth.SessionReply {
+            let text = text ?? String(data: (try? JSONSerialization.data(withJSONObject: body)) ?? Data(), encoding: .utf8) ?? ""
+            return Auth.SessionReply(status: status, text: text, body: body, session: session)
+        }
+        #expect(try Auth.finishSent(reply(200, ["success": true])) == .accepted)
+        // No reply at all, a gateway's error, a 200 that is not the server's answer: the rotation may have been made.
+        #expect(try Auth.finishSent(nil) == .unknown)
+        #expect(try Auth.finishSent(reply(502, [:], text: "<html>Bad gateway</html>")) == .unknown)
+        #expect(try Auth.finishSent(reply(200, [:])) == .unknown)
+        #expect(try Auth.finishSent(reply(200, ["success": 1])) == .unknown)
+        #expect(try Auth.finishSent(reply(429, [:], text: "")) == .unknown)
+        // The server answered, and refused: the step's own refusals go to the form's step fields with their code,
+        // an ended session to sign-in, and anything else is a refusal in the server's words.
+        #expect(throws: StepError.refused(.wrong, "That code didn’t work.")) { try Auth.finishSent(reply(401, ["message": "That code didn’t work.", "code": "step-wrong"])) }
+        #expect(throws: StepError.refused(.required, "This needs your second step.")) { try Auth.finishSent(reply(403, ["message": "This needs your second step.", "code": "two-step"])) }
+        #expect(throws: AuthError.self) { try Auth.finishSent(reply(401, ["message": "Sign in again."])) }
+        #expect(try Auth.finishSent(reply(400, ["message": "That isn’t your password."])) == .refused("That isn’t your password."))
     }
 
     actor Attempts {
@@ -285,25 +316,25 @@ private func challenge(_ methods: [StepMethod] = [.totp, .backup, .phrase], phra
         func next() -> Reset.Proved { made += 1; return answers.isEmpty ? .unknown : answers.removeFirst() }
     }
 
-    @Test func theSignInAfterAResetIsTriedOnceMoreAndItsStepFailingStillProvesThePassword() async {
+    @Test func theSignInAfterAChangeIsTriedOnceMoreAndTheBetterAnswerStands() async {
         // The step path failing (a lost reply to login/two-step) leaves "applied": tried again, and signed in the second time.
         var attempts = Attempts([.applied, .signedIn(user)])
         #expect(await Reset.prove { await attempts.next() } == .signedIn(user))
         #expect(await attempts.made == 2)
-        // Still no session the second time: the password stays proved, so the words are shown and sign-in follows.
+        // Still no session the second time: the change stays shown as made, so the words are the account's.
         attempts = Attempts([.applied, .unknown])
         #expect(await Reset.prove { await attempts.next() } == .applied)
-        #expect(Reset.settle(sent: .accepted, proved: .applied) == .show(nil, certain: true))
-        // Signed in, or a password that is not the account's: not tried again.
+        // The account as it was at the first look, and the change landed by the second.
+        attempts = Attempts([.notApplied, .signedIn(user)])
+        #expect(await Reset.prove { await attempts.next() } == .signedIn(user))
+        #expect(await attempts.made == 2)
+        // Signed in: not tried again.
         attempts = Attempts([.signedIn(user), .unknown])
         _ = await Reset.prove { await attempts.next() }
         #expect(await attempts.made == 1)
-        attempts = Attempts([.notApplied, .signedIn(user)])
-        #expect(await Reset.prove { await attempts.next() } == .notApplied)
-        #expect(await attempts.made == 1)
     }
 
-    /* A probe that met a session sealed at `version`, and whether it was then opened or ended. */
+    /* A probe that met a session sealed under `salt`, and whether it was then opened or ended. */
     actor Looked {
         var opened = 0
         var ended = 0
@@ -311,40 +342,73 @@ private func challenge(_ methods: [StepMethod] = [.totp, .backup, .phrase], phra
         func end() { ended += 1 }
     }
 
-    func session(_ version: UInt64?, _ looked: Looked, fails: Bool = false) -> Auth.ResetProbe {
+    func session(_ salt: String?, _ looked: Looked, fails: Bool = false) -> Auth.ResetProbe {
         let user = user
-        return .session(credentialVersion: version,
+        return .session(envelopeSalt: salt,
                         open: { await looked.open(); if fails { throw AuthError.noSession }; return user },
                         end: { await looked.end() })
     }
 
-    @Test func aResetToTheSamePasswordWithItsReplyLostIsNotSaidToBeAppliedBecauseItSignsIn() async {
-        // The reset writes credential version 4 over 3. Someone who "reset" to the password they already had signs in
-        // fine against the unchanged account: read as applied, they would be handed words the server never took, and
-        // throw away a kit that is still the only one that works.
+    func prove(_ probe: Auth.ResetProbe) async -> Reset.Proved {
+        let user = user
+        return await Auth.proved(probe: { probe }, answer: { _, _ in user }, envelopeSalt: "this-change", recoverySalt: "its-recovery-key", phrase: "")
+    }
+
+    @Test func signingInIsNotEvidenceOnlyTheChangesOwnSaltIs() async {
+        // Someone who "reset" to the password they already had signs in fine against the unchanged account, and a
+        // rotation keeps the password. Read as made, they would be told their old phrase is dead when it is the only one.
         let unchanged = Looked()
-        let proved = await Auth.proved(probe: { self.session(3, unchanged) }, answer: { _, _ in self.user }, credentialVersion: 4, recoveryVersion: 2, phrase: "")
+        let proved = await prove(session("the-envelope-as-it-was", unchanged))
         #expect(proved == .notApplied)
-        #expect(Reset.settle(sent: .unknown, proved: proved) == .refused(StepWords.notReset))
         // The session was only asked for to look: never stored on the phone, and ended on the server.
         #expect(await unchanged.opened == 0)
         #expect(await unchanged.ended == 1)
-        // The reset's own envelope: made, and this is the sign-in.
-        let reset = Looked()
-        #expect(await Auth.proved(probe: { self.session(4, reset) }, answer: { _, _ in self.user }, credentialVersion: 4, recoveryVersion: 2, phrase: "") == .signedIn(user))
-        #expect(await reset.opened == 1)
-        #expect(await reset.ended == 0)
-        // Made, but the session could not be stored: still made, and the words are shown.
-        #expect(await Auth.proved(probe: { self.session(4, Looked(), fails: true) }, answer: { _, _ in self.user }, credentialVersion: 4, recoveryVersion: 2, phrase: "") == .applied)
-        // A version that is neither, or none in the reply: nothing is known, and the session is not kept.
-        for version in [nil, 7] as [UInt64?] {
-            let odd = Looked()
-            #expect(await Auth.proved(probe: { self.session(version, odd) }, answer: { _, _ in self.user }, credentialVersion: 4, recoveryVersion: 2, phrase: "") == .unknown)
-            #expect(await odd.opened == 0)
-            #expect(await odd.ended == 1)
+        // And still the words are shown, with the caveat: the look is not proof.
+        #expect(Reset.settle(sent: .unknown, proved: proved) == .show(nil, certain: false))
+        // The envelope this change sealed: made, and this is the sign-in.
+        let changed = Looked()
+        #expect(await prove(session("this-change", changed)) == .signedIn(user))
+        #expect(await changed.opened == 1)
+        #expect(await changed.ended == 0)
+        // Made, but the session could not be stored: still made.
+        #expect(await prove(session("this-change", Looked(), fails: true)) == .applied)
+        // No salt in the reply: nothing is known, and the session is not kept.
+        let bare = Looked()
+        #expect(await prove(session(nil, bare)) == .unknown)
+        #expect(await bare.opened == 0)
+        #expect(await bare.ended == 1)
+    }
+
+    @Test func aRotationThatFindsTheAccountAsItWasKeepsThePersonInTheAppWithBothPhrasesKept() async {
+        // A rotation keeps the password, so the look signs in whether it landed or not. On the account as it was, the
+        // person was signed in a moment ago and still is: they stay in, and the words are shown with "keep both"
+        // (the rotation may land a second later). Ended instead, they were thrown out of an account nothing changed.
+        let user = user
+        func rotation(_ probe: Auth.ResetProbe) async -> Reset.Proved {
+            await Auth.proved(probe: { probe }, answer: { _, _ in user }, envelopeSalt: "this-change", recoverySalt: "its-recovery-key", phrase: "", keepsSession: true)
         }
-        // When the server's own reply confirmed the reset, that stands whatever the look afterwards showed.
-        #expect(Reset.settle(sent: .accepted, proved: .notApplied) == .show(nil, certain: true))
+        let asItWas = Looked()
+        let proved = await rotation(session("the-envelope-as-it-was", asItWas))
+        #expect(proved == .unconfirmed(user))
+        #expect(await asItWas.opened == 1)
+        #expect(await asItWas.ended == 0)
+        #expect(Reset.settle(sent: .unknown, proved: proved) == .show(user, certain: false))
+        // The server's own answer stands when there was one.
+        #expect(Reset.settle(sent: .accepted, proved: proved) == .show(user, certain: true))
+        // Signed in already: not looked at a second time.
+        let attempts = Attempts([proved, .signedIn(user)])
+        #expect(await Reset.prove { await attempts.next() } == proved)
+        #expect(await attempts.made == 1)
+        // A reset never keeps such a session: holding the link and the phrase does not sign anyone in to an unchanged account.
+        let reset = Looked()
+        #expect(await prove(session("the-envelope-as-it-was", reset)) == .notApplied)
+        #expect(await reset.opened == 0)
+        #expect(await reset.ended == 1)
+        // A session that could not be stored is not kept, and one with no salt says nothing even for a rotation.
+        let unstored = Looked()
+        #expect(await rotation(session("the-envelope-as-it-was", unstored, fails: true)) == .notApplied)
+        #expect(await unstored.ended == 1)
+        #expect(await rotation(session(nil, Looked())) == .unknown)
     }
 
     actor Sent {
@@ -352,121 +416,113 @@ private func challenge(_ methods: [StepMethod] = [.totp, .backup, .phrase], phra
         func took(_ proof: StepProof) { proofs.append(proof) }
     }
 
-    @Test func theStepAfterAResetIsAnsweredOnlyWhenItNamesTheNewRecoveryKey() async throws {
+    @Test func aVersionOneHigherIsNotThisChangeAndItsStepIsNotAnswered() async throws {
+        // Another device changed the account at the same moment: its recovery key is also "one more than before", but
+        // it is not the one made here. Compared by number, the new phrase was sent to it as a wrong answer, and the
+        // words were shown as the account's when they are nobody's.
         let userId = UUID().uuidString.lowercased()
         let fresh = try recoveryCreate(userId: userId, accountKey: randomBytes(length: 32), recoveryVersion: 2, keyVersion: 1)
-        func pending(_ recoveryVersion: UInt64?, _ methods: [StepMethod] = [.totp, .phrase]) -> PendingSignIn {
+        let theirs = try recoveryCreate(userId: userId, accountKey: randomBytes(length: 32), recoveryVersion: 2, keyVersion: 1)
+        func pending(_ salt: String?, version: UInt64 = 2, _ methods: [StepMethod] = [.totp, .phrase]) -> PendingSignIn {
             var step = challenge(methods)
-            step.phrase = recoveryVersion.map { StepPhrase(userId: userId, recoveryVersion: $0, wrappingSalt: fresh.envelope.wrappingSalt) }
+            step.phrase = salt.map { StepPhrase(userId: userId, recoveryVersion: version, wrappingSalt: $0) }
             return PendingSignIn(origin: "https://step.test", email: "maya@example.org", challenge: step, exportKey: Data(repeating: 1, count: 64))
         }
         let user = user
         func prove(_ step: PendingSignIn, _ sent: Sent, fails: Bool = false) async -> Reset.Proved {
             await Auth.proved(probe: { .step(step) }, answer: { _, proof in await sent.took(proof); if fails { throw StepError.lost(StepWords.lostStep) }; return user },
-                              credentialVersion: 4, recoveryVersion: 2, phrase: fresh.phrase)
+                              envelopeSalt: "this-change", recoverySalt: fresh.envelope.wrappingSalt, phrase: fresh.phrase)
         }
-        // The step names the old recovery key (version 1): the reset was not made. The new phrase is not sent to it:
-        // it would be a wrong answer, counted against the account, for a reset that never happened.
         var sent = Sent()
-        #expect(await prove(pending(1), sent) == .notApplied)
+        #expect(await prove(pending(theirs.envelope.wrappingSalt, version: 2), sent) == .notApplied)
         #expect(await sent.proofs.isEmpty)
-        // It names the reset's key: made, and the phrase just made answers it, as a signature that key verifies.
-        #expect(await prove(pending(2), sent) == .signedIn(user))
+        // The step names the recovery key made here, whatever number it carries: the phrase just made answers it, as a signature that key verifies.
+        #expect(await prove(pending(fresh.envelope.wrappingSalt, version: 9), sent) == .signedIn(user))
         guard case .phrase(let signature)? = await sent.proofs.first else { Issue.record("no phrase answer"); return }
         #expect(twoStepPhraseVerify(publicKey: try base64urlDecode(value: fresh.envelope.publicKey), userId: userId,
                                     tokenDigest: stepTokenDigest(stepToken: token), signature: try base64urlDecode(value: signature)))
-        // The step's reply lost: the reset was made all the same, so the words are shown. Before, this threw the new phrase away with the sign-in.
+        // The step's reply lost: the change was made all the same, so the words are the account's.
         sent = Sent()
-        let failed = await prove(pending(2), sent, fails: true)
+        let failed = await prove(pending(fresh.envelope.wrappingSalt), sent, fails: true)
         #expect(failed == .applied)
         #expect(Reset.settle(sent: .unknown, proved: failed) == .show(nil, certain: true))
-        // The reset's key, but no phrase method this build can answer with: made, and not answered.
+        // This change's key, but no phrase method this build can answer with: made, and not answered.
         sent = Sent()
-        #expect(await prove(pending(2, [.totp]), sent) == .applied)
-        // A step that names no recovery key, or another version: no version to go by, and nothing is sent.
+        #expect(await prove(pending(fresh.envelope.wrappingSalt, [.totp]), sent) == .applied)
+        // A step that names no recovery key: nothing to go by, and nothing is sent.
         #expect(await prove(pending(nil), sent) == .unknown)
-        #expect(await prove(pending(9), sent) == .unknown)
         #expect(await sent.proofs.isEmpty)
     }
 
-    @Test func aRefusedPasswordMeansNoResetAndNoAnswerAtAllMeansNothing() async {
+    @Test func aRefusedPasswordOrNoAnswerAtAllStillShowsTheWords() async {
         let user = user
         func prove(_ failure: Error) async -> Reset.Proved {
-            await Auth.proved(probe: { throw failure }, answer: { _, _ in user }, credentialVersion: 4, recoveryVersion: 2, phrase: "")
+            await Auth.proved(probe: { throw failure }, answer: { _, _ in user }, envelopeSalt: "this-change", recoverySalt: "its-recovery-key", phrase: "")
         }
         #expect(await prove(AuthError.wrongPassword) == .notApplied)
         #expect(await prove(AuthError.message(AuthError.unreachable)) == .unknown)
         #expect(await prove(StepError.lost(StepWords.lostSignIn)) == .unknown)
         #expect(await prove(AuthError.message("Too many tries. Wait a moment, then try again.")) == .unknown)
-        // Unknown both ways is the one case the words are shown with a caveat.
-        #expect(Reset.settle(sent: .unknown, proved: .unknown) == .show(nil, certain: false))
+        #expect(Reset.settle(sent: .unknown, proved: .notApplied) == .show(nil, certain: false))
     }
 
-    @Test func aRotationWhoseReplyWasLostIsJudgedByTheVersionsALaterReplyShows() async throws {
-        // The rotation writes credential version 4 over 3 and recovery version 2 over 1. Its reply never arrived.
+    struct Full: Error {}
+
+    @Test func aRotationsWordsAreHandedBackEvenWhenThisPhoneCannotRememberTheNewKey() throws {
+        // The write of what the phone remembers comes after the last request. If it throws (a keychain that refuses),
+        // the rotation is made all the same, and the phrase must still reach the screen.
         let userId = UUID().uuidString.lowercased()
-        let fresh = try recoveryCreate(userId: userId, accountKey: randomBytes(length: 32), recoveryVersion: 2, keyVersion: 1)
-        let user = user
-        func step(_ recoveryVersion: UInt64) -> Auth.ResetProbe {
-            var asked = challenge([.totp, .phrase])
-            asked.phrase = StepPhrase(userId: userId, recoveryVersion: recoveryVersion, wrappingSalt: fresh.envelope.wrappingSalt)
-            return .step(PendingSignIn(origin: "https://step.test", email: "maya@example.org", challenge: asked, exportKey: Data(repeating: 1, count: 64)))
+        let memory = try deviceRemember(userId: userId, accountKey: randomBytes(length: 32), keyVersion: 2, credentialVersion: 4, deviceKeyId: UUID().uuidString.lowercased())
+        var tried = 0
+        let keys = try Auth.rotated(phrase: "the new words", recovery: ["recoveryVersion": 2], recoveryVersion: 2, memory: memory, settled: .show(nil, certain: true)) { _ in
+            tried += 1
+            throw Full()
         }
-        func settle(_ probe: Auth.ResetProbe, _ sent: Sent = Sent(), fails: Bool = false) async -> Reset.Settled {
-            let proved = await Auth.proved(probe: { probe }, answer: { _, proof in await sent.took(proof); if fails { throw StepError.lost(StepWords.lostStep) }; return user },
-                                           credentialVersion: 4, recoveryVersion: 2, phrase: fresh.phrase)
-            return Reset.settle(sent: .unknown, proved: proved, notMade: StepWords.notRotated)
+        #expect(tried == 1)
+        #expect(keys.phrase == "the new words")
+        #expect(keys.certain)
+        // Nothing is remembered for a rotation nothing confirmed, or one whose own sign-in has written it already.
+        tried = 0
+        #expect(try !Auth.rotated(phrase: "w", recovery: [:], recoveryVersion: 2, memory: memory, settled: .show(nil, certain: false)) { _ in tried += 1 }.certain)
+        #expect(try Auth.rotated(phrase: "w", recovery: [:], recoveryVersion: 2, memory: memory, settled: .show(user, certain: true)) { _ in tried += 1 }.user == user)
+        #expect(tried == 0)
+        // An answered refusal is the only thing thrown: the server's why, then that nothing changed.
+        #expect(throws: AuthError.message("Too many attempts. Please try again in 15 minutes. \(StepWords.notRotated)")) {
+            try Auth.rotated(phrase: "w", recovery: [:], recoveryVersion: 2, memory: memory, settled: .refused("Too many attempts. Please try again in 15 minutes.")) { _ in tried += 1 }
         }
-        // The new versions are visible: it was made. The words are shown, and the step is answered with them: for
-        // someone whose only second step is the phrase, dropping them here was a permanent lockout.
-        var sent = Sent()
-        #expect(await settle(step(2), sent) == .show(user, certain: true))
-        #expect(await sent.proofs.count == 1)
-        #expect(await settle(session(4, Looked())) == .show(user, certain: true))
-        // Made, and the step's answer didn't come back: the words are still shown, as the account's.
-        #expect(await settle(step(2), fails: true) == .show(nil, certain: true))
-        // The old versions: it was not made, in the rotation's own words, and the new phrase is sent nowhere.
-        sent = Sent()
-        #expect(await settle(step(1), sent) == .refused(StepWords.notRotated))
-        #expect(await sent.proofs.isEmpty)
-        #expect(await settle(session(3, Looked())) == .refused(StepWords.notRotated))
-        // No reply shows a version: the words are shown all the same, with the caveat.
-        let nothing = await Auth.proved(probe: { throw AuthError.message(AuthError.unreachable) }, answer: { _, _ in user }, credentialVersion: 4, recoveryVersion: 2, phrase: fresh.phrase)
-        #expect(Reset.settle(sent: .unknown, proved: nothing, notMade: StepWords.notRotated) == .show(nil, certain: false))
-        // Only a request that got no answer of the server's own is read this way; a refusal changed nothing and is thrown.
-        #expect(Auth.unanswered(StepError.lost(StepWords.lostSaved)))
-        #expect(Auth.unanswered(AuthError.message(AuthError.unreachable)))
-        #expect(!Auth.unanswered(StepError.refused(.wrong, "That code didn’t work.")))
-        #expect(!Auth.unanswered(AuthError.message("That isn’t your password.")))
     }
 
     @Test func theSignInAfterHeldWordsAnswersOnlyAStepThatNamesThem() async throws {
         let userId = UUID().uuidString.lowercased()
         let fresh = try recoveryCreate(userId: userId, accountKey: randomBytes(length: 32), recoveryVersion: 2, keyVersion: 1)
+        let held = fresh.envelope.wrappingSalt
         let user = user
-        func step(_ recoveryVersion: UInt64?, _ methods: [StepMethod] = [.totp, .phrase]) -> Auth.SignIn {
+        func step(_ salt: String?, _ methods: [StepMethod] = [.totp, .phrase]) -> Auth.SignIn {
             var asked = challenge(methods)
-            asked.phrase = recoveryVersion.map { StepPhrase(userId: userId, recoveryVersion: $0, wrappingSalt: fresh.envelope.wrappingSalt) }
+            asked.phrase = salt.map { StepPhrase(userId: userId, recoveryVersion: 2, wrappingSalt: $0) }
             return .step(PendingSignIn(origin: "https://step.test", email: "maya@example.org", challenge: asked, exportKey: Data(repeating: 1, count: 64)))
         }
         func signedIn(_ taken: Auth.SignIn) -> SessionUser? { if case .signedIn(let who) = taken { who } else { nil } }
         // The step names the held words' recovery key: answered with them, as a signature that key verifies, and signed in.
         let sent = Sent()
-        #expect(signedIn(await Auth.holding(step(2), phrase: fresh.phrase, recoveryVersion: 2) { _, proof in await sent.took(proof); return user }) == user)
+        #expect(signedIn(await Auth.holding(step(held), phrase: fresh.phrase, recoverySalt: held) { _, proof in await sent.took(proof); return user }) == user)
         guard case .phrase(let signature)? = await sent.proofs.first else { Issue.record("no phrase answer"); return }
         #expect(twoStepPhraseVerify(publicKey: try base64urlDecode(value: fresh.envelope.publicKey), userId: userId,
                                     tokenDigest: stepTokenDigest(stepToken: token), signature: try base64urlDecode(value: signature)))
-        // Another key (a rotation that was not made after all), none named, or no phrase method: the step is the
-        // person's to answer, and the held words are sent nowhere.
+        // Another key at the same version (a rotation that was not made after all), none named, or no phrase method:
+        // the step is the person's to answer, and the held words are sent nowhere.
         let unasked = Sent()
-        for left in [step(1), step(nil), step(2, [.totp])] {
-            #expect(signedIn(await Auth.holding(left, phrase: fresh.phrase, recoveryVersion: 2) { _, proof in await unasked.took(proof); return user }) == nil)
+        let another = try recoveryCreate(userId: userId, accountKey: randomBytes(length: 32), recoveryVersion: 2, keyVersion: 1).envelope.wrappingSalt
+        for left in [step(another), step(nil), step(held, [.totp])] {
+            #expect(signedIn(await Auth.holding(left, phrase: fresh.phrase, recoverySalt: held) { _, proof in await unasked.took(proof); return user }) == nil)
         }
+        // No salt held at all never matches a step that names none.
+        #expect(signedIn(await Auth.holding(step(""), phrase: fresh.phrase, recoverySalt: "") { _, proof in await unasked.took(proof); return user }) == nil)
         #expect(await unasked.proofs.isEmpty)
         // The answer didn't come back as a session: the step screen takes over, and nothing is thrown away.
-        #expect(signedIn(await Auth.holding(step(2), phrase: fresh.phrase, recoveryVersion: 2) { _, _ in throw StepError.lost(StepWords.lostStep) }) == nil)
+        #expect(signedIn(await Auth.holding(step(held), phrase: fresh.phrase, recoverySalt: held) { _, _ in throw StepError.lost(StepWords.lostStep) }) == nil)
         // No step at all: signed in as it was.
-        #expect(signedIn(await Auth.holding(.signedIn(user), phrase: fresh.phrase, recoveryVersion: 2) { _, _ in throw StepError.lost("") }) == user)
+        #expect(signedIn(await Auth.holding(.signedIn(user), phrase: fresh.phrase, recoverySalt: held) { _, _ in throw StepError.lost("") }) == user)
     }
 
     @Test func aPhonesOwnRotationMutesTheSignedOutNoticeFromBeforeItsRequestToTheSignInAfter() {
@@ -513,15 +569,23 @@ private func challenge(_ methods: [StepMethod] = [.totp, .backup, .phrase], phra
         #expect(CheckedWords(userId: "u", origin: "o", recoveryVersion: 0).confirms(userId: "u", origin: "o") == nil)
     }
 
-    @Test func aStepLeftUnansweredIsDroppedAMinuteAfterItsOwnEnd() {
-        let pending = PendingSignIn(origin: "https://step.test", email: "maya@example.org", challenge: challenge(), exportKey: Data(repeating: 1, count: 64))
-        // 2026-11-13T10:00:00Z, plus the minute.
-        #expect(pending.dropAt() == Date(timeIntervalSince1970: 1_794_564_000 + 60))
-        // An end that can't be read still ends: the server's five minutes from now, plus the minute.
-        var undated = challenge()
-        undated.expiresAt = "soon"
-        let now = Date(timeIntervalSince1970: 1_000_000)
-        #expect(PendingSignIn(origin: "o", email: "e", challenge: undated, exportKey: Data()).dropAt(now: now) == now.addingTimeInterval(360))
+    @Test func aStepLastsSixMinutesFromWhenItArrivedWhateverTheDateOnThePhoneSays() {
+        // Counted against the step's own `expiresAt` (the server's wall clock), a phone whose date is set seven minutes
+        // fast found every step over before it was shown, and nobody with the step could sign in on it.
+        let arrived = ContinuousClock.now
+        for expiresAt in ["2026-11-13T10:00:00.000Z", "1999-01-01T00:00:00.000Z", "2099-01-01T00:00:00.000Z", "soon"] {
+            var step = challenge()
+            step.expiresAt = expiresAt
+            let pending = PendingSignIn(origin: "https://step.test", email: "maya@example.org", challenge: step, exportKey: Data(repeating: 1, count: 64), received: arrived)
+            #expect(pending.dropIn(now: arrived) == .seconds(360), "\(expiresAt)")
+            #expect(pending.dropIn(now: arrived + .seconds(359)) == .seconds(1), "\(expiresAt)")
+            // The server's five minutes and one more, and then it is over.
+            #expect(pending.dropIn(now: arrived + .seconds(360)) == .zero, "\(expiresAt)")
+            #expect(pending.dropIn(now: arrived + .seconds(400)) < .zero, "\(expiresAt)")
+        }
+        // Each step counts from its own arrival.
+        let later = PendingSignIn(origin: "o", email: "e", challenge: challenge(), exportKey: Data(), received: arrived + .seconds(30))
+        #expect(later.dropIn(now: arrived + .seconds(40)) == .seconds(350))
     }
 }
 
@@ -559,6 +623,22 @@ private func challenge(_ methods: [StepMethod] = [.totp, .backup, .phrase], phra
         #expect(await log.lines == ["first ends", "second starts", "third starts"])
         // Free again once everyone has left: the next one does not wait.
         await turn.enter()
+        await turn.leave()
+    }
+
+    @Test func aChangeThatWaitsTooLongForItsTurnGivesUpWithNothingSent() async {
+        // The one ahead can take minutes against a server that answers slowly (a rotation makes several requests).
+        // Whoever waits behind it is told so after a minute, and its place goes: it must not run later, unasked.
+        let turn = PasswordTurn()
+        await turn.enter()
+        await #expect(throws: AuthError.message("This took too long. Please try again.")) { try await PasswordTurn.take(turn, within: .milliseconds(80)) }
+        // Its place is gone: when the holder leaves, the turn is free and not handed to a waiter who has left.
+        await turn.leave()
+        #expect(await turn.enter(within: .milliseconds(80)))
+        // That one got the turn in time and keeps it after its limit has passed; the next behind it times out in its own turn.
+        try? await Task.sleep(for: .milliseconds(150))
+        let waiting = Task { await turn.enter(within: .milliseconds(80)) }
+        #expect(await waiting.value == false)
         await turn.leave()
     }
 
@@ -864,8 +944,8 @@ extension OnFakeDrive {
             #expect(sent?.path == "/api/auth/two-step/challenge")
             #expect(sent?.body["purpose"] as? String == "master-key")
             #expect(sent?.headers["Cookie"] == "__Host-hushos-session=session-token")
-            // The step is off for this account (409), or this server has two-step off and it never had one (501).
-            for status in [409, 501] {
+            // The step is off for this account (409). The route never answers 501: it does not look at the server's switch.
+            for status in [409] {
                 StepServer.current = StepServer(status, json: ["message": "Two-step sign-in is off for this account."])
                 #expect(try await TwoStep.challenge(.password) == nil, "\(status)")
             }

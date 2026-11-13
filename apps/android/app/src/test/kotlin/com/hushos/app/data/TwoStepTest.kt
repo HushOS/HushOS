@@ -64,6 +64,11 @@ class TwoStepTest {
     @org.junit.After
     fun stop() = servers.forEach { it.stop(0) }
 
+    /* The clock since boot, which a JVM test has none of: a step arrives at `now`. */
+    private var now = 50_000L
+    @org.junit.Before
+    fun clock() { uptime = { now } }
+
     // What the step screen does after each way an answer can fail.
 
     @Test
@@ -192,6 +197,55 @@ class TwoStepTest {
     }
 
     @Test
+    fun aWaitThatEndsAnyOtherWayGivesItsPlaceUpToo() {
+        // The probe itself failing, or the thread interrupted: left in the line, its ticket reached the head with nobody
+        // behind it, and every later password change on the phone waited for ever.
+        val holding = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val thrown = java.util.concurrent.atomic.AtomicReference<Throwable?>()
+        try {
+            val holder = Thread { Auth.passwordTurn { holding.countDown(); release.await() } }.apply { isDaemon = true; start() }
+            holding.await()
+            val broken = Thread {
+                try { Auth.cancellable({ throw IllegalStateException("the probe failed") }) { Auth.passwordTurn { } } } catch (error: Throwable) { thrown.set(error) }
+            }.apply { isDaemon = true; start() }
+            broken.join(2_000)
+            assertTrue(thrown.get() is IllegalStateException)
+            val interrupted = Thread { try { Auth.passwordTurn { } } catch (error: Throwable) { thrown.set(error) } }.apply { isDaemon = true; start() }
+            Thread.sleep(120)
+            interrupted.interrupt()
+            interrupted.join(2_000)
+            assertTrue(thrown.get() is InterruptedException)
+            release.countDown()
+            holder.join(2_000)
+        } finally { release.countDown() }
+        // The turn is free: the next one runs at once.
+        val next = java.util.concurrent.Executors.newSingleThreadExecutor()
+        try { assertEquals("free", next.submit<String> { Auth.passwordTurn { "free" } }.get(2, java.util.concurrent.TimeUnit.SECONDS)) } finally { next.shutdownNow() }
+    }
+
+    @Test
+    fun aChangeThatWaitsTooLongForItsTurnGivesUpWithNothingSent() {
+        // The one ahead can take minutes against a server that answers slowly (a rotation makes several requests).
+        // Whoever waits behind it is told so after a minute, and its place goes: it must not run later, unasked.
+        val holding = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val ran = java.util.concurrent.atomic.AtomicInteger()
+        Auth.turnWaitMillis = 150
+        try {
+            val holder = Thread { Auth.passwordTurn { holding.countDown(); release.await() } }.apply { isDaemon = true; start() }
+            holding.await()
+            val late = assertThrows(AuthFailure::class.java) { Auth.passwordTurn { ran.incrementAndGet() } }
+            assertEquals("This took too long. Please try again.", late.message)
+            release.countDown()
+            holder.join(2_000)
+        } finally { release.countDown(); Auth.turnWaitMillis = 60_000 }
+        assertEquals(0, ran.get())
+        val next = java.util.concurrent.Executors.newSingleThreadExecutor()
+        try { assertEquals("free", next.submit<String> { Auth.passwordTurn { "free" } }.get(2, java.util.concurrent.TimeUnit.SECONDS)) } finally { next.shutdownNow() }
+    }
+
+    @Test
     fun everyPasswordChangeWaitsForItsTurn() {
         // The removal of other devices runs behind the backup codes; a change started meanwhile must send nothing
         // until it has finished. Each of these sent its first request at once before it took the turn.
@@ -229,8 +283,8 @@ class TwoStepTest {
     private val maya = SessionUser("u", "Maya", "maya@example.org", 3uL)
 
     @Test
-    fun onceTheResetIsTakenTheNewWordsAreShownWhateverTheSignInDoes() {
-        // The old phrase is dead the moment recover/finish succeeds, and the new one is only in memory. Dropped because
+    fun onceTheChangeIsTakenTheNewWordsAreShownWhateverTheSignInDoes() {
+        // The old phrase is dead the moment the server takes the change, and the new one is only in memory. Dropped because
         // the sign-in after it failed (no network, a 429, a step that didn't pass), the account has no phrase anyone has seen.
         for (proved in listOf(Reset.Proved.Applied, Reset.Proved.Unknown, Reset.Proved.NotApplied))
             assertEquals("$proved", Reset.Settled.Show(null, certain = true), Reset.settle(Reset.Sent.Accepted, proved))
@@ -238,20 +292,26 @@ class TwoStepTest {
     }
 
     @Test
-    fun aResetWhoseOwnReplyWasLostIsSettledByTheSignInWithTheNewPassword() {
-        // The new password signs in, or gets as far as the step: the reset was made, and the words are the account's.
+    fun theNewWordsAreWithheldOnlyWhenTheServerAnsweredARefusal() {
+        // The request left and nothing of the server's came back. A look that found the account as it was is not proof
+        // that nothing changed: the commit can land a second later, and words that were dropped can't be shown again.
+        // Before, this said "not changed" and threw the only copy of what may be the account's phrase away.
+        assertEquals(Reset.Settled.Show(null, certain = false), Reset.settle(Reset.Sent.Unknown, Reset.Proved.NotApplied))
+        assertEquals(Reset.Settled.Show(null, certain = false), Reset.settle(Reset.Sent.Unknown, Reset.Proved.Unknown))
+        // Something showed it was made: the words are the account's.
         assertEquals(Reset.Settled.Show(maya, certain = true), Reset.settle(Reset.Sent.Unknown, Reset.Proved.SignedIn(maya)))
         assertEquals(Reset.Settled.Show(null, certain = true), Reset.settle(Reset.Sent.Unknown, Reset.Proved.Applied))
-        // It is not the account's password: nothing changed, and the new words are not shown as anyone's.
-        assertEquals(Reset.Settled.Refused(StepWords.NOT_RESET), Reset.settle(Reset.Sent.Unknown, Reset.Proved.NotApplied))
-        // Nothing answers: the words are kept and shown, and said to be uncertain so the old ones are kept too.
-        assertEquals(Reset.Settled.Show(null, certain = false), Reset.settle(Reset.Sent.Unknown, Reset.Proved.Unknown))
-        // A refusal in the server's words changed nothing, whatever else is known.
-        assertEquals(Reset.Settled.Refused("This link has expired."), Reset.settle(Reset.Sent.Refused("This link has expired."), Reset.Proved.Unknown))
+        // The server answered, and refused: nothing changed, whatever a look afterwards showed, and only then is that said.
+        for (proved in listOf(Reset.Proved.Unknown, Reset.Proved.NotApplied, Reset.Proved.Applied))
+            assertEquals(Reset.Settled.Refused("This link has expired."), Reset.settle(Reset.Sent.Refused("This link has expired."), proved))
+        assertEquals("This link has expired. ${StepWords.NOT_RESET}", Reset.refusal("This link has expired.", StepWords.NOT_RESET))
+        assertEquals(StepWords.NOT_ROTATED, Reset.refusal(" ", StepWords.NOT_ROTATED))
+        assertEquals("Your password was not changed. Nothing changed, and your recovery phrase is still the one you have. Please try again.", StepWords.NOT_RESET)
+        assertEquals("Your account key was not rotated. Nothing changed, and your recovery phrase is still the one you have. Please try again.", StepWords.NOT_ROTATED)
     }
 
     @Test
-    fun whatRecoverFinishAnsweredIsReadFromItsOwnShape() {
+    fun onlyA4xxInTheServersOwnWordsIsAnAnsweredRefusal() {
         assertEquals(Reset.Sent.Accepted, Reset.sent(200, JSONObject("""{"user":{"id":"u"}}""")))
         // A 200 that is not the account (a proxy's page parsed as nothing), and any 5xx: nothing says either way.
         assertEquals(Reset.Sent.Unknown, Reset.sent(200, JSONObject()))
@@ -260,11 +320,33 @@ class TwoStepTest {
         assertEquals(Reset.Sent.Unknown, Reset.sent(502, JSONObject()))
         // A 4xx in the server's words is a refusal: the old phrase still works, and the new words are never shown.
         assertEquals(Reset.Sent.Refused("That recovery phrase isn’t right."), Reset.sent(401, JSONObject().put("message", "That recovery phrase isn’t right.")))
+        // A 4xx with nothing of the server's in it (something in the way) is not one: the words are kept.
         assertEquals(Reset.Sent.Unknown, Reset.sent(429, JSONObject()))
+        assertEquals(Reset.Sent.Unknown, Reset.sent(403, JSONObject().put("message", "  ")))
+        // A rotation's own answer is `{ success: true }`.
+        assertEquals(Reset.Sent.Accepted, Reset.sent(200, JSONObject("""{"success":true}""")) { it.opt("success") == true })
+        assertEquals(Reset.Sent.Unknown, Reset.sent(200, JSONObject("""{"error":"upstream"}""")) { it.opt("success") == true })
     }
 
     @Test
-    fun theSignInAfterAResetIsTriedOnceMoreAndTheBetterAnswerStands() {
+    fun whatSecurityFinishAnsweredToARotationKeepsTheWordsUnlessItRefused() {
+        fun reply(status: Int, body: String) = Auth.SessionReply(status, body, runCatching { JSONObject(body) }.getOrDefault(JSONObject()))
+        assertEquals(Reset.Sent.Accepted, Auth.finishSent(reply(200, """{"success":true}""")))
+        // No reply at all, a gateway's error, a 200 that is not the server's answer: the rotation may have been made.
+        assertEquals(Reset.Sent.Unknown, Auth.finishSent(null))
+        assertEquals(Reset.Sent.Unknown, Auth.finishSent(reply(502, "<html>Bad gateway</html>")))
+        assertEquals(Reset.Sent.Unknown, Auth.finishSent(reply(200, "{}")))
+        assertEquals(Reset.Sent.Unknown, Auth.finishSent(reply(429, "")))
+        // The server answered, and refused: the step's own refusals go to the form's step fields with their code,
+        // an ended session to sign-in, and anything else is a refusal in the server's words.
+        assertEquals(StepRefusal.WRONG, assertThrows(StepRefused::class.java) { Auth.finishSent(reply(401, refusal("That code didn’t work.", "step-wrong"))) }.refusal)
+        assertEquals(StepRefusal.REQUIRED, assertThrows(StepRefused::class.java) { Auth.finishSent(reply(403, refusal("This needs your second step.", "two-step"))) }.refusal)
+        assertThrows(NotAuthenticated::class.java) { Auth.finishSent(reply(401, refusal("Sign in again."))) }
+        assertEquals(Reset.Sent.Refused("The password is not right."), Auth.finishSent(reply(400, refusal("The password is not right."))))
+    }
+
+    @Test
+    fun theSignInAfterAChangeIsTriedOnceMoreAndTheBetterAnswerStands() {
         fun proving(vararg answers: Reset.Proved): Pair<Reset.Proved, Int> {
             val left = answers.toMutableList()
             var made = 0
@@ -272,142 +354,164 @@ class TwoStepTest {
         }
         // The step path failing leaves "applied": tried again, and signed in the second time.
         assertEquals(Reset.Proved.SignedIn(maya) to 2, proving(Reset.Proved.Applied, Reset.Proved.SignedIn(maya)))
-        // Still no session the second time: the password stays proved, so the words are shown and sign-in follows.
+        // Still no session the second time: the change stays shown as made, so the words are the account's.
         assertEquals(Reset.Proved.Applied to 2, proving(Reset.Proved.Applied, Reset.Proved.Unknown))
         assertEquals(Reset.Proved.Applied to 2, proving(Reset.Proved.Unknown, Reset.Proved.Applied))
-        // Signed in, or a password that is not the account's: not tried again.
+        // The account as it was at the first look, and the change landed by the second.
+        assertEquals(Reset.Proved.SignedIn(maya) to 2, proving(Reset.Proved.NotApplied, Reset.Proved.SignedIn(maya)))
+        // Signed in: not tried again.
         assertEquals(Reset.Proved.SignedIn(maya) to 1, proving(Reset.Proved.SignedIn(maya), Reset.Proved.Unknown))
-        assertEquals(Reset.Proved.NotApplied to 1, proving(Reset.Proved.NotApplied, Reset.Proved.SignedIn(maya)))
     }
 
-    /* A probe that met a session sealed at `version`, and whether it was then opened or ended. */
-    private class Session(version: ULong?, user: SessionUser, fails: Boolean = false) {
+    /* A probe that met a session sealed under `salt`, and whether it was then opened or ended. */
+    private class Session(salt: String?, user: SessionUser, fails: Boolean = false) {
         var opened = 0
         var ended = 0
-        val probe = Auth.Probe.Session(version, open = { opened++; if (fails) throw AuthFailure("Signed in, but the session was not returned.") else user }, end = { ended++ })
+        val probe = Auth.Probe.Session(salt, open = { opened++; if (fails) throw AuthFailure("Signed in, but the session was not returned.") else user }, end = { ended++ })
     }
 
     @Test
-    fun aResetToTheSamePasswordWithItsReplyLostIsNotSaidToBeAppliedBecauseItSignsIn() {
-        // The reset writes credential version 4 over 3. Someone who "reset" to the password they already had signs in
-        // fine against the unchanged account: read as applied, they would be handed words the server never took, and
-        // throw away a kit that is still the only one that works.
-        val unchanged = Session(3uL, maya)
-        val proved = Auth.proved({ unchanged.probe }, { _, _ -> error("no step") }, credentialVersion = 4uL, recoveryVersion = 2uL, freshPhrase = "")
+    fun signingInIsNotEvidenceOnlyTheChangesOwnSaltIs() {
+        // Someone who "reset" to the password they already had signs in fine against the unchanged account, and a
+        // rotation keeps the password. Read as made, they would be told their old phrase is dead when it is the only one.
+        val unchanged = Session("the-envelope-as-it-was", maya)
+        val proved = Auth.proved({ unchanged.probe }, { _, _ -> error("no step") }, envelopeSalt = "this-change", recoverySalt = "its-recovery-key", freshPhrase = "")
         assertEquals(Reset.Proved.NotApplied, proved)
-        assertEquals(Reset.Settled.Refused(StepWords.NOT_RESET), Reset.settle(Reset.Sent.Unknown, proved))
         // The session was only asked for to look: never stored on the phone, and ended on the server.
-        assertEquals(0, unchanged.opened)
-        assertEquals(1, unchanged.ended)
-        // The reset's own envelope: made, and this is the sign-in.
-        val reset = Session(4uL, maya)
-        assertEquals(Reset.Proved.SignedIn(maya), Auth.proved({ reset.probe }, { _, _ -> error("no step") }, 4uL, 2uL, ""))
-        assertEquals(1 to 0, reset.opened to reset.ended)
-        // Made, but the session could not be stored: still made, and the words are shown.
-        assertEquals(Reset.Proved.Applied, Auth.proved({ Session(4uL, maya, fails = true).probe }, { _, _ -> error("no step") }, 4uL, 2uL, ""))
-        // A version that is neither, or none in the reply: nothing is known, and the session is not kept.
-        for (version in listOf<ULong?>(null, 7uL)) {
-            val odd = Session(version, maya)
-            assertEquals("$version", Reset.Proved.Unknown, Auth.proved({ odd.probe }, { _, _ -> error("no step") }, 4uL, 2uL, ""))
-            assertEquals(0 to 1, odd.opened to odd.ended)
-        }
-        // When the server's own reply confirmed the reset, that stands whatever the look afterwards showed.
-        assertEquals(Reset.Settled.Show(null, certain = true), Reset.settle(Reset.Sent.Accepted, Reset.Proved.NotApplied))
+        assertEquals(0 to 1, unchanged.opened to unchanged.ended)
+        // And still the words are shown, with the caveat: the look is not proof (theNewWordsAreWithheldOnly…).
+        assertEquals(Reset.Settled.Show(null, certain = false), Reset.settle(Reset.Sent.Unknown, proved))
+        // The envelope this change sealed: made, and this is the sign-in.
+        val changed = Session("this-change", maya)
+        assertEquals(Reset.Proved.SignedIn(maya), Auth.proved({ changed.probe }, { _, _ -> error("no step") }, "this-change", "its-recovery-key", ""))
+        assertEquals(1 to 0, changed.opened to changed.ended)
+        // Made, but the session could not be stored: still made.
+        assertEquals(Reset.Proved.Applied, Auth.proved({ Session("this-change", maya, fails = true).probe }, { _, _ -> error("no step") }, "this-change", "its-recovery-key", ""))
+        // No salt in the reply: nothing is known, and the session is not kept.
+        val bare = Session(null, maya)
+        assertEquals(Reset.Proved.Unknown, Auth.proved({ bare.probe }, { _, _ -> error("no step") }, "this-change", "its-recovery-key", ""))
+        assertEquals(0 to 1, bare.opened to bare.ended)
     }
 
     @Test
-    fun theStepAfterAResetIsAnsweredOnlyWhenItNamesTheNewRecoveryKey() {
+    fun aRotationThatFindsTheAccountAsItWasKeepsThePersonInTheAppWithBothPhrasesKept() {
+        // A rotation keeps the password, so the look signs in whether it landed or not. On the account as it was, the
+        // person was signed in a moment ago and still is: they stay in, and the words are shown with "keep both"
+        // (the rotation may land a second later). Ended instead, they were thrown out of an account nothing changed.
+        val asItWas = Session("the-envelope-as-it-was", maya)
+        val proved = Auth.proved({ asItWas.probe }, { _, _ -> error("no step") }, "this-change", "its-recovery-key", "", keepsSession = true)
+        assertEquals(Reset.Proved.Unconfirmed(maya), proved)
+        assertEquals(1 to 0, asItWas.opened to asItWas.ended)
+        assertEquals(Reset.Settled.Show(maya, certain = false), Reset.settle(Reset.Sent.Unknown, proved))
+        // The server's own answer stands when there was one.
+        assertEquals(Reset.Settled.Show(maya, certain = true), Reset.settle(Reset.Sent.Accepted, proved))
+        // Signed in already: not looked at a second time.
+        var looks = 0
+        assertEquals(proved, Reset.prove { looks++; proved })
+        assertEquals(1, looks)
+        // A reset never keeps such a session: holding the link and the phrase does not sign anyone in to an unchanged account.
+        val reset = Session("the-envelope-as-it-was", maya)
+        assertEquals(Reset.Proved.NotApplied, Auth.proved({ reset.probe }, { _, _ -> error("no step") }, "this-change", "its-recovery-key", ""))
+        assertEquals(0 to 1, reset.opened to reset.ended)
+        // A session that could not be stored is not kept, and one with no salt says nothing even for a rotation.
+        val unstored = Session("the-envelope-as-it-was", maya, fails = true)
+        assertEquals(Reset.Proved.NotApplied, Auth.proved({ unstored.probe }, { _, _ -> error("no step") }, "this-change", "its-recovery-key", "", keepsSession = true))
+        assertEquals(1, unstored.ended)
+        assertEquals(Reset.Proved.Unknown, Auth.proved({ Session(null, maya).probe }, { _, _ -> error("no step") }, "this-change", "its-recovery-key", "", keepsSession = true))
+    }
+
+    @Test
+    fun aVersionOneHigherIsNotThisChangeAndItsStepIsNotAnswered() {
+        // Another device changed the account at the same moment: its recovery key is also "one more than before", but it
+        // is not the one made here. Compared by number, the new phrase was sent to it as a wrong answer, and the words
+        // were shown as the account's when they are nobody's.
         val userId = "0d8f3a52-5a0e-4a6a-9a3e-6a5b4b1f2c11"
         val fresh = recoveryCreate(userId, randomBytes(32u), 2uL, 1uL)
-        fun pending(recoveryVersion: ULong?, methods: List<StepMethod> = listOf(StepMethod.TOTP, StepMethod.PHRASE)) =
-            PendingSignIn("http://step.test", "maya@example.org", challenge(methods, recoveryVersion?.let { StepPhrase(userId, it, fresh.envelope.wrappingSalt) }), ByteArray(64))
-        fun prove(step: PendingSignIn, answer: (PendingSignIn, StepProof) -> SessionUser) = Auth.proved({ Auth.Probe.Step(step) }, answer, credentialVersion = 4uL, recoveryVersion = 2uL, freshPhrase = fresh.phrase)
+        val theirs = recoveryCreate(userId, randomBytes(32u), 2uL, 1uL)
+        fun pending(salt: String?, version: ULong = 2uL, methods: List<StepMethod> = listOf(StepMethod.TOTP, StepMethod.PHRASE)) =
+            PendingSignIn("http://step.test", "maya@example.org", challenge(methods, salt?.let { StepPhrase(userId, version, it) }), ByteArray(64))
+        fun prove(step: PendingSignIn, answer: (PendingSignIn, StepProof) -> SessionUser) =
+            Auth.proved({ Auth.Probe.Step(step) }, answer, envelopeSalt = "this-change", recoverySalt = fresh.envelope.wrappingSalt, freshPhrase = fresh.phrase)
 
-        // The step names the old recovery key (version 1): the reset was not made. The new phrase is not sent to it:
-        // it would be a wrong answer, counted against the account, for a reset that never happened.
         var asked = 0
-        assertEquals(Reset.Proved.NotApplied, prove(pending(1uL)) { _, _ -> asked++; maya })
+        assertEquals(Reset.Proved.NotApplied, prove(pending(theirs.envelope.wrappingSalt, version = 2uL)) { _, _ -> asked++; maya })
         assertEquals(0, asked)
-        // It names the reset's key: made, and the phrase just made answers it, as a signature that key verifies.
+        // The step names the recovery key made here, whatever number it carries: the phrase just made answers it, as a signature that key verifies.
         var sent: StepProof? = null
-        assertEquals(Reset.Proved.SignedIn(maya), prove(pending(2uL)) { _, proof -> sent = proof; maya })
+        assertEquals(Reset.Proved.SignedIn(maya), prove(pending(fresh.envelope.wrappingSalt, version = 9uL)) { _, proof -> sent = proof; maya })
         assertTrue(twoStepPhraseVerify(base64urlDecode(fresh.envelope.publicKey), userId, stepTokenDigest(token), base64urlDecode((sent as StepProof.Phrase).signature)))
-        // The step's reply lost, refused, or nothing at all: the reset was made all the same, so the words are shown.
-        // Before, any of these threw the new phrase away with the sign-in.
+        // The step's reply lost, refused, or nothing at all: the change was made all the same, so the words are the account's.
         for (failure in listOf(LostReply(StepWords.LOST_STEP), StepRefused(StepRefusal.WRONG, "That recovery phrase isn’t right."), AuthUnreachable(), IllegalStateException("x"))) {
-            val proved = prove(pending(2uL)) { _, _ -> throw failure }
+            val proved = prove(pending(fresh.envelope.wrappingSalt)) { _, _ -> throw failure }
             assertEquals("$failure", Reset.Proved.Applied, proved)
             assertEquals(Reset.Settled.Show(null, certain = true), Reset.settle(Reset.Sent.Unknown, proved))
         }
-        // The reset's key, but no phrase method this build can answer with: made, and not answered.
-        assertEquals(Reset.Proved.Applied, prove(pending(2uL, listOf(StepMethod.TOTP))) { _, _ -> error("not asked") })
-        // A step that names no recovery key, or another version: no version to go by, and nothing is sent.
+        // This change's key, but no phrase method this build can answer with: made, and not answered.
+        assertEquals(Reset.Proved.Applied, prove(pending(fresh.envelope.wrappingSalt, methods = listOf(StepMethod.TOTP))) { _, _ -> error("not asked") })
+        // A step that names no recovery key: nothing to go by, and nothing is sent.
         assertEquals(Reset.Proved.Unknown, prove(pending(null)) { _, _ -> error("not asked") })
-        assertEquals(Reset.Proved.Unknown, prove(pending(9uL)) { _, _ -> error("not asked") })
     }
 
     @Test
-    fun aRefusedPasswordMeansNoResetAndNoAnswerAtAllMeansNothing() {
-        fun prove(probe: () -> Auth.Probe) = Auth.proved(probe, { _, _ -> maya }, 4uL, 2uL, "")
+    fun aRefusedPasswordOrNoAnswerAtAllStillShowsTheWords() {
+        fun prove(probe: () -> Auth.Probe) = Auth.proved(probe, { _, _ -> maya }, "this-change", "its-recovery-key", "")
         assertEquals(Reset.Proved.NotApplied, prove { throw WrongPassword() })
         for (failure in listOf(AuthUnreachable(), LostReply(StepWords.LOST_SIGN_IN), AuthFailure("Too many tries. Wait a moment, then try again.", 429)))
             assertEquals("$failure", Reset.Proved.Unknown, prove { throw failure })
-        // Unknown both ways is the one case the words are shown with a caveat.
-        assertEquals(Reset.Settled.Show(null, certain = false), Reset.settle(Reset.Sent.Unknown, Reset.Proved.Unknown))
+        assertEquals(Reset.Settled.Show(null, certain = false), Reset.settle(Reset.Sent.Unknown, prove { throw WrongPassword() }))
     }
 
     @Test
-    fun aRotationWhoseReplyWasLostIsJudgedByTheVersionsALaterReplyShows() {
-        // The rotation writes credential version 4 over 3 and recovery version 2 over 1. Its reply never arrived.
+    fun aRotationsWordsAreHandedBackEvenWhenThisPhoneCannotRememberTheNewKey() {
+        // The write of what the phone remembers comes after the last request. If it throws (a full disk, a keystore that
+        // refuses), the rotation is made all the same, and the phrase must still reach the screen.
         val userId = "0d8f3a52-5a0e-4a6a-9a3e-6a5b4b1f2c11"
         val fresh = recoveryCreate(userId, randomBytes(32u), 2uL, 1uL)
-        fun step(recoveryVersion: ULong) = Auth.Probe.Step(PendingSignIn("http://step.test", "maya@example.org",
-            challenge(listOf(StepMethod.TOTP, StepMethod.PHRASE), StepPhrase(userId, recoveryVersion, fresh.envelope.wrappingSalt)), ByteArray(64)))
-        fun settle(probe: Auth.Probe, answer: (PendingSignIn, StepProof) -> SessionUser = { _, _ -> maya }) =
-            Reset.settle(Reset.Sent.Unknown, Auth.proved({ probe }, answer, credentialVersion = 4uL, recoveryVersion = 2uL, freshPhrase = fresh.phrase), StepWords.NOT_ROTATED)
-
-        // The new versions are visible: it was made. The words are shown, and the step is answered with them: for
-        // someone whose only second step is the phrase, dropping them here was a permanent lockout.
-        var answered = 0
-        assertEquals(Reset.Settled.Show(maya, certain = true), settle(step(2uL)) { _, _ -> answered++; maya })
-        assertEquals(1, answered)
-        assertEquals(Reset.Settled.Show(maya, certain = true), settle(Session(4uL, maya).probe))
-        // Made, and the step's answer didn't come back: the words are still shown, as the account's.
-        assertEquals(Reset.Settled.Show(null, certain = true), settle(step(2uL)) { _, _ -> throw LostReply(StepWords.LOST_STEP) })
-        // The old versions: it was not made, in the rotation's own words, and the new phrase is sent nowhere.
-        answered = 0
-        assertEquals(Reset.Settled.Refused(StepWords.NOT_ROTATED), settle(step(1uL)) { _, _ -> answered++; maya })
-        assertEquals(0, answered)
-        assertEquals(Reset.Settled.Refused(StepWords.NOT_ROTATED), settle(Session(3uL, maya).probe))
-        // No reply shows a version: the words are shown all the same, with the caveat.
-        assertEquals(Reset.Settled.Show(null, certain = false), Reset.settle(Reset.Sent.Unknown, Auth.proved({ throw AuthUnreachable() }, { _, _ -> maya }, 4uL, 2uL, fresh.phrase), StepWords.NOT_ROTATED))
-        // Only a request that got no answer of the server's own is read this way; a refusal changed nothing and is thrown.
-        assertTrue(Auth.unanswered(LostReply(StepWords.LOST_SAVED)))
-        assertTrue(Auth.unanswered(AuthUnreachable()))
-        assertFalse(Auth.unanswered(StepRefused(StepRefusal.WRONG, "That code didn’t work.")))
-        assertFalse(Auth.unanswered(AuthFailure("The password is not right.")))
+        val memory = com.hushos.core.deviceRemember(userId, randomBytes(32u), 2uL, 4uL, java.util.UUID.randomUUID().toString())
+        val made = Auth.ResetMade(userId, fresh.phrase, JSONObject().put("recoveryVersion", 2).put("wrappingSalt", fresh.envelope.wrappingSalt), Reset.Sent.Accepted, "this-change", fresh.envelope.wrappingSalt, memory)
+        var tried = 0
+        val keys = Auth.rotated(made, Reset.Settled.Show(null, certain = true)) { tried++; throw java.io.IOException("No space left on device") }
+        assertEquals(1, tried)
+        assertEquals(fresh.phrase, keys.phrase)
+        assertEquals(2L, keys.recoveryVersion)
+        assertTrue(keys.certain)
+        // Nothing is remembered for a rotation nothing confirmed, or one whose own sign-in has written it already.
+        tried = 0
+        assertFalse(Auth.rotated(made, Reset.Settled.Show(null, certain = false)) { tried++ }.certain)
+        assertEquals(maya, Auth.rotated(made, Reset.Settled.Show(maya, certain = true)) { tried++ }.user)
+        assertEquals(0, tried)
+        // An answered refusal is the only thing thrown: the server's why, then that nothing changed.
+        val refused = assertThrows(AuthFailure::class.java) { Auth.rotated(made, Reset.Settled.Refused("Too many attempts. Please try again in 15 minutes.")) { tried++ } }
+        assertEquals("Too many attempts. Please try again in 15 minutes. ${StepWords.NOT_ROTATED}", refused.message)
     }
 
     @Test
     fun theSignInAfterHeldWordsAnswersOnlyAStepThatNamesThem() {
         val userId = "0d8f3a52-5a0e-4a6a-9a3e-6a5b4b1f2c11"
         val fresh = recoveryCreate(userId, randomBytes(32u), 2uL, 1uL)
-        fun step(recoveryVersion: ULong?, methods: List<StepMethod> = listOf(StepMethod.TOTP, StepMethod.PHRASE)) = Auth.SignIn.Step(PendingSignIn("http://step.test", "maya@example.org",
-            challenge(methods, recoveryVersion?.let { StepPhrase(userId, it, fresh.envelope.wrappingSalt) }), ByteArray(64)))
+        val held = fresh.envelope.wrappingSalt
+        fun step(salt: String?, methods: List<StepMethod> = listOf(StepMethod.TOTP, StepMethod.PHRASE)) = Auth.SignIn.Step(PendingSignIn("http://step.test", "maya@example.org",
+            challenge(methods, salt?.let { StepPhrase(userId, 2uL, it) }), ByteArray(64)))
         // The step names the held words' recovery key: answered with them, as a signature that key verifies, and signed in.
         var sent: StepProof? = null
-        val signedIn = Auth.holding(step(2uL), fresh.phrase, 2) { _, proof -> sent = proof; maya }
+        val signedIn = Auth.holding(step(held), fresh.phrase, held) { _, proof -> sent = proof; maya }
         assertEquals(maya, (signedIn as Auth.SignIn.SignedIn).user)
         assertTrue(twoStepPhraseVerify(base64urlDecode(fresh.envelope.publicKey), userId, stepTokenDigest(token), base64urlDecode((sent as StepProof.Phrase).signature)))
-        // Another key (a rotation that was not made after all), none named, or no phrase method: the step is the
-        // person's to answer, and the held words are sent nowhere.
-        for (left in listOf(step(1uL), step(null), step(2uL, listOf(StepMethod.TOTP)))) assertTrue(Auth.holding(left, fresh.phrase, 2) { _, _ -> error("not asked") } === left)
+        // Another key at the same version (a rotation that was not made after all), none named, no phrase method, or
+        // no salt held: the step is the person's to answer, and the held words are sent nowhere.
+        // (Counted, not thrown: a failed answer is swallowed and the step handed on, which would hide a phrase that was sent.)
+        var asked = 0
+        val another = recoveryCreate(userId, randomBytes(32u), 2uL, 1uL).envelope.wrappingSalt
+        for (left in listOf(step(another), step(null), step(held, listOf(StepMethod.TOTP)))) assertTrue(Auth.holding(left, fresh.phrase, held) { _, _ -> asked++; maya } === left)
+        val unheld = step("")
+        assertTrue(Auth.holding(unheld, fresh.phrase, "") { _, _ -> asked++; maya } === unheld)
+        assertEquals(0, asked)
         // The answer didn't come back as a session: the step screen takes over, and nothing is thrown away.
-        val failed = step(2uL)
-        assertTrue(Auth.holding(failed, fresh.phrase, 2) { _, _ -> throw LostReply(StepWords.LOST_STEP) } === failed)
+        val failed = step(held)
+        assertTrue(Auth.holding(failed, fresh.phrase, held) { _, _ -> throw LostReply(StepWords.LOST_STEP) } === failed)
         // No step at all: signed in as it was.
         val plain = Auth.SignIn.SignedIn(maya)
-        assertTrue(Auth.holding(plain, fresh.phrase, 2) { _, _ -> error("not asked") } === plain)
+        assertTrue(Auth.holding(plain, fresh.phrase, held) { _, _ -> error("not asked") } === plain)
     }
 
     @Test
@@ -450,13 +554,21 @@ class TwoStepTest {
     }
 
     @Test
-    fun aStepLeftUnansweredIsDroppedAMinuteAfterItsOwnEnd() {
-        val pending = PendingSignIn("https://step.test", "maya@example.org", challenge(), ByteArray(64))
-        assertEquals(java.time.Instant.parse("2026-11-13T10:01:00Z"), pending.dropAt())
-        // An end that can't be read still ends: the server's five minutes from now, plus the minute.
-        val now = java.time.Instant.parse("2026-11-13T09:00:00Z")
-        val undated = PendingSignIn("o", "e", StepChallenge(token, all, "soon", null), ByteArray(0))
-        assertEquals(now.plusSeconds(360), undated.dropAt(now))
+    fun aStepLastsSixMinutesFromWhenItArrivedWhateverTheDateOnThePhoneSays() {
+        // Counted against the step's own `expiresAt` (the server's wall clock), a phone whose date is set seven minutes
+        // fast found every step over before it was shown, and nobody with the step could sign in on it.
+        now = 50_000
+        for (expiresAt in listOf("2026-11-13T10:00:00.000Z", "1999-01-01T00:00:00.000Z", "2099-01-01T00:00:00.000Z", "soon")) {
+            val pending = PendingSignIn("https://step.test", "maya@example.org", StepChallenge(token, all, expiresAt, null), ByteArray(64))
+            assertEquals(expiresAt, 360_000L, pending.dropIn())
+            assertEquals(expiresAt, 1L, pending.dropIn(now = 50_000L + 359_999))
+            // The server's five minutes and one more, and then it is over.
+            assertEquals(expiresAt, 0L, pending.dropIn(now = 50_000L + 360_000))
+            assertTrue(pending.dropIn(now = 50_000L + 400_000) < 0)
+        }
+        // Each step counts from its own arrival.
+        now = 80_000
+        assertEquals(350_000L, PendingSignIn("o", "e", challenge(), ByteArray(0)).dropIn(now = 90_000))
     }
 
     @Test
@@ -532,6 +644,20 @@ class TwoStepTest {
         assertEquals("Two-step sign-in is off.", out.removed(on = false).finished)
         assertEquals("Authenticator app removed.", out.removed(on = true).finished)
         assertEquals(listOf("A", "B"), out.newCodes(listOf("A", "B")).codes)
+
+        // Codes nobody has seen survive a page being opened or left: the server made them already, and nothing else
+        // shows them. Before, leaving the page while "Making" was out and opening another dropped them.
+        val unseen = out.newCodes(listOf("A", "B"))
+        assertEquals(unseen, unseen.cleared())
+        assertTrue(unseen.codesReplace)
+        assertFalse(out.confirmed(Result.success(codes), replacing = false).codesReplace)
+        assertEquals(codes.backupCodes, out.confirmed(Result.success(codes), replacing = false).cleared().codes)
+        // A request still out is not cleared either: its answer has to land.
+        assertEquals(out, out.cleared())
+        // Only Done forgets them, and the settings are read again then.
+        assertEquals(TwoStepFlow(reread = 1), unseen.seen())
+        // An error or a finished change with nothing to show is cleared as before.
+        assertEquals(TwoStepFlow(reread = 1), odd.cleared())
     }
 
     @Test
@@ -831,8 +957,8 @@ class TwoStepTest {
         assertEquals("/api/auth/two-step/challenge", sent.path)
         assertEquals("master-key", sent.body.getString("purpose"))
         assertEquals("hushos-session=session-token", sent.cookie)
-        // The step is off for this account (409), or this server has two-step off and it never had one (501).
-        for (status in listOf(409, 501)) {
+        // The step is off for this account (409). The route never answers 501: it does not look at the server's switch.
+        for (status in listOf(409)) {
             session = serving(status, refusal("Two-step sign-in is off for this account."))
             assertNull("$status", TwoStep.challenge(session, StepPurpose.PASSWORD))
         }

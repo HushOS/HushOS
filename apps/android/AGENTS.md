@@ -198,7 +198,7 @@ Design: `docs/devices-design.md` 5; as built: `docs/push-relay-plan.md`, PR 4.
 `docs/two-step-design.md` 4 to 6. `data/TwoStep.kt` holds the requests and the rules; `ui/TwoStepScreen.kt` the screens.
 
 - `Auth.startSignIn` sends `twoStep: 1` (`Auth.finishBody`) and returns `SignIn.SignedIn` or `SignIn.Step(PendingSignIn)`. What the password opened waits in `PendingSignIn`, in the view model's memory, for `Auth.answerStep`.
-    - It is dropped a minute after the step's own end (`PendingSignIn.dropAt`, `DriveViewModel.awaitStep`), as the web does. An answer still out is waited for.
+    - It is dropped six minutes after it arrived (`PendingSignIn.dropIn`, `DriveViewModel.awaitStep`), counted on the clock since boot (`uptime`), never against the step's `expiresAt`: a phone with a wrong date must still be able to sign in. An answer still out is waited for.
     - `DriveViewModel.answerStep` acts on an answer only while its step is still the pending one, and `stepBusy` is the view model's, so a rebuilt screen sends no second answer.
 - The core reads every reply (`signInReplyRead`, `stepChangeReplyRead`). A reply that is not the server's answer is a `LostReply`, never a sign-in; so is the session's body without its cookie. A step's refusal is a `StepRefused` with its code.
 - `StepOutcome.after` says what the step screen does with a failure: ask again, narrow the methods, go back to the password, or offer the same answer again. `StepUp` is the same for a step inside a form. Change these with their tests (`TwoStepTest`).
@@ -213,8 +213,11 @@ Design: `docs/devices-design.md` 5; as built: `docs/push-relay-plan.md`, PR 4.
     - Once a rotation's or a reset's last request has gone out, nothing that fails may cost the new phrase. Keep it that way.
 - A rotation and a phrase reset end the same way (`Reset`, `data/TwoStep.kt`; `Auth.rotateKeysKit`, `Auth.recover`): what the last request answered, what the sign-in with the new password showed, and what to show.
     - That sign-in (`Auth.proved`, tried twice) answers its second step with the phrase just made, so nobody is sent to a step they need unseen words for.
-    - A lost reply is judged by versions, never by whether the sign-in worked: someone who reset to the password they already had signs in against the unchanged account. The session envelope's `credentialVersion`, or the step's `phrase.recoveryVersion`, is the change's own only if it was made.
-    - The old version or a refused password is "not made" (`NOT_RESET`, `NOT_ROTATED`): the probe's session is ended and never stored, a step naming the old recovery key is not answered, and the new words are not shown. No version at all shows the words with a caveat.
+    - The new words are withheld only when the server answered a refusal (a 4xx in its own words): then, and only then, `NOT_RESET` or `NOT_ROTATED` is said after the server's reason (`Reset.refusal`). Once the request has left without one they are always shown (`Reset.settle`): a look that found the account as it was is not proof, the commit can land a second later.
+    - Whether they are shown as the account's or with "keep both" is judged by the salt this change generated, never by whether the sign-in worked and never by version numbers: the session envelope's `wrappingSalt`, or the step's `phrase.wrappingSalt`, is this change's only if it was made. Another salt ends the probe's session unstored and leaves the step unanswered.
+    - A rotation's look can sign in on the account as it was (the password is the same): that session is kept (`Reset.Proved.Unconfirmed`), the person stays in the app, and the words are shown from memory with "keep both" (`HeldWords.keepsSession`). A reset's is ended.
+    - Nothing after the last request may throw but an answered refusal; what the phone remembers is written best effort (`Auth.rotated`).
+    - After a held reset the app leaves the session it showed (another account's is signed out) and opens sign-in with the recovered address filled (`DriveState.signInEmail`).
     - After held words, `Auth.signInHolding` answers a step that names their recovery key with them; any other step is the person's.
 - `OwnChange` is what mutes "You’ve been signed out" for this phone's own rotation, password change or reset: raised before the request (`begin`), dropped on failure, held while the words are up and the sign-in after is out. `signedIn` clears it.
     - `CheckedWords` (account, server, the phrase's own `recoveryVersion`) is what a check made without a session records at the next sign-in, and only for a matching one.
@@ -223,10 +226,11 @@ Design: `docs/devices-design.md` 5; as built: `docs/push-relay-plan.md`, PR 4.
 - The other replies are read the same way, by the web's readers: `Auth.done` (`{ success: true }`), `TwoStep.enrolment`, `TwoStep.removed`, `TwoStep.codes`. Turning the step on without codes in the reply is lost too.
 - "Remove my other devices" is offered whenever the step is turned on, whatever the device list said, and removes when ticked; never when the app is replaced (`TwoStepFlow.removesOthers`). The codes show first; the removal runs behind them (`DriveViewModel.removeOtherDevices`), Done closes the codes meanwhile, and a failure is a notice.
 - Account › Two-step sign-in's changes run in the view model's scope and their results live in `DriveViewModel.twoStepFlow` (`TwoStepFlow`), not in a screen: the key and the codes are shown once, and a screen rebuilt while the request is out must find them. A lost reply reads the settings again (`reread`).
+    - Backup codes stay in the flow until the person presses Done (`TwoStepFlow.seen`); `cleared` never drops unseen ones, and `TwoStepScreen` shows them first whichever page it was on. Back is held while a request is out.
 - A copied key or set of codes leaves the clipboard after two minutes, as the recovery phrase does (`SensitiveClipboard`); sharing the codes watches the clipboard for them too.
 - What a refusal withdraws is `StepOutcome.left`: a paused app, the app; a spent budget, both kinds of code together; `step-unavailable`, only the method that was tried.
 - Password re-checks go one at a time, in the order asked (`Auth.passwordTurn`): the removal of other devices behind the backup codes, and whatever password action the person starts meanwhile, never overlap.
-    - The view model runs them through `change`, which tells a waiting one when its scope has gone (`Auth.cancellable`): it gives up its place and never runs late.
+    - The view model runs them through `change`, which tells a waiting one when its scope has gone (`Auth.cancellable`): it gives up its place and never runs late. Any throw while waiting gives the place up, and so does a minute's wait (`StepWords.TOO_LONG`).
     - Each has an `…At(session)` form that takes the turn (`changePasswordAt`, `rotateKeysAt`, `deleteAccountAt`, `removeOtherDevicesAt`), which is what the tests call.
 - Account › Two-step sign-in shows nothing on a server that has two-step off (`TwoStep.status` is null for 501).
 - The key and the backup codes are on a secure window (no screenshots), as the recovery phrase is.
