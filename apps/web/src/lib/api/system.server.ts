@@ -12,30 +12,33 @@ import {
 import { requestContext } from '@/lib/api/shared.server';
 
 /*
- * Once this process is ready it says which two-step key it seals under (its id, never the
- * key): the worker re-seals older secrets only towards the key the web service names
- * (docs/two-step-design.md 8), and a health check is the first thing a new container answers,
- * so a rotation does not wait for someone's next sign-in. Said once per process; a failure is
- * logged, never the readiness answer's, and the next check tries again.
+ * At its readiness checks this process says which two-step key it seals under and which keys
+ * it can read (their ids, never the keys). The worker re-seals older secrets towards a key
+ * only when every web process seen in the last five minutes seals under it
+ * (docs/two-step-design.md 8), so each process keeps saying so for as long as it runs: one
+ * that stops is taken for gone. Not at every request, though: readiness is asked by anyone,
+ * signed in or not, and each word is a write. A failure is logged, never the readiness
+ * answer's, and the next check tries again.
  */
-let keyAnnounced = false;
-let keyAnnouncing = false;
-function announceTwoStepKey() {
-    if (keyAnnounced || keyAnnouncing) return;
-    keyAnnouncing = true;
+const KEY_REPORT_MS = 15_000;
+let keysReportedAt = 0;
+let keysReporting = false;
+function reportTwoStepKeys() {
+    if (keysReporting || Date.now() - keysReportedAt < KEY_REPORT_MS) return;
+    keysReporting = true;
     void auth
-        .announceTwoStepKey()
+        .reportTwoStepKeys()
         .then(() => {
-            keyAnnounced = true;
+            keysReportedAt = Date.now();
         })
         .catch((error: unknown) =>
             serverLog.error({
-                message: 'The two-step key could not be announced to the worker.',
+                message: 'This process could not say which two-step key it seals under.',
                 twoStep: { failure: error instanceof Error ? error.name : typeof error },
             }),
         )
         .finally(() => {
-            keyAnnouncing = false;
+            keysReporting = false;
         });
 }
 
@@ -54,7 +57,7 @@ export const systemApi = new Elysia()
             set.headers['Cache-Control'] = 'no-store';
             try {
                 await db.execute('select 1');
-                announceTwoStepKey();
+                reportTwoStepKeys();
                 return { status: 'ok' as const };
             } catch (error) {
                 if (error instanceof Error) log.error(error);

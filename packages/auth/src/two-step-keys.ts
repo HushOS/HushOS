@@ -149,14 +149,67 @@ export async function resealTotpSecrets(
     }
 }
 
+/* How long every running web process must have sealed under a key before secrets are moved to it. */
+export const RESEAL_GRACE_MS = 30 * 60_000;
+
+/*
+ * Why nothing is moved yet:
+ * - `no-reader`: no web process has been seen in the last five minutes;
+ * - `cannot-read`: a running web process does not have the worker's current key at all;
+ * - `other-key`: a running web process seals new secrets under another key;
+ * - `grace`: every running web process seals under it, and not all have for 30 minutes yet.
+ */
+export type ResealWait = 'no-reader' | 'cannot-read' | 'other-key' | 'grace';
+
+/*
+ * Whether the web processes agree on `sealedWith` (a key id) as the key to seal under, enough
+ * for the worker to move older secrets to it. Re-sealing overwrites the old seal, so it waits
+ * for two things:
+ *
+ * - **Every web process seen in the last five minutes can read the key and seals under it.**
+ *   During a rolling update some processes are still on the old settings: a secret moved to
+ *   the new key would be unreadable to them, and the person's sign-in would land on one of
+ *   them. The worker being given a key the web service was not is the same case.
+ * - **Each of them has sealed under it for 30 minutes.** A rollout that is taken back in its
+ *   first minutes then finds every secret where it was, still under the old key. A process
+ *   that restarts is a new reader and waits its own 30 minutes.
+ *
+ * A process that has not been seen for five minutes no longer counts: it exited.
+ */
+export function sealingAgreed(
+    readers: twoStepRepository.KeyReader[],
+    sealedWith: string,
+    now: Date,
+):
+    | { agreed: true }
+    | { agreed: false; reason: ResealWait; webSealsWith: string[]; readyAt: Date | null } {
+    const webSealsWith = [...new Set(readers.map((reader) => reader.sealingKeyId))].sort();
+    const waiting = (reason: ResealWait, readyAt: Date | null = null) =>
+        ({ agreed: false, reason, webSealsWith, readyAt }) as const;
+    if (!readers.length) return waiting('no-reader');
+    if (readers.some((reader) => !reader.readableKeyIds.includes(sealedWith)))
+        return waiting('cannot-read');
+    if (readers.some((reader) => reader.sealingKeyId !== sealedWith)) return waiting('other-key');
+    const newest = Math.max(...readers.map((reader) => reader.sealingSince.getTime()));
+    const readyAt = new Date(newest + RESEAL_GRACE_MS);
+    return readyAt > now ? waiting('grace', readyAt) : { agreed: true };
+}
+
 export type ResealRun =
     /* This process has no key to seal under: no TWO_STEP_KEY, and no OPAQUE setup it can read. */
     | { status: 'no-key' }
-    /*
-     * The web service has not said it seals under this process's current key: it has not
-     * started on these settings yet, or it was given other keys. Nothing was touched.
-     */
-    | { status: 'waiting'; sealedWith: string; webSealsWith: string | null }
+    /* The web processes do not agree on this process's current key yet (`sealingAgreed`). Nothing was touched. */
+    | {
+          status: 'waiting';
+          /* The id of this process's current key. */
+          sealedWith: string;
+          reason: ResealWait;
+          /* How many web processes were seen in the last five minutes, and the key ids they seal under. */
+          readers: number;
+          webSealsWith: string[];
+          /* `grace`: when the 30 minutes are over, if no web process restarts before. */
+          readyAt: string | null;
+      }
     | ({
           status: 'done';
           /* The id of the current key. */
@@ -168,13 +221,18 @@ export type ResealRun =
       } & ResealCounts);
 
 /*
- * The worker's run after a rotation of the two-step key. It re-seals only towards the key the
- * web service has said it seals under (`announceSealingKey`): a worker given a key the web
- * service lacks would otherwise move every secret to a key nobody reads with, and re-sealing
- * overwrites the old seal. Until the two agree, nothing is touched and the run says so.
+ * The worker's run after a rotation of the two-step key. It moves secrets to its current key
+ * only once the web processes agree on that key (`sealingAgreed`), and otherwise touches
+ * nothing and says why. Rows of web processes long gone are dropped on the way.
  */
 export async function resealTwoStepSecrets(
-    options: { batchSize?: number; signal?: AbortSignal; keyring?: TwoStepKeyring | null } = {},
+    options: {
+        batchSize?: number;
+        signal?: AbortSignal;
+        keyring?: TwoStepKeyring | null;
+        /* The moment the run is judged at; the database's clock when not given. */
+        now?: Date;
+    } = {},
 ): Promise<ResealRun> {
     const keyring =
         options.keyring === undefined
@@ -182,9 +240,18 @@ export async function resealTwoStepSecrets(
             : options.keyring;
     if (!keyring) return { status: 'no-key' };
     const sealedWith = keyring.current.id.toString('hex');
-    const announced = await twoStepRepository.announcedSealingKey();
-    if (!announced?.equals(keyring.current.id))
-        return { status: 'waiting', sealedWith, webSealsWith: announced?.toString('hex') ?? null };
+    await twoStepRepository.dropStaleKeyReaders(options.now);
+    const { now, readers } = await twoStepRepository.liveKeyReaders(options.now);
+    const web = sealingAgreed(readers, sealedWith, now);
+    if (!web.agreed)
+        return {
+            status: 'waiting',
+            sealedWith,
+            reason: web.reason,
+            readers: readers.length,
+            webSealsWith: web.webSealsWith,
+            readyAt: web.readyAt?.toISOString() ?? null,
+        };
     const counts = await resealTotpSecrets(keyring, options);
     const under = await twoStepRepository.sealedUnder();
     const others = <T extends { keyId: Buffer }>(rows: T[], count: (row: T) => number) =>

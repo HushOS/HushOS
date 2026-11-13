@@ -8,6 +8,7 @@ import {
     gt,
     isNotNull,
     isNull,
+    lt,
     ne,
     sql,
 } from 'drizzle-orm';
@@ -15,11 +16,11 @@ import { db } from './client';
 import {
     accountDevices,
     accountSecurityEvents,
-    serverSecrets,
     sessions,
     twoStepAttempts,
     twoStepBackupCodes,
     twoStepFactors,
+    twoStepKeyReaders,
     twoStepState,
     type accountKeys,
     type TwoStepFactorKind,
@@ -857,35 +858,90 @@ export async function sealedUnder() {
     };
 }
 
-/* Where the web service says which key it seals under. An id, not a secret. */
-const SEALING_KEY_NAME = 'two-step-sealing-key-id';
+/* A web process counts as running while it has been seen in this long. */
+export const KEY_READER_LIVE_SECONDS = 5 * 60;
+/* A row not seen for this long is deleted. */
+export const KEY_READER_KEPT_SECONDS = 60 * 60;
+
+/* A web process as the worker sees it: key ids in hex, never a key. */
+export type KeyReader = {
+    instanceId: string;
+    sealingKeyId: string;
+    readableKeyIds: string[];
+    sealingSince: Date;
+    seenAt: Date;
+};
+
+const keyIdHex = (keyId: Buffer) => {
+    // 8 bytes is an id. Anything longer could be a key, and must never be written here.
+    if (keyId.length !== 8) throw new Error('A two-step key id is 8 bytes.');
+    return keyId.toString('hex');
+};
 
 /*
- * The web service's word on which key it seals new secrets under: the key's id (the first 8
- * bytes of its SHA-256, never the key). The worker re-seals only towards the key named here,
- * so a worker that was given a key the web service does not have, by a slip or ahead of a
- * rollout, moves nothing to a key that would then be read by nobody. The newest word wins.
+ * A web process's word on its keys, said again at every readiness check: the key it seals
+ * new secrets under, and every key it can read, by id. The first word starts
+ * `sealing_since`; each later one only moves `seen_at`, unless the process now seals under
+ * another key (it cannot, short of a restart), which starts `sealing_since` again. Times are
+ * the database's clock, so web processes and the worker on different hosts agree on them.
  */
-export async function announceSealingKey(keyId: Buffer) {
-    if (keyId.length !== 8) throw new Error('A two-step key id is 8 bytes.');
-    const value = keyId.toString('hex');
+export async function reportKeyReader(input: {
+    instanceId: string;
+    sealingKeyId: Buffer;
+    readableKeyIds: Buffer[];
+    now?: Date;
+}) {
+    const sealingKeyId = keyIdHex(input.sealingKeyId);
+    const readableKeyIds = [...new Set(input.readableKeyIds.map(keyIdHex))].sort();
+    const now = input.now ?? sql<Date>`now()`;
     await db
-        .insert(serverSecrets)
-        .values({ name: SEALING_KEY_NAME, value })
+        .insert(twoStepKeyReaders)
+        .values({
+            instanceId: input.instanceId,
+            sealingKeyId,
+            readableKeyIds,
+            sealingSince: now,
+            seenAt: now,
+        })
         .onConflictDoUpdate({
-            target: serverSecrets.name,
-            set: { value },
-            setWhere: ne(serverSecrets.value, value),
+            target: twoStepKeyReaders.instanceId,
+            set: {
+                sealingKeyId,
+                readableKeyIds,
+                sealingSince: sql`case when ${twoStepKeyReaders.sealingKeyId} = excluded.sealing_key_id then ${twoStepKeyReaders.sealingSince} else excluded.sealing_since end`,
+                seenAt: sql`greatest(${twoStepKeyReaders.seenAt}, excluded.seen_at)`,
+            },
         });
 }
 
-/* The id of the key the web service last said it seals under, or null when it has said nothing. */
-export async function announcedSealingKey() {
-    const [row] = await db
-        .select({ value: serverSecrets.value })
-        .from(serverSecrets)
-        .where(eq(serverSecrets.name, SEALING_KEY_NAME));
-    return row && /^[0-9a-f]{16}$/.test(row.value) ? Buffer.from(row.value, 'hex') : null;
+/*
+ * The web processes seen in the last five minutes, and the moment that was read at, by the
+ * database's clock. A process that stopped saying so (it exited, or cannot reach the
+ * database) is no reader any more once those five minutes have passed.
+ */
+export async function liveKeyReaders(at?: Date): Promise<{ now: Date; readers: KeyReader[] }> {
+    const now =
+        at ?? new Date((await db.execute<{ now: Date }>(sql`select now() as now`)).rows[0]!.now);
+    const readers = await db
+        .select()
+        .from(twoStepKeyReaders)
+        .where(
+            gt(twoStepKeyReaders.seenAt, new Date(now.getTime() - KEY_READER_LIVE_SECONDS * 1000)),
+        )
+        .orderBy(asc(twoStepKeyReaders.instanceId));
+    return { now, readers };
+}
+
+/* Deletes the rows of processes not seen for an hour; how many went. */
+export async function dropStaleKeyReaders(at?: Date) {
+    const cutoff = at
+        ? new Date(at.getTime() - KEY_READER_KEPT_SECONDS * 1000)
+        : sql<Date>`now() - make_interval(secs => ${KEY_READER_KEPT_SECONDS})`;
+    const gone = await db
+        .delete(twoStepKeyReaders)
+        .where(lt(twoStepKeyReaders.seenAt, cutoff))
+        .returning({ instanceId: twoStepKeyReaders.instanceId });
+    return gone.length;
 }
 
 /* ------------------------------------------------------------------------- */

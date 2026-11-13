@@ -91,12 +91,12 @@ await boss.work<JobPayloads[typeof queues.cleanupExpired]>(
 
 /*
  * Every ten minutes, and once now: authenticator secrets sealed under an older two-step key
- * move to the current one (docs/two-step-design.md 8). Once now, because a key rotation
- * restarts the worker; again soon after, because the run at start usually finds the web
- * service not yet up on the new key and waits for it, and because a web container still on
- * the old settings can seal a new secret under the old key meanwhile. A run with nothing to
- * move reads the table once. Whether accounts may turn the step on (TWO_STEP_ENABLED)
- * changes nothing here: the secrets that exist are still read at every sign-in.
+ * move to the current one (docs/two-step-design.md 8), once every running web process has
+ * sealed under that key for 30 minutes. So after a rotation the first runs wait, and say
+ * why; the schedule is what finishes it. It also catches a secret that a web process still
+ * on the old settings sealed under the old key meanwhile. A run with nothing to move reads
+ * the table once. Whether accounts may turn the step on (TWO_STEP_ENABLED) changes nothing
+ * here: the secrets that exist are still read at every sign-in.
  */
 await boss.schedule(queues.twoStepReseal, '*/10 * * * *', {}, { tz: 'UTC' });
 await boss.send(queues.twoStepReseal, {});

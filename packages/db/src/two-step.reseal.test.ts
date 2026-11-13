@@ -5,7 +5,7 @@ import { registered, sha256 } from '../test/accounts';
 import { closeDatabase, resetDatabase } from '../test/helpers';
 import * as auth from './auth';
 import { db } from './client';
-import { serverSecrets, twoStepBackupCodes, twoStepFactors } from './schema';
+import { twoStepBackupCodes, twoStepFactors, twoStepKeyReaders } from './schema';
 import * as twoStep from './two-step';
 
 /*
@@ -305,34 +305,102 @@ describe('what is still under each key', () => {
     });
 });
 
-describe('the key the web service says it seals under', () => {
-    test('is nothing until it is said, then the newest word', async () => {
-        expect(await twoStep.announcedSealingKey()).toBeNull();
-        await twoStep.announceSealingKey(keyId('first'));
-        expect(await twoStep.announcedSealingKey()).toEqual(keyId('first'));
-        // Said again by every web process that starts: the same word twice is still one row.
-        await twoStep.announceSealingKey(keyId('first'));
-        await twoStep.announceSealingKey(keyId('second'));
-        expect(await twoStep.announcedSealingKey()).toEqual(keyId('second'));
-        expect(await db.select().from(serverSecrets)).toHaveLength(1);
+describe('the web processes that read two-step rows', () => {
+    const MINUTE = 60_000;
+    const T0 = new Date('2026-11-13T12:00:00.000Z');
+    const after = (minutes: number) => new Date(T0.getTime() + minutes * MINUTE);
+    const report = (instanceId: string, sealing: string, readable: string[], now: Date) =>
+        twoStep.reportKeyReader({
+            instanceId,
+            sealingKeyId: keyId(sealing),
+            readableKeyIds: readable.map(keyId),
+            now,
+        });
+    const hex = (label: string) => keyId(label).toString('hex');
+    const live = async (now: Date) => (await twoStep.liveKeyReaders(now)).readers;
+
+    test('each process has one row: its first word starts the clock, later ones only say it is still there', async () => {
+        const web = randomUUID();
+        await report(web, 'b', ['a', 'b'], T0);
+        await report(web, 'b', ['a', 'b'], after(3));
+        await report(web, 'b', ['b', 'a', 'b'], after(4));
+
+        expect(await db.select().from(twoStepKeyReaders)).toHaveLength(1);
+        expect(await live(after(4))).toEqual([
+            {
+                instanceId: web,
+                sealingKeyId: hex('b'),
+                readableKeyIds: [hex('a'), hex('b')].sort(),
+                // Since its first word, not its latest: the grace is counted from here.
+                sealingSince: T0,
+                seenAt: after(4),
+            },
+        ]);
+        // A word that arrives late (two checks racing) never moves a process back in time.
+        await report(web, 'b', ['a', 'b'], after(2));
+        expect((await live(after(4)))[0]!.seenAt).toEqual(after(4));
     });
 
-    test('is an id and nothing longer: a key itself is refused, and a stored value that is not an id reads as nothing', async () => {
+    test('a process that now seals under another key starts its clock again', async () => {
+        const web = randomUUID();
+        await report(web, 'a', ['a'], T0);
+        await report(web, 'b', ['a', 'b'], after(10));
+        expect((await live(after(10)))[0]).toMatchObject({
+            sealingKeyId: hex('b'),
+            sealingSince: after(10),
+        });
+    });
+
+    test('a process counts for five minutes after its last word, and no longer', async () => {
+        const running = randomUUID();
+        const stopped = randomUUID();
+        await report(stopped, 'a', ['a'], T0);
+        await report(running, 'b', ['a', 'b'], after(4));
+
+        const seen = async (minutes: number, seconds = 0) =>
+            (await live(new Date(after(minutes).getTime() + seconds * 1000)))
+                .map((reader) => reader.instanceId)
+                .sort();
+        expect(await seen(4, 59)).toEqual([running, stopped].sort());
+        // Five minutes after its last word, the stopped one is no reader any more.
+        expect(await seen(5)).toEqual([running]);
+        expect(await seen(9)).toEqual([]);
+        // Read without a moment, the database's own clock is used: these words are from 2026-11-13 noon.
+        expect((await twoStep.liveKeyReaders()).readers).toEqual([]);
+    });
+
+    test('rows of processes not seen for an hour are deleted, and no sooner', async () => {
+        const old = randomUUID();
+        const recent = randomUUID();
+        await report(old, 'a', ['a'], T0);
+        await report(recent, 'b', ['b'], after(30));
+        expect(await twoStep.dropStaleKeyReaders(after(60))).toBe(0);
+        expect(await twoStep.dropStaleKeyReaders(after(61))).toBe(1);
+        expect((await db.select().from(twoStepKeyReaders)).map((row) => row.instanceId)).toEqual([
+            recent,
+        ]);
+    });
+
+    test('only key ids are stored: a whole key is refused, and so is a process that cannot read the key it seals under', async () => {
+        const web = randomUUID();
         // 32 bytes is a key, not its id: it must never be written where ids are kept.
-        await expect(twoStep.announceSealingKey(fixed('a-whole-key', 32))).rejects.toThrow(
-            'A two-step key id is 8 bytes.',
-        );
-        expect(await db.select().from(serverSecrets)).toEqual([]);
-        // A row someone edited: the worker must wait, not seal towards whatever it says.
-        await twoStep.announceSealingKey(keyId('first'));
-        for (const value of [
-            '',
-            'not-an-id',
-            keyId('first').toString('hex').toUpperCase(),
-            'ab'.repeat(9),
-        ]) {
-            await db.update(serverSecrets).set({ value });
-            expect(await twoStep.announcedSealingKey(), value).toBeNull();
-        }
+        await expect(
+            twoStep.reportKeyReader({
+                instanceId: web,
+                sealingKeyId: fixed('a-whole-key', 32),
+                readableKeyIds: [keyId('a')],
+                now: T0,
+            }),
+        ).rejects.toThrow('A two-step key id is 8 bytes.');
+        await expect(
+            twoStep.reportKeyReader({
+                instanceId: web,
+                sealingKeyId: keyId('a'),
+                readableKeyIds: [keyId('a'), fixed('a-whole-key', 32)],
+                now: T0,
+            }),
+        ).rejects.toThrow('A two-step key id is 8 bytes.');
+        await expect(report(web, 'b', ['a'], T0)).rejects.toThrow();
+        expect(await db.select().from(twoStepKeyReaders)).toEqual([]);
     });
 });

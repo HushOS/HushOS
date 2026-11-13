@@ -106,10 +106,19 @@ async function opened(factorId: string, key: Uint8Array) {
 }
 const hexOf = (secret: string) => Buffer.from(fromBase32(secret)).toString('hex');
 
-/* The web service says which key it seals under, as it does once it is ready. */
+const MINUTE = 60_000;
+
+/*
+ * The web service has been up on these settings for a while: this process says which keys it
+ * has, as it does at every readiness check, and its first word is dated 31 minutes back, as
+ * if it had been saying so since then.
+ */
 async function webIsUp() {
     const auth = await import('@hushos/auth/server');
-    await auth.announceTwoStepKey();
+    await auth.reportTwoStepKeys();
+    await edge.db
+        .update(edge.schema.twoStepKeyReaders)
+        .set({ sealingSince: new Date(Date.now() - 31 * MINUTE) });
 }
 
 describe('the re-seal job after a key rotation', () => {
@@ -247,43 +256,6 @@ describe('the re-seal job after a key rotation', () => {
         expect((await row(other.factorId)).sealedWith).toBe(await idOf(CURRENT));
     }, 90_000);
 
-    test('nothing moves until the web service seals under the worker’s current key', async () => {
-        const account = await accountUnder(PREVIOUS);
-        const before = await row(account.factorId);
-
-        // The web service has said nothing yet: it may still be running on the old settings.
-        expect(await job()).toEqual({
-            status: 'waiting',
-            sealedWith: await idOf(CURRENT),
-            webSealsWith: null,
-        });
-        expect(await row(account.factorId)).toEqual(before);
-
-        // The web service seals under TWO_STEP_KEY; a worker given some other key is not followed.
-        await webIsUp();
-        const stray = new Uint8Array(randomBytes(32));
-        const strayRing = await keys.twoStepKeyring({
-            serverSetup: await edge.serverSetup(),
-            key: encoded(stray),
-            previousKey: encoded(PREVIOUS),
-        });
-        expect(await keys.resealTwoStepSecrets({ keyring: strayRing })).toEqual({
-            status: 'waiting',
-            sealedWith: await idOf(stray),
-            webSealsWith: await idOf(CURRENT),
-        });
-        expect(await row(account.factorId)).toEqual(before);
-        // Moved to the stray key, no web process could have opened it again.
-        expect(await opened(account.factorId, stray)).toBeNull();
-
-        // A worker with no key at all (no TWO_STEP_KEY, no setup it can read) does nothing either.
-        expect(await keys.resealTwoStepSecrets({ keyring: null })).toEqual({ status: 'no-key' });
-        expect(await row(account.factorId)).toEqual(before);
-
-        expect((await job()).status).toBe('done');
-        expect((await row(account.factorId)).sealedWith).toBe(await idOf(CURRENT));
-    }, 90_000);
-
     test('a second run finds nothing to do and rewrites nothing', async () => {
         const account = await accountUnder(PREVIOUS);
         await webIsUp();
@@ -332,4 +304,234 @@ describe('the re-seal job after a key rotation', () => {
         ])
             expect(logged).not.toContain(secret);
     }, 90_000);
+});
+
+/*
+ * Re-sealing overwrites the old seal, so the worker moves nothing to a key until every web
+ * process that is running can read that key, seals under it, and has for 30 minutes. Each
+ * process below is a row as a web process writes it at its readiness checks; the times are
+ * given, so a rollout is played out minute by minute.
+ */
+describe('the worker waits for every web process', () => {
+    const T0 = new Date('2026-01-10T09:00:00.000Z');
+    const at = (minutes: number, seconds = 0) =>
+        new Date(T0.getTime() + minutes * MINUTE + seconds * 1000);
+    const id = async (key: Uint8Array) => Buffer.from(await twoStepKeyId(key));
+
+    /* A web process on the new settings: it seals under TWO_STEP_KEY and reads all three keys. */
+    const onNew = () => ({ sealing: CURRENT, readable: [CURRENT, PREVIOUS, derived] });
+    /* One still on the settings from before the rotation: PREVIOUS was its key, and it never heard of CURRENT. */
+    const onOld = () => ({ sealing: PREVIOUS, readable: [PREVIOUS, derived] });
+
+    /* One readiness check of a web process, at `now`. */
+    async function seen(
+        instanceId: string,
+        process: { sealing: Uint8Array; readable: Uint8Array[] },
+        now: Date,
+    ) {
+        await edge.twoStepRepository.reportKeyReader({
+            instanceId,
+            sealingKeyId: await id(process.sealing),
+            readableKeyIds: await Promise.all(process.readable.map(id)),
+            now,
+        });
+    }
+    /* The worker's run at `now`, on the keys this instance was started with. */
+    const run = (now: Date) => keys.resealTwoStepSecrets({ now });
+
+    test('with no web process seen, nothing moves', async () => {
+        const account = await accountUnder(PREVIOUS);
+        const before = await row(account.factorId);
+        expect(await run(at(0))).toEqual({
+            status: 'waiting',
+            sealedWith: await idOf(CURRENT),
+            reason: 'no-reader',
+            readers: 0,
+            webSealsWith: [],
+            readyAt: null,
+        });
+        expect(await row(account.factorId)).toEqual(before);
+    }, 60_000);
+
+    test('a mixed fleet blocks: one process still on the old key is enough', async () => {
+        const account = await accountUnder(PREVIOUS);
+        const before = await row(account.factorId);
+        const [fresh, stale] = [randomUUID(), randomUUID()];
+        // The new process has been up for 40 minutes; an old one is still answering beside it.
+        await seen(fresh, onNew(), at(0));
+        await seen(fresh, onNew(), at(40));
+        await seen(stale, onOld(), at(0));
+        await seen(stale, onOld(), at(40));
+
+        expect(await run(at(40))).toMatchObject({
+            status: 'waiting',
+            reason: 'cannot-read',
+            readers: 2,
+            webSealsWith: [await idOf(CURRENT), await idOf(PREVIOUS)].sort(),
+        });
+        // Moved now, the secret would be unreadable to the old process, and this person's
+        // next sign-in may land on it.
+        expect(await row(account.factorId)).toEqual(before);
+
+        // A rollout taken back with both keys kept: the old process can read CURRENT, and
+        // still seals under PREVIOUS. Nothing may be moved away from the key it writes with.
+        await seen(stale, { sealing: PREVIOUS, readable: [CURRENT, PREVIOUS, derived] }, at(41));
+        await seen(fresh, onNew(), at(41));
+        expect(await run(at(41))).toMatchObject({ status: 'waiting', reason: 'other-key' });
+        expect(await row(account.factorId)).toEqual(before);
+    }, 60_000);
+
+    test('a fleet fully on the new key blocks until it has been for 30 minutes', async () => {
+        const account = await accountUnder(PREVIOUS);
+        const before = await row(account.factorId);
+        const [one, two] = [randomUUID(), randomUUID()];
+        await seen(one, onNew(), at(0));
+        // The second process came up three minutes after the first: the 30 minutes are its.
+        await seen(two, onNew(), at(3));
+        await seen(one, onNew(), at(32, 59));
+        await seen(two, onNew(), at(32, 59));
+
+        expect(await run(at(32, 59))).toEqual({
+            status: 'waiting',
+            sealedWith: await idOf(CURRENT),
+            reason: 'grace',
+            readers: 2,
+            webSealsWith: [await idOf(CURRENT)],
+            readyAt: at(33).toISOString(),
+        });
+        // A rollout taken back in its first half hour finds every secret where it was.
+        expect(await row(account.factorId)).toEqual(before);
+
+        await seen(one, onNew(), at(33));
+        await seen(two, onNew(), at(33));
+        expect(await run(at(33))).toMatchObject({ status: 'done', moved: 1, left: {} });
+        expect((await row(account.factorId)).sealedWith).toBe(await idOf(CURRENT));
+    }, 60_000);
+
+    test('a web process that restarts is a new reader, and the 30 minutes start again', async () => {
+        const account = await accountUnder(PREVIOUS);
+        const before = await row(account.factorId);
+        const first = randomUUID();
+        await seen(first, onNew(), at(0));
+        await seen(first, onNew(), at(20));
+        // It restarts at minute 20: a new process, which says so under a new id.
+        const restarted = randomUUID();
+        await seen(restarted, onNew(), at(20));
+        await seen(restarted, onNew(), at(31));
+
+        // Thirty minutes after the first start, but only eleven after the restart.
+        expect(await run(at(31))).toMatchObject({
+            status: 'waiting',
+            reason: 'grace',
+            readers: 1,
+            readyAt: at(50).toISOString(),
+        });
+        expect(await row(account.factorId)).toEqual(before);
+
+        await seen(restarted, onNew(), at(50));
+        expect(await run(at(50))).toMatchObject({ status: 'done', moved: 1 });
+    }, 60_000);
+
+    test('a process that has stopped answering stops blocking after five minutes', async () => {
+        const account = await accountUnder(PREVIOUS);
+        const before = await row(account.factorId);
+        const [fresh, gone] = [randomUUID(), randomUUID()];
+        await seen(fresh, onNew(), at(0));
+        // The old process answered its last readiness check at minute 40, and was stopped.
+        await seen(gone, onOld(), at(0));
+        await seen(gone, onOld(), at(40));
+
+        await seen(fresh, onNew(), at(44, 59));
+        expect(await run(at(44, 59))).toMatchObject({
+            status: 'waiting',
+            reason: 'cannot-read',
+            readers: 2,
+        });
+        expect(await row(account.factorId)).toEqual(before);
+
+        // Five minutes after its last word it is no reader any more, and the rotation goes on.
+        await seen(fresh, onNew(), at(45));
+        expect(await run(at(45))).toMatchObject({ status: 'done', moved: 1, left: {} });
+        // Its row is kept for an hour, then deleted by the worker's own run.
+        expect(await edge.db.select().from(edge.schema.twoStepKeyReaders)).toHaveLength(2);
+        await seen(fresh, onNew(), at(101));
+        await run(at(101));
+        expect(
+            (await edge.db.select().from(edge.schema.twoStepKeyReaders)).map(
+                (reader) => reader.instanceId,
+            ),
+        ).toEqual([fresh]);
+    }, 60_000);
+
+    test('a worker given a key the web service does not have moves nothing to it', async () => {
+        const account = await accountUnder(PREVIOUS);
+        const before = await row(account.factorId);
+        const web = randomUUID();
+        await seen(web, onNew(), at(0));
+        await seen(web, onNew(), at(40));
+
+        const stray = new Uint8Array(randomBytes(32));
+        const strayRing = await keys.twoStepKeyring({
+            serverSetup: await edge.serverSetup(),
+            key: encoded(stray),
+            previousKey: encoded(PREVIOUS),
+        });
+        expect(await keys.resealTwoStepSecrets({ keyring: strayRing, now: at(40) })).toMatchObject({
+            status: 'waiting',
+            sealedWith: await idOf(stray),
+            reason: 'cannot-read',
+            webSealsWith: [await idOf(CURRENT)],
+        });
+        expect(await row(account.factorId)).toEqual(before);
+        // Moved to the stray key, no web process could have opened it again.
+        expect(await opened(account.factorId, stray)).toBeNull();
+
+        // A worker with no key at all (no TWO_STEP_KEY, no setup it can read) does nothing either.
+        expect(await keys.resealTwoStepSecrets({ keyring: null, now: at(40) })).toEqual({
+            status: 'no-key',
+        });
+        expect(await row(account.factorId)).toEqual(before);
+    }, 60_000);
+
+    test('this web process says what it really has, and the job waits for it, with the reason as a warning', async () => {
+        const account = await accountUnder(PREVIOUS);
+        const before = await row(account.factorId);
+        const auth = await import('@hushos/auth/server');
+        await auth.reportTwoStepKeys();
+        await auth.reportTwoStepKeys();
+
+        // One row for the process, with the key it seals under and every key it reads, by id.
+        const readers = await edge.db.select().from(edge.schema.twoStepKeyReaders);
+        expect(readers).toHaveLength(1);
+        expect(readers[0]).toMatchObject({
+            sealingKeyId: await idOf(CURRENT),
+            readableKeyIds: [await idOf(CURRENT), await idOf(PREVIOUS), await idOf(derived)].sort(),
+        });
+        expect(JSON.stringify(readers)).not.toContain(encoded(CURRENT));
+
+        // It only just said so: the job, as pg-boss runs it, waits out the 30 minutes.
+        edge.emitted.length = 0;
+        expect(await job()).toMatchObject({ status: 'waiting', reason: 'grace', readers: 1 });
+        expect(await row(account.factorId)).toEqual(before);
+        const line = edge.emitted.find(
+            (event) => (event.twoStep as { reseal?: string } | undefined)?.reseal === 'waiting',
+        );
+        expect(line).toMatchObject({
+            level: 'warn',
+            twoStep: {
+                reseal: 'waiting',
+                reason: 'grace',
+                sealedWith: await idOf(CURRENT),
+                webProcesses: 1,
+                webSealsWith: [await idOf(CURRENT)],
+            },
+        });
+        expect(JSON.stringify(line)).toContain('not all have for 30 minutes yet');
+
+        // The same process, half an hour on.
+        await edge.db
+            .update(edge.schema.twoStepKeyReaders)
+            .set({ sealingSince: new Date(Date.now() - 31 * MINUTE) });
+        expect(await job()).toMatchObject({ status: 'done', moved: 1 });
+    }, 60_000);
 });

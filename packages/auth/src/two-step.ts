@@ -85,8 +85,6 @@ function keys() {
         const ring = await twoStepKeyringFromEnv(await serverSetup());
         // With a setup there is always a key: the derived one, when the operator set none.
         if (!ring) throw new Error('This server has no two-step key.');
-        // Bookkeeping: if it fails, the keys still work, and `announceTwoStepKey` tries again.
-        await quietly('announce', () => announce(ring));
         return ring;
     })().catch((error: unknown) => {
         keyring = undefined;
@@ -95,23 +93,24 @@ function keys() {
     return keyring;
 }
 
-/*
- * Says which key this service seals new secrets under (its id, never the key). The worker
- * re-seals older rows only towards the key named here (docs/two-step-design.md 8), so it
- * never moves a secret to a key this service was not given.
- */
-function announce(ring: TwoStepKeyring) {
-    return twoStepRepository.announceSealingKey(ring.current.id);
-}
+/* This process, as the worker tells one web process from another: new at every start. */
+const INSTANCE_ID = randomUUID();
 
 /*
- * Builds this server's two-step keys and says which one it seals under, without waiting for
- * someone's second step to need them. The web service calls it once it is ready, so a worker
- * started after a key rotation is not left waiting for the next sign-in. It throws when the
- * word could not be written, and the caller asks again.
+ * Says which key this process seals new secrets under and which keys it can read (their ids,
+ * never the keys), and that it is running now. The web service calls it at its readiness
+ * checks for as long as it runs: the worker re-seals older secrets towards a key only when
+ * every web process seen lately seals under it and has for a while
+ * (docs/two-step-design.md 8), so a process that is still on the old key, or back on it, is
+ * never handed a secret it cannot open. It throws when the word could not be written.
  */
-export async function announceTwoStepKey() {
-    await announce(await keys());
+export async function reportTwoStepKeys() {
+    const ring = await keys();
+    await twoStepRepository.reportKeyReader({
+        instanceId: INSTANCE_ID,
+        sealingKeyId: ring.current.id,
+        readableKeyIds: [...ring.byId.keys()].map((id) => Buffer.from(id, 'hex')),
+    });
 }
 
 async function keyFor(keyId: Buffer) {
