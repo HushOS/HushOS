@@ -219,8 +219,13 @@ final class AppModel {
         signedIn(user)
     }
 
-    /* Back to the password: the person chose to start again (no reason), or the step is over (the server's reason). */
-    func cancelStep(_ reason: String = "") {
+    /*
+     * Back to the password: the person chose to start again (no reason), or the step is over (the server's reason).
+     * `token` names the step a late answer was for: if that step was already let go (timed out, started again), the
+     * answer has nothing to end, and must not end the step that took its place.
+     */
+    func cancelStep(_ reason: String = "", token: String? = nil) {
+        if let token, pendingStep?.challenge.token != token { return }
         stepNotice = reason
         pendingStep = nil
     }

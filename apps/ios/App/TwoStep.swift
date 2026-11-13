@@ -294,7 +294,7 @@ struct SignInStepView: View {
                     notice = message
                     lost = answer
                 case .over(let message)?:
-                    model.cancelStep(message)
+                    model.cancelStep(message, token: pending.challenge.token)
                 case nil:
                     break
                 }
