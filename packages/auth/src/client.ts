@@ -926,9 +926,11 @@ export function createAuthClient(
         busy = true;
         holding = true;
         try {
-            const reply = readLoginReply(
-                await api.loginTwoStep(await proveStep(pending.challenge, answer, own)),
-            );
+            const proof = await proveStep(pending.challenge, answer, own);
+            // A lock while the key's sheet was open let go of this sign-in: its answer is not
+            // sent, so no session is opened for a page that has stopped waiting for one.
+            if (epoch !== pending.epoch) throw new StepFailure('over', STEP_OVER);
+            const reply = readLoginReply(await api.loginTwoStep(proof));
             if (reply.kind !== 'session') throw new StepFailure('lost', LOST_REPLY);
             if (epoch !== pending.epoch) throw new StepFailure('over', STEP_OVER);
             // The step is passed: from here this is an ordinary sign-in's second half.
@@ -1521,8 +1523,17 @@ export function createAuthClient(
             if (!challenge) throw new Error('Please try again.');
             return challenge;
         },
-        proveStep: (challenge: StepChallenge, answer: StepAnswer) =>
-            proveStep(challenge, answer, rpc),
+        /*
+         * The answer a change carries. A key's sheet (or the worker's signing) can outlast a
+         * lock or a sign-out: an answer made under one session is not handed to whatever is
+         * signed in after it.
+         */
+        async proveStep(challenge: StepChallenge, answer: StepAnswer) {
+            const asked = epoch;
+            const proved = await proveStep(challenge, answer, rpc);
+            if (asked !== epoch) throw lockedSince();
+            return proved;
+        },
         twoStep: () => api.twoStep(),
         /* Starts adding an authenticator app: the password again and, once the step is on, the step. */
         startAuthenticator: (password: string, twoStep?: StepInput) =>
@@ -1585,9 +1596,15 @@ export function createAuthClient(
             name?: string,
         ) {
             if (!passkeys?.supported()) throw passkeyUnused(null, PASSKEY_NOT_ADDED);
+            // The session the press was made under. The browser's sheet can stay open for
+            // minutes, and a lock or a sign-out meanwhile leaves the server's session usable:
+            // sent then, the key would be added (and the step turned on) for a page that has
+            // already closed its dialog, and would throw away the backup codes that came back.
+            const asked = epoch;
             const response = await passkeys.create(started.options).catch((cause: unknown) => {
                 throw passkeyUnused(cause, PASSKEY_NOT_ADDED);
             });
+            if (asked !== epoch) throw lockedSince();
             const added = readKeyAdded(
                 await api.twoStepAddKey({
                     registrationToken: started.registrationToken,

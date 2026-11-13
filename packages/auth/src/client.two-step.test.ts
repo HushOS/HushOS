@@ -1562,3 +1562,156 @@ describe('passkeys, and what this client tells the server it can answer', () => 
         vi.useRealTimers();
     });
 });
+
+/*
+ * The browser's sheet for a key can stay open for minutes. A lock or a sign-out in that time
+ * leaves the server's session usable, so what the key hands back afterwards must not be sent:
+ * the page that asked has closed, and a key added then would turn the step on with nobody to
+ * show its backup codes to.
+ */
+describe('a key that answers after this browser was locked', () => {
+    const webauthn: KeyRequestOptions = {
+        challenge: 'Y2hhbGxlbmdl',
+        rpId: 'hushos.com',
+        timeout: 300_000,
+        userVerification: 'discouraged',
+        allowCredentials: [{ id: 'a2V5', type: 'public-key' }],
+    };
+    const keyStep = { ...step, methods: ['webauthn', 'backup', 'phrase'], webauthn };
+    const assertion: KeyAssertion = {
+        id: 'a2V5',
+        rawId: 'a2V5',
+        type: 'public-key',
+        response: { clientDataJSON: 'ZGF0YQ', authenticatorData: 'YXV0aA', signature: 'c2ln' },
+    };
+    /* A key whose sheet stays open until the test closes it with an answer. */
+    function slowKey() {
+        let answer!: () => void;
+        const opened = new Promise<void>((resolve) => {
+            answer = resolve;
+        });
+        let asked!: () => void;
+        const sheet = new Promise<void>((resolve) => {
+            asked = resolve;
+        });
+        const passkeys: PasskeyDriver = {
+            supported: () => true,
+            get: async () => {
+                asked();
+                await opened;
+                return assertion;
+            },
+            create: async () => {
+                asked();
+                await opened;
+                return {
+                    id: 'bmV3',
+                    rawId: 'bmV3',
+                    type: 'public-key',
+                    response: { clientDataJSON: 'ZGF0YQ', attestationObject: 'b2Jq' },
+                };
+            },
+        };
+        return { passkeys, sheet, answer };
+    }
+    const started = { registrationToken: 'r'.repeat(43), options: {} as never };
+
+    test('a registration is not sent, so the step is never turned on behind a closed dialog', async () => {
+        const sent: unknown[] = [];
+        const key = slowKey();
+        const { client } = setup(
+            {
+                twoStepAddKey: async (input: never) => {
+                    sent.push(input);
+                    return { method: {}, backupCodes: ['7KQ2M-9XD4P'] };
+                },
+            },
+            key.passkeys,
+        );
+        const adding = client.addPasskey(started, 'Desk key').catch((error: unknown) => error);
+        await key.sheet;
+        await client.lock();
+        key.answer();
+        const refused = await adding;
+        expect(refused).toBeInstanceOf(Error);
+        expect((refused as Error).message).toBe(
+            'This browser was locked or signed out meanwhile. Nothing was changed.',
+        );
+        expect(sent).toEqual([]);
+    });
+
+    test('with no lock, the same registration is sent', async () => {
+        const sent: unknown[] = [];
+        const key = slowKey();
+        const { client } = setup(
+            {
+                twoStepAddKey: async (input: never) => {
+                    sent.push(input);
+                    return {
+                        method: {
+                            id: 'f1',
+                            kind: 'webauthn',
+                            name: 'Desk key',
+                            createdAt: '2026-11-14T10:00:00.000Z',
+                            lastUsedAt: null,
+                            synced: false,
+                        },
+                    };
+                },
+            },
+            key.passkeys,
+        );
+        const adding = client.addPasskey(started, 'Desk key');
+        await key.sheet;
+        key.answer();
+        expect((await adding).method.name).toBe('Desk key');
+        expect(sent).toHaveLength(1);
+    });
+
+    test('an answer to a sign-in’s step is not sent, so no session is opened for a page that stopped waiting', async () => {
+        const sent: unknown[] = [];
+        const key = slowKey();
+        const { client, toStep } = setup(
+            {
+                loginStart: async () => ({ attemptToken: 'attempt', twoStepMethods: true }),
+                loginFinish: async () => ({ twoStep: keyStep }),
+                loginTwoStep: async (input: never) => {
+                    sent.push(input);
+                    return session;
+                },
+            },
+            key.passkeys,
+        );
+        await toStep();
+        const answering = client.answerStep({ kind: 'webauthn' }).catch((error: unknown) => error);
+        await key.sheet;
+        await client.lock();
+        key.answer();
+        const failure = await answering;
+        expect(failure).toBeInstanceOf(StepFailure);
+        expect(failure).toMatchObject({ reason: 'over' });
+        expect(sent).toEqual([]);
+        expect(client.store.getState().unlockedUserId).toBeNull();
+    });
+
+    test('an answer for a change is not handed to whatever is signed in after the lock', async () => {
+        const key = slowKey();
+        const { client } = setup({}, key.passkeys);
+        const proving = client
+            .proveStep(keyStep as never, { kind: 'webauthn' })
+            .catch((error: unknown) => error);
+        await key.sheet;
+        await client.lock();
+        key.answer();
+        const refused = await proving;
+        expect(refused).toBeInstanceOf(Error);
+        expect((refused as Error).message).toContain('locked or signed out meanwhile');
+        // Unlocked throughout, the same press hands the change its answer.
+        const again = slowKey();
+        const open = setup({}, again.passkeys);
+        const proved = open.client.proveStep(keyStep as never, { kind: 'webauthn' });
+        await again.sheet;
+        again.answer();
+        expect((await proved).proof).toEqual({ kind: 'webauthn', response: assertion });
+    });
+});
