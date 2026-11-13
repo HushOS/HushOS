@@ -535,3 +535,60 @@ describe('the worker waits for every web process', () => {
         expect(await job()).toMatchObject({ status: 'done', moved: 1 });
     }, 60_000);
 });
+
+describe('when the re-seal job fails', () => {
+    test('neither the log nor what the job throws carries the failed query or its parameters', async () => {
+        const account = await accountUnder(PREVIOUS);
+        const before = (await edge.db.select().from(edge.schema.twoStepFactors))[0]!;
+        await webIsUp();
+        // The database refuses the write: Postgres names the statement, and the driver's error
+        // repeats it with its parameters, which here are a nonce and a sealed secret.
+        const blocked = `two_step_factors_test_block_${Date.now()}`;
+        await edge.db.execute(
+            `alter table two_step_factors add constraint ${blocked} check (encode(totp_key_id, 'hex') <> '${await idOf(CURRENT)}') not valid`,
+        );
+        edge.emitted.length = 0;
+        let thrown: unknown;
+        try {
+            await job();
+        } catch (error) {
+            thrown = error;
+        } finally {
+            await edge.db.execute(`alter table two_step_factors drop constraint ${blocked}`);
+        }
+
+        expect(thrown).toBeInstanceOf(Error);
+        const failure = thrown as Error & { code?: string; cause?: unknown };
+        // What pg-boss keeps of a failed job: a name and the database's code, and no more.
+        expect(failure.message).toBe('Two-step re-seal failed.');
+        expect(failure.code).toBe('23514');
+        expect(failure.cause).toBeUndefined();
+
+        const line = edge.emitted.find((event) => event.failure);
+        expect(line?.failure).toMatchObject({ cause: { code: '23514' } });
+        const everything = `${JSON.stringify(edge.emitted)}\n${failure.stack}\n${JSON.stringify(failure, Object.getOwnPropertyNames(failure))}`;
+        expect(everything).not.toMatch(/update|Failed query|params/i);
+        const forms = (bytes: Uint8Array) => [
+            Buffer.from(bytes).toString('hex'),
+            Buffer.from(bytes).toString('base64'),
+            Buffer.from(bytes).toString('base64url'),
+            // How a failed query's message prints a binary parameter.
+            Buffer.from(bytes).toString('utf8'),
+            Buffer.from(bytes).toString('latin1'),
+            Array.from(bytes).join(','),
+        ];
+        for (const secret of [
+            ...forms(before.totpNonce!),
+            ...forms(before.totpSecret!),
+            ...forms(CURRENT),
+            ...forms(PREVIOUS),
+            account.secret,
+        ])
+            expect(everything).not.toContain(secret);
+        // And the row is as it was: the failed write changed nothing.
+        expect(await row(account.factorId)).toMatchObject({
+            sealedWith: await idOf(PREVIOUS),
+            nonce: before.totpNonce!.toString('hex'),
+        });
+    }, 60_000);
+});

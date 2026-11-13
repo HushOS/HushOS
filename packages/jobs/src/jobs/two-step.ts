@@ -79,9 +79,18 @@ export async function twoStepReseal(job: Job<JobPayloads[typeof queues.twoStepRe
         }
         return run;
     } catch (error) {
-        if (error instanceof Error) event.error(error);
-        event.set({ failure: sanitizeFailure(error) });
-        throw error;
+        // Never the error itself, to the log or to pg-boss, which keeps what a job threw in
+        // its own table: a failed query's message carries its parameters, and a re-seal's
+        // parameters are a nonce and a sealed secret. Its class and code say enough.
+        const failure = sanitizeFailure(error);
+        event.set({ failure });
+        event.error(new Error('Two-step re-seal failed.'));
+        throw Object.assign(new Error('Two-step re-seal failed.'), {
+            name: 'TwoStepResealFailed',
+            ...(failure?.cause?.code || failure?.code
+                ? { code: failure.cause?.code ?? failure.code }
+                : {}),
+        });
     } finally {
         event.emit();
     }
