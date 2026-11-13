@@ -128,6 +128,9 @@ const authActions = new Set([
     'two-step/totp/:id/confirm',
     'two-step/methods/:id',
     'two-step/backup-codes',
+    'two-step/keys/options',
+    'two-step/keys',
+    'two-step/default',
     'security-events',
 ]);
 const FAILURE_TOKEN = /^[A-Za-z0-9_.:-]{1,64}$/;

@@ -360,6 +360,8 @@ export async function loadEdge(
         options: {
             cookie?: string | null;
             twoStep?: boolean;
+            /* What a client from the passkeys release names beside `twoStep: 1`. */
+            methods?: string[];
             device?: Proof;
             password?: string;
         } = {},
@@ -384,7 +386,12 @@ export async function loadEdge(
         return call(
             'POST',
             '/login/finish',
-            { ...proof, ...(options.twoStep ? { twoStep: 1 } : {}), ...(device ? { device } : {}) },
+            {
+                ...proof,
+                ...(options.twoStep ? { twoStep: 1 } : {}),
+                ...(options.methods ? { twoStepMethods: options.methods } : {}),
+                ...(device ? { device } : {}),
+            },
             { cookie: options.cookie },
         );
     }

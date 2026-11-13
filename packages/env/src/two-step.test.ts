@@ -37,6 +37,7 @@ async function startWith(env: Record<string, string>) {
         'TWO_STEP_KEY_FILE',
         'TWO_STEP_PREVIOUS_KEY',
         'TWO_STEP_PREVIOUS_KEY_FILE',
+        'WEBAUTHN_ANDROID_ORIGINS',
     ])
         vi.stubEnv(name, env[name] ?? '');
     return (await import('./two-step')).twoStepEnv;
@@ -131,5 +132,32 @@ describe('TWO_STEP_KEY_FILE and TWO_STEP_PREVIOUS_KEY_FILE', () => {
         // Compose passes unset variables as empty strings.
         const set = await startWith({ TWO_STEP_KEY: KEY, TWO_STEP_KEY_FILE: '' });
         expect(set.TWO_STEP_KEY).toBe(KEY);
+    });
+});
+
+describe('WEBAUTHN_ANDROID_ORIGINS', () => {
+    const APP = 'android:apk-key-hash:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8';
+    const DEBUG = 'android:apk-key-hash:_-7d3Nva2djX1tXU09LR0M_OzczLysrJyMfGxcTDwsE';
+
+    test('unset or empty, no Android origin is accepted; set, each origin is its own entry', async () => {
+        expect((await startWith({})).WEBAUTHN_ANDROID_ORIGINS).toEqual([]);
+        expect(
+            (await startWith({ WEBAUTHN_ANDROID_ORIGINS: ` ${APP} , ${DEBUG},` }))
+                .WEBAUTHN_ANDROID_ORIGINS,
+        ).toEqual([APP, DEBUG]);
+    });
+
+    test('anything that is not an app’s key-hash origin refuses to start: a web origin here would answer for this site', async () => {
+        vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        for (const value of [
+            'https://evil.example',
+            `${APP},https://hushos.com`,
+            'android:apk-key-hash:short',
+            `${APP}=`,
+            '*',
+        ])
+            await expect(startWith({ WEBAUTHN_ANDROID_ORIGINS: value })).rejects.toThrow(
+                'Invalid environment variables',
+            );
     });
 });

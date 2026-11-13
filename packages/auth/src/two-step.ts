@@ -1,4 +1,4 @@
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import {
     formatBackupCode,
     normalizeBackupCode,
@@ -15,22 +15,34 @@ import {
     totpUri,
 } from '@hushos/crypto/two-step/server';
 import { authRepository, twoStepRepository } from '@hushos/db';
-import type { TwoStepMethod, TwoStepSessionPurpose } from '@hushos/db/schema';
+import type {
+    TwoStepDefaultKind,
+    TwoStepFactorKind,
+    TwoStepMethod,
+    TwoStepSessionPurpose,
+} from '@hushos/db/schema';
 import { sendSecurityNotice, type SecurityNoticeKind } from '@hushos/emails/server';
 import { authEnv } from '@hushos/env/auth';
 import { twoStepEnv } from '@hushos/env/two-step';
 import { log as serverLog } from '@hushos/logging';
 import { hash, noticeWhen, randomToken, serverSetup, supportedEnvelope } from './internal';
 import { notify } from './notifications';
-import { consumeBoundAttempt, requireSession, startLogin } from './server';
+import { consumeBoundAttempt, normalizeDeviceName, requireSession, startLogin } from './server';
 import { AuthError, SESSION_IDLE_SECONDS, TOKEN_PATTERN } from './tokens';
 import { twoStepKeyringFromEnv, type TwoStepKeyring } from './two-step-keys';
+import {
+    keyCreationOptions,
+    keyRequestOptions,
+    verifyKeyAssertion,
+    verifyKeyRegistration,
+    type KeyRequestOptions,
+} from './webauthn';
 
 /*
  * Two-step sign-in, the server's rule (docs/two-step-design.md). After the password, an
  * account that has the step on gets no session, no cookie and no envelope until the step
- * passes: a code from an authenticator app, a backup code, or a signature made with the
- * recovery phrase. The same step is asked before a security change, account deletion and any
+ * passes: a passkey or security key, a code from an authenticator app, a backup code, or a
+ * signature made with the recovery phrase. The same step is asked before a security change, account deletion and any
  * change to the step itself.
  *
  * The repository (`twoStepRepository`) holds the lines that must not depend on this module:
@@ -54,21 +66,37 @@ function requireEnabled() {
         throw new AuthError('Two-step sign-in isn’t available on this server.', 501);
 }
 
-/* What a client sends as its answer to a step. */
+/* What a client sends as its answer to a step. `response` is a key's assertion, as WebAuthn's JSON has it. */
 export type StepAnswer =
     | { kind: 'totp'; code: string }
     | { kind: 'backup'; code: string }
-    | { kind: 'phrase'; signature: string };
+    | { kind: 'phrase'; signature: string }
+    | { kind: 'webauthn'; response: unknown };
 export type StepInput = { token: string; proof: StepAnswer };
 
 /* What a client is told when it must answer a step: nothing a stranger to the password sees. */
 export type StepChallenge = {
     token: string;
-    methods: Exclude<TwoStepMethod, 'webauthn'>[];
+    /* What this client can answer this step with, in the order to offer it: the usual way first. */
+    methods: TwoStepMethod[];
     expiresAt: string;
     /* What the device needs to sign with the recovery phrase (docs/two-step-design.md 5). */
     phrase?: { userId: string; recoveryVersion: number; wrappingSalt: string };
+    /* What a passkey or security key is asked: this token's challenge, and the account's keys. */
+    webauthn?: KeyRequestOptions;
+    /* A way to answer was left out because this client did not say it can use it. */
+    withheld?: true;
+    /* The account's usual way is not first, or not there: it can't be used for this step. */
+    defaultUnavailable?: true;
 };
+
+/*
+ * The kinds of method a client says it can answer beyond the ones every client can (the app's
+ * code, a backup code, the phrase): `twoStepMethods` in its request (docs/two-step-design.md
+ * 12). Null from a client that sent none, which is a client from before passkeys: it is told
+ * nothing it does not know. A name this server does not know is ignored.
+ */
+export type ClientMethods = readonly string[] | null | undefined;
 
 const STEP_TOKEN_MS = 5 * 60_000;
 const CODE_BUDGET = 10;
@@ -295,6 +323,32 @@ async function afterFailure(
     });
 }
 
+/*
+ * A key answered with a counter that did not go up (docs/two-step-design.md 3): the answer was
+ * refused and counted, and the account is told its key may have been copied, with a line in
+ * its log. Once an hour: only the key itself, or a copy of it, can set this off.
+ */
+async function counterWentBack(attempt: twoStepRepository.StepAttempt) {
+    const { userId } = attempt;
+    await quietly('key-counter', async () => {
+        if (
+            !(await authRepository.consumeRateLimit(
+                hash(`auth:two-step:key-counter:${userId}`),
+                1,
+                60 * 60_000,
+            ))
+        )
+            return;
+        await record({
+            userId,
+            kind: 'key-counter',
+            method: 'webauthn',
+            deviceId: poolDevice(attempt),
+        });
+        notice(userId, 'key-counter');
+    });
+}
+
 /* ------------------------------------------------------------------------- */
 /* Answering a step                                                           */
 /* ------------------------------------------------------------------------- */
@@ -320,7 +374,9 @@ const refusals = {
                 ? 'That code didn’t work. Codes change every 30 seconds.'
                 : method === 'backup'
                   ? 'That backup code didn’t work. Each code works once.'
-                  : 'That recovery phrase didn’t work. Check each word and try again.';
+                  : method === 'webauthn'
+                    ? 'That passkey or security key didn’t work. Try again, or use another way.'
+                    : 'That recovery phrase didn’t work. Check each word and try again.';
         return new AuthError(message, flow === 'sign-in' ? 401 : 403, { code: 'step-wrong' });
     },
     expired: (flow: Flow) =>
@@ -379,12 +435,38 @@ async function totpSecret(
  * app really shows but that was already used is a wrong answer here, and is counted as one
  * by the caller: whatever the action does before it reaches the repository (a deletion stops
  * what is billed first) must not happen for a replay. The repository refuses a replay again.
+ * `counter` is a key's answer that verified in everything but its counter: wrong, and told.
  */
 async function rightAnswer(
     attempt: twoStepRepository.StepAttempt,
     proof: StepAnswer,
-): Promise<(twoStepRepository.StepSpend & { freshPhrase?: boolean }) | null> {
+): Promise<(twoStepRepository.StepSpend & { freshPhrase?: boolean }) | 'counter' | null> {
     const { userId } = attempt;
+    if (proof.kind === 'webauthn') {
+        // The challenge is this token's own: an assertion made for another token signs another.
+        if (!attempt.webauthnChallenge) return null;
+        const id = (proof.response as { id?: unknown } | null)?.id;
+        const key =
+            typeof id === 'string'
+                ? (await twoStepRepository.listWebauthnCredentials(userId)).find(
+                      (candidate) => candidate.credentialId.toString('base64url') === id,
+                  )
+                : undefined;
+        // Not one of this account's confirmed keys: another account's, or one removed since.
+        if (!key) return null;
+        const verified = await verifyKeyAssertion({
+            response: proof.response,
+            challenge: attempt.webauthnChallenge,
+            key,
+        });
+        if (!verified.ok) return verified.counter ? 'counter' : null;
+        return {
+            method: 'webauthn',
+            factorId: key.id,
+            signCount: verified.signCount,
+            backedUp: verified.backedUp,
+        };
+    }
     if (proof.kind === 'totp') {
         const factor = await twoStepRepository.getTotpFactor(userId);
         if (!factor) return null;
@@ -448,7 +530,7 @@ const FRESH_PHRASE_MS = 15 * 60_000;
 type Checked = {
     attempt: twoStepRepository.StepAttempt;
     proof: twoStepRepository.StepProof;
-    method: Exclude<TwoStepMethod, 'webauthn'>;
+    method: TwoStepMethod;
     flow: Flow;
     /* The code budget this answer was charged to, to hand back when the step passes. */
     bucket: Buffer | null;
@@ -490,8 +572,9 @@ async function checkAnswer(input: {
     if (taken.status !== 'ok')
         throw taken.status === 'frozen' ? refusals.frozen() : refusals.expired(flow);
     const { attempt } = taken;
-    // Only what can be guessed has a budget: the phrase is never refused for a spent one.
-    const bucket = proof.kind === 'phrase' ? null : codeBucket(attempt);
+    // Only what can be guessed has a budget: a key and the phrase are never refused for a spent one.
+    const bucket =
+        proof.kind === 'phrase' || proof.kind === 'webauthn' ? null : codeBucket(attempt);
     if (bucket && !(await authRepository.consumeRateLimit(bucket, CODE_BUDGET, CODE_BUDGET_MS))) {
         // Refused unchecked, so the slot goes back: the refusal says the phrase still works,
         // and on a token's last slot it would not if this one stayed taken.
@@ -510,8 +593,9 @@ async function checkAnswer(input: {
         });
         throw unavailable(error);
     }
-    if (!right) {
+    if (!right || right === 'counter') {
         const failure = await twoStepRepository.recordStepFailure(attempt);
+        if (right === 'counter') await counterWentBack(attempt);
         await afterFailure(attempt, failure, proof.kind, flow);
         throw refusals.wrong(
             flow,
@@ -559,6 +643,7 @@ async function settle(
     const { attempt, method, flow, freshPhrase } = checked;
     if (refusal) {
         if (refusal.reason === 'spent') {
+            if (refusal.counter) await counterWentBack(attempt);
             await afterFailure(attempt, refusal.failure, method, flow);
             throw refusals.wrong(
                 flow,
@@ -633,18 +718,64 @@ export async function beforeSpending<T>(checked: Checked | null, run: () => Prom
 /* The step at sign-in                                                        */
 /* ------------------------------------------------------------------------- */
 
-/* What can answer the token: the app unless it is frozen for it, a backup code while any is left, the phrase. */
-async function challenge(token: string, userId: string, expiresAt: Date): Promise<StepChallenge> {
-    const [status, attempt, recovery] = await Promise.all([
+/* The kinds of factor this server can check an answer of. Approving on another device is not built yet. */
+const ANSWERABLE: ReadonlySet<TwoStepDefaultKind> = new Set(['webauthn', 'totp']);
+/* The kinds every client that answers a step can answer; the others it must name. */
+const EVERY_CLIENT: ReadonlySet<TwoStepDefaultKind> = new Set(['totp']);
+
+/*
+ * What can answer the token, in the order to offer it (docs/two-step-design.md 12): the
+ * account's kinds of method, default first, then a backup code while any is left, then the
+ * phrase.
+ * - A kind is listed only when this sign-in can use it: the app is left out while it is frozen
+ *   for the token, a key only when the token carries a challenge for it.
+ * - And only when the client can answer it: every client answers the app's code, a backup
+ *   code and the phrase; anything else it must have named (`names`). An account always has
+ *   backup codes and a phrase, so no client is locked out.
+ * - `withheld` says a usable kind was left out because the client did not name it, and
+ *   `defaultUnavailable` that the account's usual way is not the first one listed, whatever
+ *   the reason: the client says one generic line, and learns nothing more. Neither is sent to
+ *   a client that named nothing, which is one from before they existed.
+ */
+async function challenge(
+    token: string,
+    userId: string,
+    expiresAt: Date,
+    names: ClientMethods,
+): Promise<StepChallenge> {
+    const [status, attempt, recovery, keys] = await Promise.all([
         twoStepRepository.getTwoStep(userId),
         twoStepRepository.getStepAttempt(hash(token)),
         authRepository.getRecoveryKey(userId),
+        twoStepRepository.listWebauthnCredentials(userId),
     ]);
-    const methods: StepChallenge['methods'] = [];
-    if (status.methods.some((method) => method.kind === 'totp') && !attempt?.totpFrozen)
-        methods.push('totp');
+    const named = new Set(names ?? []);
+    const order = twoStepRepository.kindOrder(
+        status.methods.map((method) => method.kind),
+        status.defaultKind,
+    );
+    const usable = (kind: TwoStepDefaultKind) =>
+        ANSWERABLE.has(kind) &&
+        (kind === 'totp'
+            ? !attempt?.totpFrozen
+            : kind === 'webauthn'
+              ? keys.length > 0 && Boolean(attempt?.webauthnChallenge)
+              : false);
+    const answers = (kind: TwoStepDefaultKind) => EVERY_CLIENT.has(kind) || named.has(kind);
+    const methods: TwoStepMethod[] = order.filter(
+        (kind): kind is TwoStepFactorKind => usable(kind) && answers(kind),
+    );
+    const first = methods[0];
     if (status.backupCodesLeft > 0) methods.push('backup');
     if (recovery) methods.push('phrase');
+    const withheld = order.some((kind) => usable(kind) && !answers(kind));
+    const webauthn =
+        methods.includes('webauthn') && attempt?.webauthnChallenge
+            ? await keyRequestOptions({
+                  challenge: attempt.webauthnChallenge,
+                  credentials: keys,
+              })
+            : null;
     return {
         token,
         methods,
@@ -658,7 +789,21 @@ async function challenge(token: string, userId: string, expiresAt: Date): Promis
                   },
               }
             : {}),
+        ...(webauthn ? { webauthn } : {}),
+        ...(names && withheld ? { withheld: true as const } : {}),
+        ...(names && order[0] !== first ? { defaultUnavailable: true as const } : {}),
     };
+}
+
+/*
+ * A fresh challenge for a key to sign, kept with the step token: made whenever the account has
+ * a key, whatever the client says it can answer, so what a token can pass with does not depend
+ * on what was asked for it.
+ */
+async function keyChallenge(userId: string) {
+    return (await twoStepRepository.listWebauthnCredentials(userId)).length > 0
+        ? randomBytes(32)
+        : null;
 }
 
 /*
@@ -671,6 +816,7 @@ export async function startLoginStep(input: {
     credentialVersion: number;
     previousTokenHash: Buffer | null;
     device?: { id: string; signature: Buffer; attemptDigest: Buffer };
+    methods?: ClientMethods;
 }): Promise<StepChallenge> {
     const token = randomToken();
     const expiresAt = new Date(Date.now() + STEP_TOKEN_MS);
@@ -681,13 +827,15 @@ export async function startLoginStep(input: {
         credentialVersion: input.credentialVersion,
         device: input.device ?? null,
         previousTokenHash: input.previousTokenHash,
+        webauthnChallenge: await keyChallenge(input.userId),
         expiresAt,
     });
-    return challenge(token, input.userId, expiresAt);
+    return challenge(token, input.userId, expiresAt, input.methods);
 }
 
 /* How a notice says a sign-in was made: the password and the kind of second step. */
 const SIGNED_IN_WITH = {
+    webauthn: 'Your password and a passkey or security key',
     totp: 'Your password and an authenticator code',
     backup: 'Your password and a backup code',
     phrase: 'Your password and your recovery phrase',
@@ -756,6 +904,7 @@ export async function finishLoginStep(input: StepInput) {
 export async function startStepChallenge(
     sessionToken: string | null,
     purpose: TwoStepSessionPurpose,
+    methods?: ClientMethods,
 ) {
     const { user, token } = await requireSession(sessionToken, 'Sign in to continue.');
     if (!(await twoStepRepository.hasTwoStep(user.id)))
@@ -777,9 +926,10 @@ export async function startStepChallenge(
         userId: user.id,
         credentialVersion: user.credentialVersion,
         sessionTokenHash,
+        webauthnChallenge: await keyChallenge(user.id),
         expiresAt,
     });
-    return challenge(stepToken, user.id, expiresAt);
+    return challenge(stepToken, user.id, expiresAt, methods);
 }
 
 /*
@@ -837,18 +987,32 @@ export async function settleChangeStep(
 
 const iso = (value: Date | null) => value?.toISOString() ?? null;
 
-/* The account's step as its settings show it. Any session of the account. */
-export async function getTwoStep(sessionToken: string | null) {
+type Method = Awaited<ReturnType<typeof twoStepRepository.getTwoStep>>['methods'][number];
+const encodeMethod = (method: Method) => ({
+    ...method,
+    createdAt: method.createdAt.toISOString(),
+    lastUsedAt: iso(method.lastUsedAt),
+});
+
+/*
+ * The account's step as its settings show it. Any session of the account.
+ *
+ * `names` is the kinds of method the client says it knows (`?methods=`, docs/two-step-design.md
+ * 12). The list holds the authenticator app and those kinds, and nothing else: a client from
+ * before passkeys names none, sees only its app with the step shown as on, and so can never
+ * remove a method it does not know about. Only a client that names kinds is told the default.
+ */
+export async function getTwoStep(sessionToken: string | null, names?: ClientMethods) {
     requireEnabled();
     const { user } = await requireSession(sessionToken, 'Sign in to see two-step sign-in.');
-    const status = await twoStepRepository.getTwoStep(user.id);
+    const { defaultKind, ...status } = await twoStepRepository.getTwoStep(user.id);
+    const named = new Set(names ?? []);
     return {
         ...status,
-        methods: status.methods.map((method) => ({
-            ...method,
-            createdAt: method.createdAt.toISOString(),
-            lastUsedAt: iso(method.lastUsedAt),
-        })),
+        methods: status.methods
+            .filter((method) => EVERY_CLIENT.has(method.kind) || named.has(method.kind))
+            .map(encodeMethod),
+        ...(names ? { defaultKind } : {}),
     };
 }
 
@@ -1076,10 +1240,245 @@ export async function removeTwoStepMethod(
         notice(user.id, 'two-step-off');
     } else if (confirmed) {
         await record({ userId: user.id, kind: 'method-removed', method: removed.kind });
-        notice(user.id, 'two-step-app-removed');
+        notice(
+            user.id,
+            removed.kind === 'webauthn' ? 'two-step-key-removed' : 'two-step-app-removed',
+        );
+        // The default went with the last method of its kind: the log says what comes first now.
+        if (removed.defaultKind) await recordDefault(user.id, removed.defaultKind);
     }
     // Read before the removal: nothing is asked of the database once the method is gone.
     return { removed: true, on: before.on && !removed.turnedOff };
+}
+
+/* A line of the log for the default moving. `device` has no factor yet, and so is never the kind here. */
+async function recordDefault(userId: string, kind: TwoStepDefaultKind) {
+    if (kind !== 'device') await record({ userId, kind: 'default-changed', method: kind });
+}
+
+/* ------------------------------------------------------------------------- */
+/* Passkeys and security keys                                                 */
+/* ------------------------------------------------------------------------- */
+
+const KEY_REGISTRATION_MS = 5 * 60_000;
+const keyLimit = () =>
+    new AuthError(
+        `You can have up to ${twoStepRepository.WEBAUTHN_KEY_LIMIT} passkeys and security keys. Remove one first.`,
+        409,
+        { code: 'limit' },
+    );
+const setupOver = () => new AuthError('This setup timed out. Start again.', 404);
+
+/*
+ * Starts adding a passkey or security key: the password again and, once the step is on, the
+ * step. Answers what `navigator.credentials.create` is given, and a registration token that
+ * carries the challenge: one use, five minutes, for this session only.
+ */
+export async function startKeyEnrolment(sessionToken: string | null, input: TwoStepChange) {
+    const { user, token } = await requireChange(sessionToken, input);
+    await requireRecoveryKey(user.id);
+    const checked = await checkChangeStep({
+        userId: user.id,
+        sessionToken: token,
+        purpose: 'two-step',
+        step: input.twoStep,
+    });
+    const registrationToken = randomToken();
+    const challenge = randomBytes(32);
+    const expiresAt = new Date(Date.now() + KEY_REGISTRATION_MS);
+    const { options, started } = await beforeSpending(checked, async () => {
+        const [state, exclude] = await Promise.all([
+            twoStepRepository.ensureTwoStepState(user.id),
+            twoStepRepository.listWebauthnCredentials(user.id),
+        ]);
+        const options = await keyCreationOptions({
+            email: user.email,
+            userHandle: state.webauthnUserHandle,
+            challenge,
+            exclude,
+        });
+        const started = await twoStepRepository.startKeyRegistration({
+            tokenHash: hash(registrationToken),
+            userId: user.id,
+            sessionTokenHash: hash(token),
+            credentialVersion: user.credentialVersion,
+            challenge,
+            expiresAt,
+            step: checked ? { sessionTokenHash: hash(token), ...checked.proof } : undefined,
+        });
+        return { options, started };
+    });
+    await settleChangeStep(checked, started, started.status === 'ok');
+    if (started.status === 'limit') throw keyLimit();
+    if (started.status !== 'ok') throw new AuthError('Sign in to change two-step sign-in.', 401);
+    return { registrationToken, options, expiresAt: expiresAt.toISOString() };
+}
+
+/*
+ * Adds the key that answered: its registration is verified against the token's challenge, and
+ * the key is stored confirmed. The account's first method turns the step on, and its backup
+ * codes are made here and returned once. A token is good for one answer: one that does not
+ * verify ends it, and the person starts again with their password.
+ */
+export async function finishKeyEnrolment(
+    sessionToken: string | null,
+    input: { registrationToken: string; name?: string; response: unknown },
+) {
+    requireEnabled();
+    const { user, token } = await requireSession(
+        sessionToken,
+        'Sign in to change two-step sign-in.',
+    );
+    if (
+        !(await authRepository.consumeRateLimit(
+            hash(`auth:two-step:confirm:${hash(token).toString('hex')}`),
+            20,
+            15 * 60_000,
+        ))
+    )
+        throw new AuthError('Too many attempts. Please try again in 15 minutes.', 429);
+    await requireRecoveryKey(user.id);
+    // A name that will not do is said before the key's one answer is used up on it.
+    const chosen = input.name === undefined ? null : normalizeDeviceName(input.name);
+    if (!TOKEN_PATTERN.test(input.registrationToken)) throw setupOver();
+    const registrationTokenHash = hash(input.registrationToken);
+    const sessionTokenHash = hash(token);
+    const registration = await twoStepRepository.getKeyRegistration({
+        tokenHash: registrationTokenHash,
+        userId: user.id,
+        sessionTokenHash,
+    });
+    if (!registration) throw setupOver();
+    const key = await verifyKeyRegistration({
+        response: input.response,
+        challenge: registration.challenge,
+    });
+    if (!key) {
+        await quietly('key-registration', () =>
+            twoStepRepository.dropKeyRegistration(registrationTokenHash),
+        );
+        throw new AuthError('That passkey or security key couldn’t be added. Start again.', 400, {
+            code: 'key-refused',
+        });
+    }
+    const add = (backupCodes?: { keyId: Buffer; hashes: Buffer[] }) =>
+        twoStepRepository.addWebauthnFactor({
+            userId: user.id,
+            sessionTokenHash,
+            credentialVersion: user.credentialVersion,
+            registrationTokenHash,
+            // Synced, it is a passkey; bound to one device or key, a security key.
+            name: chosen ?? (key.backupState ? 'Passkey' : 'Security key'),
+            backupCodes,
+            ...key,
+        });
+    let fresh = (await twoStepRepository.hasTwoStep(user.id))
+        ? null
+        : await freshBackupCodes(user.id);
+    let result = await add(fresh?.set);
+    // The last method went between the look and the answer: this one turns the step on after all.
+    if (result.status === 'codes-required') {
+        fresh = await freshBackupCodes(user.id);
+        result = await add(fresh.set);
+    }
+    switch (result.status) {
+        case 'ok':
+            break;
+        case 'session':
+            throw new AuthError('Sign in to change two-step sign-in.', 401);
+        case 'limit':
+            throw keyLimit();
+        case 'exists':
+            throw new AuthError('This passkey or security key is already on your account.', 409, {
+                code: 'exists',
+            });
+        default:
+            throw setupOver();
+    }
+    if (result.turnedOn) {
+        await record({ userId: user.id, kind: 'two-step-on', method: 'webauthn' });
+        notice(user.id, 'two-step-on', { method: 'A passkey or security key' });
+    } else {
+        await record({ userId: user.id, kind: 'method-added', method: 'webauthn' });
+        notice(user.id, 'two-step-key-added');
+    }
+    return {
+        method: encodeMethod(result.method),
+        ...(result.turnedOn && fresh ? { backupCodes: fresh.codes } : {}),
+    };
+}
+
+/* How many times an hour an account's keys can be renamed, or its default changed. */
+async function limitSettings(userId: string) {
+    if (
+        !(await authRepository.consumeRateLimit(
+            hash(`auth:two-step:settings:${userId}`),
+            30,
+            60 * 60_000,
+        ))
+    )
+        throw new AuthError('Too many changes. Please try again in an hour.', 429);
+}
+
+/*
+ * Renames a key. Any session of the account may, as with a device's name, and by the same
+ * rules: the name is a label only the account sees, stored as typed and not encrypted.
+ */
+export async function renameTwoStepMethod(
+    sessionToken: string | null,
+    factorId: string,
+    input: { name: string },
+) {
+    requireEnabled();
+    const { user } = await requireSession(sessionToken, 'Sign in to change two-step sign-in.');
+    await limitSettings(user.id);
+    const method = await twoStepRepository.renameFactor({
+        userId: user.id,
+        factorId,
+        name: normalizeDeviceName(input.name),
+    });
+    // Another account's key, an app and a method that never existed are the same answer.
+    if (!method) throw new AuthError('This method isn’t on your account.', 404);
+    return { method: encodeMethod(method) };
+}
+
+/*
+ * Chooses the kind of method the account is offered first (docs/two-step-design.md 12). It
+ * changes only an order, so it asks for no password; but only a session that passed the step
+ * itself may, and the change is a line in the log.
+ */
+export async function setTwoStepDefault(
+    sessionToken: string | null,
+    kind: Exclude<TwoStepDefaultKind, 'device'>,
+) {
+    requireEnabled();
+    const { user, token } = await requireSession(
+        sessionToken,
+        'Sign in to change two-step sign-in.',
+    );
+    await limitSettings(user.id);
+    const result = await twoStepRepository.setDefaultKind({
+        userId: user.id,
+        kind,
+        sessionTokenHash: hash(token),
+        credentialVersion: user.credentialVersion,
+    });
+    switch (result.status) {
+        case 'ok':
+            break;
+        case 'session':
+            throw new AuthError('Sign in to change two-step sign-in.', 401);
+        case 'step':
+            // This session signed in before the step was on, and never passed it.
+            throw new AuthError(
+                'Sign out and sign in again on this device to change your default.',
+                403,
+            );
+        default:
+            throw new AuthError('Add that method first.', 404);
+    }
+    if (result.changed) await recordDefault(user.id, kind);
+    return { defaultKind: kind };
 }
 
 /* A new set of backup codes, which replaces the old one: the password and the step. */

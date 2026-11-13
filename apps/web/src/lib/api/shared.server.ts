@@ -789,9 +789,49 @@ export const deviceRemovalSchema = t.Object({
     finishLoginRequest: opaqueMessage,
 });
 
+/* Bytes as WebAuthn's JSON carries them: Base64url without padding, up to `maxLength` characters. */
+const webauthnBytes = (maxLength: number) =>
+    t.String({ minLength: 1, maxLength, pattern: '^[A-Za-z0-9_-]+$' });
+/* A credential id is 1 to 1023 bytes. */
+const credentialIdSchema = webauthnBytes(1364);
+
+/*
+ * A key's assertion, as `PublicKeyCredential.toJSON()` and the phone apps send it
+ * (AuthenticationResponseJSON). Only what the server checks is taken: the credential id, the
+ * client data, the authenticator data and the signature. Everything else a client adds
+ * (extension results, the attachment) is dropped here.
+ */
+export const keyAssertionSchema = t.Object({
+    id: credentialIdSchema,
+    rawId: credentialIdSchema,
+    type: t.Literal('public-key'),
+    response: t.Object({
+        clientDataJSON: webauthnBytes(4096),
+        authenticatorData: webauthnBytes(2048),
+        signature: webauthnBytes(2048),
+    }),
+});
+
+/*
+ * A key's registration (RegistrationResponseJSON): the credential id, the client data, the
+ * attestation object (format `none`: the authenticator data and nothing that names a maker)
+ * and the transports the client reported.
+ */
+export const keyRegistrationSchema = t.Object({
+    id: credentialIdSchema,
+    rawId: credentialIdSchema,
+    type: t.Literal('public-key'),
+    response: t.Object({
+        clientDataJSON: webauthnBytes(4096),
+        attestationObject: webauthnBytes(16_384),
+        transports: t.Optional(t.Array(t.String({ maxLength: 32 }), { maxItems: 8 })),
+    }),
+});
+
 /*
  * An answer to a second step (docs/two-step-design.md 4): the step token and one of a code
- * from an authenticator app, a backup code, or the recovery phrase's signature (64 bytes).
+ * from an authenticator app, a backup code, the recovery phrase's signature (64 bytes), or a
+ * passkey's or security key's assertion.
  */
 export const stepAnswerSchema = t.Object({
     token: tokenSchema,
@@ -802,8 +842,19 @@ export const stepAnswerSchema = t.Object({
             kind: t.Literal('phrase'),
             signature: t.String({ minLength: 86, maxLength: 86, pattern: '^[A-Za-z0-9_-]+$' }),
         }),
+        t.Object({ kind: t.Literal('webauthn'), response: keyAssertionSchema }),
     ]),
 });
+
+/*
+ * The kinds of method a client says it can answer beyond a code and the phrase
+ * (`twoStepMethods`, docs/two-step-design.md 12): short names, a few of them. A name this
+ * server does not know is accepted and ignored, so a newer client need not ask twice.
+ */
+export const clientMethodsSchema = t.Array(
+    t.String({ minLength: 1, maxLength: 24, pattern: '^[a-z][a-z0-9-]*$' }),
+    { maxItems: 8 },
+);
 
 /* What changing the step itself carries: the password proved again, and the step once it is on. */
 export const twoStepChangeSchema = t.Object({

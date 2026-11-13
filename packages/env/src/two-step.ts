@@ -14,6 +14,12 @@ import { z } from 'zod';
  * TWO_STEP_PREVIOUS_KEY is the key before a rotation of TWO_STEP_KEY, kept while rows sealed or
  * hashed under it remain.
  *
+ * WEBAUTHN_ANDROID_ORIGINS lists the Android app origins a passkey or security key may answer
+ * from, beside APP_ORIGIN (docs/two-step-design.md 6, 8): `android:apk-key-hash:` and the
+ * SHA-256 of the app's signing certificate in Base64url, comma-separated. An Android app's
+ * WebAuthn response names that as its origin, not the site's. Empty unless this server's own
+ * domain vouches for an app in its `assetlinks.json`; hushos.com sets the HushOS app's.
+ *
  * Each key can come from a file instead (TWO_STEP_KEY_FILE, TWO_STEP_PREVIOUS_KEY_FILE): a
  * Docker or Kubernetes secret mounted into the container, so the key is in no environment
  * listing. The web service and the worker both read this module, so both take the same forms.
@@ -22,6 +28,26 @@ const key = z
     .string()
     .regex(/^[A-Za-z0-9_-]{43}$/, 'Expected 32 bytes, Base64url without padding.')
     .optional();
+
+/*
+ * The Android origins, as a list. Each must be exactly an `android:apk-key-hash:` origin: a
+ * web origin here would let a page on another site answer for this one, so anything else
+ * fails the environment check rather than being accepted or skipped.
+ */
+export const ANDROID_ORIGIN = /^android:apk-key-hash:[A-Za-z0-9_-]{43}$/;
+const androidOrigins = z
+    .string()
+    .default('')
+    .transform((value) =>
+        value
+            .split(',')
+            .map((origin) => origin.trim())
+            .filter(Boolean),
+    )
+    .refine((origins) => origins.length <= 8 && origins.every((o) => ANDROID_ORIGIN.test(o)), {
+        message:
+            'Expected up to 8 comma-separated android:apk-key-hash:<43 Base64url characters> origins.',
+    });
 
 type KeyName = 'TWO_STEP_KEY' | 'TWO_STEP_PREVIOUS_KEY';
 
@@ -59,9 +85,11 @@ export const twoStepEnv = createEnv({
             .transform((value) => value === 'true'),
         TWO_STEP_KEY: key,
         TWO_STEP_PREVIOUS_KEY: key,
+        WEBAUTHN_ANDROID_ORIGINS: androidOrigins,
     },
     runtimeEnv: {
         TWO_STEP_ENABLED: process.env.TWO_STEP_ENABLED,
+        WEBAUTHN_ANDROID_ORIGINS: process.env.WEBAUTHN_ANDROID_ORIGINS,
         TWO_STEP_KEY: twoStepKeyFrom(process.env, 'TWO_STEP_KEY'),
         TWO_STEP_PREVIOUS_KEY: twoStepKeyFrom(process.env, 'TWO_STEP_PREVIOUS_KEY'),
     },

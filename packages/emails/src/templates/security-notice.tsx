@@ -42,7 +42,10 @@ export type SecurityNoticeKind =
     | 'account-key-rotated'
     | 'step-failed'
     | 'change-step-failed'
-    | 'totp-frozen';
+    | 'totp-frozen'
+    | 'two-step-key-added'
+    | 'two-step-key-removed'
+    | 'key-counter';
 
 /* Hidden everywhere, Outlook included; a variable, since React's types lack mso-hide. */
 const hidden = { display: 'none', msoHide: 'all' };
@@ -211,6 +214,30 @@ const copy: Record<
         body: 'The second step was answered wrongly 100 times in a row from devices HushOS doesn’t recognise, so codes from your authenticator app are refused on such devices for now. To sign in on one, use a backup code or your recovery phrase; either lifts the pause.',
         facts: [['When', '{{when}}']],
         foot: 'If this wasn’t you, someone knows your password. Change it.',
+        action: 'Review your account',
+    },
+    'two-step-key-added': {
+        preview: 'A passkey or security key was added to your HushOS account.',
+        heading: 'A passkey or security key was added.',
+        body: 'It now passes your second step, after your password. Your other ways to pass it still work.',
+        facts: [['When', '{{when}}']],
+        foot: 'If you didn’t do this, someone else may be signed in to your account. Check your devices and change your password.',
+        action: 'Review your account',
+    },
+    'two-step-key-removed': {
+        preview: 'A passkey or security key was removed from your HushOS account.',
+        heading: 'A passkey or security key was removed.',
+        body: 'It no longer passes your second step. Your other ways to pass it still work.',
+        facts: [['When', '{{when}}']],
+        foot: 'If you didn’t do this, someone else may be signed in to your account. Check your devices and change your password.',
+        action: 'Review your account',
+    },
+    'key-counter': {
+        preview: 'One of your security keys may have been copied.',
+        heading: 'One of your security keys may have been copied.',
+        body: 'A security key on your account answered your second step with a use count that did not go up. That can mean a copy of the key exists. The answer was refused, and nobody was let in with it.',
+        facts: [['When', '{{when}}']],
+        foot: 'Sign in another way, remove that key from your account, and change your password.',
         action: 'Review your account',
     },
 };
