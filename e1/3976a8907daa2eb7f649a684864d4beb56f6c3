@@ -1,0 +1,57 @@
+apps/web/src/components/unlock-device.test.tsx
+  s_566b8e0c4467a4::t_ddc29ec60bd934 178-205
+apps/web/src/lib/two-step.test.ts
+  s_566b8e0c4467a4::t_626111b3ed985c 84-87
+apps/web/src/routes/recover/complete.tsx
+  s_566b8e0c4467a4::t_a188d66b4ded27 2,10,14,51-57,95,98-102,112,333-415
+docs/two-step-design.md
+  s_566b8e0c4467a4::t_83ff47df52ec3c 246,303-308
+e2e/two-step.spec.ts
+  s_566b8e0c4467a4::t_909b5afc6a8775 4-12,505-618
+packages/auth/src/client.test.ts
+  s_71a46c0012ed21::t_bdc82f8aafee78 350-351,448-454
+packages/auth/src/client.two-step.test.ts
+  s_566b8e0c4467a4::t_ba93352632b2f0 177-182,720-899
+packages/auth/src/login-reply.ts
+  s_566b8e0c4467a4::t_e0b944ab1323ff 100-103
+packages/crypto/src/session.two-step.test.ts
+  s_566b8e0c4467a4::t_b378a1285e8383 15-20,136-208
+apps/web/src/lib/two-step.ts
+  s_1e3406041198f8::t_70b1fc058a9005 85-86,98
+packages/auth/src/client.ts
+  s_1e3406041198f8::t_1a360ec9db0a52 21,166-171,188,194-199,606-610,616-617,626,642-654,1047-1055,1061-1063,1065,1071,1073-1082,1091-1092,1094-1099,1101-1123
+packages/crypto/src/session.ts
+  s_1e3406041198f8::t_f4f51d585bb064 168-174,807,963-965,1508,1651,1657-1658,1705-1710
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e13976a8907daa2eb7f649a684864d4beb56f6c3",
+  "prompts": {},
+  "sessions": {
+    "s_1e3406041198f8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a0e21c7cc47809e54",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_71a46c0012ed21": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "159305f7-8bd6-48d2-a2f7-dada81916a25",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
