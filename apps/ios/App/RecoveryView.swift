@@ -42,7 +42,11 @@ struct RecoveryView: View {
                 case .checking: checking
                 case let .linkFailed(why): linkFailed(why)
                 case let .kit(enrollment): RecoverKitStep(enrollment: enrollment) { step = .done($0) }
-                case let .done(account): NewPhraseStep(account: account) { model.wordsChecked(); model.recoveryDone() }
+                case let .done(account):
+                    NewPhraseStep(account: account) {
+                        // Signed in: the drive. Not signed in (the sign-in after the reset didn't happen): sign-in, told why.
+                        if account.user != nil { model.wordsChecked(); model.recoveryDone() } else { model.recoveredSignedOut(account) }
+                    }
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
@@ -448,13 +452,16 @@ private struct NewPhraseStep: View {
     var body: some View {
         Form {
             Section {} header: {
-                Text("Your old phrase no longer works. Save these 24 words before you leave this page.")
+                // Nothing could say whether the reset was made (its reply was lost): the words are shown, and the old ones kept.
+                Text(account.certain ? "Your old phrase no longer works. Save these 24 words before you leave this page." : StepWords.resetUncertain)
                     .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).textCase(nil)
             }
             Section { PhraseGrid(phrase: account.phrase, columns: 3).padding(.vertical, Alpine.Space.s2).alpineRow() }
             Section {
                 Button {
-                    Task { await KitShare.present(phrase: account.phrase, email: account.user.email, accountId: account.user.id) }
+                    // The new recovery key came with the reset: with no session there is nothing to read it back with.
+                    let recovery = try? JSONSerialization.jsonObject(with: account.recovery) as? [String: Any]
+                    Task { await KitShare.present(phrase: account.phrase, email: account.email, accountId: account.userId, recovery: recovery) }
                 } label: { Text("Save the kit").frame(maxWidth: .infinity) }
                     .buttonStyle(PrimaryCapsuleStyle())
                     .listRowBackground(Color.clear).listRowInsets(EdgeInsets())
@@ -464,8 +471,9 @@ private struct NewPhraseStep: View {
         .alpineGrouped()
         .navigationTitle("Your new recovery phrase")
         .navigationDestination(isPresented: $checking) {
-            CheckWordsView(phrase: account.phrase, recoveryVersion: account.recoveryVersion) {
-                NoticeCenter.shared.show("Recovery phrase saved")
+            // With no session the check is only made here; it is recorded at the sign-in that follows.
+            CheckWordsView(phrase: account.phrase, recoveryVersion: account.recoveryVersion, records: account.user != nil) {
+                if account.user != nil { NoticeCenter.shared.show("Recovery phrase saved") }
                 finish()
             }
         }

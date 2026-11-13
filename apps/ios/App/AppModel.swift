@@ -143,15 +143,11 @@ final class AppModel {
     var stepNotice = ""
 
     /*
-     * The new recovery words were checked on this phone while no session was left to say so (Rotate
-     * account key on an account with two-step sign-in): recorded once signed in.
+     * This phone's own rotation, from the request that ends its session to the sign-in after the new
+     * words (HushOSKit's OwnChange): while it mutes, nothing signs the app out from under the words,
+     * and the words' check is recorded at the sign-in that is theirs.
      */
-    var wordsCheckedBeforeSignIn = false
-    /*
-     * Rotate account key is showing the new recovery words while the session the rotation ended is still on
-     * screen behind them: nothing signs the app out from under them until they are saved (ResetKeysSheet).
-     */
-    var wordsHeld = false
+    var ownChange = OwnChange()
 
     /*
      * Returns whether the app is signed in: false when the account asked for its second step. With
@@ -159,13 +155,19 @@ final class AppModel {
      * that the step screen would replace, and signs in again when it is done).
      */
     @discardableResult
-    func signIn(email: String, password: String, stepLater: Bool = false) async throws -> Bool {
+    /* `holding`: new recovery words this phone still has in memory, which answer a second step that names them (`Auth.signInHolding`). */
+    func signIn(email: String, password: String, stepLater: Bool = false, holding: (phrase: String, recoveryVersion: UInt64)? = nil) async throws -> Bool {
         removedNotice = false
         signInGeneration += 1
         await wiping?.value
         let previous = AccountStore.shared.owner()
         // The session is stored only once signed in; another account's data goes then (AccountStore.claim).
-        switch try await Auth.startSignIn(origin: origin, email: email, password: password) {
+        let taken = if let holding {
+            try await Auth.signInHolding(origin: origin, email: email, password: password, phrase: holding.phrase, recoveryVersion: holding.recoveryVersion)
+        } else {
+            try await Auth.startSignIn(origin: origin, email: email, password: password)
+        }
+        switch taken {
         case .signedIn(let user):
             await anotherAccount(since: previous)
             signedIn(user)
@@ -196,6 +198,14 @@ final class AppModel {
         if lastEmail.isEmpty { lastEmail = pending.email }
         stepNotice = ""
         pendingStep = pending
+        // Left unanswered, the step and what the password opened are dropped a minute after the step's own end.
+        let token = pending.challenge.token
+        let wait = max(0, pending.dropAt().timeIntervalSinceNow)
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(wait))
+            guard let self, self.pendingStep?.challenge.token == token else { return }
+            self.cancelStep(StepWords.over)
+        }
     }
 
     /* The step's answer: on a right one the app is signed in, as a sign-in without a step leaves it. */
@@ -246,10 +256,10 @@ final class AppModel {
         wordsWaiting = WordsWaiting.isWaiting(for: user.id)
         state = .signedIn
         if let owner { Task { await FilesDomain.register(for: owner) } }
-        if wordsCheckedBeforeSignIn {
-            wordsCheckedBeforeSignIn = false
-            // Best effort: unrecorded, the words are only asked about again.
-            Task { if let version = try? await Auth.recoveryKey().envelope.recoveryVersion { try? await Auth.confirmRecovery(recoveryVersion: version) } }
+        // Words checked with no session to say so (a rotation's, a reset's): recorded now, if they were this sign-in's.
+        // Best effort: unrecorded, they are only asked about again. The server refuses any version but the current one.
+        if let version = ownChange.signedIn(userId: user.id, origin: origin) {
+            Task { try? await Auth.confirmRecovery(recoveryVersion: version) }
         }
         // Notifications this account turned on here: the token again, in case iOS replaced it, then what no push showed.
         Task {
@@ -362,7 +372,7 @@ final class AppModel {
      * the account on the phone goes as well, as on sign-out.
      */
     func sessionLost(ended: SharedKeychain.Session? = nil) {
-        guard !wordsHeld else { return }
+        guard !ownChange.mutesSessionEnd else { return }
         // The session said to have ended is no longer the one stored (a sign-in since replaced it): nothing of the
         // stored one goes. The account is looked at again instead, which adopts the stored session.
         if let ended, let stored = SharedKeychain.session, stored != ended {
@@ -388,9 +398,9 @@ final class AppModel {
      * cleared if anyone signed in meanwhile.
      */
     func sessionEnded() async {
-        // A rotation's new words are on screen (wordsHeld): "You've been signed out" would take them away, and the
+        // A rotation of this phone's own is under way, or its new words are on screen (ownChange): "You've been signed out" would take them away, and the
         // sign-in that follows them is already planned. The check stays unanswered, so its alert never shows.
-        guard !wordsHeld else { return }
+        guard !ownChange.mutesSessionEnd else { return }
         guard !checkingRemoval else { return }
         guard let ended = SharedKeychain.session else {
             sessionCheck = .kept
@@ -552,6 +562,22 @@ final class AppModel {
         wordsWaiting = false
     }
 
+    /*
+     * Rotates the account key, and leaves the app signed in under it when the rotation's own sign-in
+     * went through (`Auth.rotateKeysKit`, which answers a second step with the new phrase).
+     */
+    func rotateKeys(password: String, twoStep: StepAnswer?) async throws -> Auth.RotatedKeys {
+        guard let email = user?.email else { throw AuthError.message(ErrorWords.generic) }
+        signInGeneration += 1
+        let previous = AccountStore.shared.owner()
+        let made = try await Auth.rotateKeysKit(email: email, password: password, twoStep: twoStep)
+        if let user = made.user {
+            await anotherAccount(since: previous)
+            signedIn(user)
+        }
+        return made
+    }
+
     /* The reset, then the app signed in under the new password, as a sign-in leaves it. */
     func recover(_ enrollment: RecoveryEnrollment, password: String, phrase: [String]) async throws -> RecoveredAccount {
         signInGeneration += 1
@@ -559,9 +585,27 @@ final class AppModel {
         let previous = AccountStore.shared.owner()
         let account = try await Auth.recover(enrollment, password: password, phrase: phrase)
         // The new words wait to be checked even if the app is stopped before they are (the drive shows them first).
-        WordsWaiting.set(userId: account.user.id)
-        await anotherAccount(since: previous)
-        signedIn(account.user)
+        WordsWaiting.set(userId: account.userId)
+        // Not signed in (the sign-in after the reset failed, twice): the words are shown from here all the same.
+        if let user = account.user {
+            await anotherAccount(since: previous)
+            signedIn(user)
+        }
         return account
+    }
+
+    /*
+     * The new words of a reset that left the app signed out were saved and checked: on to sign-in,
+     * with the address filled and what to do said. The check is recorded at that sign-in, if it is
+     * this account's on this server.
+     */
+    func recoveredSignedOut(_ account: RecoveredAccount) {
+        WordsWaiting.clear()
+        wordsWaiting = false
+        ownChange.wordsChecked(CheckedWords(userId: account.userId, origin: origin, recoveryVersion: account.certain ? account.recoveryVersion : 0))
+        ownChange.settled()
+        lastEmail = account.email
+        recoveryDone()
+        NoticeCenter.shared.show(StepWords.signInAfterReset, important: true)
     }
 }

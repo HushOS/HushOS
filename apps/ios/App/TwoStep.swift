@@ -59,8 +59,9 @@ struct StepField: View {
                     .keyboardType(.asciiCapable).textInputAutocapitalization(.characters)
                     .kerning(1)
             case .phrase:
-                TextField("", text: $draft.phrase, axis: .vertical)
-                    .lineLimit(4 ... 8).keyboardType(.asciiCapable).textInputAutocapitalization(.never)
+                // The field the recovery screens type the phrase in (PhraseEntry): no predictions, spelling, smart
+                // punctuation or Writing Tools, so the keyboard neither learns the words nor offers them elsewhere.
+                PhraseEntry(text: $draft.phrase).frame(minHeight: 112)
             }
         }
         .font(.body.monospaced()).foregroundStyle(Alpine.ink)
@@ -438,7 +439,8 @@ struct TwoStepView: View {
             // The log is beside the settings, never instead of them: a failure there leaves it out.
             if next != nil { events = (try? await TwoStep.securityEvents()) ?? events }
         } catch {
-            if endsSession(error) { return }
+            // An ended session is said as everywhere (the signed-out alert), not swallowed here.
+            if endsSession(error) { store.report(error); return }
             if let words = ErrorWords.say(error, otherwise: "Two-step sign-in couldn’t be loaded.") { problem = words }
         }
     }
@@ -588,7 +590,8 @@ struct AuthenticatorSheet: View {
                                 if capture.active {
                                     Text("Hidden while your screen is recorded or shared.").font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
                                 } else {
-                                    Text(app.grouped).font(.callout.monospaced()).foregroundStyle(Alpine.ink).textSelection(.enabled)
+                                    // Not selectable: the system's own Copy would put the key on a clipboard nothing clears. Copy key does.
+                                    Text(app.grouped).font(.callout.monospaced()).foregroundStyle(Alpine.ink)
                                 }
                             }
                             Spacer()
@@ -687,7 +690,8 @@ struct AuthenticatorSheet: View {
                 // Then the other devices, which signed in before the step was on: removed whenever the box is ticked,
                 // whatever the list said (the server removes none when there are none). It runs behind the codes and
                 // never holds them or this sheet: Done closes it meanwhile, and a failure is then a notice.
-                if signOutOthers {
+                // Only when turning the step on: replacing an app never removes a device, whatever the box last said.
+                if signOutOthers && !replacing {
                     removing = .running
                     let typed = password
                     Task {
@@ -771,6 +775,8 @@ struct TurnOffSheet: View {
                 done(on ? "Authenticator app removed." : "Two-step sign-in is off.")
                 dismiss()
             } catch {
+                // Nothing says whether it was turned off: the settings behind are read again, so they never keep saying On on a guess.
+                if case StepError.lost = error { done("") }
                 if let words = await step.failed(error) { self.error = words }
             }
             pending = false

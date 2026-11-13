@@ -162,6 +162,8 @@ struct SignInView: View {
         }
         .background(Alpine.ground.ignoresSafeArea())
         .onAppear { if email.isEmpty { email = model.lastEmail } }
+        // Learnt while this screen was already up (a reset that ended signed out): the address is filled then too.
+        .onChange(of: model.lastEmail) { if email.isEmpty { email = model.lastEmail } }
         .onChange(of: email) { clearErrors() }
         // Emptied by a step that sent the person back here: what it said stays until they type.
         .onChange(of: password) { _, typed in if !typed.isEmpty { clearErrors() } }

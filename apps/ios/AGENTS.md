@@ -322,24 +322,32 @@ Markdown files (`text/markdown`, or `.md`, `.markdown`, `.mdx`) up to 2 MB open 
 
 `docs/two-step-design.md` 4 to 6. `TwoStep.swift` in HushOSKit holds the requests and the rules; `App/TwoStep.swift` the screens.
 
-- `Auth.startSignIn` sends `twoStep: 1` and returns `.signedIn` or `.step(PendingSignIn)`. What the password opened waits in `PendingSignIn`, in memory, for `Auth.answerStep`.
+- `Auth.startSignIn` sends `twoStep: 1` (`Auth.finishBody`) and returns `.signedIn` or `.step(PendingSignIn)`. What the password opened waits in `PendingSignIn`, in memory, for `Auth.answerStep`.
+    - It is dropped a minute after the step's own end (`PendingSignIn.dropAt`, `AppModel.awaitStep`), as the web does.
     - `Auth.signIn` is for callers with no step screen (the Files sheet, a new account): a step there is "This account asks for a second step. Open HushOS and sign in there."
-- The core reads every reply (`signInReplyRead`, `stepChangeReplyRead`). A reply that is not the server's answer is `StepError.lost`, never a sign-in.
+- The core reads every reply (`signInReplyRead`, `stepChangeReplyRead`). A reply that is not the server's answer is `StepError.lost`, never a sign-in; so is the session's body without its cookie.
 - `StepOutcome.after` says what the step screen does with a failure: ask again, narrow the methods, go back to the password, or offer the same answer again. `StepUp` is the same for a step inside a form. Change these with their tests (`TwoStepTests`).
 - The step screen (`SignInStepView`) is pushed on sign-in's own stack while `AppModel.pendingStep` is set. Back is "Start again".
     - Signed in already (after this phone's own password change or rotation), `AppModel.awaitStep` goes to sign-in first, keeping what the phone holds.
 - The code field is `.oneTimeCode`. Codes, the key and backup codes are monospaced, copied to this phone only for two minutes, and hidden while the screen is recorded.
-- The phrase is signed in the core (`twoStepPhraseSign`); only the signature is sent.
+- The phrase is signed in the core (`twoStepPhraseSign`); only the signature is sent. It is typed in `PhraseEntry`, as in recovery, wherever a step asks for it.
 - Change password, Rotate account key and Delete account hold a `StepUpModel` and show `StepUpSections`. No `keepSession` is sent.
-- Rotate account key on an account with the step shows the new words before the sign-in that follows: `AppModel.wordsHeld` keeps "You’ve been signed out" away meanwhile, `CheckWordsView(records: false)` checks them without a session, and the check is recorded once signed in (`wordsCheckedBeforeSignIn`).
-- `Auth.recover` answers the step of the sign-in that follows a phrase reset with the phrase it just made.
+- A rotation and a phrase reset end the same way (`Reset`; `Auth.rotateKeysKit`, `Auth.recover`): what the last request answered, what the sign-in with the new password showed, and what to show.
+    - Once the last request has gone out, nothing that fails may cost the new phrase. Keep it that way.
+    - That sign-in (`Auth.proved`, tried twice) answers its second step with the phrase just made, so nobody is sent to a step they need unseen words for.
+    - A lost reply is judged by versions, never by whether the sign-in worked: someone who reset to the password they already had signs in against the unchanged account. The session envelope's `credentialVersion`, or the step's `phrase.recoveryVersion`, is the change's own only if it was made.
+    - The old version or a refused password is "not made" (`notReset`, `notRotated`): the probe's session is ended and never stored, a step naming the old recovery key is not answered, and the new words are not shown. No version at all shows the words with a caveat (`certain` false).
+- Rotate account key shows the new words before a sign-in only when no session came of the rotation's own (`RotatedKeys.user` nil). `CheckWordsView(records: false)` checks them without a session, and `AppModel.signIn(holding:)` answers a step that names them. Stopping the app while they are held loses them.
+- `OwnChange` (`AppModel.ownChange`) is what mutes "You’ve been signed out" for this phone's own rotation: raised before the request (`begin`), dropped on failure, held while the words are up and the sign-in after is out. `signedIn` clears it.
+    - `CheckedWords` (account, server, the phrase's own `recoveryVersion`) is what a check made without a session records at the next sign-in, and only for a matching one.
+- After a reset that left the app signed out, the words are shown all the same and sign-in follows (`AppModel.recoveredSignedOut`). A reset nothing could confirm says `resetUncertain`.
 - `TwoStep.confirmAuthenticator` takes only the server's two answers (`TwoStep.confirmed`): `{ backupCodes }` turned the step on, `{ replaced: true }` replaced the app. Anything else with a 200, `{}` included, is a lost reply: the sheet says it can't tell whether the app was added, and the settings are read again.
 - A lost change says what is unknown, in the web's sentence (`StepWords.lost(whether:)`).
 - The other replies are read the same way, by the web's readers: `Auth.done` (`{ success: true }`), `TwoStep.enrolment`, `TwoStep.removed`, `TwoStep.codes`. Turning the step on without codes in the reply is lost too.
-- "Remove my other devices" is offered whenever the step is turned on, whatever the device list said, and removes when ticked. The codes show first; the removal runs behind them (an unstructured task), Done closes the codes meanwhile, and a failure is a notice.
-- A copied key or set of codes leaves the clipboard after two minutes, as the recovery phrase does (the pasteboard's expiry, this phone only).
+- "Remove my other devices" is offered whenever the step is turned on, whatever the device list said, and removes when ticked; never when the app is replaced. The codes show first; the removal runs behind them (an unstructured task), Done closes the codes meanwhile, and a failure is a notice.
+- A copied key or set of codes leaves the clipboard after two minutes, as the recovery phrase does (the pasteboard's expiry, this phone only). The key is not selectable text: Copy key is the only way it reaches the clipboard.
 - What a refusal withdraws is `StepOutcome.left`: a paused app, the app; a spent budget, both kinds of code together; `step-unavailable`, only the method that was tried.
-- Password re-checks go one at a time (`PasswordTurn` (HushOSKit)): the removal of other devices behind the backup codes, and whatever password action the person starts meanwhile, never overlap.
+- Password re-checks go one at a time (`PasswordTurn` (HushOSKit)): the removal of other devices behind the backup codes, and whatever password action the person starts meanwhile, never overlap. `PasswordTurn.take` gives the turn back and throws when its task was cancelled while waiting.
 - Account › Two-step sign-in (`TwoStepView`) shows nothing on a server that has two-step off (`TwoStep.status()` is nil for 501).
 - "Open in authenticator app" opens only an `otpauth://totp/` address (`TotpEnrolment.link`).
 

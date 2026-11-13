@@ -608,7 +608,11 @@ internal fun PhraseWords(phrase: String) {
 }
 
 /* The kit as the web writes it (hushos-recovery-kit.txt), handed to the share sheet: print, save to Files, any app. */
-private fun shareKit(context: Context, user: com.hushos.app.data.SessionUser?, kit: DriveViewModel.RecoveryKit) {
+private fun shareKit(context: Context, user: com.hushos.app.data.SessionUser?, kit: DriveViewModel.RecoveryKit) =
+    shareKit(context, user?.email.orEmpty(), user?.id.orEmpty(), kit)
+
+/* The same, for an account named by the caller: new words held with no session name it themselves. */
+private fun shareKit(context: Context, email: String, userId: String, kit: DriveViewModel.RecoveryKit) {
     val words = kit.phrase.trim().split(Regex("\\s+"))
     val numbered = words.mapIndexed { i, w -> "${(i + 1).toString().padStart(2, ' ')}. $w".padEnd(16, ' ') }
     val lines = numbered.chunked(4).map { it.joinToString("").trimEnd() }
@@ -621,8 +625,8 @@ private fun shareKit(context: Context, user: com.hushos.app.data.SessionUser?, k
         "your password, nobody can get you back in, including HushOS.",
         "",
         "YOUR ACCOUNT",
-        "Email:       ${user?.email.orEmpty()}",
-        "Account ID:  ${user?.id.orEmpty()}",
+        "Email:       $email",
+        "Account ID:  $userId",
         "",
         "YOUR RECOVERY PHRASE (${words.size} words, in this order)",
         "This is what unlocks your account if you forget your password.",
@@ -769,13 +773,6 @@ private fun ResetKeysScreen(model: DriveViewModel, onBack: () -> Unit) {
     val step = retain { StepUpHolder(model, com.hushos.app.data.StepPurpose.MASTER_KEY) }
     val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) { step.prepare() }
-    // An account with two-step sign-in: no session is left to read the new words with until the sign-in that asks
-    // for the step, and that sign-in waits for the words. They are shown from memory, checked here, then it runs.
-    model.rotated?.let { held ->
-        BackHandler {}
-        FreshWordsScreen(model, held.kit) { model.signInAfterRotation() }
-        return
-    }
     if (reset) {
         BackHandler {}
         PhraseScreen(model, fresh = true) { reset = false; onBack() }
@@ -794,8 +791,14 @@ private fun ResetKeysScreen(model: DriveViewModel, onBack: () -> Unit) {
                 if (!ready) return@Button
                 pending = true
                 model.rotateKeys(password, twoStep) { made, failure ->
-                    if (made) { pending = false; reset = model.rotated == null }
-                    else scope.launch { error = failure?.let { step.failed(it) }; pending = false }
+                    if (made) {
+                        // The password has done its work: it is not left in a form that comes back after the sign-in.
+                        password = ""
+                        pending = false
+                        // Signed straight back in: the new words, read from the account. Otherwise the app's shell is
+                        // showing them from memory (DriveViewModel.heldWords), and this page is done with.
+                        if (model.heldWords == null) reset = true else onBack()
+                    } else scope.launch { error = failure?.let { step.failed(it) }; pending = false }
                 }
             }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(if (pending) "Rotating…" else "Rotate") }
         }
@@ -803,13 +806,15 @@ private fun ResetKeysScreen(model: DriveViewModel, onBack: () -> Unit) {
 }
 
 /*
- * The new recovery words after a rotation on an account with two-step sign-in, from memory: saved and
- * checked here, with no way out but that, before the sign-in that asks for the second step.
+ * New recovery words held in memory with no session to read them back with (DriveViewModel.HeldWords): after a
+ * rotation whose sign-in is still to come, or a phrase reset whose sign-in didn't happen. Drawn by the app's shell in
+ * place of everything else, tabs included, so nothing leaves them but saving and checking them.
  */
 @Composable
-private fun FreshWordsScreen(model: DriveViewModel, kit: DriveViewModel.RecoveryKit, onDone: () -> Unit) {
+internal fun FreshWordsScreen(model: DriveViewModel, held: DriveViewModel.HeldWords, onDone: () -> Unit) {
     val alpine = Alpine.colors
     val context = LocalContext.current
+    val kit = held.kit
     val phrase = kit.phrase
     // The kit file is only on this phone while this page is open.
     androidx.compose.runtime.DisposableEffect(Unit) { onDispose { File(context.cacheDir, "kit").deleteRecursively() } }
@@ -821,12 +826,15 @@ private fun FreshWordsScreen(model: DriveViewModel, kit: DriveViewModel.Recovery
         CheckWordsScreen(phrase, onBack = { checking = false }) { model.notify("Recovery phrase saved"); onDone() }
         return
     }
+    BackHandler {}
     AccountPage("Your new recovery phrase", onBack = null) {
         Column(Modifier.padding(horizontal = AlpineSpace.S4), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S4)) {
-            Text("Your old phrase and any printed kit no longer work. Save these 24 words instead.", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
+            // Nothing confirmed the change was made: the old words are not said to be dead.
+            Text(held.caveat ?: "Your old phrase and any printed kit no longer work. Save these 24 words instead.", style = MaterialTheme.typography.bodyMedium,
+                color = if (held.caveat == null) alpine.inkMuted else alpine.warning)
             PhraseWords(phrase)
             Row(horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
-                OutlinedButton(onClick = { shareKit(context, model.state.value.user, kit) }) { Text("Save the kit") }
+                OutlinedButton(onClick = { shareKit(context, held.email, held.userId, kit) }) { Text("Save the kit") }
                 OutlinedButton(onClick = {
                     SensitiveClipboard.copy(context, "Recovery phrase", phrase)
                     model.notify("Copied. Paste it somewhere private, then clear your clipboard.")

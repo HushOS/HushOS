@@ -21,6 +21,74 @@ public struct PendingSignIn: Sendable {
         self.challenge = challenge
         self.exportKey = exportKey
     }
+
+    /*
+     * When this is dropped unanswered, with what the password opened: a minute after the step's own
+     * end, as the web drops its own. A step whose end can't be read is given the server's five
+     * minutes from `now`. Nothing of a password's work stays in memory behind a screen left open.
+     */
+    public func dropAt(now: Date = Date()) -> Date {
+        (TwoStep.date(challenge.expiresAt) ?? now.addingTimeInterval(300)).addingTimeInterval(60)
+    }
+}
+
+/*
+ * Recovery words a phone showed and checked with no session to tell the server so (a rotation's, or
+ * a reset's whose sign-in didn't happen): whose they are, on which server, and which phrase. The
+ * check is recorded at the next sign-in only when all three are that sign-in's: another account
+ * signing in on the phone, or the same one on another server, confirms nothing.
+ */
+public struct CheckedWords: Sendable, Equatable {
+    public let userId: String
+    public let origin: String
+    public let recoveryVersion: UInt64
+
+    public init(userId: String, origin: String, recoveryVersion: UInt64) {
+        self.userId = userId
+        self.origin = origin
+        self.recoveryVersion = recoveryVersion
+    }
+
+    /* The version to confirm for a sign-in as `userId` on `origin`, or nil when the words were someone else's. */
+    public func confirms(userId: String, origin: String) -> UInt64? {
+        self.userId.lowercased() == userId.lowercased() && self.origin == origin && recoveryVersion > 0 ? recoveryVersion : nil
+    }
+}
+
+/*
+ * This phone's own rotation, from the request that ends its session to the sign-in that follows.
+ * The session's end is its own doing all the way through, so "You've been signed out" says nothing
+ * meanwhile: the mute is raised before the request goes out (a 401 can arrive from another request
+ * before the rotation's own answer does), dropped if the rotation fails, and held while the new
+ * words are on screen and while the sign-in after them is out. A sign-in by any road ends it.
+ */
+public struct OwnChange: Sendable, Equatable {
+    public private(set) var underWay = false
+    public private(set) var wordsHeld = false
+    public private(set) var signingIn = false
+    public private(set) var checked: CheckedWords?
+
+    public init() {}
+
+    /* Whether an ended session says nothing for now. */
+    public var mutesSessionEnd: Bool { underWay || wordsHeld || signingIn }
+
+    /* The rotation's request is about to go. */
+    public mutating func begin() { underWay = true }
+    /* It failed, or the app signed straight back in: nothing is held. */
+    public mutating func ended() { underWay = false }
+    /* It went through and the new words are on screen, with the sign-in still to come. */
+    public mutating func hold() { underWay = false; wordsHeld = true }
+    /* The words were saved and checked: the sign-in that waited goes out. */
+    public mutating func wordsChecked(_ words: CheckedWords?) { wordsHeld = false; signingIn = true; checked = words }
+    /* That sign-in answered, whatever it said. */
+    public mutating func settled() { signingIn = false }
+    /* Signed in, by this road or another: nothing is held, and the check is recorded if the words were this sign-in's. */
+    public mutating func signedIn(userId: String, origin: String) -> UInt64? {
+        let version = checked?.confirms(userId: userId, origin: origin)
+        self = OwnChange()
+        return version
+    }
 }
 
 /* A step's token and the answer to it, as `login/two-step` and a change's `twoStep` field take them. */
@@ -74,6 +142,16 @@ public enum StepWords {
     public static let cannotAnswer = "This version of HushOS can’t answer this account’s second step. Update HushOS, then try again."
     /* The ways ran out after refusals (a paused app, a spent budget): updating would not help. */
     public static let noWayLeft = "There is no other way to answer this step from here right now. Start again in a while."
+    /* A rotation whose reply was lost, and the session then said it had not happened. */
+    public static let notRotated = "Your account key wasn’t rotated. Try again."
+    /* A rotation whose reply was lost, and nothing could say whether it happened: the words are shown, and the old ones kept. */
+    public static let rotationUncertain = "HushOS couldn’t confirm that your account key was rotated. Keep your old phrase as well as these 24 words until you have signed in."
+    /* A phrase reset whose reply was lost, and the account still shows its old versions: nothing changed, and the new words are not handed over. */
+    public static let notReset = "Your password wasn’t changed. Try again."
+    /* A phrase reset whose reply was lost, and nothing could say whether it happened. */
+    public static let resetUncertain = "HushOS couldn’t confirm that your password was changed. Keep your old phrase as well as these 24 words until you have signed in. If your new password doesn’t sign you in, your old one still does."
+    /* After a reset whose sign-in didn't happen. */
+    public static let signInAfterReset = "Your password was changed. Sign in with your new password."
     /* The removal of other devices, asked for while turning the step on, did not happen. */
     public static let othersNotRemoved = "Your other devices weren’t removed. You can remove them under Devices."
     /* A step that ended with nothing said. */
@@ -238,6 +316,19 @@ actor PasswordTurn {
 
     /* For a `defer`, which cannot wait. */
     nonisolated func leaveSoon() { Task { await leave() } }
+
+    /*
+     * Takes the shared turn for a password exchange. Whoever was cancelled while waiting gives the
+     * turn straight back and throws: a change nobody is waiting for any more is not made late.
+     * Pair with `defer { PasswordTurn.shared.leaveSoon() }`.
+     */
+    static func take(_ turn: PasswordTurn = .shared) async throws {
+        await turn.enter()
+        if Task.isCancelled {
+            await turn.leave()
+            throw CancellationError()
+        }
+    }
 }
 
 /* What a change asks the step for: the server binds the token to the session and this purpose. */
@@ -396,9 +487,10 @@ public enum TwoStep {
     }
 
     /*
-     * A step for a change this session makes. Nil when the account has no step to ask for (the
-     * server answers 409, or 501 where two-step is off and the account never had it): the change
-     * goes without one.
+     * A step for a change this session makes. Nil when there is none to ask for here: the account
+     * has no step (409), or this server has two-step switched off and so hands out no challenge
+     * (501). On the second an account that turned the step on earlier is still asked for it: the
+     * change goes without an answer, the server refuses it with `two-step`, and the form says so.
      */
     public static func challenge(_ purpose: StepPurpose) async throws -> StepChallenge? {
         let reply = try await Auth.request("/api/auth/two-step/challenge", method: "POST", body: ["purpose": purpose.rawValue])
@@ -432,7 +524,7 @@ public enum TwoStep {
 
     /* A pending authenticator app, good for ten minutes: the key to type and the address to open. `twoStep` once the step is on (replacing the app). */
     public static func startAuthenticator(password: String, twoStep: StepAnswer? = nil) async throws -> TotpEnrolment {
-        await PasswordTurn.shared.enter()
+        try await PasswordTurn.take()
         defer { PasswordTurn.shared.leaveSoon() }
         let reply = try await Auth.call("/api/auth/two-step/totp", method: "POST", body: try await change(password, twoStep), whole: true, lost: StepWords.lostSetup)
         guard let app = enrolment(reply) else { throw StepError.lost(StepWords.lostSetup) }
@@ -515,7 +607,7 @@ public enum TwoStep {
     /* Removes a method: the password and the step. Returns whether the step is still on; removing the last turns it off and deletes the codes. */
     @discardableResult
     public static func removeMethod(_ id: String, password: String, twoStep: StepAnswer?) async throws -> Bool {
-        await PasswordTurn.shared.enter()
+        try await PasswordTurn.take()
         defer { PasswordTurn.shared.leaveSoon() }
         let reply = try await Auth.call("/api/auth/two-step/methods/\(id)", method: "DELETE", body: try await change(password, twoStep), whole: true, lost: StepWords.lostTurnedOff)
         guard let on = removed(reply) else { throw StepError.lost(StepWords.lostTurnedOff) }
@@ -524,7 +616,7 @@ public enum TwoStep {
 
     /* A new set of ten backup codes, which replaces the old one, shown once. */
     public static func newBackupCodes(password: String, twoStep: StepAnswer?) async throws -> [String] {
-        await PasswordTurn.shared.enter()
+        try await PasswordTurn.take()
         defer { PasswordTurn.shared.leaveSoon() }
         let reply = try await Auth.call("/api/auth/two-step/backup-codes", method: "POST", body: try await change(password, twoStep), whole: true, lost: StepWords.lostNewCodes)
         guard let made = codes(reply) else { throw StepError.lost(StepWords.lostNewCodes) }
@@ -582,7 +674,8 @@ public struct StepUp: Sendable, Equatable {
     public mutating func prove() throws -> StepAnswer? {
         guard let challenge else { return nil }
         tried = true
-        guard let method = shown else { throw AuthError.message(StepWords.cannotAnswer) }
+        // Nothing this build knows was offered: update. The ways ran out after refusals: updating would not help.
+        guard let method = shown else { throw AuthError.message(challenge.methods.isEmpty ? StepWords.cannotAnswer : StepWords.noWayLeft) }
         if draft.problem(for: method) != nil { throw Unready() }
         do {
             return try draft.answer(to: challenge, method: method)

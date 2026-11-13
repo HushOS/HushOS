@@ -334,7 +334,12 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
 
     private fun signedIn(user: SessionUser) {
         // A step left waiting (answered now, or passed over by a sign-in from another screen) is done with.
-        pendingSignIn = null
+        dropStep()
+        // So are new words still held, and this phone's own change: a sign-in by any road ends both.
+        heldWords = null
+        signingInAfterWords = false
+        val (cleared, checkedVersion) = ownChange.signedIn(user.id, state.value.origin)
+        ownChange = cleared
         showingOwnWords = false
         contactStep = null
         // A session saved before the email was kept learns it now, so the Files app can name the account.
@@ -354,11 +359,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         filesAppChanged()
         refreshOffline()
         _state.update { it.copy(gate = Gate.SIGNED_IN, user = user, linkWaiting = false, step = null, stepNotice = null) }
-        if (wordsCheckedBeforeSignIn) {
-            wordsCheckedBeforeSignIn = false
-            // Best effort: unrecorded, the words are only asked about again.
-            viewModelScope.launch(Dispatchers.IO) { runCatching { Auth.confirmRecovery(context, Auth.recoveryBackup(context).first.getLong("recoveryVersion")) } }
-        }
+        // Words checked on this phone while no session was left to say so, when they were this account's on this
+        // server: that phrase's version, never whatever the account holds now. Best effort: unrecorded, they are asked about again.
+        if (checkedVersion != null) viewModelScope.launch(Dispatchers.IO) { runCatching { Auth.confirmRecovery(context, checkedVersion) } }
         // Notifications this account turned on here: the token again, in case Google replaced it.
         viewModelScope.launch(Dispatchers.IO) {
             runCatching { com.hushos.app.data.PushTokens.refresh(context) }
@@ -531,29 +534,57 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
 
     /* What the password opened, waiting for the step's answer: in memory only, never in the state a screen saves. */
     private var pendingSignIn: com.hushos.app.data.PendingSignIn? = null
+    private var stepDrop: kotlinx.coroutines.Job? = null
+
+    /* The step's answer is out: held here, so a screen rebuilt meanwhile (a rotation, a fold) still shows it and sends no second one. */
+    var stepBusy by mutableStateOf(false)
+        private set
+
+    private fun dropStep() {
+        pendingSignIn = null
+        stepDrop?.cancel()
+        stepDrop = null
+        stepBusy = false
+    }
+
+    /* The app leaves the session it had, as it does when one ends, with what the phone holds kept: for a sign-in screen that follows this phone's own change. */
+    private fun leaveSession() {
+        if (state.value.gate != Gate.SIGNED_IN) return
+        showingOwnWords = false
+        contactStep = null
+        signup = null
+        Shared.clearSession(context)
+        endFamilyCleanups()
+        vault?.close()
+        vault?.areaLedger?.clear()
+        vault = null
+        families.reset()
+        notices.clear()
+        link = null
+        _state.value = DriveState(gate = Gate.SIGNED_OUT, origin = state.value.origin)
+    }
 
     /*
      * The account asks for its second step. Signed out, sign-in shows the step screen. Signed in, this is
      * the sign-in after this phone's own password change or rotation: the server ended every session with
      * it, so the app goes to sign-in as it does when a session ends (what the phone holds kept) and asks
      * for the step there. No "you've been signed out" is said: the person just did this.
+     *
+     * The step, and what the password opened, are dropped a minute after the step's own end, as the web
+     * does: nothing can answer it by then. An answer still out is waited for, and says how it ended itself.
      */
     private fun awaitStep(pending: com.hushos.app.data.PendingSignIn, said: String? = null) {
-        if (state.value.gate == Gate.SIGNED_IN) {
-            showingOwnWords = false
-            contactStep = null
-            signup = null
-            Shared.clearSession(context)
-            endFamilyCleanups()
-            vault?.close()
-            vault?.areaLedger?.clear()
-            vault = null
-            families.reset()
-            notices.clear()
-            link = null
-            _state.value = DriveState(gate = Gate.SIGNED_OUT, origin = state.value.origin)
-        }
+        leaveSession()
+        dropStep()
+        // The sign-in this phone's own change waited for has answered: the session it had is gone from the phone, and nothing more of it can end.
+        signingInAfterWords = false
+        ownChange = ownChange.ended().settled()
         pendingSignIn = pending
+        stepDrop = viewModelScope.launch {
+            kotlinx.coroutines.delay(java.time.Duration.between(java.time.Instant.now(), pending.dropAt()).toMillis().coerceAtLeast(0))
+            while (stepBusy) kotlinx.coroutines.delay(1_000)
+            if (pendingSignIn === pending) cancelStep(com.hushos.app.data.StepWords.OVER)
+        }
         _state.update { it.copy(step = pending.challenge, stepNotice = null) }
         said?.let(::notify)
     }
@@ -561,11 +592,17 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     /*
      * The step's answer. `done(null)` when it signed in (or nothing is to be said); otherwise what the
      * step screen does next (StepOutcome). A step that is over goes back to the password here, with why.
+     * An answer that comes back after its step was given up or replaced says and does nothing: it is not
+     * about the sign-in on screen any more.
      */
     fun answerStep(answer: com.hushos.app.data.StepAnswer, methods: List<com.hushos.core.StepMethod>, done: (com.hushos.app.data.StepOutcome?) -> Unit) {
         val pending = pendingSignIn ?: run { cancelStep(com.hushos.app.data.StepWords.OVER); done(null); return }
+        if (stepBusy) return
+        stepBusy = true
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) { runCatching { Auth.answerStep(context, pending, answer.proof) } }
+            if (pendingSignIn !== pending) return@launch
+            stepBusy = false
             result.onSuccess { user -> signedIn(user); done(null) }.onFailure { failure ->
                 val outcome = com.hushos.app.data.StepOutcome.after(failure, methods, tried = answer.method)
                 if (outcome is com.hushos.app.data.StepOutcome.Over) { cancelStep(outcome.message); done(null) } else done(outcome)
@@ -575,7 +612,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
 
     /* Back to the password: the person chose to start again (no reason), or the step is over (the server's reason). */
     fun cancelStep(reason: String? = null) {
-        pendingSignIn = null
+        dropStep()
         // Never null: sign-in empties its password field whenever a step is given up or over, and says why if there is a why.
         _state.update { it.copy(step = null, stepNotice = reason.orEmpty()) }
     }
@@ -588,9 +625,76 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
      */
     suspend fun <T> twoStep(block: (Shared.Session) -> T): Result<T> {
         val session = Shared.session(context) ?: return Result.failure(com.hushos.app.data.AuthFailure("Sign in first."))
-        val result = withContext(Dispatchers.IO) { runCatching { block(session) } }
+        val result = change { block(session) }
         if (result.exceptionOrNull() is NotAuthenticated) sessionLost()
         return result
+    }
+
+    /*
+     * A change that proves the password, off the main thread. These calls block, so cancelling this
+     * coroutine does not stop one: it is told when the scope has gone (Auth.cancellable), so a change
+     * still waiting for its turn behind another is never made late, with nobody left to see what it did.
+     */
+    private suspend fun <T> change(block: () -> T): Result<T> = withContext(Dispatchers.IO) {
+        val job = coroutineContext[kotlinx.coroutines.Job]
+        runCatching { Auth.cancellable({ job?.isActive == false }) { block() } }
+    }
+
+    /*
+     * Account › Two-step sign-in's changes and what each one made (TwoStepFlow). They run here and their
+     * results are kept here, not in the screen: the key and the backup codes are shown once, the server
+     * has already made them when the answer arrives, and a screen rebuilt while the request was out (a
+     * rotation, a fold, a theme change) would have dropped the answer with its own scope.
+     */
+    var twoStepFlow by mutableStateOf(com.hushos.app.data.TwoStepFlow())
+        private set
+
+    /* A page of it was opened or left: nothing of the last one is carried over. Not while a request is out: its answer still has to land. */
+    fun twoStepReset() {
+        if (!twoStepFlow.pending) twoStepFlow = com.hushos.app.data.TwoStepFlow(reread = twoStepFlow.reread)
+    }
+
+    /* `failed` words a failure for the form, and asks for a new step when that is what it means (StepUpHolder.failed). */
+    private fun <T> twoStepChange(failed: suspend (Throwable) -> String?, request: (Shared.Session) -> T, made: com.hushos.app.data.TwoStepFlow.(T) -> com.hushos.app.data.TwoStepFlow) {
+        if (twoStepFlow.pending) return
+        twoStepFlow = twoStepFlow.started()
+        viewModelScope.launch {
+            twoStep(request).fold(
+                { result -> twoStepFlow = twoStepFlow.made(result) },
+                // A session that ended is said by sign-in, which is on screen by now.
+                { failure -> twoStepFlow = twoStepFlow.failed(failure, if (failure is NotAuthenticated) null else failed(failure)) },
+            )
+        }
+    }
+
+    fun startAuthenticator(password: String, twoStep: com.hushos.app.data.StepAnswer?, failed: suspend (Throwable) -> String?) =
+        twoStepChange(failed, { com.hushos.app.data.TwoStep.startAuthenticator(it, password, twoStep) }) { enrolled(it) }
+
+    fun newBackupCodes(password: String, twoStep: com.hushos.app.data.StepAnswer?, failed: suspend (Throwable) -> String?) =
+        twoStepChange(failed, { com.hushos.app.data.TwoStep.newBackupCodes(it, password, twoStep) }) { newCodes(it) }
+
+    fun removeTwoStepMethod(id: String, password: String, twoStep: com.hushos.app.data.StepAnswer?, failed: suspend (Throwable) -> String?) =
+        twoStepChange(failed, { com.hushos.app.data.TwoStep.removeMethod(it, id, password, twoStep) }) { removed(it) }
+
+    /*
+     * Confirms the pending app with a code from it. The backup codes are kept the moment they arrive;
+     * only then, and only when the step was being turned on with the box ticked, are the other devices
+     * removed (TwoStepFlow.removesOthers), behind the codes.
+     */
+    fun confirmAuthenticator(code: String, replacing: Boolean, signOutOthers: Boolean, password: String) {
+        val app = twoStepFlow.enrolment ?: return
+        if (twoStepFlow.pending) return
+        twoStepFlow = twoStepFlow.started()
+        viewModelScope.launch {
+            val result = twoStep { com.hushos.app.data.TwoStep.confirmAuthenticator(it, app.id, code) }
+            twoStepFlow = twoStepFlow.confirmed(result, replacing)
+            val confirmed = result.getOrNull() ?: return@launch
+            if (com.hushos.app.data.TwoStepFlow.removesOthers(confirmed, signOutOthers, replacing)) {
+                twoStepFlow = twoStepFlow.copy(removing = true)
+                // The page may have been closed with Done by the time this ends: the notice says a failure wherever the person is.
+                removeOtherDevices(password) { removed -> if (twoStepFlow.codes != null) twoStepFlow = twoStepFlow.copy(removing = false, notRemoved = !removed) }
+            }
+        }
     }
 
     /* How many other devices are signed in, for the words under "Remove my other devices" only; null when that can't be told. */
@@ -605,7 +709,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     fun removeOtherDevices(password: String, done: (Boolean) -> Unit) {
         val asked = Shared.session(context)
         viewModelScope.launch {
-            val removed = withContext(Dispatchers.IO) { runCatching { Auth.removeOtherDevices(context, password) } }
+            val removed = change { Auth.removeOtherDevices(context, password) }
             // A session that ended under it is said as everywhere, but only if it is still the one stored: a sign-in
             // since (after a password change made meanwhile) must not be taken down by the old session's answer.
             if (removed.exceptionOrNull() is NotAuthenticated && Shared.session(context) == asked) { sessionLost(); return@launch }
@@ -645,11 +749,10 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     }
 
     private fun sessionLost() {
-        // A rotation's new words are on screen, and nothing else shows them before the sign-in that asks for the second
-        // step: the session is known to be over (the rotation ended it), and that sign-in follows the words. Until it
-        // has answered, a late 401 from the old session says nothing either: "You've been signed out" over the step
-        // screen would be wrong twice.
-        if (rotated != null || signingInAfterRotation) return
+        // This phone's own change is ending the session (OwnChange): from before its request goes out, while its new
+        // words are on screen (nothing else shows them before the sign-in that follows), and until that sign-in has
+        // answered. "You've been signed out" would be wrong, and would take the words off the screen.
+        if (ownChange.mutesSessionEnd) return
         showingOwnWords = false
         contactStep = null
         signup = null
@@ -1227,11 +1330,18 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         }
     }
 
-    /* The words and a new password: the reset, then a sign-in with the new password, then the new phrase to save. */
+    /*
+     * The words and a new password: the reset, then a sign-in with the new password, then the new phrase to save.
+     * Once the reset has been sent and not refused, the new phrase is shown whatever that sign-in did (Reset): the old
+     * one may be dead already, and the new one is only in this phone's memory. Signed in, on the page that reads it from
+     * the account; otherwise from memory (heldWords), and sign-in follows for the person to do.
+     */
     fun recover(words: List<String>, password: String) {
         val flow = recovery ?: return
         val enrollment = flow.enrollment ?: return
         recovery = flow.copy(pending = true, error = null)
+        // A session this phone has for the account is ended by the reset: from here its end is this phone's own doing.
+        ownChange = ownChange.begin()
         viewModelScope.launch {
           // Whether this recovery marked its words: only then is the marker its own to clear.
           var marked = false
@@ -1239,33 +1349,37 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
             val origin = state.value.origin
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    val recovered = Auth.recover(origin, enrollment, words.joinToString(" "), password)
-                    // Before the session is stored: a picker's sign-in screen waits for this account's new words.
-                    com.hushos.app.data.RecoveryWords.begun(recovered.userId)
-                    marked = true
-                    val phrase = recovered.phrase
-                    val user = try {
-                        // An account with two-step sign-in is asked for its step here: the new phrase answers it.
-                        Auth.signInAfterRecovery(context, origin, enrollment.email, password, phrase)
-                    } catch (error: Exception) {
-                        throw com.hushos.app.data.AuthFailure("Your password was changed. Sign in with your new password.")
+                    Auth.recover(context, origin, enrollment, words.joinToString(" "), password) { userId ->
+                        // Before any session is stored: a picker's sign-in screen waits for this account's new words.
+                        com.hushos.app.data.RecoveryWords.begun(userId)
+                        marked = true
                     }
-                    phrase to user
                 }
             }
             result.fold(
-                { (phrase, user) ->
-                    recovery = RecoveryFlow(RecoveryStep.NEW_PHRASE, email = enrollment.email, newPhrase = phrase)
-                    signedIn(user)
+                { recovered ->
+                    val user = recovered.user
+                    if (user != null) {
+                        recovery = RecoveryFlow(RecoveryStep.NEW_PHRASE, email = enrollment.email, newPhrase = recovered.phrase)
+                        signedIn(user)
+                    } else {
+                        // No session came of it: the words are shown from here, over everything, and the marker stays
+                        // until they are checked (stopped before that, the next sign-in shows them first).
+                        recovery = null
+                        heldWords = HeldWords(RecoveryKit(recovered.phrase, recovered.recovery, confirmed = false), recovered.userId, recovered.email,
+                            password = null, origin = origin, certain = recovered.certain, reset = true)
+                        ownChange = ownChange.hold()
+                    }
                 },
                 {
+                    ownChange = ownChange.ended()
                     if (marked) com.hushos.app.data.RecoveryWords.settled()
                     recovery = recovery?.copy(pending = false, error = com.hushos.app.data.Problems.say(it, com.hushos.app.data.Problems.SERVER))
                 },
             )
           } finally {
             // Cancelled (the view model went) or failed: no new words are on screen, so nothing waits for them.
-            if (marked && recovery?.step != RecoveryStep.NEW_PHRASE) com.hushos.app.data.RecoveryWords.settled()
+            if (marked && recovery?.step != RecoveryStep.NEW_PHRASE && heldWords == null) com.hushos.app.data.RecoveryWords.settled()
           }
         }
     }
@@ -1714,58 +1828,87 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         redraw(plan.reload)
     }
 
-    /* A master-key rotation ends every session too; the app signs in again and hands back the new phrase. */
     /*
-     * Resets the keys; `done(true, null)` once the new phrase exists. The phrase itself is not handed to the
-     * screen: it reads it again from the account (recoveryKit) so it never sits in saved state.
+     * Rotates the account key; `done(true, null)` once the new phrase exists. A rotation ends every session, so the
+     * app signs in again. The phrase is not handed to the screen: signed straight back in, the screen reads it from
+     * the account (recoveryKit), so it never sits in saved state; otherwise it is held here (heldWords) and the app's
+     * shell shows it over everything.
+     *
+     * The sign-in after it is the rotation's own (Auth.rotateKeysKit): a second step there is answered with the new
+     * phrase, which nobody has seen yet. The words are held whenever no session came of that: the sign-in didn't
+     * happen, its step did not pass, or the rotation's reply was lost and no later reply showed a version either
+     * way. Once the rotation's last request has gone out, nothing that fails costs the words.
      */
     fun rotateKeys(password: String, twoStep: com.hushos.app.data.StepAnswer? = null, done: (Boolean, Throwable?) -> Unit) = viewModelScope.launch {
-        val email = state.value.user?.email ?: return@launch
+        val user = state.value.user ?: return@launch
         val origin = state.value.origin
-        val result = withContext(Dispatchers.IO) {
-            runCatching {
-                val (phrase, recovery) = Auth.rotateKeysKit(context, password, twoStep)
-                // An account with two-step sign-in is asked for its step at the sign-in that follows, on a screen that
-                // replaces this one. It waits until the new words are saved here: they are shown only now, and they are
-                // what answers that step for someone whose other methods are gone.
-                val kit = RecoveryKit(phrase, recovery, confirmed = false)
-                if (twoStep != null) kit to null
-                else when (val taken = Auth.startSignIn(context, origin, email, password)) {
-                    is Auth.SignIn.SignedIn -> kit to taken.user
-                    is Auth.SignIn.Step -> kit to null
-                }
-            }
-        }
-        result.onSuccess { (kit, user) ->
-            if (user != null) signedIn(user) else rotated = Rotated(kit, email, password)
-            done(true, null)
-        }.onFailure { failure ->
+        // Before the request, not after its answer: the rotation ends this session, and another request's 401 (the
+        // feed's, every ten seconds) can arrive first and would take the app to "You've been signed out".
+        ownChange = ownChange.begin()
+        val keys = change { Auth.rotateKeysKit(context, user.email, password, twoStep) }.getOrElse { failure ->
+            ownChange = ownChange.ended()
             if (failure is NotAuthenticated) sessionLost() else done(false, failure)
+            return@launch
         }
+        val signedInAs = keys.user
+        if (signedInAs != null) signedIn(signedInAs)
+        else {
+            heldWords = HeldWords(RecoveryKit(keys.phrase, keys.recovery, confirmed = false), user.id, user.email, password, origin, keys.certain, reset = false)
+            ownChange = ownChange.hold()
+        }
+        done(true, null)
     }
 
     /*
-     * A rotation on an account with two-step sign-in, its sign-in still to come: the new words, shown from
-     * here (no session is left to read them with), and what the sign-in needs. In memory only.
+     * New recovery words with no session to read them back with: a rotation's (above), or a phrase reset's whose
+     * sign-in didn't happen (recover). In memory only, and shown by the app's shell over everything, with no way out
+     * but saving and checking them. Stopping the app while they are held loses them (docs/two-step-design.md 6).
+     * `password`: what the sign-in after a rotation needs; null after a reset, where the person signs in themselves.
      */
-    class Rotated(val kit: RecoveryKit, val email: String, val password: String)
-    var rotated by androidx.compose.runtime.mutableStateOf<Rotated?>(null)
+    class HeldWords(val kit: RecoveryKit, val userId: String, val email: String, val password: String?, val origin: String, val certain: Boolean, val reset: Boolean) {
+        /* What checking them records at the next sign-in: this phrase, this account, this server. Nothing when nothing says they are the account's. */
+        val checked: com.hushos.app.data.CheckedWords?
+            get() = if (certain) com.hushos.app.data.CheckedWords(userId, origin, kit.recovery.optLong("recoveryVersion")) else null
+        /* Said above the words when nothing could confirm the change was made. */
+        val caveat: String?
+            get() = if (certain) null else if (reset) com.hushos.app.data.StepWords.RESET_UNCERTAIN else com.hushos.app.data.StepWords.ROTATION_UNCERTAIN
+    }
+    var heldWords by mutableStateOf<HeldWords?>(null)
         private set
 
-    /* The new recovery words were checked on this phone while no session was left to say so: recorded once signed in. */
-    private var wordsCheckedBeforeSignIn = false
+    /* The held words were checked and the sign-in after them is out: the shell waits, and shows nothing of the session that is over. */
+    var signingInAfterWords by mutableStateOf(false)
+        private set
 
-    /* The rotation's new words are saved and checked: now the sign-in that waited, which asks for the second step. */
-    private var signingInAfterRotation = false
+    /* This phone's own change that ends its session, from its request to the sign-in after (OwnChange): what mutes "You've been signed out". */
+    private var ownChange = com.hushos.app.data.OwnChange()
 
-    fun signInAfterRotation() {
-        val held = rotated ?: return
-        signingInAfterRotation = true
-        rotated = null
-        wordsCheckedBeforeSignIn = true
+    /*
+     * The held words are saved and checked. After a rotation: the sign-in that waited. A second step that names
+     * these words' recovery key is answered with them (Auth.signInHolding); any other is the person's to answer.
+     * After a reset: sign-in, for the person to do.
+     */
+    fun heldWordsSaved() {
+        val held = heldWords ?: return
+        heldWords = null
+        ownChange = ownChange.wordsChecked(held.checked)
+        val password = held.password
+        if (password == null) {
+            com.hushos.app.data.RecoveryWords.settled()
+            ownChange = ownChange.settled()
+            // The recovered account's own session here was ended by the reset. Another account's is ended now, as
+            // signing in over it would have: properly, on the server too.
+            if (state.value.gate == Gate.SIGNED_IN && state.value.user?.id?.equals(held.userId, ignoreCase = true) != true) signOut() else leaveSession()
+            _state.update { it.copy(step = null, stepNotice = com.hushos.app.data.StepWords.SIGN_IN_AFTER_RESET) }
+            return
+        }
+        signingInAfterWords = true
         viewModelScope.launch {
-            val result = withContext(Dispatchers.IO) { runCatching { Auth.startSignIn(context, state.value.origin, held.email, held.password) } }
-            signingInAfterRotation = false
+            val result = withContext(Dispatchers.IO) {
+                runCatching { Auth.signInHolding(context, held.origin, held.email, password, held.kit.phrase, held.kit.recovery.optLong("recoveryVersion")) }
+            }
+            signingInAfterWords = false
+            ownChange = ownChange.settled()
             result.onSuccess { taken ->
                 when (taken) {
                     is Auth.SignIn.SignedIn -> signedIn(taken.user)
@@ -1802,12 +1945,17 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     fun changePassword(current: String, new: String, twoStep: com.hushos.app.data.StepAnswer? = null, done: (Throwable?) -> Unit) = viewModelScope.launch {
         val email = state.value.user?.email ?: return@launch
         val origin = state.value.origin
-        val changed = withContext(Dispatchers.IO) { runCatching { Auth.changePassword(context, current, new, twoStep) } }
+        // As a rotation: the change ends this session, and its end is this phone's own doing until the sign-in after it has answered.
+        ownChange = ownChange.begin()
+        val changed = change { Auth.changePassword(context, current, new, twoStep) }
         changed.exceptionOrNull()?.let { failure ->
+            ownChange = ownChange.ended()
             if (failure is NotAuthenticated) sessionLost() else done(failure)
             return@launch
         }
+        ownChange = ownChange.signInNext()
         val result = withContext(Dispatchers.IO) { runCatching { Auth.startSignIn(context, origin, email, new) } }
+        ownChange = ownChange.settled()
         result.onSuccess { taken ->
             when (taken) {
                 is Auth.SignIn.SignedIn -> { signedIn(taken.user); done(null) }
@@ -1822,7 +1970,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
 
     fun deleteAccount(password: String, twoStep: com.hushos.app.data.StepAnswer? = null, done: (Throwable?) -> Unit) = viewModelScope.launch {
         // Off the main thread, as before: closing the vault waits for the family copies' lock.
-        val result = withContext(Dispatchers.IO) { runCatching { Auth.deleteAccount(context, password, twoStep); accountDeleted() } }
+        val result = change { Auth.deleteAccount(context, password, twoStep); accountDeleted() }
         result.exceptionOrNull()?.let { failure -> if (failure is NotAuthenticated) sessionLost() else done(failure) } ?: done(null)
     }
 

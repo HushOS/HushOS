@@ -930,13 +930,18 @@ struct ResetKeysSheet: View {
      * for someone whose other methods are gone.
      */
     @State private var signInAfter = false
+    /* The rotation's reply was lost and nothing could say whether it was made. */
+    @State private var uncertain = false
+    @State private var recoveryVersion: UInt64 = 0
 
     var body: some View {
         NavigationStack {
             Form {
                 if let phrase {
                     Section {} header: {
-                        Text("Your old phrase and any printed kit no longer work. Save these 24 words instead.").font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).textCase(nil)
+                        // Nothing could say whether the rotation was made (its reply was lost): the words are shown, and the old ones kept.
+                        Text(uncertain ? StepWords.rotationUncertain : "Your old phrase and any printed kit no longer work. Save these 24 words instead.")
+                            .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).textCase(nil)
                     }
                     Section { PhraseGrid(phrase: phrase, columns: 3).padding(.vertical, Alpine.Space.s2).alpineRow() }
                     Section {
@@ -984,14 +989,16 @@ struct ResetKeysSheet: View {
                     // No session is left to record the check with while the sign-in waits: the app records it once signed in.
                     CheckWordsView(phrase: phrase, recoveryVersion: nil, records: !signInAfter) {
                         NoticeCenter.shared.show("Recovery phrase saved")
-                        guard signInAfter, let email = model.user?.email else { dismiss(); return }
-                        model.wordsCheckedBeforeSignIn = true
+                        guard signInAfter, let email = model.user?.email, let userId = model.user?.id else { dismiss(); return }
+                        // Whose words were checked, where, and which: recorded only at a sign-in that is theirs.
+                        model.ownChange.wordsChecked(uncertain ? nil : CheckedWords(userId: userId, origin: model.origin, recoveryVersion: recoveryVersion))
                         let (model, password) = (model, password)
                         dismiss()
                         Task {
-                            // Held until the sign-in has answered: a late 401 from the old session says nothing over it.
-                            let signedIn = try? await model.signIn(email: email, password: password)
-                            model.wordsHeld = false
+                            // Muted until the sign-in has answered: a late 401 from the old session says nothing over it.
+                            // A second step that names these words' recovery key is answered with them; any other is the person's.
+                            let signedIn = try? await model.signIn(email: email, password: password, holding: (phrase, recoveryVersion))
+                            model.ownChange.settled()
                             // No sign-in (no connection): the ended session is said now, as it would have been.
                             if signedIn == nil { await model.sessionEnded() }
                         }
@@ -1007,23 +1014,23 @@ struct ResetKeysSheet: View {
         do { twoStep = try step.prove() } catch { if !(error is StepUp.Unready) { self.error = ErrorWords.say(error) ?? "" }; return }
         pending = true
         error = ""
+        // Raised before the request goes: the rotation ends this session, and another request's 401 can arrive first.
+        model.ownChange.begin()
         Task {
             do {
-                let made = try await Auth.rotateKeysKit(password: password, twoStep: twoStep)
-                // The rotation happened: the new phrase is shown whatever follows, since the old one no longer opens the
-                // account and this is the only time the new one is shown.
+                // The rotation and the sign-in after it, whose second step the new phrase answers. The words are shown
+                // whatever follows: the old phrase no longer opens the account, and this is the only time the new one is shown.
+                let made = try await model.rotateKeys(password: password, twoStep: twoStep)
                 recovery.value = made.recovery
+                recoveryVersion = made.recoveryVersion
+                uncertain = !made.certain
                 phrase = made.phrase
-                // Every session ended with the reset; sign in again under the new key. If that fails, the session alert
-                // asks for it later; the phrase stays on screen. An account with two-step sign-in is asked for its step
-                // at that sign-in, on a screen that would replace this one: it waits until the words are saved.
-                if step.step.asked {
-                    signInAfter = true
-                } else if let email = model.user?.email {
-                    signInAfter = (try? await model.signIn(email: email, password: password, stepLater: true)) == false
-                }
-                model.wordsHeld = signInAfter
+                // No session came of it (the sign-in didn't happen, its step did not pass, or nothing confirmed the
+                // rotation): the sign-in waits until the words are saved, and their end of the session stays this phone's own.
+                signInAfter = made.user == nil
+                if signInAfter { model.ownChange.hold() } else { model.ownChange.ended() }
             } catch {
+                model.ownChange.ended()
                 if let words = await step.failed(error) { self.error = words }
             }
             pending = false

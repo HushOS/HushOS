@@ -182,6 +182,42 @@ public enum Auth {
      * is read whole by the core: one that is neither the session nor the step is `StepError.lost`.
      */
     public static func startSignIn(origin: String, email: String, password: String) async throws -> SignIn {
+        switch try await passwordHalf(origin: origin, email: email, password: password) {
+        case .session(let reply, let exportKey):
+            return .signedIn(try await openSession(origin: origin, email: email, exportKey: exportKey, reply: reply))
+        case .step(let pending):
+            return .step(pending)
+        }
+    }
+
+    /*
+     * A sign-in by a phone that holds the account's newest recovery phrase in memory (after its own
+     * rotation or reset): a second step that names that phrase's recovery key is answered with it, so
+     * nobody is sent to a step they would need those words for. A step that names another key is left
+     * for the person, and so is one whose answer did not come back as a session.
+     */
+    public static func signInHolding(origin: String, email: String, password: String, phrase: String, recoveryVersion: UInt64) async throws -> SignIn {
+        await holding(try await startSignIn(origin: origin, email: email, password: password), phrase: phrase, recoveryVersion: recoveryVersion) { pending, proof in
+            try await answerStep(pending, proof: proof)
+        }
+    }
+
+    static func holding(_ taken: SignIn, phrase: String, recoveryVersion: UInt64, answer: (PendingSignIn, StepProof) async throws -> SessionUser) async -> SignIn {
+        guard case .step(let pending) = taken, let signing = pending.challenge.phrase, signing.recoveryVersion == recoveryVersion,
+              pending.challenge.methods.contains(.phrase),
+              let signature = try? twoStepPhraseSign(phrase: phrase, wrappingSalt: signing.wrappingSalt, userId: signing.userId, stepToken: pending.challenge.token),
+              let user = try? await answer(pending, .phrase(signature: signature))
+        else { return taken }
+        return .signedIn(user)
+    }
+
+    /* What the password's half met, with nothing stored yet: the session's reply (whole, with its cookie), or the step. */
+    enum Met {
+        case session(RawReply, exportKey: Data)
+        case step(PendingSignIn)
+    }
+
+    static func passwordHalf(origin: String, email: String, password: String) async throws -> Met {
         let start = try opaqueStartLogin(password: password)
         let started = try await post(origin, "/api/auth/login/start", ["email": email, "startLoginRequest": start.request]).body
         guard let attemptToken = started["attemptToken"] as? String, let loginResponse = started["loginResponse"] as? String else {
@@ -190,15 +226,14 @@ public enum Auth {
         guard let finish = try opaqueFinishLogin(password: password, state: start.state, loginResponse: loginResponse) else {
             throw AuthError.wrongPassword
         }
-        var finishBody: [String: Any] = ["attemptToken": attemptToken, "finishLoginRequest": finish.request, "twoStep": 1]
         // The device key's proof, only for the account it was made for: the same device comes back.
-        if let proof = deviceProof(identity: SharedKeychain.deviceIdentity, email: email, attemptToken: attemptToken) {
-            finishBody["device"] = proof
-        }
-        let reply = try await send(origin, "/api/auth/login/finish", finishBody)
+        let proof = deviceProof(identity: SharedKeychain.deviceIdentity, email: email, attemptToken: attemptToken)
+        let reply = try await send(origin, "/api/auth/login/finish", finishBody(attemptToken: attemptToken, finishRequest: finish.request, device: proof))
         switch signInReplyRead(status: UInt16(clamping: reply.status), body: reply.text) {
         case .done:
-            return .signedIn(try await openSession(origin: origin, email: email, exportKey: finish.exportKey, reply: reply))
+            // The session is its body and its cookie: without the cookie nothing was handed over, whatever the body says.
+            guard reply.cookie != nil else { throw StepError.lost(StepWords.lostSignIn) }
+            return .session(reply, exportKey: finish.exportKey)
         case .step(let challenge):
             return .step(PendingSignIn(origin: origin, email: email, challenge: challenge, exportKey: finish.exportKey))
         case .refused(let refusal, let message):
@@ -207,6 +242,16 @@ public enum Auth {
         case .lost:
             throw StepError.lost(StepWords.lostSignIn)
         }
+    }
+
+    /*
+     * What `login/finish` is sent. `twoStep: 1` says this build can answer a second step: without it
+     * the server tells an account that has one to update, and nobody with the step could sign in here.
+     */
+    static func finishBody(attemptToken: String, finishRequest: String, device: [String: String]?) -> [String: Any] {
+        var body: [String: Any] = ["attemptToken": attemptToken, "finishLoginRequest": finishRequest, "twoStep": 1]
+        if let device { body["device"] = device }
+        return body
     }
 
     /*
@@ -219,6 +264,7 @@ public enum Auth {
         let reply = try await send(pending.origin, "/api/auth/login/two-step", body)
         switch signInReplyRead(status: UInt16(clamping: reply.status), body: reply.text) {
         case .done:
+            guard reply.cookie != nil else { throw StepError.lost(StepWords.lostStep) }
             return try await openSession(origin: pending.origin, email: pending.email, exportKey: pending.exportKey, reply: reply)
         case .refused(let refusal, let message):
             throw StepError.refused(refusal, message)
@@ -229,7 +275,7 @@ public enum Auth {
     }
 
     /* The session's reply, whole (the core checked): the session and the device memory are stored, and the account returned. */
-    private static func openSession(origin: String, email: String, exportKey: Data, reply: RawReply) async throws -> SessionUser {
+    static func openSession(origin: String, email: String, exportKey: Data, reply: RawReply) async throws -> SessionUser {
         guard let userJson = reply.body["user"] as? [String: Any] else { throw AuthError.message("Signed in, but HushOS returned no account.") }
         let user = try JSONDecoder().decode(SessionUser.self, from: JSONSerialization.data(withJSONObject: userJson))
         guard let envelopeJson = reply.body["envelope"] as? [String: Any] else { throw AuthError.message("Signed in, but HushOS returned no account key.") }
@@ -348,6 +394,12 @@ public enum Auth {
     }
 
     /* Ends the session on the server (best effort) and forgets it here; AccountStore.wipe removes the rest. */
+    /* Ends a session by its token alone, touching nothing this phone has stored. Best effort: it runs out by itself otherwise. */
+    static func endSession(origin: String, token: String) async {
+        let cookieName = origin.hasPrefix("https:") ? "__Host-hushos-session" : "hushos-session"
+        _ = try? await send(origin, "/api/auth/logout", [:], cookie: "\(cookieName)=\(token)")
+    }
+
     public static func signOut() async {
         if let session = SharedKeychain.session {
             let cookieName = session.origin.hasPrefix("https:") ? "__Host-hushos-session" : "hushos-session"

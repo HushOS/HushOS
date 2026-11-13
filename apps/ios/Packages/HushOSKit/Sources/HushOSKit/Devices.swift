@@ -118,7 +118,7 @@ public enum Devices {
 
     /* Signs another device out at once; the server refuses this phone (sign out instead). */
     public static func remove(_ id: String, password: String) async throws {
-        await PasswordTurn.shared.enter()
+        try await PasswordTurn.take()
         defer { PasswordTurn.shared.leaveSoon() }
         _ = try await Auth.call("/api/auth/devices/\(id)", method: "DELETE", body: try await passwordProof(password))
     }
@@ -126,7 +126,7 @@ public enum Devices {
     /* Every device but this one. Returns how many were removed. */
     @discardableResult
     public static func removeOthers(password: String) async throws -> Int {
-        await PasswordTurn.shared.enter()
+        try await PasswordTurn.take()
         defer { PasswordTurn.shared.leaveSoon() }
         return try await Auth.call("/api/auth/devices/others", method: "DELETE", body: try await passwordProof(password))["removed"] as? Int ?? 0
     }

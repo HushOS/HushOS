@@ -117,6 +117,14 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 @Composable
 fun HushOSApp(model: DriveViewModel = viewModel()) {
     val state by model.state.collectAsStateWithLifecycle()
+    // New recovery words held in memory (a rotation's before its sign-in, or a reset's whose sign-in didn't happen):
+    // in place of everything, the tabs included, so no tap leaves them. Nothing else on this phone can show them again.
+    model.heldWords?.let { held ->
+        Noticed(model, state) { FormColumn { FreshWordsScreen(model, held) { model.heldWordsSaved() } } }
+        return
+    }
+    // They were checked, and the sign-in that waited for them is out: nothing of the session that is over is drawn meanwhile.
+    if (model.signingInAfterWords) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { LoadingIndicator() }; return }
     // Account recovery, signed in or out: its own screens until the new phrase, which is saved signed in.
     model.recovery?.let { flow ->
         if (flow.step != DriveViewModel.RecoveryStep.NEW_PHRASE) { Noticed(model, state) { FormColumn { RecoverScreen(model, state) } }; return }

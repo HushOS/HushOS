@@ -190,9 +190,86 @@ public struct RecoveryEnrollment: Sendable, Equatable {
 
 /* What a finished recovery leaves: the account signed in under the new password, and the phrase to save. */
 public struct RecoveredAccount: Sendable {
-    public let user: SessionUser
+    public let userId: String
+    public let email: String
+    /* Nil when the reset is done and the sign-in after it is not: the words are shown all the same, then sign-in. */
+    public let user: SessionUser?
     public let phrase: String
     public let recoveryVersion: UInt64
+    /* The new recovery key as JSON, for the kit file: with no session there is nothing to read it back with. */
+    public let recovery: Data
+    /*
+     * False when the reset's reply was lost and nothing could say whether it happened: the words are
+     * shown all the same (they may be the account's only way back), and the old ones are kept.
+     */
+    public let certain: Bool
+}
+
+/*
+ * What a phrase reset comes to, decided away from the requests so every case is tested. Once the
+ * server has taken the reset the old phrase is dead and the new one exists only in this phone's
+ * memory: whatever the sign-in after it does, the new words are shown.
+ */
+public enum Reset {
+    /* What `recover/finish` answered: the reset, a refusal in the server's words, or nothing of the server's own. */
+    public enum Sent: Sendable, Equatable { case accepted, refused(String), unknown }
+
+    /*
+     * What signing in with the new password showed, by the versions in its reply (`Auth.proved`). That it
+     * signed in shows nothing: a reset to the password the account already had signs in either way.
+     */
+    public enum Proved: Sendable, Equatable {
+        /* The session's envelope is the reset's, or the step named the reset's recovery key and the new phrase passed it. */
+        case signedIn(SessionUser)
+        /* A reply showed the reset's version, but no session came of it. */
+        case applied
+        /* A reply showed the old version, or the new password was refused: the reset was not made. */
+        case notApplied
+        /* No reply showed a version. */
+        case unknown
+
+        fileprivate var rank: Int {
+            switch self {
+            case .signedIn: 3
+            case .applied: 2
+            case .notApplied: 1
+            case .unknown: 0
+            }
+        }
+    }
+
+    public enum Settled: Sendable, Equatable {
+        /* Show the new words; signed in or not; `certain` false when nothing says the reset was made. */
+        case show(SessionUser?, certain: Bool)
+        /* Nothing changed: the server's words, or that the account is still as it was. */
+        case refused(String)
+    }
+
+    /* `notMade`: what is said when the account still shows its old versions (a reset's words, or a rotation's). */
+    public static func settle(sent: Sent, proved: Proved, notMade: String = StepWords.notReset) -> Settled {
+        switch (sent, proved) {
+        case (.refused(let said), _): .refused(said)
+        case (_, .signedIn(let user)): .show(user, certain: true)
+        case (.accepted, _), (.unknown, .applied): .show(nil, certain: true)
+        case (.unknown, .notApplied): .refused(notMade)
+        case (.unknown, .unknown): .show(nil, certain: false)
+        }
+    }
+
+    /*
+     * Signs in after the reset, once more if the first try gave no session: a sign-in that failed
+     * for a moment's reason is tried again while the words are still held. The better answer of the
+     * two stands. An account that showed it was not reset is not asked again.
+     */
+    public static func prove(_ attempt: () async -> Proved) async -> Proved {
+        let first = await attempt()
+        switch first {
+        case .signedIn, .notApplied: return first
+        case .applied, .unknown:
+            let second = await attempt()
+            return second.rank >= first.rank ? second : first
+        }
+    }
 }
 
 extension Auth {
@@ -297,40 +374,134 @@ extension Auth {
         } catch {
             throw AuthError.message(Recovery.message(error))
         }
-        do {
-            _ = try await recoveryRequest(origin, "/api/auth/recover/finish", body: [
-                "userId": userId, "attemptToken": attemptToken, "credentialVersion": credentialVersion,
-                "registrationRecord": registered.record,
-                "envelope": [
-                    "envelopeVersion": sealed.envelopeVersion, "keyVersion": sealed.keyVersion, "credentialVersion": sealed.credentialVersion,
-                    "wrappingSalt": sealed.wrappingSalt, "wrappingNonce": sealed.wrappingNonce, "encryptedKey": sealed.encryptedKey,
-                ],
-                "recovery": json(fresh.envelope),
-                "signature": signature,
-            ], enrollment: enrollment.token)
-        } catch {
-            // The server may have committed before the reply was lost; retrying with the old phrase would then fail for the wrong reason.
-            let said = ErrorWords.say(error, otherwise: "Please try again.") ?? "Please try again."
-            throw AuthError.message("\(said) If it keeps failing, try signing in with your new password first: the reset may already have been applied.")
-        }
-        let user: SessionUser
-        do {
-            switch try await startSignIn(origin: origin, email: enrollment.email, password: password) {
-            case .signedIn(let signedIn):
-                user = signedIn
-            case .step(let pending):
-                // An account with two-step sign-in (docs/two-step-design.md 4, 5): the recovery phrase passes the
-                // step, and the account's phrase is now the one just made here, which the person has not seen yet.
-                // It answers, so a person with only their phrase is not asked for a method they may have lost.
-                guard let signing = pending.challenge.phrase, pending.challenge.methods.contains(.phrase) else {
-                    throw AuthError.message(StepWords.cannotAnswer)
-                }
-                let signature = try twoStepPhraseSign(phrase: fresh.phrase, wrappingSalt: signing.wrappingSalt, userId: signing.userId, stepToken: pending.challenge.token)
-                user = try await answerStep(pending, proof: .phrase(signature: signature))
+        let sent = await resetSent(origin, body: [
+            "userId": userId, "attemptToken": attemptToken, "credentialVersion": credentialVersion,
+            "registrationRecord": registered.record,
+            "envelope": [
+                "envelopeVersion": sealed.envelopeVersion, "keyVersion": sealed.keyVersion, "credentialVersion": sealed.credentialVersion,
+                "wrappingSalt": sealed.wrappingSalt, "wrappingNonce": sealed.wrappingNonce, "encryptedKey": sealed.encryptedKey,
+            ],
+            "recovery": json(fresh.envelope),
+            "signature": signature,
+        ], enrollment: enrollment.token)
+        // Refused: nothing changed, and nothing is tried with the new password. Otherwise the old phrase may be dead
+        // already and the new one is only here: the sign-in is tried (twice at most), and the words are shown whatever
+        // it does. When the reset's own reply was lost, that sign-in is also what says whether it was made.
+        var proved = Reset.Proved.unknown
+        if case .refused = sent {} else {
+            proved = await Reset.prove {
+                await proveReset(origin: origin, email: enrollment.email, password: password, phrase: fresh.phrase,
+                                 credentialVersion: sealed.credentialVersion, recoveryVersion: fresh.envelope.recoveryVersion)
             }
-        } catch {
-            throw AuthError.message("Your password was changed. Sign in with your new password.")
         }
-        return RecoveredAccount(user: user, phrase: fresh.phrase, recoveryVersion: fresh.envelope.recoveryVersion)
+        switch Reset.settle(sent: sent, proved: proved) {
+        case .refused(let said):
+            throw AuthError.message(said)
+        case .show(let user, let certain):
+            let recovery = (try? JSONSerialization.data(withJSONObject: json(fresh.envelope))) ?? Data()
+            return RecoveredAccount(userId: userId, email: enrollment.email, user: user, phrase: fresh.phrase,
+                                    recoveryVersion: fresh.envelope.recoveryVersion, recovery: recovery, certain: certain)
+        }
+    }
+
+    /* Sends the reset and says what came back: the server's `{ user }`, its refusal, or nothing of its own. */
+    static func resetSent(_ origin: String, body: [String: Any], enrollment: String) async -> Reset.Sent {
+        guard let url = URL(string: origin + "/api/auth/recover/finish") else { return .refused("Bad HushOS address.") }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.httpShouldHandleCookies = false
+        request.setValue(origin, forHTTPHeaderField: "Origin")
+        request.setValue(DriveAPI.clientHeader, forHTTPHeaderField: "HushOS-Client")
+        request.setValue("\(enrollmentCookie(origin))=\(enrollment)", forHTTPHeaderField: "Cookie")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        request.timeoutInterval = 30
+        guard let (data, response) = try? await URLSession(configuration: testTransport ?? .ephemeral).data(for: request),
+              let http = response as? HTTPURLResponse else { return .unknown }
+        return resetSent(status: http.statusCode, body: (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:])
+    }
+
+    /*
+     * The reset is the server's `{ user }` on a 2xx. A 4xx in its own words is a refusal, and nothing
+     * changed. Anything else (a 5xx, a page from something in the way, a 2xx without the account)
+     * says nothing either way.
+     */
+    static func resetSent(status: Int, body: [String: Any]) -> Reset.Sent {
+        if (200 ..< 300).contains(status) { return body["user"] is [String: Any] ? .accepted : .unknown }
+        if (400 ..< 500).contains(status), let said = body["message"] as? String, !said.isEmpty { return .refused(said) }
+        return .unknown
+    }
+
+    /*
+     * One sign-in with the new password, and what it shows about the reset. Signing in is not the evidence:
+     * someone who reset to the password they already had signs in against the unchanged account. The
+     * versions are: the session's envelope is sealed at the reset's credential version only if the reset
+     * was made, and a second step names the reset's recovery key only then.
+     *
+     * - Made: the session is opened; or the step (docs/two-step-design.md 4, 5) is answered with the phrase
+     *   just made here, which the person has not seen yet, so someone with only their phrase is not asked
+     *   for a method they may have lost. A step that does not pass still shows the reset was made.
+     * - Not made (an old version, or the new password refused): the probe's session is ended and never
+     *   stored, and a step that names the old recovery key is not answered, so no wrong answer is counted.
+     * - No reply shows a version: unknown.
+     */
+    static func proveReset(origin: String, email: String, password: String, phrase: String, credentialVersion: UInt64, recoveryVersion: UInt64) async -> Reset.Proved {
+        await proved(
+            probe: {
+                switch try await passwordHalf(origin: origin, email: email, password: password) {
+                case .step(let pending):
+                    return .step(pending)
+                case .session(let reply, let exportKey):
+                    let sealedAt = ((reply.body["envelope"] as? [String: Any])?["credentialVersion"] as? NSNumber)?.uint64Value
+                    return .session(credentialVersion: sealedAt,
+                                    open: { try await openSession(origin: origin, email: email, exportKey: exportKey, reply: reply) },
+                                    end: { if let token = reply.cookie { await endSession(origin: origin, token: token) } })
+                }
+            },
+            answer: { pending, proof in try await answerStep(pending, proof: proof) },
+            credentialVersion: credentialVersion, recoveryVersion: recoveryVersion, phrase: phrase
+        )
+    }
+
+    /* What the sign-in with the new password met: a session not yet stored (with the version its envelope is sealed at), or the step. */
+    enum ResetProbe {
+        case session(credentialVersion: UInt64?, open: () async throws -> SessionUser, end: () async -> Void)
+        case step(PendingSignIn)
+    }
+
+    /* The rule above, over a sign-in and a step's answer the caller supplies, so every way it can end is tested. */
+    static func proved(probe: () async throws -> ResetProbe, answer: (PendingSignIn, StepProof) async throws -> SessionUser,
+                       credentialVersion: UInt64, recoveryVersion: UInt64, phrase: String) async -> Reset.Proved {
+        let met: ResetProbe
+        do {
+            met = try await probe()
+        } catch AuthError.wrongPassword {
+            return .notApplied
+        } catch {
+            // No answer, a limit, or the session's own reply gone missing: nothing shows a version.
+            return .unknown
+        }
+        switch met {
+        case .session(let sealedAt, let open, let end):
+            if sealedAt == credentialVersion {
+                guard let user = try? await open() else { return .applied }
+                return .signedIn(user)
+            }
+            // The envelope the reset would have replaced: the password signs in because it was the password already.
+            // Any other version says nothing of this reset. Either way the session was only asked for to look: ended, never stored.
+            await end()
+            return sealedAt == credentialVersion - 1 ? .notApplied : .unknown
+        case .step(let pending):
+            guard let signing = pending.challenge.phrase else { return .unknown }
+            if signing.recoveryVersion == recoveryVersion {
+                guard pending.challenge.methods.contains(.phrase),
+                      let signature = try? twoStepPhraseSign(phrase: phrase, wrappingSalt: signing.wrappingSalt, userId: signing.userId, stepToken: pending.challenge.token),
+                      let user = try? await answer(pending, .phrase(signature: signature))
+                else { return .applied }
+                return .signedIn(user)
+            }
+            // The old recovery key: the new phrase would be a wrong answer, and is not sent.
+            return signing.recoveryVersion == recoveryVersion - 1 ? .notApplied : .unknown
+        }
     }
 }

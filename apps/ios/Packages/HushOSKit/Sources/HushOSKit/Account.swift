@@ -325,7 +325,7 @@ extension Auth {
      * refuses with `two-step` (`StepError.refused(.required, …)`) and nothing changes.
      */
     public static func changePassword(current: String, new: String, twoStep: StepAnswer? = nil) async throws {
-        await PasswordTurn.shared.enter()
+        try await PasswordTurn.take()
         defer { PasswordTurn.shared.leaveSoon() }
         let login = try opaqueStartLogin(password: current)
         let registration = try opaqueStartRegistration(password: new)
@@ -361,7 +361,7 @@ extension Auth {
 
     /* Proves the password once more, then the server removes the account; every local trace goes with it. */
     public static func deleteAccount(password: String, twoStep: StepAnswer? = nil) async throws {
-        await PasswordTurn.shared.enter()
+        try await PasswordTurn.take()
         defer { PasswordTurn.shared.leaveSoon() }
         let login = try opaqueStartLogin(password: password)
         let started = try await call("/api/auth/delete/start", method: "POST", body: ["startLoginRequest": login.request])
@@ -498,19 +498,41 @@ extension Auth {
      * key replaces the old one under the same password, the identity and every
      * workspace grant are sealed again under it, and a new recovery phrase is
      * minted. Files and shares do not change; the server ends every session,
-     * so the caller signs in again. Returns the phrase to show once.
+     * so this signs in again.
      */
-    public static func rotateKeys(password: String, twoStep: StepAnswer? = nil) async throws -> String {
-        try await rotateKeysKit(password: password, twoStep: twoStep).phrase
+    /* A rotation's new recovery words, the key for the kit file, and what is known of the change. */
+    public struct RotatedKeys {
+        public let phrase: String
+        public let recovery: [String: Any]
+        /* The new phrase's version, for recording that it was checked. */
+        public let recoveryVersion: UInt64
+        /*
+         * False when the reply was lost and no later reply showed a version either way: the words are
+         * shown all the same (they may be the account's only way back), and the old ones are kept.
+         */
+        public let certain: Bool
+        /* Who the sign-in after the rotation signed in; nil when no session came of it, and the sign-in follows the words. */
+        public let user: SessionUser?
+    }
+
+    /* A change's request that got no answer of the server's own: it may have been made. */
+    static func unanswered(_ error: Error) -> Bool {
+        if case StepError.lost = error { return true }
+        if case AuthError.message(let said) = error { return said == AuthError.unreachable }
+        return false
     }
 
     /*
-     * The same, with the new recovery key as the server now holds it: what the kit file carries. An
-     * account with two-step sign-in has no session to read it back with until it has signed in again,
-     * and the kit is saved before that.
+     * Once the last request has gone out the new phrase is returned whatever happens next: the old one
+     * may be dead already, and for someone whose only second step is the phrase, losing the new one is
+     * losing the account. Whether the rotation was made is read from versions, as a reset's is
+     * (`proveReset`): the sign-in after it, with `email`, shows the new credential version or names the
+     * new recovery key only if it was. That sign-in's step is answered with the new phrase, which nobody
+     * has seen yet, so no one is sent to a step they would need those words for. The old versions mean
+     * it was not made (`StepWords.notRotated`); no version at all means the words are shown with a caveat.
      */
-    public static func rotateKeysKit(password: String, twoStep: StepAnswer? = nil) async throws -> (phrase: String, recovery: [String: Any]) {
-        await PasswordTurn.shared.enter()
+    public static func rotateKeysKit(email: String, password: String, twoStep: StepAnswer? = nil) async throws -> RotatedKeys {
+        try await PasswordTurn.take()
         defer { PasswordTurn.shared.leaveSoon() }
         let login = try opaqueStartLogin(password: password)
         let registration = try opaqueStartRegistration(password: password)
@@ -557,9 +579,31 @@ extension Auth {
         ]
         if let settingsKey { body["settingsKey"] = json(settingsKey) }
         if let twoStep { body["twoStep"] = try twoStep.json() }
-        try done(try await call("/api/auth/security/finish", method: "POST", body: body, whole: true, lost: StepWords.lostSaved), lost: StepWords.lostSaved)
-        let memory = try deviceRemember(userId: userId, accountKey: newRoot, keyVersion: sealed.keyVersion, credentialVersion: sealed.credentialVersion, deviceKeyId: UUID().uuidString.lowercased())
-        try SharedKeychain.write(SharedKeychain.deviceAccount, SharedKeychain.Device(memory: memory))
-        return (recovery.phrase, json(recovery.envelope))
+        let asked = try testSession ?? session()
+        var sent = Reset.Sent.accepted
+        do {
+            try done(try await call("/api/auth/security/finish", method: "POST", body: body, as: asked, whole: true, lost: StepWords.lostSaved), lost: StepWords.lostSaved)
+        } catch where unanswered(error) {
+            // The reply was lost, and with it the only showing of the new words unless they are kept. A refusal in the
+            // server's words changed nothing, and is thrown for the form to show.
+            sent = .unknown
+        }
+        let phrase = recovery.phrase
+        let proved = await Reset.prove {
+            await proveReset(origin: asked.origin, email: email, password: password, phrase: phrase,
+                             credentialVersion: sealed.credentialVersion, recoveryVersion: recovery.envelope.recoveryVersion)
+        }
+        switch Reset.settle(sent: sent, proved: proved, notMade: StepWords.notRotated) {
+        case .refused(let said):
+            throw AuthError.message(said)
+        case .show(let user, let certain):
+            // What this phone remembers follows the server: written only once the rotation is known to have been made.
+            // (Signed in, the sign-in has written it already, from the envelope it was handed.)
+            if certain, user == nil {
+                let memory = try deviceRemember(userId: userId, accountKey: newRoot, keyVersion: sealed.keyVersion, credentialVersion: sealed.credentialVersion, deviceKeyId: UUID().uuidString.lowercased())
+                try SharedKeychain.write(SharedKeychain.deviceAccount, SharedKeychain.Device(memory: memory))
+            }
+            return RotatedKeys(phrase: phrase, recovery: json(recovery.envelope), recoveryVersion: recovery.envelope.recoveryVersion, certain: certain, user: user)
+        }
     }
 }
