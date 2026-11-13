@@ -1,0 +1,43 @@
+.env.example
+  s_566b8e0c4467a4::t_2b42efad28b426 105-106
+.env.production.example
+  s_566b8e0c4467a4::t_943483b04f7200 130-131
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_bf54fc791f67b1 255,257
+apps/android/app/src/main/kotlin/com/hushos/app/ui/PasskeySheet.kt
+  s_566b8e0c4467a4::t_49e3b1cd91b391 35-36
+apps/web/src/lib/api/two-step-android-origin.db.test.ts
+  s_566b8e0c4467a4::t_0944a3c9661a65 1-77
+apps/web/src/lib/api/two-step-passkeys.db.test.ts
+  s_566b8e0c4467a4::t_51e3f98c5b252d 23-26,31-35,608-610
+apps/web/src/lib/app-links.server.ts
+  s_566b8e0c4467a4::t_7af7d2338445c0 67-68
+compose.yaml
+  s_566b8e0c4467a4::t_4f8e2d1dd6be64 142
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_0e4bf5099b1d5b 880-883,886,889,2553
+docs/two-step-design.md
+  s_566b8e0c4467a4::t_d16e5f312dacaa 584,894
+packages/auth/src/webauthn.ts
+  s_566b8e0c4467a4::t_172e22a2278481 14,22-24,59-62
+packages/env/src/two-step.test.ts
+  s_566b8e0c4467a4::t_2fcfd191e294a6 150-178
+packages/env/src/two-step.ts
+  s_566b8e0c4467a4::t_26ba1545c62303 20-23,40,44-49,51-95,133
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9dec91e85c7bc1e200992234a77b20bbe62fa1c0",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
