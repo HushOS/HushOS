@@ -1,0 +1,31 @@
+apps/web/src/lib/api/notifications.server.ts
+  s_566b8e0c4467a4::t_162fdeaa8eb1d2 3,8,20-28,36-43,96-102
+apps/web/src/lib/api/two-step-push.db.test.ts
+  s_566b8e0c4467a4::t_a504f0e97c8519 235-270,272-275,277-353
+packages/auth/src/two-step.ts
+  s_566b8e0c4467a4::t_0c14eb7710cda2 462-466,524-533,579-586
+packages/db/src/notifications.ts
+  s_566b8e0c4467a4::t_1dbbd82de86946 7,179-184
+packages/db/src/schema/notifications.ts
+  s_566b8e0c4467a4::t_9d909faa4e2b3c 74-109
+packages/db/src/two-step.core.ts
+  s_566b8e0c4467a4::t_da2d908d8029c4 410-423,528
+packages/db/src/two-step.ts
+  s_566b8e0c4467a4::t_30c2d320a1a3ad 110,685,705
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "17ae801937758a541a15a235d15125abcbef5621",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
