@@ -372,7 +372,7 @@ Drizzle Kit reads `packages/db/drizzle.config.ts`. It uses `MIGRATION_DATABASE_U
 
 ## Background jobs
 
-`@hushos/jobs` is the background worker, pg-boss on the same Postgres. It sweeps expired auth rows, reconciles billing, and runs Drive's expiry, purge, replication, deletion, audit, orphan-sweep and tiering jobs.
+`@hushos/jobs` is the background worker, pg-boss on the same Postgres. It sweeps expired auth rows, re-seals authenticator secrets after a rotation of the two-step key, reconciles billing, and runs Drive's expiry, purge, replication, deletion, audit, orphan-sweep and tiering jobs.
 
 | Where                         | What                                    |
 | ----------------------------- | --------------------------------------- |

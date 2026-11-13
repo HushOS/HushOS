@@ -108,6 +108,7 @@ The worker runs background jobs with [pg-boss](https://pgboss.io). pg-boss keeps
 | Job                    | When                  | What it does                                                                                                                                                                                                 |
 | ---------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Auth cleanup           | Every five minutes    | Sweeps expired sessions, attempts and rate-limit rows                                                                                                                                                        |
+| Two-step re-seal       | Every ten minutes     | Moves authenticator secrets sealed under an older two-step key to the current one. See [Two-step sign-in](#two-step-sign-in)                                                                                 |
 | Billing reconciliation | Daily                 | Re-reads every billing customer from the provider, when billing is enabled. Queues the end of any pooled family member's personal plan still live or not yet refunded                                        |
 | Dissolved family plans | When queued           | Sets a dissolved family's plan that can still charge, or a renewing plan whose payer is no longer in the family, to end at its period's end, with no refund. See [Dissolved families](#dissolved-families)   |
 | End personal plans     | When queued           | Ends a family member's own personal plan at Polar once their files draw from the family's pool, and refunds the unused days. See [Members who pay for a personal plan](#members-who-pay-for-a-personal-plan) |
@@ -140,6 +141,7 @@ What the worker needs:
 - **Optional:** the `STORAGE_REPLICA_*` and `STORAGE_EVIDENCE_*` settings.
 - **With billing enabled:** `APP_ORIGIN`, `BILLING_PROVIDER`, `POLAR_ACCESS_TOKEN`, `POLAR_ENVIRONMENT` and `BILLING_GRACE_DAYS`. Never the webhook secret.
 - **With families on:** `GROUPS_ENABLED`, which the worker reads as the web service does. Give both the same value.
+- **For two-step sign-in:** the same `TWO_STEP_KEY` and `TWO_STEP_PREVIOUS_KEY` (or their `_FILE` forms) as the web service, and `OPAQUE_SERVER_SETUP` when you keep the setup in the environment. The worker re-seals authenticator secrets after a key rotation. See [Two-step sign-in](#two-step-sign-in).
 - **With families on, for email:** `APP_ORIGIN` and the same `EMAIL_*` settings as the web service, plus the `SMTP_*`, `RESEND_API_KEY` or `AWS_*` ones its adapter uses.
 
 What the worker emails, with families on:
@@ -855,14 +857,14 @@ Off by default while the apps that show them are built: `NOTIFICATIONS_ENABLED=t
 - **The phone apps** can only be reached through Apple and Google with HushOS's own credentials, so pings for them go to the relay: `PUSH_RELAY_URL`, `https://push.hushos.com` by default. Set it empty to send none.
     - The server names its relay to the apps in `GET /api/notifications/settings` (`relay`). An app registers its token there and hands the server only the handle.
     - The apps use `https://push.hushos.com` only (a debug build also a relay on the developer's computer). A server with `PUSH_RELAY_URL` empty, or naming another relay, gets no phone pushes, and the apps hide their Notifications section: a push token is never handed to a host a server chose.
-- **What the relay learns:** that a handle got a ping, from your server's address, at a time, and its class: `security` (a sign-in, a device removed) or `other`. It holds each device's APNs or FCM token, which identifies the device to Apple or Google, never the account or what happened. Apple and Google learn that a device received a ping at a time, and its tag, which stays the same for each account on that device: they can tell how many HushOS accounts a phone holds and how often each is pinged.
+- **What the relay learns:** that a handle got a ping, from your server's address, at a time, and its class: `security` (a sign-in, a device removed, a change to two-step sign-in) or `other`. It holds each device's APNs or FCM token, which identifies the device to Apple or Google, never the account or what happened. Apple and Google learn that a device received a ping at a time, and its tag, which stays the same for each account on that device: they can tell how many HushOS accounts a phone holds and how often each is pinged.
 - **A ping can locate a device.** Every ping wakes the device to fetch from your server, so your server, or anyone who learns a handle, can make a phone connect and log its address, up to the relay's limits. Every ping shows a notification, so this is seen, not prevented.
 - **Browsers** need no relay: the server pushes to the browser's own push service (Google's, Mozilla's, Apple's or Microsoft's, and no other host), encrypted to the browser and signed with this server's VAPID key, which it makes at first use and keeps in the database (`server_secrets`). The push carries only the event id; an open, unlocked HushOS tab writes the words, and otherwise the browser shows "New activity in HushOS". The push service learns that a browser received an encrypted push at a time.
 - **What the server keeps:** each device's relay handle or browser subscription, the events for 30 days, and two toggles per account (Shared with you, Families). Security notices cannot be turned off.
 
 ## Two-step sign-in
 
-Off by default: `TWO_STEP_ENABLED=true` lets accounts turn it on. Only `true` and `false` are accepted; any other value (`1`, `yes`) fails the environment check, so the web service answers 500 and fails its health check. Only the web service reads it and the two keys below; the worker only trims the security log. The design is `docs/two-step-design.md`.
+Off by default: `TWO_STEP_ENABLED=true` lets accounts turn it on. Only `true` and `false` are accepted; any other value (`1`, `yes`) fails the environment check, so the web service answers 500 and fails its health check. Only the web service reads it. The web service and the worker both read the two keys below, and must be given the same ones: the worker re-seals authenticator secrets after a key rotation, and trims the security log. The design is `docs/two-step-design.md`.
 
 - **What it is.** After the password, an account that has the step on gets no session and no keys until it passes a second step: a code from an authenticator app, a backup code, or its recovery phrase. The same step is asked before a password change, a key rotation, deleting the account, and any change to the step itself.
 - **What it protects.** It is the server's rule. It stops someone who has a password from signing in to your server. It does not change how files are encrypted, and it does nothing against whoever controls the server, or holds a copy of its database with the OPAQUE setup.
@@ -872,12 +874,61 @@ Off by default: `TWO_STEP_ENABLED=true` lets accounts turn it on. Only `true` an
     - Unset, the key is derived from the OPAQUE server setup (HKDF-SHA-256, with its own `info`), wherever the setup lives. Moving the setup from the database to the environment changes nothing here.
     - Keep it outside the database, as you keep the setup. With the setup in `server_secrets`, the derived key sits beside what it seals and protects nothing against a copy of the database.
     - To make one: `openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`.
-    - Both keys are read from the environment only. There is no `TWO_STEP_KEY_FILE` or `TWO_STEP_PREVIOUS_KEY_FILE` yet.
-- **Rotating the key.** Set the new key as `TWO_STEP_KEY` and the old one as `TWO_STEP_PREVIOUS_KEY`.
+    - **From a file:** set `TWO_STEP_KEY_FILE` to the path of a file that holds the key, instead of `TWO_STEP_KEY`: a Docker or Kubernetes secret mounted into the container, so the key is in no environment listing. `TWO_STEP_PREVIOUS_KEY_FILE` does the same for the previous key.
+        - The file holds the key and nothing else. A newline at its end is ignored.
+        - It must be readable by the user the container runs as (`bun`).
+        - These fail the environment check, and what a file holds is never printed: a key set both ways (`TWO_STEP_KEY` and `TWO_STEP_KEY_FILE`), a file that is missing or cannot be read, an empty file, and one that does not hold a key. The web service then answers 500 and fails its health check, and the worker exits when it starts. A file is never read as "no key": the server would seal under the derived key while you believe it uses yours.
+        - `compose.yaml` passes both variables to the web service and the worker. Mounting the secret is yours:
+
+            ```yaml
+            services:
+                web:
+                    secrets: [two_step_key]
+                    environment:
+                        TWO_STEP_KEY_FILE: /run/secrets/two_step_key
+                worker:
+                    secrets: [two_step_key]
+                    environment:
+                        TWO_STEP_KEY_FILE: /run/secrets/two_step_key
+            secrets:
+                two_step_key:
+                    file: ./secrets/two_step_key
+            ```
+
+    - **Give the web service and the worker the same keys.** The worker also needs the OPAQUE setup the derived key comes from: `OPAQUE_SERVER_SETUP` when you keep it in the environment (`compose.yaml` passes it to both), otherwise it reads the setup from `server_secrets`, as the web service does. A worker without it cannot open what is sealed under the derived key, and leaves those rows where they are.
+- **Rotating the key.** Set the new key as `TWO_STEP_KEY` and the old one as `TWO_STEP_PREVIOUS_KEY`, on the web service and the worker, and restart both.
     - Each row records which key it was made under, and the server reads under the current key, the previous one, and the derived one. So setting `TWO_STEP_KEY` for the first time needs no previous key.
-    - **Only one rotation of an explicit key is safe for now.** Nothing re-seals older rows yet, and the server knows three keys at most: the current one, the previous one and the derived one. Going from the derived key to a first `TWO_STEP_KEY` loses nothing, and neither does one rotation after that, with the old key kept as `TWO_STEP_PREVIOUS_KEY` for as long as the instance runs. A second rotation drops the key before the previous one, and every authenticator secret and backup-code set still under it stops working. Wait for a release that re-seals before rotating again.
-    - A row whose key the server no longer has is never treated as a wrong answer. The person is told that two-step sign-in is unavailable on this server right now (503) and to use their recovery phrase, and nothing is counted against them. The server logs an error with the row's kind and the id of the key it was made under (`twoStep.row`, `twoStep.sealedWith`; the id is the first 8 bytes of the key's SHA-256, not a secret). Putting the missing key back as `TWO_STEP_PREVIOUS_KEY` repairs it. Until then only the recovery phrase gets that person in. A backup-code set is unavailable only when none of its unused codes is under a key the server has.
-    - Backup codes can never be re-keyed, because the server never holds them in plain text. A set keeps verifying under its own key until its owner makes a new one.
+    - **The worker re-seals.** When it starts and every ten minutes, it opens every authenticator secret that is under an older key and seals it under the current one. The secret does not change, so nobody's authenticator app notices, and a sign-in at the same moment is not disturbed.
+    - **It follows the web service.** The web service records the id of the key it seals under when it answers its first health check after starting (and at the first second step it checks). The worker re-seals only when that is its own current key. A worker that was given a key the web service does not have moves nothing and logs `reseal: "waiting"`, with both ids. So a slip in one service's settings cannot move people's secrets to a key the other cannot read.
+    - **How you know it has finished.** Each run of the queue `auth.two-step-reseal` logs one event. Its `twoStep` field has:
+
+        | Field              | Meaning                                                                                                    |
+        | ------------------ | ---------------------------------------------------------------------------------------------------------- |
+        | `reseal`           | `done`; `waiting` (see above); or `no-key`, when the worker has neither a `TWO_STEP_KEY` nor a setup       |
+        | `sealedWith`       | The id of the current key                                                                                  |
+        | `moved`            | Secrets this run moved to the current key                                                                  |
+        | `left`             | Authenticator secrets still under another key after this run. **The rotation has finished when this is 0** |
+        | `leftUnder`        | The same, by key id                                                                                        |
+        | `unknown`          | Secrets under a key the worker does not have, by key id. They are left exactly as they are                 |
+        | `unopened`         | Secrets that did not open under the key they name: damaged, or not written by the server. Left as they are |
+        | `changed`          | Secrets that changed while the run was writing them. The next run takes them                               |
+        | `backupCodesUnder` | Accounts that still have unused backup codes under another key, by key id (see below)                      |
+
+        A key's id is the first 8 bytes of its SHA-256, in hex. It is not a secret. To work one out:
+
+        ```bash
+        printf '%s=' "$TWO_STEP_KEY" | tr '_-' '/+' | openssl base64 -d -A | openssl dgst -sha256 -r | cut -c1-16
+        ```
+
+        The database says the same thing as `leftUnder`:
+
+        ```sql
+        select encode(totp_key_id, 'hex') as key_id, count(*) from two_step_factors where kind = 'totp' group by 1;
+        ```
+
+    - **Rotating again.** Once a run says `left: 0`, no authenticator secret needs the previous key any more, and the next rotation can take its place. Rotations can follow one another, each after the worker has finished the one before. Before a run has said so, a second rotation drops a key that secrets are still under.
+    - **Backup codes are never re-keyed,** because the server never holds them in plain text. A set keeps verifying under its own key until its owner makes a new one, or has used every code. `backupCodesUnder` counts the accounts that still have unused codes under each older key. Dropping a key while that count is not 0 makes those accounts' backup codes unavailable, until they make a new set in their settings; their authenticator app and their recovery phrase still pass. Sets under the derived key are never lost: that key is always there.
+    - A row whose key the server no longer has is never treated as a wrong answer. The person is told that two-step sign-in is unavailable on this server right now (503) and to use their recovery phrase, and nothing is counted against them. The server logs an error with the row's kind and the id of the key it was made under (`twoStep.row`, `twoStep.sealedWith`). Putting the missing key back as `TWO_STEP_PREVIOUS_KEY`, on the web service and the worker, repairs it, and the worker then moves the secret to the current key. Until then only the recovery phrase gets that person in. A backup-code set is unavailable only when none of its unused codes is under a key the server has.
 - **What the server keeps:**
     - each method's kind, when it was added, and when it was last used, to the hour;
     - each authenticator secret, sealed under the key above, which the running server can open;
@@ -886,7 +937,7 @@ Off by default: `TWO_STEP_ENABLED=true` lets accounts turn it on. Only `true` an
 - **Limits on wrong answers.** A step allows five answers. Codes, from an app or a backup set, have a budget of ten in 15 minutes. Each known device has its own, for sign-ins that prove the device's key and for changes made from its session; every sign-in that proves no device shares one. Wrong answers in a row are also counted, and the hundredth from devices HushOS doesn't recognise pauses the authenticator app on such devices until a backup code or the recovery phrase is used.
     - The 15-minute budgets are rate-limit buckets under [the server hash key](#the-server-hash-key). With the OPAQUE setup kept in the database, they count per process and start over when a process restarts. So do the hourly caps on the failed-step notice (one) and on failed-step lines in the security log (ten).
     - The count to 100 is a row in the database: it holds across processes and restarts, whatever the setup.
-- **Notices.** Every change to the step, a backup code or the recovery phrase used, and a run of wrong answers after a correct password are emailed to the account. They cannot be turned off, and they name only the kind of method and the time. They go by email only: the apps' push notifications do not carry them yet.
+- **Notices.** Every change to the step, a backup code or the recovery phrase used, and a run of wrong answers after a correct password are emailed to the account. They cannot be turned off, and they name only the kind of method and the time. With [notifications](#notifications) on, each also goes to the account's devices, as every security notice does: the push carries an event id, and the device writes the words ("Two-step sign-in is on."). A phone app from before this release shows "New activity in HushOS" for them. A change that signs a device out ends its push registration, so that device hears by email alone.
 - **You can turn anyone's step off.** Anyone with write access to the database can delete a person's methods, because the step is a server rule. The management area has no button for it.
 - **Losing everything.** The recovery phrase passes the step. Someone who has lost every method, their backup codes and the phrase cannot sign in, and neither email nor the operator's pages can let them in.
 - **Rolling back** past the release that added the tables is covered under [Release migration notes](#release-migration-notes).
@@ -2414,3 +2465,34 @@ psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f packages/db/drizzle/2026111
 - Because it locks `two_step_factors` first, it can deadlock with a sign-in that is under way. Postgres then aborts one of the two. The script is one transaction, so it applies whole or not at all: stop the app first, or run it again.
 - Then run the previous release's images only: this release's worker waits for the migrations and exits without them.
 - `packages/db/src/two-step.migration.test.ts` runs both scripts against a migrated database and checks that the schema is exactly what it was before.
+
+#### Two-step notices release (`20261113170753_two_step_notices`)
+
+This release sends two-step sign-in's security notices to the account's devices as well as by email, re-seals authenticator secrets after a rotation of the two-step key, and reads the two-step keys from files ([Two-step sign-in](#two-step-sign-in)).
+
+What the migration does:
+
+- It replaces the check on `notification_events.kind` with one that also accepts the thirteen kinds of two-step notice. No row changes.
+- It takes an exclusive lock on `notification_events` and reads it once (30 days of events at most). Notifications recorded or fetched meanwhile wait: milliseconds. The lock waits at most five seconds (`lock_timeout`); not had in time, the migration fails with nothing applied. Run it again.
+
+What changes for the worker:
+
+- It now reads `TWO_STEP_KEY`, `TWO_STEP_PREVIOUS_KEY` and their `_FILE` forms, and `OPAQUE_SERVER_SETUP`. Give it the same values as the web service. `compose.yaml` does; on a platform where the worker is its own service, add them there.
+- A worker without them does no harm. It has only the keys it was given, moves nothing until the web service seals under its current key, and leaves every row it cannot open as it is.
+- The web service writes one row to `server_secrets`, `two-step-sealing-key-id`: the id of the key it seals under, not a secret.
+
+Containers of the previous release beside the new ones:
+
+- A previous web container cannot serve an event of a new kind: its reply fails its own check. A device that asks it for one gets 500, and shows "New activity in HushOS" for that push. A device whose list reaches one gets 500 for that request and is not offered that page of its list again. The email carries the notice either way.
+- A previous web container still on the old two-step key cannot open a secret the new worker has already moved to the new one. It answers that sign-in 503 (`step-unavailable`), counts nothing, and the person's next try reaches a new container. The worker waits for a new web container before it moves anything.
+
+To roll back to the previous release:
+
+- Delete the events it cannot serve first. They stay for 30 days otherwise, and a device whose list reaches one gets 500 and loses that page of its list (up to 100 events):
+
+    ```sql
+    delete from notification_events where kind in ('two-step-on', 'two-step-off', 'two-step-app-added', 'two-step-app-removed', 'backup-codes-made', 'backup-code-used', 'phrase-used', 'phrase-replaced', 'password-reset', 'account-key-rotated', 'step-failed', 'change-step-failed', 'totp-frozen');
+    ```
+
+- The schema can stay: the previous release writes none of the new kinds, and the wider check refuses nothing it writes. This release's worker exits without the migration, and the previous worker does not look for it.
+- Keep `TWO_STEP_KEY` and `TWO_STEP_PREVIOUS_KEY` as they are. Secrets the worker moved to the current key stay readable, since the previous release reads under the same keys. It does not read the `_FILE` forms: put the keys in the variables before rolling back, or it seals under the derived key and cannot open what is under yours.

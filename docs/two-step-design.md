@@ -2,7 +2,7 @@
 
 This document adds an optional second step to signing in to HushOS: a code from an authenticator app (TOTP), a security key (WebAuthn), or a backup code, asked for after the password and before the server hands over anything. It says what that step protects in an end-to-end encrypted system and what it does not, where it sits in each flow, how a person gets back in without it, and how it ships on the web and the apps. It sits beside `docs/devices-design.md` (Approve new devices, Keys need a device) and changes nothing there; section 1 says how the three fit together.
 
-Written on 21 October 2026, and revised the same day after an independent review: the apps' browser path for security keys, code budgets for known devices, where the two-step key comes from, the phrase's salt and justification, the counter rule, policies, guardians, the security log and the phones' sign-in. Section 11 lists the decisions the owner had to make, each with a recommendation; all nine are answered below it. Steps 1 to 3 of the implementation plan (section 10) are built, behind `TWO_STEP_ENABLED`, which is off: the server and the web app. The same section lists what the flag still waits for.
+Written on 21 October 2026, and revised the same day after an independent review: the apps' browser path for security keys, code budgets for known devices, where the two-step key comes from, the phrase's salt and justification, the counter rule, policies, guardians, the security log and the phones' sign-in. Section 11 lists the decisions the owner had to make, each with a recommendation; all nine are answered below it. Steps 1 to 6 of the implementation plan (section 10) are built, behind `TWO_STEP_ENABLED`: the server, the web app, the phone apps, and what the first steps had left out (re-sealing after a key rotation, the keys from files, push for the notices). The same section lists what comes next.
 
 The recommendations, in short:
 
@@ -517,7 +517,7 @@ After the phrase passes the step, the session's settings page opens on Two-step 
 
 ## 7. Notices
 
-Every change to the step is a security notice to the account's email, and to its devices by push (`docs/devices-design.md` 5). Push for these notices is not built yet (section 10): until it is, they go by email only. None of these can be turned off:
+Every change to the step is a security notice to the account's email, and to its devices by push (`docs/devices-design.md` 5). None of these can be turned off:
 
 | Event                                                                                                                 | Says                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -541,6 +541,15 @@ Every change to the step is a security notice to the account's email, and to its
 - an address or browser.
 
 They name only the **kind** of method and the time.
+
+**By push,** each notice in the table that is sent today is also an event for the account's devices, through the pipeline every other security notice uses (`docs/devices-design.md` 5):
+
+- **What is sent:** the event's kind is the notice's (`two-step-on`, `two-step-off`, `two-step-app-added`, `two-step-app-removed`, `backup-codes-made`, `backup-code-used`, `phrase-used`, `phrase-replaced`, `password-reset`, `account-key-rotated`, `step-failed`, `change-step-failed`, `totp-frozen`). The push carries the event's id and nothing else. The device fetches the event over its own session and gets the kind, and for a used backup code how many are left. There is no name in the event to fetch.
+- **The words** are written on the device and say what the email's subject says: "Two-step sign-in is on.", "A backup code was used. 7 are left.", "Someone signed in with your password but did not pass the second step." The web writes them in an open, unlocked tab (`apps/web/src/lib/web-push.ts`), the phones in the Rust core both apps share (`crates/hushos-core/src/notifications.rs`). A tap opens the account's settings.
+- **Who hears:** every device of the account that is registered for pushes and not removed, the one that made the change included. A change that signs devices out (a reset signs out all of them, a rotation the others) ends their push registrations with their sessions, so those devices hear by email alone.
+- **When it is sent:** exactly when the email is, under the same budgets (below): a notice that is not emailed is not pushed. A push that fails never holds back the email, and the email never waits for the push.
+- **An app from before this** does not know the new kinds, and shows "New activity in HushOS", as it does for any kind it cannot read.
+- **Not turned off:** they are security notices, so no setting stops them, as for a new sign-in. With `NOTIFICATIONS_ENABLED=false` nothing is pushed for any notice, and the email is the notice.
 
 **The new-device notice** that exists today says "Signed in with: Your password". With the step on it names both: "Your password and a security key", "Your password and an authenticator code", "Your password and a backup code", or "Your password and your recovery phrase".
 
@@ -570,10 +579,22 @@ Settings › Security gets a list, **Recent security activity**, so a person can
 | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `TWO_STEP_ENABLED`                      | `true` to let accounts turn the step on. Off, the settings screen and routes answer 501, and existing factors are **still enforced** at sign-in. Default `false` in release A, `true` from release B                                                                                                                                                                                                                                                                                                                                                                                      |
 | `TWO_STEP_KEY` (or `TWO_STEP_KEY_FILE`) | Optional, 32 bytes, base64url. Seals TOTP secrets and keys the backup-code hash. Unset, the key is derived from the OPAQUE server setup wherever it lives (`serverSetup()` in `packages/auth/src/server.ts`): `HKDF-SHA-256(setup, salt = empty, info = "hushos/two-step/key/v1", 32)`. The `info` differs from the server hash key's (`"hushos/server/hash-key/v1"`), so the two keys are independent. The setup is the same value in the environment or in `server_secrets`, so moving it from the database to the environment, as the self-hosting guide advises, changes nothing here |
-| `TWO_STEP_PREVIOUS_KEY` (or `_FILE`)    | During a rotation of an explicit `TWO_STEP_KEY`: the old key. Each row records its key id (the first 8 bytes of `SHA-256(key)`), and the worker reseals TOTP secrets under the current key. The derived key needs no entry here: it is always available, so setting `TWO_STEP_KEY` for the first time is a rotation like any other. Backup codes cannot be re-keyed (the server never holds them in plain text), so each set keeps verifying under its own key id until the person makes a new one; an old explicit key has to stay until then                                            |
+| `TWO_STEP_PREVIOUS_KEY` (or `_FILE`)    | During a rotation of an explicit `TWO_STEP_KEY`: the old key. Each row records its key id (the first 8 bytes of `SHA-256(key)`), and the worker reseals TOTP secrets under the current key (below). The derived key needs no entry here: it is always available, so setting `TWO_STEP_KEY` for the first time is a rotation like any other. Backup codes cannot be re-keyed (the server never holds them in plain text), so each set keeps verifying under its own key id until the person makes a new one; an old explicit key has to stay until then                                    |
 | `WEBAUTHN_ANDROID_ORIGINS`              | The `android:apk-key-hash:` origins accepted beside `APP_ORIGIN`. hushos.com sets the HushOS app's; self-hosted servers leave it empty and use the browser path (section 6)                                                                                                                                                                                                                                                                                                                                                                                                               |
 
-**Not built yet** (section 10): the `_FILE` forms of both keys, and the worker that re-seals. Until then the keys are read from the environment only, and nothing moves a row to a newer key. The server reads under three keys at most (the current one, the previous one and the derived one), so only one rotation of an explicit key is safe; a second one drops the key before the previous one, with every secret and code set still under it.
+**The keys from files.** `TWO_STEP_KEY_FILE` and `TWO_STEP_PREVIOUS_KEY_FILE` name a file that holds the key (a Docker or Kubernetes secret), read once at start by `packages/env/src/two-step.ts`, which the web service and the worker share. A newline at the end is not part of the key. A key set both ways is refused, and so is a file that is missing, unreadable or empty: read as "no key", the server would seal under the derived key while its operator believes it uses the one in the file. What a file holds is never printed.
+
+**Re-sealing after a rotation.** The worker moves every TOTP secret that is not under the current key to it (`auth.two-step-reseal`, every ten minutes and when the worker starts; `resealTwoStepSecrets` in `packages/auth/src/two-step-keys.ts`):
+
+- **How:** each row is opened with the key its key id names and sealed again under the current key, with a new nonce and the same associated data but for the key id. The secret is the same secret, so the person's app goes on showing the right codes.
+- **The same keys as the web service:** the worker builds its keys from the same settings (the two variables or their files, and the OPAQUE setup from the environment or `server_secrets`), with the same code. It never makes a setup: with none to read and no `TWO_STEP_KEY` it has no key and does nothing.
+- **Only towards the web service's key:** the web service writes the id of the key it seals under to `server_secrets` (`two-step-sealing-key-id`; an id, not a secret) when it answers its first health check and when it first builds its keys. The worker re-seals only when that id is its own current key's. Re-sealing overwrites the old seal, so a worker given a key the web service lacks, by a slip or ahead of a rollout, must not be followed: it waits, and says so in its log.
+- **Safe beside sign-ins:** the write replaces a row only while it still holds exactly the key id, nonce and sealed bytes that were read, in one statement, and writes only those three columns. A sign-in at the same moment reads the row before or after, whole either way. `totp_last_step` is never written, so a used code stays used. A row replaced by a new app, removed, or already moved by another run is left as it is.
+- **What it leaves:** a row under a key the worker does not have, and a row that does not open under the key it names (damaged, or sealed bytes copied from another row: the associated data names the account and the factor). Both are left byte for byte and counted. Re-sealing a row that did not open would give it a fresh, valid seal.
+- **Idempotent and batched:** one pass in id order, a page at a time; a second run finds nothing the first one moved.
+- **What it logs:** one event per run, with counts and key ids only: `moved`, `changed`, `unopened`, `unknown` (by key id), `left` (TOTP secrets still under another key), `leftUnder` and `backupCodesUnder` (accounts with unused backup codes under another key). Never a key, a secret or sealed bytes. An operator knows a rotation has finished when a run says `left: 0`.
+
+So rotations can follow one another, each after the worker has finished the one before. The server still reads under three keys at most (the current one, the previous one and the derived one). What an older explicit key still holds after re-sealing is backup codes only: a set under a key that has since been dropped is unavailable, and its owner makes a new one.
 
 **A row under a key the server no longer has** is the server's fault, never a wrong answer:
 
@@ -639,6 +660,8 @@ WebAuthn public keys are not secret.
 
 **An account has the step on** exactly when it has a confirmed factor. No separate flag can disagree with the factors.
 
+`notification_events` (`docs/devices-design.md` 5) gains the kinds of section 7's notices in its `kind` check. `server_secrets` gains one row, `two-step-sealing-key-id` (section 8).
+
 ### Routes
 
 Base64url without padding; ids lowercase UUIDs, as elsewhere.
@@ -672,6 +695,7 @@ Base64url without padding; ids lowercase UUIDs, as elsewhere.
     **What it does not cover:** step-ups. An older container also skips the step at a password change, a rotation and account deletion, since its `/auth/security/finish` and `/auth/delete/finish` know nothing of it. Only a session that already exists can get there, and it still needs the password. So the narrow case of section 4 (a live session and a watched password) is open again on older containers for as long as they run. Closing it would need a guard on every table those changes write (`opaque_credentials`, `account_keys`, the deletion of `users`), each checking a step grant consumed in the same transaction. That is more machinery than a rollback window is worth. The self-hosting guide says to finish a rollout before people turn the step on, and not to roll back past release A.
 
 4. **No existing data changes:** nobody has a factor until release B lets them make one.
+5. **The notices' kinds** (step 6): `notification_events_kind_valid` is replaced by one that also accepts section 7's kinds, with `lock_timeout`. An older release cannot serve an event of a new kind, so a rollback past it deletes those events first (`docs/self-hosting.md`).
 
 ### Tests that must exist
 
@@ -697,7 +721,9 @@ This is authentication, so AGENTS.md's rule for keys applies: repository tests i
     - a frozen authenticator app is refused for sign-ins without a device proof, while a key, a backup code and the phrase still pass, and a known device's code still passes.
 - **The sealed secret:**
     - a secret sealed for one user or factor does not open as another's (associated data);
-    - a row sealed under a previous key opens with `TWO_STEP_PREVIOUS_KEY` and is resealed by the worker;
+    - a row sealed under a previous key opens with `TWO_STEP_PREVIOUS_KEY` and is resealed by the worker, and its codes still sign in afterwards with the previous key no longer needed;
+    - re-sealing leaves a row under an unknown key, and one that does not open under the key it names, byte for byte; replaces a row only while it is still the row that was read (two runs for one row give one write); never changes `totp_last_step`; and moves nothing while the web service seals under another key;
+    - `TWO_STEP_KEY_FILE` gives the same key as the variable would; both set, a missing file and an empty one refuse to start;
     - the derived key is the same whether the OPAQUE setup comes from the environment or from `server_secrets`, so a secret sealed before the setup moves still opens after, and it differs from the server hash key.
 - **Backup codes:**
     - each works once, including under two concurrent requests;
@@ -734,6 +760,7 @@ This is authentication, so AGENTS.md's rule for keys applies: repository tests i
     - a guardian's removal of the child's methods is refused from `adult_from`, and appears in the child's security log.
 - **Notices:**
     - no notice carries a method's or device's name;
+    - a notice that is emailed pings every registered device of the account and no other account's, with an event id alone, whatever the account's toggles say; each kind is one a device can fetch; a relay that is down costs neither the action nor the email;
     - failed-step notices cannot exhaust the budget that would drop a "step turned off".
 - **End to end (Playwright):**
     - turn the step on with the QR secret read from the page, and sign in with a computed code;
@@ -750,10 +777,10 @@ One change per pull request, as AGENTS.md asks:
 3. **`feat(web)`:** settings (enrol, list, rename, remove, codes) and the sign-in step screen, with Playwright tests.
 4. **`feat(ios)` and `feat(android)`:** the step screen for codes, backup codes and the phrase, and `update-required`; the phrase statement in `crates/hushos-core` with the shared fixtures.
 5. **`docs`:** `docs/self-hosting.md` (the settings, the key, the trigger, rollback) and `docs/opaque-auth-design.md`.
-6. **`feat(auth)`:** what steps 1 and 2 left out, all of it needed before the flag goes on:
-    - **re-sealing on rotation:** the worker moves TOTP secrets to the current key (section 8). Until it does, only one rotation of an explicit key is safe;
-    - **`TWO_STEP_KEY_FILE` and `TWO_STEP_PREVIOUS_KEY_FILE`:** until then both keys are read from the environment only;
-    - **push for the step's notices** (section 7): until then they go by email only.
+6. **`feat(auth)`:** what steps 1 and 2 left out. Built:
+    - **re-sealing on rotation:** the worker moves TOTP secrets to the current key (section 8), so rotations can follow one another;
+    - **`TWO_STEP_KEY_FILE` and `TWO_STEP_PREVIOUS_KEY_FILE`:** each key from a mounted file (section 8);
+    - **push for the step's notices** (section 7), written on the web, iPhone and Android.
 7. **`chore(web)`:** turn `TWO_STEP_ENABLED` on at hushos.com once the apps from 4 are live in both stores and step 6 is in. The roadmap item moves to Shipped in the same PR.
 8. **`feat(auth)` and `feat(web)`:** security keys, registration and assertion, with the virtual-authenticator tests.
 9. **`feat(ios)` and `feat(android)`:** security keys natively on hushos.com, and the browser path for self-hosted servers (the static `/two-step/key` page; the verified `https://hushos.com/two-step/return` link, with `hushos://two-step-key` as the fallback).
