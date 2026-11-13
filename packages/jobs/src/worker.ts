@@ -12,6 +12,7 @@ import { groupsEnv } from '@hushos/env/groups';
 import { evidenceConfigured, replicaConfigured } from '@hushos/env/storage';
 import { cleanupExpired } from './jobs/cleanup-expired';
 import { groupsDissolveNotices, groupsPurgeDissolved } from './jobs/groups';
+import { twoStepReseal } from './jobs/two-step';
 import {
     driveAuditObjects,
     driveAuditReplica,
@@ -85,6 +86,23 @@ await boss.work<JobPayloads[typeof queues.cleanupExpired]>(
     { batchSize: 1, pollingIntervalSeconds: 5 },
     async ([job]) => {
         if (job) await cleanupExpired(job);
+    },
+);
+
+/*
+ * Hourly, and once now: authenticator secrets sealed under an older two-step key move to the
+ * current one (docs/two-step-design.md 8). Once now, because a key rotation restarts the
+ * worker; hourly, because a web container still on the old settings can seal a new secret
+ * under the old key after that. Whether accounts may turn the step on (TWO_STEP_ENABLED)
+ * changes nothing here: the secrets that exist are still read at every sign-in.
+ */
+await boss.schedule(queues.twoStepReseal, '50 * * * *', {}, { tz: 'UTC' });
+await boss.send(queues.twoStepReseal, {});
+await boss.work<JobPayloads[typeof queues.twoStepReseal]>(
+    queues.twoStepReseal,
+    { batchSize: 1, pollingIntervalSeconds: 30 },
+    async ([job]) => {
+        if (job) await twoStepReseal(job);
     },
 );
 

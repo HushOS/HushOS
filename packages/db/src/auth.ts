@@ -220,6 +220,15 @@ export async function getAccountKeyVersion(userId: string) {
     return row?.keyVersion ?? null;
 }
 
+/* A secret the server keeps for itself, as stored, or null when it was never made. Never makes one. */
+export async function getServerSecret(name: string) {
+    const [row] = await db
+        .select({ value: serverSecrets.value })
+        .from(serverSecrets)
+        .where(eq(serverSecrets.name, name));
+    return row?.value ?? null;
+}
+
 /*
  * A secret the server keeps for itself, made once: the first caller's value is
  * the one everyone reads afterwards, however many processes start at once, and

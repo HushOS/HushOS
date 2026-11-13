@@ -281,6 +281,7 @@
       "name": "@hushos/jobs",
       "version": "0.0.0",
       "dependencies": {
+        "@hushos/auth": "workspace:*",
         "@hushos/billing": "workspace:*",
         "@hushos/db": "workspace:*",
         "@hushos/drive": "workspace:*",

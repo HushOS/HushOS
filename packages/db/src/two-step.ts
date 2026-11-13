@@ -1,8 +1,21 @@
-import { and, asc, desc, eq, gt, isNotNull, isNull, ne, sql } from 'drizzle-orm';
+import {
+    and,
+    asc,
+    count,
+    countDistinct,
+    desc,
+    eq,
+    gt,
+    isNotNull,
+    isNull,
+    ne,
+    sql,
+} from 'drizzle-orm';
 import { db } from './client';
 import {
     accountDevices,
     accountSecurityEvents,
+    serverSecrets,
     sessions,
     twoStepAttempts,
     twoStepBackupCodes,
@@ -719,6 +732,158 @@ export async function openSteppedSession(input: {
         if (refusal.reason === 'spent') return { status: 'spent', failure: refusal.failure };
         return { status: refusal.reason === 'required' ? 'gone' : refusal.reason };
     }
+}
+
+/* ------------------------------------------------------------------------- */
+/* Re-sealing after a key rotation                                            */
+/* ------------------------------------------------------------------------- */
+
+/*
+ * After the two-step key is rotated, the worker moves each authenticator secret to the
+ * current key (docs/two-step-design.md 8). The repository still opens nothing: the worker
+ * reads sealed rows here, opens and seals them itself, and hands back sealed bytes. What is
+ * guaranteed here is that a row is replaced only if it is still, byte for byte, the row that
+ * was read, and that nothing but its seal changes.
+ */
+
+/* An authenticator secret as stored: what the seal's associated data names, and the sealed bytes. */
+export type SealedTotp = {
+    id: string;
+    userId: string;
+    keyId: Buffer;
+    nonce: Buffer;
+    sealedSecret: Buffer;
+};
+type Seal = Pick<SealedTotp, 'keyId' | 'nonce' | 'sealedSecret'>;
+
+/* The most rows one page hands over. */
+export const RESEAL_PAGE_LIMIT = 500;
+
+/*
+ * A page of the authenticator secrets sealed under any key but `keyId`, in id order, after
+ * `after`. Pending apps are included: one confirmed a minute later would otherwise stay
+ * under the old key. The caller walks the whole table once by passing the last id it got, so
+ * a row it could not move (no key for it) is passed, not met again and again.
+ */
+export async function listTotpSealedOutside(input: {
+    keyId: Buffer;
+    after?: string | null;
+    limit?: number;
+}): Promise<SealedTotp[]> {
+    const limit = Math.max(1, Math.min(input.limit ?? RESEAL_PAGE_LIMIT, RESEAL_PAGE_LIMIT));
+    const rows = await db
+        .select({
+            id: twoStepFactors.id,
+            userId: twoStepFactors.userId,
+            keyId: twoStepFactors.totpKeyId,
+            nonce: twoStepFactors.totpNonce,
+            sealedSecret: twoStepFactors.totpSecret,
+        })
+        .from(twoStepFactors)
+        .where(
+            and(
+                eq(twoStepFactors.kind, 'totp'),
+                ne(twoStepFactors.totpKeyId, input.keyId),
+                input.after ? gt(twoStepFactors.id, input.after) : undefined,
+            ),
+        )
+        .orderBy(asc(twoStepFactors.id))
+        .limit(limit);
+    return rows.flatMap((row) =>
+        row.keyId && row.nonce && row.sealedSecret
+            ? [{ ...row, keyId: row.keyId, nonce: row.nonce, sealedSecret: row.sealedSecret }]
+            : [],
+    );
+}
+
+/*
+ * Replaces one secret's seal: `to` is written only while the row still holds exactly `from`
+ * (its key id, nonce and sealed bytes), in one statement. So a row that was re-sealed by
+ * another run, replaced by a new app, removed, or changed by anything else since it was read
+ * is left as it is, and the answer says so (`false`). Only the three columns of the seal are
+ * written: the last accepted time step is never touched, so a re-seal cannot make a used code
+ * good again, and a sign-in that accepts a code at the same moment loses nothing.
+ */
+export async function resealTotpSecret(input: { id: string; from: Seal; to: Seal }) {
+    const moved = await db
+        .update(twoStepFactors)
+        .set({
+            totpKeyId: input.to.keyId,
+            totpNonce: input.to.nonce,
+            totpSecret: input.to.sealedSecret,
+        })
+        .where(
+            and(
+                eq(twoStepFactors.id, input.id),
+                eq(twoStepFactors.kind, 'totp'),
+                eq(twoStepFactors.totpKeyId, input.from.keyId),
+                eq(twoStepFactors.totpNonce, input.from.nonce),
+                eq(twoStepFactors.totpSecret, input.from.sealedSecret),
+            ),
+        )
+        .returning({ id: twoStepFactors.id });
+    return moved.length === 1;
+}
+
+/*
+ * How much is sealed or hashed under each key, by key id: authenticator secrets (pending ones
+ * too), and the accounts that still have an unused backup code under it. It is what tells an
+ * operator when an old key can go: backup codes are never re-keyed, so a set stays under the
+ * key it was made with until its owner makes a new one or uses it up.
+ */
+export async function sealedUnder() {
+    const [totp, backupCodes] = await Promise.all([
+        db
+            .select({ keyId: twoStepFactors.totpKeyId, secrets: count() })
+            .from(twoStepFactors)
+            .where(eq(twoStepFactors.kind, 'totp'))
+            .groupBy(twoStepFactors.totpKeyId),
+        db
+            .select({
+                keyId: twoStepBackupCodes.keyId,
+                accounts: countDistinct(twoStepBackupCodes.userId),
+            })
+            .from(twoStepBackupCodes)
+            .where(isNull(twoStepBackupCodes.usedAt))
+            .groupBy(twoStepBackupCodes.keyId),
+    ]);
+    return {
+        totp: totp.flatMap((row) =>
+            row.keyId ? [{ keyId: row.keyId, secrets: row.secrets }] : [],
+        ),
+        backupCodes,
+    };
+}
+
+/* Where the web service says which key it seals under. An id, not a secret. */
+const SEALING_KEY_NAME = 'two-step-sealing-key-id';
+
+/*
+ * The web service's word on which key it seals new secrets under: the key's id (the first 8
+ * bytes of its SHA-256, never the key). The worker re-seals only towards the key named here,
+ * so a worker that was given a key the web service does not have, by a slip or ahead of a
+ * rollout, moves nothing to a key that would then be read by nobody. The newest word wins.
+ */
+export async function announceSealingKey(keyId: Buffer) {
+    if (keyId.length !== 8) throw new Error('A two-step key id is 8 bytes.');
+    const value = keyId.toString('hex');
+    await db
+        .insert(serverSecrets)
+        .values({ name: SEALING_KEY_NAME, value })
+        .onConflictDoUpdate({
+            target: serverSecrets.name,
+            set: { value },
+            setWhere: ne(serverSecrets.value, value),
+        });
+}
+
+/* The id of the key the web service last said it seals under, or null when it has said nothing. */
+export async function announcedSealingKey() {
+    const [row] = await db
+        .select({ value: serverSecrets.value })
+        .from(serverSecrets)
+        .where(eq(serverSecrets.name, SEALING_KEY_NAME));
+    return row && /^[0-9a-f]{16}$/.test(row.value) ? Buffer.from(row.value, 'hex') : null;
 }
 
 /* ------------------------------------------------------------------------- */

@@ -7,7 +7,6 @@ import { opaqueEnv } from './opaque';
 export const authEnv = createEnv({
     extends: [appEnv, opaqueEnv],
     server: {
-        OPAQUE_SERVER_SETUP_ID: z.string().min(1).max(100).default('primary'),
         // Behind a reverse proxy, the header that carries the real client address
         // (for example `x-forwarded-for` or `cf-connecting-ip`). Unset: the socket address.
         TRUSTED_PROXY_HEADER: z

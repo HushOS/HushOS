@@ -6,7 +6,6 @@ import {
 } from '@hushos/crypto/two-step';
 import {
     base32,
-    deriveTwoStepKey,
     generateBackupCodes,
     generateTotpSecret,
     hashBackupCode,
@@ -14,7 +13,6 @@ import {
     sealTotpSecret,
     totpMatches,
     totpUri,
-    twoStepKeyId,
 } from '@hushos/crypto/two-step/server';
 import { authRepository, twoStepRepository } from '@hushos/db';
 import type { TwoStepMethod, TwoStepSessionPurpose } from '@hushos/db/schema';
@@ -25,6 +23,7 @@ import { log as serverLog } from '@hushos/logging';
 import { hash, noticeWhen, randomToken, serverSetup, supportedEnvelope } from './internal';
 import { consumeBoundAttempt, requireSession, startLogin } from './server';
 import { AuthError, SESSION_IDLE_SECONDS, TOKEN_PATTERN } from './tokens';
+import { twoStepKeyringFromEnv, type TwoStepKeyring } from './two-step-keys';
 
 /*
  * Two-step sign-in, the server's rule (docs/two-step-design.md). After the password, an
@@ -78,46 +77,40 @@ const CODE_BUDGET_MS = 15 * 60_000;
 /* The two-step key                                                           */
 /* ------------------------------------------------------------------------- */
 
-export type TwoStepKeyring = {
-    current: { key: Uint8Array; id: Buffer };
-    byId: Map<string, Uint8Array>;
-};
-
-/*
- * The key new secrets and codes are made under, and every key older rows may name: the
- * operator's TWO_STEP_KEY when set, its predecessor during a rotation, and always the key
- * derived from the OPAQUE server setup, which is what an instance used before it set one.
- * Nothing re-seals older rows yet, so a key that is in none of the three places is gone, and
- * what was sealed or hashed under it with it: only one rotation of an explicit key is safe.
- */
-export async function twoStepKeyring(input: {
-    serverSetup: string;
-    key?: string;
-    previousKey?: string;
-}): Promise<TwoStepKeyring> {
-    const decode = (value: string) => new Uint8Array(Buffer.from(value, 'base64url'));
-    const derived = await deriveTwoStepKey(decode(input.serverSetup));
-    const explicit = input.key ? decode(input.key) : null;
-    const previous = input.previousKey ? decode(input.previousKey) : null;
-    const byId = new Map<string, Uint8Array>();
-    for (const key of [derived, previous, explicit])
-        if (key) byId.set(Buffer.from(await twoStepKeyId(key)).toString('hex'), key);
-    const current = explicit ?? derived;
-    return { current: { key: current, id: Buffer.from(await twoStepKeyId(current)) }, byId };
-}
-
 let keyring: Promise<TwoStepKeyring> | undefined;
+/* This server's keys, built once. */
 function keys() {
-    keyring ??= (async () =>
-        twoStepKeyring({
-            serverSetup: await serverSetup(),
-            key: twoStepEnv.TWO_STEP_KEY,
-            previousKey: twoStepEnv.TWO_STEP_PREVIOUS_KEY,
-        }))().catch((error: unknown) => {
+    keyring ??= (async () => {
+        const ring = await twoStepKeyringFromEnv(await serverSetup());
+        // With a setup there is always a key: the derived one, when the operator set none.
+        if (!ring) throw new Error('This server has no two-step key.');
+        // Bookkeeping: if it fails, the keys still work, and `announceTwoStepKey` tries again.
+        await quietly('announce', () => announce(ring));
+        return ring;
+    })().catch((error: unknown) => {
         keyring = undefined;
         throw error;
     });
     return keyring;
+}
+
+/*
+ * Says which key this service seals new secrets under (its id, never the key). The worker
+ * re-seals older rows only towards the key named here (docs/two-step-design.md 8), so it
+ * never moves a secret to a key this service was not given.
+ */
+function announce(ring: TwoStepKeyring) {
+    return twoStepRepository.announceSealingKey(ring.current.id);
+}
+
+/*
+ * Builds this server's two-step keys and says which one it seals under, without waiting for
+ * someone's second step to need them. The web service calls it once it is ready, so a worker
+ * started after a key rotation is not left waiting for the next sign-in. It throws when the
+ * word could not be written, and the caller asks again.
+ */
+export async function announceTwoStepKey() {
+    await announce(await keys());
 }
 
 async function keyFor(keyId: Buffer) {
