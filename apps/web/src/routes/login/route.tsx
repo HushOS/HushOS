@@ -12,11 +12,9 @@ import { DeviceStorageUnreadable, TwoStepRequired } from '@hushos/auth/client';
 import { z } from 'zod';
 import { AuthInput } from '@/components/auth-input';
 import { AuthActions, AuthFields, AuthLayout, AuthNote, authLink } from '@/components/auth-layout';
-import { NewPhrase } from '@/components/new-phrase';
 import { SignInStep } from '@/components/sign-in-step';
 import { Button } from '@/components/ui/button';
 import { authClient } from '@/lib/auth-client';
-import { forgetNewPhrase, keptNewPhrase } from '@/lib/new-phrase';
 import { rememberReturn, returnTarget, safeReturnPath } from '@/lib/return-to';
 import { ensureSessionUser, sessionQueryOptions } from '@/lib/session';
 import { authError, emailValue } from '@/lib/form';
@@ -98,9 +96,6 @@ function LoginPage() {
     const [removed, setRemoved] = useState(false);
     // The password was right and the account asks for a second step: the card asks for it.
     const [step, setStep] = useState<StepChallenge | null>(null);
-    // A rotation in Account replaced the recovery phrase and this browser was not signed in
-    // again: the new words are shown before the form, since the step below may need them.
-    const [made, setMade] = useState(keptNewPhrase);
     // A sign-in left at its step holds the worker; leaving the page lets go of it, and of
     // nothing another form started (`owner`).
     const [owner] = useState(() => ({}));
@@ -110,7 +105,6 @@ function LoginPage() {
         // The form keeps what was typed and stays busy until the app replaces it:
         // emptied first, it would look for a moment as if signing in had failed.
         cue('success');
-        forgetNewPhrase();
         const queryClient = router.options.context.queryClient;
         queryClient.clear();
         // Known again before moving on: a public page (a shared link) reads the session from the cache,
@@ -182,24 +176,6 @@ function LoginPage() {
               }
             : notices[securityChanged]
         : null;
-    if (made)
-        return (
-            <NewPhrase
-                made={made}
-                action={
-                    <Button
-                        type="button"
-                        size="lg"
-                        onClick={() => {
-                            forgetNewPhrase();
-                            setMade(null);
-                        }}
-                    >
-                        Continue to sign in
-                    </Button>
-                }
-            />
-        );
     if (step)
         return (
             <AuthLayout

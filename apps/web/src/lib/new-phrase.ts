@@ -1,10 +1,17 @@
+import { createStore } from 'zustand/vanilla';
+
 /*
- * The recovery phrase a rotation just made, kept in this tab's memory on the way from the
- * dialog that made it to the sign-in page that shows it. A new recovery phrase or a new
- * account key replaces the phrase, and the old one stops working once the server accepts the
- * change. When this browser is then not signed in again, the page that would show the new
- * words is behind a sign-in whose second step may need them: so they are shown first, on the
- * sign-in page itself. Never stored: a reload forgets them, as any page showing a phrase does.
+ * The recovery phrase a rotation just made, held in this tab's memory for as long as it takes
+ * to show it. A new recovery phrase or a new account key replaces the phrase, and the old one
+ * stops working once the server accepts the change. When this browser is then not signed in
+ * again, the page that would show the new words is behind a sign-in whose second step may
+ * need them: so they are shown at once, over whatever page the person is on or lands on
+ * (`NewPhraseGate`, in the root), until they say they have saved them.
+ *
+ * Only the person who just made the change in this tab sees them. The words go the moment
+ * they are acknowledged, and the moment this browser is locked or signed out, here or in
+ * another tab: never left behind for whoever comes to the screen next. Never stored: a reload
+ * forgets them, as any page showing a phrase does.
  */
 export type NewPhrase = {
     phrase: string;
@@ -16,23 +23,25 @@ export type NewPhrase = {
     from: 'reset' | 'rotation';
 };
 
-/* How long the words wait to be shown: the walk from the dialog to the sign-in page, generously. */
-const KEPT_MS = 10 * 60_000;
+/* The auth store, as far as this needs it: a lock or a sign-out anywhere raises `lockRevision`. */
+type Locks = {
+    subscribe(
+        listener: (state: { lockRevision: number }, previous: { lockRevision: number }) => void,
+    ): () => void;
+};
 
-let kept: { made: NewPhrase; until: number } | null = null;
+export const newPhrase = createStore<{ made: NewPhrase | null }>(() => ({ made: null }));
+let unwatch: (() => void) | undefined;
 
-export function keepNewPhrase(made: NewPhrase) {
-    kept = { made, until: Date.now() + KEPT_MS };
-}
-/*
- * Read without forgetting: a page may render more than once before it has shown anything.
- * Words nobody came for are dropped: the browser was signed in after all (its session
- * arrived though the reply did not), and the app shows the phrase itself there.
- */
-export function keptNewPhrase() {
-    if (kept && Date.now() > kept.until) kept = null;
-    return kept?.made ?? null;
+export function keepNewPhrase(made: NewPhrase, auth: Locks) {
+    unwatch?.();
+    newPhrase.setState({ made });
+    unwatch = auth.subscribe((state, previous) => {
+        if (state.lockRevision !== previous.lockRevision) forgetNewPhrase();
+    });
 }
 export function forgetNewPhrase() {
-    kept = null;
+    unwatch?.();
+    unwatch = undefined;
+    newPhrase.setState({ made: null });
 }

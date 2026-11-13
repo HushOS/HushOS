@@ -21,7 +21,7 @@ import { succeedIdentity } from '@/lib/contacts';
 import { driveClient, driveError, driveOpenQueryOptions } from '@/lib/drive';
 import { authError } from '@/lib/form';
 import { cue } from '@/lib/sounds';
-import { keepNewPhrase } from '@/lib/new-phrase';
+import { showNewPhrase } from '@/lib/show-new-phrase';
 import { forgetDevice } from '@/lib/sign-out';
 import { useStepUp } from '@/lib/two-step';
 
@@ -355,6 +355,9 @@ export function NewKeyDialog({
         setPending(true);
         setError('');
         try {
+            // The panel that shows a new phrase when nothing else will, loaded before anything
+            // is changed: a page that could not load it must not replace the phrase.
+            await import('@/components/new-phrase');
             if (await step.ask()) {
                 setPending(false);
                 return;
@@ -371,8 +374,11 @@ export function NewKeyDialog({
                 // The old phrase is dead, or may be, and this browser is signed out: the new
                 // words go with the person to the sign-in page, which shows them first. The
                 // step there may need them, and nothing else would ever show them.
-                if (result.phrase)
-                    keepNewPhrase({
+                if (result.phrase) {
+                    // Shown at once, over whatever page comes next, until they are saved: the
+                    // sign-in page, or, with a session that is still good, the page that asks
+                    // to unlock. Gone on a lock or a sign-out, here or in another tab.
+                    showNewPhrase({
                         phrase: result.phrase,
                         applied: result.uncertain ? 'unknown' : true,
                         storage: result.storage
@@ -380,6 +386,8 @@ export function NewKeyDialog({
                             : null,
                         from: 'rotation',
                     });
+                    onOpenChange(false);
+                }
                 await router.navigate({
                     to: '/login',
                     search: {

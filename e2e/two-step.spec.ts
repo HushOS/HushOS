@@ -667,7 +667,7 @@ test('a new recovery phrase whose reply is lost does not lock out someone with o
 
     // On to the form. The password is the same; the step refuses the old phrase and takes
     // the words just shown.
-    await page.getByRole('button', { name: 'Continue to sign in' }).click();
+    await page.getByRole('button', { name: 'I’ve saved these words' }).click();
     await expect(page.getByRole('heading', { name: 'Welcome back' })).toBeVisible();
     await enterPassword(page, email);
     await expect(stepHeading(page)).toBeVisible({ timeout: 60_000 });
@@ -680,5 +680,68 @@ test('a new recovery phrase whose reply is lost does not lock out someone with o
     await page.getByLabel('Recovery phrase').fill(fresh);
     await page.getByRole('button', { name: 'Continue' }).click();
     await inApp(page);
+    await page.context().close();
+});
+
+test('a new recovery phrase is shown at once wherever the person lands, and is gone once saved: nothing of it is left for the signed-out screen', async ({
+    browser,
+}) => {
+    test.skip(!twoStepOn, 'Two-step sign-in is off (TWO_STEP_ENABLED).');
+    test.setTimeout(480_000);
+    const { page, email, phrase } = await account(browser);
+    const { app } = await turnOn(page);
+    await dialog(page).getByRole('button', { name: 'Done' }).click();
+
+    // The change is made and its session arrives, but the sign-in that follows it fails
+    // (here the connection; a device key that cannot be read does the same).
+    await page.route('**/api/auth/login/start', (route) => route.abort());
+    await page.getByRole('button', { name: 'Make a new phrase' }).click();
+    const make = dialog(page);
+    await make.getByLabel('Password', { exact: true }).fill(PASSWORD);
+    await make.getByRole('button', { name: 'Make a new phrase' }).click();
+    const code = make.getByLabel('Code from your authenticator app');
+    await expect(code).toBeVisible({ timeout: 60_000 });
+    await code.fill(await app.next());
+    await make.getByRole('button', { name: 'Make a new phrase' }).click();
+
+    // The session is still good, so the sign-in page sends the person on to the page that
+    // asks them to unlock. The new words are over it all the same: not behind the unlock.
+    const gate = page.locator('[data-new-phrase]');
+    await expect(gate.getByRole('heading', { name: 'Save your new recovery phrase' })).toBeVisible({
+        timeout: 120_000,
+    });
+    await expect(gate.getByText('Your old recovery phrase no longer works.')).toBeVisible();
+    const fresh = (await gate.getByRole('listitem').allInnerTexts())
+        .map((item) => item.trim().split(/\s+/).at(-1))
+        .join(' ');
+    expect(fresh.split(' ')).toHaveLength(24);
+    expect(fresh).not.toBe(phrase);
+    await expect(page).toHaveURL(/\/setup\/recovery-key/, { timeout: 60_000 });
+    await page.unroute('**/api/auth/login/start');
+
+    // Saved: the words leave the screen and the tab.
+    await gate.getByRole('button', { name: 'I’ve saved these words' }).click();
+    await expect(gate).toHaveCount(0);
+    await expect(page.getByText(fresh.split(' ').slice(0, 3).join(' '))).toHaveCount(0);
+
+    // Unlocking with the password shows the same phrase on its own page, as the account's.
+    await page.getByLabel('Password', { exact: true }).fill(PASSWORD);
+    await page.getByRole('button', { name: 'Unlock', exact: true }).click();
+    await expect(page.getByRole('list', { name: 'Recovery phrase' })).toBeVisible({
+        timeout: 60_000,
+    });
+    expect(await wordsOn(page)).toBe(fresh);
+    await saveKit(page);
+    await inApp(page);
+
+    // Signed out a moment later, the sign-in page shows no phrase to whoever is there.
+    await page.goto('/app/account', { waitUntil: 'networkidle' });
+    await signOut(page);
+    await expect(page.getByRole('heading', { name: 'Welcome back' })).toBeVisible();
+    await expect(page.locator('[data-new-phrase]')).toHaveCount(0);
+    await expect(page.getByRole('list', { name: 'Recovery phrase' })).toHaveCount(0);
+    await enterPassword(page, email);
+    await expect(stepHeading(page)).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByRole('list', { name: 'Recovery phrase' })).toHaveCount(0);
     await page.context().close();
 });

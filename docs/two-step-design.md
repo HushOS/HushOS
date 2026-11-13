@@ -311,7 +311,7 @@ A reset also **replaces the phrase**, so the phrase that answers is the new one,
 
 **A rotation from a signed-in session does the same.** A new recovery phrase and a new account key (`recovery-key` and `master-key` at `/auth/security/finish`) replace the phrase too, and end every session. If the reply is lost, the session it carried is lost with it, and the person is signed out with a phrase they were never shown. So the client keeps the new words before it sends the change, and:
 
-- whenever the change went through, or may have, and the browser is not signed in again, it shows the new words before the sign-in form;
+- whenever the change went through, or may have, and the device is not signed in again, it shows the new words at once, over whatever screen the person lands on, until they say they have saved them. Not only on the sign-in screen: with a session that is still good the person is sent to a screen that asks them to unlock, and that can need the step, and so the words, too. The words are held in memory only, and forgotten the moment they are acknowledged or the device is locked or signed out, so nobody who comes to the screen later sees them;
 - the sign-in after the change answers its step with the new phrase, as a reset's does;
 - whether it went through is read the same way, by version and never by the password signing in, which a rotation does not change: a session at the old credential version plus one, or a step whose `phrase.recoveryVersion` is the old one plus one, means it did; either at the old version, or the session the change was made from still being there, means it did not; with neither, the words are shown with "keep both until you have signed in".
 

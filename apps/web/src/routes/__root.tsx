@@ -15,6 +15,7 @@ import {
 import { createMiddleware } from '@tanstack/react-start';
 import { useEffect, useRef, type ReactNode } from 'react';
 
+import { NewPhraseGate } from '@/components/new-phrase-gate';
 import { MotionProvider } from '@/components/motion';
 import {
     analyticsAllowed,
@@ -252,6 +253,7 @@ function Document({ children, release }: { children: ReactNode; release: string 
                 <MotionProvider>
                     <TooltipProvider delay={0} closeDelay={0}>
                         <Toaster>{children}</Toaster>
+                        <NewPhraseGate />
                     </TooltipProvider>
                 </MotionProvider>
                 <Scripts />

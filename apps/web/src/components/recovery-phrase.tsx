@@ -21,6 +21,7 @@ import { authError } from '@/lib/form';
 import { checkQuestions, kitText } from '@/lib/recovery-kit';
 import { cue } from '@/lib/sounds';
 import { copySecret } from '@/lib/clipboard';
+import { forgetNewPhrase } from '@/lib/new-phrase';
 
 export type RecoveryReason = 'master-key' | 'recovery-key';
 
@@ -38,7 +39,13 @@ export function useRecoveryBackup(user: SessionUser) {
         queryFn: () =>
             authClient
                 .restore(user, { validated: true })
-                .then(() => authClient.recoveryBackup(user)),
+                .then(() => authClient.recoveryBackup(user))
+                .then((backup) => {
+                    // The phrase is on its own page now: a copy a rotation left to be shown
+                    // (lib/new-phrase.ts) has nothing more to do.
+                    forgetNewPhrase();
+                    return backup;
+                }),
         staleTime: Infinity,
         gcTime: 0,
         retry: false,
