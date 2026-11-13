@@ -260,8 +260,8 @@ export const sections: RoadmapSection[] = [
                 id: 'security-keys-and-device-approval',
                 status: 'now',
                 area: 'Platform',
-                title: 'Security keys and device approval',
-                body: 'A security key as your second step, the one kind phishing can’t get past, and approving each new device from one you already use. Approval can also be set so your keys reach a new device only from one you already have.',
+                title: 'Passkeys and approving from another device',
+                body: 'Confirm a new sign-in with a passkey or security key, the one kind a fake sign-in page can’t get past, or by approving it on a device you already use, beside the authenticator app. You choose which one HushOS asks for first.',
                 links: [
                     {
                         kind: 'docs',
