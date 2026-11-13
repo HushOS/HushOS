@@ -1,0 +1,25 @@
+docs/two-step-design.md
+  s_566b8e0c4467a4::t_6221a9a553112e 307-310
+packages/auth/src/client.test.ts
+  s_566b8e0c4467a4::t_d8b075570ca8ed 349-350
+packages/auth/src/client.ts
+  s_566b8e0c4467a4::t_48cb6bce84ce0c 607-609,611-624,629,654-660,684-686,1112-1125,1129-1149,1153-1164,1171-1172
+packages/auth/src/client.two-step.test.ts
+  s_566b8e0c4467a4::t_29150e89f442e7 731-736,768,772-773,791,794,817,826,847-853,862,875-929,955-956,961-974
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bb72f210458c2bc1b4bfad29f13e5bc5772947ac",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
