@@ -1,0 +1,24 @@
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_6309ab471f8012 712,715,721-723
+  s_566b8e0c4467a4::t_beb7750e5c64ab 681,683-686,689
+  s_566b8e0c4467a4::t_84271435356345 750
+  s_566b8e0c4467a4::t_d67f4f9e0a45ac 785
+  s_566b8e0c4467a4::t_bb4c787a7acda7 659-670
+  s_566b8e0c4467a4::t_1467856ff64820 343-344
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "588bbb5be49e7fc24962dbb62b031ed1e1be6ace",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
