@@ -1018,6 +1018,12 @@ export async function resetAccountPassword(input: {
             .set({ ...input.recovery, confirmedAt: null, updatedAt: new Date() })
             .where(eq(accountRecoveryKeys.userId, user.id));
         await tx.delete(sessions).where(eq(sessions.userId, user.id));
+        // Every device is signed out, so none is pushed to any more: a notice on the lock
+        // screen of a device that was just signed out of the account is what signing out
+        // ends. Each asks again when it next signs in.
+        await tx
+            .delete(notificationRegistrations)
+            .where(eq(notificationRegistrations.userId, user.id));
         await tx.delete(opaqueLoginAttempts).where(eq(opaqueLoginAttempts.userId, user.id));
         await tx.delete(accountRecoveryAttempts).where(eq(accountRecoveryAttempts.userId, user.id));
         await tx
@@ -1615,6 +1621,20 @@ async function changeSecurity(
                     ),
                 );
         await tx.delete(sessions).where(eq(sessions.userId, user.id));
+        // The other devices are signed out and need the new password, so they are pushed to
+        // no more: each asks again when it next signs in. The device that made the change
+        // keeps its registration: it proved the password for this very change, and it is
+        // signed in again by the change or by its own next request, as the same device.
+        await tx
+            .delete(notificationRegistrations)
+            .where(
+                and(
+                    eq(notificationRegistrations.userId, user.id),
+                    current.deviceId
+                        ? ne(notificationRegistrations.deviceId, current.deviceId)
+                        : undefined,
+                ),
+            );
         await tx.delete(opaqueLoginAttempts).where(eq(opaqueLoginAttempts.userId, user.id));
         await tx.delete(accountRecoveryAttempts).where(eq(accountRecoveryAttempts.userId, user.id));
         await tx
