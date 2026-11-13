@@ -1,0 +1,43 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/TwoStep.kt
+  s_566b8e0c4467a4::t_f51096d4032ee3 255,257,259,261-271
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AccountScreen.kt
+  s_566b8e0c4467a4::t_a105c1d1061cea 830-831,834,843,848
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_c1c4ab74483aba 1872-1876
+apps/ios/App/AccountView.swift
+  s_566b8e0c4467a4::t_f2b76a9952c87f 942-946,949-953,963,989
+apps/ios/App/RecoveryView.swift
+  s_566b8e0c4467a4::t_d62047c030f5c8 451-452,458-460,463-467,477,480
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/TwoStep.swift
+  s_566b8e0c4467a4::t_9fbf9723073f2d 146,148,150,152-162
+docs/two-step-design.md
+  s_566b8e0c4467a4::t_2261125dd67555 447-449
+apps/android/AGENTS.md
+  s_a7b7a6f08ce4bb::t_dcca473a97131b 211-212
+apps/ios/AGENTS.md
+  s_a7b7a6f08ce4bb::t_e3cf93bab445fc 341
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5cfe346981b0dd9933bf5d66f4a376aff9b66cb5",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_a7b7a6f08ce4bb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a2fc93fc7e1974125",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
