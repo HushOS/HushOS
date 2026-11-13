@@ -1,0 +1,41 @@
+apps/web/src/lib/api/system.server.ts
+  s_566b8e0c4467a4::t_1e544d054f1c96 15-21,23-28,30,32,36,41,60
+apps/web/src/lib/api/two-step-reseal.db.test.ts
+  s_566b8e0c4467a4::t_8881e187f3c03e 109-115,118-121,308-537
+packages/auth/src/two-step-keys.ts
+  s_566b8e0c4467a4::t_cbb1dbbd2b760d 152-197,201-212,224-226,229-235,243-254
+packages/auth/src/two-step.ts
+  s_566b8e0c4467a4::t_c29bed4b2dc897 96-97,100-105,107-113
+packages/db/drizzle/20261113181124_two_step_key_readers/migration.sql
+  s_566b8e0c4467a4::t_d48ee493d5268f 1-16
+packages/db/drizzle/20261113181124_two_step_key_readers/snapshot.json
+  s_566b8e0c4467a4::t_2e03945800c417 1-198
+packages/db/src/readiness.ts
+  s_566b8e0c4467a4::t_196859e2100262 14
+packages/db/src/schema/two-step.ts
+  s_566b8e0c4467a4::t_110b15733f6c9f 264-296
+packages/db/src/two-step.reseal.test.ts
+  s_566b8e0c4467a4::t_1d7f872faf1bc0 8,308-381,384-385,387-404
+packages/db/src/two-step.ts
+  s_566b8e0c4467a4::t_94fff0b732d8b2 11,23,861-879,882-886,888-896,898-905,907-913,917-944
+packages/jobs/src/jobs/two-step.ts
+  s_566b8e0c4467a4::t_991dfe4cc95d33 12-13,22-32,44,48,50,52,56-58
+packages/jobs/src/worker.ts
+  s_566b8e0c4467a4::t_add37a4a3c2b2d 94-99
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "41dba2e14ad9232b21f0432ed98e0ea0cb026b93",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
