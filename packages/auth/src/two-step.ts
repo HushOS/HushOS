@@ -864,7 +864,12 @@ export async function finishLoginStep(input: StepInput) {
         await settle(
             checked,
             result.status === 'spent'
-                ? { status: 'two-step', reason: 'spent', failure: result.failure }
+                ? {
+                      status: 'two-step',
+                      reason: 'spent',
+                      failure: result.failure,
+                      ...(result.counter ? { counter: true } : {}),
+                  }
                 : { status: 'two-step', reason: result.status },
         );
         throw refusals.expired('sign-in');

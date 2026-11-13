@@ -1054,8 +1054,12 @@ export type SteppedSession =
      * is one no code could be for yet. None of the three is counted.
      */
     | { status: 'gone' | 'frozen' | 'step' | 'suspended' }
-    /* The code was already used. It was counted as a wrong answer, once: `failure` is that count. */
-    | { status: 'spent'; failure: StepFailure };
+    /*
+     * The code was already used, or a key's counter did not go up (`counter`: found here,
+     * under the lock, when another answer of the same key moved it first). It was counted as a
+     * wrong answer, once: `failure` is that count.
+     */
+    | { status: 'spent'; failure: StepFailure; counter?: boolean };
 
 /*
  * Opens the session a sign-in's step token was made for, once the server has checked the
@@ -1120,7 +1124,13 @@ export async function openSteppedSession(input: {
     } catch (error) {
         const refusal = await settleRefusal(error);
         if (!refusal) throw error;
-        if (refusal.reason === 'spent') return { status: 'spent', failure: refusal.failure };
+        if (refusal.reason === 'spent')
+            return {
+                status: 'spent',
+                failure: refusal.failure,
+                // Carried on: the account is told its key may have been copied only if this is.
+                ...(refusal.counter ? { counter: true } : {}),
+            };
         return { status: refusal.reason === 'required' ? 'gone' : refusal.reason };
     }
 }

@@ -551,6 +551,39 @@ describe('a key at sign-in', () => {
         expect((await withKeyAnswer(await toStep(who), key, { counter: 6 })).status).toBe(200);
     });
 
+    test('two answers of one key racing: the one that finds its counter passed is refused, and the account is told', async () => {
+        const { who, key } = await withKey({ counter: 5 });
+        // Both answers are checked against the stored count before either is spent: held at
+        // the door of the transaction until both have arrived, as two requests in flight are.
+        const open = edge.twoStepRepository.openSteppedSession;
+        const held: (() => void)[] = [];
+        const gate = vi
+            .spyOn(edge.twoStepRepository, 'openSteppedSession')
+            .mockImplementation(async (input) => {
+                await new Promise<void>((arrived) => {
+                    held.push(arrived);
+                    if (held.length === 2) for (const go of held) go();
+                });
+                return open(input);
+            });
+        const [first, second] = [await toStep(who), await toStep(who)];
+        const replies = await Promise.all([
+            withKeyAnswer(first, key, { counter: 6 }),
+            withKeyAnswer(second, key, { counter: 6 }),
+        ]);
+        gate.mockRestore();
+        // The same count twice: a real key never gives it, a copy of one does. One gets in.
+        expect(replies.map((reply) => reply.status).sort((a, b) => a - b)).toEqual([200, 401]);
+        const refused = replies.find((reply) => reply.status === 401)!;
+        expect(refused.body.code).toBe('step-wrong');
+        expect(refused.session).toBeUndefined();
+        // Found only inside the transaction, after the check let it through: told all the same.
+        const told = await edge.notices('key-counter');
+        expect(told.map((notice) => notice.to)).toEqual([who.email]);
+        const cookie = replies.find((reply) => reply.status === 200)!.session!;
+        expect(await events(cookie)).toContain('key-counter:webauthn');
+    });
+
     test('the account’s credential id signed by another key opens nothing, moves no counter, and is not called a copied key', async () => {
         // A fresh account, so no notice of any kind has been sent or spent, and a counter far
         // ahead of the stored one: the only thing wrong with this answer is whose key signed it.

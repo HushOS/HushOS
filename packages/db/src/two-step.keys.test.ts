@@ -426,8 +426,10 @@ describe('a key answering the step', () => {
         const { userId, factorId } = await withKey('k', 5);
         for (const next of [5, 0]) {
             const { session, result } = await signIn(userId, spend(factorId, next));
+            // Said to be the counter, so the server can tell the account its key may be copied.
             expect(result).toMatchObject({
                 status: 'spent',
+                counter: true,
                 failure: { status: 'counted', pool: 'account' },
             });
             expect(
@@ -453,14 +455,22 @@ describe('a key answering the step', () => {
             signIn(userId, spend(factorId, 9)),
         ]);
         expect(results.map(({ result }) => result.status).sort()).toEqual(['ok', 'spent']);
+        // The loser passed every check before the lock: only here is its counter found passed,
+        // and the refusal says so on its way out of the sign-in.
+        expect(
+            results.map(({ result }) => result).find(({ status }) => status === 'spent'),
+        ).toMatchObject({ counter: true });
         expect((await factorOf(factorId))?.signCount).toBe(9);
     });
 
     test('another account’s key, and a removed key, do not pass', async () => {
         const maya = await withKey('maya', 1);
         const sam = await withKey('sam', 1);
-        // Sam's key named on Maya's sign-in: it is not a key of Maya's account.
-        expect((await signIn(maya.userId, spend(sam.factorId, 2))).result.status).toBe('spent');
+        // Sam's key named on Maya's sign-in: it is not a key of Maya's account. Refused, and
+        // not as a counter that went back: nobody's key was copied.
+        const strangers = (await signIn(maya.userId, spend(sam.factorId, 2))).result;
+        expect(strangers.status).toBe('spent');
+        expect('counter' in strangers).toBe(false);
         expect((await factorOf(sam.factorId))?.signCount).toBe(1);
 
         // A second key, then the first removed: its assertion no longer passes.
@@ -475,6 +485,18 @@ describe('a key answering the step', () => {
         });
         expect(removed).toMatchObject({ status: 'ok', turnedOff: false });
         expect((await signIn(maya.userId, spend(maya.factorId, 2))).result.status).toBe('spent');
+
+        // A change refused because the key's counter did not go up says so too, through the
+        // gate every change uses: the spare signs in at 5, and a change then answers with 5.
+        const [spareKey] = await keysOf(maya.userId);
+        expect((await signIn(maya.userId, spend(spareKey!.id, 5))).result.status).toBe('ok');
+        const again = await stepUp(maya.userId, maya.session);
+        const back = await twoStep.replaceBackupCodes({
+            userId: maya.userId,
+            ...codeSet('again'),
+            step: { ...again, spend: spend(spareKey!.id, 5) },
+        });
+        expect(back).toMatchObject({ status: 'two-step', reason: 'spent', counter: true });
     });
 
     test('a key lifts the app’s freeze, as any method but the app does', async () => {
