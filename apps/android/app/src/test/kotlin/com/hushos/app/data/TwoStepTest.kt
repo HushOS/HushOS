@@ -1035,4 +1035,20 @@ class TwoStepTest {
         session = serving(404, refusal("This setup timed out. Start again."))
         assertEquals("This setup timed out. Start again.", assertThrows(SetupTimedOut::class.java) { TwoStep.confirmAuthenticator(session, "factor", "123456") }.message)
     }
+
+    /*
+     * A change that waited its turn acts only for the session it was asked under: after a sign-out, and another
+     * account signed in meanwhile (same server, maybe the same password), it must change nothing.
+     */
+    @Test
+    fun aChangeThatWaitedItsTurnActsOnlyForTheSessionItWasAskedUnder() {
+        val asked = Shared.Session("https://hushos.com", "token-a", "user-a", "a@example.com")
+        assertTrue(Auth.stillSignedIn(asked, asked))
+        assertTrue(Auth.stillSignedIn(asked.copy(email = ""), asked))
+        assertFalse(Auth.stillSignedIn(null, asked))
+        assertFalse(Auth.stillSignedIn(asked.copy(userId = "user-b", token = "token-b"), asked))
+        // The same account signed in again is a new session: what was asked under the old one is not carried over.
+        assertFalse(Auth.stillSignedIn(asked.copy(token = "token-a2"), asked))
+        assertFalse(Auth.stillSignedIn(asked.copy(origin = "https://self.example"), asked))
+    }
 }

@@ -414,6 +414,24 @@ describe('a sign-in that stops at its second step', () => {
         });
     });
 
+    test('a step nobody answers lets go of what the worker holds when its time is up, with nothing else happening', async () => {
+        const clock = vi.spyOn(performance, 'now').mockReturnValue(1_000);
+        vi.useFakeTimers({ toFake: ['setTimeout'] });
+        try {
+            const { client, toStep, locks } = setup({ loginTwoStep: async () => session });
+            await toStep();
+            expect(locks()).toBe(0);
+            // The form sits idle: no operation looks at the step, but its time runs out.
+            clock.mockReturnValue(1_000 + 6 * 60_000 + 2_000);
+            vi.advanceTimersByTime(6 * 60_000 + 1_000);
+            expect(locks()).toBe(1);
+            expect(client.isAuthenticating()).toBe(false);
+        } finally {
+            vi.useRealTimers();
+            clock.mockRestore();
+        }
+    });
+
     test('leaving the step, or starting another sign-in, drops it', async () => {
         const { client, toStep, locks } = setup({ loginTwoStep: async () => session });
         await toStep();

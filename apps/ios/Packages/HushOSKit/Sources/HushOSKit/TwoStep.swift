@@ -178,6 +178,8 @@ public enum StepWords {
     public static let othersNotRemoved = "Your other devices weren’t removed. You can remove them under Devices."
     /* A password exchange that waited a minute for its turn behind another: nothing was sent. The web's words for its own timeout. */
     public static let tookTooLong = "This took too long. Please try again."
+    /* A change that waited its turn while this phone was signed out, and maybe into another account. */
+    public static let signedOutMeanwhile = "HushOS was signed out meanwhile. Nothing was changed."
     /* A step that ended with nothing said. */
     public static let over = "This sign-in timed out. Enter your password again."
 }
@@ -360,12 +362,23 @@ actor PasswordTurn {
      * turn straight back and throws: a change nobody is waiting for any more is not made late.
      * Pair with `defer { PasswordTurn.shared.leaveSoon() }`.
      */
-    static func take(_ turn: PasswordTurn = .shared, within limit: Duration = PasswordTurn.wait) async throws {
+    static func take(
+        _ turn: PasswordTurn = .shared, within limit: Duration = PasswordTurn.wait,
+        session current: @Sendable () -> SharedKeychain.Session? = { Auth.currentSession }
+    ) async throws {
+        // The session the change is asked under, read before waiting: every change reads the stored session
+        // when it sends, and one read after a wait could be another account's, signed in meanwhile.
+        let asked = current()
         // The one ahead is taking a minute (a server that answers slowly, more than once): said, not sat through.
         guard await turn.enter(within: limit) else { throw AuthError.message(StepWords.tookTooLong) }
         if Task.isCancelled {
             await turn.leave()
             throw CancellationError()
+        }
+        // Signed out (and maybe into someone else's account) while this waited: nothing is changed for whoever is in now.
+        if asked == nil || current() != asked {
+            await turn.leave()
+            throw AuthError.message(StepWords.signedOutMeanwhile)
         }
     }
 }

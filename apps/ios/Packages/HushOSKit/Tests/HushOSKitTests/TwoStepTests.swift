@@ -631,7 +631,7 @@ private func challenge(_ methods: [StepMethod] = [.totp, .backup, .phrase], phra
         // Whoever waits behind it is told so after a minute, and its place goes: it must not run later, unasked.
         let turn = PasswordTurn()
         await turn.enter()
-        await #expect(throws: AuthError.message("This took too long. Please try again.")) { try await PasswordTurn.take(turn, within: .milliseconds(80)) }
+        await #expect(throws: AuthError.message("This took too long. Please try again.")) { try await PasswordTurn.take(turn, within: .milliseconds(80), session: { signedIn }) }
         // Its place is gone: when the holder leaves, the turn is free and not handed to a waiter who has left.
         await turn.leave()
         #expect(await turn.enter(within: .milliseconds(80)))
@@ -642,11 +642,33 @@ private func challenge(_ methods: [StepMethod] = [.totp, .backup, .phrase], phra
         await turn.leave()
     }
 
+    @Test func aChangeThatWaitedWhileThePhoneWasSignedOutChangesNothingForWhoeverIsInNow() async {
+        // Its turn comes after a sign-out and another account's sign-in: every change reads the stored session when it
+        // sends, so going on would change that account. It gives the turn back and says so instead.
+        let turn = PasswordTurn()
+        let stored = Stored(signedIn)
+        await turn.enter()
+        let waiting = Task { try await PasswordTurn.take(turn, session: { stored.now }) }
+        try? await Task.sleep(for: .milliseconds(50))
+        stored.now = SharedKeychain.Session(origin: signedIn.origin, token: "someone-else", userId: "user-b")
+        await turn.leave()
+        await #expect(throws: AuthError.message(StepWords.signedOutMeanwhile)) { try await waiting.value }
+        // The turn went back: the next one does not wait.
+        #expect(await turn.enter(within: .milliseconds(80)))
+        await turn.leave()
+        // Nobody signed in at all is refused the same way, and one still signed in as it asked goes ahead.
+        stored.now = nil
+        await #expect(throws: AuthError.message(StepWords.signedOutMeanwhile)) { try await PasswordTurn.take(turn, session: { stored.now }) }
+        stored.now = signedIn
+        try? await PasswordTurn.take(turn, session: { stored.now })
+        await turn.leave()
+    }
+
     @Test func aCallerCancelledWhileWaitingNeverMakesItsChange() async {
         // Its turn comes after whoever asked has gone: the change is not made late, and the turn goes on to the next.
         let turn = PasswordTurn()
         await turn.enter()
-        let waiting = Task { try await PasswordTurn.take(turn) }
+        let waiting = Task { try await PasswordTurn.take(turn, session: { signedIn }) }
         try? await Task.sleep(for: .milliseconds(50))
         waiting.cancel()
         await turn.leave()
@@ -654,7 +676,7 @@ private func challenge(_ methods: [StepMethod] = [.totp, .backup, .phrase], phra
         #expect(throws: CancellationError.self) { try ended.get() }
         // A waiter that took the turn after all still holds it: given back, so what follows fails here and does not hang.
         if case .success = ended { await turn.leave() }
-        try? await PasswordTurn.take(turn)
+        try? await PasswordTurn.take(turn, session: { signedIn })
         await turn.leave()
     }
 }
@@ -1019,4 +1041,11 @@ extension OnFakeDrive {
             await #expect(throws: TwoStep.SetupTimedOut(message: "This setup timed out. Start again.")) { _ = try await TwoStep.confirmAuthenticator(id: "factor", code: "123456") }
         }
     }
+}
+
+/* The session the turn tests are signed in under, and a stored session a test can change while a change waits. */
+private let signedIn = SharedKeychain.Session(origin: "https://hush.example", token: "token-a", userId: "user-a")
+private final class Stored: @unchecked Sendable {
+    var now: SharedKeychain.Session?
+    init(_ session: SharedKeychain.Session?) { now = session }
 }

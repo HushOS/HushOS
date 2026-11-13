@@ -219,6 +219,9 @@ extension Auth {
     nonisolated(unsafe) static var testSession: SharedKeychain.Session?
     nonisolated(unsafe) static var testTransport: URLSessionConfiguration?
 
+    /* The session a change would be sent under now, or none: for a change that waits its turn (PasswordTurn). */
+    static var currentSession: SharedKeychain.Session? { testSession ?? SharedKeychain.session }
+
     private static func session() throws -> SharedKeychain.Session {
         if let testSession { return testSession }
         guard let session = SharedKeychain.session else { throw AuthError.message("Sign in first.") }

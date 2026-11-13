@@ -715,12 +715,19 @@ export function createAuthClient(
             // The page that asked left while the reply was on its way: nobody can answer.
             if (askedBy?.attempt !== attempt)
                 throw new Error('This sign-in was left. Sign in again.');
-            pendingStep = {
+            const held = {
                 challenge: reply.challenge,
                 epoch: loginEpoch,
                 until: performance.now() + STEP_HELD_MS,
                 owner: options.owner,
             };
+            pendingStep = held;
+            // A step left unanswered lets go of what the worker holds when its time is up, even
+            // with nothing else happening: the form can sit idle, and nothing else would look.
+            // A step answered, given up or replaced by then is not touched.
+            setTimeout(() => {
+                if (pendingStep === held) waitingStep();
+            }, STEP_HELD_MS + 1_000);
             throw new TwoStepRequired(reply.challenge);
         }
         // The envelope the server hands over is the one this change sealed, if it landed.

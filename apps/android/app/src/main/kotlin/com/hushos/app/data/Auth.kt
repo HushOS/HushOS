@@ -1064,15 +1064,28 @@ object Auth {
      * nobody has seen yet, so no one is sent to a step they would need those words for. When nothing shows
      * the rotation was made, the words are shown all the same, with "keep both until you have signed in".
      */
-    fun rotateKeysKit(context: Context, email: String, password: String, twoStep: StepAnswer? = null): RotatedKeys = passwordTurn {
+    fun rotateKeysKit(context: Context, email: String, password: String, twoStep: StepAnswer? = null): RotatedKeys {
+        // The session it was asked under, read before waiting for the turn: one read after could be another
+        // account's, signed in while this waited, and rotating that one would be rotating the wrong account.
         val session = sessionOf(context)
+        return passwordTurn { rotateKeysFor(context, session, email, password, twoStep) }
+    }
+
+    private fun rotateKeysFor(context: Context, session: Shared.Session, email: String, password: String, twoStep: StepAnswer?): RotatedKeys {
+        if (!stillSignedIn(Shared.session(context), session)) throw AuthFailure(SIGNED_OUT_MEANWHILE)
         val made = rotateKeysAt(session, password, twoStep)
         // From here nothing may throw but an answered refusal: the phrase is the account's, or may be.
         // (An answered refusal changed nothing: the session is still this one, and nothing is tried with the password.)
         val proved = if (made.sent is Reset.Sent.Refused) Reset.Proved.Unknown
             else runCatching { Reset.prove { proveReset(context, session.origin, email, password, made, keepsSession = true) } }.getOrDefault(Reset.Proved.Unknown)
-        rotated(made, Reset.settle(made.sent, proved)) { Shared.writeDevice(context, it) }
+        return rotated(made, Reset.settle(made.sent, proved)) { Shared.writeDevice(context, it) }
     }
+
+    /* Said when a change waited its turn while this phone was signed out (and maybe into another account). */
+    internal const val SIGNED_OUT_MEANWHILE = "HushOS was signed out meanwhile. Nothing was changed."
+
+    /* Whether the session stored now is still the one a change was asked under. */
+    internal fun stillSignedIn(now: Shared.Session?, asked: Shared.Session) = now != null && now.userId == asked.userId && now.token == asked.token && now.origin == asked.origin
 
     /*
      * What a rotation hands back once it is settled. What this phone remembers follows the server: written
