@@ -749,6 +749,35 @@ describe('proving the password again for two things at once', () => {
         ]);
     });
 
+    test('one waiting its turn when the browser locks never runs, so it cannot act for an account that signs in after', async () => {
+        let answerFirst!: (challenge: unknown) => void;
+        const started: unknown[] = [];
+        let secondExchange = false;
+        const client = oneExchange({
+            devicesReauth: () => new Promise((resolve) => (answerFirst = resolve)),
+            removeOtherDevices: async () => ({ removed: 0 }),
+            twoStepReauth: async () => {
+                secondExchange = true;
+                return { attemptToken: 'second' };
+            },
+            twoStepStartTotp: async (input: never) => {
+                started.push(input);
+                return { id: 'app', secret: 'KEY', uri: 'otpauth://totp/x' };
+            },
+        });
+        const removal = client.removeOtherDevices('the password');
+        await vi.waitFor(() => expect(answerFirst).toBeTypeOf('function'));
+        const another = client.startAuthenticator('the password');
+        // The browser is locked (or signed out) while the second waits its turn.
+        await client.lock();
+        answerFirst({ attemptToken: 'first' });
+        await expect(removal).rejects.toThrow(/locked or signed out meanwhile/);
+        await expect(another).rejects.toThrow(/locked or signed out meanwhile/);
+        // Neither exchange was finished for whoever is signed in now, and nothing was started.
+        expect(secondExchange).toBe(false);
+        expect(started).toEqual([]);
+    });
+
     test('an exchange that fails does not hold up the next, and a slow request does not hold up the next exchange', async () => {
         let finishRemoval!: (result: unknown) => void;
         let refuse = true;

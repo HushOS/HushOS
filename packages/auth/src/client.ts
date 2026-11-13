@@ -336,7 +336,7 @@ export function createAuthClient(
         void store.persist.rehydrate();
         withStorageEvents(store, () => {
             lock();
-            store.setState({ device: null });
+            store.setState({ device: null, locks: store.getState().locks + 1 });
         });
         store.subscribe((state, previous) => {
             if (
@@ -894,8 +894,15 @@ export function createAuthClient(
         // Which change the proof is for: the server binds the exchange to it.
         reauth: AuthApi['devicesReauth'] = (input) => api.devicesReauth(input),
     ) {
-        return action(await provePassword(password, reauth));
+        // The session this was asked under: a lock or a sign-out since (and a sign-in by
+        // someone else after it) means the proof, or what it authorises, is not this person's.
+        const asked = epoch;
+        const proof = await provePassword(password, reauth, asked);
+        if (asked !== epoch) throw lockedSince();
+        return action(proof);
     }
+    const lockedSince = () =>
+        new Error('This browser was locked or signed out meanwhile. Nothing was changed.');
     /*
      * One password exchange at a time. The worker holds a single exchange's state between its
      * start and its finish, so a second one begun meanwhile would overwrite the first's, and
@@ -907,8 +914,11 @@ export function createAuthClient(
      * request it authorises) runs outside the queue, so a slow request holds nobody up.
      */
     let proving: Promise<unknown> = Promise.resolve();
-    function provePassword(password: string, reauth: AuthApi['devicesReauth']) {
+    function provePassword(password: string, reauth: AuthApi['devicesReauth'], asked: number) {
         const exchange = proving.then(async () => {
+            // Its turn came after a lock or a sign-out: never started, so it cannot prove a
+            // password against an account that signed in since.
+            if (asked !== epoch) throw lockedSince();
             // An exchange that never settles (a request that hangs, a worker that goes quiet)
             // is given up on after PASSWORD_EXCHANGE_MS, so it cannot hold every later one.
             // Once given up on it does nothing more: its late reply must not finish, or
