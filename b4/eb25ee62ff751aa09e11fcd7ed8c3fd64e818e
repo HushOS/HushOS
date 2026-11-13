@@ -1,0 +1,33 @@
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_a91171c22aa0ff 636-638
+apps/web/src/lib/new-phrase.ts
+  s_566b8e0c4467a4::t_ef6dc1cf8e0fc5 48
+  s_566b8e0c4467a4::t_fa7f8dcee14fc0 56-63
+  s_566b8e0c4467a4::t_a36c450a05ca14 55
+apps/web/src/lib/show-new-phrase.ts
+  s_566b8e0c4467a4::t_8e0229d45441d4 13-18,20
+  s_566b8e0c4467a4::t_bdabc4c85dda8b 2
+  s_566b8e0c4467a4::t_f80ce5879ab9e4 19
+apps/web/src/routes/recover/complete.tsx
+  s_566b8e0c4467a4::t_222773439a8e5f 61-66,68-69,71-72
+  s_566b8e0c4467a4::t_06b3e299061ca1 17
+  s_566b8e0c4467a4::t_eb8f37eadf2254 67,70
+apps/web/src/lib/new-phrase.test.ts
+  s_566b8e0c4467a4::t_c5a009a8a87e1c 7,117-132
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b4eb25ee62ff751aa09e11fcd7ed8c3fd64e818e",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
