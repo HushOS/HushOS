@@ -1,0 +1,23 @@
+apps/ios/App/TwoStep.swift
+  s_566b8e0c4467a4::t_4f86f72d8475bd 49-51,71
+apps/web/src/components/account-two-step.test.tsx
+  s_566b8e0c4467a4::t_5985bb6013c507 2,15-31,46,81,280-340
+apps/web/src/components/account-two-step.tsx
+  s_566b8e0c4467a4::t_dec58934880c03 6,30-31,493-521,557-563,581-584,601,603,917-921,938-941
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fdff284c09bb32c740d25108acaaecda768f6399",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
