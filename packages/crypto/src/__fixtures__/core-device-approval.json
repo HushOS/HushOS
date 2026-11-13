@@ -1,0 +1,131 @@
+{
+    "cases": [
+        {
+            "approver": {
+                "publicKey": "Tdzn8YU85ih9UAq6ajtwu-E_CpgpxuXyzZjUC3zbu6g",
+                "signature": "oOLZ9VxVn0eNN87OoAYz5hc_WDhL_sa9RlMBXObuAYwHF6ZAbtC4NF9cKBCdAEmcyZISvalUT3uKvV9v506PCQ"
+            },
+            "approverKey": "WnLDX7s-XNMCNw_PP-B467NjwOQZ9mtJEuLYFOCvOzg",
+            "code": "15 museum",
+            "commitment": "TpA9J5mS2U_CjL21zJl6CA6g4zHfSFBOaOH6VrC7xM0",
+            "deviceSigningKey": "YOE-fTZX3nL3VnEQTplRdtxLzmR_3FgD8wr-fIZEzbA",
+            "nonce": "8GcTRLSlBjWq3A5viugqacshGA_yQpuXCoqOl85FOTw",
+            "purpose": "login",
+            "qr": "hushos-approve:ENonip7tS9OLNqgP2tpXuU6QPSeZktlPwoy9tcyZeggOoOMx30hQTmjh-lawu8TN",
+            "requestId": "10da278a-9eed-4bd3-8b36-a80fdada57b9",
+            "statement": "WyJodXNob3MvdHdvLXN0ZXAvZGV2aWNlIiwxLCJlYTVjZDFkZS0yMzJjLTRjOTAtODFjZS0wNGRlNjYzZDk1YTgiLCIxMGRhMjc4YS05ZWVkLTRiZDMtOGIzNi1hODBmZGFkYTU3YjkiLCJsb2dpbiIsInpETUlJUHpKamJkQUJ6bGhjeEpBeTcwbXR0S3ByYmI4ZWpNVWJHSTRmT1kiLCJZT0UtZlRaWDNuTDNWbkVRVHBsUmR0eEx6bVJfM0ZnRDh3ci1mSVpFemJBIl0",
+            "stepToken": "e2cypo_jf7W7uYR-KFaetvthitElVl5x16Xn5pDb2aA",
+            "tokenDigest": "zDMIIPzJjbdABzlhcxJAy70mttKprbb8ejMUbGI4fOY",
+            "userId": "EA5CD1DE-232C-4C90-81CE-04DE663D95A8"
+        },
+        {
+            "approver": {
+                "publicKey": "xHfN837pZs1W4uCanSzYwyBmN1Vsyc29gyU8BY1WP28",
+                "signature": "RlUCUTv-UGJTnS0ndqohz_y0hqUAXw2vonI6WrJT4WWjlxKRBfPvh-oonmvMB80NgVvPysoX92MvLS-HlnylAQ"
+            },
+            "approverKey": "liuu45_WlvmVH2WS32Go3c-c4_wVvbjubZ3Rrz_wXnU",
+            "code": "14 rice",
+            "commitment": "EeApytdKctAJsdpJhY3-IV-u0RayVY4ZP2pmeSI-Q30",
+            "deviceSigningKey": "Wk_q2CvqT0e2g9g9EGVxAgG4pXvyUNRyqFJICuD1VJc",
+            "nonce": "VgyGg9A6IuO1ROZcAt9oBVcnKFaguV3OO1PnXEoAERY",
+            "purpose": "password",
+            "qr": "hushos-approve:cBwB6p00SEmFwZheBK4gcRHgKcrXSnLQCbHaSYWN_iFfrtEWslWOGT9qZnkiPkN9",
+            "requestId": "701c01ea-9d34-4849-85c1-985e04ae2071",
+            "statement": "WyJodXNob3MvdHdvLXN0ZXAvZGV2aWNlIiwxLCIxOTM5MWEwYi0xZjg4LTQzZjgtOGVmZC1hY2ViZWU5MGNlNDEiLCI3MDFjMDFlYS05ZDM0LTQ4NDktODVjMS05ODVlMDRhZTIwNzEiLCJwYXNzd29yZCIsIndMeURMUkF5dnREQ2VPZVl5U3NQa0Z5RGRrTTd0X1otT1FKRmdqS293bVUiLCJXa19xMkN2cVQwZTJnOWc5RUdWeEFnRzRwWHZ5VU5SeXFGSklDdUQxVkpjIl0",
+            "stepToken": "DHVm6RG-Y8z-Jw-l87DbVkfp2GDmAFk3AgvBWZ86nB0",
+            "tokenDigest": "wLyDLRAyvtDCeOeYySsPkFyDdkM7t_Z-OQJFgjKowmU",
+            "userId": "19391A0B-1F88-43F8-8EFD-ACEBEE90CE41"
+        },
+        {
+            "approver": {
+                "publicKey": "cEOdY-B8vB8LCiaikmPrGUp9F2lc3p0672YWaB0MwV8",
+                "signature": "TN026okPPoXJz6EVzK0TAc7Wi6qxVPQ1B2O07C1wiXFglA0V7Vds_y-oPUjvVCLK5eCLdMW_1P46pZ5h718SBA"
+            },
+            "approverKey": "uvfEqVKz4eMeRkU3Csm5sxM9PZ80cYNzkLwUJ1D9VSA",
+            "code": "07 stumble",
+            "commitment": "tW2UNqwuhsRVIRLlvPe9Qz80aFh_CR3b7V_Ur9x9JZE",
+            "deviceSigningKey": "t_Jj6J0pvfa_5xm93P-1vUCpNJctxeEfLHBIB55jX9Y",
+            "nonce": "X5lqhpQ6iMDGKzJ7HQQj3BcXRdhkO7lRiEQ7rsMOrn0",
+            "purpose": "master-key",
+            "qr": "hushos-approve:iNrZy6DnRK6MA2Ezg-Qxp7VtlDasLobEVSES5bz3vUM_NGhYfwkd2-1f1K_cfSWR",
+            "requestId": "88dad9cb-a0e7-44ae-8c03-613383e431a7",
+            "statement": "WyJodXNob3MvdHdvLXN0ZXAvZGV2aWNlIiwxLCI3YjhiZmM5OC0yZWY2LTQwNmYtOGRiYS1lMjlkMTFlNGZhMDUiLCI4OGRhZDljYi1hMGU3LTQ0YWUtOGMwMy02MTMzODNlNDMxYTciLCJtYXN0ZXIta2V5IiwiRm52YkxtT1YzdU1VSDA1Ul9VV0J1SGJFNUYtS3NmeW91My16dWdnV3BqYyIsInRfSmo2SjBwdmZhXzV4bTkzUC0xdlVDcE5KY3R4ZUVmTEhCSUI1NWpYOVkiXQ",
+            "stepToken": "ewUOhngQVTx6ZOpDkJ9wscgyCK_ZiqITnmvl9Y2op3w",
+            "tokenDigest": "FnvbLmOV3uMUH05R_UWBuHbE5F-Ksfyou3-zuggWpjc",
+            "userId": "7B8BFC98-2EF6-406F-8DBA-E29D11E4FA05"
+        },
+        {
+            "approver": {
+                "publicKey": "1eKqi3Jkftc6IsZ53_SIS9k5SNxq1Wl_Q-Eux9VjGt0",
+                "signature": "XKrp8hCANdFNa_vXtX3oHCy9xFLR90VSlN3XMgm9-6GNwcSxTwErKTaVT86Yn2yTnGGCKC1r5Pt5PbWvdaHuBg"
+            },
+            "approverKey": "Oa-T7Nc2Re66nA3wZoREgJpUDMYCx1v6NA7bHHBTeDk",
+            "code": "73 aware",
+            "commitment": "HjD7HGNljPs055K4h6Sxh1DA0n88dhkFJS5-ITUPSlU",
+            "deviceSigningKey": "O6cxBw783XjyZRcCKO3K1J8Ms4zVic_B0kIhjALLpqc",
+            "nonce": "KIw0nedqFazhJFYknTWKiBDPe5Ey9F573vaO1LAqd98",
+            "purpose": "recovery-key",
+            "qr": "hushos-approve:X4jP9__cTgmNlduQxx2R7R4w-xxjZYz7NOeSuIeksYdQwNJ_PHYZBSUufiE1D0pV",
+            "requestId": "5f88cff7-ffdc-4e09-8d95-db90c71d91ed",
+            "statement": "WyJodXNob3MvdHdvLXN0ZXAvZGV2aWNlIiwxLCJmN2RkZWRjZC1mYTU0LTQxZjEtODZlNi05ZjNhNzNiZDJhYzkiLCI1Zjg4Y2ZmNy1mZmRjLTRlMDktOGQ5NS1kYjkwYzcxZDkxZWQiLCJyZWNvdmVyeS1rZXkiLCJTV3VCUjR0TXZDcHY3SW5xUVlpbGJUY2FCM3JleXZCd2phc2xwUldXeV84IiwiTzZjeEJ3NzgzWGp5WlJjQ0tPM0sxSjhNczR6VmljX0Iwa0loakFMTHBxYyJd",
+            "stepToken": "fu2b0yMUIY43Lx2QY6dRsPqjlyw4WeM4h48dlhLu2P8",
+            "tokenDigest": "SWuBR4tMvCpv7InqQYilbTcaB3reyvBwjaslpRWWy_8",
+            "userId": "F7DDEDCD-FA54-41F1-86E6-9F3A73BD2AC9"
+        },
+        {
+            "approver": {
+                "publicKey": "4vG3yDDEelDJldwu_q5HwGYPlTrCYaPhP8g-0htHvEM",
+                "signature": "fGOLliulT23IzxZq_-dZBhnQKlRvvyXlrmcDKsCGLMYDODAZZxFWdT0wH-P2Gf_pQkG2lIJL4EIPW-hBIacxCw"
+            },
+            "approverKey": "Nad4mYZ8B00s6EvX01-udaMuSbsNv7dKcgdFAcZ3CUo",
+            "code": "95 proud",
+            "commitment": "_c7zPu6eOZ1lOI2y7rX31cjlKIIwMGAQn5sdcu5WfsY",
+            "deviceSigningKey": "4lfFPFISA1d28lCjnHKh3pIazBY2FvlZQbmgNe2LAs0",
+            "nonce": "3JVlozA89LQ2AJ2ueD_whuCX71Ka9mPJfxb8wmDmmd8",
+            "purpose": "delete",
+            "qr": "hushos-approve:mWCwdFaKQf2E9V4jdoyVk_3O8z7unjmdZTiNsu6199XI5SiCMDBgEJ-bHXLuVn7G",
+            "requestId": "9960b074-568a-41fd-84f5-5e23768c9593",
+            "statement": "WyJodXNob3MvdHdvLXN0ZXAvZGV2aWNlIiwxLCI1MGNjZWZmMi1iMDE3LTQ3ZTEtODQxNy1hODVlZTlkNzY0NzQiLCI5OTYwYjA3NC01NjhhLTQxZmQtODRmNS01ZTIzNzY4Yzk1OTMiLCJkZWxldGUiLCJIZWVZUzFNYm9FMUhCVnVFX2dXZ0sxY0Nfd1lMYWJRWklTWnEtS0MxcmhnIiwiNGxmRlBGSVNBMWQyOGxDam5IS2gzcElhekJZMkZ2bFpRYm1nTmUyTEFzMCJd",
+            "stepToken": "wQv0JY-J2B9hsTtUdyhvfWr4rRbIXpqZQ4L00Us8YqU",
+            "tokenDigest": "HeeYS1MboE1HBVuE_gWgK1cC_wYLabQZISZq-KC1rhg",
+            "userId": "50CCEFF2-B017-47E1-8417-A85EE9D76474"
+        },
+        {
+            "approver": {
+                "publicKey": "yBBrcquN3Bcec8T2J_49ATZSVVPebvO3ztIs4QnIkCE",
+                "signature": "jWTlNeIn4fhpqByAc0c2RcUdB3mCNUaXZagRr08pLkT6PZe25CN1jap96TnE4ZrK2sN6Erh71z-kqJSP086TDg"
+            },
+            "approverKey": "TkXNN9hkviaepSuUiYQI1KY1qFo_8o9RuqkdpV3zpp8",
+            "code": "06 grit",
+            "commitment": "OjSAZX6-i2MGQBtnris902Cu7K0xwvPHTUIm9wxTNeU",
+            "deviceSigningKey": "j7-fDPPOYCVJ1WJGAqk_Mu79artpv8ASVMNCRU9y_oE",
+            "nonce": "Bh-sJJaDKDXoAZfkDm86bnDVSd3MuaeChvOfWbekleI",
+            "purpose": "two-step",
+            "qr": "hushos-approve:KU6g9cSMQXKLfwme-IO4-zo0gGV-votjBkAbZ64rPdNgruytMcLzx01CJvcMUzXl",
+            "requestId": "294ea0f5-c48c-4172-8b7f-099ef883b8fb",
+            "statement": "WyJodXNob3MvdHdvLXN0ZXAvZGV2aWNlIiwxLCIwZDg5YmYyZC1jZTM5LTRjZDktODM2Zi0zYjhmZTFjMTA0ZWIiLCIyOTRlYTBmNS1jNDhjLTQxNzItOGI3Zi0wOTllZjg4M2I4ZmIiLCJ0d28tc3RlcCIsIjBsMHBPQTVCaHZtaUNRM3dYR2c1eElpS05FTkVsV0xVZ3N3VnctcG15XzAiLCJqNy1mRFBQT1lDVkoxV0pHQXFrX011NzlhcnRwdjhBU1ZNTkNSVTl5X29FIl0",
+            "stepToken": "Xv43BH0GVSJRecLM9p0BfaMS5Q0H9w7y4F_B2v3dxMg",
+            "tokenDigest": "0l0pOA5BhvmiCQ3wXGg5xIiKNENElWLUgswVw-pmy_0",
+            "userId": "0D89BF2D-CE39-4CD9-836F-3B8FE1C104EB"
+        },
+        {
+            "approver": {
+                "publicKey": "4WsqK0zaukcN-qu7S04nEhftE6g0bcK-yBkb_Q4NnZo",
+                "signature": "cWZGIulzpeFpJRVvTqAmRbICe1PQwOwNcBOaUNB9bC2S76hN5RjnXXzN1q6R_n4Fgk2Hn4weJMJGEkS4G7xUCg"
+            },
+            "approverKey": "GWboOsxMKIm4KPPcV7Hummbh2MiXALKJBvqqPCADm9I",
+            "code": "05 sound",
+            "commitment": "mz9yeswwk7s9m_NP_NIV6MV1Kamr0c6zsGg2loKv7lw",
+            "deviceSigningKey": "u4pjcjkqrKYQRka6_EKGYjh1GA8SMqqstDWaiuswRjE",
+            "nonce": "ra5y1149av9vdf3TRILehbioxffhYzzUc7MQedhM4aQ",
+            "purpose": "device-approval",
+            "qr": "hushos-approve:xclWXEZCTkWPeX5jpmJ6Mps_cnrMMJO7PZvzT_zSFejFdSmpq9HOs7BoNpaCr-5c",
+            "requestId": "c5c9565c-4642-4e45-8f79-7e63a6627a32",
+            "statement": "WyJodXNob3MvdHdvLXN0ZXAvZGV2aWNlIiwxLCI1NDY3ZjdjOS04ZDdmLTQ2OGYtODQzYy03YTYxMWRjZjJhZmQiLCJjNWM5NTY1Yy00NjQyLTRlNDUtOGY3OS03ZTYzYTY2MjdhMzIiLCJkZXZpY2UtYXBwcm92YWwiLCItT1didmhWbjJ5MlY3ZTRKaHVVcjhjRU04TGN1RU95OC1OaHl1WVJXaDJnIiwidTRwamNqa3FyS1lRUmthNl9FS0dZamgxR0E4U01xcXN0RFdhaXVzd1JqRSJd",
+            "stepToken": "_LDDRGnanStYXcXuIHGCZbpWhv8loF6_w892z_WwaNo",
+            "tokenDigest": "-OWbvhVn2y2V7e4JhuUr8cEM8LcuEOy8-NhyuYRWh2g",
+            "userId": "5467F7C9-8D7F-468F-843C-7A611DCF2AFD"
+        }
+    ],
+    "generatedBy": "crates/hushos-core/examples/device_approval_fixtures.rs"
+}

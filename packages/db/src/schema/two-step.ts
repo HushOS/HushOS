@@ -110,7 +110,10 @@ export const twoStepFactors = pgTable(
             .on(table.createdAt)
             .where(sql`${table.confirmedAt} is null`),
         check('two_step_factors_kind_valid', sql`${table.kind} in ('totp', 'webauthn', 'device')`),
-        check('two_step_factors_device_valid', sql`${table.kind} <> 'device' or ${table.name} is null`),
+        check(
+            'two_step_factors_device_valid',
+            sql`${table.kind} <> 'device' or ${table.name} is null`,
+        ),
         check(
             'two_step_factors_totp_valid',
             sql`(${table.kind} = 'totp' and ${table.name} is null and ${table.totpKeyId} is not null and ${table.totpNonce} is not null and ${table.totpSecret} is not null and ${table.totpLastStep} is not null and octet_length(${table.totpKeyId}) = 8 and octet_length(${table.totpNonce}) = 24 and octet_length(${table.totpSecret}) = 36 and ${table.totpLastStep} >= 0 and (${table.confirmedAt} is null or ${table.totpLastStep} > 0)) or (${table.kind} <> 'totp' and ${table.totpKeyId} is null and ${table.totpNonce} is null and ${table.totpSecret} is null and ${table.totpLastStep} is null)`,
@@ -292,7 +295,13 @@ export type DeviceRequestClass = (typeof DEVICE_REQUEST_CLASSES)[number];
  * one approving device posted its fresh key. `revealed`: the asking device showed what it
  * committed to. `approved`: the approving device signed. `ended`: over, for `ended_reason`.
  */
-export const DEVICE_REQUEST_STATES = ['waiting', 'opened', 'revealed', 'approved', 'ended'] as const;
+export const DEVICE_REQUEST_STATES = [
+    'waiting',
+    'opened',
+    'revealed',
+    'approved',
+    'ended',
+] as const;
 export type DeviceRequestState = (typeof DEVICE_REQUEST_STATES)[number];
 /*
  * Why a request ended: `used` (it passed the step), `passed` (the step was passed another way),
