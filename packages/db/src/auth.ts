@@ -71,6 +71,7 @@ import {
     accountSecurityEvents,
     sessions,
     twoStepAttempts,
+    twoStepDeviceRequests,
     twoStepFactors,
     twoStepKeyRegistrations,
     userSettings,
@@ -858,6 +859,7 @@ export async function cleanupExpired(options: { batchSize?: number; signal?: Abo
     const noSession = sql`not exists (select 1 from ${sessions} where ${sessions.deviceId} = ${accountDevices.id})`;
     const pendingCutoff = new Date(now.getTime() - PENDING_FACTOR_SECONDS * 1000);
     const logCutoff = new Date(now.getTime() - SECURITY_EVENT_DAYS * 24 * 60 * 60 * 1000);
+    const requestCutoff = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000);
     return {
         enrollments: await sweep(
             accountEnrollments,
@@ -890,6 +892,13 @@ export async function cleanupExpired(options: { batchSize?: number; signal?: Abo
             twoStepKeyRegistrations,
             twoStepKeyRegistrations.tokenHash,
             twoStepKeyRegistrations.expiresAt,
+        ),
+        // Requests to approve on another device, two days after they were made: by then no
+        // budget counts them. What was left unanswered is counted first, by the job itself.
+        deviceRequests: await repeat(() =>
+            db.execute(
+                sql`delete from ${twoStepDeviceRequests} where ${twoStepDeviceRequests.id} in (select ${twoStepDeviceRequests.id} from ${twoStepDeviceRequests} where ${twoStepDeviceRequests.createdAt} < ${requestCutoff} limit ${batch})`,
+            ),
         ),
         // A second-step method nobody confirmed in its ten minutes: its sealed secret goes. The
         // conditions are on the delete itself too: a row confirmed while this waited on it is
