@@ -1,0 +1,52 @@
+apps/web/src/lib/api/two-step-push.db.test.ts
+  s_566b8e0c4467a4::t_f3ac9e3dc584f2 1-239
+  s_566b8e0c4467a4::t_b02c09d8c6fc6a 240-244
+apps/android/app/src/main/kotlin/com/hushos/app/MainActivity.kt
+  s_566b8e0c4467a4::t_d5941fe0724956 70,73
+apps/android/app/src/main/kotlin/com/hushos/app/data/PushNotifications.kt
+  s_566b8e0c4467a4::t_0e0727f746f6b6 487,516
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HushOSApp.kt
+  s_566b8e0c4467a4::t_a7ec8b2baf0af9 269-270
+apps/ios/App/MainView.swift
+  s_566b8e0c4467a4::t_7be24620b656a9 144,149
+apps/ios/App/PhonePush.swift
+  s_566b8e0c4467a4::t_aeff0c0b80fc61 20
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/PushContent.swift
+  s_566b8e0c4467a4::t_20dfaba824f015 26
+apps/web/src/lib/api/notifications-responses.server.ts
+  s_566b8e0c4467a4::t_6e09b9856c0e24 21-33,37-42
+apps/web/src/lib/api/two-step-reseal.db.test.ts
+  s_566b8e0c4467a4::t_3ef237de5bfd12 293
+apps/web/src/lib/web-push.ts
+  s_566b8e0c4467a4::t_adbb8a069a7813 196-232,266-286
+apps/web/src/test/auth-edge.server.ts
+  s_566b8e0c4467a4::t_a6fc12161678bd 155-158,163-168,183-185
+crates/hushos-core/src/notifications.rs
+  s_566b8e0c4467a4::t_389af783635ef4 102-115,128-129,206-227,263-264,340-341,371-407,552-561,667-728
+packages/auth/src/two-step.ts
+  s_566b8e0c4467a4::t_40e60fadc2effb 24,178-181,185-189,195-208
+packages/db/drizzle/20261113170753_two_step_notices/migration.sql
+  s_566b8e0c4467a4::t_cc481a13281ec1 1-11
+packages/db/drizzle/20261113170753_two_step_notices/snapshot.json
+  s_566b8e0c4467a4::t_cf6d5d14ec2bad 1-30
+packages/db/src/readiness.ts
+  s_566b8e0c4467a4::t_0298426190ed62 14
+packages/db/src/schema/notifications.ts
+  s_566b8e0c4467a4::t_704b90c92d689b 28-41,55-68
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6e13fc96ef01a7285e90037c9b2e6dd78b4c3661",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
