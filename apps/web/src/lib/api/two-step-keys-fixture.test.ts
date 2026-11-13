@@ -4,6 +4,7 @@ import { Elysia, t, type AnySchema } from 'elysia';
 import { beforeAll, describe, expect, test } from 'vitest';
 import { readKeyOptions, readLoginReply } from '../../../../../packages/auth/src/login-reply';
 import { keyOptionsResponse, loginFinishResponse } from '@/lib/api/auth-responses.server';
+import type * as Shared from '@/lib/api/shared.server';
 import { loadApi } from '@/test/api-app';
 
 /*
@@ -23,7 +24,7 @@ const fixture = JSON.parse(
 );
 
 /* The request schemas sit beside the API's shared context, which reads the server's settings. */
-let schemas: typeof import('@/lib/api/shared.server');
+let schemas: typeof Shared;
 beforeAll(async () => {
     await loadApi();
     schemas = await import('@/lib/api/shared.server');

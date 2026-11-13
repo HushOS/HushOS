@@ -16,7 +16,11 @@
             "timeout": 300000,
             "userVerification": "discouraged",
             "allowCredentials": [
-                { "id": "c2VjdXJpdHkta2V5LW9uZQ", "type": "public-key", "transports": ["usb", "nfc"] },
+                {
+                    "id": "c2VjdXJpdHkta2V5LW9uZQ",
+                    "type": "public-key",
+                    "transports": ["usb", "nfc"]
+                },
                 { "id": "c3luY2VkLXBhc3NrZXktdHdv", "type": "public-key" }
             ]
         }
@@ -80,7 +84,11 @@
             "timeout": 300000,
             "attestation": "none",
             "excludeCredentials": [
-                { "id": "c2VjdXJpdHkta2V5LW9uZQ", "type": "public-key", "transports": ["usb", "nfc"] }
+                {
+                    "id": "c2VjdXJpdHkta2V5LW9uZQ",
+                    "type": "public-key",
+                    "transports": ["usb", "nfc"]
+                }
             ],
             "authenticatorSelection": {
                 "residentKey": "discouraged",
