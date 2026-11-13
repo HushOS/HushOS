@@ -897,9 +897,26 @@ Off by default: `TWO_STEP_ENABLED=true` lets accounts turn it on. Only `true` an
 
     - **Give the web service and the worker the same keys.** The worker also needs the OPAQUE setup the derived key comes from: `OPAQUE_SERVER_SETUP` when you keep it in the environment (`compose.yaml` passes it to both), otherwise it reads the setup from `server_secrets`, as the web service does. A worker without it cannot open what is sealed under the derived key, and leaves those rows where they are.
 - **Rotating the key.** Set the new key as `TWO_STEP_KEY` and the old one as `TWO_STEP_PREVIOUS_KEY`, on the web service and the worker, and restart both.
+    - **Keep the new key from its first start.** From the moment one web process starts with it, new authenticator secrets and backup codes are made under it. Never start a process without it again. To go back to the old key, swap the two (`TWO_STEP_KEY` the old one, `TWO_STEP_PREVIOUS_KEY` the new one): everything stays readable, and the worker moves the secrets back.
     - Each row records which key it was made under, and the server reads under the current key, the previous one, and the derived one. So setting `TWO_STEP_KEY` for the first time needs no previous key.
     - **The worker re-seals.** When it starts and every ten minutes, it opens every authenticator secret that is under an older key and seals it under the current one. The secret does not change, so nobody's authenticator app notices, and a sign-in at the same moment is not disturbed.
-    - **It follows the web service.** The web service records the id of the key it seals under when it answers its first health check after starting (and at the first second step it checks). The worker re-seals only when that is its own current key. A worker that was given a key the web service does not have moves nothing and logs `reseal: "waiting"`, with both ids. So a slip in one service's settings cannot move people's secrets to a key the other cannot read.
+    - **It waits for every web process.** Each web process says, at its readiness checks (`/api/ready`), which key it seals under and which keys it can read, as key ids in the table `two_step_key_readers`. The worker moves secrets to the new key only when every web process seen in the last five minutes can read that key and seals under it, and each has for 30 minutes. So:
+        - in a rolling update, nothing moves while a process on the old settings is still answering, since it could not read a moved secret;
+        - a rollout you take back within half an hour finds every secret still under the old key;
+        - a worker given a key the web service does not have moves nothing;
+        - a web process that restarts starts its 30 minutes again, and one that has stopped answering stops counting after five minutes;
+        - your platform must ask each web process `/api/ready`, as the included Compose health check does. A process nobody asks is never seen, and the worker waits for ever (`no-reader`).
+    - **How you see it waiting.** While it waits, each run logs a warning (`Two-step re-seal is waiting: …`) whose `twoStep` field has `reseal: "waiting"` and a `reason`:
+
+        | `reason`      | Meaning                                                                                                            |
+        | ------------- | ------------------------------------------------------------------------------------------------------------------ |
+        | `no-reader`   | No web process has answered a readiness check in the last five minutes                                             |
+        | `cannot-read` | A running web process does not have the worker's current key: it is on the old settings, or the worker's are wrong |
+        | `other-key`   | A running web process has the key but seals under another                                                          |
+        | `grace`       | Every running web process seals under it; `readyAt` is when the 30 minutes are over                                |
+
+        `webProcesses` is how many were seen, `webSealsWith` the ids of the keys they seal under, `sealedWith` the id of the worker's own.
+
     - **How you know it has finished.** Each run of the queue `auth.two-step-reseal` logs one event. Its `twoStep` field has:
 
         | Field              | Meaning                                                                                                    |
@@ -937,7 +954,7 @@ Off by default: `TWO_STEP_ENABLED=true` lets accounts turn it on. Only `true` an
 - **Limits on wrong answers.** A step allows five answers. Codes, from an app or a backup set, have a budget of ten in 15 minutes. Each known device has its own, for sign-ins that prove the device's key and for changes made from its session; every sign-in that proves no device shares one. Wrong answers in a row are also counted, and the hundredth from devices HushOS doesn't recognise pauses the authenticator app on such devices until a backup code or the recovery phrase is used.
     - The 15-minute budgets are rate-limit buckets under [the server hash key](#the-server-hash-key). With the OPAQUE setup kept in the database, they count per process and start over when a process restarts. So do the hourly caps on the failed-step notice (one) and on failed-step lines in the security log (ten).
     - The count to 100 is a row in the database: it holds across processes and restarts, whatever the setup.
-- **Notices.** Every change to the step, a backup code or the recovery phrase used, and a run of wrong answers after a correct password are emailed to the account. They cannot be turned off, and they name only the kind of method and the time. With [notifications](#notifications) on, each also goes to the account's devices, as every security notice does: the push carries an event id, and the device writes the words ("Two-step sign-in is on."). A phone app from before this release shows "New activity in HushOS" for them. A change that signs a device out ends its push registration, so that device hears by email alone.
+- **Notices.** Every change to the step, a backup code or the recovery phrase used, and a run of wrong answers after a correct password are emailed to the account. They cannot be turned off, and they name only the kind of method and the time. With [notifications](#notifications) on, each also goes to the account's devices, as every security notice does: the push carries an event id, and the device writes the words ("Two-step sign-in is on."). A phone app from before this release shows "New activity in HushOS" for them. A change that signs devices out ends their push registrations too: a reset every device's, a password change or a rotation every device's but the one that made it. Those devices hear by email alone until they sign in again.
 - **You can turn anyone's step off.** Anyone with write access to the database can delete a person's methods, because the step is a server rule. The management area has no button for it.
 - **Losing everything.** The recovery phrase passes the step. Someone who has lost every method, their backup codes and the phrase cannot sign in, and neither email nor the operator's pages can let them in.
 - **Rolling back** past the release that added the tables is covered under [Release migration notes](#release-migration-notes).
@@ -2466,25 +2483,27 @@ psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f packages/db/drizzle/2026111
 - Then run the previous release's images only: this release's worker waits for the migrations and exits without them.
 - `packages/db/src/two-step.migration.test.ts` runs both scripts against a migrated database and checks that the schema is exactly what it was before.
 
-#### Two-step notices release (`20261113170753_two_step_notices`)
+#### Two-step notices release (`20261113170753_two_step_notices`, `20261113181124_two_step_key_readers`)
 
 This release sends two-step sign-in's security notices to the account's devices as well as by email, re-seals authenticator secrets after a rotation of the two-step key, and reads the two-step keys from files ([Two-step sign-in](#two-step-sign-in)).
 
-What the migration does:
+What the migrations do:
 
-- It replaces the check on `notification_events.kind` with one that also accepts the thirteen kinds of two-step notice. No row changes.
+- The second adds an empty table, `two_step_key_readers`. Nothing waits on it.
+- The first replaces the check on `notification_events.kind` with one that also accepts the thirteen kinds of two-step notice. No row changes.
 - It takes an exclusive lock on `notification_events` and reads it once (30 days of events at most). Notifications recorded or fetched meanwhile wait: milliseconds. The lock waits at most five seconds (`lock_timeout`); not had in time, the migration fails with nothing applied. Run it again.
 
 What changes for the worker:
 
 - It now reads `TWO_STEP_KEY`, `TWO_STEP_PREVIOUS_KEY` and their `_FILE` forms, and `OPAQUE_SERVER_SETUP`. Give it the same values as the web service. `compose.yaml` does; on a platform where the worker is its own service, add them there.
-- A worker without them does no harm. It has only the keys it was given, moves nothing until the web service seals under its current key, and leaves every row it cannot open as it is.
-- The web service writes one row to `server_secrets`, `two-step-sealing-key-id`: the id of the key it seals under, not a secret.
+- A worker without them does no harm. It has only the keys it was given, moves nothing until every running web process seals under its current key, and leaves every row it cannot open as it is.
+- Each web process writes one row to the new table `two_step_key_readers` at its readiness checks: the ids of the keys it has, never a key. The worker deletes rows not seen for an hour.
+- Do not rotate the two-step key in the same rollout as this release. Web containers of the previous release do not say which keys they have, so the worker cannot wait for them.
 
 Containers of the previous release beside the new ones:
 
 - A previous web container cannot serve an event of a new kind: its reply fails its own check. A device that asks it for one gets 500, and shows "New activity in HushOS" for that push. A device whose list reaches one gets 500 for that request and is not offered that page of its list again. The email carries the notice either way.
-- A previous web container still on the old two-step key cannot open a secret the new worker has already moved to the new one. It answers that sign-in 503 (`step-unavailable`), counts nothing, and the person's next try reaches a new container. The worker waits for a new web container before it moves anything.
+- A previous web container still on the old two-step key cannot open a secret the new worker has already moved to the new one. It answers that sign-in 503 (`step-unavailable`), counts nothing, and the person's next try reaches a new container. The worker moves nothing in the first 30 minutes of a new key, so finish the rollout within them.
 
 To roll back to the previous release:
 
@@ -2494,5 +2513,5 @@ To roll back to the previous release:
     delete from notification_events where kind in ('two-step-on', 'two-step-off', 'two-step-app-added', 'two-step-app-removed', 'backup-codes-made', 'backup-code-used', 'phrase-used', 'phrase-replaced', 'password-reset', 'account-key-rotated', 'step-failed', 'change-step-failed', 'totp-frozen');
     ```
 
-- The schema can stay: the previous release writes none of the new kinds, and the wider check refuses nothing it writes. This release's worker exits without the migration, and the previous worker does not look for it.
+- The schema can stay: the previous release writes none of the new kinds, the wider check refuses nothing it writes, and it never looks at `two_step_key_readers`. This release's worker exits without the migration, and the previous worker does not look for it.
 - Keep `TWO_STEP_KEY` and `TWO_STEP_PREVIOUS_KEY` as they are. Secrets the worker moved to the current key stay readable, since the previous release reads under the same keys. It does not read the `_FILE` forms: put the keys in the variables before rolling back, or it seals under the derived key and cannot open what is under yours.

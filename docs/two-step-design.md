@@ -546,7 +546,7 @@ They name only the **kind** of method and the time.
 
 - **What is sent:** the event's kind is the notice's (`two-step-on`, `two-step-off`, `two-step-app-added`, `two-step-app-removed`, `backup-codes-made`, `backup-code-used`, `phrase-used`, `phrase-replaced`, `password-reset`, `account-key-rotated`, `step-failed`, `change-step-failed`, `totp-frozen`). The push carries the event's id and nothing else. The device fetches the event over its own session and gets the kind, and for a used backup code how many are left. There is no name in the event to fetch.
 - **The words** are written on the device and say what the email's subject says: "Two-step sign-in is on.", "A backup code was used. 7 are left.", "Someone signed in with your password but did not pass the second step." The web writes them in an open, unlocked tab (`apps/web/src/lib/web-push.ts`), the phones in the Rust core both apps share (`crates/hushos-core/src/notifications.rs`). A tap opens the account's settings.
-- **Who hears:** every device of the account that is registered for pushes and not removed, the one that made the change included. A change that signs devices out (a reset signs out all of them, a rotation the others) ends their push registrations with their sessions, so those devices hear by email alone.
+- **Who hears:** every device of the account that is registered for pushes and not removed, the one that made the change included. A change that signs devices out ends their push registrations with their sessions, in the same transaction: a reset signs out every device, and a password change or a rotation every device but the one that made it. Those devices hear by email alone, and register again when they next sign in.
 - **When it is sent:** exactly when the email is, under the same budgets (below): a notice that is not emailed is not pushed. A push that fails never holds back the email, and the email never waits for the push.
 - **An app from before this** does not know the new kinds, and shows "New activity in HushOS", as it does for any kind it cannot read.
 - **Not turned off:** they are security notices, so no setting stops them, as for a new sign-in. With `NOTIFICATIONS_ENABLED=false` nothing is pushed for any notice, and the email is the notice.
@@ -588,11 +588,16 @@ Settings › Security gets a list, **Recent security activity**, so a person can
 
 - **How:** each row is opened with the key its key id names and sealed again under the current key, with a new nonce and the same associated data but for the key id. The secret is the same secret, so the person's app goes on showing the right codes.
 - **The same keys as the web service:** the worker builds its keys from the same settings (the two variables or their files, and the OPAQUE setup from the environment or `server_secrets`), with the same code. It never makes a setup: with none to read and no `TWO_STEP_KEY` it has no key and does nothing.
-- **Only towards the web service's key:** the web service writes the id of the key it seals under to `server_secrets` (`two-step-sealing-key-id`; an id, not a secret) when it answers its first health check and when it first builds its keys. The worker re-seals only when that id is its own current key's. Re-sealing overwrites the old seal, so a worker given a key the web service lacks, by a slip or ahead of a rollout, must not be followed: it waits, and says so in its log.
+- **Only towards a key every web process has:** each web process writes a row to `two_step_key_readers` at its readiness checks (`/api/ready`, at most every 15 seconds): a random id made when it started, the id of the key it seals under, the ids of the keys it can read, when it first said so and when it last did. Ids, never keys. The worker moves secrets to its current key only when both of these hold:
+    - **every web process seen in the last five minutes can read that key and seals under it.** In a rolling update some processes are still on the old settings; a secret moved now would be unreadable to them, and the person's next sign-in may land on one. A worker given a key the web service lacks is the same case;
+    - **each of them has sealed under it for 30 minutes.** A rollout taken back in its first half hour finds every secret where it was. A process that restarts is a new reader, with its own 30 minutes.
+
+    Otherwise it touches nothing and logs a warning with the reason: `no-reader`, `cannot-read`, `other-key` or `grace`. A process not seen for five minutes no longer counts, and its row is deleted after an hour. Re-sealing overwrites the old seal, which is why it waits: nothing else here cannot be undone. The server's processes have to be asked `/api/ready` for this, as every health check does.
+
 - **Safe beside sign-ins:** the write replaces a row only while it still holds exactly the key id, nonce and sealed bytes that were read, in one statement, and writes only those three columns. A sign-in at the same moment reads the row before or after, whole either way. `totp_last_step` is never written, so a used code stays used. A row replaced by a new app, removed, or already moved by another run is left as it is.
 - **What it leaves:** a row under a key the worker does not have, and a row that does not open under the key it names (damaged, or sealed bytes copied from another row: the associated data names the account and the factor). Both are left byte for byte and counted. Re-sealing a row that did not open would give it a fresh, valid seal.
 - **Idempotent and batched:** one pass in id order, a page at a time; a second run finds nothing the first one moved.
-- **What it logs:** one event per run, with counts and key ids only: `moved`, `changed`, `unopened`, `unknown` (by key id), `left` (TOTP secrets still under another key), `leftUnder` and `backupCodesUnder` (accounts with unused backup codes under another key). Never a key, a secret or sealed bytes. An operator knows a rotation has finished when a run says `left: 0`.
+- **What it logs:** one event per run, with counts and key ids only: `moved`, `changed`, `unopened`, `unknown` (by key id), `left` (TOTP secrets still under another key), `leftUnder` and `backupCodesUnder` (accounts with unused backup codes under another key); while it waits, a warning with the `reason`. Never a key, a secret or sealed bytes: a failed run logs the error's class and the database's code, and throws no more than that, since a failed query's message carries its parameters. An operator knows a rotation has finished when a run says `left: 0`.
 
 So rotations can follow one another, each after the worker has finished the one before. The server still reads under three keys at most (the current one, the previous one and the derived one). What an older explicit key still holds after re-sealing is backup codes only: a set under a key that has since been dropped is unavailable, and its owner makes a new one.
 
@@ -660,7 +665,7 @@ WebAuthn public keys are not secret.
 
 **An account has the step on** exactly when it has a confirmed factor. No separate flag can disagree with the factors.
 
-`notification_events` (`docs/devices-design.md` 5) gains the kinds of section 7's notices in its `kind` check. `server_secrets` gains one row, `two-step-sealing-key-id` (section 8).
+`notification_events` (`docs/devices-design.md` 5) gains the kinds of section 7's notices in its `kind` check. `two_step_key_readers` holds one row per web process: `instance_id`, `sealing_key_id`, `readable_key_ids`, `sealing_since`, `seen_at` (section 8).
 
 ### Routes
 
@@ -696,6 +701,7 @@ Base64url without padding; ids lowercase UUIDs, as elsewhere.
 
 4. **No existing data changes:** nobody has a factor until release B lets them make one.
 5. **The notices' kinds** (step 6): `notification_events_kind_valid` is replaced by one that also accepts section 7's kinds, with `lock_timeout`. An older release cannot serve an event of a new kind, so a rollback past it deletes those events first (`docs/self-hosting.md`).
+6. **`two_step_key_readers`** (step 6): a new, empty table (section 8).
 
 ### Tests that must exist
 
@@ -722,7 +728,9 @@ This is authentication, so AGENTS.md's rule for keys applies: repository tests i
 - **The sealed secret:**
     - a secret sealed for one user or factor does not open as another's (associated data);
     - a row sealed under a previous key opens with `TWO_STEP_PREVIOUS_KEY` and is resealed by the worker, and its codes still sign in afterwards with the previous key no longer needed;
-    - re-sealing leaves a row under an unknown key, and one that does not open under the key it names, byte for byte; replaces a row only while it is still the row that was read (two runs for one row give one write); never changes `totp_last_step`; and moves nothing while the web service seals under another key;
+    - re-sealing leaves a row under an unknown key, and one that does not open under the key it names, byte for byte; replaces a row only while it is still the row that was read (two runs for one row give one write); and never changes `totp_last_step`;
+    - re-sealing moves nothing while a web process still seals under another key or cannot read the new one, nor until every running web process has sealed under it for 30 minutes; a process that restarts starts its 30 minutes again, and one that stopped answering stops counting after five;
+    - a failed re-seal logs and throws no query and no parameter;
     - `TWO_STEP_KEY_FILE` gives the same key as the variable would; both set, a missing file and an empty one refuse to start;
     - the derived key is the same whether the OPAQUE setup comes from the environment or from `server_secrets`, so a secret sealed before the setup moves still opens after, and it differs from the server hash key.
 - **Backup codes:**
@@ -761,6 +769,8 @@ This is authentication, so AGENTS.md's rule for keys applies: repository tests i
 - **Notices:**
     - no notice carries a method's or device's name;
     - a notice that is emailed pings every registered device of the account and no other account's, with an event id alone, whatever the account's toggles say; each kind is one a device can fetch; a relay that is down costs neither the action nor the email;
+    - a used backup code's notice carries the count from when it was used, also when the same request made a new set; an event whose data is not its kind's is refused before it is stored; one unreadable event is left out of a device's list by itself;
+    - a reset ends every device's push registration, and a password change or rotation every device's but the one that made it;
     - failed-step notices cannot exhaust the budget that would drop a "step turned off".
 - **End to end (Playwright):**
     - turn the step on with the QR secret read from the page, and sign in with a computed code;
