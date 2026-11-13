@@ -381,7 +381,8 @@ struct TwoStepView: View {
                 app(status)
                 if status.on {
                     Section {
-                        Text(status.codesLeft).foregroundStyle(Alpine.inkMuted).alpineRow()
+                        Text(status.codesLeft).fontWeight(status.codesLow ? .semibold : .regular)
+                            .foregroundStyle(status.codesLow ? Alpine.warning : Alpine.inkMuted).alpineRow()
                         Button("New codes") { open = .codes }.foregroundStyle(Alpine.primary).alpineRow()
                     } header: {
                         SectionTitle("Backup codes")

@@ -693,6 +693,8 @@ public struct TwoStepStatus: Sendable, Equatable {
 
     /* "7 of 10 left", or "None left": the value, and New codes is beside it. */
     public var codesLeft: String { backupCodesLeft == 0 ? "None left" : "\(backupCodesLeft) of 10 left" }
+    /* Two or fewer: the count is shown as a warning, in the same words, so it is time for a new set without a sentence saying so. */
+    public var codesLow: Bool { backupCodesLeft <= 2 }
 }
 
 /* POST /api/auth/two-step/totp: the pending app's key, shown once, and its `otpauth://` address. */

@@ -748,6 +748,9 @@ private func challenge(_ methods: [StepMethod] = [.totp, .backup, .phrase], phra
         #expect(try status(2).codesLeft == "2 of 10 left")
         #expect(try status(1).codesLeft == "1 of 10 left")
         #expect(try status(0).codesLeft == "None left")
+        // Two or fewer are a warning; three are not.
+        #expect(try !status(10).codesLow && !status(3).codesLow)
+        #expect(try status(2).codesLow && status(1).codesLow && status(0).codesLow)
         let read = try status(7)
         #expect(read.app?.id == "m")
         #expect(read.app?.createdAt != nil)
