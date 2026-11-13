@@ -13,6 +13,14 @@ import { createStore } from 'zustand/vanilla';
  * moment they are acknowledged, and the moment this browser is locked or signed out, here or
  * in another tab: never left behind for whoever comes to the screen next. Never stored: a
  * reload forgets them, as any page showing a phrase does.
+ *
+ * They go when the page does, too (`pagehide`): the document is being left for another site,
+ * or closed, or put in the back-forward cache, and a page brought back from that cache by
+ * the Back button comes back as it was, memory and all, for whoever presses it. The auth
+ * client locks the keys on the same event, without the lock or sign-out that is watched for
+ * here, so this listens for it itself. A tab that is only hidden or frozen in the background
+ * is not leaving: the person is in their password manager or their notes, saving the words,
+ * and comes back to the same screen they left, so `visibilitychange` and `freeze` keep them.
  */
 export type NewPhrase = {
     phrase: string;
@@ -37,12 +45,38 @@ let unwatch: (() => void) | undefined;
 export function keepNewPhrase(made: NewPhrase, auth: Locks) {
     unwatch?.();
     newPhrase.setState({ made });
-    unwatch = auth.subscribe((state, previous) => {
+    const unsubscribe = auth.subscribe((state, previous) => {
         if (state.lockRevision !== previous.lockRevision) forgetNewPhrase();
     });
+    const staying = whenPageLeaves(forgetNewPhrase);
+    unwatch = () => {
+        unsubscribe();
+        staying();
+    };
+}
+/*
+ * Runs `gone` when this page is left: for another site, closed, or put in the back-forward
+ * cache. For anything showing a new phrase from the page's own memory, which a page brought
+ * back from that cache would show again. Returns what stops listening.
+ */
+export function whenPageLeaves(gone: () => void) {
+    window.addEventListener('pagehide', gone);
+    return () => window.removeEventListener('pagehide', gone);
 }
 export function forgetNewPhrase() {
     unwatch?.();
     unwatch = undefined;
     newPhrase.setState({ made: null });
 }
+/*
+ * The recovery page has fetched and is showing `phrase`. When those are the words held here,
+ * they have their own page now and the copy has nothing more to do. When they are not, they
+ * are the phrase from before a rotation the server may never have applied (its reply was
+ * lost, and this browser stayed signed in): the held words may be the only copy of the
+ * phrase that now opens the account, and stay until the person says they have saved them.
+ */
+export function phraseShownOnItsPage(phrase: string) {
+    const held = newPhrase.getState().made?.phrase;
+    if (held !== undefined && words(held) === words(phrase)) forgetNewPhrase();
+}
+const words = (phrase: string) => phrase.trim().split(/\s+/).join(' ');

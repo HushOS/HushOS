@@ -39,6 +39,7 @@ import { notify } from './notifications';
 import {
     checkChangeStep,
     beforeSpending,
+    noticeOfRotation,
     settleChangeStep,
     startLoginStep,
     type StepInput,
@@ -2248,6 +2249,8 @@ export async function finishSecurityChange(
     const done = changed === true || changed === 'replaced';
     await settleChangeStep(step, changed, done);
     if (!done) throw failure();
+    // A rotation replaces the recovery phrase: the account is told, by mail, that it did.
+    if (input.action !== 'password') noticeOfRotation(user.id, input.action);
     return { success: true, sessionToken: changed === 'replaced' ? replacement : null };
 }
 

@@ -37,6 +37,8 @@ export type SecurityNoticeKind =
     | 'backup-codes-made'
     | 'backup-code-used'
     | 'phrase-used'
+    | 'phrase-replaced'
+    | 'account-key-rotated'
     | 'step-failed'
     | 'change-step-failed'
     | 'totp-frozen';
@@ -158,6 +160,22 @@ const copy: Record<
         body: 'Someone with your password passed your second step with your recovery phrase. Keep the phrase apart from your password: whoever has both needs nothing else.',
         facts: [['When', '{{when}}']],
         foot: 'If this wasn’t you, change your password and make a new recovery phrase.',
+        action: 'Review your account',
+    },
+    'phrase-replaced': {
+        preview: 'A new recovery phrase was made for your HushOS account.',
+        heading: 'Your recovery phrase was replaced.',
+        body: 'A new recovery phrase was made from a device signed in to your account, with your password. The phrase you had before, and any kit saved from it, no longer work.',
+        facts: [['When', '{{when}}']],
+        foot: 'If this wasn’t you, sign in, change your password and make a new recovery phrase.',
+        action: 'Review your account',
+    },
+    'account-key-rotated': {
+        preview: 'The account key of your HushOS account was rotated.',
+        heading: 'Your account key was rotated.',
+        body: 'A new account key was made from a device signed in to your account, with your password. Your recovery phrase was replaced with it, and your other devices were signed out.',
+        facts: [['When', '{{when}}']],
+        foot: 'If this wasn’t you, sign in, change your password and rotate the account key again.',
         action: 'Review your account',
     },
     'step-failed': {

@@ -151,6 +151,70 @@ async function changePassword(
     );
 }
 
+/*
+ * An account-key rotation as the client sends it: the password proved, a new record, and
+ * everything the old root wrapped (the recovery key, the identity, each workspace key) sent
+ * back re-wrapped under the next key version.
+ */
+async function rotateAccountKey(who: Account, cookie: string, twoStep: unknown): Promise<Reply> {
+    const registration = client.startRegistration({ password: 'correct horse battery staple' });
+    const { challenge: started, proof } = await edge.passwordProof(
+        '/security/start',
+        { action: 'master-key', registrationRequest: registration.registrationRequest },
+        { cookie },
+    );
+    const { registrationRecord } = client.finishRegistration({
+        password: 'correct horse battery staple',
+        clientRegistrationState: registration.clientRegistrationState,
+        registrationResponse: started.registrationResponse,
+        identifiers: OPAQUE_IDENTIFIERS,
+        keyStretching: KEY_STRETCHING,
+    });
+    const keyVersion = started.envelope.keyVersion + 1;
+    const made = await createRecovery(
+        new Uint8Array(randomBytes(32)),
+        who.userId,
+        started.recovery.recoveryVersion + 1,
+        keyVersion,
+    );
+    return edge.call(
+        'POST',
+        '/security/finish',
+        {
+            action: 'master-key',
+            ...proof,
+            registrationRecord,
+            envelope: {
+                envelopeVersion: 1,
+                keyVersion,
+                credentialVersion: started.envelope.credentialVersion + 1,
+                wrappingSalt: b64(32),
+                wrappingNonce: b64(24),
+                encryptedKey: b64(48),
+            },
+            recovery: made.recovery,
+            identity: {
+                ...started.identity,
+                encryptionPrivateKeyNonce: b64(24),
+                encryptedEncryptionPrivateKey: b64(48),
+                signingSeedNonce: b64(24),
+                encryptedSigningSeed: b64(48),
+            },
+            workspaces: (started.workspaces as Record<string, unknown>[]).map(
+                ({ groupId: _group, ...grant }) => ({
+                    ...grant,
+                    keyVersion,
+                    wrappingSalt: b64(32),
+                    wrappingNonce: b64(24),
+                    encryptedKey: b64(48),
+                }),
+            ),
+            twoStep,
+        },
+        { cookie },
+    );
+}
+
 /* Rows as they are stored, past every route. The tables hold a test's few rows, so they are read whole. */
 const rows = {
     sessions: () => edge.db.select().from(edge.schema.sessions),
@@ -910,23 +974,33 @@ describe('the recovery phrase and the step', () => {
         expect(passed.session).toBeTruthy();
     }, 90_000);
 
-    test('a phrase a rotation just made answers the step without a second email: after fifteen minutes its use is told again, and it is logged either way', async () => {
-        const { who, cookie, secret } = await stepped();
+    test('a rotation authorised with the old phrase tells of that use and of itself, once each: the new phrase then answers without a second email, until fifteen minutes on', async () => {
+        const { who, cookie } = await stepped();
         const step = await challenge(cookie, 'recovery-key');
+        // The phrase from sign-up authorises its own replacement. It is the key that answered
+        // that counts, not the one the change leaves behind: that one is seconds old.
         const rotated = await rotateRecoveryKey(who, cookie, {
             token: step.token,
-            proof: { kind: 'totp', code: await appCode(secret) },
+            proof: await edge.phraseProof(who.phrase, step),
         });
         expect(rotated.reply.status).toBe(200);
-        // The rotation itself told the account. The sign-in that follows it, answered with
-        // the new words (as the client does on the person's behalf), sends no "your phrase
-        // was used" on top of that.
+        expect(await edge.notices('phrase-used')).toMatchObject([{ to: who.email }]);
+        expect(await edge.notices('phrase-replaced')).toMatchObject([
+            {
+                to: who.email,
+                subject: expect.stringContaining('Your recovery phrase was replaced'),
+            },
+        ]);
+
+        // The sign-in that follows, answered with the new words (as the client does on the
+        // person's behalf), sends nothing on top of those two.
         const first = await toStep(who);
         expect(
             (await answer(first.token, await edge.phraseProof(rotated.phrase, first))).status,
         ).toBe(200);
         await edge.quiet();
-        expect(edge.outbox.filter((notice) => notice.kind === 'phrase-used')).toEqual([]);
+        expect(edge.outbox.filter((notice) => notice.kind === 'phrase-used')).toHaveLength(1);
+        expect(edge.outbox.filter((notice) => notice.kind === 'phrase-replaced')).toHaveLength(1);
         // It is in the security log all the same: a sign-in by phrase.
         expect(await rows.log(who.userId)).toContain('sign-in:phrase');
 
@@ -937,17 +1011,95 @@ describe('the recovery phrase and the step', () => {
         expect(
             (await answer(later.token, await edge.phraseProof(rotated.phrase, later))).status,
         ).toBe(200);
-        expect(await edge.notices('phrase-used')).toMatchObject([{ to: who.email }]);
+        expect(await edge.notices('phrase-used', 2)).toHaveLength(2);
+        expect(edge.outbox.filter((notice) => notice.kind === 'phrase-replaced')).toHaveLength(1);
+    }, 120_000);
 
+    test('a phrase made minutes ago that authorises the next rotation is not told of again, and a refused rotation tells of nothing', async () => {
+        const { who, cookie, secret } = await stepped();
+        const step = await challenge(cookie, 'recovery-key');
+        const rotated = await rotateRecoveryKey(who, cookie, {
+            token: step.token,
+            proof: { kind: 'totp', code: await appCode(secret) },
+        });
+        expect(rotated.reply.status).toBe(200);
+        expect(await edge.notices('phrase-replaced')).toHaveLength(1);
+        // The rotation signed this device out with the rest; it comes back with the new words.
+        const back = await toStep(who);
+        const session = (await answer(back.token, await edge.phraseProof(rotated.phrase, back)))
+            .session!;
+        expect(session).toBeTruthy();
+
+        // The words from sign-up no longer answer: nothing is rotated, and nothing is said of
+        // a rotation that did not happen.
+        const refused = await challenge(session, 'recovery-key');
+        const stale = await rotateRecoveryKey(who, session, {
+            token: refused.token,
+            proof: await edge.phraseProof(who.phrase, refused),
+        });
+        expect(stale.reply).toMatchObject({ status: 403, body: { code: 'step-wrong' } });
+
+        // The words the first rotation made, used at once to authorise a second: the person
+        // was handed them a moment ago, so only the rotation itself is told.
+        const again = await challenge(session, 'recovery-key');
+        const second = await rotateRecoveryKey(who, session, {
+            token: again.token,
+            proof: await edge.phraseProof(rotated.phrase, again),
+        });
+        expect(second.reply.status).toBe(200);
+        expect(await edge.notices('phrase-replaced', 2)).toHaveLength(2);
+        await edge.quiet();
+        expect(edge.outbox.filter((notice) => notice.kind === 'phrase-used')).toEqual([]);
+    }, 120_000);
+
+    test('an account-key rotation tells of itself once, as that and not as a new phrase alone', async () => {
+        const { who, cookie, secret } = await stepped();
+        const step = await challenge(cookie, 'master-key');
+        const rotated = await rotateAccountKey(who, cookie, {
+            token: step.token,
+            proof: { kind: 'totp', code: await appCode(secret) },
+        });
+        expect(rotated).toMatchObject({ status: 200, body: { success: true } });
+        expect(await edge.notices('account-key-rotated')).toMatchObject([
+            { to: who.email, subject: expect.stringContaining('Your account key was rotated') },
+        ]);
+        await edge.quiet();
+        expect(edge.outbox.filter((notice) => notice.kind === 'account-key-rotated')).toHaveLength(
+            1,
+        );
+        expect(edge.outbox.filter((notice) => notice.kind === 'phrase-replaced')).toEqual([]);
+    }, 90_000);
+
+    test('a password change sends no rotation notice, and an account’s first phrase is told of when it answers a sign-in', async () => {
+        const { who, cookie, secret } = await stepped();
+        const step = await challenge(cookie, 'password');
+        const changed = await changePassword(cookie, 'a new long password for this', {
+            token: step.token,
+            proof: { kind: 'totp', code: await appCode(secret) },
+        });
+        expect(changed.status).toBe(200);
         // An account's first phrase was made at sign-up, by no change: its use is told at once.
-        await edge.resetDatabase();
-        edge.outbox.length = 0;
-        const fresh = await stepped();
-        const asked = await toStep(fresh.who);
+        const asked = await edge.signIn(who, {
+            twoStep: true,
+            password: 'a new long password for this',
+        });
+        expect(asked.status).toBe(200);
         expect(
-            (await answer(asked.token, await edge.phraseProof(fresh.who.phrase, asked))).status,
+            (
+                await answer(
+                    asked.body.twoStep.token,
+                    await edge.phraseProof(who.phrase, asked.body.twoStep),
+                )
+            ).status,
         ).toBe(200);
-        expect(await edge.notices('phrase-used')).toMatchObject([{ to: fresh.who.email }]);
+        expect(await edge.notices('phrase-used')).toMatchObject([{ to: who.email }]);
+        await edge.quiet();
+        expect(
+            edge.outbox.filter(
+                (notice) =>
+                    notice.kind === 'phrase-replaced' || notice.kind === 'account-key-rotated',
+            ),
+        ).toEqual([]);
     }, 120_000);
 
     test('the step is not turned on for an account without a recovery key, and none can be added from a session once it is on', async () => {

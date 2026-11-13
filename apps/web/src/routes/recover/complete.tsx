@@ -2,7 +2,7 @@ import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '@hushos/auth/protocol'
 import { createFileRoute, Link, useRouter } from '@tanstack/react-router';
 import { cn } from 'cn';
 import { CircleCheckIcon, FileTextIcon } from 'lucide-react';
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { AuthInput, StrengthHint } from '@/components/auth-input';
 import { AuthActions, AuthFields, AuthLayout, AuthNote, authLink } from '@/components/auth-layout';
 import { NewPhrase } from '@/components/new-phrase';
@@ -13,6 +13,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { getRecoveryEnrollment } from '@/lib/auth';
 import { authClient } from '@/lib/auth-client';
 import { authError } from '@/lib/form';
+import { whenPageLeaves } from '@/lib/new-phrase';
 import { phraseFromKit, WORDS } from '@/lib/recovery-kit';
 import { cue } from '@/lib/sounds';
 
@@ -55,6 +56,9 @@ function RecoverForm({ enrollment }: { enrollment: { email: string } }) {
         applied: true | 'unknown';
         storage: string | null;
     } | null>(null);
+    // Held in this page's memory, so gone when the page is: brought back by the Back button
+    // from the back-forward cache, it would otherwise show them to whoever pressed it.
+    useEffect(() => (made ? whenPageLeaves(() => setMade(null)) : undefined), [made]);
     const count = wordsOf(typed).length;
     const words = mode === 'kit' ? (kit?.words ?? null) : wordsOf(typed);
     const ready = mode === 'kit' ? kit !== null : true;

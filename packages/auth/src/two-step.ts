@@ -206,6 +206,11 @@ function notice(userId: string, kind: StepNotice, extra: { count?: number; metho
     );
 }
 
+/* The notice a rotation sends of itself: the phrase replaced, or the account key rotated with it. */
+export function noticeOfRotation(userId: string, action: 'recovery-key' | 'master-key') {
+    notice(userId, action === 'master-key' ? 'account-key-rotated' : 'phrase-replaced');
+}
+
 /* One line of the account's security log. A log problem never undoes what it records. */
 async function record(input: Parameters<typeof twoStepRepository.recordSecurityEvent>[0]) {
     try {
@@ -357,7 +362,7 @@ async function totpSecret(
 async function rightAnswer(
     attempt: twoStepRepository.StepAttempt,
     proof: StepAnswer,
-): Promise<twoStepRepository.StepSpend | null> {
+): Promise<(twoStepRepository.StepSpend & { freshPhrase?: boolean }) | null> {
     const { userId } = attempt;
     if (proof.kind === 'totp') {
         const factor = await twoStepRepository.getTotpFactor(userId);
@@ -406,8 +411,18 @@ async function rightAnswer(
         proof.signature,
         recovery.publicKey.toString('base64url'),
     );
-    return signed ? { method: 'phrase' } : null;
+    if (!signed) return null;
+    // Noted now, of the key that answered: by the time the action has run, a rotation has
+    // replaced it, and a key read then is the new one, not the one this answer used. A reset
+    // or a rotation made it in the last fifteen minutes, or not; an account's first key
+    // (version 1) was made at sign-up, by neither.
+    const freshPhrase =
+        recovery.recoveryVersion > 1 && Date.now() - recovery.updatedAt.getTime() < FRESH_PHRASE_MS;
+    return { method: 'phrase', freshPhrase };
 }
+
+/* How long after a reset or a rotation its new phrase answers a step without a notice of its own. */
+const FRESH_PHRASE_MS = 15 * 60_000;
 
 type Checked = {
     attempt: twoStepRepository.StepAttempt;
@@ -416,6 +431,12 @@ type Checked = {
     flow: Flow;
     /* The code budget this answer was charged to, to hand back when the step passes. */
     bucket: Buffer | null;
+    /*
+     * The recovery phrase answered, and the key it is the phrase of was made by a reset or a
+     * rotation in the last fifteen minutes: said of the key as it was when the answer was
+     * checked, before whatever the answer authorises replaces it.
+     */
+    freshPhrase: boolean;
 };
 
 /*
@@ -451,9 +472,9 @@ async function checkAnswer(input: {
         await quietly('limited', () => twoStepRepository.returnStepAnswer(attempt));
         throw refusals.limited();
     }
-    let spend: twoStepRepository.StepSpend | null;
+    let right: Awaited<ReturnType<typeof rightAnswer>>;
     try {
-        spend = await rightAnswer(attempt, proof);
+        right = await rightAnswer(attempt, proof);
     } catch (error) {
         if (!(error instanceof KeyUnavailable)) throw error;
         // Nothing was looked at, so nothing is used up: the budget and the slot go back.
@@ -463,7 +484,7 @@ async function checkAnswer(input: {
         });
         throw unavailable(error);
     }
-    if (!spend) {
+    if (!right) {
         const failure = await twoStepRepository.recordStepFailure(attempt);
         await afterFailure(attempt, failure, proof.kind, flow);
         throw refusals.wrong(
@@ -472,7 +493,8 @@ async function checkAnswer(input: {
             failure.status === 'counted' ? failure.tokenEnded : true,
         );
     }
-    return { attempt, proof: { tokenHash, spend }, method: proof.kind, flow, bucket };
+    const { freshPhrase = false, ...spend } = right;
+    return { attempt, proof: { tokenHash, spend }, method: proof.kind, flow, bucket, freshPhrase };
 }
 
 /*
@@ -492,7 +514,7 @@ async function settle(
         accountGone?: boolean;
     } = {},
 ) {
-    const { attempt, method, flow } = checked;
+    const { attempt, method, flow, freshPhrase } = checked;
     if (refusal) {
         if (refusal.reason === 'spent') {
             await afterFailure(attempt, refusal.failure, method, flow);
@@ -525,28 +547,14 @@ async function settle(
         }
         if (method === 'phrase') {
             if (!passed.signIn) await record({ userId, kind: 'phrase-used', method, deviceId });
-            // A reset or a rotation that just made this phrase has told the account so already,
-            // and the sign-in that follows it answers with the new words on the person's
-            // behalf: a second mail a minute later, saying their phrase was used, would only
-            // alarm. The log line above is written all the same.
-            if (!(await phraseJustReplaced(userId))) notice(userId, 'phrase-used');
+            // The sign-in that follows a reset or a rotation answers with the new words on the
+            // person's behalf: a mail a minute later saying their phrase was used would only
+            // alarm, about something they did themselves. So none is sent when the key that
+            // answered (not whatever key the account has by now) was made by such a change
+            // in the last fifteen minutes. The log line above is written all the same.
+            if (!freshPhrase) notice(userId, 'phrase-used');
         }
     });
-}
-
-/* How long after a reset or a rotation its new phrase answers a step without a notice of its own. */
-const FRESH_PHRASE_MS = 15 * 60_000;
-/*
- * Whether the recovery key that just answered was made by a reset or a rotation in the last
- * fifteen minutes. An account's first key (version 1) is neither: it was made at sign-up.
- */
-async function phraseJustReplaced(userId: string) {
-    const key = await authRepository.getRecoveryKey(userId);
-    return (
-        key !== null &&
-        key.recoveryVersion > 1 &&
-        Date.now() - key.updatedAt.getTime() < FRESH_PHRASE_MS
-    );
 }
 
 /*
