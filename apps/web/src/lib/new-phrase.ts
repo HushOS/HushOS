@@ -8,10 +8,11 @@ import { createStore } from 'zustand/vanilla';
  * need them: so they are shown at once, over whatever page the person is on or lands on
  * (`NewPhraseGate`, in the root), until they say they have saved them.
  *
- * Only the person who just made the change in this tab sees them. The words go the moment
- * they are acknowledged, and the moment this browser is locked or signed out, here or in
- * another tab: never left behind for whoever comes to the screen next. Never stored: a reload
- * forgets them, as any page showing a phrase does.
+ * Only the person who just made the change in this tab sees them. The words stay on screen
+ * until they are acknowledged, however long that takes; nothing times them out. They go the
+ * moment they are acknowledged, and the moment this browser is locked or signed out, here or
+ * in another tab: never left behind for whoever comes to the screen next. Never stored: a
+ * reload forgets them, as any page showing a phrase does.
  */
 export type NewPhrase = {
     phrase: string;

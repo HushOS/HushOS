@@ -150,6 +150,10 @@ export class StepFailure extends Error {
         this.again = reason !== 'over' && reason !== 'lost';
     }
 }
+/* How long a step is held here: the five minutes the server gives its token, and one more. */
+const STEP_HELD_MS = 6 * 60_000;
+/* How long one password exchange may take before the next is let through. */
+export const PASSWORD_EXCHANGE_MS = 60_000;
 const LOST_REPLY =
     'The server’s answer didn’t arrive, so HushOS can’t tell whether you were signed in. Enter your password again. If you used a code, wait for the next one.';
 const STEP_OVER = 'This sign-in timed out. Enter your password again.';
@@ -221,7 +225,32 @@ export function stepRefused(error: unknown) {
  */
 export function nothingChanged(error: unknown) {
     const status = (error as { status?: unknown } | null)?.status;
-    return stepRefused(error) || status === 429;
+    return stepRefused(error) || status === 429 || answeredRefusal(error);
+}
+/*
+ * A refusal that is the server's own: a 4xx whose body was the server's (`answered`, set by
+ * whoever read the reply). Only this says a change was not made. Anything else after the
+ * request has left (no reply, a 5xx, a proxy's page) leaves it open: the server may have made
+ * the change, or may yet.
+ */
+export function answeredRefusal(error: unknown) {
+    const { status, answered } = (error ?? {}) as { status?: unknown; answered?: unknown };
+    return typeof status === 'number' && status >= 400 && status < 500 && answered === true;
+}
+/* What a person is told when the server refused a change that would have replaced something. */
+const NOT_DONE: Record<SecurityAction, string> = {
+    password:
+        'Your password was not changed. Nothing changed, and your recovery phrase is still the one you have. Please try again.',
+    'master-key':
+        'Your account key was not rotated. Nothing changed, and your recovery phrase is still the one you have. Please try again.',
+    'recovery-key':
+        'Your recovery phrase was not replaced. Nothing changed, and your recovery phrase is still the one you have. Please try again.',
+};
+/* The server's reason, when it gave one of its own, then what that means for the account. */
+function notDone(error: unknown, action: SecurityAction) {
+    const said = error instanceof Error ? error.message : '';
+    const reason = said && said !== 'Please try again.' ? `${said} ` : '';
+    return new Error(`${reason}${NOT_DONE[action]}`, { cause: error });
 }
 /* A 200 that was not the server's answer to a change: what was asked for may or may not be done. */
 export class LostReply extends Error {
@@ -278,10 +307,16 @@ export function createAuthClient(
         active?.lock();
         store.setState({ unlockedUserId: null });
     }
-    /* The step a sign-in is waiting at, while it can still be answered. */
+    /*
+     * The step a sign-in is waiting at, while it can still be answered. Its life is counted
+     * from when it arrived, on a clock that only runs forward (`performance.now()`), never
+     * read off the device's own date: a phone or a computer whose clock runs minutes fast
+     * would otherwise find every step already over, and could never sign in. The server
+     * decides when a token has really ended; this only lets go of what the worker holds for
+     * one it has long refused.
+     */
     function waitingStep() {
-        // A minute past its end the server has long refused it: what the worker holds for it goes.
-        if (pendingStep && Date.now() > pendingStep.until + 60_000) lock();
+        if (pendingStep && performance.now() > pendingStep.until) lock();
         return pendingStep;
     }
     /*
@@ -609,18 +644,23 @@ export function createAuthClient(
      * step, and nobody else holds the new one yet.
      */
     type AfterReset = {
-        /* The phrase the reset made. */
+        /* The phrase the change made. */
         phrase: string;
-        /* The versions the account is at once the reset has landed. */
-        credentialVersion: number;
-        recoveryVersion: number;
         /*
-         * Told what the server's reply shows of the reset itself: true when the account is at
-         * the reset's versions, false when it is not. Not called when the reply shows neither.
-         * The password signing in is no such evidence: someone may reset to the password they
-         * already have, and then it signs in whether the reset landed or not.
+         * What this change made and no other could have: the salts of the account-key
+         * envelope and of the recovery envelope it sent. The server serving one of them back
+         * is the change itself showing. A version number is not: another device's change
+         * moves it to the same number.
          */
-        landed: (landed: boolean) => void;
+        envelopeSalt: string;
+        recoverySalt: string;
+        /*
+         * Called when the server's reply shows this change landed. Not being called proves
+         * nothing: the server may still commit a moment later. The password signing in is no
+         * evidence either: someone may reset to the password they already have, and a
+         * rotation keeps it.
+         */
+        landed: () => void;
     };
     async function login(
         email: string,
@@ -654,10 +694,9 @@ export function createAuthClient(
                 // The step names the recovery key the account has now. Only if that is the
                 // reset's is the new phrase the account's phrase: anything else is left
                 // unanswered, since the new words would only be a wrong answer, and counted.
-                const holds = reply.challenge.phrase?.recoveryVersion;
-                if (holds !== undefined) step.landed(holds === step.recoveryVersion);
-                if (holds !== step.recoveryVersion)
+                if (reply.challenge.phrase?.wrappingSalt !== step.recoverySalt)
                     throw new Error('This account asks for a second step.');
+                step.landed();
                 const answered = readLoginReply(
                     await api.loginTwoStep(
                         await proveStep(
@@ -676,14 +715,14 @@ export function createAuthClient(
             pendingStep = {
                 challenge: reply.challenge,
                 epoch: loginEpoch,
-                until: Date.parse(reply.challenge.expiresAt),
+                until: performance.now() + STEP_HELD_MS,
                 owner: options.owner,
             };
             throw new TwoStepRequired(reply.challenge);
         }
-        // The envelope carries the account's credential version: the reset's, if it landed.
-        if (typeof step === 'object')
-            step.landed(reply.session.envelope.credentialVersion === step.credentialVersion);
+        // The envelope the server hands over is the one this change sealed, if it landed.
+        if (typeof step === 'object' && reply.session.envelope.wrappingSalt === step.envelopeSalt)
+            step.landed();
         return openSession(reply.session, loginEpoch);
     }
     /* The second half of a sign-in: the session is open, and the envelope opens the account here. */
@@ -867,12 +906,34 @@ export function createAuthClient(
     let proving: Promise<unknown> = Promise.resolve();
     function provePassword(password: string, reauth: AuthApi['devicesReauth']) {
         const exchange = proving.then(async () => {
-            try {
+            // An exchange that never settles (a request that hangs, a worker that goes quiet)
+            // is given up on after PASSWORD_EXCHANGE_MS, so it cannot hold every later one.
+            // Once given up on it does nothing more: its late reply must not finish, or
+            // clear, the exchange that took its place.
+            let over = false;
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            const run = (async () => {
                 const start = await rpc('reauthStart', { password });
                 const challenge = await reauth(start);
+                if (over) throw new Error('This took too long. Please try again.');
                 const finish = await rpc('reauthFinish', challenge);
                 return { attemptToken: challenge.attemptToken, ...finish };
+            })();
+            // Rejects only after it was given up on, when nobody is waiting for it any more.
+            run.catch(() => {});
+            try {
+                return await Promise.race([
+                    run,
+                    new Promise<never>((_resolve, reject) => {
+                        timer = setTimeout(() => {
+                            over = true;
+                            reject(new Error('This took too long. Please try again.'));
+                        }, PASSWORD_EXCHANGE_MS);
+                    }),
+                ]);
             } finally {
+                clearTimeout(timer);
+                over = true;
                 // A server that refused the start (429, a lost session) leaves the password in
                 // the worker otherwise, until the next lock.
                 await rpc('reauthCancel', {}).catch(() => {});
@@ -1091,15 +1152,11 @@ export function createAuthClient(
                     });
                     if (!readReset(reply)) throw lostChange('your password was changed');
                 } catch (error) {
-                    const status = (error as { status?: unknown } | null)?.status;
                     // The server answered and refused: nothing changed, and the old phrase
-                    // is still the phrase.
-                    if (typeof status === 'number' && status < 500)
-                        throw new Error(
-                            `${error instanceof Error ? error.message : 'Please try again.'} If it keeps failing, try signing in with your new password first: the reset may already have been applied.`,
-                        );
+                    // is still the phrase. Only this says so.
+                    if (answeredRefusal(error)) throw notDone(error, 'password');
                     // No answer, or not the server's: it may have applied the reset before the
-                    // reply was lost. Signing in with the new password, below, says which.
+                    // reply was lost, or may apply it a moment from now.
                     confirmed = false;
                 }
                 lock();
@@ -1110,19 +1167,15 @@ export function createAuthClient(
                 broadcastLock();
                 await deviceKeys.clear().catch(() => {});
                 /*
-                 * Whether the reset landed, on evidence of the reset itself: the server said so,
-                 * or the sign-in below shows the account at the versions the reset sends (its
-                 * credential version in the envelope, or its recovery key's version at the
-                 * step). Undefined while nothing shows either way. The new password signing in
-                 * is not evidence: it may be the password the account already had.
+                 * Whether the reset landed: the server said so, or the sign-in below is
+                 * served what this reset made (the account-key envelope it sealed, or a step
+                 * naming the recovery key it sent). Without that the outcome is unknown,
+                 * whatever the sign-in did: the new password signing in may be the password
+                 * the account already had, and the account being as it was is no proof either,
+                 * since the server can commit a moment later. So from here on the new words
+                 * always come back: thrown away, they could turn out to be the only way in.
                  */
-                const seen: { landed: boolean | undefined } = {
-                    landed: confirmed ? true : undefined,
-                };
-                const notChanged = () =>
-                    new Error(
-                        'Your password was not changed: the server never got the request. Please try again.',
-                    );
+                let landed = confirmed;
                 try {
                     // A second step is answered with the new phrase: nobody has seen it yet,
                     // and someone whose only step is the phrase could not answer it otherwise.
@@ -1132,48 +1185,32 @@ export function createAuthClient(
                         {},
                         {
                             phrase: fresh,
-                            credentialVersion: challenge.credentialVersion + 1,
-                            recoveryVersion: challenge.recovery.recoveryVersion + 1,
-                            landed: (shown) => {
-                                if (!confirmed) seen.landed = shown;
+                            envelopeSalt: finish.envelope.wrappingSalt,
+                            recoverySalt: finish.recovery.wrappingSalt,
+                            landed: () => {
+                                landed = true;
                             },
                         },
                     );
-                    if (seen.landed === false) {
-                        // Signed in, on the account as it was: the reset never landed, and
-                        // the password given was the one it already had. The session this
-                        // opened was only the question; the old phrase is still the phrase.
-                        lock();
-                        await api.logout().catch(() => {});
-                        throw notChanged();
-                    }
-                    return { user, phrase: fresh, applied: true as const, storage: null };
-                } catch (error) {
+                    if (landed)
+                        return { user, phrase: fresh, applied: true as const, storage: null };
+                    // Signed in, to an account that is not what this reset made: perhaps the
+                    // password was the one it already had. The session was only the question.
                     lock();
-                    // The account is not at the reset's versions, or the server's record
-                    // refused the new password: the reset never reached it.
-                    if (
-                        seen.landed === false ||
-                        (!confirmed &&
-                            error instanceof Error &&
-                            error.message.startsWith('Unable to sign in'))
-                    )
-                        throw notChanged();
-                    // Nothing showed either way (the server could not be reached again): the
-                    // new words are kept, and nothing is said about the old ones.
-                    if (seen.landed === undefined)
-                        return {
-                            user: null,
-                            phrase: fresh,
-                            applied: 'unknown' as const,
-                            storage: null,
-                        };
-                    // The reset is in place; `storage` says when this browser's device key
-                    // was why it did not sign in here.
+                    await api.logout().catch(() => {});
                     return {
                         user: null,
                         phrase: fresh,
-                        applied: true as const,
+                        applied: 'unknown' as const,
+                        storage: null,
+                    };
+                } catch (error) {
+                    lock();
+                    // `storage` says when this browser's device key was why it did not sign in.
+                    return {
+                        user: null,
+                        phrase: fresh,
+                        applied: landed ? (true as const) : ('unknown' as const),
                         storage: error instanceof DeviceStorageUnreadable ? error.why : null,
                     };
                 }
@@ -1224,8 +1261,10 @@ export function createAuthClient(
                     if (!readDone(reply)) throw lostChange('your change was saved');
                 } catch (error) {
                     // The server answered, and refused before changing anything: nothing this
-                    // browser keeps needs clearing, and no other tab needs locking.
-                    if (nothingChanged(error)) throw error;
+                    // browser keeps needs clearing, and no other tab needs locking. The step's
+                    // own refusal goes to the page as it is, to be answered again.
+                    if (stepRefused(error)) throw error;
+                    if (nothingChanged(error)) throw notDone(error, action);
                     // A lost response leaves the outcome unknown: the server may have
                     // replaced the credentials and revoked every session. Clean up as if it
                     // had, then let the live session say which it was.
@@ -1240,35 +1279,29 @@ export function createAuthClient(
                 broadcastLock();
                 await deviceKeys.clear().catch(() => {});
                 /*
-                 * Whether the change landed, on evidence of the change itself: the server
-                 * said so, or what it serves now is at the change's versions (a session's
-                 * credential version, or a step's recovery-key version). Undefined while
-                 * nothing shows either way. Signing in is not evidence: a rotation keeps the
-                 * password, so it signs in whether the change landed or not.
+                 * Whether the change landed: the server said so, or the sign-in below is
+                 * served what this change made (see `AfterReset`). Without that the outcome
+                 * is unknown, and for a rotation the new words always come back: the account
+                 * looking as it was proves nothing, since the server can commit a moment
+                 * later, and words thrown away could be the only way in.
                  */
-                const next = user.credentialVersion + 1;
-                const seen: { landed: boolean | undefined } = {
-                    landed: committed ? true : undefined,
-                };
-                if (!committed) {
+                let landed = committed;
+                if (!committed && !fresh) {
+                    // A password change replaces no phrase, and has nothing to learn by
+                    // signing in: the live session says which it was, as before.
                     let live: SessionUser | null = null;
                     try {
                         live = (await readSession()).user;
                     } catch {
                         /* Unknown either way. */
                     }
-                    // The session the change was made from is still there, on the credential
-                    // as it was: nothing changed, and that is the error.
                     if (live && live.credentialVersion === user.credentialVersion) throw failure;
-                    if (live && live.credentialVersion === next) seen.landed = true;
-                    // A password change has nothing more to learn by signing in.
-                    if (!fresh && seen.landed !== true)
-                        return { signedIn: false, uncertain: true, storage: null, phrase: null };
+                    return { signedIn: false, uncertain: true, storage: null, phrase: null };
                 }
                 // The server replaced the credentials and ended every session, or may have.
                 // A sign-in that fails here leaves the person signed out, on the sign-in page,
                 // with this browser's device key kept. After a rotation it answers a second
-                // step with the new phrase, and its reply shows whether the change landed.
+                // step with the new phrase, when the step names the recovery key it made.
                 let signedIn = false;
                 let storage: DeviceStorageReason | null = null;
                 try {
@@ -1276,13 +1309,13 @@ export function createAuthClient(
                         user.email,
                         action === 'password' ? (newPassword ?? password) : password,
                         {},
-                        fresh
+                        fresh && finish.recovery
                             ? {
                                   phrase: fresh,
-                                  credentialVersion: next,
-                                  recoveryVersion: challenge.recovery.recoveryVersion + 1,
-                                  landed: (shown) => {
-                                      if (!committed) seen.landed = shown;
+                                  envelopeSalt: finish.envelope.wrappingSalt,
+                                  recoverySalt: finish.recovery.wrappingSalt,
+                                  landed: () => {
+                                      landed = true;
                                   },
                               }
                             : 'refuse',
@@ -1291,13 +1324,12 @@ export function createAuthClient(
                 } catch (error) {
                     if (error instanceof DeviceStorageUnreadable) storage = error.reason;
                 }
-                // The account is as it was: the change never landed, and the old phrase is
-                // still the phrase. The new words are not handed over.
-                if (seen.landed === false) throw failure;
-                if (signedIn)
+                // Signed in on what this change made (or the server said it was made): the app
+                // shows the new phrase itself. In every other case a rotation's words go to
+                // the page: with `uncertain`, beside the old ones until a sign-in settles it.
+                if (signedIn && landed)
                     return { signedIn: true, uncertain: false, storage: null, phrase: null };
-                // `storage` says when this browser's device key was why it was not signed in.
-                return { signedIn: false, uncertain: seen.landed !== true, storage, phrase: fresh };
+                return { signedIn, uncertain: !landed, storage, phrase: fresh };
             }),
         session: () => readSession(),
         /* Whether this tab cleared a removed device; said once, on the sign-in page. */

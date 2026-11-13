@@ -718,6 +718,21 @@ test('a new recovery phrase is shown at once wherever the person lands, and is g
     expect(fresh).not.toBe(phrase);
     await expect(page).toHaveURL(/\/setup\/recovery-key/, { timeout: 60_000 });
     await page.unroute('**/api/auth/login/start');
+    // It is a modal: what is under it (the page's own Unlock) cannot be reached by keyboard
+    // or by a screen reader until the words are acknowledged, and Escape does not close it.
+    expect(await gate.evaluate((dialog) => dialog.matches(':modal'))).toBe(true);
+    const reached = await page.evaluate(() => {
+        const under = [...document.querySelectorAll('button')].find(
+            (button) => button.textContent?.trim() === 'Unlock' && !button.closest('dialog'),
+        );
+        under?.focus();
+        return { there: under !== undefined, focused: document.activeElement === under };
+    });
+    expect(reached).toEqual({ there: true, focused: false });
+    await page.keyboard.press('Escape');
+    await expect(
+        gate.getByRole('heading', { name: 'Save your new recovery phrase' }),
+    ).toBeVisible();
 
     // Saved: the words leave the screen and the tab.
     await gate.getByRole('button', { name: 'I’ve saved these words' }).click();

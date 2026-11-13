@@ -370,24 +370,22 @@ export function NewKeyDialog({
             const result = await authClient.changeSecurity(user, action, password, '', twoStep);
             cue('success');
             router.options.context.queryClient.clear();
+            // The new words, whenever the change went through or may have and the app will
+            // not show them itself: shown at once, over whatever page comes next, until they
+            // are saved. The old phrase is dead, or may be, and a sign-in's second step may
+            // need these. Gone on a lock or a sign-out, here or in another tab.
+            if (result.phrase) {
+                showNewPhrase({
+                    phrase: result.phrase,
+                    applied: result.uncertain ? 'unknown' : true,
+                    storage: result.storage
+                        ? new DeviceStorageUnreadable(result.storage).why
+                        : null,
+                    from: 'rotation',
+                });
+                onOpenChange(false);
+            }
             if (!result.signedIn) {
-                // The old phrase is dead, or may be, and this browser is signed out: the new
-                // words go with the person to the sign-in page, which shows them first. The
-                // step there may need them, and nothing else would ever show them.
-                if (result.phrase) {
-                    // Shown at once, over whatever page comes next, until they are saved: the
-                    // sign-in page, or, with a session that is still good, the page that asks
-                    // to unlock. Gone on a lock or a sign-out, here or in another tab.
-                    showNewPhrase({
-                        phrase: result.phrase,
-                        applied: result.uncertain ? 'unknown' : true,
-                        storage: result.storage
-                            ? new DeviceStorageUnreadable(result.storage).why
-                            : null,
-                        from: 'rotation',
-                    });
-                    onOpenChange(false);
-                }
                 await router.navigate({
                     to: '/login',
                     search: {
@@ -396,6 +394,16 @@ export function NewKeyDialog({
                     },
                     replace: true,
                 });
+                return;
+            }
+            if (result.uncertain) {
+                // Signed in, on the account as it was for now: nothing more to show than the
+                // words and what they may be. The pages read the account afresh.
+                await router.invalidate();
+                setPassword('');
+                setTried(false);
+                step.reset();
+                setPending(false);
                 return;
             }
             await router.navigate({

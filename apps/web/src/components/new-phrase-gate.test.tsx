@@ -16,6 +16,8 @@ vi.mock('@/components/brand', () => ({ Brand: () => null }));
 vi.mock('@/components/cover', () => ({ Cover: () => null }));
 vi.mock('@/lib/sounds', () => ({ cue: vi.fn() }));
 const { NewPhraseGate } = await import('./new-phrase-gate');
+// The panel is loaded on demand; the dialog that keeps a phrase loads it first, and so does this.
+await import('./new-phrase');
 const { forgetNewPhrase, keepNewPhrase, newPhrase } = await import('@/lib/new-phrase');
 
 const words = Array.from({ length: 24 }, (_, index) => `word${index + 1}`);
@@ -42,6 +44,12 @@ function authStore() {
     };
 }
 const shown = () => screen.queryByRole('list', { name: 'Recovery phrase' });
+
+// jsdom has no modal dialogs: the browser's own call is recorded, and opens it as jsdom can.
+const showModal = vi.fn(function (this: HTMLDialogElement) {
+    this.setAttribute('open', '');
+});
+HTMLDialogElement.prototype.showModal = showModal;
 
 beforeEach(() => act(() => forgetNewPhrase()));
 
@@ -84,6 +92,23 @@ describe('the new recovery phrase, shown wherever the person is', () => {
         expect(shown()).toBeNull();
         expect(document.body).not.toHaveTextContent('word1');
         expect(newPhrase.getState().made).toBeNull();
+    });
+
+    test('is opened as a modal, so nothing under it can be reached, and Escape does not dismiss it', async () => {
+        showModal.mockClear();
+        render(<NewPhraseGate />);
+        act(() => keepNewPhrase(made, authStore()));
+        const list = await screen.findByRole('list', { name: 'Recovery phrase' });
+        // The browser's modal: top layer, the rest of the page inert to keyboard and readers.
+        expect(showModal).toHaveBeenCalledTimes(1);
+        const dialog = list.closest('dialog')!;
+        expect(showModal.mock.contexts[0]).toBe(dialog);
+        // Escape asks a modal dialog to close; this one closes only by its own button.
+        const cancel = new Event('cancel', { cancelable: true });
+        act(() => void dialog.dispatchEvent(cancel));
+        expect(cancel.defaultPrevented).toBe(true);
+        expect(shown()).not.toBeNull();
+        expect(newPhrase.getState().made).toEqual(made);
     });
 
     test('when the outcome could not be confirmed, it says to keep both phrases', async () => {

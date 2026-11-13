@@ -76,7 +76,13 @@ const bundle = {
     encryptedKey: 'B'.repeat(64),
 };
 const transport: CryptoTransport = {
-    request: async (operation) => (operation === 'remember' ? bundle : {}) as never,
+    request: async (operation) =>
+        (operation === 'remember'
+            ? bundle
+            : // What a reset makes, as far as the client reads it: the salts of its envelopes.
+              operation === 'recoverFinish'
+              ? { envelope: { wrappingSalt: 'made' }, recovery: { wrappingSalt: 'made' } }
+              : {}) as never,
     lock() {},
     onLock() {},
 };

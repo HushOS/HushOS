@@ -151,3 +151,53 @@ describe('turning two-step sign-in on', () => {
         expect(api.twoStep.mock.calls.length).toBeGreaterThan(1);
     });
 });
+
+/*
+ * Replacing the app offers no removal of devices and must do none. The trap: another tab
+ * removed the app meanwhile, so this confirmation turns the step on and comes back with
+ * codes, the path that removes devices when turning on was what the person asked for.
+ */
+describe('replacing the authenticator app', () => {
+    test('never removes a device, even when the confirmation comes back with backup codes', async () => {
+        api.twoStep.mockResolvedValue({
+            on: true,
+            methods: [
+                {
+                    id: 'app-0',
+                    kind: 'totp',
+                    name: null,
+                    createdAt: '2026-11-01T10:00:00.000Z',
+                    lastUsedAt: null,
+                    synced: false,
+                },
+            ],
+            backupCodesLeft: 10,
+            totpFrozen: false,
+        } as never);
+        api.devices.mockResolvedValue({
+            devices: [
+                { id: 'this', current: true },
+                { id: 'phone', current: false },
+            ],
+        });
+        const person = userEvent.setup();
+        render(
+            <QueryClientProvider
+                client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+            >
+                <AccountTwoStep user={user as never} />
+            </QueryClientProvider>,
+        );
+        await person.click(await screen.findByRole('button', { name: 'Replace' }));
+        await person.type(screen.getByLabelText('Password'), password);
+        await person.click(screen.getByRole('button', { name: 'Continue' }));
+        const code = await screen.findByLabelText('Code from your authenticator app');
+        // No removal is offered here.
+        expect(screen.queryByRole('checkbox', { name: /Remove my other devices/ })).toBeNull();
+        await person.type(code, '123456');
+        await person.click(screen.getByRole('button', { name: 'Replace app' }));
+        // The codes are shown, since the step was turned on after all.
+        await screen.findByRole('heading', { name: 'Save your backup codes' });
+        expect(api.removeOtherDevices).not.toHaveBeenCalled();
+    });
+});

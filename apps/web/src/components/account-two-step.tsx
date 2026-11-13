@@ -579,7 +579,10 @@ function AppDialog({
             // the box is ticked, whatever the list said (the server removes none when there
             // are none). It runs behind the codes and never holds them or the dialog: a
             // failure is said beside the codes, and in a notice if the dialog has closed.
-            if (signOutOthers) {
+            // Only when the step is being turned on. Replacing an app never removes a
+            // device, even when it comes back with codes: another tab removed the app
+            // meanwhile, and nobody was offered, or agreed to, any removal here.
+            if (!replacing && signOutOthers) {
                 setRemoving('running');
                 void authClient.removeOtherDevices(password).then(
                     () => {

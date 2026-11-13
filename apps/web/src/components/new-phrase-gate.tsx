@@ -19,20 +19,27 @@ const Panel = lazy(() =>
 export function NewPhraseGate() {
     const made = useStore(newPhrase, (state) => state.made);
     const layer = useRef<HTMLDialogElement>(null);
+    // Opened as a modal: the browser puts it above everything and makes the rest of the page
+    // inert, so the keyboard and a screen reader reach nothing that is under it (an unlock
+    // form, a sign-in form) until the words are acknowledged.
     useEffect(() => {
-        if (made) layer.current?.focus();
+        const dialog = layer.current;
+        if (!made || !dialog || dialog.open) return;
+        if (typeof dialog.showModal === 'function') dialog.showModal();
+        else dialog.setAttribute('open', '');
+        dialog.focus();
     }, [made]);
     if (!made) return null;
     return (
         <dialog
             ref={layer}
-            open
-            aria-modal="true"
             aria-label="Save your new recovery phrase"
             tabIndex={-1}
             data-new-phrase
-            // The whole viewport, above every page, dialog and notice.
-            className="fixed inset-0 z-[1000] m-0 size-full max-h-none max-w-none overflow-y-auto border-0 bg-background p-0 text-foreground outline-none"
+            // Escape closes a modal dialog by default; this one closes only by its button.
+            onCancel={(event) => event.preventDefault()}
+            // The whole viewport.
+            className="fixed inset-0 m-0 size-full max-h-none max-w-none overflow-y-auto border-0 bg-background p-0 text-foreground outline-none"
         >
             <Suspense fallback={null}>
                 <Panel
