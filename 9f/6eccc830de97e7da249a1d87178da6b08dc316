@@ -1,0 +1,60 @@
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/TwoStep.swift
+  s_566b8e0c4467a4::t_c7ae56bb57e254 1-493
+  s_566b8e0c4467a4::t_e3ce8ef72d2864 494-506
+apps/android/app/src/main/kotlin/com/hushos/app/data/TwoStep.kt
+  s_566b8e0c4467a4::t_351e210797e60f 1-374
+  s_566b8e0c4467a4::t_454eb09a854b4b 375-376
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/TwoStepTests.swift
+  s_566b8e0c4467a4::t_99a43b0df971bc 1-442
+  s_566b8e0c4467a4::t_ea930ebd908c52 443-466
+apps/ios/App/TwoStep.swift
+  s_566b8e0c4467a4::t_0fb4782c6cf791 1-804
+  s_566b8e0c4467a4::t_9f046cb227af90 805-809
+apps/android/app/src/main/kotlin/com/hushos/app/ui/TwoStepScreen.kt
+  s_566b8e0c4467a4::t_89b6919d0cdfd5 1-675
+apps/android/app/src/test/kotlin/com/hushos/app/data/TwoStepTest.kt
+  s_566b8e0c4467a4::t_2753938e993a51 1-391
+  s_566b8e0c4467a4::t_1c35b2b0afc7cb 392-421
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_4d4a88f64b8385 196-213,217
+apps/android/app/src/main/kotlin/com/hushos/app/data/Auth.kt
+  s_566b8e0c4467a4::t_b77529a51242d6 287-291,316,319-325,432-435,437-450,452-458,464,467-510,530,536-552,646-653,675-701,841-848,880-881,883,932-938,953-954,959,963-964
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AccountScreen.kt
+  s_566b8e0c4467a4::t_1f46bc630e4335 47,106,137-140,146,185-186,241,342,482-485,491,496-497,499-501,662,726-729,734,738,743-744,746-748,769-778,791,793-794,796-799,805-844
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_51b958c8ba29b0 104-107,336-337,356-361,520-554,556-558,561-601,633-637,1233-1234,1707,1710-1762,1782-1787,1790-1793,1795-1811,1814,1828
+apps/android/app/src/main/kotlin/com/hushos/app/ui/SignInScreen.kt
+  s_566b8e0c4467a4::t_a14e771644dada 33,92-97
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_e3f13d3ebd3878 321-338
+apps/ios/App/AccountView.swift
+  s_566b8e0c4467a4::t_b6d84fa9882d03 30-31,86-91,179-184,693-694,711,723,727,732-733,738-748,828-831,924-932,944,967,976,984-998,1001,1006-1007,1012,1015-1016,1018-1025,1027,1034-1036,1116,1130,1145,1149,1154-1155,1160,1164,1210-1211,1280
+apps/ios/App/AppModel.swift
+  s_566b8e0c4467a4::t_3ab75654979d97 136-162,167-207,212-217,231-233,249-253,365,391-393
+apps/ios/App/SignInView.swift
+  s_566b8e0c4467a4::t_33653c9f8364b7 41-51,166-167
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Account.swift
+  s_566b8e0c4467a4::t_95294ac06444b5 2,228-259,283,314-319,336,343-346,353,362-364,491-500,545-546,549
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Auth.swift
+  s_566b8e0c4467a4::t_ac15b876b88e77 2,95-104,117,124-133,135,159-163,166-184,193,198-233,235-244,255,264
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Recovery.swift
+  s_566b8e0c4467a4::t_1dd24862bdaa81 318-330
+docs/two-step-design.md
+  s_566b8e0c4467a4::t_42f3177da27daf 422-442,493
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9f6eccc830de97e7da249a1d87178da6b08dc316",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
