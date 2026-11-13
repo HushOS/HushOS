@@ -101,8 +101,17 @@ export function createSecurityChange() {
               action: SecurityAction;
           }
         | undefined;
+    // The recovery phrase a rotation made, until it is taken (`takePhrase`): a new recovery key
+    // or a new master key replaces the phrase, and the old one stops working once the server
+    // accepts the change.
+    let madePhrase = '';
     function reset() {
         pending = undefined;
+    }
+    function takePhrase() {
+        const phrase = madePhrase;
+        madePhrase = '';
+        return phrase;
     }
     async function start(input: {
         password: string;
@@ -131,6 +140,7 @@ export function createSecurityChange() {
     async function finish(input: SecurityChallenge): Promise<SecurityUpdate> {
         const attempt = pending;
         reset();
+        madePhrase = '';
         if (!attempt || attempt.action !== input.action)
             throw new CryptoError('Security change expired. Please try again.');
         const secrets: Uint8Array[] = [];
@@ -183,6 +193,17 @@ export function createSecurityChange() {
             const nonce = crypto.getRandomValues(new Uint8Array(24));
             const wrap = await wrappingKey(registration.exportKey, salt);
             secrets.push(wrap);
+            // A new recovery key (and so a new phrase) for every change but the password's.
+            const made =
+                input.action !== 'password'
+                    ? await createRecovery(
+                          nextRoot,
+                          input.userId,
+                          input.recovery.recoveryVersion + 1,
+                          keyVersion,
+                      )
+                    : undefined;
+            madePhrase = made?.phrase ?? '';
             return {
                 finishLoginRequest: login.finishLoginRequest,
                 registrationRecord: registration.registrationRecord,
@@ -201,17 +222,7 @@ export function createSecurityChange() {
                         ),
                     ),
                 },
-                recovery:
-                    input.action !== 'password'
-                        ? (
-                              await createRecovery(
-                                  nextRoot,
-                                  input.userId,
-                                  input.recovery.recoveryVersion + 1,
-                                  keyVersion,
-                              )
-                          ).recovery
-                        : undefined,
+                recovery: made?.recovery,
                 ...(input.action === 'master-key'
                     ? await rewrapAccountKeys(root, nextRoot, input.userId, keyVersion, input)
                     : {}),
@@ -224,5 +235,5 @@ export function createSecurityChange() {
             for (const secret of secrets) secret.fill(0);
         }
     }
-    return { start, finish, reset };
+    return { start, finish, reset, takePhrase };
 }

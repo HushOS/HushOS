@@ -465,7 +465,12 @@ describe('a device store that does not answer at sign-in', () => {
             'correct horse',
             'new horse',
         );
-        expect(result).toEqual({ signedIn: false, uncertain: false, storage: 'blocked' });
+        expect(result).toEqual({
+            signedIn: false,
+            uncertain: false,
+            storage: 'blocked',
+            phrase: null,
+        });
         expect(calls).toEqual([]);
         const state = auth.store.getState();
         expect(state.unlockedUserId).toBeNull();

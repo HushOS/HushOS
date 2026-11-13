@@ -616,3 +616,69 @@ test('when the sign-in after a reset does not happen, the new phrase is shown on
     await inApp(page);
     await page.context().close();
 });
+
+test('a new recovery phrase whose reply is lost does not lock out someone with only their phrase: the new words are shown before the sign-in that needs them', async ({
+    browser,
+}) => {
+    test.skip(!twoStepOn, 'Two-step sign-in is off (TWO_STEP_ENABLED).');
+    test.setTimeout(480_000);
+    const { page, email, phrase } = await account(browser);
+    await turnOn(page);
+    await dialog(page).getByRole('button', { name: 'Done' }).click();
+
+    // Make a new phrase, answering the step with the phrase: the only step this person has.
+    await page.getByRole('button', { name: 'Make a new phrase' }).click();
+    const make = dialog(page);
+    await make.getByLabel('Password', { exact: true }).fill(PASSWORD);
+    await make.getByRole('button', { name: 'Make a new phrase' }).click();
+    await expect(make.getByLabel('Code from your authenticator app')).toBeVisible({
+        timeout: 60_000,
+    });
+    await make.getByRole('button', { name: 'Use your recovery phrase' }).click();
+    await make.getByLabel('Recovery phrase').fill(phrase);
+
+    // The change reaches the server and is made; its reply, and the session it carried, are
+    // lost on the way back, and so is the sign-in the page then tries.
+    await page.route('**/api/auth/security/finish', async (route) => {
+        await route.fetch();
+        // The session the reply carried never reaches the browser, and the old one is dead.
+        await page.context().clearCookies();
+        await route.fulfill({
+            status: 200,
+            contentType: 'text/html',
+            body: '<html>Sign in to Wi-Fi</html>',
+        });
+    });
+    await page.route('**/api/auth/login/start', (route) => route.abort());
+    await make.getByRole('button', { name: 'Make a new phrase' }).click();
+
+    // Every session and the old phrase are dead now. The sign-in page shows the new words
+    // first, and says what it could not confirm.
+    await expect(page.getByRole('heading', { name: 'Save your new recovery phrase' })).toBeVisible({
+        timeout: 120_000,
+    });
+    await expect(page).toHaveURL(/\/login/);
+    await expect(page.getByText('Keep both until you have signed in.')).toBeVisible();
+    const fresh = await wordsOn(page);
+    expect(fresh.split(' ')).toHaveLength(24);
+    expect(fresh).not.toBe(phrase);
+    await page.unroute('**/api/auth/security/finish');
+    await page.unroute('**/api/auth/login/start');
+
+    // On to the form. The password is the same; the step refuses the old phrase and takes
+    // the words just shown.
+    await page.getByRole('button', { name: 'Continue to sign in' }).click();
+    await expect(page.getByRole('heading', { name: 'Welcome back' })).toBeVisible();
+    await enterPassword(page, email);
+    await expect(stepHeading(page)).toBeVisible({ timeout: 60_000 });
+    await page.getByRole('button', { name: 'Use your recovery phrase' }).click();
+    await page.getByLabel('Recovery phrase').fill(phrase);
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await expect(page.getByRole('alert')).toContainText('That recovery phrase didn’t work', {
+        timeout: 60_000,
+    });
+    await page.getByLabel('Recovery phrase').fill(fresh);
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await inApp(page);
+    await page.context().close();
+});

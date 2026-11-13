@@ -1186,6 +1186,13 @@ export function createAuthClient(
             /* The second step, for an account that has it on: asked for before this is called. */
             twoStep?: StepInput,
         ) =>
+            /*
+             * `phrase` in the result: the recovery phrase a rotation made (a new recovery key
+             * or a new master key), whenever the change went through, or may have, and this
+             * browser was not signed in again. The old phrase is dead once the server accepts
+             * the change, and the page that shows the new one is behind the sign-in: someone
+             * whose only second step is the phrase would be locked out without these words.
+             */
             exclusive(async () => {
                 lock();
                 const start = await own('securityStart', { action, password, newPassword });
@@ -1194,6 +1201,9 @@ export function createAuthClient(
                     throw new Error('Your account changed. Sign in again.');
                 const changeEpoch = epoch;
                 const finish = await own('securityFinish', challenge);
+                // A rotation's new words, out of the worker before anything is sent.
+                const fresh =
+                    action === 'password' ? null : (await own('recoveredPhrase', {})).phrase;
                 if (epoch !== changeEpoch)
                     throw new Error('Your account was locked. Please try again.');
                 let committed = true;
@@ -1229,6 +1239,17 @@ export function createAuthClient(
                 });
                 broadcastLock();
                 await deviceKeys.clear().catch(() => {});
+                /*
+                 * Whether the change landed, on evidence of the change itself: the server
+                 * said so, or what it serves now is at the change's versions (a session's
+                 * credential version, or a step's recovery-key version). Undefined while
+                 * nothing shows either way. Signing in is not evidence: a rotation keeps the
+                 * password, so it signs in whether the change landed or not.
+                 */
+                const next = user.credentialVersion + 1;
+                const seen: { landed: boolean | undefined } = {
+                    landed: committed ? true : undefined,
+                };
                 if (!committed) {
                     let live: SessionUser | null = null;
                     try {
@@ -1236,25 +1257,47 @@ export function createAuthClient(
                     } catch {
                         /* Unknown either way. */
                     }
+                    // The session the change was made from is still there, on the credential
+                    // as it was: nothing changed, and that is the error.
                     if (live && live.credentialVersion === user.credentialVersion) throw failure;
-                    return { signedIn: false, uncertain: true, storage: null };
+                    if (live && live.credentialVersion === next) seen.landed = true;
+                    // A password change has nothing more to learn by signing in.
+                    if (!fresh && seen.landed !== true)
+                        return { signedIn: false, uncertain: true, storage: null, phrase: null };
                 }
-                // Committed: the server replaced the credentials and ended every session, so a
-                // sign-in that fails here leaves the person signed out, on the sign-in page, with
-                // this browser's device key kept. `storage` says when that was the reason.
+                // The server replaced the credentials and ended every session, or may have.
+                // A sign-in that fails here leaves the person signed out, on the sign-in page,
+                // with this browser's device key kept. After a rotation it answers a second
+                // step with the new phrase, and its reply shows whether the change landed.
+                let signedIn = false;
+                let storage: DeviceStorageReason | null = null;
                 try {
                     await login(
                         user.email,
                         action === 'password' ? (newPassword ?? password) : password,
+                        {},
+                        fresh
+                            ? {
+                                  phrase: fresh,
+                                  credentialVersion: next,
+                                  recoveryVersion: challenge.recovery.recoveryVersion + 1,
+                                  landed: (shown) => {
+                                      if (!committed) seen.landed = shown;
+                                  },
+                              }
+                            : 'refuse',
                     );
-                    return { signedIn: true, uncertain: false, storage: null };
+                    signedIn = true;
                 } catch (error) {
-                    return {
-                        signedIn: false,
-                        uncertain: false,
-                        storage: error instanceof DeviceStorageUnreadable ? error.reason : null,
-                    };
+                    if (error instanceof DeviceStorageUnreadable) storage = error.reason;
                 }
+                // The account is as it was: the change never landed, and the old phrase is
+                // still the phrase. The new words are not handed over.
+                if (seen.landed === false) throw failure;
+                if (signedIn)
+                    return { signedIn: true, uncertain: false, storage: null, phrase: null };
+                // `storage` says when this browser's device key was why it was not signed in.
+                return { signedIn: false, uncertain: seen.landed !== true, storage, phrase: fresh };
             }),
         session: () => readSession(),
         /* Whether this tab cleared a removed device; said once, on the sign-in page. */

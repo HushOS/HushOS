@@ -437,7 +437,7 @@ describe('the second step at a security change', () => {
         });
         expect(
             await client.changeSecurity(user, 'password', 'correct horse', 'a new one', twoStep),
-        ).toEqual({ signedIn: true, uncertain: false, storage: null });
+        ).toEqual({ signedIn: true, uncertain: false, storage: null, phrase: null });
         expect(sent).toHaveLength(1);
         expect(sent[0]).toMatchObject({ action: 'password', twoStep, keepSession: 1 });
     });
@@ -451,7 +451,7 @@ describe('the second step at a security change', () => {
         });
         expect(
             await client.changeSecurity(user, 'password', 'correct horse', 'a new one', twoStep),
-        ).toEqual({ signedIn: false, uncertain: false, storage: null });
+        ).toEqual({ signedIn: false, uncertain: false, storage: null, phrase: null });
         // Nothing owns the worker: the sign-in page's own sign-in can begin at once.
         expect(client.isAuthenticating()).toBe(false);
         await expect(client.answerStep({ kind: 'totp', code: '123456' })).rejects.toMatchObject({
@@ -514,7 +514,7 @@ describe('the second step at a security change', () => {
             });
             expect(
                 await unknown.client.changeSecurity(user, 'password', 'correct horse', 'a new one'),
-            ).toEqual({ signedIn: false, uncertain: true, storage: null });
+            ).toEqual({ signedIn: false, uncertain: true, storage: null, phrase: null });
             // The session is still there on the old credential: nothing changed, and that is the error.
             const unchanged = change(async () => reply);
             await expect(
@@ -979,5 +979,183 @@ describe('a reset with the recovery phrase', () => {
                 storage: null,
             });
         });
+    });
+});
+
+/*
+ * A new recovery phrase or a new account key, from Account, replaces the phrase like a reset
+ * does. When `security/finish` commits and its reply (and the session it carries) is lost,
+ * every session and the old phrase are dead. Sent to sign in with nothing more, someone whose
+ * only second step is the phrase is locked out for good: the step needs words they were never
+ * shown. So the new words come back from the change whenever it went through, or may have,
+ * and this browser was not signed in again; whether it went through is read from the
+ * account's versions, never from the password signing in, which a rotation does not change.
+ */
+describe.each(['recovery-key', 'master-key'] as const)(
+    'a lost reply to a %s change, with the step on',
+    (action) => {
+        const fresh = 'fresh words made by the rotation';
+        const after = { ...session, envelope: { ...session.envelope, credentialVersion: 2 } };
+        const stepAfter = { ...step, phrase: { ...step.phrase, recoveryVersion: 2 } };
+        const lostReply = () => Promise.reject(new TypeError('Failed to fetch'));
+
+        function rotating(server: Partial<Record<keyof AuthApi, (...input: never[]) => unknown>>) {
+            items.clear();
+            const signed: string[] = [];
+            const reached: string[] = [];
+            const transport: CryptoTransport = {
+                request: async (operation, input) => {
+                    if (operation === 'recoveredPhrase') return { phrase: fresh } as never;
+                    if (operation === 'twoStepPhrase') {
+                        signed.push((input as { phrase: string }).phrase);
+                        return { signature: 's'.repeat(86) } as never;
+                    }
+                    return {} as never;
+                },
+                lock() {},
+                onLock() {},
+            };
+            const keys: DeviceKeyStore = {
+                create: async () => ({ id: 'device-key-1', key: {} as CryptoKey }),
+                load: async () => null,
+                clear: async () => {},
+            };
+            const client = createAuthClient(() => transport, keys, {
+                securityStart: async () => ({
+                    userId: user.id,
+                    action,
+                    attemptToken: 'a',
+                    recovery: { recoveryVersion: 1 },
+                }),
+                // Committed on the server; the reply, and the session cookie with it, never arrive.
+                securityFinish: lostReply,
+                // Every session ended with the change.
+                session: async () => ({ user: null, device: null }),
+                loginStart: async () => {
+                    reached.push('loginStart');
+                    return { attemptToken: 'attempt' };
+                },
+                // The cookie was lost, so the sign-in meets the step, which names the new key.
+                loginFinish: async () => ({ twoStep: stepAfter }),
+                loginTwoStep: async () => after,
+                ...server,
+            } as unknown as AuthApi);
+            const change = () => client.changeSecurity(user, action, 'correct horse', '');
+            return { change, signed, reached, client };
+        }
+
+        test('the step names the new recovery key: the change landed, the new phrase answers the step, and the person is signed in', async () => {
+            const { change, signed } = rotating({});
+            expect(await change()).toEqual({
+                signedIn: true,
+                uncertain: false,
+                storage: null,
+                phrase: null,
+            });
+            // Only the phrase could answer, and only the new one: the old is dead.
+            expect(signed).toEqual([fresh]);
+        });
+
+        test.each([
+            ['the step’s answer cannot be sent', { loginTwoStep: lostReply }],
+            [
+                'the step’s answer is refused',
+                { loginTwoStep: () => Promise.reject(refusal('No.', 401, 'step-wrong')) },
+            ],
+        ])(
+            'the change landed and %s: not signed in, and the new words come back to be shown',
+            async (_name, server) => {
+                const { change, client } = rotating(server as never);
+                expect(await change()).toEqual({
+                    signedIn: false,
+                    uncertain: false,
+                    storage: null,
+                    phrase: fresh,
+                });
+                expect(client.isAuthenticating()).toBe(false);
+            },
+        );
+
+        test('nothing can be reached again: the outcome is unknown, and the new words still come back, to be kept beside the old', async () => {
+            const { change } = rotating({
+                session: lostReply,
+                loginStart: lostReply,
+            });
+            expect(await change()).toEqual({
+                signedIn: false,
+                uncertain: true,
+                storage: null,
+                phrase: fresh,
+            });
+        });
+
+        test('the password signing in is not evidence: with no reply that shows the versions, the outcome stays unknown', async () => {
+            const { change } = rotating({ loginFinish: lostReply });
+            expect(await change()).toMatchObject({
+                signedIn: false,
+                uncertain: true,
+                phrase: fresh,
+            });
+        });
+
+        test('the account turns out to be as it was: the change never landed, the error says so, and no new words are handed over', async () => {
+            const failure = new TypeError('Failed to fetch');
+            // The session is gone for another reason, and the sign-in shows the old credential.
+            const onOldCredential = rotating({
+                securityFinish: () => Promise.reject(failure),
+                loginFinish: async () => session,
+            });
+            await expect(onOldCredential.change()).rejects.toBe(failure);
+            // Or it meets a step that names the old recovery key: left unanswered, since the
+            // new words are not the account's and would only be a counted wrong answer.
+            const answers: unknown[] = [];
+            const oldKey = rotating({
+                securityFinish: () => Promise.reject(failure),
+                loginFinish: async () => ({ twoStep: step }),
+                loginTwoStep: async (answer: never) => void answers.push(answer),
+            });
+            await expect(oldKey.change()).rejects.toBe(failure);
+            expect(oldKey.signed).toEqual([]);
+            expect(answers).toEqual([]);
+            // Or the session the change was made from is simply still there.
+            const stillIn = rotating({
+                securityFinish: () => Promise.reject(failure),
+                session: async () => ({ user, device: null }),
+            });
+            await expect(stillIn.change()).rejects.toBe(failure);
+            expect(stillIn.reached).toEqual([]);
+        });
+
+        test('the server said the change was made, and the sign-in after it fails: the new words come back', async () => {
+            const { change } = rotating({
+                securityFinish: async () => ({ success: true }),
+                loginFinish: lostReply,
+            });
+            expect(await change()).toEqual({
+                signedIn: false,
+                uncertain: false,
+                storage: null,
+                phrase: fresh,
+            });
+        });
+    },
+);
+
+describe('a lost reply to a password change', () => {
+    test('hands over no phrase (the phrase is not replaced) and is not probed by signing in, as before', async () => {
+        const reached: string[] = [];
+        const { client } = setup({
+            securityStart: async () => ({ userId: user.id, action: 'password', attemptToken: 'a' }),
+            securityFinish: () => Promise.reject(new TypeError('Failed to fetch')),
+            session: async () => ({ user: null, device: null }),
+            loginStart: async () => {
+                reached.push('loginStart');
+                return { attemptToken: 'attempt' };
+            },
+        });
+        expect(await client.changeSecurity(user, 'password', 'correct horse', 'a new one')).toEqual(
+            { signedIn: false, uncertain: true, storage: null, phrase: null },
+        );
+        expect(reached).toEqual([]);
     });
 });

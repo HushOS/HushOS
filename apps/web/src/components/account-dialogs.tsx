@@ -1,3 +1,4 @@
+import { DeviceStorageUnreadable } from '@hushos/auth/client';
 import type { SessionUser } from '@hushos/auth/protocol';
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '@hushos/auth/protocol';
 import { useQueryClient } from '@tanstack/react-query';
@@ -20,6 +21,7 @@ import { succeedIdentity } from '@/lib/contacts';
 import { driveClient, driveError, driveOpenQueryOptions } from '@/lib/drive';
 import { authError } from '@/lib/form';
 import { cue } from '@/lib/sounds';
+import { keepNewPhrase } from '@/lib/new-phrase';
 import { forgetDevice } from '@/lib/sign-out';
 import { useStepUp } from '@/lib/two-step';
 
@@ -366,6 +368,18 @@ export function NewKeyDialog({
             cue('success');
             router.options.context.queryClient.clear();
             if (!result.signedIn) {
+                // The old phrase is dead, or may be, and this browser is signed out: the new
+                // words go with the person to the sign-in page, which shows them first. The
+                // step there may need them, and nothing else would ever show them.
+                if (result.phrase)
+                    keepNewPhrase({
+                        phrase: result.phrase,
+                        applied: result.uncertain ? 'unknown' : true,
+                        storage: result.storage
+                            ? new DeviceStorageUnreadable(result.storage).why
+                            : null,
+                        from: 'rotation',
+                    });
                 await router.navigate({
                     to: '/login',
                     search: {

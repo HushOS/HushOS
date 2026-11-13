@@ -166,10 +166,11 @@ type BaseRequests = {
         phrase: string;
     };
     /*
-     * The recovery phrase a reset just made (`recoverFinish`), taken once. A reset replaces
-     * the phrase, and the old one stops working the moment the server accepts the reset: the
-     * new words must reach the person whatever happens to the sign-in that follows, and they
-     * are what answers that sign-in's second step (docs/two-step-design.md 5).
+     * The recovery phrase a reset (`recoverFinish`) or a rotation (`securityFinish` for a new
+     * recovery key or a new master key) just made, taken once. Each replaces the phrase, and
+     * the old one stops working the moment the server accepts the change: the new words must
+     * reach the person whatever happens to the sign-in that follows, and they are what
+     * answers that sign-in's second step (docs/two-step-design.md 5).
      */
     recoveredPhrase: Record<string, never>;
     registerFinish: { registrationResponse: string; userId: string; profileVersion: number };
@@ -1527,8 +1528,12 @@ export function createCryptoSession() {
             case 'securityStart':
                 clearState();
                 return security.start(message.input);
-            case 'securityFinish':
-                return security.finish(message.input);
+            case 'securityFinish': {
+                const update = await security.finish(message.input);
+                // A rotation's new words, for the client to take: see `recoveredPhrase`.
+                resetPhrase = security.takePhrase();
+                return update;
+            }
             case 'initialize': {
                 if (!accountKey || unlockedUserId !== message.input.userId)
                     throw new CryptoError('Unlock your account to finish setup.');

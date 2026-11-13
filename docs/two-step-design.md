@@ -309,6 +309,12 @@ A reset also **replaces the phrase**, so the phrase that answers is the new one,
     - either at the old version, or the new password refused: not applied. The old phrase is still the phrase, the new words are discarded, and a step that names the old recovery key is left unanswered;
     - no reply that shows either: unknown. The client shows the new words and says to keep both phrases until a sign-in has settled it.
 
+**A rotation from a signed-in session does the same.** A new recovery phrase and a new account key (`recovery-key` and `master-key` at `/auth/security/finish`) replace the phrase too, and end every session. If the reply is lost, the session it carried is lost with it, and the person is signed out with a phrase they were never shown. So the client keeps the new words before it sends the change, and:
+
+- whenever the change went through, or may have, and the browser is not signed in again, it shows the new words before the sign-in form;
+- the sign-in after the change answers its step with the new phrase, as a reset's does;
+- whether it went through is read the same way, by version and never by the password signing in, which a rotation does not change: a session at the old credential version plus one, or a step whose `phrase.recoveryVersion` is the old one plus one, means it did; either at the old version, or the session the change was made from still being there, means it did not; with neither, the words are shown with "keep both until you have signed in".
+
 ### Turning the step on and off
 
 - **On:**

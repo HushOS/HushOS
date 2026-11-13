@@ -10,6 +10,7 @@ import {
     OPAQUE_IDENTIFIERS,
     OPAQUE_PROFILE_VERSION,
 } from './protocol';
+import { createIdentity } from './identity';
 import { createRecovery } from './recovery';
 import { createCryptoSession } from './session';
 import {
@@ -204,5 +205,120 @@ describe('the phrase a reset makes', () => {
                 typeof session.handle
             >[0]),
         ).rejects.toBeInstanceOf(RefusedError);
+    });
+});
+
+/*
+ * A new recovery phrase, or a new account key, from Account: both replace the phrase, and the
+ * worker hands the new words over the same way a reset's are. A password change makes none.
+ */
+describe('the phrase a rotation makes', () => {
+    async function change(action: 'recovery-key' | 'master-key' | 'password') {
+        await ready;
+        const serverSetup = server.createSetup();
+        const registration = client.startRegistration({ password: PASSWORD });
+        const registered = client.finishRegistration({
+            password: PASSWORD,
+            clientRegistrationState: registration.clientRegistrationState,
+            registrationResponse: server.createRegistrationResponse({
+                serverSetup,
+                userIdentifier: USER,
+                registrationRequest: registration.registrationRequest,
+            }).registrationResponse,
+            identifiers: OPAQUE_IDENTIFIERS,
+            keyStretching: KEY_STRETCHING,
+        });
+        const root = crypto.getRandomValues(new Uint8Array(32));
+        const salt = crypto.getRandomValues(new Uint8Array(32));
+        const nonce = crypto.getRandomValues(new Uint8Array(24));
+        const b64 = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64url');
+        const envelope = {
+            envelopeVersion: ENVELOPE_VERSION,
+            keyVersion: 1,
+            credentialVersion: 1,
+            wrappingSalt: b64(salt),
+            wrappingNonce: b64(nonce),
+            encryptedKey: b64(
+                await encryptKey(
+                    root,
+                    await wrappingKey(registered.exportKey, salt),
+                    nonce,
+                    accountKeyContext(USER, 1, 1),
+                ),
+            ),
+        };
+        const old = await createRecovery(root.slice(), USER);
+        const session = createCryptoSession();
+        let id = 0;
+        const call = (operation: string, input: unknown) =>
+            session.handle({ id: ++id, operation, input } as Parameters<typeof session.handle>[0]);
+        const start = (await call('securityStart', {
+            action,
+            password: PASSWORD,
+            newPassword: 'another password entirely',
+        })) as { startLoginRequest: string; registrationRequest: string };
+        const update = (await call('securityFinish', {
+            action,
+            userId: USER,
+            attemptToken: STEP_TOKEN,
+            profileVersion: OPAQUE_PROFILE_VERSION,
+            loginResponse: server.startLogin({
+                serverSetup,
+                userIdentifier: USER,
+                registrationRecord: registered.registrationRecord,
+                startLoginRequest: start.startLoginRequest,
+                identifiers: OPAQUE_IDENTIFIERS,
+            }).loginResponse,
+            registrationResponse: server.createRegistrationResponse({
+                serverSetup,
+                userIdentifier: USER,
+                registrationRequest: start.registrationRequest,
+            }).registrationResponse,
+            envelope,
+            recovery: old.recovery,
+            identity: await createIdentity(root.slice(), USER),
+            identityHistory: [],
+            settingsKey: null,
+            workspaces: [],
+        })) as { recovery?: { publicKey: string; wrappingSalt: string; recoveryVersion: number } };
+        return { call, old, update };
+    }
+
+    test.each(['recovery-key', 'master-key'] as const)(
+        'a %s change hands its new phrase over once: the phrase of the recovery key it sends, which answers a step where the old one does not',
+        async (action) => {
+            const { call, old, update } = await change(action);
+            const { phrase } = (await call('recoveredPhrase', {})) as { phrase: string };
+            expect(phrase.split(' ')).toHaveLength(24);
+            expect(phrase).not.toBe(old.phrase);
+            expect(update.recovery!.recoveryVersion).toBe(2);
+            const statement = { userId: USER, tokenDigest: await stepTokenDigest(STEP_TOKEN) };
+            const sign = async (words: string) =>
+                signTwoStepPhrase(await recoveryStepKey(words, update.recovery!.wrappingSalt), {
+                    userId: USER,
+                    stepToken: STEP_TOKEN,
+                });
+            expect(
+                await verifyTwoStepPhrase(
+                    statement,
+                    await sign(phrase),
+                    update.recovery!.publicKey,
+                ),
+            ).toBe(true);
+            expect(
+                await verifyTwoStepPhrase(
+                    statement,
+                    await sign(old.phrase),
+                    update.recovery!.publicKey,
+                ),
+            ).toBe(false);
+            await expect(call('recoveredPhrase', {})).rejects.toBeInstanceOf(RefusedError);
+        },
+    );
+
+    test('a password change makes no new phrase, and hands none over', async () => {
+        const { call, update } = await change('password');
+        expect(update.recovery).toBeUndefined();
+        await expect(call('recoveredPhrase', {})).rejects.toBeInstanceOf(RefusedError);
     });
 });
