@@ -31,7 +31,8 @@ export const TWO_STEP_REMEMBER_SECONDS = 30 * 24 * 60 * 60;
  */
 export const REPLACEMENT_SESSION_SECONDS = 10 * 60;
 
-export type CreatedDevice = 'enrolment' | 'password';
+/* `device`: a new device whose sign-in another of the account's devices approved (the step). */
+export type CreatedDevice = 'enrolment' | 'password' | 'device';
 /* A device key's signature over one sign-in attempt (`deviceSessionStatement`). */
 export type DeviceProof = { id: string; signature: Buffer; attemptDigest: Buffer };
 type SessionDevice = { id: string; registered: boolean };
@@ -239,6 +240,8 @@ export async function writeSession(
         expiresAt: Date;
         device: SessionDevice | null;
         twoStepAt: Date | null;
+        /* The device that approved this sign-in as its second step, recorded on a new device. */
+        approvedByDeviceId?: string | null;
     },
 ) {
     const { user } = input;
@@ -251,16 +254,18 @@ export async function writeSession(
             .select({ count: count() })
             .from(accountDevices)
             .where(eq(accountDevices.userId, user.id));
-        created =
-            (existing?.count ?? 0) === 0 &&
-            user.createdAt.getTime() > now.getTime() - DEVICE_ENROLMENT_SECONDS * 1000
-                ? 'enrolment'
-                : 'password';
+        created = input.approvedByDeviceId
+            ? 'device'
+            : (existing?.count ?? 0) === 0 &&
+                user.createdAt.getTime() > now.getTime() - DEVICE_ENROLMENT_SECONDS * 1000
+              ? 'enrolment'
+              : 'password';
         const [row] = await tx
             .insert(accountDevices)
             .values({
                 userId: user.id,
                 approvedBy: created,
+                approvedByDeviceId: input.approvedByDeviceId ?? null,
                 approvedAt: now,
                 createdAt: now,
                 lastSeenAt: now,

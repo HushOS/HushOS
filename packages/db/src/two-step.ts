@@ -40,6 +40,7 @@ import {
     type DeviceProof,
     type Tx,
 } from './sessions';
+import { endRequestsOfRemovedMethod } from './two-step.approvals';
 import {
     BACKUP_CODE_COUNT,
     PENDING_FACTOR_SECONDS,
@@ -119,6 +120,31 @@ export type {
     TwoStepRefusal,
 } from './two-step.core';
 export { REPLACEMENT_SESSION_SECONDS, TWO_STEP_REMEMBER_SECONDS } from './sessions';
+export { STEP_UP_DEVICE_SECONDS } from './two-step.core';
+export {
+    CHANGE_REQUESTS_A_DAY,
+    DEVICE_REQUESTS_A_DAY,
+    approveDeviceRequest,
+    canAddDeviceStep,
+    confirmDeviceFactor,
+    createDeviceRequest,
+    denyDeviceRequest,
+    deviceStepUsable,
+    getDeviceRequest,
+    listApprovalPrompts,
+    openDeviceRequest,
+    revealDeviceRequest,
+    settleDeviceRequests,
+    startDeviceFactor,
+} from './two-step.approvals';
+export type {
+    ApprovalPrompt,
+    ConfirmDeviceFactorResult,
+    CountedRequest,
+    CreateRequestResult,
+    RequestStatus,
+    StartDeviceFactorResult,
+} from './two-step.approvals';
 
 /* A step-up's proof: the session asking, its step token, and what the answer spends. */
 export type SessionStep = StepProof & { sessionTokenHash: Buffer };
@@ -504,6 +530,8 @@ export async function removeFactor(input: {
                 proof: input.step,
             });
         await tx.delete(twoStepFactors).where(eq(twoStepFactors.id, input.factorId));
+        // No request outlives the method it was for, nor the token that would have confirmed it.
+        if (factor.kind === 'device') await endRequestsOfRemovedMethod(tx, input.userId);
         if (!factor.confirmedAt) return { status: 'ok', kind: factor.kind, turnedOff: false };
         const left = (await confirmedFactors(tx, input.userId)).map(({ kind }) => kind);
         const turnedOff = left.length === 0;
@@ -523,6 +551,7 @@ export async function removeFactor(input: {
                 .where(eq(twoStepState.userId, input.userId));
         const moved = kindGone && was === factor.kind && now ? { defaultKind: now } : {};
         if (turnedOff) {
+            await endRequestsOfRemovedMethod(tx, input.userId);
             await tx.delete(twoStepAttempts).where(eq(twoStepAttempts.userId, input.userId));
             await tx
                 .delete(twoStepKeyRegistrations)
@@ -1110,6 +1139,7 @@ export async function openSteppedSession(input: {
                     previousTokenHash: attempt.previousTokenHash,
                 }),
                 twoStepAt: new Date(),
+                approvedByDeviceId: passed.approverDeviceId,
             });
             const { createdAt: _createdAt, ...user } = account.user;
             return {

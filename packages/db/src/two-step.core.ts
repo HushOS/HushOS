@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { and, count, eq, gt, isNotNull, isNull, sql } from 'drizzle-orm';
+import { and, count, eq, gt, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
 import { db } from './client';
 import {
     accountDevices,
@@ -7,6 +7,7 @@ import {
     sessions,
     twoStepAttempts,
     twoStepBackupCodes,
+    twoStepDeviceRequests,
     twoStepFactors,
     twoStepState,
     type TwoStepDefaultKind,
@@ -342,6 +343,38 @@ export type StepFailure =
       };
 
 /*
+ * One more wrong answer in a row in `pool`: the device's own count, or the account's for
+ * sign-ins that proved no device. At the hundredth in a row in the account's pool the
+ * authenticator app is frozen for those sign-ins. The caller holds the account's lock.
+ */
+export async function countPoolFailure(tx: Tx, userId: string, pool: StepPool) {
+    let consecutiveFailures = 0;
+    let froze = false;
+    if (pool.kind === 'device') {
+        const [device] = await tx
+            .update(accountDevices)
+            .set({ twoStepFailures: sql`${accountDevices.twoStepFailures} + 1` })
+            .where(and(eq(accountDevices.id, pool.deviceId), eq(accountDevices.userId, userId)))
+            .returning({ failures: accountDevices.twoStepFailures });
+        consecutiveFailures = device?.failures ?? 0;
+    } else {
+        const state = await ensureState(tx, userId);
+        consecutiveFailures = state.consecutiveFailures + 1;
+        // At or past the limit, not only on it: a freeze lifted from a known device comes
+        // back with the next wrong answer here, so lifting it never hands out more guesses.
+        froze =
+            consecutiveFailures >= TOTP_FREEZE_FAILURES &&
+            !state.totpFrozenAt &&
+            (await confirmedFactors(tx, userId)).some(({ kind }) => kind === 'totp');
+        await tx
+            .update(twoStepState)
+            .set({ consecutiveFailures, ...(froze ? { totpFrozenAt: new Date() } : {}) })
+            .where(eq(twoStepState.userId, userId));
+    }
+    return { consecutiveFailures, froze, notice: consecutiveFailures >= STEP_NOTICE_FAILURES };
+}
+
+/*
  * Counts the wrong answer that was checked in a slot `takeStepAnswer` handed out, under the
  * account's lock:
  * - against the token, if it is still there: the fifth wrong answer deletes it;
@@ -383,34 +416,7 @@ export async function recordStepFailure(answer: StepAttempt): Promise<StepFailur
             }
         }
 
-        let consecutiveFailures = 0;
-        let froze = false;
-        if (answer.pool.kind === 'device') {
-            const [device] = await tx
-                .update(accountDevices)
-                .set({ twoStepFailures: sql`${accountDevices.twoStepFailures} + 1` })
-                .where(
-                    and(
-                        eq(accountDevices.id, answer.pool.deviceId),
-                        eq(accountDevices.userId, answer.userId),
-                    ),
-                )
-                .returning({ failures: accountDevices.twoStepFailures });
-            consecutiveFailures = device?.failures ?? 0;
-        } else {
-            const state = await ensureState(tx, answer.userId);
-            consecutiveFailures = state.consecutiveFailures + 1;
-            // At or past the limit, not only on it: a freeze lifted from a known device comes
-            // back with the next wrong answer here, so lifting it never hands out more guesses.
-            froze =
-                consecutiveFailures >= TOTP_FREEZE_FAILURES &&
-                !state.totpFrozenAt &&
-                (await confirmedFactors(tx, answer.userId)).some(({ kind }) => kind === 'totp');
-            await tx
-                .update(twoStepState)
-                .set({ consecutiveFailures, ...(froze ? { totpFrozenAt: new Date() } : {}) })
-                .where(eq(twoStepState.userId, answer.userId));
-        }
+        const { consecutiveFailures, froze } = await countPoolFailure(tx, answer.userId, answer.pool);
         return {
             status: 'counted',
             left,
@@ -487,13 +493,15 @@ async function recordSuccess(
  * - `backup`: the code's hash, as stored;
  * - `phrase`: nothing beyond the token, which the signature was made over;
  * - `webauthn`: the counter the key's assertion carried, on the account's confirmed key, and
- *   whether the key says it is backed up now (a passkey can start syncing later).
+ *   whether the key says it is backed up now (a passkey can start syncing later);
+ * - `device`: the request another device approved, which must be this token's own.
  */
 export type StepSpend =
     | { method: 'totp'; factorId: string; step: number }
     | { method: 'backup'; codeHash: Buffer }
     | { method: 'phrase' }
-    | { method: 'webauthn'; factorId: string; signCount: number; backedUp: boolean };
+    | { method: 'webauthn'; factorId: string; signCount: number; backedUp: boolean }
+    | { method: 'device'; requestId: string };
 /* What spending an answer left behind: how many backup codes the account had left, when one was used. */
 export type StepSpent = { backupCodesLeft: number | null };
 /*
@@ -620,14 +628,175 @@ export async function passStep(
         if (moved !== 'ok')
             throw new StepRefused({ reason: 'spent', attempt, counter: moved === 'counter' });
     }
+    let approverDeviceId: string | null = null;
+    if (spend.method === 'device') {
+        approverDeviceId = await useDeviceApproval(tx, attempt, spend.requestId);
+        if (!approverDeviceId) throw new StepRefused({ reason: 'gone' });
+    }
     const gone = await tx
         .delete(twoStepAttempts)
         .where(eq(twoStepAttempts.tokenHash, attempt.tokenHash))
         .returning({ tokenHash: twoStepAttempts.tokenHash });
     if (gone.length !== 1) throw new StepRefused({ reason: 'gone' });
+    // The token is used: a request to approve on another device that it still had open ends with
+    // it, and is not a failed step. The person passed another way.
+    await endDeviceRequests(tx, {
+        userId: attempt.userId,
+        tokenHash: attempt.tokenHash,
+        reason: 'passed',
+    });
     await recordSuccess(tx, { userId: attempt.userId, pool: attempt.pool, method: spend.method });
     input.proof.spent?.({ backupCodesLeft });
-    return { attempt, method: spend.method, backupCodesLeft };
+    return { attempt, method: spend.method, backupCodesLeft, approverDeviceId };
+}
+
+/* ------------------------------------------------------------------------- */
+/* Approving on another device                                                */
+/* ------------------------------------------------------------------------- */
+
+/* A step-up is approved only between devices that have been on the account this long (design 12). */
+export const STEP_UP_DEVICE_SECONDS = 7 * 24 * 60 * 60;
+
+/* Whether a purpose is a step-up that both devices must be seven days old for. */
+export const agedPurpose = (purpose: TwoStepPurpose) =>
+    purpose !== 'login' && purpose !== 'enrol' && purpose !== 'device-approval';
+
+/*
+ * The account's devices that may approve a request for `purpose` (docs/two-step-design.md 12):
+ * not removed, approved, holding a device key, and with a live session on the account's current
+ * credential that passed the step. Never `exceptDeviceId`, the device asking. For a step-up, only
+ * a device approved on the account at least seven days ago.
+ *
+ * `bootstrap`: the account has no confirmed method yet, so no session has passed the step; for
+ * the one approval that turns the method on, a live session with a device key is enough.
+ */
+export async function approvingDevices(
+    executor: Executor,
+    input: {
+        userId: string;
+        purpose: TwoStepPurpose;
+        exceptDeviceId: string | null;
+        bootstrap: boolean;
+        onlyDeviceId?: string;
+    },
+) {
+    const now = new Date();
+    const aged = new Date(now.getTime() - STEP_UP_DEVICE_SECONDS * 1000);
+    const rows = await executor
+        .selectDistinct({ id: accountDevices.id })
+        .from(accountDevices)
+        .innerJoin(
+            sessions,
+            and(
+                eq(sessions.deviceId, accountDevices.id),
+                eq(sessions.userId, accountDevices.userId),
+                gt(sessions.expiresAt, now),
+                input.bootstrap ? undefined : isNotNull(sessions.twoStepAt),
+            ),
+        )
+        .innerJoin(
+            opaqueCredentials,
+            and(
+                eq(opaqueCredentials.userId, sessions.userId),
+                eq(opaqueCredentials.version, sessions.credentialVersion),
+            ),
+        )
+        .where(
+            and(
+                eq(accountDevices.userId, input.userId),
+                isNull(accountDevices.revokedAt),
+                isNotNull(accountDevices.approvedAt),
+                isNotNull(accountDevices.signingPublicKey),
+                input.exceptDeviceId ? ne(accountDevices.id, input.exceptDeviceId) : undefined,
+                input.onlyDeviceId ? eq(accountDevices.id, input.onlyDeviceId) : undefined,
+                agedPurpose(input.purpose)
+                    ? sql`${accountDevices.approvedAt} <= ${aged}`
+                    : undefined,
+            ),
+        );
+    return rows.map((row) => row.id);
+}
+
+/*
+ * Ends the account's requests that are still open, or one token's: nothing more can approve
+ * them. A request that was replaced by a newer one while its token lived ends with the token
+ * too, so it is never counted as left unanswered when the person passed another way.
+ */
+export async function endDeviceRequests(
+    tx: Tx,
+    input: { userId: string; tokenHash?: Buffer; reason: 'passed' | 'off' },
+) {
+    await tx
+        .update(twoStepDeviceRequests)
+        .set({ state: 'ended', endedReason: input.reason, endedAt: new Date() })
+        .where(
+            and(
+                eq(twoStepDeviceRequests.userId, input.userId),
+                input.tokenHash ? eq(twoStepDeviceRequests.tokenHash, input.tokenHash) : undefined,
+                eq(twoStepDeviceRequests.counted, false),
+                or(
+                    ne(twoStepDeviceRequests.state, 'ended'),
+                    eq(twoStepDeviceRequests.endedReason, 'replaced'),
+                ),
+            ),
+        );
+}
+
+/*
+ * Spends another device's approval for the token being passed, under the account's lock: the
+ * request must be this account's, made for this very token and purpose, and approved; the
+ * device that approved it must still be one that may (not removed since, its session still
+ * live); and the account must still have the method. The request ends as used, so an approval
+ * passes one token once. Answers the approving device, or null when any of that does not hold.
+ */
+async function useDeviceApproval(tx: Tx, attempt: StepAttempt, requestId: string) {
+    const [request] = await tx
+        .select({
+            id: twoStepDeviceRequests.id,
+            approverDeviceId: twoStepDeviceRequests.approverDeviceId,
+            deviceId: twoStepDeviceRequests.deviceId,
+        })
+        .from(twoStepDeviceRequests)
+        .where(
+            and(
+                eq(twoStepDeviceRequests.id, requestId),
+                eq(twoStepDeviceRequests.userId, attempt.userId),
+                eq(twoStepDeviceRequests.tokenHash, attempt.tokenHash),
+                eq(twoStepDeviceRequests.purpose, attempt.purpose),
+                eq(twoStepDeviceRequests.state, 'approved'),
+                gt(twoStepDeviceRequests.expiresAt, new Date()),
+            ),
+        )
+        .for('update');
+    if (!request?.approverDeviceId) return null;
+    const asking = attempt.pool.kind === 'device' ? attempt.pool.deviceId : null;
+    // The device the token names now must be the one the request was made for, and never the approver.
+    if (request.deviceId !== asking || request.approverDeviceId === asking) return null;
+    const [approver] = await approvingDevices(tx, {
+        userId: attempt.userId,
+        purpose: attempt.purpose,
+        exceptDeviceId: asking,
+        bootstrap: false,
+        onlyDeviceId: request.approverDeviceId,
+    });
+    if (!approver) return null;
+    const used = await tx
+        .update(twoStepFactors)
+        .set({ lastUsedAt: hourOf(new Date()) })
+        .where(
+            and(
+                eq(twoStepFactors.userId, attempt.userId),
+                eq(twoStepFactors.kind, 'device'),
+                isNotNull(twoStepFactors.confirmedAt),
+            ),
+        )
+        .returning({ id: twoStepFactors.id });
+    if (used.length !== 1) return null;
+    await tx
+        .update(twoStepDeviceRequests)
+        .set({ state: 'ended', endedReason: 'used', endedAt: new Date() })
+        .where(eq(twoStepDeviceRequests.id, request.id));
+    return approver;
 }
 
 /*
