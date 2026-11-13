@@ -1,0 +1,50 @@
+packages/db/src/two-step.reseal.test.ts
+  s_566b8e0c4467a4::t_3b3dc61c350ae0 1-330
+  s_566b8e0c4467a4::t_399802b4c0c4f7 331-338
+apps/web/src/lib/api/two-step-reseal.db.test.ts
+  s_566b8e0c4467a4::t_568d6fcd8fbe5b 1-335
+apps/web/src/lib/api/system.server.ts
+  s_566b8e0c4467a4::t_2ae8921187d3b1 2,4,14-41,57
+bun.lock
+  s_566b8e0c4467a4::t_a190a441c9d286 284
+compose.yaml
+  s_566b8e0c4467a4::t_666f048f1018f7 138-140,174-182
+packages/auth/package.json
+  s_566b8e0c4467a4::t_c9e842d2ce26ef 15-16
+packages/auth/src/two-step-keys.ts
+  s_566b8e0c4467a4::t_d44d988945c629 1-203
+packages/auth/src/two-step.ts
+  s_566b8e0c4467a4::t_4d1c93aebdb25d 26,81,83-90,97-115
+packages/db/src/auth.ts
+  s_566b8e0c4467a4::t_67e84998532120 223-231
+packages/db/src/two-step.ts
+  s_566b8e0c4467a4::t_57a3fd20d60768 1-13,18,737-888
+packages/env/src/opaque.ts
+  s_566b8e0c4467a4::t_1fe0aea31cb781 6-7,18-19
+packages/jobs/Dockerfile
+  s_566b8e0c4467a4::t_cdc64561f04074 35-36
+packages/jobs/package.json
+  s_566b8e0c4467a4::t_0a6b13534b6fe7 18
+packages/jobs/src/client.ts
+  s_566b8e0c4467a4::t_a5527d184334a1 12,37,92-104
+packages/jobs/src/jobs/two-step.ts
+  s_566b8e0c4467a4::t_8779901d944c35 1-72
+packages/jobs/src/worker.ts
+  s_566b8e0c4467a4::t_647728d9c208cd 15,92-108
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1c51fb08fe3447313c0d36873aaa1af8c97aad95",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
