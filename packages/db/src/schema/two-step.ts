@@ -25,6 +25,13 @@ import { accountDevices, bytea, users, type DeviceKind } from './auth';
 export type TwoStepFactorKind = 'totp' | 'webauthn';
 /* What can pass the step: a factor's kind, a backup code or the recovery phrase. */
 export type TwoStepMethod = TwoStepFactorKind | 'backup' | 'phrase';
+/*
+ * What an account's default can be (docs/two-step-design.md 12): the kind of method the step
+ * offers first. `device` (approving on another device) is named here before it is built, so the
+ * column and the order need no second migration; no factor of that kind exists yet.
+ */
+export const TWO_STEP_DEFAULT_KINDS = ['webauthn', 'totp', 'device'] as const;
+export type TwoStepDefaultKind = (typeof TWO_STEP_DEFAULT_KINDS)[number];
 
 /*
  * What a step token is for. `login` and `enrol` come from a sign-in that has no session yet;
@@ -51,8 +58,8 @@ const sessionPurposes = TWO_STEP_PURPOSES.filter(
     .join(', ');
 
 /*
- * A method: an authenticator app (TOTP) or, from the security-key release, a WebAuthn
- * credential. A row is pending until `confirmed_at` is set; a pending row never satisfies the
+ * A method: an authenticator app (TOTP) or a WebAuthn credential (a passkey or a security
+ * key). A row is pending until `confirmed_at` is set; a pending row never satisfies the
  * step, and the worker deletes it ten minutes after it was made.
  *
  * - TOTP: the shared secret sealed under the two-step key (XChaCha20-Poly1305, 20 bytes and the
@@ -70,7 +77,7 @@ export const twoStepFactors = pgTable(
             .notNull()
             .references(() => users.id, { onDelete: 'cascade' }),
         kind: text().notNull().$type<TwoStepFactorKind>(),
-        // A security key's name, chosen by whoever added it and not encrypted. An app has none.
+        // A passkey's or security key's name, chosen by whoever added it and not encrypted. An app has none.
         name: text(),
         createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
         confirmedAt: timestamp('confirmed_at', { withTimezone: true }),
@@ -203,6 +210,11 @@ export const twoStepAttempts = pgTable(
  * with, and the counters for sign-ins that proved no device: how many wrong answers in a row,
  * and when that froze the authenticator app for new devices. A device that proved its key has
  * its own count, `account_devices.two_step_failures`.
+ *
+ * `default_kind` is the kind of method the person chose to be offered first
+ * (docs/two-step-design.md 12). It is never read on its own: the order is always worked out
+ * against the confirmed factors, and the repository clears it in the transaction that removes
+ * the last factor of that kind, so an old choice never comes back when the kind is added again.
  */
 export const twoStepState = pgTable(
     'two_step_state',
@@ -214,11 +226,48 @@ export const twoStepState = pgTable(
         backupCodeSalt: bytea('backup_code_salt').notNull(),
         consecutiveFailures: integer('consecutive_failures').notNull().default(0),
         totpFrozenAt: timestamp('totp_frozen_at', { withTimezone: true }),
+        defaultKind: text('default_kind').$type<TwoStepDefaultKind>(),
     },
     (table) => [
         check(
             'two_step_state_valid',
             sql`octet_length(${table.webauthnUserHandle}) = 32 and octet_length(${table.backupCodeSalt}) = 16 and ${table.consecutiveFailures} >= 0`,
+        ),
+        check(
+            'two_step_state_default_valid',
+            sql`${table.defaultKind} is null or ${table.defaultKind} in ('webauthn', 'totp', 'device')`,
+        ),
+    ],
+);
+
+/*
+ * A passkey or security key being added (docs/two-step-design.md 3): what
+ * `two-step/keys/options` hands out and `two-step/keys` takes back. Only the token's hash is
+ * kept, with the WebAuthn challenge the key must sign. A row exists only because the session
+ * it names proved the password again and, when the account had the step on, passed it; it is
+ * used once, lasts five minutes, and goes when the step is turned on or off by anything else,
+ * so a registration started before the step was on can never add a key after it without it.
+ * A WebAuthn factor has no pending row of its own: its columns exist only once the key answered.
+ */
+export const twoStepKeyRegistrations = pgTable(
+    'two_step_key_registrations',
+    {
+        tokenHash: bytea('token_hash').primaryKey(),
+        userId: uuid('user_id')
+            .notNull()
+            .references(() => users.id, { onDelete: 'cascade' }),
+        sessionTokenHash: bytea('session_token_hash').notNull(),
+        credentialVersion: integer('credential_version').notNull(),
+        challenge: bytea().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    },
+    (table) => [
+        index('two_step_key_registrations_user_idx').on(table.userId),
+        index('two_step_key_registrations_expiry_idx').on(table.expiresAt),
+        check(
+            'two_step_key_registrations_valid',
+            sql`octet_length(${table.tokenHash}) = 32 and octet_length(${table.sessionTokenHash}) = 32 and octet_length(${table.challenge}) = 32 and ${table.credentialVersion} > 0 and ${table.expiresAt} > ${table.createdAt}`,
         ),
     ],
 );

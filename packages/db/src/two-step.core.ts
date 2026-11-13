@@ -9,6 +9,8 @@ import {
     twoStepBackupCodes,
     twoStepFactors,
     twoStepState,
+    type TwoStepDefaultKind,
+    type TwoStepFactorKind,
     type TwoStepMethod,
     type TwoStepPurpose,
 } from './schema';
@@ -37,6 +39,24 @@ export const SECURITY_EVENT_DAYS = 90;
 export const PENDING_FACTOR_SECONDS = 10 * 60;
 /* RFC 6238's time step, which the key URI fixes at 30 seconds. */
 export const TOTP_PERIOD_SECONDS = 30;
+/* How many passkeys and security keys one account may have (docs/two-step-design.md 3). */
+export const WEBAUTHN_KEY_LIMIT = 10;
+
+/*
+ * The order the kinds of method are offered in (docs/two-step-design.md 12): the account's
+ * default first, then passkey, authenticator app, another device. Only kinds the account has a
+ * confirmed factor of are in it, so a default whose kind is gone is simply not there: the stored
+ * choice is never read on its own. The first entry is the account's usual way.
+ */
+const KIND_ORDER: readonly TwoStepDefaultKind[] = ['webauthn', 'totp', 'device'];
+export function kindOrder(
+    confirmed: Iterable<TwoStepFactorKind | TwoStepDefaultKind>,
+    defaultKind: TwoStepDefaultKind | null | undefined,
+): TwoStepDefaultKind[] {
+    const has = new Set<string>(confirmed);
+    const order = defaultKind ? [defaultKind, ...KIND_ORDER] : KIND_ORDER;
+    return [...new Set(order)].filter((kind) => has.has(kind));
+}
 
 const HOUR_MS = 60 * 60 * 1000;
 /* The hour a moment falls in (UTC): what `last_used_at` keeps. */
@@ -83,6 +103,27 @@ export async function ensureState(executor: Executor, userId: string) {
     return state;
 }
 
+/*
+ * Keeps the account's usual way where it is when a method of another kind is added: an account
+ * that never chose a default (its row is from before there was one, or an older container
+ * confirmed its app) gets the kind it has been using written down first. `confirmed` is the
+ * kinds it had before the new one. The caller holds the account's lock.
+ */
+export async function settleDefault(
+    tx: Tx,
+    userId: string,
+    confirmed: Iterable<TwoStepFactorKind>,
+    turnedOnWith?: TwoStepFactorKind,
+) {
+    const state = await ensureState(tx, userId);
+    const next = turnedOnWith ?? state.defaultKind ?? kindOrder(confirmed, null)[0] ?? null;
+    if (next !== state.defaultKind)
+        await tx
+            .update(twoStepState)
+            .set({ defaultKind: next })
+            .where(eq(twoStepState.userId, userId));
+}
+
 /* How many of the account's backup codes are unused. */
 export async function unusedBackupCodes(executor: Executor, userId: string) {
     const [row] = await executor
@@ -117,6 +158,50 @@ async function advanceTotpStep(
         )
         .returning({ id: twoStepFactors.id });
     return moved.length === 1;
+}
+
+/*
+ * Moves a confirmed key's signature counter on, in one statement, by the specification's rule
+ * (WebAuthn 6.1.1, docs/two-step-design.md 3): when either the stored counter or the new one
+ * is non-zero, the new one must be greater. The comparison is in the update itself, so however
+ * many assertions race, the counter only ever goes up, and a clone that answers with a counter
+ * the real key has passed is refused. A stored 0 and a new 0 pass: a synced passkey reports 0
+ * every time. Answers `counter` when the key is there and the rule refused it, `missing` when
+ * the key is not this account's confirmed key (removed since the answer was checked).
+ */
+async function advanceSignCount(
+    executor: Executor,
+    input: { userId: string; factorId: string; signCount: number; backedUp: boolean },
+): Promise<'ok' | 'counter' | 'missing'> {
+    if (!Number.isSafeInteger(input.signCount) || input.signCount < 0) return 'counter';
+    const key = and(
+        eq(twoStepFactors.id, input.factorId),
+        eq(twoStepFactors.userId, input.userId),
+        eq(twoStepFactors.kind, 'webauthn'),
+        isNotNull(twoStepFactors.confirmedAt),
+    );
+    const moved = await executor
+        .update(twoStepFactors)
+        .set({
+            signCount: input.signCount,
+            backupState: input.backedUp,
+            lastUsedAt: hourOf(new Date()),
+        })
+        .where(
+            and(
+                key,
+                input.signCount === 0
+                    ? eq(twoStepFactors.signCount, 0)
+                    : sql`${twoStepFactors.signCount} < ${input.signCount}`,
+            ),
+        )
+        .returning({ id: twoStepFactors.id });
+    if (moved.length === 1) return 'ok';
+    const [there] = await executor
+        .select({ id: twoStepFactors.id })
+        .from(twoStepFactors)
+        .where(key);
+    return there ? 'counter' : 'missing';
 }
 
 /*
@@ -400,13 +485,15 @@ async function recordSuccess(
  * What a right answer uses up, once the server has checked it:
  * - `totp`: the time step the code was for, on the account's confirmed app;
  * - `backup`: the code's hash, as stored;
- * - `phrase`: nothing beyond the token, which the signature was made over.
- * A security key's assertion joins these with the security-key release.
+ * - `phrase`: nothing beyond the token, which the signature was made over;
+ * - `webauthn`: the counter the key's assertion carried, on the account's confirmed key, and
+ *   whether the key says it is backed up now (a passkey can start syncing later).
  */
 export type StepSpend =
     | { method: 'totp'; factorId: string; step: number }
     | { method: 'backup'; codeHash: Buffer }
-    | { method: 'phrase' };
+    | { method: 'phrase' }
+    | { method: 'webauthn'; factorId: string; signCount: number; backedUp: boolean };
 /* What spending an answer left behind: how many backup codes the account had left, when one was used. */
 export type StepSpent = { backupCodesLeft: number | null };
 /*
@@ -432,8 +519,11 @@ type Refused =
     | { reason: 'frozen' }
     /* The time step is one no code could be for yet: a mistake above the repository, not counted. */
     | { reason: 'step' }
-    /* The time step or backup code was already used: a wrong answer, counted as one. */
-    | { reason: 'spent'; attempt: StepAttempt };
+    /*
+     * The time step or backup code was already used, or the key's counter did not go up
+     * (`counter`): a wrong answer, counted as one.
+     */
+    | { reason: 'spent'; attempt: StepAttempt; counter?: boolean };
 
 /*
  * What a gated function answers when the step did not pass, with nothing else done. A spent
@@ -443,7 +533,8 @@ type Refused =
  */
 export type TwoStepRefusal =
     | { status: 'two-step'; reason: 'required' | 'gone' | 'frozen' | 'step' }
-    | { status: 'two-step'; reason: 'spent'; failure: StepFailure };
+    /* `counter`: a key's counter did not go up, which can mean the key was copied. */
+    | { status: 'two-step'; reason: 'spent'; failure: StepFailure; counter?: boolean };
 
 /* Thrown inside a gated transaction, so everything it did so far rolls back with the refusal. */
 export class StepRefused extends Error {
@@ -467,6 +558,7 @@ export async function settleRefusal(error: unknown): Promise<TwoStepRefusal | nu
         status: 'two-step',
         reason: 'spent',
         failure: await recordStepFailure(refused.attempt),
+        ...(refused.counter ? { counter: true } : {}),
     };
 }
 
@@ -475,7 +567,7 @@ export async function settleRefusal(error: unknown): Promise<TwoStepRefusal | nu
  * is read again, must be this account's, for this purpose and session, and must have an
  * answer slot taken and not yet counted (`takeStepAnswer`); a frozen app is refused, and so is
  * a time step out of the clock's reach, before anything is written; the time step or backup
- * code is spent; the token is deleted and the success recorded. Any refusal
+ * code is spent, or the key's counter moved on; the token is deleted and the success recorded. Any refusal
  * is thrown (`StepRefused`), so the caller's transaction rolls back whole. What this wrote
  * commits only if the caller's action does.
  */
@@ -518,6 +610,15 @@ export async function passStep(
         });
         if (!used) throw new StepRefused({ reason: 'spent', attempt });
         backupCodesLeft = used.left;
+    } else if (spend.method === 'webauthn') {
+        const moved = await advanceSignCount(tx, {
+            userId: attempt.userId,
+            factorId: spend.factorId,
+            signCount: spend.signCount,
+            backedUp: spend.backedUp,
+        });
+        if (moved !== 'ok')
+            throw new StepRefused({ reason: 'spent', attempt, counter: moved === 'counter' });
     }
     const gone = await tx
         .delete(twoStepAttempts)

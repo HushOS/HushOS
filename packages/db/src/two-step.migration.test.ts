@@ -10,7 +10,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 /*
  * The two-step migrations and their undo scripts (drizzle/<migration>/undo.sql), on a database
  * of their own beside the test database: every earlier migration is applied with drizzle's
- * migrator (the code `drizzle-kit migrate` runs, with its ledger), the schema is read, the two
+ * migrator (the code `drizzle-kit migrate` runs, with its ledger), the schema is read, the
  * migrations are applied, rows are written, the undo scripts are run as an operator would run
  * them, and the schema is read again. It must be the schema from before, exactly: tables,
  * columns, defaults, constraints, indexes, triggers, functions and the migrations ledger.
@@ -18,6 +18,8 @@ import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 
 const TABLES = '20261112160538_two_step';
 const GUARD = '20261112174853_two_step_session_guard';
+const READERS = '20261113181124_two_step_key_readers';
+const PASSKEYS = '20261113195154_two_step_passkeys';
 
 const migrationsFolder = fileURLToPath(new URL('../drizzle', import.meta.url));
 const undo = (migration: string) =>
@@ -353,6 +355,107 @@ describe('the two-step migrations and their undo scripts', () => {
         await run(undo(TABLES));
         expect(await schemaOf(client)).toEqual(before);
         await expect(run(undo(TABLES))).rejects.toMatchObject({ code: '42P01' });
+        expect(await schemaOf(client)).toEqual(before);
+    }, 180_000);
+
+    test('the passkeys migration makes the app the default for accounts that have one, and its undo takes back only what it added', async () => {
+        // Before: everything up to the release before this one, an account with the step on by an app, one whose
+        // only method is a key, and one that started setting up and never confirmed.
+        await migrate(upTo(READERS), scratch, { migrationsFolder });
+        const before = await schemaOf(client);
+        const account = async (email: string) => {
+            const id = randomUUID();
+            await client.query(
+                `insert into users (id, name, email, normalized_email, email_verified_at) values ($1, 'Someone', $2, $2, now())`,
+                [id, email],
+            );
+            await client.query(
+                `insert into two_step_state (user_id, webauthn_user_handle, backup_code_salt) values ($1, $2, $3)`,
+                [id, randomBytes(32), randomBytes(16)],
+            );
+            return id;
+        };
+        const app = (userId: string, confirmed: boolean) =>
+            client.query(
+                `insert into two_step_factors (user_id, kind, confirmed_at, totp_key_id, totp_nonce, totp_secret, totp_last_step)
+                 values ($1, 'totp', $2, $3, $4, $5, $6)`,
+                [
+                    userId,
+                    confirmed ? new Date() : null,
+                    randomBytes(8),
+                    randomBytes(24),
+                    randomBytes(36),
+                    confirmed ? 1000 : 0,
+                ],
+            );
+        const withApp = await account('app@hushos.test');
+        await app(withApp, true);
+        const withKey = await account('key@hushos.test');
+        await client.query(
+            `insert into two_step_factors (user_id, kind, name, confirmed_at, credential_id, public_key, sign_count, transports, backup_eligible, backup_state)
+             values ($1, 'webauthn', 'Security key', now(), $2, $3, 0, '{usb}', false, false)`,
+            [withKey, randomBytes(32), randomBytes(77)],
+        );
+        const pending = await account('pending@hushos.test');
+        await app(pending, false);
+        await client.query(
+            `insert into notification_events (user_id, kind) values ($1, 'two-step-on')`,
+            [withApp],
+        );
+        // The kinds this migration adds are refused until it has run.
+        const keyEvent = `insert into notification_events (user_id, kind) values ($1, 'two-step-key-added')`;
+        await expect(client.query(keyEvent, [withKey])).rejects.toMatchObject({
+            constraint: 'notification_events_kind_valid',
+        });
+
+        await migrate(upTo(PASSKEYS), scratch, { migrationsFolder });
+        const after = await schemaOf(client);
+        expect(after.ledger).toEqual([...before.ledger, PASSKEYS]);
+        const defaults = await client.query<{ user_id: string; default_kind: string | null }>(
+            `select user_id, default_kind from two_step_state`,
+        );
+        const defaultOf = (userId: string) =>
+            defaults.rows.find((row) => row.user_id === userId)?.default_kind;
+        // The first method turned on is the default: for every account today, that was its app.
+        expect(defaultOf(withApp)).toBe('totp');
+        // No confirmed app, no default written: the order decides (a key first).
+        expect(defaultOf(withKey)).toBeNull();
+        expect(defaultOf(pending)).toBeNull();
+        await expect(
+            client.query(`update two_step_state set default_kind = 'sms' where user_id = $1`, [
+                withApp,
+            ]),
+        ).rejects.toMatchObject({ constraint: 'two_step_state_default_valid' });
+
+        // Rows of what it added, so the undo runs on a database that used it.
+        await client.query(keyEvent, [withKey]);
+        await client.query(
+            `insert into two_step_key_registrations (token_hash, user_id, session_token_hash, credential_version, challenge, expires_at)
+             values ($1, $2, $3, 1, $4, now() + interval '5 minutes')`,
+            [randomBytes(32), withKey, randomBytes(32), randomBytes(32)],
+        );
+
+        await run(undo(PASSKEYS));
+        expect(await schemaOf(client)).toEqual(before);
+        // The keys themselves stay, so the session guard still counts them; only the events an
+        // older release cannot serve are gone.
+        expect(
+            (await client.query(`select 1 from two_step_factors where kind = 'webauthn'`)).rowCount,
+        ).toBe(1);
+        expect(
+            (await client.query(`select kind from notification_events order by seq`)).rows,
+        ).toEqual([{ kind: 'two-step-on' }]);
+        const tablet = await insertDevice(withKey);
+        await expect(insertSession(withKey, tablet, false)).rejects.toMatchObject({
+            constraint: 'sessions_two_step_guard',
+        });
+
+        // Undone, the same release migrates again to the same schema, and is taken back again.
+        await migrate(upTo(PASSKEYS), scratch, { migrationsFolder });
+        expect(unnumbered(await schemaOf(client))).toEqual(unnumbered(after));
+        await run(undo(PASSKEYS));
+        // Run twice, it fails whole (the column is gone) instead of half-applying.
+        await expect(run(undo(PASSKEYS))).rejects.toMatchObject({ code: '42703' });
         expect(await schemaOf(client)).toEqual(before);
     }, 180_000);
 });

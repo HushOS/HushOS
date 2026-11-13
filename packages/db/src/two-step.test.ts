@@ -279,6 +279,7 @@ describe('enrolling an authenticator app', () => {
             methods: [],
             backupCodesLeft: 0,
             totpFrozen: false,
+            defaultKind: null,
         });
         expect(await twoStep.getTotpFactor(user.id)).toBeNull();
         // A step token answered with the pending app's code: refused, and no session.
@@ -2125,11 +2126,13 @@ describe('removing a method', () => {
                     codeHash: maya.codes.hashes[0]!,
                 }),
             }),
-        ).toEqual({ status: 'ok', kind: 'totp', turnedOff: false });
+            // The app was the default and its kind is gone: the key is what comes first now.
+        ).toEqual({ status: 'ok', kind: 'totp', turnedOff: false, defaultKind: 'webauthn' });
         expect(await twoStep.getTwoStep(maya.userId)).toMatchObject({
             on: true,
             backupCodesLeft: 9,
             totpFrozen: false,
+            defaultKind: 'webauthn',
         });
         expect(await twoStep.getTotpFactor(maya.userId)).toBeNull();
         expect(await twoStep.getStepAttempt(pendingLogin)).not.toBeNull();
@@ -2149,6 +2152,7 @@ describe('removing a method', () => {
             methods: [],
             backupCodesLeft: 0,
             totpFrozen: false,
+            defaultKind: null,
         });
         expect(await twoStep.getBackupCodes(maya.userId)).toMatchObject({ codes: [] });
         expect(await twoStep.getStepAttempt(pendingLogin)).toBeNull();
