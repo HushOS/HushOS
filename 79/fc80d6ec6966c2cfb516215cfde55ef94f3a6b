@@ -1,0 +1,19 @@
+apps/web/scripts/check-server-deps.ts
+  s_566b8e0c4467a4::t_8922088dd14495 17-21,42-50,64-71
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "79fc80d6ec6966c2cfb516215cfde55ef94f3a6b",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
