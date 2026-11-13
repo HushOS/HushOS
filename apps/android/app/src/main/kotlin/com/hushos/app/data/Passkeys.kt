@@ -30,7 +30,10 @@ object Passkeys {
     fun usable(serverOrigin: String, linkHost: String = BuildConfig.LINK_HOST): Boolean {
         val uri = runCatching { java.net.URI(serverOrigin.trim()) }.getOrNull() ?: return false
         val host = uri.host ?: return false
-        return uri.scheme.equals("https", ignoreCase = true) && linkHost.isNotEmpty() && host.equals(linkHost, ignoreCase = true)
+        // As the iPhone app has it: a port other than 443 is another origin to the server, and an
+        // address with a user or password in it is not one a person typed for this host.
+        return uri.scheme.equals("https", ignoreCase = true) && linkHost.isNotEmpty() && host.equals(linkHost, ignoreCase = true) &&
+            (uri.port == -1 || uri.port == 443) && uri.rawUserInfo == null
     }
 }
 
@@ -54,27 +57,44 @@ class KeyRefused(message: String, status: Int) : AuthFailure(message, status)
  * Whether a server said it reads `twoStepMethods`, as of this phone's last sign-in there. Kept per
  * server across launches: a session lasts 30 days, and its changes name methods too. Three states:
  * said so (true), said nothing (false), and never heard (null: a session from before this version).
+ *
+ * "Said nothing" is kept for a day and no longer (`NO_MS`). A server is updated while sessions on
+ * it live on, and a session that went on believing the old answer would never be offered its
+ * passkey at a change. After a day it is never heard again: the field is tried once more.
  */
 interface StepAdverts {
     fun read(origin: String): Boolean?
     fun write(origin: String, advertised: Boolean)
 
     /* In memory: for tests, and for a caller with nowhere to keep it. */
-    class Memory : StepAdverts {
-        private val said = mutableMapOf<String, Boolean>()
-        @Synchronized override fun read(origin: String): Boolean? = said[key(origin)]
-        @Synchronized override fun write(origin: String, advertised: Boolean) { said[key(origin)] = advertised }
+    class Memory(private val now: () -> Long = System::currentTimeMillis) : StepAdverts {
+        private val said = mutableMapOf<String, Any>()
+        @Synchronized override fun read(origin: String): Boolean? = heard(said[key(origin)], now())
+        @Synchronized override fun write(origin: String, advertised: Boolean) { said[key(origin)] = kept(advertised, now()) }
     }
 
     companion object {
+        /* How long "does not read it" is believed. */
+        const val NO_MS = 24L * 60 * 60 * 1000
+
         /* One server, however its address was typed. */
         internal fun key(origin: String): String = origin.trim().trimEnd('/').lowercase()
 
+        /* What is kept for an answer: `true`, or when the server was found not to read the field. */
+        internal fun kept(advertised: Boolean, now: Long): Any = if (advertised) true else now
+
+        /* What a kept value says now. A time from the future is a clock that moved: not trusted, and tried again. */
+        internal fun heard(kept: Any?, now: Long): Boolean? = when (kept) {
+            true -> true
+            is Number -> if (now >= kept.toLong() && now - kept.toLong() < NO_MS) false else null
+            else -> null
+        }
+
         /* Beside the session and the server's address, in the app's encrypted preferences. */
-        fun stored(context: Context): StepAdverts = object : StepAdverts {
+        fun stored(context: Context, now: () -> Long = System::currentTimeMillis): StepAdverts = object : StepAdverts {
             private val app = context.applicationContext
-            override fun read(origin: String): Boolean? = Shared.stepAdvert(app, key(origin))
-            override fun write(origin: String, advertised: Boolean) = Shared.writeStepAdvert(app, key(origin), advertised)
+            override fun read(origin: String): Boolean? = heard(Shared.stepAdvert(app, key(origin)), now())
+            override fun write(origin: String, advertised: Boolean) = Shared.writeStepAdvert(app, key(origin), kept(advertised, now()))
         }
     }
 }

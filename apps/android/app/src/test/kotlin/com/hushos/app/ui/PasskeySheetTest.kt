@@ -104,5 +104,9 @@ class PasskeySheetTest {
         next.write("https://hushos.com", false)
         assertEquals(false, StepAdverts.stored(context).read("https://hushos.com"))
         assertEquals(false, StepAdverts.stored(context).read("https://drive.example.org"))
+        // What was kept is when, not only that: a launch a day later has never heard, and asks again.
+        val later = System.currentTimeMillis() + StepAdverts.NO_MS
+        assertNull(StepAdverts.stored(context) { later }.read("https://hushos.com"))
+        assertEquals(false, StepAdverts.stored(context) { later - 60_000 }.read("https://hushos.com"))
     }
 }

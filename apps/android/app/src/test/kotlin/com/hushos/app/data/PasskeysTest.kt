@@ -109,6 +109,11 @@ class PasskeysTest {
             "http://hushos.com", "https://drive.example.org", "https://hushos.com.evil.example", "https://evil.example/hushos.com",
             "https://hushos.com@evil.example", "https://app.hushos.com", "https://nothushos.com", "hushos.com", "", "not an address",
         )) assertFalse(other, Passkeys.usable(other, link))
+        // Another port is another origin to the server, and the phone's sheet signs for the host alone; an address
+        // that carries a user or a password is not the server's own. The default port, written out, is the same origin.
+        assertTrue(Passkeys.usable("https://hushos.com:443", link))
+        for (other in listOf("https://hushos.com:8443", "https://hushos.com:80", "https://user@hushos.com", "https://user:secret@hushos.com", "https://@hushos.com"))
+            assertFalse(other, Passkeys.usable(other, link))
         // A debug build is linked to localhost over http: never a server a key can be used for, even though the host matches.
         assertFalse(Passkeys.usable("http://localhost:5173", "localhost"))
         assertFalse(Passkeys.usable("https://hushos.com", ""))
@@ -453,6 +458,25 @@ class PasskeysTest {
             TwoStep.challenge(session, StepPurpose.DELETE, memory)
             assertEquals(listOf(true, false, false), asked.map(named))
         }
+
+        // "Does not read it" is believed for a day. The server is updated meanwhile: a day on, the same session's
+        // next change names its methods again, and is offered its key. Believed for ever, it never would be.
+        var clock = 1_000_000_000_000L
+        memory = StepAdverts.Memory { clock }
+        session = serving { if (named(it)) 400 to refusal("Unknown field.") else 200 to step(listOf("totp", "backup", "phrase")) { remove("webauthn") } }
+        TwoStep.challenge(session, StepPurpose.PASSWORD, memory)
+        assertEquals(false, memory.read(session.origin))
+        clock += StepAdverts.NO_MS - 1
+        assertEquals(false, memory.read(session.origin))
+        clock += 1
+        assertNull(memory.read(session.origin))
+        session = serving { 200 to step(listOf("webauthn", "backup", "phrase")) }
+        TwoStep.challenge(session, StepPurpose.PASSWORD, memory, passkeys = true)
+        assertEquals(listOf(true), asked.map(named))
+        // A clock set back does not stretch the day: a time from the future is not believed.
+        memory = StepAdverts.Memory { clock }.apply { write(session.origin, false) }
+        clock -= 60_000
+        assertNull(memory.read(session.origin))
 
         // Advertised at the last sign-in, and since rolled back: the same, and the advert is taken back.
         memory = StepAdverts.Memory().apply { write(session.origin, true) }

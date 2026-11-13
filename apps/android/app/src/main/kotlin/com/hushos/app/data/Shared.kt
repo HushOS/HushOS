@@ -140,14 +140,15 @@ object Shared {
     }.getOrDefault(false)
 
     /*
-     * Whether the server at `origin` said it reads `twoStepMethods` (StepAdverts): true, false, or null when this
-     * phone never heard. Per server, not per account, so it outlives a sign-out as the server's address does.
+     * What the server at `origin` said of `twoStepMethods`, as StepAdverts keeps it: `true` when it reads the field,
+     * the time it was found not to (epoch milliseconds) when it does not, null when this phone never heard. Per
+     * server, not per account, so it outlives a sign-out as the server's address does.
      */
-    fun stepAdvert(context: Context, origin: String): Boolean? = read(context, STEP_ADVERTS)?.opt(origin) as? Boolean
+    fun stepAdvert(context: Context, origin: String): Any? = read(context, STEP_ADVERTS)?.opt(origin)
 
     /* Read, changed and written under one lock: two servers' answers never overwrite each other. */
-    fun writeStepAdvert(context: Context, origin: String, advertised: Boolean) = synchronized(this) {
-        runCatching { write(context, STEP_ADVERTS, (read(context, STEP_ADVERTS) ?: JSONObject()).put(origin, advertised)) }
+    fun writeStepAdvert(context: Context, origin: String, kept: Any) = synchronized(this) {
+        runCatching { write(context, STEP_ADVERTS, (read(context, STEP_ADVERTS) ?: JSONObject()).put(origin, kept)) }
         Unit
     }
 
