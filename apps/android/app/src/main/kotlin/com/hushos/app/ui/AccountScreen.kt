@@ -827,11 +827,11 @@ internal fun FreshWordsScreen(model: DriveViewModel, held: DriveViewModel.HeldWo
         return
     }
     BackHandler {}
-    AccountPage("Your new recovery phrase", onBack = null) {
+    // The web's panel for words shown to someone not signed in again, in its words (StepWords.NEW_PHRASE_…).
+    AccountPage(com.hushos.app.data.StepWords.NEW_PHRASE_TITLE, onBack = null) {
         Column(Modifier.padding(horizontal = AlpineSpace.S4), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S4)) {
             // Nothing confirmed the change was made: the old words are not said to be dead.
-            Text(held.caveat ?: "Your old phrase and any printed kit no longer work. Save these 24 words instead.", style = MaterialTheme.typography.bodyMedium,
-                color = if (held.caveat == null) alpine.inkMuted else alpine.warning)
+            Text(held.lead, style = MaterialTheme.typography.bodyMedium, color = if (held.certain) alpine.inkMuted else alpine.warning)
             PhraseWords(phrase)
             Row(horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
                 OutlinedButton(onClick = { shareKit(context, held.email, held.userId, kit) }) { Text("Save the kit") }
@@ -840,12 +840,12 @@ internal fun FreshWordsScreen(model: DriveViewModel, held: DriveViewModel.HeldWo
                     model.notify("Copied. Paste it somewhere private, then clear your clipboard.")
                 }) { Icon(Icons.Outlined.ContentCopy, null, Modifier.size(18.dp)); Spacer(Modifier.width(AlpineSpace.S2)); Text("Copy") }
             }
-            Text("Keep it somewhere private and offline. Anyone with these words and your email can get into your account.", style = MaterialTheme.typography.bodySmall, color = alpine.inkMuted)
+            Text(com.hushos.app.data.StepWords.NEW_PHRASE_ONCE, style = MaterialTheme.typography.bodySmall, color = alpine.inkMuted)
             Row(Modifier.fillMaxWidth().toggleable(value = saved, role = Role.Checkbox) { saved = it }, verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(checked = saved, onCheckedChange = null)
                 Text("I’ve saved my kit or written the words down, somewhere private.", modifier = Modifier.padding(start = AlpineSpace.S3))
             }
-            Button(enabled = saved, onClick = { checking = true }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text("I’ve saved it") }
+            Button(enabled = saved, onClick = { checking = true }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(com.hushos.app.data.StepWords.NEW_PHRASE_SAVED) }
         }
     }
 }

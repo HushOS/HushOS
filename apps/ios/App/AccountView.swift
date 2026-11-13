@@ -939,11 +939,18 @@ struct ResetKeysSheet: View {
             Form {
                 if let phrase {
                     Section {} header: {
-                        // Nothing could say whether the rotation was made (its reply was lost): the words are shown, and the old ones kept.
-                        Text(uncertain ? StepWords.rotationUncertain : "Your old phrase and any printed kit no longer work. Save these 24 words instead.")
+                        // Not signed in again (the sign-in waits for these words): the web's panel, in its words. Nothing could
+                        // say whether the rotation was made (its reply was lost): the words are shown, and the old ones kept.
+                        Text(uncertain ? StepWords.rotationUncertain
+                            : signInAfter ? StepWords.newPhraseAfterRotation
+                            : "Your old phrase and any printed kit no longer work. Save these 24 words instead.")
                             .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).textCase(nil)
                     }
-                    Section { PhraseGrid(phrase: phrase, columns: 3).padding(.vertical, Alpine.Space.s2).alpineRow() }
+                    Section {
+                        PhraseGrid(phrase: phrase, columns: 3).padding(.vertical, Alpine.Space.s2).alpineRow()
+                    } footer: {
+                        if signInAfter { Text(StepWords.newPhraseOnce) }
+                    }
                     Section {
                         VStack(spacing: Alpine.Space.s2) {
                             Button { Task { await KitShare.present(phrase: phrase, email: model.user?.email ?? "", accountId: model.user?.id ?? "", recovery: recovery.value) } } label: {
@@ -953,7 +960,7 @@ struct ResetKeysSheet: View {
                         }
                         .listRowBackground(Color.clear).listRowInsets(EdgeInsets())
                     }
-                    SavedCheck(saved: $saved, title: "I’ve saved it") { checking = true }
+                    SavedCheck(saved: $saved, title: signInAfter ? StepWords.newPhraseSaved : "I’ve saved it") { checking = true }
                 } else {
                     Section {} header: {
                         VStack(alignment: .leading, spacing: Alpine.Space.s2) {
@@ -979,7 +986,7 @@ struct ResetKeysSheet: View {
             }
             .alpineGrouped()
             .scrollDismissesKeyboard(.interactively)
-            .navigationTitle(phrase == nil ? "Rotate account key" : "Your new recovery phrase")
+            .navigationTitle(phrase == nil ? "Rotate account key" : signInAfter ? StepWords.newPhraseTitle : "Your new recovery phrase")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { if phrase == nil { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } } }
             .interactiveDismissDisabled(phrase != nil || pending)

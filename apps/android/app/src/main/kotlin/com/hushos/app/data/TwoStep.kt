@@ -252,13 +252,23 @@ object StepWords {
     /* The ways ran out after refusals (a paused app, a spent budget): updating would not help. */
     const val NO_WAY_LEFT = "There is no other way to answer this step from here right now. Start again in a while."
     /* A rotation whose reply was lost, and the account still shows its old versions: nothing changed. */
-    const val NOT_ROTATED = "Your account key wasn’t rotated. Try again."
+    const val NOT_ROTATED = "Your account key was not rotated: the server never got the request. Please try again."
     /* A rotation whose reply was lost, and no reply showed a version either way: the words are shown, and the old ones kept. */
-    const val ROTATION_UNCERTAIN = "HushOS couldn’t confirm that your account key was rotated. Keep your old phrase as well as these 24 words until you have signed in."
+    const val ROTATION_UNCERTAIN = "We couldn’t confirm that your recovery phrase was replaced. If it was, these 24 words are your recovery phrase now. If it wasn’t, your old phrase still is. Keep both until you have signed in."
     /* A phrase reset whose reply was lost, and the account still shows its old versions: nothing changed, and the new words are not handed over. */
-    const val NOT_RESET = "Your password wasn’t changed. Try again."
+    const val NOT_RESET = "Your password was not changed: the server never got the request. Please try again."
     /* A phrase reset whose reply was lost, and nothing could say whether it happened. */
-    const val RESET_UNCERTAIN = "HushOS couldn’t confirm that your password was changed. Keep your old phrase as well as these 24 words until you have signed in. If your new password doesn’t sign you in, your old one still does."
+    const val RESET_UNCERTAIN = "We couldn’t confirm that your password was changed. If it was, these 24 words are your recovery phrase now. If it wasn’t, your old phrase still is. Keep both until you have signed in."
+    /*
+     * The panel that shows new words to someone the change did not sign in again here, in the web's
+     * words (apps/web/src/components/new-phrase.tsx): its title, what it says after each change, the
+     * line under the words, and its way on.
+     */
+    const val NEW_PHRASE_TITLE = "Save your new recovery phrase"
+    const val NEW_PHRASE_AFTER_RESET = "Your password is changed, and your old recovery phrase no longer works. These 24 words replace it."
+    const val NEW_PHRASE_AFTER_ROTATION = "Your old recovery phrase no longer works. These 24 words replace it."
+    const val NEW_PHRASE_ONCE = "They are shown here once. If your account asks for a second step when you sign in, these words answer it."
+    const val NEW_PHRASE_SAVED = "I’ve saved these words"
     /* After a reset whose sign-in didn't happen. */
     const val SIGN_IN_AFTER_RESET = "Your password was changed. Sign in with your new password."
     /* The removal of other devices, asked for while turning the step on, did not happen. */

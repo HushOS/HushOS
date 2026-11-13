@@ -143,13 +143,23 @@ public enum StepWords {
     /* The ways ran out after refusals (a paused app, a spent budget): updating would not help. */
     public static let noWayLeft = "There is no other way to answer this step from here right now. Start again in a while."
     /* A rotation whose reply was lost, and the session then said it had not happened. */
-    public static let notRotated = "Your account key wasn’t rotated. Try again."
+    public static let notRotated = "Your account key was not rotated: the server never got the request. Please try again."
     /* A rotation whose reply was lost, and nothing could say whether it happened: the words are shown, and the old ones kept. */
-    public static let rotationUncertain = "HushOS couldn’t confirm that your account key was rotated. Keep your old phrase as well as these 24 words until you have signed in."
+    public static let rotationUncertain = "We couldn’t confirm that your recovery phrase was replaced. If it was, these 24 words are your recovery phrase now. If it wasn’t, your old phrase still is. Keep both until you have signed in."
     /* A phrase reset whose reply was lost, and the account still shows its old versions: nothing changed, and the new words are not handed over. */
-    public static let notReset = "Your password wasn’t changed. Try again."
+    public static let notReset = "Your password was not changed: the server never got the request. Please try again."
     /* A phrase reset whose reply was lost, and nothing could say whether it happened. */
-    public static let resetUncertain = "HushOS couldn’t confirm that your password was changed. Keep your old phrase as well as these 24 words until you have signed in. If your new password doesn’t sign you in, your old one still does."
+    public static let resetUncertain = "We couldn’t confirm that your password was changed. If it was, these 24 words are your recovery phrase now. If it wasn’t, your old phrase still is. Keep both until you have signed in."
+    /*
+     * The panel that shows new words to someone the change did not sign in again here, in the web's
+     * words (apps/web/src/components/new-phrase.tsx): its title, what it says after each change, the
+     * line under the words, and its way on.
+     */
+    public static let newPhraseTitle = "Save your new recovery phrase"
+    public static let newPhraseAfterReset = "Your password is changed, and your old recovery phrase no longer works. These 24 words replace it."
+    public static let newPhraseAfterRotation = "Your old recovery phrase no longer works. These 24 words replace it."
+    public static let newPhraseOnce = "They are shown here once. If your account asks for a second step when you sign in, these words answer it."
+    public static let newPhraseSaved = "I’ve saved these words"
     /* After a reset whose sign-in didn't happen. */
     public static let signInAfterReset = "Your password was changed. Sign in with your new password."
     /* The removal of other devices, asked for while turning the step on, did not happen. */

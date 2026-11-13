@@ -208,7 +208,8 @@ Design: `docs/devices-design.md` 5; as built: `docs/push-relay-plan.md`, PR 4.
 - The phrase is signed in the core (`twoStepPhraseSign`); only the signature is sent.
 - Change password, Rotate account key and Delete account hold a `StepUpHolder` and show `StepUpFields`. No `keepSession` is sent.
 - New recovery words with no session to read them back with are `DriveViewModel.heldWords`, drawn by `HushOSApp` in place of everything (`FreshWordsScreen`), tabs included. Nothing leaves them but saving and checking them; stopping the app loses them.
-    - A rotation or a phrase reset holds them when no session came of the sign-in after it: it didn't happen, its step did not pass, or nothing confirmed the change (`HeldWords.caveat`).
+    - A rotation or a phrase reset holds them when no session came of the sign-in after it: it didn't happen, its step did not pass, or nothing confirmed the change.
+    - The panel says what the web's does (`apps/web/src/components/new-phrase.tsx`), from `StepWords.NEW_PHRASE_…` and `HeldWords.lead`. Change the wording there and on the web together.
     - Once a rotation's or a reset's last request has gone out, nothing that fails may cost the new phrase. Keep it that way.
 - A rotation and a phrase reset end the same way (`Reset`, `data/TwoStep.kt`; `Auth.rotateKeysKit`, `Auth.recover`): what the last request answered, what the sign-in with the new password showed, and what to show.
     - That sign-in (`Auth.proved`, tried twice) answers its second step with the phrase just made, so nobody is sent to a step they need unseen words for.

@@ -448,15 +448,23 @@ private struct NewPhraseStep: View {
     let finish: () -> Void
     @State private var saved = false
     @State private var checking = false
+    /* The reset did not sign the app in: the words are shown from memory, in the web's panel and its words (`StepWords.newPhrase…`). */
+    private var held: Bool { account.user == nil }
 
     var body: some View {
         Form {
             Section {} header: {
                 // Nothing could say whether the reset was made (its reply was lost): the words are shown, and the old ones kept.
-                Text(account.certain ? "Your old phrase no longer works. Save these 24 words before you leave this page." : StepWords.resetUncertain)
+                Text(!account.certain ? StepWords.resetUncertain
+                    : held ? StepWords.newPhraseAfterReset
+                    : "Your old phrase no longer works. Save these 24 words before you leave this page.")
                     .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).textCase(nil)
             }
-            Section { PhraseGrid(phrase: account.phrase, columns: 3).padding(.vertical, Alpine.Space.s2).alpineRow() }
+            Section {
+                PhraseGrid(phrase: account.phrase, columns: 3).padding(.vertical, Alpine.Space.s2).alpineRow()
+            } footer: {
+                if held { Text(StepWords.newPhraseOnce) }
+            }
             Section {
                 Button {
                     // The new recovery key came with the reset: with no session there is nothing to read it back with.
@@ -466,10 +474,10 @@ private struct NewPhraseStep: View {
                     .buttonStyle(PrimaryCapsuleStyle())
                     .listRowBackground(Color.clear).listRowInsets(EdgeInsets())
             }
-            SavedCheck(saved: $saved, title: "Continue") { checking = true }
+            SavedCheck(saved: $saved, title: held ? StepWords.newPhraseSaved : "Continue") { checking = true }
         }
         .alpineGrouped()
-        .navigationTitle("Your new recovery phrase")
+        .navigationTitle(held ? StepWords.newPhraseTitle : "Your new recovery phrase")
         .navigationDestination(isPresented: $checking) {
             // With no session the check is only made here; it is recorded at the sign-in that follows.
             CheckWordsView(phrase: account.phrase, recoveryVersion: account.recoveryVersion, records: account.user != nil) {

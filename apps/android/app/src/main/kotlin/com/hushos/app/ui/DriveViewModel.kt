@@ -1869,9 +1869,11 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         /* What checking them records at the next sign-in: this phrase, this account, this server. Nothing when nothing says they are the account's. */
         val checked: com.hushos.app.data.CheckedWords?
             get() = if (certain) com.hushos.app.data.CheckedWords(userId, origin, kit.recovery.optLong("recoveryVersion")) else null
-        /* Said above the words when nothing could confirm the change was made. */
-        val caveat: String?
-            get() = if (certain) null else if (reset) com.hushos.app.data.StepWords.RESET_UNCERTAIN else com.hushos.app.data.StepWords.ROTATION_UNCERTAIN
+        /* Said above the words, in the web's: what the change did, or that nothing could confirm it was made. */
+        val lead: String
+            get() = com.hushos.app.data.StepWords.run {
+                if (reset) { if (certain) NEW_PHRASE_AFTER_RESET else RESET_UNCERTAIN } else { if (certain) NEW_PHRASE_AFTER_ROTATION else ROTATION_UNCERTAIN }
+            }
     }
     var heldWords by mutableStateOf<HeldWords?>(null)
         private set
