@@ -17,7 +17,7 @@ final class PhonePush {
     static let shared = PhonePush()
 
     /* What a tapped notice opens, set by TransferNotices' delegate; the drive opens it and clears it. */
-    enum Target: String { case devices, shared, families, app }
+    enum Target: String { case devices, account, shared, families, app }
     var opening: Target?
 
     @ObservationIgnored private var waiting: [CheckedContinuation<Data, Error>] = []

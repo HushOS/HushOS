@@ -21,6 +21,7 @@ import { authEnv } from '@hushos/env/auth';
 import { twoStepEnv } from '@hushos/env/two-step';
 import { log as serverLog } from '@hushos/logging';
 import { hash, noticeWhen, randomToken, serverSetup, supportedEnvelope } from './internal';
+import { notify } from './notifications';
 import { consumeBoundAttempt, requireSession, startLogin } from './server';
 import { AuthError, SESSION_IDLE_SECONDS, TOKEN_PATTERN } from './tokens';
 import { twoStepKeyringFromEnv, type TwoStepKeyring } from './two-step-keys';
@@ -174,17 +175,37 @@ type StepNotice = Exclude<
 >;
 
 /*
- * A security notice about the step, by email, sent after the action and never awaited: the
- * action already happened, and a mail problem is the operator's. Changes to the step are
- * never dropped: each needs the password and the step, so nobody can flood them. Only the
+ * A security notice about the step, by email and to the account's devices
+ * (docs/two-step-design.md 7), sent after the action and never awaited: the action already
+ * happened, and a mail or push problem is the operator's. Changes to the step are never
+ * dropped: each needs the password and the step, so nobody can flood them. Only the
  * failed-step notice has a budget, its own (one an hour), so a run of failures cannot use up
  * anything a later "step turned off" would need. It names the kind of method and the time,
  * never a name anyone chose.
+ *
+ * The push names an event of the same kind as the email, and carries nothing else: each
+ * device fetches the event over its own session and writes the words itself. Like every
+ * security notice it cannot be turned off. A device the action signed out (a reset signs out
+ * all of them) has no registration left, so it hears by email alone.
  */
 function notice(userId: string, kind: StepNotice, extra: { count?: number; method?: string } = {}) {
     void (async () => {
         const user = await authRepository.getUserById(userId);
         if (!user) return;
+        // A push problem is never the mail's, and the mail does not wait for it.
+        const pushed =
+            kind === 'backup-code-used'
+                ? notify(userId, kind, { left: extra.count ?? 0 })
+                : notify(userId, kind, {});
+        void pushed.catch((error: unknown) =>
+            serverLog.error({
+                message: 'Two-step notice push failed.',
+                notifications: {
+                    kind,
+                    failure: error instanceof Error ? error.name : typeof error,
+                },
+            }),
+        );
         await sendSecurityNotice(user.email, {
             kind,
             when: noticeWhen(),

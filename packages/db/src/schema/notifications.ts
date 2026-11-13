@@ -25,6 +25,20 @@ export const NOTIFICATION_KINDS = {
     'device-removed': 'security',
     'devices-removed': 'security',
     'password-attempts': 'security',
+    // Two-step sign-in's notices (docs/two-step-design.md 7), each under the name its email has.
+    'two-step-on': 'security',
+    'two-step-off': 'security',
+    'two-step-app-added': 'security',
+    'two-step-app-removed': 'security',
+    'backup-codes-made': 'security',
+    'backup-code-used': 'security',
+    'phrase-used': 'security',
+    'phrase-replaced': 'security',
+    'password-reset': 'security',
+    'account-key-rotated': 'security',
+    'step-failed': 'security',
+    'change-step-failed': 'security',
+    'totp-frozen': 'security',
     shared: 'other',
     'family-invitation': 'other',
     'family-waiting': 'other',
@@ -38,6 +52,20 @@ export type NotificationData = {
     'device-removed': Record<string, never>;
     'devices-removed': { count: number };
     'password-attempts': Record<string, never>;
+    'two-step-on': Record<string, never>;
+    'two-step-off': Record<string, never>;
+    'two-step-app-added': Record<string, never>;
+    'two-step-app-removed': Record<string, never>;
+    'backup-codes-made': Record<string, never>;
+    /* How many backup codes the account has left, as the email says it. */
+    'backup-code-used': { left: number };
+    'phrase-used': Record<string, never>;
+    'phrase-replaced': Record<string, never>;
+    'password-reset': Record<string, never>;
+    'account-key-rotated': Record<string, never>;
+    'step-failed': Record<string, never>;
+    'change-step-failed': Record<string, never>;
+    'totp-frozen': Record<string, never>;
     shared: { granterUserId: string; shareId: string; role: 'viewer' | 'editor' };
     'family-invitation': { groupId: string; invitationId: string };
     'family-waiting': { groupId: string };

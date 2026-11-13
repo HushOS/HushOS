@@ -1,0 +1,30 @@
+{
+    "type": "diff",
+    "version": "9",
+    "dialect": "postgres",
+    "id": "9cc6a256-fe9e-4bca-98e3-61c1de9de5ba",
+    "prevIds": ["ed0875fa-7b88-4378-b747-15ed3602b6fd"],
+    "footprints": [
+        {
+            "statementType": "alter_check",
+            "statementTarget": ["table", "public", "notification_events"],
+            "writes": ["s|ck|public.notification_events.notification_events_kind_valid"],
+            "reads": [
+                "n|tbl|public.notification_events",
+                "n|sch|public",
+                "n|col|public.notification_events.kind",
+                "e|col|public.notification_events.kind"
+            ],
+            "sqlHash": "a257ae2309b1ae82"
+        }
+    ],
+    "deltas": [
+        {
+            "op": "alter",
+            "key": "checks\u0000[\"public\",\"notification_events\",\"notification_events_kind_valid\"]",
+            "set": {
+                "value": "kind in ('new-device', 'device-removed', 'devices-removed', 'password-attempts', 'two-step-on', 'two-step-off', 'two-step-app-added', 'two-step-app-removed', 'backup-codes-made', 'backup-code-used', 'phrase-used', 'phrase-replaced', 'password-reset', 'account-key-rotated', 'step-failed', 'change-step-failed', 'totp-frozen', 'shared', 'family-invitation', 'family-waiting')"
+            }
+        }
+    ]
+}

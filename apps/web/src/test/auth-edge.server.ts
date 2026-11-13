@@ -152,12 +152,20 @@ export async function loadEdge(
         if (fromDatabase) await serverSetup();
     }
 
-    /* One request to /api/auth, as a client sends it. `session` is the cookie it set: a token, null when cleared. */
+    /*
+     * One request to /api/auth (or to `options.api`, another part of the API), as a client
+     * sends it. `session` is the cookie it set: a token, null when cleared.
+     */
     async function call(
         method: 'GET' | 'POST' | 'PUT' | 'DELETE',
         path: string,
         body?: unknown,
-        options: { cookie?: string | null; origin?: string; enrollment?: string } = {},
+        options: {
+            cookie?: string | null;
+            origin?: string;
+            enrollment?: string;
+            api?: string;
+        } = {},
     ): Promise<Reply> {
         const init: RequestInit = {
             method,
@@ -172,7 +180,9 @@ export async function loadEdge(
             },
         };
         if (body !== undefined) init.body = JSON.stringify(body);
-        const response = await handleApiRequest(new Request(`${ORIGIN}/api/auth${path}`, init));
+        const response = await handleApiRequest(
+            new Request(`${ORIGIN}${options.api ?? '/api/auth'}${path}`, init),
+        );
         const cookie = response.headers
             .getSetCookie()
             .map((value) => /^hushos-session=([^;]*);/.exec(value)?.[1])

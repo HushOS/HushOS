@@ -141,12 +141,12 @@ struct MainView: View {
                     case .phone: tab = .home
                     }
                 }
-                // A tapped notice: Shared for a share, Account for devices (pushed there) and families, else as it was.
+                // A tapped notice: Shared for a share, Account for devices (pushed there), two-step sign-in and families, else as it was.
                 .onChange(of: PhonePush.shared.opening, initial: true) { _, target in
                     switch target {
                     case .shared: PhonePush.shared.opening = nil; store.route = .shared(byMe: false)
                     case .devices: tab = .account
-                    case .families: PhonePush.shared.opening = nil; tab = .account
+                    case .families, .account: PhonePush.shared.opening = nil; tab = .account
                     case .app: PhonePush.shared.opening = nil
                     case nil: break
                     }

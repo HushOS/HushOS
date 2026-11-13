@@ -290,7 +290,7 @@ describe('the re-seal job after a key rotation', () => {
         expect(await job()).toMatchObject({ status: 'done', moved: 1 });
         const after = await row(account.factorId);
         expect(await job()).toMatchObject({ status: 'done', moved: 0, changed: 0, left: {} });
-        // The same nonce: a run that re-sealed what is already current would churn every row hourly.
+        // The same nonce: a run that re-sealed what is already current would churn every row at every run.
         expect(await row(account.factorId)).toEqual(after);
     }, 90_000);
 

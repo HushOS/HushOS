@@ -193,6 +193,43 @@ export async function turnOffWebPush(userId: string) {
 
 type Notice = { title: string; body: string; url: string };
 
+/*
+ * Two-step sign-in's notices (docs/two-step-design.md 7): each says what its email's subject
+ * says, and never names a device or a method anyone named. The phones write the same words
+ * (crates/hushos-core/src/notifications.rs, `push_notice`).
+ */
+const TWO_STEP_NOTICES = {
+    'two-step-on': ['Two-step sign-in', 'Two-step sign-in is on.'],
+    'two-step-off': ['Two-step sign-in', 'Two-step sign-in is off.'],
+    'two-step-app-added': ['Two-step sign-in', 'An authenticator app was added.'],
+    'two-step-app-removed': ['Two-step sign-in', 'An authenticator app was removed.'],
+    'backup-codes-made': ['Backup codes', 'New backup codes were made.'],
+    'phrase-used': ['Recovery phrase', 'Your recovery phrase was used as your second step.'],
+    'phrase-replaced': ['Recovery phrase', 'Your recovery phrase was replaced.'],
+    'password-reset': ['Password reset', 'Your password was reset with your recovery phrase.'],
+    'account-key-rotated': ['Account key', 'Your account key was rotated.'],
+    'step-failed': [
+        'Sign-in attempt',
+        'Someone signed in with your password but did not pass the second step.',
+    ],
+    'change-step-failed': [
+        'Change attempt',
+        'Someone tried to change your account and did not pass the second step.',
+    ],
+    'totp-frozen': [
+        'Authenticator app paused',
+        'Your authenticator app is paused on devices HushOS doesn’t recognise.',
+    ],
+} as const;
+/* Where a tapped two-step notice opens: the account's two-step settings and security activity. */
+const TWO_STEP_URL = '/app/account#two-step';
+
+/* How many backup codes are left, as a sentence. */
+function backupCodesLeft(left: number) {
+    if (left === 0) return 'None are left.';
+    return left === 1 ? '1 is left.' : `${left} are left.`;
+}
+
 /* The words for an event, from what this tab can read; the sender only when checked. */
 async function noticeFor(id: string): Promise<Notice | null> {
     const userId = unlockedNow();
@@ -225,6 +262,27 @@ async function noticeFor(id: string): Promise<Notice | null> {
                 title: 'Password attempts',
                 body: 'Someone kept trying to confirm your password.',
                 url: '/app/account#devices',
+            };
+        case 'two-step-on':
+        case 'two-step-off':
+        case 'two-step-app-added':
+        case 'two-step-app-removed':
+        case 'backup-codes-made':
+        case 'phrase-used':
+        case 'phrase-replaced':
+        case 'password-reset':
+        case 'account-key-rotated':
+        case 'step-failed':
+        case 'change-step-failed':
+        case 'totp-frozen': {
+            const [title, body] = TWO_STEP_NOTICES[notification.kind];
+            return { title, body, url: TWO_STEP_URL };
+        }
+        case 'backup-code-used':
+            return {
+                title: 'Backup codes',
+                body: `A backup code was used. ${backupCodesLeft(notification.data.left)}`,
+                url: TWO_STEP_URL,
             };
         case 'shared': {
             // Named only from a contact this person checked themselves. A first-seen pin's
