@@ -1,0 +1,25 @@
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_ceb28e6eb12298 376
+apps/ios/App/PasskeySheet.swift
+  s_566b8e0c4467a4::t_6828ab7465b96f 15-16,21,23
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Passkeys.swift
+  s_566b8e0c4467a4::t_827939aa78984c 192-214
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/PasskeyStepTests.swift
+  s_566b8e0c4467a4::t_aed036c1d3846a 495-539
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c899c55b28328c66799bdccd10ca65fbfde5b9a3",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
