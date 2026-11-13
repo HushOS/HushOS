@@ -491,6 +491,13 @@ describe('the worker waits for every web process', () => {
             status: 'no-key',
         });
         expect(await row(account.factorId)).toEqual(before);
+        // It still clears the rows of web processes long gone: left to a worker that has a
+        // key, they would pile up for as long as this one has none.
+        expect(await edge.db.select().from(edge.schema.twoStepKeyReaders)).toHaveLength(1);
+        expect(await keys.resealTwoStepSecrets({ keyring: null, now: at(101) })).toEqual({
+            status: 'no-key',
+        });
+        expect(await edge.db.select().from(edge.schema.twoStepKeyReaders)).toEqual([]);
     }, 60_000);
 
     test('this web process says what it really has, and the job waits for it, with the reason as a warning', async () => {

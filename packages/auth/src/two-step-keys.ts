@@ -238,9 +238,11 @@ export async function resealTwoStepSecrets(
         options.keyring === undefined
             ? await twoStepKeyringFromEnv(await storedServerSetup())
             : options.keyring;
+    // Before anything else: the rows of web processes long gone go whether or not this
+    // worker has a key to seal under, or they would pile up for as long as it has none.
+    await twoStepRepository.dropStaleKeyReaders(options.now);
     if (!keyring) return { status: 'no-key' };
     const sealedWith = keyring.current.id.toString('hex');
-    await twoStepRepository.dropStaleKeyReaders(options.now);
     const { now, readers } = await twoStepRepository.liveKeyReaders(options.now);
     const web = sealingAgreed(readers, sealedWith, now);
     if (!web.agreed)
