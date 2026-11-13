@@ -151,8 +151,8 @@ pub fn backup_code_normalize(typed: String) -> Option<String> {
     .then_some(code)
 }
 
-/// One way to answer a step. A method this build does not know (another device, later) is
-/// one it cannot answer, and is left out of a challenge's list.
+/// One way to answer a step. A method this build does not know is one it cannot answer,
+/// and is left out of a challenge's list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum StepMethod {
@@ -164,6 +164,9 @@ pub enum StepMethod {
     Phrase,
     /// A passkey or security key, asked by the platform's own sheet.
     Webauthn,
+    /// Another of the account's devices approves (`device_approval.rs`): this device shows a
+    /// code, and the person types or scans it there.
+    Device,
 }
 
 /// One of the account's keys, as a step or a registration names it: the credential id
@@ -232,10 +235,22 @@ pub struct KeyAssertion {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum StepProof {
-    Totp { code: String },
-    Backup { code: String },
-    Phrase { signature: String },
-    Webauthn { assertion: KeyAssertion },
+    Totp {
+        code: String,
+    },
+    Backup {
+        code: String,
+    },
+    Phrase {
+        signature: String,
+    },
+    Webauthn {
+        assertion: KeyAssertion,
+    },
+    /// The request another device approved (`docs/two-step-design.md` 12).
+    Device {
+        request_id: String,
+    },
 }
 
 /// Why the server refused, for the app to act on (`docs/two-step-design.md` 4). The words
@@ -252,6 +267,9 @@ pub enum StepRefusal {
     /// `step-limited`: the shared budget for codes is spent for now. It covers the
     /// authenticator app and the backup codes together; the phrase, or waiting.
     Limited,
+    /// `step-pending`: the other device has not approved yet. Nothing was counted; the
+    /// same answer is sent again once it has.
+    Pending,
     /// `two-step`: the action needs the step and came without it. A challenge, then the step.
     Required,
     /// `setup-required`: the account has no recovery key yet.
@@ -380,6 +398,7 @@ fn challenge_of(value: &Value) -> Option<StepChallenge> {
             Some("backup") => StepMethod::Backup,
             Some("phrase") if phrase.is_some() => StepMethod::Phrase,
             Some("webauthn") if key_request.is_some() => StepMethod::Webauthn,
+            Some("device") => StepMethod::Device,
             _ => continue,
         };
         if !methods.contains(&method) {
@@ -394,6 +413,7 @@ fn challenge_of(value: &Value) -> Option<StepChallenge> {
             StepMethod::Backup => "backup",
             StepMethod::Phrase => "phrase",
             StepMethod::Webauthn => "webauthn",
+            StepMethod::Device => "device",
         });
         first.as_str() != kept
     });
@@ -442,6 +462,7 @@ fn refusal_of(status: u16, body: &str) -> StepReply {
         (Some("step-frozen"), _) => StepRefusal::Frozen,
         (Some("step-limited"), _) => StepRefusal::Limited,
         (Some("step-unavailable"), _) => StepRefusal::Unavailable,
+        (Some("step-pending"), _) => StepRefusal::Pending,
         (Some("two-step"), _) => StepRefusal::Required,
         (Some("setup-required"), _) => StepRefusal::SetupRequired,
         (Some("update-required"), _) => StepRefusal::UpdateRequired,
@@ -565,6 +586,9 @@ pub fn step_answer_json(token: String, proof: StepProof) -> String {
         StepProof::Phrase { signature } => format!(r#"{{"kind":"phrase","signature":{}}}"#, json!(signature)),
         StepProof::Webauthn { assertion } => {
             format!(r#"{{"kind":"webauthn","response":{}}}"#, assertion_value(&assertion))
+        }
+        StepProof::Device { request_id } => {
+            format!(r#"{{"kind":"device","requestId":{}}}"#, json!(request_id.to_lowercase()))
         }
     };
     format!(r#"{{"token":{},"proof":{proof}}}"#, json!(token))
@@ -944,20 +968,25 @@ pub fn key_added_reply_read(status: u16, body: String) -> KeyAddedReply {
 /// The kinds of method this build names to the server beyond the ones every client answers
 /// (the app's code, a backup code, the phrase), for `twoStepMethods` at sign-in and at a
 /// change (`docs/two-step-design.md` 12). `passkeys`: whether this device can use a passkey or
-/// security key for this server. One that cannot names none, and is never shown one.
+/// security key for this server. `device`: whether it can ask another device, which needs a
+/// device key of its own to commit to. One that cannot names neither, and is never shown one.
 ///
 /// ```
 /// use hushos_core::step_methods_named;
-/// assert_eq!(step_methods_named(true), vec!["webauthn"]);
-/// assert!(step_methods_named(false).is_empty());
+/// assert_eq!(step_methods_named(true, true), vec!["webauthn", "device"]);
+/// assert_eq!(step_methods_named(false, true), vec!["device"]);
+/// assert!(step_methods_named(false, false).is_empty());
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
-pub fn step_methods_named(passkeys: bool) -> Vec<String> {
+pub fn step_methods_named(passkeys: bool, device: bool) -> Vec<String> {
+    let mut named = Vec::new();
     if passkeys {
-        vec!["webauthn".to_string()]
-    } else {
-        Vec::new()
+        named.push("webauthn".to_string());
     }
+    if device {
+        named.push("device".to_string());
+    }
+    named
 }
 
 /// The kinds of method this build can list in settings (`?methods=`), whether or not this
@@ -965,11 +994,11 @@ pub fn step_methods_named(passkeys: bool) -> Vec<String> {
 ///
 /// ```
 /// use hushos_core::step_methods_shown;
-/// assert_eq!(step_methods_shown(), vec!["webauthn"]);
+/// assert_eq!(step_methods_shown(), vec!["webauthn", "device"]);
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn step_methods_shown() -> Vec<String> {
-    vec!["webauthn".to_string()]
+    vec!["webauthn".to_string(), "device".to_string()]
 }
 
 /// Whether `login/start`'s reply says the server reads `twoStepMethods`. It is sent only to
@@ -1002,6 +1031,44 @@ pub fn step_methods_advertised(login_start_body: String) -> bool {
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn step_methods_refused(status: u16) -> bool {
     status == 422 || status == 400
+}
+
+#[cfg(test)]
+mod device_tests {
+    use super::*;
+
+    #[test]
+    fn a_device_answer_names_its_request_and_a_pending_one_is_not_a_wrong_answer() {
+        assert_eq!(
+            step_answer_json(
+                "tok".into(),
+                StepProof::Device { request_id: "7C9E6679-7425-40DE-944B-E07FC1F90AE7".into() }
+            ),
+            r#"{"token":"tok","proof":{"kind":"device","requestId":"7c9e6679-7425-40de-944b-e07fc1f90ae7"}}"#
+        );
+        // The other device has not answered yet: the app waits and sends the same answer again.
+        assert_eq!(
+            sign_in_reply_read(
+                409,
+                r#"{"message":"Waiting for your other device.","code":"step-pending"}"#.into()
+            ),
+            StepReply::Refused {
+                refusal: StepRefusal::Pending,
+                message: "Waiting for your other device.".into()
+            },
+        );
+        // A 409 without that code is not a reason to keep waiting.
+        assert_eq!(
+            sign_in_reply_read(
+                409,
+                r#"{"message":"Update HushOS to sign in.","code":"update-required"}"#.into()
+            ),
+            StepReply::Refused {
+                refusal: StepRefusal::UpdateRequired,
+                message: "Update HushOS to sign in.".into()
+            },
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1179,9 +1246,15 @@ mod tests {
             whole.phrase,
             Some(StepPhrase { user_id: USER.into(), recovery_version: 3, wrapping_salt: "c2FsdA".into() })
         );
-        // Another device (later) is skipped, and the server's order is kept for the rest.
+        // Another device answers with nothing the reply carries, and keeps the server's order.
+        let mut device = step_body();
+        device["methods"] = json!(["device", "phrase", "totp"]);
+        let device = read(device);
+        assert_eq!(device.methods, vec![StepMethod::Device, StepMethod::Phrase, StepMethod::Totp]);
+        assert!(!device.default_unavailable);
+        // A way this build does not know is skipped, and the server's order is kept for the rest.
         let mut later = step_body();
-        later["methods"] = json!(["device", "phrase", "totp"]);
+        later["methods"] = json!(["a-way-from-later", "phrase", "totp"]);
         let later = read(later);
         assert_eq!(later.methods, vec![StepMethod::Phrase, StepMethod::Totp]);
         // What the server put first is not on offer here: the app says its one line.
@@ -1197,7 +1270,7 @@ mod tests {
         }
         // Nothing this build can answer with is still the server's step: the app says to update.
         let mut keys_only = step_body();
-        keys_only["methods"] = json!(["device"]);
+        keys_only["methods"] = json!(["a-way-from-later"]);
         assert!(read(keys_only).methods.is_empty());
     }
 

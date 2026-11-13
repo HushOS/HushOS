@@ -554,7 +554,9 @@ describe('a sign-in approved on another device', () => {
 
     test('only a signature by the approving device over this request approves it', async () => {
         const { userId, laptop, phone } = await withDeviceStep();
-        const sign_ = async (signature: (id: string, tokenHash: Buffer, from: Asking) => Buffer) => {
+        const sign_ = async (
+            signature: (id: string, tokenHash: Buffer, from: Asking) => Buffer,
+        ) => {
             const tokenHash = await loginToken(userId);
             const from = asking('login');
             const made = await request(tokenHash, from);
@@ -1029,12 +1031,8 @@ describe('budgets', () => {
         const { userId, laptop, phone } = await withDeviceStep();
         for (let round = 0; round < 5; round++)
             expect(
-                (
-                    await request(
-                        await loginToken(userId, laptop),
-                        asking('login', laptop.publicKey),
-                    )
-                ).status,
+                (await request(await loginToken(userId, laptop), asking('login', laptop.publicKey)))
+                    .status,
             ).toBe('ok');
         expect(
             (await request(await loginToken(userId, laptop), asking('login', laptop.publicKey)))

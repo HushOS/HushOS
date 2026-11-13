@@ -1,0 +1,131 @@
+{
+    "generatedBy": "packages/crypto/scripts/device-approval-fixtures.ts",
+    "cases": [
+        {
+            "purpose": "login",
+            "userId": "6032DC4A-DB1E-47C5-8F05-DA5D3C2B477A",
+            "requestId": "a7e8f04f-3a40-45b8-8051-eac9f0b74da7",
+            "stepToken": "Bxe_5Qg7jaSeJyHB-vaExoo7s36T9A2Gjr0YvUfjJT8",
+            "tokenDigest": "X6B3TvY9njCXJgHi-y77IUJcLbjQiRmdC2QrskDaUW0",
+            "deviceSigningKey": "lsJvuH4lSUB1wBRR4UriFhAKO8HqSiXk_k5nTjtl26w",
+            "nonce": "m85W1AEK52DJLrl8ofY_C9T1c_5d62ktLvUgN9_1sjY",
+            "approverKey": "rHhNabTaEaOBAdRTo0wkophI27zfFA8HDi1oTYT5LP0",
+            "commitment": "6X9SfrhufGy-vTWSgiPYfoNUi7WORPh9dvPPririKOQ",
+            "code": "32 palm",
+            "statement": "WyJodXNob3MvdHdvLXN0ZXAvZGV2aWNlIiwxLCI2MDMyZGM0YS1kYjFlLTQ3YzUtOGYwNS1kYTVkM2MyYjQ3N2EiLCJhN2U4ZjA0Zi0zYTQwLTQ1YjgtODA1MS1lYWM5ZjBiNzRkYTciLCJsb2dpbiIsIlg2QjNUdlk5bmpDWEpnSGkteTc3SVVKY0xialFpUm1kQzJRcnNrRGFVVzAiLCJsc0p2dUg0bFNVQjF3QlJSNFVyaUZoQUtPOEhxU2lYa19rNW5UanRsMjZ3Il0",
+            "approver": {
+                "publicKey": "jJXAJXyymTtmi9BHY5jroaumv1u0P0Z_Hw8pRIh0nUw",
+                "signature": "Kn5mNhBd_wRisI7jTGCmNAuN3hG_iZ89vgVBWWM4jx5lbh0Oh97uIgirCk53WYUiHRSHID77bgKmlHkdRX6PAA"
+            },
+            "qr": "hushos-approve:p-jwTzpARbiAUerJ8LdNp-l_Un64bnxsvr01koIj2H6DVIu1jkT4fXbzz64q4ijk"
+        },
+        {
+            "purpose": "password",
+            "userId": "5EA77A9F-6210-42B8-8700-B4401A333AE7",
+            "requestId": "40206e32-e631-4237-8b49-066d096eb7ed",
+            "stepToken": "8creS8Mu3I_-Uu9Rwjcxuo_uHqIeDAJYJ4XwNh3jxKk",
+            "tokenDigest": "nV6ZKAkV_2aXTd-Q1KTmqTgfObTryV_gv-O3id8eu0I",
+            "deviceSigningKey": "ah5St8CnlIvCYj4GTqShSafdP9XHR6ZPAecCGZiFadI",
+            "nonce": "8YH6__7OR8n2xcQnpwmgOVYFrK9wlfUEWzdCNykXTaM",
+            "approverKey": "IFZRT1GJLflvwuJ5_FLrGqTXoljAA6GksNP7O3UGFwk",
+            "commitment": "8VuUe2oyFZgE25v-yPpz38Df-o2NQbGGmdUGNGPBNDw",
+            "code": "24 remember",
+            "statement": "WyJodXNob3MvdHdvLXN0ZXAvZGV2aWNlIiwxLCI1ZWE3N2E5Zi02MjEwLTQyYjgtODcwMC1iNDQwMWEzMzNhZTciLCI0MDIwNmUzMi1lNjMxLTQyMzctOGI0OS0wNjZkMDk2ZWI3ZWQiLCJwYXNzd29yZCIsIm5WNlpLQWtWXzJhWFRkLVExS1RtcVRnZk9iVHJ5Vl9ndi1PM2lkOGV1MEkiLCJhaDVTdDhDbmxJdkNZajRHVHFTaFNhZmRQOVhIUjZaUEFlY0NHWmlGYWRJIl0",
+            "approver": {
+                "publicKey": "50spGJWcyVVefKqHih-nPk6WcQE43fxXOjHbGT9kxcQ",
+                "signature": "IT24WLVNX8V4Cs3j2B5QfeFKYyfPzculoNkmVFKvV-1FJYtLoFFzk4iGPilzL9IJc6ufcGTtrhQIBlOPYe0oDA"
+            },
+            "qr": "hushos-approve:QCBuMuYxQjeLSQZtCW637fFblHtqMhWYBNub_sj6c9_A3_qNjUGxhpnVBjRjwTQ8"
+        },
+        {
+            "purpose": "master-key",
+            "userId": "4A3986E4-BB0D-4FC9-8BD8-AE7829847717",
+            "requestId": "70e570f4-1f61-4d0b-876c-f6f3006ed7bc",
+            "stepToken": "cMPbSGjaLcG5ww_voRjem-ESsTH-o57AfTwip7ZMyco",
+            "tokenDigest": "-O4xFWLeeUoYk7HKv6PvkPKijWq_bFL5iLWTEhQw2Bk",
+            "deviceSigningKey": "78x3fBpRDIZL2se95-JUWfFbzpiaocmoV9auXtuW3fk",
+            "nonce": "u5WMi3fmJN63bsBTgsvC26z9-h0jI40poYPLYyPwEac",
+            "approverKey": "gXeWTltcCoiLqXHxPaiPxCTOA4b5Xveibn-4O20LwRI",
+            "commitment": "QTXxDXCPIF52C-94ZkDKe2H4hH7hA_i9oVpZagRFPak",
+            "code": "20 ankle",
+            "statement": "WyJodXNob3MvdHdvLXN0ZXAvZGV2aWNlIiwxLCI0YTM5ODZlNC1iYjBkLTRmYzktOGJkOC1hZTc4Mjk4NDc3MTciLCI3MGU1NzBmNC0xZjYxLTRkMGItODc2Yy1mNmYzMDA2ZWQ3YmMiLCJtYXN0ZXIta2V5IiwiLU80eEZXTGVlVW9ZazdIS3Y2UHZrUEtpaldxX2JGTDVpTFdURWhRdzJCayIsIjc4eDNmQnBSRElaTDJzZTk1LUpVV2ZGYnpwaWFvY21vVjlhdVh0dVczZmsiXQ",
+            "approver": {
+                "publicKey": "KRGXIhIb2Eox8yncf7fc6038n0zzh_XN2Z2yLFmRcVI",
+                "signature": "0bmaB0KDzVZ0PNzhM6E1vLPBqhVpbWjcneEiOIwzcMqyBi3uH6drVjsUaYXXhKeKuxMsBlmBvUapK9LHXrK0BA"
+            },
+            "qr": "hushos-approve:cOVw9B9hTQuHbPbzAG7XvEE18Q1wjyBedgvveGZAynth-IR-4QP4vaFaWWoERT2p"
+        },
+        {
+            "purpose": "recovery-key",
+            "userId": "80089668-7FA5-45D8-8BD8-B40A3F5C708D",
+            "requestId": "afb60ef5-7c61-4c0e-8022-41cf0c6dcb2d",
+            "stepToken": "UMMU_c7gOWj0C3mPWweJ-i9Ii1RxkjbeCIlcjmHg_R4",
+            "tokenDigest": "AjsM-3JeAfXsXuiC_nPBJ8HR2sOjqpLeJ2fc-SYJypI",
+            "deviceSigningKey": "bmZxuZGWsVrdb2jqmw2o7jo9n2yGJQmnhtPX2knDAg4",
+            "nonce": "lnO3zS1C4ZPwA9lutNPxPXCsxugf1CQCo7yx0SFX5Jw",
+            "approverKey": "VsXyDlaW4qZXUVPAIS48-iczAdQjkMMqrAGi13Hbv3E",
+            "commitment": "b0Ov2sJ8xLyACdiXxF0UySQ0tf_AOUncUqyMobGfXJw",
+            "code": "11 drill",
+            "statement": "WyJodXNob3MvdHdvLXN0ZXAvZGV2aWNlIiwxLCI4MDA4OTY2OC03ZmE1LTQ1ZDgtOGJkOC1iNDBhM2Y1YzcwOGQiLCJhZmI2MGVmNS03YzYxLTRjMGUtODAyMi00MWNmMGM2ZGNiMmQiLCJyZWNvdmVyeS1rZXkiLCJBanNNLTNKZUFmWHNYdWlDX25QQko4SFIyc09qcXBMZUoyZmMtU1lKeXBJIiwiYm1aeHVaR1dzVnJkYjJqcW13Mm83am85bjJ5R0pRbW5odFBYMmtuREFnNCJd",
+            "approver": {
+                "publicKey": "hdEDSrGABNAIST5fwYvx_Gw5Kj3q0UspTAGUTiT1Yko",
+                "signature": "3b5Dfm-0MfP6LVHA0XrLxf7mWjhvZgqAt1gaJxj9KCMfIjgDAjZGEtlty8Bz1CyfeHi2eSecBALSqXuY6QTrBQ"
+            },
+            "qr": "hushos-approve:r7YO9XxhTA6AIkHPDG3LLW9Dr9rCfMS8gAnYl8RdFMkkNLX_wDlJ3FKsjKGxn1yc"
+        },
+        {
+            "purpose": "delete",
+            "userId": "89EFA4E7-3879-4002-83E7-38F19FBE32AD",
+            "requestId": "fc9e458b-d01c-4c08-8f8d-6cab4b15a84d",
+            "stepToken": "0QNShMI2jckQ5EM-8OxmZEXSncho836fixjIpTIgNZ8",
+            "tokenDigest": "4907yi1UQSYRUOmboojVnodHXjuTlOaP-sfRmJ0-Wxw",
+            "deviceSigningKey": "M2Saj_Q90fITaTKhMsTYN3GgCiBSdorNk6mXF3qaGFA",
+            "nonce": "v2zkQyc_qniSt-yhuHaLbJZjqAc60wehH5crGeLAmm0",
+            "approverKey": "ZBhy2zapUAPNIOk1Ce465MJfp7tVXq0Pws2_pOZaJzE",
+            "commitment": "6vLWV7BLcE0DGMc_ZjJnzCWFir6UOJ8Hw8u-QpA_VTc",
+            "code": "57 there",
+            "statement": "WyJodXNob3MvdHdvLXN0ZXAvZGV2aWNlIiwxLCI4OWVmYTRlNy0zODc5LTQwMDItODNlNy0zOGYxOWZiZTMyYWQiLCJmYzllNDU4Yi1kMDFjLTRjMDgtOGY4ZC02Y2FiNGIxNWE4NGQiLCJkZWxldGUiLCI0OTA3eWkxVVFTWVJVT21ib29qVm5vZEhYanVUbE9hUC1zZlJtSjAtV3h3IiwiTTJTYWpfUTkwZklUYVRLaE1zVFlOM0dnQ2lCU2Rvck5rNm1YRjNxYUdGQSJd",
+            "approver": {
+                "publicKey": "ru9es3XTqNnxTKEc87fsAzzEV_4XbS-06kaCgSt7SkA",
+                "signature": "2hEvAbGDNoLW0aHusrvus_EQVTzXITyL9cVSREVVVOoDbIMV-tACaBGcfLvso5tuy7WvaL2BjxVKsMmHINM8AQ"
+            },
+            "qr": "hushos-approve:_J5Fi9AcTAiPjWyrSxWoTery1lewS3BNAxjHP2YyZ8wlhYq-lDifB8PLvkKQP1U3"
+        },
+        {
+            "purpose": "two-step",
+            "userId": "9233EE9D-1C6A-4C37-8AF0-48E67F1F9767",
+            "requestId": "5bc158e0-ee32-48ec-8520-7d68a9c2b0cd",
+            "stepToken": "C7zESF18ozkwTIVTtAoynP6fx9AwxKS4w8g6K81BKz8",
+            "tokenDigest": "9BexyVWFlvGwYXETVa_rsjJ2j7BZhbcB0-9dcNM6EDo",
+            "deviceSigningKey": "JEgIaGypTQGBSYn3e03NHcqNzVeP3fTPjIQd67C1Tq8",
+            "nonce": "N2jJLIhs-7ki7rCJ_aFl3EjEp7jxO-NRWbVL2Q2BhxM",
+            "approverKey": "uypsuQEocvH8veMPY7uM4-SIvWF3Xj6KFmWjD9Dgnfc",
+            "commitment": "Pr1vb0_Etl90u4WKelBFhxuK9fW4mKJek8bACmmRNQw",
+            "code": "44 desk",
+            "statement": "WyJodXNob3MvdHdvLXN0ZXAvZGV2aWNlIiwxLCI5MjMzZWU5ZC0xYzZhLTRjMzctOGFmMC00OGU2N2YxZjk3NjciLCI1YmMxNThlMC1lZTMyLTQ4ZWMtODUyMC03ZDY4YTljMmIwY2QiLCJ0d28tc3RlcCIsIjlCZXh5VldGbHZHd1lYRVRWYV9yc2pKMmo3QlpoYmNCMC05ZGNOTTZFRG8iLCJKRWdJYUd5cFRRR0JTWW4zZTAzTkhjcU56VmVQM2ZUUGpJUWQ2N0MxVHE4Il0",
+            "approver": {
+                "publicKey": "7btEdMv-FumNYZ2vQg0viDns_gp_p0xM3K2DeEN3g5I",
+                "signature": "cvzdsjnnxp3TegCwQkIrXHRfA84FHg1AYpSDd3bcYXfypIZeJeB6HlP8TCp6JMlWQ1-hojZeT50sI_0UUf9QCQ"
+            },
+            "qr": "hushos-approve:W8FY4O4ySOyFIH1oqcKwzT69b29PxLZfdLuFinpQRYcbivX1uJiiXpPGwAppkTUM"
+        },
+        {
+            "purpose": "device-approval",
+            "userId": "25D84E07-3962-4626-8758-0EB68D61D521",
+            "requestId": "263f599c-4b6a-4b14-8e06-2ddc955d6a73",
+            "stepToken": "ExlY9Cy9klW6PV0yXN2qg-bvNlOP0dwY7EJnr5M52xM",
+            "tokenDigest": "YY5IKfCFk-k_JtUQVXiFShaa_4nUr_3_0IzmRetf9qk",
+            "deviceSigningKey": "1qb7_33huI_wt_ITWO3mj2GNw5EIO_jQrRDzpaF-N_0",
+            "nonce": "MyHrKgKD-nZ3q3IzIKtuT5FYCH1-tBJ15DbTZm5qHv0",
+            "approverKey": "GgP4fzseSlWHpDDAiyQXzJzeRrHvucBuvXO_PLdB82A",
+            "commitment": "KjITLyj1cK-Wrgd6tVuC6tyBQUCAs5xDPnN2aR7lstk",
+            "code": "32 swarm",
+            "statement": "WyJodXNob3MvdHdvLXN0ZXAvZGV2aWNlIiwxLCIyNWQ4NGUwNy0zOTYyLTQ2MjYtODc1OC0wZWI2OGQ2MWQ1MjEiLCIyNjNmNTk5Yy00YjZhLTRiMTQtOGUwNi0yZGRjOTU1ZDZhNzMiLCJkZXZpY2UtYXBwcm92YWwiLCJZWTVJS2ZDRmsta19KdFVRVlhpRlNoYWFfNG5Vcl8zXzBJem1SZXRmOXFrIiwiMXFiN18zM2h1SV93dF9JVFdPM21qMkdOdzVFSU9falFyUkR6cGFGLU5fMCJd",
+            "approver": {
+                "publicKey": "L1HTodrZbOpKWi4VRoUOdpfwWNikbGWC243vpCfywvo",
+                "signature": "7cqKI3RMc74ZINuUvN8JjfaPLGn3ODUSGymY3c28HpTSjbaGjxyIqpvTnecmtTAYcJkoJXBUS0tBrklMNWvRDw"
+            },
+            "qr": "hushos-approve:Jj9ZnEtqSxSOBi3clV1qcyoyEy8o9XCvlq4HerVbgurcgUFAgLOcQz5zdmke5bLZ"
+        }
+    ]
+}

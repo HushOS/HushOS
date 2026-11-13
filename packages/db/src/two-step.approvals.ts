@@ -133,8 +133,7 @@ async function requestFor(executor: Executor, attempt: StepAttempt) {
     // A sign-in whose device has no key yet is still one device asking another; a step-up is not.
     if (!signIn && !device) return null;
     if (agedPurpose(attempt.purpose) && device && !agedEnough(device.approvedAt)) return null;
-    const bootstrap =
-        confirming && (await confirmedFactors(executor, attempt.userId)).length === 0;
+    const bootstrap = confirming && (await confirmedFactors(executor, attempt.userId)).length === 0;
     const approvers = await approvingDevices(executor, {
         userId: attempt.userId,
         purpose: attempt.purpose,
@@ -293,7 +292,6 @@ export async function settleDeviceRequests(userId?: string): Promise<CountedRequ
         );
     return counted;
 }
-
 
 /* ------------------------------------------------------------------------- */
 /* The asking device                                                          */
@@ -951,7 +949,10 @@ export async function confirmDeviceFactor(input: {
             await tx
                 .delete(twoStepFactors)
                 .where(
-                    and(eq(twoStepFactors.userId, input.userId), isNull(twoStepFactors.confirmedAt)),
+                    and(
+                        eq(twoStepFactors.userId, input.userId),
+                        isNull(twoStepFactors.confirmedAt),
+                    ),
                 );
             await tx
                 .delete(twoStepKeyRegistrations)

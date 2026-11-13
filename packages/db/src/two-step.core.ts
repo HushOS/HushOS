@@ -416,7 +416,11 @@ export async function recordStepFailure(answer: StepAttempt): Promise<StepFailur
             }
         }
 
-        const { consecutiveFailures, froze } = await countPoolFailure(tx, answer.userId, answer.pool);
+        const { consecutiveFailures, froze } = await countPoolFailure(
+            tx,
+            answer.userId,
+            answer.pool,
+        );
         return {
             status: 'counted',
             left,
