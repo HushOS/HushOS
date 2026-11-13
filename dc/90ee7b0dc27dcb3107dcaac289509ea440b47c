@@ -1,0 +1,33 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/Auth.kt
+  s_566b8e0c4467a4::t_3dfbb93afe2013 1161-1163
+apps/android/app/src/test/kotlin/com/hushos/app/data/TwoStepTest.kt
+  s_566b8e0c4467a4::t_00e3e97605bc8f 340-342
+apps/ios/App/AccountView.swift
+  s_566b8e0c4467a4::t_e99e67d702f4dd 991-992
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Account.swift
+  s_566b8e0c4467a4::t_37094682f59c26 608-609,612-616
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/TwoStepTests.swift
+  s_566b8e0c4467a4::t_12248b411b8113 304-306
+apps/web/src/components/sign-in-step.tsx
+  s_566b8e0c4467a4::t_ffae297ea4eb14 3,9,42-53
+apps/web/src/components/unlock-device.test.tsx
+  s_566b8e0c4467a4::t_f0bce0a8327028 2,21-37,40,224-235
+apps/web/src/lib/two-step.ts
+  s_566b8e0c4467a4::t_3152ae26d60aed 6,9,119-130
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "dc90ee7b0dc27dcb3107dcaac289509ea440b47c",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
