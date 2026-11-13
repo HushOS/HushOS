@@ -1,0 +1,35 @@
+apps/web/src/components/account-family.tsx
+  s_566b8e0c4467a4::t_6a0e77666416c7 26
+apps/web/src/components/account-two-step.test.tsx
+  s_566b8e0c4467a4::t_9f38fe9f6993cb 478-479,515-539
+apps/web/src/components/account-two-step.tsx
+  s_566b8e0c4467a4::t_222c4fde6ad086 72-73,270-277,300-309,356,358,360
+apps/web/src/components/settings.tsx
+  s_566b8e0c4467a4::t_527cdad63df886 66-72,96-99,138
+apps/web/src/content/security.mdx
+  s_566b8e0c4467a4::t_a1c8e282d1c37f 4,39
+apps/web/src/routes/_authenticated/app/account.tsx
+  s_566b8e0c4467a4::t_450f794dfc783d 284,346-354,359,383-387,393-397,401-407,419
+e2e/devices.spec.ts
+  s_566b8e0c4467a4::t_cb8b73df6e20da 166-168
+e2e/two-step-passkeys.spec.ts
+  s_566b8e0c4467a4::t_4f52757b366978 46-48,294,329
+e2e/two-step.spec.ts
+  s_566b8e0c4467a4::t_be564c42bd0441 312-314,423-425
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "66ee653e37ac4330f5999c519df9cb519b47fb42",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
