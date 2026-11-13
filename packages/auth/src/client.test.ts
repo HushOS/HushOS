@@ -346,6 +346,8 @@ describe('a device store that does not answer at sign-in', () => {
                 userId: user.id,
                 attemptToken: 'recover',
                 credentialVersion: 1,
+                // The recovery envelope the reset opens, as far as the client reads it here.
+                recovery: { recoveryVersion: 1 },
             }),
             // The server's own answer to a reset it applied.
             recoverFinish: async () => ({ user }),

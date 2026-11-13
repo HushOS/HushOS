@@ -728,6 +728,12 @@ describe('proving the password again for two things at once', () => {
  */
 describe('a reset with the recovery phrase', () => {
     const fresh = 'fresh words made by the reset';
+    // The account as the reset leaves it: its credential and its recovery key one version on.
+    const after = { ...session, envelope: { ...session.envelope, credentialVersion: 2 } };
+    const stepAfter = { ...step, phrase: { ...step.phrase, recoveryVersion: 2 } };
+    // And as it was, when the reset never landed.
+    const before = session;
+    const stepBefore = step;
     function resetting(
         server: Partial<Record<keyof AuthApi, (...input: never[]) => unknown>>,
         worker: { wrongPassword?: boolean } = {},
@@ -759,10 +765,12 @@ describe('a reset with the recovery phrase', () => {
                 userId: user.id,
                 attemptToken: 'a',
                 credentialVersion: 1,
+                recovery: { recoveryVersion: 1 },
             }),
             recoverFinish: async () => ({ user }),
             loginStart: async () => ({ attemptToken: 'attempt' }),
-            loginFinish: async () => session,
+            loginFinish: async () => after,
+            logout: async () => ({}),
             ...server,
         } as unknown as AuthApi);
         return {
@@ -780,10 +788,10 @@ describe('a reset with the recovery phrase', () => {
     test('a second step at that sign-in is answered with the new phrase, never the old one', async () => {
         const answers: unknown[] = [];
         const { reset, signed, client } = resetting({
-            loginFinish: async () => ({ twoStep: step }),
+            loginFinish: async () => ({ twoStep: stepAfter }),
             loginTwoStep: async (answer: never) => {
                 answers.push(answer);
-                return session;
+                return after;
             },
         });
         expect(await reset()).toMatchObject({ user, phrase: fresh, applied: true });
@@ -806,7 +814,7 @@ describe('a reset with the recovery phrase', () => {
         [
             'the step’s answer is refused',
             {
-                loginFinish: async () => ({ twoStep: step }),
+                loginFinish: async () => ({ twoStep: stepAfter }),
                 loginTwoStep: () => Promise.reject(refusal('No.', 401, 'step-wrong')),
             },
         ],
@@ -815,7 +823,7 @@ describe('a reset with the recovery phrase', () => {
             { loginFinish: () => Promise.reject(new TypeError('Failed to fetch')) },
         ],
     ])(
-        'when %s, the reset still stands and the new words still come back',
+        'when %s, the reset the server confirmed still stands and the new words still come back',
         async (_name, server) => {
             const { reset, client } = resetting(server as never);
             // Not signed in here, and not an error either: the page shows the words.
@@ -836,6 +844,13 @@ describe('a reset with the recovery phrase', () => {
         await expect(reset()).rejects.toThrow('This link has expired.');
     });
 
+    /*
+     * The reset's reply never arrived. Whether it landed is read from the reset itself: the
+     * account's credential version in the envelope, or its recovery key's version at the step.
+     * Never from the new password signing in: someone may reset to the password they already
+     * have, and then it signs in either way. Saying "applied" on that would tell them their
+     * working phrase is dead and hand them new words that open nothing.
+     */
     describe('when the server’s answer to the reset is lost', () => {
         const lost = [
             ['no answer', () => Promise.reject(new TypeError('Failed to fetch'))],
@@ -844,7 +859,7 @@ describe('a reset with the recovery phrase', () => {
         ] as const;
 
         test.each(lost)(
-            'after %s, the new password signing in shows it was applied',
+            'after %s, the account at the reset’s credential version shows it was applied',
             async (_name, recoverFinish) => {
                 const { reset } = resetting({ recoverFinish: recoverFinish as never });
                 expect(await reset()).toEqual({
@@ -857,7 +872,61 @@ describe('a reset with the recovery phrase', () => {
         );
 
         test.each(lost)(
-            'after %s, the new password being refused shows it was not: the old phrase is still the phrase',
+            'after %s, the same password as before signing in to the account as it was is not "applied": the old phrase is still the phrase',
+            async (_name, recoverFinish) => {
+                let signedOut = 0;
+                // The reset never landed, and the new password is the one the account already
+                // had: the sign-in works, on the old credential.
+                const { reset, client } = resetting({
+                    recoverFinish: recoverFinish as never,
+                    loginFinish: async () => before,
+                    logout: async () => void signedOut++,
+                });
+                const result = await reset().catch((error: unknown) => error);
+                expect(result).toBeInstanceOf(Error);
+                expect((result as Error).message).toContain('Your password was not changed');
+                // No new words are handed over as the account's phrase, and the session that
+                // answered the question is not left open behind the page.
+                expect(signedOut).toBe(1);
+                expect(client.store.getState().unlockedUserId).toBeNull();
+            },
+        );
+
+        test.each(lost)(
+            'after %s, a step that names the old recovery key is not answered: the new words are not the account’s, and would only be a counted wrong answer',
+            async (_name, recoverFinish) => {
+                const answers: unknown[] = [];
+                const { reset, signed } = resetting({
+                    recoverFinish: recoverFinish as never,
+                    loginFinish: async () => ({ twoStep: stepBefore }),
+                    loginTwoStep: async (answer: never) => void answers.push(answer),
+                });
+                await expect(reset()).rejects.toThrow('Your password was not changed');
+                expect(signed).toEqual([]);
+                expect(answers).toEqual([]);
+            },
+        );
+
+        test.each(lost)(
+            'after %s, a step that names the reset’s recovery key shows it was applied, and the new phrase answers it',
+            async (_name, recoverFinish) => {
+                const { reset, signed } = resetting({
+                    recoverFinish: recoverFinish as never,
+                    loginFinish: async () => ({ twoStep: stepAfter }),
+                    loginTwoStep: async () => after,
+                });
+                expect(await reset()).toEqual({
+                    user,
+                    phrase: fresh,
+                    applied: true,
+                    storage: null,
+                });
+                expect(signed).toEqual([fresh]);
+            },
+        );
+
+        test.each(lost)(
+            'after %s, the new password being refused shows it was not applied',
             async (_name, recoverFinish) => {
                 const { reset } = resetting(
                     { recoverFinish: recoverFinish as never },
@@ -883,10 +952,25 @@ describe('a reset with the recovery phrase', () => {
             },
         );
 
-        test('the password matching and the sign-in then failing still means it was applied', async () => {
+        test('the password matching, with no reply that shows the account’s versions, is not evidence: the outcome stays unknown', async () => {
+            // The password's half of the sign-in went through, and then the connection dropped.
             const { reset } = resetting({
                 recoverFinish: () => Promise.reject(new TypeError('Failed to fetch')),
                 loginFinish: () => Promise.reject(new TypeError('Failed to fetch')),
+            });
+            expect(await reset()).toEqual({
+                user: null,
+                phrase: fresh,
+                applied: 'unknown',
+                storage: null,
+            });
+        });
+
+        test('a step that shows the reset landed, then cannot be finished: applied, and the words come back', async () => {
+            const { reset } = resetting({
+                recoverFinish: () => Promise.reject(new TypeError('Failed to fetch')),
+                loginFinish: async () => ({ twoStep: stepAfter }),
+                loginTwoStep: () => Promise.reject(new TypeError('Failed to fetch')),
             });
             expect(await reset()).toEqual({
                 user: null,

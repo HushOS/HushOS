@@ -304,7 +304,10 @@ A reset also **replaces the phrase**, so the phrase that answers is the new one,
 
 - answers the step of the sign-in that follows with the new phrase. The reset was authorised by the old phrase's signature, and the phrase answers any step, so nothing is skipped;
 - shows the new words as soon as the server has accepted the reset, whether or not that sign-in works;
-- keeps the new words when the server's answer to the reset is lost, and signs in with the new password to learn whether it was applied: the server's record matching the new password says it was.
+- keeps the new words when the server's answer to the reset is lost, and signs in with the new password to learn whether it was applied. What says so is the reset itself showing in the reply, never the sign-in succeeding (someone may reset to the password they already have):
+    - a session's envelope at the credential version the reset sends (the old one plus one), or a step whose `phrase.recoveryVersion` is the reset's (the old one plus one): applied;
+    - either at the old version, or the new password refused: not applied. The old phrase is still the phrase, the new words are discarded, and a step that names the old recovery key is left unanswered;
+    - no reply that shows either: unknown. The client shows the new words and says to keep both phrases until a sign-in has settled it.
 
 ### Turning the step on and off
 

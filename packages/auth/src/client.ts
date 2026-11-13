@@ -604,17 +604,29 @@ export function createAuthClient(
      * person (`ask`) gets TwoStepRequired and answers with `answerStep`. A sign-in made on
      * the person's behalf after something else (a new account, a reset, a security change)
      * has nobody to ask, so it stops (`refuse`) and the person signs in themselves. The one
-     * that follows a reset answers the step itself, with the recovery phrase the reset just
-     * made (`{ phrase }`): the reset was authorised by the old phrase, the phrase answers any
-     * step, and nobody else holds the new one yet. `passwordProved` is called once the server's
-     * record has matched the password, whatever happens after.
+     * that follows a reset (`AfterReset`) answers the step itself, with the recovery phrase the
+     * reset just made: the reset was authorised by the old phrase, the phrase answers any
+     * step, and nobody else holds the new one yet.
      */
+    type AfterReset = {
+        /* The phrase the reset made. */
+        phrase: string;
+        /* The versions the account is at once the reset has landed. */
+        credentialVersion: number;
+        recoveryVersion: number;
+        /*
+         * Told what the server's reply shows of the reset itself: true when the account is at
+         * the reset's versions, false when it is not. Not called when the reply shows neither.
+         * The password signing in is no such evidence: someone may reset to the password they
+         * already have, and then it signs in whether the reset landed or not.
+         */
+        landed: (landed: boolean) => void;
+    };
     async function login(
         email: string,
         password: string,
         options: LoginOptions = {},
-        step: 'ask' | 'refuse' | { phrase: string } = 'refuse',
-        passwordProved?: () => void,
+        step: 'ask' | 'refuse' | AfterReset = 'refuse',
     ) {
         const loginEpoch = epoch;
         const attempt = ++signIns;
@@ -623,7 +635,6 @@ export function createAuthClient(
         const start = await own('loginStart', { password });
         const challenge = await api.loginStart({ email, ...start });
         const finish = await own('loginFinish', challenge);
-        passwordProved?.();
         const device = await deviceProof(stored, email, challenge.attemptToken);
         // A lock here has already dropped the export key; do not create a session for it.
         if (epoch !== loginEpoch) throw new Error('Your account was locked. Please sign in again.');
@@ -640,6 +651,13 @@ export function createAuthClient(
             if (epoch !== loginEpoch)
                 throw new Error('Your account was locked. Please sign in again.');
             if (typeof step === 'object') {
+                // The step names the recovery key the account has now. Only if that is the
+                // reset's is the new phrase the account's phrase: anything else is left
+                // unanswered, since the new words would only be a wrong answer, and counted.
+                const holds = reply.challenge.phrase?.recoveryVersion;
+                if (holds !== undefined) step.landed(holds === step.recoveryVersion);
+                if (holds !== step.recoveryVersion)
+                    throw new Error('This account asks for a second step.');
                 const answered = readLoginReply(
                     await api.loginTwoStep(
                         await proveStep(
@@ -663,6 +681,9 @@ export function createAuthClient(
             };
             throw new TwoStepRequired(reply.challenge);
         }
+        // The envelope carries the account's credential version: the reset's, if it landed.
+        if (typeof step === 'object')
+            step.landed(reply.session.envelope.credentialVersion === step.credentialVersion);
         return openSession(reply.session, loginEpoch);
     }
     /* The second half of a sign-in: the session is open, and the envelope opens the account here. */
@@ -1088,33 +1109,67 @@ export function createAuthClient(
                 });
                 broadcastLock();
                 await deviceKeys.clear().catch(() => {});
-                // The new password matching the server's record proves the reset was applied.
-                let applied = confirmed;
+                /*
+                 * Whether the reset landed, on evidence of the reset itself: the server said so,
+                 * or the sign-in below shows the account at the versions the reset sends (its
+                 * credential version in the envelope, or its recovery key's version at the
+                 * step). Undefined while nothing shows either way. The new password signing in
+                 * is not evidence: it may be the password the account already had.
+                 */
+                const seen: { landed: boolean | undefined } = {
+                    landed: confirmed ? true : undefined,
+                };
+                const notChanged = () =>
+                    new Error(
+                        'Your password was not changed: the server never got the request. Please try again.',
+                    );
                 try {
                     // A second step is answered with the new phrase: nobody has seen it yet,
                     // and someone whose only step is the phrase could not answer it otherwise.
-                    const user = await login(email, password, {}, { phrase: fresh }, () => {
-                        applied = true;
-                    });
+                    const user = await login(
+                        email,
+                        password,
+                        {},
+                        {
+                            phrase: fresh,
+                            credentialVersion: challenge.credentialVersion + 1,
+                            recoveryVersion: challenge.recovery.recoveryVersion + 1,
+                            landed: (shown) => {
+                                if (!confirmed) seen.landed = shown;
+                            },
+                        },
+                    );
+                    if (seen.landed === false) {
+                        // Signed in, on the account as it was: the reset never landed, and
+                        // the password given was the one it already had. The session this
+                        // opened was only the question; the old phrase is still the phrase.
+                        lock();
+                        await api.logout().catch(() => {});
+                        throw notChanged();
+                    }
                     return { user, phrase: fresh, applied: true as const, storage: null };
                 } catch (error) {
                     lock();
-                    if (!applied) {
-                        // The server's own record refused the new password: the reset never
-                        // reached it, and the old password and phrase are as they were.
-                        if (error instanceof Error && error.message.startsWith('Unable to sign in'))
-                            throw new Error(
-                                'Your password was not changed: the server never got the request. Please try again.',
-                            );
+                    // The account is not at the reset's versions, or the server's record
+                    // refused the new password: the reset never reached it.
+                    if (
+                        seen.landed === false ||
+                        (!confirmed &&
+                            error instanceof Error &&
+                            error.message.startsWith('Unable to sign in'))
+                    )
+                        throw notChanged();
+                    // Nothing showed either way (the server could not be reached again): the
+                    // new words are kept, and nothing is said about the old ones.
+                    if (seen.landed === undefined)
                         return {
                             user: null,
                             phrase: fresh,
                             applied: 'unknown' as const,
                             storage: null,
                         };
-                    }
-                    // The new password is in place; `storage` says when this browser's device
-                    // key was why it did not sign in here.
+                    // The reset is in place; `storage` says when this browser's device key
+                    // was why it did not sign in here.
                     return {
                         user: null,
                         phrase: fresh,
