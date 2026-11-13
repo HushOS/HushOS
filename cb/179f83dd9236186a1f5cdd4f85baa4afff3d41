@@ -1,0 +1,21 @@
+packages/auth/src/client.ts
+  s_566b8e0c4467a4::t_9c044dbc99ebbe 929-933,1526-1536,1599-1603,1607
+packages/auth/src/client.two-step.test.ts
+  s_566b8e0c4467a4::t_aa8c2de6ac9785 1565-1717
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cb179f83dd9236186a1f5cdd4f85baa4afff3d41",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
