@@ -1249,8 +1249,12 @@ object Auth {
     fun deleteAccount(context: Context, password: String, twoStep: StepAnswer? = null) {
         val session = sessionOf(context)
         deleteAccountAt(session, password, twoStep)
-        // What is cleared is the deleted account's: a sign-in by someone else while this waited is left alone.
-        if (!stillSignedIn(Shared.session(context), session)) return
+        // What is cleared is the deleted account's. A sign-in by someone else while this waited is left alone; but the
+        // session may already be gone (the feed's poll can hear the server's 401 first), and then the deleted account's
+        // key and files still go, when this phone's data is theirs (as a removal's are, mayForgetRemoved).
+        val now = Shared.session(context)
+        if (now != null && !stillSignedIn(now, session)) return
+        if (now == null && !mayForgetRemoved(session, null, AccountStore.of(context).owner())) return
         Shared.clearSession(context)
         Shared.clearDevice(context)
         AccountStore.of(context).wipe()

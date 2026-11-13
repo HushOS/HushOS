@@ -1001,6 +1001,9 @@ struct ResetKeysSheet: View {
                         guard signInAfter, let email = model.user?.email, let userId = model.user?.id else {
                             model.ownChange.released()
                             dismiss()
+                            // A session that ended while the words were held was not said then: it is asked about now
+                            // (nothing is shown when it is still live).
+                            Task { await model.sessionEnded() }
                             return
                         }
                         // Whose words were checked, where, and which: recorded only at a sign-in that is theirs.
