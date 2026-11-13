@@ -1,0 +1,23 @@
+apps/web/src/content/roadmap.ts
+  s_566b8e0c4467a4::t_7bc33fe6cf7c06 263-264
+docs/devices-design.md
+  s_566b8e0c4467a4::t_bed573e33811d8 7-8
+docs/two-step-design.md
+  s_566b8e0c4467a4::t_27d664a164f070 759,773-825
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "69db6d4d755d4be8e68bf11ce53d81b541e9bde7",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
