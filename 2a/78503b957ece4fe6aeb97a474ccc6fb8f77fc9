@@ -1,0 +1,47 @@
+apps/web/src/components/account-dialogs.tsx
+  s_566b8e0c4467a4::t_8a6bd501a78b8e 373-387,399-408
+apps/web/src/components/account-two-step.test.tsx
+  s_566b8e0c4467a4::t_ad1606ac458404 154-203
+apps/web/src/components/new-phrase-gate.test.tsx
+  s_566b8e0c4467a4::t_5737dd1dae4cdd 19-20,48-53,97-113
+apps/web/src/lib/api-client.ts
+  s_566b8e0c4467a4::t_3583422b657c18 60-66,71
+apps/web/src/lib/new-phrase.ts
+  s_566b8e0c4467a4::t_3a9c25ad5cf18e 11-15
+e2e/two-step.spec.ts
+  s_566b8e0c4467a4::t_b6d36d517436e7 721-735
+packages/auth/src/client.test.ts
+  s_566b8e0c4467a4::t_4b35dff7b315a0 79-85
+packages/auth/src/client.ts
+  s_566b8e0c4467a4::t_b3fedc9edd20ed 153-156,228-253,310-317,319,647,650-661,663,697,699,718,723-725,909-915,918,921-933,935-936,1156-1157,1159,1170-1176,1178,1188-1191,1195-1206,1209,1213,1264-1267,1282-1286,1288-1291,1299,1304,1312,1315-1318,1327-1330,1332
+packages/auth/src/client.two-step.test.ts
+  s_566b8e0c4467a4::t_d1accade8e6905 1,28-29,56-58,381-416,511-525,527,529-535,779-793,795-866,873-882,884-885,887-888,891,901,904,927,950-952,954-958,961-967,974,976,978-980,989,991-1002,1004,1006-1007,1009-1013,1015-1018,1020-1029,1031-1034,1037-1042,1044-1056,1058-1059,1063,1067-1068,1070,1074-1075,1077-1081,1083-1086,1088-1096,1098-1102,1105-1109,1111,1114,1116-1117,1120-1141,1143-1153,1155-1180,1182-1199,1206,1236-1301
+apps/web/src/components/account-two-step.tsx
+  s_566b8e0c4467a4::t_4893284609601e 582-585
+docs/two-step-design.md
+  s_1e3406041198f8::t_a63f203fe214e8 307-310,316,484-496
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2a78503b957ece4fe6aeb97a474ccc6fb8f77fc9",
+  "prompts": {},
+  "sessions": {
+    "s_1e3406041198f8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a0e21c7cc47809e54",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
