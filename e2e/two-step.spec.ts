@@ -182,10 +182,7 @@ test('turning it on shows the codes once, and a code, a backup code or the phras
     test.setTimeout(420_000);
     const { page, email, phrase } = await account(browser);
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
-    await expect(section(page).getByText('Off. Your password alone signs you in.')).toBeVisible();
-    await expect(
-        section(page).getByText('It doesn’t change how your files are encrypted.'),
-    ).toBeVisible();
+    await expect(section(page).locator('[data-two-step=off]')).toBeVisible();
     const { app, codes } = await turnOn(page, { copyKey: true });
 
     // Ten codes, shown once, to copy or to keep as a file made here.
@@ -313,7 +310,7 @@ test('changing the password asks for the step in the same dialog, keeps this bro
     await code.fill(await app.next());
     await change.click();
     await expect(
-        page.getByText('Password changed. Your other devices are signed out.'),
+        page.locator('[data-slot=toast]').getByText('Password changed', { exact: true }),
     ).toBeVisible({ timeout: 90_000 });
     // This browser is still signed in and open, and was not asked for a second code.
     await expect(page).toHaveURL(/\/app\/account/);
@@ -422,10 +419,10 @@ test('new backup codes replace the old ones, and turning it off needs the step a
     await off.getByLabel('Password', { exact: true }).fill(PASSWORD);
     await off.getByLabel('Backup code').fill(made[0]!);
     await off.getByRole('button', { name: 'Turn off' }).click();
-    await expect(section(page).getByText('Off. Your password alone signs you in.')).toBeVisible({
-        timeout: 60_000,
-    });
-    await expect(section(page).getByText('Two-step sign-in is off.')).toBeVisible();
+    await expect(section(page).locator('[data-two-step=off]')).toBeVisible({ timeout: 60_000 });
+    await expect(
+        page.locator('[data-slot=toast]').getByText('Two-step sign-in is off', { exact: true }),
+    ).toBeVisible();
     await expect
         .poll(async () => (await mailSubjects(email)).join('\n'), { timeout: 30_000 })
         .toContain('Two-step sign-in is off');
@@ -490,9 +487,7 @@ test('a browser signed in before the step was on is asked for it when it unlocks
         .getByLabel('Code from your authenticator app')
         .fill(await app.next());
     await dialog(page).getByRole('button', { name: 'Turn off' }).click();
-    await expect(section(page).getByText('Off. Your password alone signs you in.')).toBeVisible({
-        timeout: 60_000,
-    });
+    await expect(section(page).locator('[data-two-step=off]')).toBeVisible({ timeout: 60_000 });
     const again = await turnOn(page);
     expect(again.codes).toHaveLength(10);
     await expect(dialog(page).getByRole('button', { name: 'Done' })).toBeEnabled({

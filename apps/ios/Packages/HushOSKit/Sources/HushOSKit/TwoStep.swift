@@ -198,7 +198,7 @@ public enum StepWords {
     public static let usualWaySignIn = "Your usual way isn’t available for this sign-in."
     public static let usualWayChange = "Your usual way isn’t available for this change."
     /* Settings, on a server this build cannot use a key for (self-hosted, localhost). */
-    public static let keysInBrowser = "Passkeys and security keys are added in a browser on this server. You can rename or remove them here."
+    public static let keysInBrowser = "Passkeys and security keys are added in a browser on this server."
 }
 
 /* A step that did not pass: the server's refusal in its own words, or a reply that was not the server's answer. */
@@ -597,7 +597,7 @@ public enum StepKind: String, Sendable, Equatable {
     }
 
     /* Said once the default moved to this kind. */
-    public var nowFirst: String { "\(words) is now asked for first." }
+    public var nowFirst: String { "\(words) is now the default." }
 }
 
 /*
@@ -632,6 +632,11 @@ public struct TwoStepStatus: Sendable, Equatable {
         public func line(day: (Date) -> String) -> String {
             [synced ? "Saved in a password manager" : nil, createdAt.map { "Added \(day($0))" }, lastUsedAt.map { "Last used \(day($0))" }]
                 .compactMap { $0 }.joined(separator: " · ")
+        }
+
+        /* The authenticator app's one fact: when it was last used, or when it was added if it never was. Empty when the server gave no date. */
+        public func latest(day: (Date) -> String) -> String {
+            lastUsedAt.map { "Last used \(day($0))" } ?? createdAt.map { "Added \(day($0))" } ?? ""
         }
     }
 
@@ -676,23 +681,25 @@ public struct TwoStepStatus: Sendable, Equatable {
     /* Add is offered only where this phone can make a key for this server, and below the limit. */
     public func canAddKey(passkeys: Bool) -> Bool { passkeys && keys.count < Passkeys.limit }
 
-    /* What the key list says beneath itself, each line only while it is true (the web's KeyNotes). */
+    /*
+     * What the key list says beneath itself: only why Add is not there, while that is so (ten keys,
+     * or a server this phone cannot make a key for). The cautions about keys are on /security, not here.
+     */
     public func keyNotes(passkeys: Bool) -> [String] {
         [
-            keys.contains(where: \.synced) ? "A passkey saved in the same password manager as your password is one factor, not two: whoever opens the manager has both." : nil,
-            !keys.isEmpty && app != nil ? "A passkey stops a fake sign-in page only when you use it. A fake page can ask you to use another way instead." : nil,
-            keys.count == 1 ? "Add a second key and keep it somewhere else, in case this one is lost." : nil,
             keys.count >= Passkeys.limit ? "You have ten, the most an account can have." : nil,
             passkeys ? nil : StepWords.keysInBrowser,
         ]
         .compactMap { $0 }
     }
 
-    /* "7 of 10 left", with what to do when they run low, as the web says it. */
-    public var codesLeft: String {
-        if backupCodesLeft == 0 { return "None left. Make a new set." }
-        return backupCodesLeft <= 2 ? "\(backupCodesLeft) of 10 left. Make a new set soon." : "\(backupCodesLeft) of 10 left"
-    }
+    /* The Add row's words: it adds another once there is one, so it is never read as acting on the key above it. */
+    public var addKeyWords: String { keys.isEmpty ? "Add" : "Add another" }
+
+    /* "7 of 10 left", or "None left": the value, and New codes is beside it. */
+    public var codesLeft: String { backupCodesLeft == 0 ? "None left" : "\(backupCodesLeft) of 10 left" }
+    /* Two or fewer: the count is shown as a warning, in the same words, so it is time for a new set without a sentence saying so. */
+    public var codesLow: Bool { backupCodesLeft <= 2 }
 }
 
 /* POST /api/auth/two-step/totp: the pending app's key, shown once, and its `otpauth://` address. */
@@ -718,8 +725,8 @@ public struct TotpEnrolment: Sendable, Equatable {
      * didn't load) or zero, the line says what ticking does without one, and the box is there all the same.
      */
     public static func othersLine(_ others: Int?) -> String {
-        guard let others, others > 0 else { return "Any other device signed in to your account will need to sign in again, and will be asked for the second step." }
-        return "\(others == 1 ? "One other device is" : "\(others) other devices are") signed in without the second step. They’ll need to sign in again, and will be asked for it."
+        guard let others, others > 0 else { return "They’ll need to sign in again." }
+        return "\(others == 1 ? "One other device" : "\(others) other devices") will need to sign in again."
     }
 }
 

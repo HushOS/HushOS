@@ -373,12 +373,23 @@ private fun DefaultBadge() {
         modifier = Modifier.padding(end = AlpineSpace.S3).background(alpine.fill, RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 1.dp))
 }
 
+/* A label and what it is now, on one row: the label at the start, the value at the end. */
+@Composable
+private fun SettingValue(label: String, value: String) {
+    val alpine = Alpine.colors
+    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2).semantics(mergeDescendants = true) {},
+        verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = MaterialTheme.typography.bodyLarge, color = alpine.ink, modifier = Modifier.weight(1f))
+        Text(value, style = MaterialTheme.typography.bodyLarge, color = alpine.inkMuted)
+    }
+}
+
 /* A line of the settings: what is so, said plainly under its heading. */
 @Composable
-private fun SettingLine(text: String, danger: Boolean = false, strong: Boolean = false) {
+private fun SettingLine(text: String, danger: Boolean = false, strong: Boolean = false, warning: Boolean = false) {
     val alpine = Alpine.colors
-    Text(text, style = MaterialTheme.typography.bodyLarge, fontWeight = if (strong) FontWeight.SemiBold else null,
-        color = if (danger) alpine.danger else if (strong) alpine.ink else alpine.inkMuted,
+    Text(text, style = MaterialTheme.typography.bodyLarge, fontWeight = if (strong || warning) FontWeight.SemiBold else null,
+        color = if (danger) alpine.danger else if (warning) alpine.warning else if (strong) alpine.ink else alpine.inkMuted,
         modifier = Modifier.padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2))
 }
 
@@ -457,10 +468,9 @@ fun TwoStepScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) 
     // Backup codes nobody has seen yet come before everything else here, whichever page asked for them and wherever
     // the person went while the request was out: the server has made them, and they are shown nowhere else.
     flow.codes?.let { made ->
+        // The codes' screen has said it (the step is on; the earlier codes no longer work): closing it says nothing more.
         CodesScreen(model, flow, made, email) {
-            val said = if (flow.codesReplace) "New backup codes made." else "Two-step sign-in is on."
             model.twoStepCodesSeen()
-            model.notify(said)
             page = TwoStepPage.MAIN
         }
         return
@@ -475,8 +485,6 @@ fun TwoStepScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) 
         TwoStepPage.MAIN -> {}
     }
     AccountPage("Two-step sign-in", onBack) {
-        Text("A second step stops someone who has your password from signing in. It doesn’t change how your files are encrypted.", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted,
-            modifier = Modifier.padding(horizontal = AlpineSpace.S4))
         val current = status
         when {
             problem != null -> Column(Modifier.padding(AlpineSpace.S4), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
@@ -497,16 +505,20 @@ fun TwoStepScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) 
                         if (failure == null) model.notify(TwoStepStatus.defaultSaid(kind))
                     }
                 }
-                Subheader("Status")
-                if (current.on) SettingLine("On", strong = true) else SettingLine("Off. Your password alone signs you in.")
+                // The state, once: one row, its value at the end.
+                SettingValue("Status", if (current.on) "On" else "Off")
                 moveProblem?.let { SettingLine(it, danger = true) }
 
                 Subheader(TwoStepStatus.kindWords(TwoStepStatus.WEBAUTHN)) { if (current.isDefault(TwoStepStatus.WEBAUTHN)) DefaultBadge() }
                 val keys = current.keys
-                if (keys.isEmpty()) SettingLine("Not added. It stops fake sign-in pages, which a code can’t.")
+                if (keys.isEmpty()) SettingLine("Not added")
                 for (key in keys) KeyRow(key, current.removeWords(key), onRename = { renaming = key }, onRemove = { remove(key) })
                 // Only where this phone can use one for this server; elsewhere the note below says where they are added.
-                if (current.canAddKey(passkeys)) AccountRow("Add", null, Icons.Outlined.Add, label = "Add passkey or security key") { keyFirst = !current.on; open(TwoStepPage.KEY) }
+                // "Add another" once there is a key: the row adds to the list, and is not an action on the key above it.
+                if (current.canAddKey(passkeys))
+                    AccountRow(current.addKeyWords, null, Icons.Outlined.Add, label = if (keys.isEmpty()) "Add passkey or security key" else "Add another passkey or security key") {
+                        keyFirst = !current.on; open(TwoStepPage.KEY)
+                    }
                 if (current.canMakeDefault(TwoStepStatus.WEBAUTHN))
                     AccountRow("Make default", null, Icons.Outlined.CheckCircle, label = "Make passkey or security key the default") { makeDefault(TwoStepStatus.WEBAUTHN) }
                 for (line in current.keyNotes(passkeys))
@@ -515,17 +527,17 @@ fun TwoStepScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) 
                 Subheader(TwoStepStatus.kindWords(TwoStepStatus.TOTP)) { if (current.isDefault(TwoStepStatus.TOTP)) DefaultBadge() }
                 val app = current.app
                 if (app == null) {
-                    SettingLine("Not added. A 6-digit code from an app on your phone.")
+                    SettingLine("Not added")
                     // The account's first method turns the step on; beside keys it is one more way to pass it.
                     AccountRow("Add", null, Icons.Outlined.Add, label = "Add authenticator app") { open(if (current.on) TwoStepPage.ADD_APP else TwoStepPage.ON) }
                 } else {
                     Column(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2), verticalArrangement = Arrangement.Center) {
-                        Text(if (current.totpFrozen) "Paused" else "On", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = if (current.totpFrozen) alpine.warning else alpine.ink)
-                        val used = app.detail(::day)
-                        if (used.isNotEmpty()) Text(used, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
+                        if (current.totpFrozen) Text("Paused", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = alpine.warning)
+                        val used = app.latest(::day)
+                        if (used.isNotEmpty()) Text(used, style = if (current.totpFrozen) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodyLarge, color = alpine.inkMuted)
                     }
                     if (current.totpFrozen) Text(
-                        "Its codes are refused on devices HushOS doesn’t recognise, after many wrong ones. A backup code or your recovery phrase works there, and lifts the pause.",
+                        "A backup code or your recovery phrase lifts the pause.",
                         style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, modifier = Modifier.padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2),
                     )
                     AccountRow("Replace", null, Icons.Outlined.Sync, label = "Replace authenticator app") { open(TwoStepPage.REPLACE) }
@@ -535,7 +547,7 @@ fun TwoStepScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) 
                 }
                 if (current.on) {
                     Subheader("Backup codes")
-                    SettingLine(current.codesLeft)
+                    SettingLine(current.codesLeft, warning = current.codesLow)
                     AccountRow("New codes", null, Icons.Outlined.Pin) { open(TwoStepPage.CODES) }
                 }
             }
@@ -572,7 +584,7 @@ private fun RenameKeyDialog(model: DriveViewModel, key: TwoStepStatus.Method, on
         title = { Text("Rename passkey or security key") },
         text = {
             Column {
-                Text("Shown in this list only. Names aren’t encrypted.", modifier = Modifier.padding(bottom = AlpineSpace.S3))
+                Text("Names aren’t encrypted.", modifier = Modifier.padding(bottom = AlpineSpace.S3))
                 OutlinedTextField(value = name, onValueChange = { name = it; error = null }, singleLine = true, label = { Text("Name") }, enabled = !saving,
                     isError = error != null, supportingText = error?.let { { Text(it) } })
             }
@@ -594,7 +606,7 @@ private fun RenameKeyDialog(model: DriveViewModel, key: TwoStepStatus.Method, on
 /* The password, asked again before any change to the step. */
 @Composable
 private fun ConfirmPassword(password: String, onChange: (String) -> Unit, tried: Boolean, enabled: Boolean) {
-    PasswordField(password, onChange, "Password", error = if (tried && password.isEmpty()) "Enter your password." else null, hint = "Enter your password to confirm.", enabled = enabled)
+    PasswordField(password, onChange, "Password", error = if (tried && password.isEmpty()) "Enter your password." else null, enabled = enabled)
 }
 
 @Composable
@@ -622,7 +634,7 @@ private fun BackupCodes(model: DriveViewModel, codes: List<String>, email: Strin
             }
         }
     }
-    Text("Each code works once, when you can’t use your authenticator app. They aren’t shown again, so keep them somewhere apart from your password.",
+    Text("Each code works once. They aren’t shown again.",
         style = MaterialTheme.typography.bodySmall, color = alpine.inkMuted)
     Row(horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
         OutlinedButton(onClick = {
@@ -750,14 +762,12 @@ private fun AuthenticatorScreen(model: DriveViewModel, setup: AppSetup, onBack: 
             val title = when (setup) { AppSetup.ON -> "Turn on two-step sign-in?"; AppSetup.REPLACE -> "Replace your authenticator app?"; AppSetup.ADD -> "Add an authenticator app?" }
             AccountPage(title, onBack = if (pending) null else onBack) {
                 FormBody {
-                    Text(
-                        when (setup) {
-                            AppSetup.ON -> "After your password, HushOS will ask for a code from an authenticator app on your phone. Your recovery phrase works as the second step too, so keep it apart from your password."
-                            AppSetup.REPLACE -> "The new app takes over once you confirm it. Your backup codes stay as they are."
-                            AppSetup.ADD -> "A code from the app will pass your second step too. Your other ways to sign in stay as they are."
-                        },
-                        style = MaterialTheme.typography.bodyLarge,
-                    )
+                    // Adding an app beside a key has no opening words: its title says it.
+                    when (setup) {
+                        AppSetup.ON -> "After your password, HushOS will ask for a code from an authenticator app."
+                        AppSetup.REPLACE -> "The new app takes over once you confirm it."
+                        AppSetup.ADD -> null
+                    }?.let { Text(it, style = MaterialTheme.typography.bodyLarge) }
                     ConfirmPassword(password, { password = it; local = null }, tried, enabled = !pending)
                     StepUpFields(holder, enabled = !pending)
                     error?.let { Text(it, color = alpine.danger, style = MaterialTheme.typography.bodyMedium) }
@@ -813,10 +823,10 @@ private fun KeyScreen(model: DriveViewModel, first: Boolean, onBack: () -> Unit)
     if (creation != null) {
         AccountPage("Add your passkey or security key", onBack = if (pending) null else onBack) {
             FormBody {
-                Text("Your phone will ask for it. Have your security key ready, or choose where to save a passkey.", style = MaterialTheme.typography.bodyLarge)
+                Text("Your phone will ask for it.", style = MaterialTheme.typography.bodyLarge)
                 OutlinedTextField(
                     value = name, onValueChange = { name = it; local = null }, label = { Text("Name") }, placeholder = { Text("Security key") }, singleLine = true, enabled = !pending,
-                    supportingText = { Text("Optional. It tells your keys apart in this list. Names aren’t encrypted.") },
+                    supportingText = { Text("Optional. Names aren’t encrypted.") },
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences), modifier = Modifier.fillMaxWidth(),
                 )
                 if (first) OthersOffer(signOutOthers, { signOutOthers = it }, others, enabled = !pending)
@@ -842,11 +852,7 @@ private fun KeyScreen(model: DriveViewModel, first: Boolean, onBack: () -> Unit)
     }
     AccountPage(if (first) "Turn on two-step sign-in?" else "Add a passkey or security key?", onBack = if (pending) null else onBack) {
         FormBody {
-            Text(
-                if (first) "After your password, HushOS will ask for your passkey or security key. Your recovery phrase works as the second step too, so keep it apart from your password."
-                else "It will pass your second step too. Your other ways to sign in stay as they are.",
-                style = MaterialTheme.typography.bodyLarge,
-            )
+            if (first) Text("After your password, HushOS will ask for your passkey or security key.", style = MaterialTheme.typography.bodyLarge)
             ConfirmPassword(password, { password = it; local = null }, tried, enabled = !pending)
             StepUpFields(holder, enabled = !pending)
             error?.let { Text(it, color = alpine.danger, style = MaterialTheme.typography.bodyMedium) }
@@ -887,8 +893,8 @@ private fun RemoveScreen(model: DriveViewModel, method: TwoStepStatus.Method, la
             Text(
                 when {
                     last -> "Your password alone will sign you in, and your backup codes will stop working."
-                    method.isApp -> "Its codes will stop passing your second step. Your other ways to sign in stay as they are."
-                    else -> "${method.name ?: "This key"} will stop passing your second step. Your other ways to sign in stay as they are."
+                    method.isApp -> "Its codes will stop working for sign-in."
+                    else -> "${method.name ?: "This key"} will stop working for sign-in."
                 },
                 style = MaterialTheme.typography.bodyLarge,
             )

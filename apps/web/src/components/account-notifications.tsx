@@ -82,11 +82,7 @@ export function AccountNotifications({ userId }: { userId: string }) {
                             onCheckedChange={(on) => void setBrowserOn(on)}
                         />
                     }
-                >
-                    <span className="text-muted-foreground">
-                        Notices here while HushOS is closed
-                    </span>
-                </Setting>
+                />
             )}
             <Setting
                 label={<label htmlFor="notifications-shared">Shared with you</label>}
@@ -97,13 +93,11 @@ export function AccountNotifications({ userId }: { userId: string }) {
                         onCheckedChange={(on) => void setToggle('shared', on)}
                     />
                 }
-            >
-                <span className="text-muted-foreground">
-                    When someone shares something with you
-                </span>
-            </Setting>
+            />
             <Setting
-                label={<label htmlFor="notifications-family">Families</label>}
+                label={
+                    <label htmlFor="notifications-family">Family invitations and requests</label>
+                }
                 action={
                     <Switch
                         id="notifications-family"
@@ -111,11 +105,7 @@ export function AccountNotifications({ userId }: { userId: string }) {
                         onCheckedChange={(on) => void setToggle('family', on)}
                     />
                 }
-            >
-                <span className="text-muted-foreground">
-                    Invitations, and people waiting to join your family
-                </span>
-            </Setting>
+            />
             {error && (
                 <p role="alert" className="text-sm text-destructive">
                     {error}

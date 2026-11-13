@@ -732,11 +732,11 @@ private func challenge(_ methods: [StepMethod] = [.totp, .backup, .phrase], phra
 
     @Test func theLineUnderRemoveMyOtherDevicesNeverNeedsACount() {
         // The box is there whatever the device list said: unknown or none, the line still says what ticking does.
-        let general = "Any other device signed in to your account will need to sign in again, and will be asked for the second step."
+        let general = "They’ll need to sign in again."
         #expect(TotpEnrolment.othersLine(nil) == general)
         #expect(TotpEnrolment.othersLine(0) == general)
-        #expect(TotpEnrolment.othersLine(1) == "One other device is signed in without the second step. They’ll need to sign in again, and will be asked for it.")
-        #expect(TotpEnrolment.othersLine(3) == "3 other devices are signed in without the second step. They’ll need to sign in again, and will be asked for it.")
+        #expect(TotpEnrolment.othersLine(1) == "One other device will need to sign in again.")
+        #expect(TotpEnrolment.othersLine(3) == "3 other devices will need to sign in again.")
     }
 
     @Test func theCodesLeftSayWhenToMakeMore() throws {
@@ -745,8 +745,12 @@ private func challenge(_ methods: [StepMethod] = [.totp, .backup, .phrase], phra
         }
         #expect(try status(10).codesLeft == "10 of 10 left")
         #expect(try status(3).codesLeft == "3 of 10 left")
-        #expect(try status(2).codesLeft == "2 of 10 left. Make a new set soon.")
-        #expect(try status(0).codesLeft == "None left. Make a new set.")
+        #expect(try status(2).codesLeft == "2 of 10 left")
+        #expect(try status(1).codesLeft == "1 of 10 left")
+        #expect(try status(0).codesLeft == "None left")
+        // Two or fewer are a warning; three are not.
+        #expect(try !status(10).codesLow && !status(3).codesLow)
+        #expect(try status(2).codesLow && status(1).codesLow && status(0).codesLow)
         let read = try status(7)
         #expect(read.app?.id == "m")
         #expect(read.app?.createdAt != nil)

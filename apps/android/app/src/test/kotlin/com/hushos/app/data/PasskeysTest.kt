@@ -634,6 +634,10 @@ class PasskeysTest {
         val day: (String?) -> String? = { iso -> iso?.let { "${it.substring(8, 10)} Nov" } }
         assertEquals("Added 14 Nov · Last used 14 Nov", read.keys[0].detail(day))
         assertEquals("Saved in a password manager · Added 14 Nov", read.keys[1].detail(day))
+        // The app's row says one fact: last used, or added when it never was, or nothing without a date.
+        assertEquals("Last used 14 Nov", read.keys[0].latest(day))
+        assertEquals("Added 14 Nov", read.keys[1].latest(day))
+        assertEquals("", older.app!!.latest(day))
         assertEquals("Saved in a password manager · Added 14 Nov · Last used 15 Nov", key("k", synced = true, used = "2026-11-15T08:00:00.000Z").detail(day))
         assertEquals("Security key", key("k", name = null).shownName)
     }
@@ -657,8 +661,8 @@ class PasskeysTest {
                 assertFalse(one.canMakeDefault(kind))
             }
         // What changing it says, by the kind it moved to.
-        assertEquals("Passkey or security key is now asked for first.", TwoStepStatus.defaultSaid("webauthn"))
-        assertEquals("Authenticator app is now asked for first.", TwoStepStatus.defaultSaid("totp"))
+        assertEquals("Passkey or security key is now the default.", TwoStepStatus.defaultSaid("webauthn"))
+        assertEquals("Authenticator app is now the default.", TwoStepStatus.defaultSaid("totp"))
     }
 
     @Test
@@ -677,26 +681,28 @@ class PasskeysTest {
     }
 
     @Test
-    fun theNotesUnderTheKeysAreEachSaidOnlyWhileTrue() {
-        val synced = "A passkey saved in the same password manager as your password is one factor, not two: whoever opens the manager has both."
-        val fake = "A passkey stops a fake sign-in page only when you use it. A fake page can ask you to use another way instead."
-        val second = "Add a second key and keep it somewhere else, in case this one is lost."
+    fun theOnlyNotesUnderTheKeysSayWhyAddIsNotThere() {
         val ten = "You have ten, the most an account can have."
+        // Add is there: nothing is said, with one key or several, synced or not, beside an app or not.
         assertEquals(emptyList<String>(), status().keyNotes(true))
         assertEquals(emptyList<String>(), status(app).keyNotes(true))
-        assertEquals(listOf(second), status(key("k")).keyNotes(true))
-        assertEquals(listOf(synced, second), status(key("k", synced = true)).keyNotes(true))
-        assertEquals(listOf(fake, second), status(key("k"), app).keyNotes(true))
-        assertEquals(listOf(synced, fake), status(key("k"), key("l", synced = true), app).keyNotes(true))
-        assertEquals(emptyList<String>(), status(key("k"), key("l")).keyNotes(true))
+        assertEquals(emptyList<String>(), status(key("k")).keyNotes(true))
+        assertEquals(emptyList<String>(), status(key("k", synced = true)).keyNotes(true))
+        assertEquals(emptyList<String>(), status(key("k"), key("l", synced = true), app).keyNotes(true))
         val full = status(*(1..10).map { key("k$it") }.toTypedArray())
         assertEquals(listOf(ten), full.keyNotes(true))
+        assertEquals(listOf(ten, StepWords.KEYS_IN_BROWSER), full.keyNotes(false))
+        // The Add row adds another once there is a key: it is never read as acting on the key above it.
+        assertEquals("Add", status().addKeyWords)
+        assertEquals("Add", status(app).addKeyWords)
+        assertEquals("Add another", status(key("k")).addKeyWords)
+        assertEquals("Add another", status(key("k"), key("l"), app).addKeyWords)
         // Ten is the limit: no Add from there, on any server; nine still has one.
         assertFalse(full.canAddKey(passkeys = true))
         assertTrue(status(*(1..9).map { key("k$it") }.toTypedArray()).canAddKey(passkeys = true))
         // A server this phone can't add keys for says so last, beside whatever else is true.
-        assertEquals(listOf(second, StepWords.KEYS_IN_BROWSER), status(key("k")).keyNotes(false))
-        assertEquals("Passkeys and security keys are added in a browser on this server. You can rename or remove them here.", StepWords.KEYS_IN_BROWSER)
+        assertEquals(listOf(StepWords.KEYS_IN_BROWSER), status(key("k")).keyNotes(false))
+        assertEquals("Passkeys and security keys are added in a browser on this server.", StepWords.KEYS_IN_BROWSER)
     }
 
     @Test

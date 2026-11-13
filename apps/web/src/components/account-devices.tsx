@@ -100,7 +100,7 @@ export function AccountDevices() {
     const refresh = () => queryClient.invalidateQueries({ queryKey: devicesQueryOptions.queryKey });
     return (
         <div id="devices" className="scroll-mt-20">
-            <SettingsGroup title="Your devices" description="Where your account is signed in.">
+            <SettingsGroup title="Your devices">
                 {devices.isPending ? (
                     <div className="flex flex-col gap-2 py-3" aria-busy="true">
                         <Skeleton className="h-5 w-48" />
@@ -178,7 +178,7 @@ function DeviceRow({
             label={device.kind ? kindWords[device.kind] : 'Unknown'}
             action={
                 <>
-                    <Button variant="ghost" onClick={onRename} aria-label={`Rename ${name}`}>
+                    <Button variant="outline" onClick={onRename} aria-label={`Rename ${name}`}>
                         Rename
                     </Button>
                     {!device.current && (
@@ -266,9 +266,7 @@ function RenameDialog({
                 >
                     <DialogHeader>
                         <DialogTitle>Rename device</DialogTitle>
-                        <DialogDescription>
-                            Shown in your list of devices. Device names aren’t encrypted.
-                        </DialogDescription>
+                        <DialogDescription>Device names aren’t encrypted.</DialogDescription>
                     </DialogHeader>
                     <DialogField
                         label="Name"
@@ -282,7 +280,7 @@ function RenameDialog({
                     <DialogFooter>
                         <Button
                             type="button"
-                            variant="ghost"
+                            variant="outline"
                             disabled={saving}
                             onClick={() => {
                                 setShownFor(null);
@@ -368,8 +366,8 @@ function RemoveDialog({
                         <AlertDialogTitle>{title}</AlertDialogTitle>
                         <AlertDialogDescription>
                             {many
-                                ? `${count} devices are signed out at once and need your password to sign in again. Anything already on them, such as files kept there, may stay there. If one was lost or stolen, change your password too.`
-                                : 'It’s signed out at once and needs your password to sign in again. Anything already on it, such as files kept there, may stay there. If it was lost or stolen, change your password too.'}
+                                ? `${count} devices are signed out at once, but files already on them may stay there. If one was lost or stolen, change your password too.`
+                                : 'It’s signed out at once, but files already on it may stay there. If it was lost or stolen, change your password too.'}
                         </AlertDialogDescription>
                     </AlertDialogHeader>
                     <DialogField

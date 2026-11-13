@@ -372,24 +372,17 @@ struct TwoStepView: View {
             } else if !loaded {
                 Section { ProgressView().frame(maxWidth: .infinity).alpineRow() }
             } else if let status {
-                Section {} header: {
-                    Text("A second step stops someone who has your password from signing in. It doesn’t change how your files are encrypted.")
-                        .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).textCase(nil)
-                }
+                // The state, once: one row, its value at the trailing edge as the system's settings show theirs.
                 Section {
-                    if status.on {
-                        Text("On").fontWeight(.semibold).foregroundStyle(Alpine.ink).alpineRow()
-                    } else {
-                        Text("Off. Your password alone signs you in.").foregroundStyle(Alpine.inkMuted).alpineRow()
-                    }
-                } header: {
-                    SectionTitle("Status")
+                    LabeledContent("Status") { Text(status.on ? "On" : "Off").foregroundStyle(Alpine.inkMuted) }
+                        .foregroundStyle(Alpine.ink).alpineRow()
                 }
                 keys(status)
                 app(status)
                 if status.on {
                     Section {
-                        Text(status.codesLeft).foregroundStyle(Alpine.inkMuted).alpineRow()
+                        Text(status.codesLeft).fontWeight(status.codesLow ? .semibold : .regular)
+                            .foregroundStyle(status.codesLow ? Alpine.warning : Alpine.inkMuted).alpineRow()
                         Button("New codes") { open = .codes }.foregroundStyle(Alpine.primary).alpineRow()
                     } header: {
                         SectionTitle("Backup codes")
@@ -445,7 +438,7 @@ struct TwoStepView: View {
     @ViewBuilder private func keys(_ status: TwoStepStatus) -> some View {
         Section {
             if status.keys.isEmpty {
-                Text("Not added. It stops fake sign-in pages, which a code can’t.").foregroundStyle(Alpine.inkMuted).alpineRow()
+                Text("Not added").foregroundStyle(Alpine.inkMuted).alpineRow()
             }
             ForEach(status.keys) { key in
                 HStack(spacing: Alpine.Space.s3) {
@@ -467,8 +460,9 @@ struct TwoStepView: View {
             }
             // Only where this iPhone can make a key for this server; on any other, keys are added in a browser.
             if status.canAddKey(passkeys: passkeys) {
-                Button("Add") { open = .key(first: !status.on) }
-                    .foregroundStyle(Alpine.primary).alpineRow().accessibilityLabel("Add passkey or security key")
+                // "Add another" once there is a key: the row adds to the list, and is not an action on the key above it.
+                Button(status.addKeyWords) { open = .key(first: !status.on) }
+                    .foregroundStyle(Alpine.primary).alpineRow().accessibilityLabel(status.keys.isEmpty ? "Add passkey or security key" : "Add another passkey or security key")
             }
             makeDefault(.webauthn, status)
         } header: {
@@ -484,15 +478,15 @@ struct TwoStepView: View {
         Section {
             if let app = status.app {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(status.totpFrozen ? "Paused" : "On").fontWeight(.semibold).foregroundStyle(status.totpFrozen ? Alpine.warning : Alpine.ink)
-                    Text(app.line(day: Self.day)).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
+                    if status.totpFrozen { Text("Paused").fontWeight(.semibold).foregroundStyle(Alpine.warning) }
+                    Text(app.latest(day: Self.day)).font(status.totpFrozen ? Theme.Text.footnote : .body).foregroundStyle(Alpine.inkMuted)
                 }
                 .alpineRow()
                 Button("Replace") { open = .app(.replace) }.foregroundStyle(Alpine.primary).alpineRow()
                 Button(status.removeWords, role: .destructive) { open = .remove(app, last: status.removesLast) }
                     .foregroundStyle(Alpine.danger).alpineRow().accessibilityLabel("\(status.removeWords) authenticator app")
             } else {
-                Text("Not added. A 6-digit code from an app on your phone.").foregroundStyle(Alpine.inkMuted).alpineRow()
+                Text("Not added").foregroundStyle(Alpine.inkMuted).alpineRow()
                 // Beside a key the step is already on: the app is added, and nothing is turned on.
                 Button("Add") { open = .app(status.on ? .add : .on) }
                     .foregroundStyle(Alpine.primary).alpineRow().accessibilityLabel("Add authenticator app")
@@ -502,7 +496,7 @@ struct TwoStepView: View {
             kindTitle(.totp, status)
         } footer: {
             if status.totpFrozen {
-                Text("Its codes are refused on devices HushOS doesn’t recognise, after many wrong ones. A backup code or your recovery phrase works there, and lifts the pause.")
+                Text("A backup code or your recovery phrase lifts the pause.")
             }
         }
     }
@@ -579,7 +573,7 @@ private struct ConfirmPassword: View {
         Section {
             PasswordField(label: "Password", text: $password, content: nil).alpineRow()
         } footer: {
-            if tried && password.isEmpty { Text("Enter your password.").foregroundStyle(Alpine.danger) } else { Text("Enter your password to confirm.") }
+            if tried && password.isEmpty { Text("Enter your password.").foregroundStyle(Alpine.danger) }
         }
     }
 }
@@ -595,7 +589,8 @@ private struct FormProblem: View {
 private struct SheetIntro: View {
     let text: String
     var body: some View {
-        Section {} header: { Text(text).font(Theme.Text.callout).foregroundStyle(Alpine.ink).textCase(nil) }
+        // A sheet whose title says it all has no opening words, and no empty section in their place.
+        if !text.isEmpty { Section {} header: { Text(text).font(Theme.Text.callout).foregroundStyle(Alpine.ink).textCase(nil) } }
     }
 }
 
@@ -692,7 +687,7 @@ private struct BackupCodesList: View {
                 .alpineRow()
             }
         } footer: {
-            Text("Each code works once, when you can’t use your authenticator app. They aren’t shown again, so keep them somewhere apart from your password.")
+            Text("Each code works once. They aren’t shown again.")
         }
         Section {
             Button("Copy") {
@@ -770,7 +765,7 @@ struct AuthenticatorSheet: View {
             Form {
                 if let codes {
                     TurnedOnCodes(codes: codes, email: email, removing: removing) {
-                        done("Two-step sign-in is on.")
+                        done("")
                         dismiss()
                     }
                 } else if let app {
@@ -847,9 +842,9 @@ struct AuthenticatorSheet: View {
 
     private var intro: String {
         switch mode {
-        case .on: "After your password, HushOS will ask for a code from an authenticator app on your phone. Your recovery phrase works as the second step too, so keep it apart from your password."
-        case .add: "A code from the app will pass your second step too. Your other ways to sign in stay as they are."
-        case .replace: "The new app takes over once you confirm it. Your backup codes stay as they are."
+        case .on: "After your password, HushOS will ask for a code from an authenticator app."
+        case .add: ""
+        case .replace: "The new app takes over once you confirm it."
         }
     }
 
@@ -957,8 +952,8 @@ struct RemoveMethodSheet: View {
 
     private var intro: String {
         if last { return "Your password alone will sign you in, and your backup codes will stop working." }
-        if app { return "Its codes will stop passing your second step. Your other ways to sign in stay as they are." }
-        return "\(method.name.flatMap { $0.isEmpty ? nil : $0 } ?? "This key") will stop passing your second step. Your other ways to sign in stay as they are."
+        if app { return "Its codes will stop working for sign-in." }
+        return "\(method.name.flatMap { $0.isEmpty ? nil : $0 } ?? "This key") will stop working for sign-in."
     }
 
     private var action: String {
@@ -1056,18 +1051,18 @@ struct KeySheet: View {
             Form {
                 if let codes {
                     TurnedOnCodes(codes: codes, email: email, removing: removing) {
-                        done("Two-step sign-in is on.")
+                        done("")
                         dismiss()
                     }
                 } else if started != nil {
-                    SheetIntro(text: "Your phone will ask for it. Have your security key ready, or choose where to save a passkey.")
+                    SheetIntro(text: "Your phone will ask for it.")
                     Section {
                         TextField("Security key", text: Binding(get: { name }, set: { name = Self.fitted($0); error = "" }))
                             .autocorrectionDisabled().disabled(pending).alpineRow()
                     } header: {
                         FieldLabel("Name")
                     } footer: {
-                        Text("Optional. It tells your keys apart in this list. Names aren’t encrypted.")
+                        Text("Optional. Names aren’t encrypted.")
                     }
                     // Offered whenever the step is being turned on, whatever the device list said or didn't.
                     if first { RemoveOthersOffer(ticked: $signOutOthers, others: others, disabled: pending) }
@@ -1075,9 +1070,7 @@ struct KeySheet: View {
                     // The system's sheet opens on this press, and only on it.
                     primaryRow(pending ? "Waiting for your key" : first ? "Add and turn on" : "Add", disabled: pending) { add() }
                 } else {
-                    SheetIntro(text: first
-                        ? "After your password, HushOS will ask for your passkey or security key. Your recovery phrase works as the second step too, so keep it apart from your password."
-                        : "It will pass your second step too. Your other ways to sign in stay as they are.")
+                    SheetIntro(text: first ? "After your password, HushOS will ask for your passkey or security key." : "")
                     ConfirmPassword(password: $password, tried: tried)
                     StepUpSections(step: step, disabled: pending)
                     FormProblem(text: error)
@@ -1192,7 +1185,7 @@ struct RenameKeySheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                SheetIntro(text: "Shown in this list only. Names aren’t encrypted.")
+                SheetIntro(text: "Names aren’t encrypted.")
                 Section {
                     TextField("Security key", text: Binding(get: { name }, set: { name = $0; error = "" }))
                         .autocorrectionDisabled().disabled(pending).submitLabel(.done).onSubmit { save() }.alpineRow()
@@ -1251,7 +1244,7 @@ struct NewCodesSheet: View {
                     SheetIntro(text: "Your earlier codes no longer work.")
                     BackupCodesList(codes: codes, email: email)
                     primaryRow("Done", disabled: false) {
-                        done("New backup codes made.")
+                        done("")
                         dismiss()
                     }
                 } else {

@@ -22,9 +22,9 @@ export function AccountFamily({ userId }: { userId: string }) {
     if (!groups) return null;
     const yours = activeFamily(families.data);
     return (
-        <SettingsGroup title="Family" description="Your family, its plan, and invitations to you.">
+        <SettingsGroup title="Family">
+            {/* No label: the group is already called Family, and the row is the family itself. */}
             <Setting
-                label="Family"
                 action={
                     families.isSuccess && (
                         <Link
@@ -49,7 +49,7 @@ export function AccountFamily({ userId }: { userId: string }) {
                     </span>
                 ) : (
                     <span className="text-muted-foreground">
-                        {families.isPending ? 'Checking' : 'You’re not in a family.'}
+                        {families.isPending ? 'Checking' : 'Not in a family'}
                     </span>
                 )}
             </Setting>

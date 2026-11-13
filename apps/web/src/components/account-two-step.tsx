@@ -13,7 +13,7 @@ import { devicesQueryOptions } from '@/components/account-devices';
 import { CopyCheckIcon } from '@/components/copy-button';
 import { SECRET_FIELD } from '@/components/password-input';
 import { QrCode } from '@/components/qr-code';
-import { DialogField, Done, Setting, SettingsGroup } from '@/components/settings';
+import { DialogField, Setting, SettingsGroup } from '@/components/settings';
 import { StepUpFields } from '@/components/two-step-answer';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -52,6 +52,12 @@ import {
  * change asks for the password again and, once the step is on, for the step; choosing the
  * default changes only an order and asks for neither. Nothing shows on a server that has
  * two-step off.
+ *
+ * The section says its state once, beside its title. A kind of method is a row: its label,
+ * how many or since when, and its actions in the page's one action column, Add among them.
+ * Each key is a row of its own beneath its kind, so Add is never beside the first key. What
+ * a change did is a toast; what went wrong stays in the section until the next try. The
+ * cautions that were lines here are on /security.
  */
 
 type Open =
@@ -63,6 +69,8 @@ type Open =
     | null;
 
 const KEY_LIMIT = 10;
+/* At this many backup codes or fewer, the count is shown as a warning: time to make new ones. */
+const CODES_LOW = 2;
 const kindWords = {
     webauthn: 'Passkey or security key',
     totp: 'Authenticator app',
@@ -73,7 +81,6 @@ export function AccountTwoStep({ user }: { user: SessionUser }) {
     const queryClient = useQueryClient();
     const status = useQuery({ ...twoStepQueryOptions, enabled });
     const [open, setOpen] = useState<Open>(null);
-    const [done, setDone] = useState('');
     const [problem, setProblem] = useState('');
     const [moving, setMoving] = useState(false);
     if (!enabled) return null;
@@ -83,12 +90,12 @@ export function AccountTwoStep({ user }: { user: SessionUser }) {
             queryClient.invalidateQueries({ queryKey: securityEventsQueryOptions.queryKey }),
             queryClient.invalidateQueries({ queryKey: devicesQueryOptions.queryKey }),
         ]);
+    // What a change did is said once, in a toast, and the section is read again either way.
     const finish = (said: string) => {
-        setDone(said);
+        if (said) toast.add({ type: 'success', title: said });
         void refresh();
     };
     const begin = (next: Open) => {
-        setDone('');
         setProblem('');
         setOpen(next);
     };
@@ -100,13 +107,12 @@ export function AccountTwoStep({ user }: { user: SessionUser }) {
     const defaultKind = status.data?.defaultKind ?? null;
     // Which kind is offered first changes only an order: no password, no step.
     async function makeDefault(kind: 'webauthn' | 'totp') {
-        setDone('');
         setProblem('');
         setMoving(true);
         try {
             await authClient.setTwoStepDefault(kind);
             cue('success');
-            finish(`${kindWords[kind]} is now asked for first.`);
+            finish(`${kindWords[kind]} is now the default`);
         } catch (cause) {
             cue('error');
             setProblem(authError(cause));
@@ -116,9 +122,9 @@ export function AccountTwoStep({ user }: { user: SessionUser }) {
         }
     }
     /*
-     * Default beside the kind offered first, Make default beneath the other, and neither with
-     * one kind. The badge sits with the method's own words and the button on a line of its
-     * own, so a phone's row never has more than two actions beside its text.
+     * Default beside the kind offered first, Make default among the other's actions, and
+     * neither with one kind. The default is a kind, not a key: the badge is on the kind's
+     * row, after how many keys there are, and never on one key among several.
      */
     const choosing = on && Boolean(app) && keys.length > 0;
     const isDefault = (kind: 'webauthn' | 'totp') =>
@@ -126,8 +132,7 @@ export function AccountTwoStep({ user }: { user: SessionUser }) {
     const makeIt = (kind: 'webauthn' | 'totp') =>
         choosing && defaultKind !== kind ? (
             <Button
-                variant="ghost"
-                className="-ms-3.5 self-start"
+                variant="outline"
                 disabled={moving}
                 aria-label={`Make ${kindWords[kind].toLowerCase()} the default`}
                 onClick={() => void makeDefault(kind)}
@@ -142,7 +147,16 @@ export function AccountTwoStep({ user }: { user: SessionUser }) {
         <div id="two-step" className="scroll-mt-20">
             <SettingsGroup
                 title="Two-step sign-in"
-                description="A second step stops someone who has your password from signing in. It doesn’t change how your files are encrypted."
+                status={
+                    status.isSuccess && (
+                        <Badge
+                            variant={on ? 'success' : 'outline'}
+                            data-two-step={on ? 'on' : 'off'}
+                        >
+                            {on ? 'On' : 'Off'}
+                        </Badge>
+                    )
+                }
             >
                 {status.isPending ? (
                     <div className="flex flex-col gap-2 py-3" aria-busy="true">
@@ -151,7 +165,6 @@ export function AccountTwoStep({ user }: { user: SessionUser }) {
                     </div>
                 ) : status.isError ? (
                     <Setting
-                        label="Status"
                         action={
                             <Button variant="outline" onClick={() => void status.refetch()}>
                                 Try again
@@ -164,76 +177,62 @@ export function AccountTwoStep({ user }: { user: SessionUser }) {
                     </Setting>
                 ) : (
                     <>
-                        <Setting
-                            label="Status"
-                            data={{ 'data-two-step': on ? 'on' : 'off' }}
-                            below={
-                                <>
-                                    {done && <Done>{done}</Done>}
-                                    {problem && (
-                                        <p role="alert" className="text-[13px] text-destructive">
-                                            {problem}
-                                        </p>
-                                    )}
-                                </>
-                            }
-                        >
-                            {on ? (
-                                <span className="font-medium">On</span>
-                            ) : (
-                                <span className="text-muted-foreground">
-                                    Off. Your password alone signs you in.
-                                </span>
-                            )}
-                        </Setting>
+                        {problem && (
+                            <p role="alert" className="py-1 text-[13px] text-destructive">
+                                {problem}
+                            </p>
+                        )}
                         <Setting
                             label={kindWords.webauthn}
                             data={{ 'data-two-step-keys': String(keys.length) }}
                             action={
-                                canAdd &&
-                                keys.length < KEY_LIMIT && (
-                                    <Button
-                                        variant="outline"
-                                        aria-label="Add passkey or security key"
-                                        onClick={() => begin({ kind: 'key' })}
-                                    >
-                                        Add
-                                    </Button>
-                                )
-                            }
-                            below={
-                                <div className="flex flex-col gap-1.5">
+                                <>
                                     {makeIt('webauthn')}
-                                    <KeyNotes keys={keys} withApp={Boolean(app)} canAdd={canAdd} />
-                                </div>
+                                    {canAdd && keys.length < KEY_LIMIT && (
+                                        <Button
+                                            variant="outline"
+                                            aria-label="Add passkey or security key"
+                                            onClick={() => begin({ kind: 'key' })}
+                                        >
+                                            Add
+                                        </Button>
+                                    )}
+                                </>
                             }
                         >
-                            {keys.length === 0 ? (
+                            <span className="flex min-w-0 flex-wrap items-center gap-2">
                                 <span className="text-muted-foreground">
-                                    Not added. It stops fake sign-in pages, which a code can’t.
+                                    {keysCount(keys.length, canAdd)}
                                 </span>
-                            ) : (
-                                <KeyList badge={isDefault('webauthn')}>
-                                    {keys.map((key) => (
-                                        <KeyRow
-                                            key={key.id}
-                                            method={key}
-                                            removeWords={removeWords}
-                                            onRename={() => begin({ kind: 'rename', method: key })}
-                                            onRemove={() => begin({ kind: 'remove', method: key })}
-                                        />
-                                    ))}
-                                </KeyList>
-                            )}
+                                {isDefault('webauthn')}
+                            </span>
                         </Setting>
+                        {keys.length > 0 && (
+                            <ul
+                                aria-label="Passkeys and security keys"
+                                className="m-0 list-none p-0"
+                            >
+                                {keys.map((key) => (
+                                    <KeyRow
+                                        key={key.id}
+                                        method={key}
+                                        removeWords={removeWords}
+                                        onRename={() => begin({ kind: 'rename', method: key })}
+                                        onRemove={() => begin({ kind: 'remove', method: key })}
+                                    />
+                                ))}
+                            </ul>
+                        )}
                         <Setting
                             label={kindWords.totp}
                             data={{ 'data-two-step-app': app ? 'on' : 'off' }}
                             action={
                                 app ? (
                                     <>
+                                        {makeIt('totp')}
                                         <Button
-                                            variant="ghost"
+                                            variant="outline"
+                                            aria-label="Replace authenticator app"
                                             onClick={() => begin({ kind: 'app', mode: 'replace' })}
                                         >
                                             Replace
@@ -259,33 +258,26 @@ export function AccountTwoStep({ user }: { user: SessionUser }) {
                                 )
                             }
                             below={
-                                <div className="flex flex-col gap-1.5">
-                                    {makeIt('totp')}
-                                    {status.data.totpFrozen && (
-                                        <p className="text-[13px] text-muted-foreground">
-                                            Its codes are refused on devices HushOS doesn’t
-                                            recognise, after many wrong ones. A backup code or your
-                                            recovery phrase works there, and lifts the pause.
-                                        </p>
-                                    )}
-                                </div>
+                                status.data.totpFrozen && (
+                                    <p className="text-[13px] text-muted-foreground">
+                                        A backup code or your recovery phrase lifts the pause.
+                                    </p>
+                                )
                             }
                         >
                             {app ? (
                                 <span className="flex min-w-0 flex-wrap items-center gap-2">
-                                    <span className="font-medium">On</span>
+                                    {/* One fact, so the value never wraps beside three actions. */}
+                                    <span className="whitespace-nowrap text-muted-foreground">
+                                        {latest(app)}
+                                    </span>
                                     {isDefault('totp')}
                                     {status.data.totpFrozen && (
                                         <Badge variant="warning">Paused</Badge>
                                     )}
-                                    <span className="text-[13px] text-muted-foreground">
-                                        {used(app)}
-                                    </span>
                                 </span>
                             ) : (
-                                <span className="text-muted-foreground">
-                                    Not added. A 6-digit code from an app on your phone.
-                                </span>
+                                <span className="text-muted-foreground">Not added</span>
                             )}
                         </Setting>
                         {on && (
@@ -300,9 +292,16 @@ export function AccountTwoStep({ user }: { user: SessionUser }) {
                                     </Button>
                                 }
                             >
-                                <span className="text-muted-foreground">
-                                    {codesLeft(status.data)}
-                                </span>
+                                {/* Two or fewer: the same words, in the warning tone, and no sentence. */}
+                                {status.data.backupCodesLeft <= CODES_LOW ? (
+                                    <Badge variant="warning" data-codes-low>
+                                        {codesLeft(status.data)}
+                                    </Badge>
+                                ) : (
+                                    <span className="text-muted-foreground">
+                                        {codesLeft(status.data)}
+                                    </span>
+                                )}
                             </Setting>
                         )}
                     </>
@@ -354,22 +353,27 @@ function used(method: TwoStepMethod) {
     return method.lastUsedAt ? `${added} · Last used ${formatDay(method.lastUsedAt)}` : added;
 }
 
-/* The account's keys, with Default above them while their kind is the one offered first. */
-function KeyList({ badge, children }: { badge: ReactNode; children: ReactNode }) {
-    return (
-        <div className="flex min-w-0 flex-col gap-2">
-            {badge}
-            <ul
-                aria-label="Passkeys and security keys"
-                className="m-0 flex list-none flex-col gap-3 p-0"
-            >
-                {children}
-            </ul>
-        </div>
-    );
+/* The app's one fact: when it was last used, or when it was added if it never was. */
+const latest = (method: TwoStepMethod) =>
+    method.lastUsedAt
+        ? `Last used ${formatDay(method.lastUsedAt)}`
+        : `Added ${formatDay(method.createdAt)}`;
+
+/*
+ * How many keys, where a count is the value: none, some, or all an account can have, which
+ * is also why Add is gone. A browser that cannot add one says so here, for the same reason.
+ */
+function keysCount(count: number, canAdd: boolean) {
+    if (!canAdd) return 'This browser can’t use passkeys or security keys.';
+    if (count === 0) return 'Not added';
+    if (count >= KEY_LIMIT) return `${count} keys, the most an account can have`;
+    return count === 1 ? '1 key' : `${count} keys`;
 }
 
-/* One key: its name, where it lives, when it was added and last used, and its two actions. */
+/*
+ * One key, a row beneath its kind: its name, where it lives, when it was added and last
+ * used, and its two actions in the page's action column.
+ */
 function KeyRow({
     method,
     removeWords,
@@ -383,72 +387,38 @@ function KeyRow({
 }) {
     const name = method.name ?? 'Security key';
     return (
-        <li data-two-step-key-row className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-            <div className="flex min-w-0 flex-1 basis-48 flex-col gap-0.5">
-                <span className="font-medium wrap-anywhere">{name}</span>
-                <span className="text-[13px] text-muted-foreground">
-                    {method.synced ? 'Saved in a password manager · ' : ''}
-                    {used(method)}
-                </span>
-            </div>
-            <div className="flex items-center gap-2">
-                <Button variant="ghost" onClick={onRename} aria-label={`Rename ${name}`}>
-                    Rename
-                </Button>
-                <Button
-                    variant="destructive-outline"
-                    onClick={onRemove}
-                    aria-label={`${removeWords} ${name}`}
-                >
-                    {removeWords}
-                </Button>
-            </div>
+        <li data-two-step-key-row>
+            <Setting
+                action={
+                    <>
+                        <Button variant="outline" onClick={onRename} aria-label={`Rename ${name}`}>
+                            Rename
+                        </Button>
+                        <Button
+                            variant="destructive-outline"
+                            onClick={onRemove}
+                            aria-label={`${removeWords} ${name}`}
+                        >
+                            {removeWords}
+                        </Button>
+                    </>
+                }
+            >
+                <div className="flex min-w-0 flex-col gap-0.5">
+                    <span className="font-medium wrap-anywhere">{name}</span>
+                    <span className="text-[13px] text-muted-foreground">
+                        {method.synced ? 'Saved in a password manager · ' : ''}
+                        {used(method)}
+                    </span>
+                </div>
+            </Setting>
         </li>
-    );
-}
-
-/*
- * What the list says beneath itself, each line only while it is true (docs/two-step-design.md
- * 3, 12): a synced passkey beside the password is one factor; a passkey stops a fake page
- * only when it is the way used; one key alone is one loss from the backup codes; and where
- * this browser cannot add one.
- */
-function KeyNotes({
-    keys,
-    withApp,
-    canAdd,
-}: {
-    keys: TwoStepMethod[];
-    withApp: boolean;
-    canAdd: boolean;
-}) {
-    const lines = [
-        keys.some((key) => key.synced) &&
-            'A passkey saved in the same password manager as your password is one factor, not two: whoever opens the manager has both.',
-        keys.length > 0 &&
-            withApp &&
-            'A passkey stops a fake sign-in page only when you use it. A fake page can ask you to use another way instead.',
-        keys.length === 1 &&
-            'Add a second key and keep it somewhere else, in case this one is lost.',
-        keys.length >= KEY_LIMIT && 'You have ten, the most an account can have.',
-        !canAdd && 'This browser can’t use passkeys or security keys.',
-    ].filter((line): line is string => Boolean(line));
-    if (lines.length === 0) return null;
-    return (
-        <div className="flex flex-col gap-1.5">
-            {lines.map((line) => (
-                <p key={line} className="text-[13px] text-muted-foreground">
-                    {line}
-                </p>
-            ))}
-        </div>
     );
 }
 
 function codesLeft(status: TwoStepStatus) {
     const left = status.backupCodesLeft;
-    if (left === 0) return 'None left. Make a new set.';
-    return left <= 2 ? `${left} of 10 left. Make a new set soon.` : `${left} of 10 left`;
+    return left === 0 ? 'None left' : `${left} of 10 left`;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -526,11 +496,11 @@ function SecurityActivity() {
     return (
         <Setting
             label="Recent activity"
+            top
             below={
                 list.length > SHOWN && (
                     <Button
-                        variant="ghost"
-                        className="-ms-3.5"
+                        variant="outline"
                         aria-expanded={all}
                         onClick={() => setAll((value) => !value)}
                     >
@@ -634,7 +604,6 @@ function PasswordField({
             value={value}
             disabled={disabled}
             onChange={(event) => onChange(event.target.value)}
-            hint="Enter your password to confirm."
             error={tried && !value ? 'Enter your password.' : undefined}
         />
     );
@@ -711,8 +680,7 @@ function BackupCodes({ codes, email }: { codes: string[]; email: string }) {
                 </Button>
             </div>
             <p className="text-[13px] text-muted-foreground">
-                Each code works once, when you can’t use your authenticator app. They aren’t shown
-                again, so keep them somewhere apart from your password.
+                Each code works once. They aren’t shown again.
             </p>
         </div>
     );
@@ -869,7 +837,7 @@ function AppDialog({
                     throw new LostReply(
                         'The server’s answer didn’t arrive, so HushOS can’t tell whether two-step sign-in was turned on. Check before you try again.',
                     );
-                onDone(replacing ? 'Authenticator app replaced.' : 'Authenticator app added.');
+                onDone(replacing ? 'Authenticator app replaced' : 'Authenticator app added');
                 onClose();
                 return;
             }
@@ -932,7 +900,7 @@ function AppDialog({
                 description="Two-step sign-in is on."
                 onClose={onClose}
                 onSubmit={() => {
-                    onDone('Two-step sign-in is on.');
+                    onDone('');
                     onClose();
                 }}
                 // Never held by the removal: a request that hangs must not keep the person here.
@@ -1052,10 +1020,10 @@ function AppDialog({
             }
             description={
                 replacing
-                    ? 'The new app takes over once you confirm it. Your backup codes stay as they are.'
+                    ? 'The new app takes over once you confirm it.'
                     : turningOn
-                      ? 'After your password, HushOS will ask for a code from an authenticator app on your phone. Your recovery phrase works as the second step too, so keep it apart from your password.'
-                      : 'A code from the app will pass your second step too. Your other ways to sign in stay as they are.'
+                      ? 'After your password, HushOS will ask for a code from an authenticator app.'
+                      : undefined
             }
             onClose={onClose}
             onSubmit={() => void start()}
@@ -1107,8 +1075,8 @@ function RemoveOthersOffer({
                 <span className="font-semibold">Remove my other devices</span>
                 <span className="text-[13px] text-muted-foreground">
                     {others
-                        ? `${others === 1 ? 'One other device is' : `${others} other devices are`} signed in without the second step. They’ll need to sign in again, and will be asked for it.`
-                        : 'Any other device signed in to your account will need to sign in again, and will be asked for the second step.'}
+                        ? `${others === 1 ? 'One other device' : `${others} other devices`} will need to sign in again.`
+                        : 'They’ll need to sign in again.'}
                 </span>
             </label>
         </div>
@@ -1207,7 +1175,7 @@ function KeyDialog({
                     throw new LostReply(
                         'The server’s answer didn’t arrive, so HushOS can’t tell whether two-step sign-in was turned on. Check before you try again.',
                     );
-                onDone('Passkey or security key added.');
+                onDone('Passkey or security key added');
                 onClose();
                 return;
             }
@@ -1261,7 +1229,7 @@ function KeyDialog({
                 description="Two-step sign-in is on."
                 onClose={onClose}
                 onSubmit={() => {
-                    onDone('Two-step sign-in is on.');
+                    onDone('');
                     onClose();
                 }}
                 footer={<Button type="submit">Done</Button>}
@@ -1285,7 +1253,7 @@ function KeyDialog({
                 open={open}
                 pending={pending}
                 title="Add your passkey or security key"
-                description="Your browser will ask for it. Have your security key ready, or choose where to save a passkey."
+                description="Your browser will ask for it."
                 onClose={onClose}
                 onSubmit={() => void add()}
                 footer={
@@ -1308,7 +1276,7 @@ function KeyDialog({
                         setName(event.target.value);
                         setError('');
                     }}
-                    hint="Optional. It tells your keys apart in this list. Names aren’t encrypted."
+                    hint="Optional. Names aren’t encrypted."
                 />
                 {first && (
                     <RemoveOthersOffer
@@ -1328,8 +1296,8 @@ function KeyDialog({
             title={first ? 'Turn on two-step sign-in?' : 'Add a passkey or security key?'}
             description={
                 first
-                    ? 'After your password, HushOS will ask for your passkey or security key. Your recovery phrase works as the second step too, so keep it apart from your password.'
-                    : 'It will pass your second step too. Your other ways to sign in stay as they are.'
+                    ? 'After your password, HushOS will ask for your passkey or security key.'
+                    : undefined
             }
             onClose={onClose}
             onSubmit={() => void start()}
@@ -1402,7 +1370,7 @@ function RenameKeyDialog({
             open={method !== null}
             pending={saving}
             title="Rename passkey or security key"
-            description="Shown in this list only. Names aren’t encrypted."
+            description="Names aren’t encrypted."
             onClose={leave}
             onSubmit={() => void save()}
             footer={
@@ -1471,10 +1439,10 @@ function RemoveDialog({
             cue('success');
             onDone(
                 !removed.on
-                    ? 'Two-step sign-in is off.'
+                    ? 'Two-step sign-in is off'
                     : app
-                      ? 'Authenticator app removed.'
-                      : 'Passkey or security key removed.',
+                      ? 'Authenticator app removed'
+                      : 'Passkey or security key removed',
             );
             onClose();
         } catch (cause) {
@@ -1502,8 +1470,8 @@ function RemoveDialog({
                 last
                     ? 'Your password alone will sign you in, and your backup codes will stop working.'
                     : app
-                      ? 'Its codes will stop passing your second step. Your other ways to sign in stay as they are.'
-                      : `${method?.name ?? 'This key'} will stop passing your second step. Your other ways to sign in stay as they are.`
+                      ? 'Its codes will stop working for sign-in.'
+                      : `${method?.name ?? 'This key'} will stop working for sign-in.`
             }
             onClose={onClose}
             onSubmit={() => void submit()}
@@ -1600,7 +1568,7 @@ function NewCodesDialog({
                 description="Your earlier codes no longer work."
                 onClose={onClose}
                 onSubmit={() => {
-                    onDone('New backup codes made.');
+                    onDone('');
                     onClose();
                 }}
                 footer={<Button type="submit">Done</Button>}

@@ -3,7 +3,7 @@ import { defaultFamilyName, familyStanding } from '@/lib/family-signup';
 import { Spinner } from '@/components/motion';
 import { PageHeader } from '@/components/page-header';
 import { PortalLink } from '@/components/portal-link';
-import { Segmented, SettingsGroup } from '@/components/settings';
+import { Segmented, SettingsGroup, SettingsPage } from '@/components/settings';
 import { StorageCard } from '@/components/storage-card';
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
@@ -443,9 +443,9 @@ function BillingPage() {
                 : null);
 
     return (
-        <div className="flex flex-col pb-10">
+        <SettingsPage width="wide" className="pb-10">
             <PageHeader title={selling ? 'Plan and storage' : 'Storage'} />
-            <div className="flex max-w-4xl flex-col gap-9 px-5 sm:px-8">
+            <div className="flex flex-col gap-9 px-5 sm:px-8">
                 {shown && (
                     <Notice tone={shown.tone} busy={'busy' in shown && shown.busy}>
                         <WithSupportLink text={shown.text} />
@@ -853,7 +853,7 @@ function BillingPage() {
                     )}
                 </DialogContent>
             </Dialog>
-        </div>
+        </SettingsPage>
     );
 }
 

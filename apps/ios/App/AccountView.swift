@@ -89,9 +89,9 @@ struct AccountView: View {
                         }
                         .alpineRow()
                     }
-                    Button { showingPhrase = true } label: { row("scroll", "Recovery phrase", "Gets you back in if you forget your password", chevron: true) }.alpineRow()
+                    Button { showingPhrase = true } label: { row("scroll", "Recovery phrase", nil, chevron: true) }.alpineRow()
                     NavigationLink { DevicesView().environment(store) } label: {
-                        row("laptopcomputer.and.iphone", "Devices", "Where you’re signed in")
+                        row("laptopcomputer.and.iphone", "Devices", nil)
                     }
                     .alpineRow()
                     Button { showingPeople = true } label: { row("person.2", "Contacts", nil, chevron: true) }.alpineRow()
@@ -257,7 +257,7 @@ struct AccountView: View {
 
     private func editName() {
         TextPrompt.present(
-            title: "Your name", message: "Shown to people you share with.", text: model.user?.name ?? "", placeholder: "Name", action: "Save", selectStem: false,
+            title: "Your name", message: nil, text: model.user?.name ?? "", placeholder: "Name", action: "Save", selectStem: false,
             validate: { $0.trimmingCharacters(in: .whitespaces).isEmpty ? "Enter a name." : nil }
         ) { name in
             Task {
@@ -584,8 +584,6 @@ struct AdvancedView: View {
                     .contentShape(Rectangle())
                 }
                 .alpineRow()
-            } footer: {
-                Text("New keys for sharing, signed by your old ones, so people you share with don’t need to compare words from scratch.")
             }
             Section {
                 Button { resetting = true } label: {
@@ -598,8 +596,6 @@ struct AdvancedView: View {
                     .contentShape(Rectangle())
                 }
                 .alpineRow()
-            } footer: {
-                Text("A new master key for your account. Your files, sharing keys and links stay as they are.")
             }
             Section {
                 if let id = model.user?.id {
@@ -632,14 +628,10 @@ struct AdvancedView: View {
                 .alpineRow()
             } header: {
                 SectionTitle("About this account")
-            } footer: {
-                Text("Support may ask for your account ID.")
             }
             BackgroundAccessSection()
             Section {
                 Button("Delete account", role: .destructive) { deleting = true }.foregroundStyle(Alpine.danger).alpineRow()
-            } footer: {
-                Text("Deletes every file, every earlier version and the account. It can’t be undone.")
             }
         }
         .listStyle(.insetGrouped)
@@ -710,7 +702,7 @@ struct ChangePasswordSheet: View {
                 }
                 StepUpSections(step: step, disabled: pending)
                 Section {
-                    Text("Your other devices will be signed out. Your recovery phrase stays the same.").font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
+                    Text("Your other devices will be signed out.").font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
                         .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: Alpine.Space.s4, bottom: 0, trailing: Alpine.Space.s4))
                         .listRowSeparator(.hidden)
                     Button { submit() } label: { Text(pending ? "Changing…" : "Change password").frame(maxWidth: .infinity) }
@@ -975,8 +967,6 @@ struct ResetKeysSheet: View {
                     if !error.isEmpty { Section { Text(error).foregroundStyle(Alpine.danger).alpineRow() } }
                     Section {
                         PasswordField(label: "Password", text: $password, content: nil).alpineRow()
-                    } footer: {
-                        Text("Enter your password to confirm.")
                     }
                     StepUpSections(step: step, disabled: pending)
                     Section {
