@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.7.0](https://github.com/HushOS/HushOS/compare/v1.6.0...v1.7.0) (2026-11-13)
+
+
+### Features
+
+* **apps:** centre the Account page, line its actions up, and cut it to labels and values ([#425](https://github.com/HushOS/HushOS/issues/425)) ([4a4c573](https://github.com/HushOS/HushOS/commit/4a4c573e234055e995b69d0000bcf6eb71989c6f))
+* **apps:** passkeys and security keys as the second step, with a default method, on the web, iPhone and Android ([#424](https://github.com/HushOS/HushOS/issues/424)) ([2e00404](https://github.com/HushOS/HushOS/commit/2e004040324a59cb8db8d03d8d3cedda1cbc03bf))
+* **auth:** re-seal two-step secrets on rotation, read the keys from files, and push the step's notices ([#422](https://github.com/HushOS/HushOS/issues/422)) ([ae0d3a4](https://github.com/HushOS/HushOS/commit/ae0d3a441355406beb5a660b314c82e4c77e0bf9))
+
 ## [1.6.0](https://github.com/HushOS/HushOS/compare/v1.5.0...v1.6.0) (2026-11-13)
 
 
