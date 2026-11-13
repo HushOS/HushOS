@@ -12,14 +12,15 @@ import UIKit
  * key's answer back into what the server checks, so those are tested without a sheet.
  *
  * The sheet opens only from `assert` and `make`, and those are called only from a button's press
- * (`StepSending.answer`, the Add button). Whatever stops it (the person closed it, no key answered,
+ * (`StepSending.answer`, the Add button). Both are held to the session they were asked under
+ * (`KeySession.held`): signed out while the sheet was open, the key's answer is not sent. Whatever stops it (the person closed it, no key answered,
  * the system refused the request) is `KeyUnused`: nothing was sent, and the step or setup stands.
  */
 enum PasskeySheet {
     /* A step's key. */
-    static let assert: KeyAsker = { request in try await assertion(request) }
+    static let assert: KeyAsker = { request in try await KeySession.held(unused: .atStep) { try await assertion(request) } }
     /* A new key for the account. */
-    static let make: KeyMaker = { creation in try await registration(creation) }
+    static let make: KeyMaker = { creation in try await KeySession.held(unused: .adding) { try await registration(creation) } }
 
     @MainActor
     private static func assertion(_ request: StepKeyRequest) async throws -> KeyAssertion {

@@ -492,6 +492,51 @@ private final class Key: @unchecked Sendable {
     }
 }
 
+/* A key's sheet can outlast the session it was opened under: what it hands back then is not sent. */
+struct KeySessionTests {
+    /* The session in use, as the keychain would say it: changed by the test while the sheet is "open". */
+    final class Current: @unchecked Sendable {
+        private let lock = NSLock()
+        private var tag: String?
+        init(_ tag: String?) { self.tag = tag }
+        var now: String? { lock.withLock { tag } }
+        func become(_ next: String?) { lock.withLock { tag = next } }
+    }
+
+    @Test func aKeyThatAnswersAfterASignOutIsNotHandedOn() async throws {
+        for after in [nil, "another-session"] as [String?] {
+            let current = Current("the-session")
+            await #expect(throws: KeyUnused.adding) {
+                _ = try await KeySession.held(unused: .adding, session: { current.now }) {
+                    // The device is removed, or someone else signs in, while the sheet is up.
+                    current.become(after)
+                    return "a registration"
+                }
+            }
+        }
+        // A sign-in that completed while a step's sheet was up is another session too.
+        let signedOut = Current(nil)
+        await #expect(throws: KeyUnused.atStep) {
+            _ = try await KeySession.held(unused: .atStep, session: { signedOut.now }) {
+                signedOut.become("a-session")
+                return "an assertion"
+            }
+        }
+    }
+
+    @Test func underTheSameSessionOrNoneTheKeysAnswerIsHandedOn() async throws {
+        let current = Current("the-session")
+        #expect(try await KeySession.held(unused: .adding, session: { current.now }) { "a registration" } == "a registration")
+        // A sign-in's step has no session yet, before or after.
+        let none = Current(nil)
+        #expect(try await KeySession.held(unused: .atStep, session: { none.now }) { "an assertion" } == "an assertion")
+        // The sheet's own failure is the sheet's: thrown on as it was.
+        await #expect(throws: KeyUnused.atStep) {
+            _ = try await KeySession.held(unused: .adding, session: { current.now }) { () async throws -> String in throw KeyUnused.atStep }
+        }
+    }
+}
+
 /* What a launch keeps of the adverts, in memory. */
 final class AdvertMemory: @unchecked Sendable {
     private let lock = NSLock()

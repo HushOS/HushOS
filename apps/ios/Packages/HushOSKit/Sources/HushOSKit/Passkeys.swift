@@ -189,6 +189,29 @@ public struct KeyUnused: Error, WordedError, Equatable, Sendable {
     public static let adding = KeyUnused(message: StepWords.keyNotAdded)
 }
 
+/*
+ * A key's ceremony, held to the session it was asked under. The system's sheet can stay open for
+ * minutes, and the app can be signed out meanwhile (the device removed, the session ended, another
+ * account signed in). What the key hands back then is not sent: it would add a key, or answer a
+ * step, for a screen that is gone, under whatever session is there now. It is `unused`, as a closed
+ * sheet is: nothing went out. A sign-in's step has no session before or after, and passes.
+ */
+public enum KeySession {
+    /* Under the session this phone holds now. */
+    public static func held<Made: Sendable>(unused: KeyUnused, _ ceremony: () async throws -> Made) async throws -> Made {
+        try await held(unused: unused, session: { Auth.currentSession?.tag }, ceremony)
+    }
+
+    static func held<Made: Sendable>(
+        unused: KeyUnused, session: @Sendable () -> String?, _ ceremony: () async throws -> Made
+    ) async throws -> Made {
+        let asked = session()
+        let made = try await ceremony()
+        guard session() == asked else { throw unused }
+        return made
+    }
+}
+
 /* Whether a server said it reads `twoStepMethods`, as far as this phone knows. */
 public enum StepAdvert: Sendable, Equatable {
     /* Its last `login/start` reply said so: the field is sent. */

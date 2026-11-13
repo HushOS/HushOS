@@ -373,6 +373,7 @@ Markdown files (`text/markdown`, or `.md`, `.markdown`, `.mdx`) up to 2 MB open 
     - A closed sheet, or no key, is `KeyUnused`: nothing is sent, and the step or setup stays. Keep it that way with its tests.
     - A lost reply keeps the key's answer and sends the same one again (`SignInStep.lost`).
 - `PasskeySheet`: one `ASAuthorizationController` with a platform request and a security-key request, for an assertion and for a registration.
+    - Both are held to the session they were asked under (`KeySession.held`, by the session's tag): signed out, or signed in as someone else, while the sheet was open, the key's answer is `KeyUnused` and nothing is sent. The web does the same with its lock count.
     - `KeyAsk` and `KeyMake` (HushOSKit) turn the core's base64url into the `Data` the providers take; `KeyAssertion` and `KeyRegistration` are built from the raw bytes handed back.
     - The security-key request names only keys that reported `usb`, `nfc` or `ble`, or nothing. It is left out when there are none: a request that named no key would take any.
     - Registration asks ES256 only, no attestation, no resident key, no user verification.
