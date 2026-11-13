@@ -232,13 +232,124 @@ describe('two-step notices on the account’s devices', () => {
         }
         // The list hands all of them over too, oldest first: one kind the schema refused would fail it whole.
         expect((await listed(laptop.cookie)).map((event) => event.kind)).toEqual([...STEP_KINDS]);
+    }, 90_000);
 
-        // A count that no set of ten codes can have left is refused on the way out, not shown.
-        const wrong = await notificationsRepository.recordEvent({
-            userId: who.userId,
-            kind: 'backup-code-used',
-            data: { left: 10 },
+    test('new backup codes made with a backup code: the notice says how many the used set had left, never ten', async () => {
+        const who = await edge.account();
+        const laptop = await device(who);
+        const { codes } = await turnOn(laptop.cookie);
+        await pinged(1);
+        pings.length = 0;
+
+        // New codes, the step answered with one of the old ones, as the settings screen sends it.
+        const step = await edge.call(
+            'POST',
+            '/two-step/challenge',
+            { purpose: 'two-step' },
+            { cookie: laptop.cookie },
+        );
+        expect(step.status).toBe(200);
+        const { proof } = await edge.passwordProof('/two-step/reauth', {}, laptop);
+        const made = await edge.call(
+            'POST',
+            '/two-step/backup-codes',
+            {
+                ...proof,
+                twoStep: { token: step.body.token, proof: { kind: 'backup', code: codes[0] } },
+            },
+            { cookie: laptop.cookie },
+        );
+        expect(made.status).toBe(200);
+        expect(made.body.codes).toHaveLength(10);
+
+        // The code was one of ten, so nine were left when it was used. Counted after the new
+        // set was written it would be ten: a number no notice of a used code can carry.
+        const [mail] = await edge.notices('backup-code-used');
+        expect(mail!.count).toBe(9);
+        expect(await edge.notices('backup-codes-made')).toHaveLength(1);
+        await pinged(2);
+
+        // The device is handed both events, and everything else in its list with them.
+        const list = await edge.call('GET', '', undefined, {
+            cookie: laptop.cookie,
+            ...NOTIFICATIONS,
         });
-        expect((await fetched(laptop.cookie, wrong!.id)).status).not.toBe(200);
+        expect(list.status).toBe(200);
+        const events = list.body.notifications as { id: string; kind: string; data: unknown }[];
+        expect(events.map((event) => event.kind).sort()).toEqual([
+            'backup-code-used',
+            'backup-codes-made',
+            'two-step-on',
+        ]);
+        expect(events.find((event) => event.kind === 'backup-code-used')!.data).toEqual({
+            left: 9,
+        });
+        expect(pings.map((ping) => ping.id).sort()).toEqual(
+            events
+                .filter((event) => event.kind !== 'two-step-on')
+                .map((event) => event.id)
+                .sort(),
+        );
+        // And the settings show the new set whole.
+        expect(
+            (await edge.call('GET', '/two-step', undefined, { cookie: laptop.cookie })).body
+                .backupCodesLeft,
+        ).toBe(10);
+    }, 90_000);
+
+    test('an event no app can read is left out by itself: the rest of the page still reaches the device', async () => {
+        const { notificationsRepository } = await import('@hushos/db');
+        const who = await edge.account();
+        const laptop = await device(who);
+        const record = (kind: 'two-step-on' | 'two-step-off' | 'backup-codes-made') =>
+            notificationsRepository.recordEvent({ userId: who.userId, kind, data: {} });
+        const before = await record('two-step-on');
+        // A row the server would never write now: stored by a bug, or by a release that counted wrongly.
+        const [bad] = await edge.db
+            .insert(edge.schema.notificationEvents)
+            .values({ userId: who.userId, kind: 'backup-code-used', data: { left: 10 } })
+            .returning({ id: edge.schema.notificationEvents.id });
+        const after = await record('two-step-off');
+
+        // Asked for by id, it is gone, as an event past its 30 days is: the app shows its fallback.
+        expect((await fetched(laptop.cookie, bad!.id)).status).toBe(404);
+        expect((await fetched(laptop.cookie, after!.id)).status).toBe(200);
+
+        // The list is not refused whole, and the events on both sides of the bad row arrive.
+        const list = await edge.call('GET', '', undefined, {
+            cookie: laptop.cookie,
+            ...NOTIFICATIONS,
+        });
+        expect(list.status).toBe(200);
+        expect(list.body.notifications.map((event: { id: string }) => event.id)).toEqual([
+            before!.id,
+            after!.id,
+        ]);
+        // The device's place in the list moved past the page it was handed, and nothing is repeated.
+        const later = await record('backup-codes-made');
+        expect((await listed(laptop.cookie)).map((event) => event.id)).toEqual([later!.id]);
+    }, 90_000);
+
+    test('an event is refused before it is stored when its data is not its kind’s, and nobody is pinged for it', async () => {
+        const { notificationsRepository } = await import('@hushos/db');
+        const who = await edge.account();
+        const laptop = await device(who);
+        const refused: [(typeof STEP_KINDS)[number], Record<string, unknown>][] = [
+            // More codes left than a set holds after one is used, fewer than none, and not a count.
+            ['backup-code-used', { left: 10 }],
+            ['backup-code-used', { left: -1 }],
+            ['backup-code-used', { left: 2.5 }],
+            ['backup-code-used', {}],
+            // A field no kind has: a name is exactly what must never ride along.
+            ['two-step-app-removed', { name: 'HushOS Support, call 5550100' }],
+            ['backup-code-used', { left: 3, device: 'evil.example' }],
+        ];
+        for (const [kind, data] of refused)
+            await expect(
+                notificationsRepository.recordEvent({ userId: who.userId, kind, data }),
+                JSON.stringify([kind, data]),
+            ).rejects.toThrow('notification was refused');
+        expect(await edge.db.select().from(edge.schema.notificationEvents)).toEqual([]);
+        expect(await listed(laptop.cookie)).toEqual([]);
     }, 90_000);
 });

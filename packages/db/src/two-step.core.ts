@@ -407,8 +407,20 @@ export type StepSpend =
     | { method: 'totp'; factorId: string; step: number }
     | { method: 'backup'; codeHash: Buffer }
     | { method: 'phrase' };
-/* A step token, and what the answer that came with it spends. */
-export type StepProof = { tokenHash: Buffer; spend: StepSpend };
+/* What spending an answer left behind: how many backup codes the account had left, when one was used. */
+export type StepSpent = { backupCodesLeft: number | null };
+/*
+ * A step token, and what the answer that came with it spends. `spent` is told what the spend
+ * left, inside the transaction and before the action it gates has run: the count of backup
+ * codes left is read there and nowhere later, because the action may replace or delete the
+ * set (new codes, the last method removed), and a count taken afterwards would be of another
+ * set. The caller uses what it was told only once the transaction has committed.
+ */
+export type StepProof = {
+    tokenHash: Buffer;
+    spend: StepSpend;
+    spent?: (left: StepSpent) => void;
+};
 
 /* Why a step did not pass, as a gated transaction throws it. */
 type Refused =
@@ -513,6 +525,7 @@ export async function passStep(
         .returning({ tokenHash: twoStepAttempts.tokenHash });
     if (gone.length !== 1) throw new StepRefused({ reason: 'gone' });
     await recordSuccess(tx, { userId: attempt.userId, pool: attempt.pool, method: spend.method });
+    input.proof.spent?.({ backupCodesLeft });
     return { attempt, method: spend.method, backupCodesLeft };
 }
 

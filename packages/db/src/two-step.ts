@@ -107,6 +107,7 @@ export type {
     StepPool,
     StepProof,
     StepSpend,
+    StepSpent,
     TwoStepRefusal,
 } from './two-step.core';
 export { REPLACEMENT_SESSION_SECONDS, TWO_STEP_REMEMBER_SECONDS } from './sessions';
@@ -681,6 +682,7 @@ export type SteppedSession =
 export async function openSteppedSession(input: {
     tokenHash: Buffer;
     spend: StepSpend;
+    spent?: StepProof['spent'];
     session: { tokenHash: Buffer; expiresAt: Date };
 }): Promise<SteppedSession> {
     try {
@@ -700,7 +702,7 @@ export async function openSteppedSession(input: {
                 userId: seen.userId,
                 purpose: 'login',
                 sessionTokenHash: null,
-                proof: { tokenHash: input.tokenHash, spend: input.spend },
+                proof: { tokenHash: input.tokenHash, spend: input.spend, spent: input.spent },
             });
             const { attempt } = passed;
             const device = await writeSession(tx, {

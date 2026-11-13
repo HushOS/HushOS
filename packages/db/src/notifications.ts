@@ -4,6 +4,7 @@ import {
     accountDevices,
     groupMemberships,
     NOTIFICATION_KINDS,
+    notificationDataValid,
     notificationEvents,
     notificationRegistrations,
     notificationSettings,
@@ -175,6 +176,12 @@ export async function recordEvent(input: {
     webPush: WebPushTarget[];
 } | null> {
     const eventClass = NOTIFICATION_KINDS[input.kind];
+    // Refused before anything is stored: an event no device can read is worse than none, since
+    // every device of the account would be pinged for it and then shown nothing.
+    if (!eventClass || !notificationDataValid(input.kind, input.data ?? {}))
+        throw new Error(
+            `A ${String(input.kind)} notification was refused: its data is not that kind's.`,
+        );
     const setting = settingOf(input.kind);
     if (setting && !(await getSettings(input.userId))[setting]) return null;
     const now = input.now ?? new Date();

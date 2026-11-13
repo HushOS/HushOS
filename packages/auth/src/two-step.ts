@@ -459,6 +459,11 @@ type Checked = {
      * checked, before whatever the answer authorises replaces it.
      */
     freshPhrase: boolean;
+    /*
+     * What spending the answer left, as the repository said it while it spent it (`proof.spent`):
+     * how many backup codes the account had left then. Null until the answer is spent.
+     */
+    spent: twoStepRepository.StepSpent | null;
 };
 
 /*
@@ -516,7 +521,16 @@ async function checkAnswer(input: {
         );
     }
     const { freshPhrase = false, ...spend } = right;
-    return { attempt, proof: { tokenHash, spend }, method: proof.kind, flow, bucket, freshPhrase };
+    const checked: Checked = {
+        attempt,
+        proof: { tokenHash, spend, spent: (left) => (checked.spent = left) },
+        method: proof.kind,
+        flow,
+        bucket,
+        freshPhrase,
+        spent: null,
+    };
+    return checked;
 }
 
 /*
@@ -529,7 +543,6 @@ async function settle(
     checked: Checked,
     refusal: twoStepRepository.TwoStepRefusal | null,
     passed: {
-        backupCodesLeft?: number | null;
         deviceId?: string | null;
         signIn?: boolean;
         /* The action deleted the account: nobody is left to log for or to tell. */
@@ -561,10 +574,16 @@ async function settle(
         const { userId } = attempt;
         const deviceId = passed.deviceId ?? poolDevice(attempt);
         if (method === 'backup') {
-            const left =
-                passed.backupCodesLeft ?? (await twoStepRepository.countBackupCodes(userId));
             if (!passed.signIn)
                 await record({ userId, kind: 'backup-code-used', method, deviceId });
+            // How many were left when the code was spent, as the repository counted it in that
+            // transaction. Never counted again here: the action the code authorised may have
+            // made a new set (ten) or deleted the set, and that would be another set's count.
+            const left = checked.spent?.backupCodesLeft;
+            if (typeof left !== 'number')
+                throw new Error(
+                    'A backup code passed the step and its count did not come with it.',
+                );
             notice(userId, 'backup-code-used', { count: left });
         }
         if (method === 'phrase') {
@@ -697,7 +716,6 @@ export async function finishLoginStep(input: StepInput) {
     const { user, key, device } = result;
     await record({ userId: user.id, kind: 'sign-in', method: checked.method, deviceId: device.id });
     await settle(checked, null, {
-        backupCodesLeft: result.backupCodesLeft,
         deviceId: device.id,
         signIn: true,
     });
