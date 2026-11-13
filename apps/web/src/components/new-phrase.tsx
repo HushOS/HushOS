@@ -24,7 +24,7 @@ const words = {
     rotation: {
         applied: 'Your old recovery phrase no longer works. These 24 words replace it.',
         unknown:
-            'We couldn’t confirm that your recovery phrase was replaced. If it was, these 24 words are your recovery phrase now. If it wasn’t, your old phrase still is. Keep both until you have signed in.',
+            'We couldn’t confirm that your recovery phrase was replaced. If it was, these 24 words are your recovery phrase now. If it wasn’t, your old phrase still is. Keep both until you know which one your account uses.',
     },
 } as const;
 

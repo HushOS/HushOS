@@ -210,6 +210,14 @@ function notice(userId: string, kind: StepNotice, extra: { count?: number; metho
 export function noticeOfRotation(userId: string, action: 'recovery-key' | 'master-key') {
     notice(userId, action === 'master-key' ? 'account-key-rotated' : 'phrase-replaced');
 }
+/*
+ * The notice a reset sends of itself: the password and the phrase replaced with the old
+ * phrase, and every session ended. Whoever did it could open the address's mail and had the
+ * phrase; the owner, if that was someone else, hears of it here and nowhere else.
+ */
+export function noticeOfReset(userId: string) {
+    notice(userId, 'password-reset');
+}
 
 /* One line of the account's security log. A log problem never undoes what it records. */
 async function record(input: Parameters<typeof twoStepRepository.recordSecurityEvent>[0]) {

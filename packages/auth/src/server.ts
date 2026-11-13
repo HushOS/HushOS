@@ -39,6 +39,7 @@ import { notify } from './notifications';
 import {
     checkChangeStep,
     beforeSpending,
+    noticeOfReset,
     noticeOfRotation,
     settleChangeStep,
     startLoginStep,
@@ -1784,6 +1785,7 @@ export async function finishRecovery(
         ),
     });
     if (!user) throw failure();
+    noticeOfReset(attempt.userId);
     return { user };
 }
 

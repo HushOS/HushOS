@@ -16,6 +16,13 @@ const Panel = lazy(() =>
     import('@/components/new-phrase').then((module) => ({ default: module.NewPhrase })),
 );
 
+function openOver(dialog: HTMLDialogElement) {
+    if (!dialog.isConnected || dialog.open) return;
+    if (typeof dialog.showModal === 'function') dialog.showModal();
+    else dialog.setAttribute('open', '');
+    dialog.focus();
+}
+
 export function NewPhraseGate() {
     const made = useStore(newPhrase, (state) => state.made);
     const layer = useRef<HTMLDialogElement>(null);
@@ -24,10 +31,7 @@ export function NewPhraseGate() {
     // form, a sign-in form) until the words are acknowledged.
     useEffect(() => {
         const dialog = layer.current;
-        if (!made || !dialog || dialog.open) return;
-        if (typeof dialog.showModal === 'function') dialog.showModal();
-        else dialog.setAttribute('open', '');
-        dialog.focus();
+        if (made && dialog) openOver(dialog);
     }, [made]);
     if (!made) return null;
     return (
@@ -37,7 +41,14 @@ export function NewPhraseGate() {
             tabIndex={-1}
             data-new-phrase
             // Escape closes a modal dialog by default; this one closes only by its button.
+            // `closedby` says so to a browser that knows it. Refusing `cancel` is for one that
+            // does not, and is not enough alone: a browser lets a page refuse only so often
+            // (Chromium, once without a click on the page in between), then closes it anyway.
+            closedby="none"
             onCancel={(event) => event.preventDefault()}
+            // So closed by anything but its button, it opens again: it is still rendered,
+            // which means the words are still held, and nothing else would show them.
+            onClose={(event) => openOver(event.currentTarget)}
             // The whole viewport.
             className="fixed inset-0 m-0 size-full max-h-none max-w-none overflow-y-auto border-0 bg-background p-0 text-foreground outline-none"
         >

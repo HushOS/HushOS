@@ -111,9 +111,41 @@ describe('the new recovery phrase, shown wherever the person is', () => {
         expect(newPhrase.getState().made).toEqual(made);
     });
 
-    test('when the outcome could not be confirmed, it says to keep both phrases', async () => {
+    test('a browser that closes it anyway finds it open again, for as long as the words are held', async () => {
+        const user = userEvent.setup();
+        showModal.mockClear();
         render(<NewPhraseGate />);
+        act(() => keepNewPhrase(made, authStore()));
+        const list = await screen.findByRole('list', { name: 'Recovery phrase' });
+        const dialog = list.closest('dialog')!;
+        // Told not to close on Escape or a click outside, where the browser takes that.
+        expect(dialog).toHaveAttribute('closedby', 'none');
+        // Chromium honours a refused `cancel` only so often, then closes the dialog whatever
+        // the page said: the words are still held and no longer on screen. As the browser
+        // does it: `open` goes, then `close` is sent.
+        for (let closed = 1; closed <= 5; closed++) {
+            dialog.removeAttribute('open');
+            act(() => void dialog.dispatchEvent(new Event('close')));
+            expect(dialog.open).toBe(true);
+            expect(showModal).toHaveBeenCalledTimes(1 + closed);
+        }
+        expect(newPhrase.getState().made).toEqual(made);
+        // Its own button still ends it, and nothing opens it again after that.
+        await user.click(screen.getByRole('button', { name: 'I’ve saved these words' }));
+        expect(shown()).toBeNull();
+        expect(showModal).toHaveBeenCalledTimes(6);
+    });
+
+    test('when the outcome could not be confirmed, it says to keep both phrases: until a sign-in after a reset, and until it is known which one the account uses after a rotation', async () => {
+        render(<NewPhraseGate />);
+        // A rotation can leave the person signed in, on the account as it was or as it is
+        // now: "until you have signed in" would tell them they are already done.
         act(() => keepNewPhrase({ ...made, applied: 'unknown' }, authStore()));
-        await screen.findByText(/Keep both until you have signed in/);
+        await screen.findByText(/Keep both until you know which one your account uses\./);
+        expect(screen.queryByText(/until you have signed in/)).toBeNull();
+        // A reset never leaves a session behind: the sign-in that follows settles it.
+        act(() => keepNewPhrase({ ...made, applied: 'unknown', from: 'reset' }, authStore()));
+        await screen.findByText(/Keep both until you have signed in\./);
+        expect(screen.queryByText(/which one your account uses/)).toBeNull();
     });
 });

@@ -658,7 +658,9 @@ test('a new recovery phrase whose reply is lost does not lock out someone with o
         timeout: 120_000,
     });
     await expect(page).toHaveURL(/\/login/);
-    await expect(page.getByText('Keep both until you have signed in.')).toBeVisible();
+    await expect(
+        page.getByText('Keep both until you know which one your account uses.'),
+    ).toBeVisible();
     const fresh = await wordsOn(page);
     expect(fresh.split(' ')).toHaveLength(24);
     expect(fresh).not.toBe(phrase);
@@ -729,10 +731,17 @@ test('a new recovery phrase is shown at once wherever the person lands, and is g
         return { there: under !== undefined, focused: document.activeElement === under };
     });
     expect(reached).toEqual({ there: true, focused: false });
-    await page.keyboard.press('Escape');
+    // However often: a browser lets a page refuse Escape only so many times, then closes a
+    // modal dialog whatever the page says, and the words would be held with nothing showing them.
+    for (let pressed = 0; pressed < 5; pressed++) {
+        await page.keyboard.press('Escape');
+        await page.waitForTimeout(200);
+    }
     await expect(
         gate.getByRole('heading', { name: 'Save your new recovery phrase' }),
     ).toBeVisible();
+    await expect(gate.getByRole('list', { name: 'Recovery phrase' })).toBeVisible();
+    expect(await gate.evaluate((dialog) => dialog.matches(':modal'))).toBe(true);
 
     // Saved: the words leave the screen and the tab.
     await gate.getByRole('button', { name: 'I’ve saved these words' }).click();

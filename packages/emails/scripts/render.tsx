@@ -132,6 +132,7 @@ const securityKinds: SecurityNoticeKind[] = [
     'backup-code-used',
     'phrase-used',
     'phrase-replaced',
+    'password-reset',
     'account-key-rotated',
     'step-failed',
     'change-step-failed',

@@ -985,12 +985,17 @@ describe('the recovery phrase and the step', () => {
         });
         expect(rotated.reply.status).toBe(200);
         expect(await edge.notices('phrase-used')).toMatchObject([{ to: who.email }]);
-        expect(await edge.notices('phrase-replaced')).toMatchObject([
+        const replaced = await edge.notices('phrase-replaced');
+        expect(replaced).toMatchObject([
             {
                 to: who.email,
                 subject: expect.stringContaining('Your recovery phrase was replaced'),
             },
         ]);
+        // A rotation ends every session, and its email says so: the device that made it is
+        // signed out here too (this client did not ask to be kept).
+        expect(await rows.sessions()).toHaveLength(0);
+        expect(replaced[0]!.text).toContain('your other devices were signed out');
 
         // The sign-in that follows, answered with the new words (as the client does on the
         // person's behalf), sends nothing on top of those two.
@@ -1069,6 +1074,79 @@ describe('the recovery phrase and the step', () => {
         );
         expect(edge.outbox.filter((notice) => notice.kind === 'phrase-replaced')).toEqual([]);
     }, 90_000);
+
+    test('a reset with the recovery phrase tells the account once that it happened and signs every device out; its new phrase then answers the step without a second email', async () => {
+        const { who, cookie } = await stepped();
+        expect(await rows.sessions()).toHaveLength(1);
+        // Without the phrase's key nothing is reset, and nothing is said of a reset.
+        const refused = await edge.reset(who, who.phrase, 'a password chosen at the reset', {
+            spoiled: true,
+        });
+        expect(refused.reply.status).toBe(400);
+        await edge.quiet();
+        expect(edge.outbox.filter((notice) => notice.kind === 'password-reset')).toEqual([]);
+
+        const reset = await edge.reset(who, who.phrase, 'a password chosen at the reset');
+        expect(reset.reply.status).toBe(200);
+        // What the email says happened did: the device that was signed in no longer is.
+        expect(await rows.sessions()).toHaveLength(0);
+        expect((await edge.call('GET', '/two-step', undefined, { cookie })).status).toBe(401);
+        const told = await edge.notices('password-reset');
+        expect(told).toMatchObject([
+            {
+                to: who.email,
+                subject: expect.stringContaining(
+                    'Your password was reset with your recovery phrase',
+                ),
+            },
+        ]);
+        expect(told[0]!.text).toContain('every device was signed out');
+        // The old phrase proved the account at the reset; it answered no step, and no step's notice is sent.
+        await edge.quiet();
+        expect(edge.outbox.filter((notice) => notice.kind === 'phrase-used')).toEqual([]);
+
+        // The sign-in after it, with the new password, answers its step with the new words
+        // on the person's behalf: the reset has told the account, and nothing more is sent.
+        const first = await edge.signIn(who, {
+            twoStep: true,
+            password: 'a password chosen at the reset',
+        });
+        expect(first.status).toBe(200);
+        const stale = await answer(
+            first.body.twoStep.token,
+            await edge.phraseProof(who.phrase, first.body.twoStep),
+        );
+        expect(stale).toMatchObject({ status: 401, body: { code: 'step-wrong' } });
+        expect(
+            (
+                await answer(
+                    first.body.twoStep.token,
+                    await edge.phraseProof(reset.phrase, first.body.twoStep),
+                )
+            ).status,
+        ).toBe(200);
+        await edge.quiet();
+        expect(edge.outbox.filter((notice) => notice.kind === 'phrase-used')).toEqual([]);
+        expect(edge.outbox.filter((notice) => notice.kind === 'password-reset')).toHaveLength(1);
+
+        // Sixteen minutes on, the phrase is no longer fresh from the reset: its use is told.
+        vi.setSystemTime(Date.now() + 16 * 60_000);
+        edge.state.address = '198.51.100.7';
+        const later = await edge.signIn(who, {
+            twoStep: true,
+            password: 'a password chosen at the reset',
+        });
+        expect(
+            (
+                await answer(
+                    later.body.twoStep.token,
+                    await edge.phraseProof(reset.phrase, later.body.twoStep),
+                )
+            ).status,
+        ).toBe(200);
+        expect(await edge.notices('phrase-used')).toMatchObject([{ to: who.email }]);
+        expect(edge.outbox.filter((notice) => notice.kind === 'password-reset')).toHaveLength(1);
+    }, 120_000);
 
     test('a password change sends no rotation notice, and an account’s first phrase is told of when it answers a sign-in', async () => {
         const { who, cookie, secret } = await stepped();
