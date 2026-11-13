@@ -910,6 +910,46 @@ describe('the recovery phrase and the step', () => {
         expect(passed.session).toBeTruthy();
     }, 90_000);
 
+    test('a phrase a rotation just made answers the step without a second email: after fifteen minutes its use is told again, and it is logged either way', async () => {
+        const { who, cookie, secret } = await stepped();
+        const step = await challenge(cookie, 'recovery-key');
+        const rotated = await rotateRecoveryKey(who, cookie, {
+            token: step.token,
+            proof: { kind: 'totp', code: await appCode(secret) },
+        });
+        expect(rotated.reply.status).toBe(200);
+        // The rotation itself told the account. The sign-in that follows it, answered with
+        // the new words (as the client does on the person's behalf), sends no "your phrase
+        // was used" on top of that.
+        const first = await toStep(who);
+        expect(
+            (await answer(first.token, await edge.phraseProof(rotated.phrase, first))).status,
+        ).toBe(200);
+        await edge.quiet();
+        expect(edge.outbox.filter((notice) => notice.kind === 'phrase-used')).toEqual([]);
+        // It is in the security log all the same: a sign-in by phrase.
+        expect(await rows.log(who.userId)).toContain('sign-in:phrase');
+
+        // Sixteen minutes on, the phrase is no longer fresh from a change: its use is told.
+        vi.setSystemTime(Date.now() + 16 * 60_000);
+        edge.state.address = '198.51.100.7';
+        const later = await toStep(who);
+        expect(
+            (await answer(later.token, await edge.phraseProof(rotated.phrase, later))).status,
+        ).toBe(200);
+        expect(await edge.notices('phrase-used')).toMatchObject([{ to: who.email }]);
+
+        // An account's first phrase was made at sign-up, by no change: its use is told at once.
+        await edge.resetDatabase();
+        edge.outbox.length = 0;
+        const fresh = await stepped();
+        const asked = await toStep(fresh.who);
+        expect(
+            (await answer(asked.token, await edge.phraseProof(fresh.who.phrase, asked))).status,
+        ).toBe(200);
+        expect(await edge.notices('phrase-used')).toMatchObject([{ to: fresh.who.email }]);
+    }, 120_000);
+
     test('the step is not turned on for an account without a recovery key, and none can be added from a session once it is on', async () => {
         const recoveryRows = async () =>
             (await edge.db.select().from(edge.schema.accountRecoveryKeys)).map((row) => row.userId);

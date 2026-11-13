@@ -525,9 +525,28 @@ async function settle(
         }
         if (method === 'phrase') {
             if (!passed.signIn) await record({ userId, kind: 'phrase-used', method, deviceId });
-            notice(userId, 'phrase-used');
+            // A reset or a rotation that just made this phrase has told the account so already,
+            // and the sign-in that follows it answers with the new words on the person's
+            // behalf: a second mail a minute later, saying their phrase was used, would only
+            // alarm. The log line above is written all the same.
+            if (!(await phraseJustReplaced(userId))) notice(userId, 'phrase-used');
         }
     });
+}
+
+/* How long after a reset or a rotation its new phrase answers a step without a notice of its own. */
+const FRESH_PHRASE_MS = 15 * 60_000;
+/*
+ * Whether the recovery key that just answered was made by a reset or a rotation in the last
+ * fifteen minutes. An account's first key (version 1) is neither: it was made at sign-up.
+ */
+async function phraseJustReplaced(userId: string) {
+    const key = await authRepository.getRecoveryKey(userId);
+    return (
+        key !== null &&
+        key.recoveryVersion > 1 &&
+        Date.now() - key.updatedAt.getTime() < FRESH_PHRASE_MS
+    );
 }
 
 /*
