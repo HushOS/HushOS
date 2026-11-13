@@ -1,0 +1,21 @@
+apps/web/src/lib/api/two-step-reseal.db.test.ts
+  s_566b8e0c4467a4::t_5f4c6c8f4977b3 538-594
+packages/jobs/src/jobs/two-step.ts
+  s_566b8e0c4467a4::t_0f981e1d7edc5c 82-93
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7f951cefd1735408952c581cdf19c6c0fb11151d",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
