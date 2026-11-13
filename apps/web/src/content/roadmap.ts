@@ -50,7 +50,7 @@ export type RoadmapSection = {
 };
 
 /* The day this file last changed what the page says (YYYY-MM-DD). */
-export const updated = '2026-11-09';
+export const updated = '2026-11-13';
 
 export const sections: RoadmapSection[] = [
     {
@@ -58,6 +58,21 @@ export const sections: RoadmapSection[] = [
         title: 'Shipped',
         summary: 'Live at hushos.com, and in a self-hosted copy that runs the latest code.',
         items: [
+            {
+                id: 'two-step-sign-in',
+                status: 'shipped',
+                month: 'November 2026',
+                area: 'Platform',
+                title: 'Two-step sign-in',
+                body: 'After your password, a code from an authenticator app, one of ten backup codes, or your recovery phrase. It’s asked for at sign-in and before you change your password, your keys or the step, or delete your account. Turn it on in Account → Two-step sign-in; phones need version 1.6 to sign in once it’s on.',
+                links: [
+                    {
+                        kind: 'blog',
+                        slug: 'two-step-sign-in',
+                        label: 'What it protects, and what it doesn’t',
+                    },
+                ],
+            },
             {
                 id: 'phone-notifications',
                 status: 'shipped',
@@ -242,11 +257,11 @@ export const sections: RoadmapSection[] = [
                 links: [{ kind: 'page', to: '/teams', label: 'HushOS for teams today' }],
             },
             {
-                id: 'two-step-sign-in',
+                id: 'security-keys-and-device-approval',
                 status: 'now',
                 area: 'Platform',
-                title: 'Two-step sign-in and device approval',
-                body: 'Sign in with your password and a code from an authenticator app, or a security key, and approve each new device from one you already use. Both are checks the server makes; approval can also be set so your keys reach a new device only from one you already have.',
+                title: 'Security keys and device approval',
+                body: 'A security key as your second step, the one kind phishing can’t get past, and approving each new device from one you already use. Approval can also be set so your keys reach a new device only from one you already have.',
                 links: [
                     {
                         kind: 'docs',
