@@ -641,6 +641,9 @@ data class TwoStepStatus(val on: Boolean, val methods: List<Method>, val backupC
     /* "7 of 10 left", or "None left": the value, and New codes is beneath it. */
     val codesLeft: String get() = if (backupCodesLeft == 0) "None left" else "$backupCodesLeft of 10 left"
 
+    /* Two or fewer: the count is shown as a warning, in the same words, so it is time for a new set without a sentence saying so. */
+    val codesLow: Boolean get() = backupCodesLeft <= 2
+
     companion object {
         const val TOTP = "totp"
         const val WEBAUTHN = "webauthn"

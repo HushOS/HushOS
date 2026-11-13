@@ -386,10 +386,10 @@ private fun SettingValue(label: String, value: String) {
 
 /* A line of the settings: what is so, said plainly under its heading. */
 @Composable
-private fun SettingLine(text: String, danger: Boolean = false, strong: Boolean = false) {
+private fun SettingLine(text: String, danger: Boolean = false, strong: Boolean = false, warning: Boolean = false) {
     val alpine = Alpine.colors
-    Text(text, style = MaterialTheme.typography.bodyLarge, fontWeight = if (strong) FontWeight.SemiBold else null,
-        color = if (danger) alpine.danger else if (strong) alpine.ink else alpine.inkMuted,
+    Text(text, style = MaterialTheme.typography.bodyLarge, fontWeight = if (strong || warning) FontWeight.SemiBold else null,
+        color = if (danger) alpine.danger else if (warning) alpine.warning else if (strong) alpine.ink else alpine.inkMuted,
         modifier = Modifier.padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2))
 }
 
@@ -547,7 +547,7 @@ fun TwoStepScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) 
                 }
                 if (current.on) {
                     Subheader("Backup codes")
-                    SettingLine(current.codesLeft)
+                    SettingLine(current.codesLeft, warning = current.codesLow)
                     AccountRow("New codes", null, Icons.Outlined.Pin) { open(TwoStepPage.CODES) }
                 }
             }

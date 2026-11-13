@@ -814,6 +814,10 @@ class TwoStepTest {
         assertEquals("2 of 10 left", status(2))
         assertEquals("1 of 10 left", status(1))
         assertEquals("None left", status(0))
+        // Two or fewer are a warning; three are not.
+        fun low(left: Int) = TwoStepStatus(true, emptyList(), left, false).codesLow
+        assertFalse(low(10) || low(3))
+        assertTrue(low(2) && low(1) && low(0))
         // Not the settings' shape: nothing is shown as "off" on a guess.
         assertNull(TwoStepStatus.from(JSONObject().put("message", "nope")))
         fun words(kind: String, method: String? = null) = SecurityEvent("e", kind, method, null, null).words
