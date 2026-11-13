@@ -253,6 +253,7 @@ Design: `docs/devices-design.md` 5; as built: `docs/push-relay-plan.md`, PR 4.
 - After `step-limited` only the key and the phrase are left (`StepOutcome.left`).
 - Adding a key is two requests (`TwoStep.keyOptions`, `TwoStep.addKey`) with the sheet between them (`KeySetup.pressed`). The view model keeps the pending `KeyCreation` in `TwoStepFlow.creation`. A closed sheet keeps the setup; anything the server answers ends it (`TwoStepFlow.keyAdded`), since a registration is good for one answer.
 - `PasskeySheet` sets no `origin`: Android reports `android:apk-key-hash:…` for the signing certificate, which the server takes for the certificates in `ANDROID_APP_CERT_SHA256` (or `WEBAUTHN_ANDROID_ORIGINS`, when set), and hushos.com's `assetlinks.json` names the app with `get_login_creds`.
+- `rememberKeySheet()` hands the sheet inside a `HeldSheet`: the session is read before the sheet opens and after it closes, and a key that answered under another session, or none, is null, as a closed sheet is. Nothing is sent. The web does the same with its lock count.
 - R8 keeps `androidx.credentials.playservices` (`proguard-rules.pro`): the provider for phones before Android 14 is found by name.
 - A real ceremony needs a real phone with Play services, a build signed with a certificate `ANDROID_APP_CERT_SHA256` names, and hushos.com as the server. An emulator, a debug build or a self-hosted server can't run one. Not yet run on a device: the sheet itself, a USB or NFC key, a synced passkey, and what the sheet does across a rotation.
 

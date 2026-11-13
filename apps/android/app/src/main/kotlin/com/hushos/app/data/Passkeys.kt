@@ -47,6 +47,24 @@ interface KeySheet {
     suspend fun registration(creation: KeyCreation): KeyRegistration?
 }
 
+/*
+ * A sheet held to the session it was asked under. The system's sheet can stay open for minutes, and
+ * the app can be signed out meanwhile (the device removed, the session ended, another account
+ * signed in). What the key hands back then is not sent: it would add a key, or answer a step, for a
+ * screen that is gone, under whatever session is there now. It is null, as a closed sheet is:
+ * nothing goes out. A sign-in's step has no session before or after, and passes.
+ */
+class HeldSheet(private val sheet: KeySheet, private val session: () -> Any?) : KeySheet {
+    override suspend fun assertion(request: StepKeyRequest): KeyAssertion? = held { sheet.assertion(request) }
+    override suspend fun registration(creation: KeyCreation): KeyRegistration? = held { sheet.registration(creation) }
+
+    private suspend fun <T> held(ceremony: suspend () -> T?): T? {
+        val asked = session()
+        val made = ceremony()
+        return if (session() == asked) made else null
+    }
+}
+
 /* A key was the way shown, and none answered: refused on this phone, before anything was sent. */
 class KeyUnused(message: String = StepWords.PASSKEY_UNUSED) : AuthFailure(message)
 

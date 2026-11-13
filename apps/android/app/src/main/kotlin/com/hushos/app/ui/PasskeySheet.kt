@@ -12,7 +12,9 @@ import androidx.credentials.GetCredentialRequest
 import androidx.credentials.GetCredentialResponse
 import androidx.credentials.GetPublicKeyCredentialOption
 import androidx.credentials.PublicKeyCredential
+import com.hushos.app.data.HeldSheet
 import com.hushos.app.data.KeySheet
+import com.hushos.app.data.Shared
 import com.hushos.core.KeyAssertion
 import com.hushos.core.KeyCreation
 import com.hushos.core.KeyRegistration
@@ -82,9 +84,15 @@ private object NoSheet : KeySheet {
     override suspend fun registration(creation: KeyCreation): KeyRegistration? = null
 }
 
-/* The sheet for the Activity this screen is drawn in. Making it asks nothing: only a press does. */
+/*
+ * The sheet for the Activity this screen is drawn in, held to the session it is asked under
+ * (`HeldSheet`): signed out while it was open, the key's answer is not sent. Making it asks
+ * nothing: only a press does.
+ */
 @Composable
 internal fun rememberKeySheet(): KeySheet {
     val activity = LocalActivity.current
-    return remember(activity) { activity?.let(::PasskeySheet) ?: NoSheet }
+    return remember(activity) {
+        activity?.let { HeldSheet(PasskeySheet(it)) { Shared.session(it.applicationContext)?.let { s -> Triple(s.origin, s.userId, s.token) } } } ?: NoSheet
+    }
 }

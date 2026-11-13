@@ -76,6 +76,9 @@ class PasskeysTest {
         JSONObject(fixture.getJSONObject("step").toString()).put("methods", JSONArray(order)).apply(change).toString()
 
     /* Read as `two-step/challenge`'s reply is, by the core. */
+    private fun creation(): KeyCreation =
+        TwoStep.keyCreation(Auth.SessionReply(200, fixture.getJSONObject("options").toString(), fixture.getJSONObject("options")))!!
+
     private fun read(step: String): StepChallenge = (com.hushos.core.stepChallengeReplyRead(200u, step) as com.hushos.core.StepReply.Step).challenge
 
     private val handedAssertion: KeyAssertion get() = keyAssertionRead(fixture.getJSONObject("handedAssertion").toString())!!
@@ -183,6 +186,48 @@ class PasskeysTest {
         val asked = TwoStep.challenge(session, StepPurpose.PASSWORD, StepAdverts.Memory(), passkeys = false)!!
         assertFalse(StepMethod.WEBAUTHN in asked.methods)
         assertTrue(StepMethod.WEBAUTHN in TwoStep.challenge(session, StepPurpose.PASSWORD, StepAdverts.Memory(), passkeys = true)!!.methods)
+    }
+
+    // The sheet, and the session it was asked under.
+
+    @Test
+    fun aKeyThatAnswersAfterASignOutIsNotHandedOn() {
+        // The device is removed, or someone else signs in, while the system's sheet is up.
+        for (after in listOf(null, "another-session")) {
+            var current: String? = "the-session"
+            val sheet = object : KeySheet {
+                override suspend fun assertion(request: StepKeyRequest): KeyAssertion? = handedAssertion.also { current = after }
+                override suspend fun registration(creation: KeyCreation): KeyRegistration? = handedRegistration.also { current = after }
+            }
+            val held = HeldSheet(sheet) { current }
+            assertNull(runBlocking { held.registration(creation()) })
+            current = "the-session"
+            assertNull(runBlocking { held.assertion(read(step()).keyRequest!!) })
+        }
+        // Through the Add button: nothing is sent for the key, and the form says the key was not added.
+        var current: String? = "the-session"
+        val gone = object : KeySheet {
+            override suspend fun assertion(request: StepKeyRequest): KeyAssertion? = null
+            override suspend fun registration(creation: KeyCreation): KeyRegistration? = handedRegistration.also { current = null }
+        }
+        assertEquals(
+            KeySetup.Pressed.Stay("Your passkey or security key wasn’t added. Try again."),
+            runBlocking { KeySetup.pressed(creation(), "Desk key", HeldSheet(gone) { current }) },
+        )
+    }
+
+    @Test
+    fun underTheSameSessionOrNoneTheKeysAnswerIsHandedOn() {
+        val sheet = Sheet(handedAssertion, handedRegistration)
+        val held = HeldSheet(sheet) { "the-session" }
+        assertEquals(handedRegistration, runBlocking { held.registration(creation()) })
+        assertEquals(handedAssertion, runBlocking { held.assertion(read(step()).keyRequest!!) })
+        // A sign-in's step has no session yet, before or after.
+        assertEquals(handedAssertion, runBlocking { HeldSheet(sheet) { null }.assertion(read(step()).keyRequest!!) })
+        // A screen that left is still a screen that left.
+        assertThrows(CancellationException::class.java) {
+            runBlocking { HeldSheet(Sheet(handedAssertion, cancelled = true)) { "the-session" }.assertion(read(step()).keyRequest!!) }
+        }
     }
 
     // The press.
