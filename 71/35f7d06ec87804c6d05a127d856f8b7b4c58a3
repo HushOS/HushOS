@@ -1,0 +1,19 @@
+apps/web/src/lib/api/two-step-passkeys.db.test.ts
+  s_566b8e0c4467a4::t_1964a67a006546 550-559,564,570-576,579-581
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7135f7d06ec87804c6d05a127d856f8b7b4c58a3",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
