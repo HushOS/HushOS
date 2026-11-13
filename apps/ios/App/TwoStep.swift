@@ -479,7 +479,7 @@ struct TwoStepView: View {
             if let app = status.app {
                 VStack(alignment: .leading, spacing: 2) {
                     if status.totpFrozen { Text("Paused").fontWeight(.semibold).foregroundStyle(Alpine.warning) }
-                    Text(app.line(day: Self.day)).font(status.totpFrozen ? Theme.Text.footnote : .body).foregroundStyle(Alpine.inkMuted)
+                    Text(app.latest(day: Self.day)).font(status.totpFrozen ? Theme.Text.footnote : .body).foregroundStyle(Alpine.inkMuted)
                 }
                 .alpineRow()
                 Button("Replace") { open = .app(.replace) }.foregroundStyle(Alpine.primary).alpineRow()

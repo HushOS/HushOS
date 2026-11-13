@@ -267,14 +267,9 @@ export function AccountTwoStep({ user }: { user: SessionUser }) {
                         >
                             {app ? (
                                 <span className="flex min-w-0 flex-wrap items-center gap-2">
-                                    {/* Each fact whole: a narrow row breaks between them, never inside a date. */}
-                                    <span className="flex min-w-0 flex-wrap gap-x-1.5 text-muted-foreground">
-                                        {usedParts(app).map((part, index, parts) => (
-                                            <span key={part} className="whitespace-nowrap">
-                                                {part}
-                                                {index < parts.length - 1 ? ' ·' : ''}
-                                            </span>
-                                        ))}
+                                    {/* One fact, so the value never wraps beside three actions. */}
+                                    <span className="whitespace-nowrap text-muted-foreground">
+                                        {latest(app)}
                                     </span>
                                     {isDefault('totp')}
                                     {status.data.totpFrozen && (
@@ -353,11 +348,16 @@ export function AccountTwoStep({ user }: { user: SessionUser }) {
     );
 }
 
-function usedParts(method: TwoStepMethod) {
+function used(method: TwoStepMethod) {
     const added = `Added ${formatDay(method.createdAt)}`;
-    return method.lastUsedAt ? [added, `Last used ${formatDay(method.lastUsedAt)}`] : [added];
+    return method.lastUsedAt ? `${added} · Last used ${formatDay(method.lastUsedAt)}` : added;
 }
-const used = (method: TwoStepMethod) => usedParts(method).join(' · ');
+
+/* The app's one fact: when it was last used, or when it was added if it never was. */
+const latest = (method: TwoStepMethod) =>
+    method.lastUsedAt
+        ? `Last used ${formatDay(method.lastUsedAt)}`
+        : `Added ${formatDay(method.createdAt)}`;
 
 /*
  * How many keys, where a count is the value: none, some, or all an account can have, which

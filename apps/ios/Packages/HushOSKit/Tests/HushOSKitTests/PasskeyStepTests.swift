@@ -578,6 +578,10 @@ final class AdvertMemory: @unchecked Sendable {
         let day: (Date) -> String = { _ in "14 Nov" }
         #expect(read.keys[0].line(day: day) == "Added 14 Nov")
         #expect(read.keys[1].line(day: day) == "Saved in a password manager · Added 14 Nov · Last used 14 Nov")
+        // The app's row says one fact: last used, or added when it never was, or nothing without a date.
+        #expect(read.app?.latest(day: day) == "Added 14 Nov")
+        #expect(read.keys[1].latest(day: day) == "Last used 14 Nov")
+        #expect(TwoStepStatus.Method(id: "a", kind: "totp", name: nil, createdAt: nil, lastUsedAt: nil).latest(day: day) == "")
         #expect(read.keys[0].shownName == "Desk key")
         #expect(TwoStepStatus.Method(id: "k", kind: "webauthn", name: nil, createdAt: nil, lastUsedAt: nil).shownName == "Security key")
         // A server from before the default names none; nothing is guessed.

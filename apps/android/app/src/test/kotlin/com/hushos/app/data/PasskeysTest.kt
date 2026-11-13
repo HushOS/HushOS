@@ -634,6 +634,10 @@ class PasskeysTest {
         val day: (String?) -> String? = { iso -> iso?.let { "${it.substring(8, 10)} Nov" } }
         assertEquals("Added 14 Nov · Last used 14 Nov", read.keys[0].detail(day))
         assertEquals("Saved in a password manager · Added 14 Nov", read.keys[1].detail(day))
+        // The app's row says one fact: last used, or added when it never was, or nothing without a date.
+        assertEquals("Last used 14 Nov", read.keys[0].latest(day))
+        assertEquals("Added 14 Nov", read.keys[1].latest(day))
+        assertEquals("", older.app!!.latest(day))
         assertEquals("Saved in a password manager · Added 14 Nov · Last used 15 Nov", key("k", synced = true, used = "2026-11-15T08:00:00.000Z").detail(day))
         assertEquals("Security key", key("k", name = null).shownName)
     }

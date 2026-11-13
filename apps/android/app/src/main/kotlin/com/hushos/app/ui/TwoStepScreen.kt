@@ -533,7 +533,7 @@ fun TwoStepScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) 
                 } else {
                     Column(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2), verticalArrangement = Arrangement.Center) {
                         if (current.totpFrozen) Text("Paused", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = alpine.warning)
-                        val used = app.detail(::day)
+                        val used = app.latest(::day)
                         if (used.isNotEmpty()) Text(used, style = if (current.totpFrozen) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodyLarge, color = alpine.inkMuted)
                     }
                     if (current.totpFrozen) Text(

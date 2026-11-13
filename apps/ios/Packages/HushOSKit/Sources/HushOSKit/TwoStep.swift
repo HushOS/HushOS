@@ -633,6 +633,11 @@ public struct TwoStepStatus: Sendable, Equatable {
             [synced ? "Saved in a password manager" : nil, createdAt.map { "Added \(day($0))" }, lastUsedAt.map { "Last used \(day($0))" }]
                 .compactMap { $0 }.joined(separator: " · ")
         }
+
+        /* The authenticator app's one fact: when it was last used, or when it was added if it never was. Empty when the server gave no date. */
+        public func latest(day: (Date) -> String) -> String {
+            lastUsedAt.map { "Last used \(day($0))" } ?? createdAt.map { "Added \(day($0))" } ?? ""
+        }
     }
 
     public let on: Bool

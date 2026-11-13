@@ -605,6 +605,9 @@ data class TwoStepStatus(val on: Boolean, val methods: List<Method>, val backupC
         /* "Saved in a password manager · Added 14 Nov · Last used 14 Nov": where it lives only for a synced key, and each date only when there is one. `day` words a date. */
         fun detail(day: (String?) -> String?): String =
             listOfNotNull("Saved in a password manager".takeIf { synced }, day(createdAt)?.let { "Added $it" }, day(lastUsedAt)?.let { "Last used $it" }).joinToString(" · ")
+
+        /* The authenticator app's one fact: when it was last used, or when it was added if it never was. Empty when the server gave no date. */
+        fun latest(day: (String?) -> String?): String = day(lastUsedAt)?.let { "Last used $it" } ?: day(createdAt)?.let { "Added $it" } ?: ""
     }
 
     /* The authenticator app, if one is confirmed: an account has at most one. */

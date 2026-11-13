@@ -537,6 +537,22 @@ describe('passkeys, security keys and the default', () => {
         }
     });
 
+    test('the app’s row says one fact: when it was last used, or when it was added if it never was', async () => {
+        const appRow = () => document.querySelector<HTMLElement>('[data-two-step-app]')!;
+        account([method('app', 'totp')], 'totp');
+        const { unmount } = view();
+        await screen.findByRole('button', { name: 'Replace authenticator app' });
+        expect(within(appRow()).getByText('Added 13 Nov')).toBeVisible();
+        expect(within(appRow()).queryByText(/Last used/)).toBeNull();
+        unmount();
+
+        account([method('app', 'totp', { lastUsedAt: '2026-11-02T10:00:00.000Z' })], 'totp');
+        view();
+        await screen.findByRole('button', { name: 'Replace authenticator app' });
+        expect(within(appRow()).getByText('Last used 13 Nov')).toBeVisible();
+        expect(within(appRow()).queryByText(/Added/)).toBeNull();
+    });
+
     test('with one kind of method there is nothing to choose, so neither Default nor Make default shows', async () => {
         account(
             [method('k1', 'webauthn'), method('k2', 'webauthn', { name: 'Spare' })],
