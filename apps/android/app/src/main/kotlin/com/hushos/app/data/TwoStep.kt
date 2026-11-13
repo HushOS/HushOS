@@ -346,7 +346,7 @@ object StepWords {
     /* The same while adding one: the setup still stands. */
     const val PASSKEY_NOT_ADDED = "Your passkey or security key wasn’t added. Try again."
     /* On a server this app cannot use a key for: the list is still shown, named and pruned here. */
-    const val KEYS_IN_BROWSER = "Passkeys and security keys are added in a browser on this server. You can rename or remove them here."
+    const val KEYS_IN_BROWSER = "Passkeys and security keys are added in a browser on this server."
     /* Turning the step on always comes back with the codes: an answer without them is not the server's answer to that. */
     val LOST_TURNED_ON = lost("two-step sign-in was turned on")
     val LOST_TURNED_OFF = lost("two-step sign-in was turned off")
@@ -627,24 +627,19 @@ data class TwoStepStatus(val on: Boolean, val methods: List<Method>, val backupC
     fun canAddKey(passkeys: Boolean): Boolean = passkeys && keys.size < Passkeys.LIMIT
 
     /*
-     * What the key list says beneath itself, each line only while it is true (docs/two-step-design.md 3, 12):
-     * a synced passkey beside the password is one factor; a passkey stops a fake page only when it is the
-     * way used; one key alone is one loss from the backup codes; the limit; and where this phone can't add one.
+     * What the key list says beneath itself: only why Add is not there, while that is so (ten keys, or a
+     * server this phone cannot use a key for). The cautions about keys are on /security, not here.
      */
     fun keyNotes(passkeys: Boolean): List<String> = listOfNotNull(
-        "A passkey saved in the same password manager as your password is one factor, not two: whoever opens the manager has both.".takeIf { keys.any { it.synced } },
-        "A passkey stops a fake sign-in page only when you use it. A fake page can ask you to use another way instead.".takeIf { keys.isNotEmpty() && app != null },
-        "Add a second key and keep it somewhere else, in case this one is lost.".takeIf { keys.size == 1 },
         "You have ten, the most an account can have.".takeIf { keys.size >= Passkeys.LIMIT },
         StepWords.KEYS_IN_BROWSER.takeIf { !passkeys },
     )
 
-    /* "7 of 10 left", with what to do when they run low, as the web says it. */
-    val codesLeft: String get() = when {
-        backupCodesLeft == 0 -> "None left. Make a new set."
-        backupCodesLeft <= 2 -> "$backupCodesLeft of 10 left. Make a new set soon."
-        else -> "$backupCodesLeft of 10 left"
-    }
+    /* The Add row's words: it adds another once there is one, so it is never read as acting on the key above it. */
+    val addKeyWords: String get() = if (keys.isEmpty()) "Add" else "Add another"
+
+    /* "7 of 10 left", or "None left": the value, and New codes is beneath it. */
+    val codesLeft: String get() = if (backupCodesLeft == 0) "None left" else "$backupCodesLeft of 10 left"
 
     companion object {
         const val TOTP = "totp"
@@ -654,7 +649,7 @@ data class TwoStepStatus(val on: Boolean, val methods: List<Method>, val backupC
         fun kindWords(kind: String): String = if (kind == WEBAUTHN) "Passkey or security key" else "Authenticator app"
 
         /* What changing the default says once the server has. */
-        fun defaultSaid(kind: String): String = "${kindWords(kind)} is now asked for first."
+        fun defaultSaid(kind: String): String = "${kindWords(kind)} is now the default."
 
         /* One method as the server lists it; null without an id or a kind. */
         fun method(row: JSONObject): Method? {
@@ -685,8 +680,8 @@ data class TotpEnrolment(val id: String, val secret: String, val uri: String) {
          * didn't load) or zero, the line says what ticking does without one, and the box is there all the same.
          */
         fun othersLine(others: Int?): String =
-            if (others == null || others <= 0) "Any other device signed in to your account will need to sign in again, and will be asked for the second step."
-            else "${if (others == 1) "One other device is" else "$others other devices are"} signed in without the second step. They’ll need to sign in again, and will be asked for it."
+            if (others == null || others <= 0) "They’ll need to sign in again."
+            else "${if (others == 1) "One other device" else "$others other devices"} will need to sign in again."
     }
 }
 

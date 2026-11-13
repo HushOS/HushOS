@@ -181,11 +181,11 @@ fun AccountScreen(model: DriveViewModel, state: DriveState) {
             FamiliesSection(model) { familyRoute = FamilyRoute.Page(it).save() }
             NotificationsSection()
             Subheader("Sign-in and recovery")
-            AccountRow("Change password", "The password you sign in with", Icons.Outlined.Password) { page = Page.PASSWORD }
+            AccountRow("Change password", null, Icons.Outlined.Password) { page = Page.PASSWORD }
             // Where this server offers it: nothing shows on one that has two-step off, or before it has answered.
             twoStep?.let { AccountRow("Two-step sign-in", if (it.on) "On" else "Off", Icons.Outlined.Security) { page = Page.TWO_STEP } }
-            AccountRow("Recovery phrase", "Gets you back in if you forget your password", Icons.Outlined.Key) { page = Page.PHRASE }
-            AccountRow("Devices", "Where you’re signed in", Icons.Outlined.Devices) { page = Page.DEVICES }
+            AccountRow("Recovery phrase", null, Icons.Outlined.Key) { page = Page.PHRASE }
+            AccountRow("Devices", null, Icons.Outlined.Devices) { page = Page.DEVICES }
             // As on iOS: who you share with, and the words they check, beside sign-in and recovery.
             AccountRow("Contacts", null, Icons.Outlined.Group) { showingPeople = true }
             AccountRow("Your twelve words", "Read these to someone checking it’s you", Icons.Outlined.Badge) { model.openOwnWords() }
@@ -214,10 +214,7 @@ fun AccountScreen(model: DriveViewModel, state: DriveState) {
             onDismissRequest = { editingName = false },
             title = { Text("Your name") },
             text = {
-                Column {
-                    Text("Shown to people you share with.", modifier = Modifier.padding(bottom = AlpineSpace.S3))
-                    OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true, label = { Text("Name") })
-                }
+                OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true, label = { Text("Name") })
             },
             confirmButton = { TextButton(enabled = name.isNotBlank(), onClick = {
                 editingName = false
@@ -491,7 +488,7 @@ private fun PasswordScreen(model: DriveViewModel, onBack: () -> Unit) {
             PasswordField(new, { new = it }, "New password", hint = "At least 12 characters. A few unrelated words work well.", enabled = !pending)
             PasswordField(repeat, { repeat = it }, "Repeat new password", error = if (mismatch) "The new passwords don’t match." else null, enabled = !pending)
             StepUpFields(step, enabled = !pending)
-            Text("Your other devices will be signed out. Your recovery phrase stays the same.", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
+            Text("Your other devices will be signed out.", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
             Button(
                 enabled = !pending && !step.asking && current.isNotEmpty() && new.length >= 12 && new == repeat,
                 onClick = {
@@ -701,9 +698,9 @@ private fun AdvancedScreen(model: DriveViewModel, state: DriveState, onReset: ()
     var selfHosting by rememberSaveable { mutableStateOf(false) }
     if (selfHosting) { SelfHostingScreen(model, state, signedIn = true) { selfHosting = false }; return }
     AccountPage("Advanced", onBack) {
-        AccountRow("Rotate account key", "A new master key for your account. Your files, sharing keys and links stay as they are.", Icons.Outlined.Sync, onClick = onReset)
-        AccountRow("Replace sharing keys", state.resealing?.let { (done, total) -> "Sealing your shares again · $done of $total" }
-            ?: "New keys for sharing, signed by your old ones, so people you share with don’t need to compare words from scratch.", Icons.Outlined.Key, onClick = onReplace)
+        // What each does is said by the page it opens, not under its row.
+        AccountRow("Rotate account key", null, Icons.Outlined.Sync, onClick = onReset)
+        AccountRow("Replace sharing keys", state.resealing?.let { (done, total) -> "Sealing your shares again · $done of $total" }, Icons.Outlined.Key, onClick = onReplace)
         Subheader("About this account")
         state.user?.id?.let { id ->
             Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable {
@@ -723,7 +720,7 @@ private fun AdvancedScreen(model: DriveViewModel, state: DriveState, onReset: ()
             Text(state.origin.substringAfter("://").trimEnd('/') + if (state.origin.contains("hushos.com")) "" else " · self-hosted", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
         }
         HorizontalDivider(Modifier.padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2), color = alpine.divider)
-        AccountRow("Delete account", "Every file, every earlier version and the account. It can’t be undone.", Icons.Outlined.DeleteForever, danger = true) { deleting = true }
+        AccountRow("Delete account", null, Icons.Outlined.DeleteForever, danger = true) { deleting = true }
     }
     if (deleting) {
         var password by retain { mutableStateOf("") }
@@ -795,7 +792,6 @@ private fun ResetKeysScreen(model: DriveViewModel, onBack: () -> Unit) {
             for (line in listOf("Use it if you think someone saw your password or recovery phrase.", "You get a new recovery phrase. The old one stops working.", "Your other devices are signed out."))
                 Row { Text("•", modifier = Modifier.padding(end = AlpineSpace.S2)); Text(line, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted) }
             PasswordField(password, { password = it; error = null }, "Password", error = error, enabled = !pending)
-            Text("Enter your password to confirm.", style = MaterialTheme.typography.bodySmall, color = alpine.inkMuted)
             StepUpFields(step, enabled = !pending)
             Button(enabled = !pending && !step.asking && password.isNotEmpty(), onClick = {
                 scope.withStep(step, sheet) { twoStep ->

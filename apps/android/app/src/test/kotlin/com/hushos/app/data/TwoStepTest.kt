@@ -811,8 +811,9 @@ class TwoStepTest {
         fun status(left: Int) = TwoStepStatus(true, emptyList(), left, false).codesLeft
         assertEquals("10 of 10 left", status(10))
         assertEquals("3 of 10 left", status(3))
-        assertEquals("2 of 10 left. Make a new set soon.", status(2))
-        assertEquals("None left. Make a new set.", status(0))
+        assertEquals("2 of 10 left", status(2))
+        assertEquals("1 of 10 left", status(1))
+        assertEquals("None left", status(0))
         // Not the settings' shape: nothing is shown as "off" on a guess.
         assertNull(TwoStepStatus.from(JSONObject().put("message", "nope")))
         fun words(kind: String, method: String? = null) = SecurityEvent("e", kind, method, null, null).words
@@ -864,11 +865,11 @@ class TwoStepTest {
     @Test
     fun theLineUnderRemoveMyOtherDevicesNeverNeedsACount() {
         // The box is there whatever the device list said: unknown or none, the line still says what ticking does.
-        val general = "Any other device signed in to your account will need to sign in again, and will be asked for the second step."
+        val general = "They’ll need to sign in again."
         assertEquals(general, TotpEnrolment.othersLine(null))
         assertEquals(general, TotpEnrolment.othersLine(0))
-        assertEquals("One other device is signed in without the second step. They’ll need to sign in again, and will be asked for it.", TotpEnrolment.othersLine(1))
-        assertEquals("3 other devices are signed in without the second step. They’ll need to sign in again, and will be asked for it.", TotpEnrolment.othersLine(3))
+        assertEquals("One other device will need to sign in again.", TotpEnrolment.othersLine(1))
+        assertEquals("3 other devices will need to sign in again.", TotpEnrolment.othersLine(3))
     }
 
     // The requests themselves, against a server that answers as the real one does, or as something in the way does.

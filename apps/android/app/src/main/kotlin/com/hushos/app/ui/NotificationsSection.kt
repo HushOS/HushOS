@@ -142,9 +142,9 @@ fun NotificationsSection() {
     val shown = toggles ?: return
     if (relay == null) return
     Subheader("Notifications")
-    SwitchRow("On this phone", "Notices here while HushOS is closed", phone, enabled = !busy) { setPhone(it) }
-    SwitchRow("Shared with you", "When someone shares something with you", shown.shared) { setToggle(shown.copy(shared = it)) }
-    SwitchRow("Families", "Invitations, and people waiting to join your family", shown.family) { setToggle(shown.copy(family = it)) }
+    SwitchRow("On this phone", phone, enabled = !busy) { setPhone(it) }
+    SwitchRow("Shared with you", shown.shared) { setToggle(shown.copy(shared = it)) }
+    SwitchRow("Family invitations and requests", shown.family) { setToggle(shown.copy(family = it)) }
     problem?.let {
         Text(it, style = MaterialTheme.typography.bodySmall, color = alpine.danger, modifier = Modifier.padding(horizontal = AlpineSpace.S4))
     }
@@ -158,7 +158,7 @@ private fun words(error: Throwable): String = when (error) {
 }
 
 @Composable
-private fun SwitchRow(title: String, detail: String, checked: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
+private fun SwitchRow(title: String, checked: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
     val alpine = Alpine.colors
     Row(
         Modifier.fillMaxWidth().heightIn(min = 56.dp)
@@ -166,10 +166,8 @@ private fun SwitchRow(title: String, detail: String, checked: Boolean, enabled: 
             .padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(Modifier.weight(1f).padding(end = AlpineSpace.S4)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge, color = alpine.ink)
-            Text(detail, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
-        }
+        // A switch says what it is for in its label, and has no line beneath.
+        Text(title, style = MaterialTheme.typography.bodyLarge, color = alpine.ink, modifier = Modifier.weight(1f).padding(end = AlpineSpace.S4))
         // The row takes the tap; the switch only shows the state.
         Switch(checked = checked, onCheckedChange = null, enabled = enabled)
     }
