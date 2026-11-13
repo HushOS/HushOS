@@ -1,0 +1,25 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_ab6b65535efe6d 256
+apps/android/app/src/main/kotlin/com/hushos/app/data/Passkeys.kt
+  s_566b8e0c4467a4::t_31f6b7ccba6604 50-67
+apps/android/app/src/main/kotlin/com/hushos/app/ui/PasskeySheet.kt
+  s_566b8e0c4467a4::t_aa2443b0be5ab1 15,17,87-91,95-97
+apps/android/app/src/test/kotlin/com/hushos/app/data/PasskeysTest.kt
+  s_566b8e0c4467a4::t_8e9620ac2dc755 79-81,191-232
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f023bacec3ad9ddb8e65c7d1b9afa80a2aa6ef4c",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
