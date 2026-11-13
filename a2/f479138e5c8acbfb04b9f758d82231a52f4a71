@@ -1,0 +1,31 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_6d448bc44d5d63 245
+apps/android/app/src/main/kotlin/com/hushos/app/data/TwoStep.kt
+  s_566b8e0c4467a4::t_a8d21281b61032 349,630-631,638-642,652,683-684
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AccountScreen.kt
+  s_566b8e0c4467a4::t_b46ed18eec1c97 184,187-188,217,491,701-703,723
+apps/android/app/src/main/kotlin/com/hushos/app/ui/NotificationsSection.kt
+  s_566b8e0c4467a4::t_a322aca7ed115c 145-147,161,169-170
+apps/android/app/src/main/kotlin/com/hushos/app/ui/TwoStepScreen.kt
+  s_566b8e0c4467a4::t_452e2e87fb2fbe 376-386,471,508-509,514,517-521,530,535,537,540,587,609,637,765-770,826,829,855,896-897
+apps/android/app/src/test/kotlin/com/hushos/app/data/PasskeysTest.kt
+  s_566b8e0c4467a4::t_a46f52cf461f1a 660-661,680,682,685-687,690-695,700-701
+apps/android/app/src/test/kotlin/com/hushos/app/data/TwoStepTest.kt
+  s_566b8e0c4467a4::t_0c5e4aa994826c 814-816,868,871-872
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a2f479138e5c8acbfb04b9f758d82231a52f4a71",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
