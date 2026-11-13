@@ -16,6 +16,7 @@ import {
 } from '@hushos/crypto/two-step/server';
 import { authRepository, twoStepRepository } from '@hushos/db';
 import type {
+    DeviceKind,
     TwoStepDefaultKind,
     TwoStepFactorKind,
     TwoStepMethod,
@@ -41,9 +42,10 @@ import {
 /*
  * Two-step sign-in, the server's rule (docs/two-step-design.md). After the password, an
  * account that has the step on gets no session, no cookie and no envelope until the step
- * passes: a passkey or security key, a code from an authenticator app, a backup code, or a
- * signature made with the recovery phrase. The same step is asked before a security change, account deletion and any
- * change to the step itself.
+ * passes: a passkey or security key, a code from an authenticator app, an approval from another
+ * of the account's devices, a backup code, or a signature made with the recovery phrase. The
+ * same step is asked before a security change, account deletion and any change to the step
+ * itself.
  *
  * The repository (`twoStepRepository`) holds the lines that must not depend on this module:
  * codes and tokens are used once, and what an answer spends commits with what it authorises.
@@ -71,7 +73,9 @@ export type StepAnswer =
     | { kind: 'totp'; code: string }
     | { kind: 'backup'; code: string }
     | { kind: 'phrase'; signature: string }
-    | { kind: 'webauthn'; response: unknown };
+    | { kind: 'webauthn'; response: unknown }
+    /* The request another device approved (docs/two-step-design.md 12). */
+    | { kind: 'device'; requestId: string };
 export type StepInput = { token: string; proof: StepAnswer };
 
 /* What a client is told when it must answer a step: nothing a stranger to the password sees. */
@@ -376,7 +380,9 @@ const refusals = {
                   ? 'That backup code didn’t work. Each code works once.'
                   : method === 'webauthn'
                     ? 'That passkey or security key didn’t work. Try again, or use another way.'
-                    : 'That recovery phrase didn’t work. Check each word and try again.';
+                    : method === 'device'
+                      ? 'Your other device didn’t approve this. Try again, or use another way.'
+                      : 'That recovery phrase didn’t work. Check each word and try again.';
         return new AuthError(message, flow === 'sign-in' ? 401 : 403, { code: 'step-wrong' });
     },
     expired: (flow: Flow) =>
@@ -400,6 +406,8 @@ const refusals = {
             { code: 'step-limited' },
         ),
     required: () => new AuthError('This needs your second step.', 403, { code: 'two-step' }),
+    /* The other device has not answered yet: nothing was looked at, and nothing is counted. */
+    pending: () => new AuthError('Waiting for your other device.', 409, { code: 'step-pending' }),
 };
 
 /* The 15-minute budget a code is charged to: the device's own, or the account's for sign-ins that proved none. */
@@ -442,6 +450,9 @@ async function rightAnswer(
     proof: StepAnswer,
 ): Promise<(twoStepRepository.StepSpend & { freshPhrase?: boolean }) | 'counter' | null> {
     const { userId } = attempt;
+    // Whether the request is this token's, for its purpose, and approved by a device that may
+    // is the repository's to say, under the account's lock, when the answer is spent.
+    if (proof.kind === 'device') return { method: 'device', requestId: proof.requestId };
     if (proof.kind === 'webauthn') {
         // The challenge is this token's own: an assertion made for another token signs another.
         if (!attempt.webauthnChallenge) return null;
@@ -563,6 +574,9 @@ async function checkAnswer(input: {
     const { token, proof } = input.step;
     if (!TOKEN_PATTERN.test(token)) throw refusals.expired(flow);
     const tokenHash = hash(token);
+    // Another device's approval is not a guess: before one exists there is nothing to check,
+    // so no slot is taken and nothing is counted (docs/two-step-design.md 12).
+    if (proof.kind === 'device') await requireApproved(tokenHash, proof.requestId, flow);
     const taken = await twoStepRepository.takeStepAnswer({
         tokenHash,
         purpose: input.purpose,
@@ -572,9 +586,12 @@ async function checkAnswer(input: {
     if (taken.status !== 'ok')
         throw taken.status === 'frozen' ? refusals.frozen() : refusals.expired(flow);
     const { attempt } = taken;
-    // Only what can be guessed has a budget: a key and the phrase are never refused for a spent one.
-    const bucket =
-        proof.kind === 'phrase' || proof.kind === 'webauthn' ? null : codeBucket(attempt);
+    // Answered another way: a request to another device that this token still had open ends.
+    if (proof.kind !== 'device')
+        await quietly('answered', () => twoStepRepository.endRequestsOfToken(attempt));
+    // Only what can be guessed has a budget: a key, another device and the phrase are never
+    // refused for a spent one.
+    const bucket = proof.kind === 'totp' || proof.kind === 'backup' ? codeBucket(attempt) : null;
     if (bucket && !(await authRepository.consumeRateLimit(bucket, CODE_BUDGET, CODE_BUDGET_MS))) {
         // Refused unchecked, so the slot goes back: the refusal says the phrase still works,
         // and on a token's last slot it would not if this one stayed taken.
@@ -614,6 +631,20 @@ async function checkAnswer(input: {
         spent: null,
     };
     return checked;
+}
+
+/*
+ * A device answer is looked at only once another device has approved its request. Until then
+ * it is `step-pending`, which takes no slot and counts nothing; a request that ended without an
+ * approval (denied, a wrong code, replaced) is refused as it stands, and was counted when it
+ * ended; a request that is not this token's is no answer at all.
+ */
+async function requireApproved(tokenHash: Buffer, requestId: string, flow: Flow) {
+    if (!(await twoStepRepository.getStepAttempt(tokenHash))) throw refusals.expired(flow);
+    const request = await twoStepRepository.getDeviceRequest({ tokenHash, requestId });
+    if (request?.state === 'approved') return;
+    if (request && request.state !== 'ended') throw refusals.pending();
+    throw refusals.wrong(flow, 'device', false);
 }
 
 /*
@@ -718,8 +749,8 @@ export async function beforeSpending<T>(checked: Checked | null, run: () => Prom
 /* The step at sign-in                                                        */
 /* ------------------------------------------------------------------------- */
 
-/* The kinds of factor this server can check an answer of. Approving on another device is not built yet. */
-const ANSWERABLE: ReadonlySet<TwoStepDefaultKind> = new Set(['webauthn', 'totp']);
+/* The kinds of factor this server can check an answer of. */
+const ANSWERABLE: ReadonlySet<TwoStepDefaultKind> = new Set(['webauthn', 'totp', 'device']);
 /* The kinds every client that answers a step can answer; the others it must name. */
 const EVERY_CLIENT: ReadonlySet<TwoStepDefaultKind> = new Set(['totp']);
 
@@ -728,7 +759,9 @@ const EVERY_CLIENT: ReadonlySet<TwoStepDefaultKind> = new Set(['totp']);
  * account's kinds of method, default first, then a backup code while any is left, then the
  * phrase.
  * - A kind is listed only when this sign-in can use it: the app is left out while it is frozen
- *   for the token, a key only when the token carries a challenge for it.
+ *   for the token, a key only when the token carries a challenge for it, another device only
+ *   when one could approve this token (never the device asking; for a change, only between
+ *   devices a week old).
  * - And only when the client can answer it: every client answers the app's code, a backup
  *   code and the phrase; anything else it must have named (`names`). An account always has
  *   backup codes and a phrase, so no client is locked out.
@@ -754,13 +787,17 @@ async function challenge(
         status.methods.map((method) => method.kind),
         status.defaultKind,
     );
+    const another =
+        attempt !== null && order.includes('device')
+            ? await twoStepRepository.deviceStepUsable(attempt)
+            : false;
     const usable = (kind: TwoStepDefaultKind) =>
         ANSWERABLE.has(kind) &&
         (kind === 'totp'
             ? !attempt?.totpFrozen
             : kind === 'webauthn'
               ? keys.length > 0 && Boolean(attempt?.webauthnChallenge)
-              : false);
+              : another);
     const answers = (kind: TwoStepDefaultKind) => EVERY_CLIENT.has(kind) || named.has(kind);
     const methods: TwoStepMethod[] = order.filter(
         (kind): kind is TwoStepFactorKind => usable(kind) && answers(kind),
@@ -837,6 +874,7 @@ export async function startLoginStep(input: {
 const SIGNED_IN_WITH = {
     webauthn: 'Your password and a passkey or security key',
     totp: 'Your password and an authenticator code',
+    device: 'Your password and another of your devices',
     backup: 'Your password and a backup code',
     phrase: 'Your password and your recovery phrase',
 } as const;
@@ -891,7 +929,8 @@ export async function finishLoginStep(input: StepInput) {
             encryptedKey: key.encryptedKey.toString('base64url'),
         },
         device: { id: device.id, attached: device.attached, registered: device.registered },
-        newDevice: device.created === 'password',
+        // Every new device but the one the account was made on, however its step was passed.
+        newDevice: device.created === 'password' || device.created === 'device',
         signedInWith: SIGNED_IN_WITH[checked.method],
         sessionToken,
     };
@@ -1009,7 +1048,7 @@ const encodeMethod = (method: Method) => ({
  */
 export async function getTwoStep(sessionToken: string | null, names?: ClientMethods) {
     requireEnabled();
-    const { user } = await requireSession(sessionToken, 'Sign in to see two-step sign-in.');
+    const { user, token } = await requireSession(sessionToken, 'Sign in to see two-step sign-in.');
     const { defaultKind, ...status } = await twoStepRepository.getTwoStep(user.id);
     const named = new Set(names ?? []);
     return {
@@ -1018,6 +1057,16 @@ export async function getTwoStep(sessionToken: string | null, names?: ClientMeth
             .filter((method) => EVERY_CLIENT.has(method.kind) || named.has(method.kind))
             .map(encodeMethod),
         ...(names ? { defaultKind } : {}),
+        // Whether this device could turn on Approve on another device now: it holds a device
+        // key and another device could approve it. Only said to a client that knows the method.
+        ...(named.has('device')
+            ? {
+                  otherDevice: await twoStepRepository.canAddDeviceStep({
+                      userId: user.id,
+                      sessionTokenHash: hash(token),
+                  }),
+              }
+            : {}),
     };
 }
 
@@ -1247,7 +1296,11 @@ export async function removeTwoStepMethod(
         await record({ userId: user.id, kind: 'method-removed', method: removed.kind });
         notice(
             user.id,
-            removed.kind === 'webauthn' ? 'two-step-key-removed' : 'two-step-app-removed',
+            removed.kind === 'webauthn'
+                ? 'two-step-key-removed'
+                : removed.kind === 'device'
+                  ? 'two-step-device-removed'
+                  : 'two-step-app-removed',
         );
         // The default went with the last method of its kind: the log says what comes first now.
         if (removed.defaultKind) await recordDefault(user.id, removed.defaultKind);
@@ -1256,9 +1309,9 @@ export async function removeTwoStepMethod(
     return { removed: true, on: before.on && !removed.turnedOff };
 }
 
-/* A line of the log for the default moving. `device` has no factor yet, and so is never the kind here. */
+/* A line of the log for the default moving, with the kind it moved to. */
 async function recordDefault(userId: string, kind: TwoStepDefaultKind) {
-    if (kind !== 'device') await record({ userId, kind: 'default-changed', method: kind });
+    await record({ userId, kind: 'default-changed', method: kind });
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1452,10 +1505,7 @@ export async function renameTwoStepMethod(
  * changes only an order, so it asks for no password; but only a session that passed the step
  * itself may, and the change is a line in the log.
  */
-export async function setTwoStepDefault(
-    sessionToken: string | null,
-    kind: Exclude<TwoStepDefaultKind, 'device'>,
-) {
+export async function setTwoStepDefault(sessionToken: string | null, kind: TwoStepDefaultKind) {
     requireEnabled();
     const { user, token } = await requireSession(
         sessionToken,
@@ -1520,4 +1570,441 @@ export async function listSecurityEvents(sessionToken: string | null) {
     return {
         events: events.map((event) => ({ ...event, createdAt: event.createdAt.toISOString() })),
     };
+}
+
+/* ------------------------------------------------------------------------- */
+/* Approving on another device                                                */
+/* ------------------------------------------------------------------------- */
+
+/*
+ * Approve on another device, as the step (docs/two-step-design.md 12). The step token is the
+ * request's bearer: the device that holds it asks, polls and reveals with it, and answers the
+ * step with `{ kind: 'device', requestId }` once another device has approved. The approving
+ * device works from its own session. The repository holds every line that decides who may
+ * approve what; this module words the refusals, counts what was denied or left unanswered as
+ * the failed step it is, and pings the account's devices.
+ */
+
+const B64_32 = /^[A-Za-z0-9_-]{43}$/;
+const B64_64 = /^[A-Za-z0-9_-]{86}$/;
+const bytes32 = (value: string, what: string) => {
+    if (!B64_32.test(value)) throw new AuthError(`That is not ${what}.`, 400);
+    return Buffer.from(value, 'base64url');
+};
+
+/* A token that cannot pass: 403 from a signed-in session, which no client reads as signed out. */
+const requestOver = (signedIn: boolean) =>
+    new AuthError(
+        signedIn
+            ? 'This confirmation timed out. Start again.'
+            : 'This sign-in timed out. Enter your password again.',
+        signedIn ? 403 : 401,
+        { code: 'step-expired' },
+    );
+
+async function limitApprovals(key: string, limit: number) {
+    if (
+        !(await authRepository.consumeRateLimit(
+            hash(`auth:two-step:approvals:${key}`),
+            limit,
+            15 * 60_000,
+        ))
+    )
+        throw new AuthError('Too many attempts. Please try again in 15 minutes.', 429);
+}
+
+/*
+ * A request that was counted as a failed step (docs/two-step-design.md 12): a line in the log,
+ * up to the hour's ten, and the notice a wrong code would set off, from the fifth in a row and
+ * once an hour. **This wasn't me** sends that notice at once: the owner just said someone else
+ * has their password. Only a device that may approve can say it, so nobody can flood with it.
+ */
+async function afterCounted(counted: twoStepRepository.CountedRequest) {
+    const { userId } = counted;
+    await quietly('failed-request', async () => {
+        if (
+            await authRepository.consumeRateLimit(
+                hash(`auth:two-step:failed-log:${userId}`),
+                FAILED_LINES_AN_HOUR,
+                60 * 60_000,
+            )
+        )
+            await record({
+                userId,
+                kind: 'step-failed',
+                method: 'device',
+                deviceId: counted.deviceId,
+            });
+        const kind = counted.purpose === 'login' ? 'step-failed' : 'change-step-failed';
+        if (counted.reason === 'not-me') notice(userId, kind);
+        else if (
+            counted.notice &&
+            (await authRepository.consumeRateLimit(
+                hash(`auth:two-step:failed-notice:${kind}:${userId}`),
+                1,
+                60 * 60_000,
+            ))
+        )
+            notice(userId, kind);
+        if (counted.froze) {
+            await record({ userId, kind: 'totp-frozen', method: 'totp' });
+            notice(userId, 'totp-frozen');
+        }
+    });
+}
+
+/*
+ * Ends the requests whose time is up and counts the ones a sign-in that proved no device left
+ * unanswered. The worker calls it for every account on its sweep; the routes below call it for
+ * the account they are about to read, so a count never waits for the sweep.
+ */
+export async function settleDeviceApprovals(userId?: string) {
+    const counted = await twoStepRepository.settleDeviceRequests(userId);
+    for (const request of counted) await afterCounted(request);
+    return counted.length;
+}
+
+/*
+ * POST /api/auth/approvals: the device that holds a step token asks another device to approve
+ * it. It sends only its commitment, and what it calls itself when the server does not know it
+ * yet (a new sign-in). Every device of the account is pinged with an event that says nothing;
+ * each asks for what it may answer over its own session.
+ */
+export async function startDeviceApproval(
+    sessionToken: string | null,
+    input: { stepToken: string; commitment: string; kind?: DeviceKind; name?: string },
+) {
+    const signedIn = sessionToken !== null;
+    if (!TOKEN_PATTERN.test(input.stepToken)) throw requestOver(signedIn);
+    const tokenHash = hash(input.stepToken);
+    await limitApprovals(`ask:${tokenHash.toString('hex')}`, 10);
+    let name: string | null = null;
+    try {
+        name = input.name === undefined ? null : normalizeDeviceName(input.name);
+    } catch {
+        // A name that will not do is left out: the approving device then says "a new device".
+    }
+    const made = await twoStepRepository.createDeviceRequest({
+        tokenHash,
+        commitment: bytes32(input.commitment, 'a commitment'),
+        kind: input.kind ?? null,
+        name,
+    });
+    for (const counted of made.counted ?? []) await afterCounted(counted);
+    switch (made.status) {
+        case 'ok':
+            break;
+        case 'gone':
+            throw requestOver(signedIn);
+        case 'limit':
+            throw new AuthError(
+                'Your other devices were asked too many times today. Use another way.',
+                429,
+                { code: 'device-limited' },
+            );
+        case 'busy':
+            throw new AuthError(
+                'Another sign-in is waiting on your other device. Use another way, or try again in a few minutes.',
+                409,
+                { code: 'device-busy' },
+            );
+        default:
+            throw new AuthError(
+                'Your other devices can’t confirm this right now. Use another way.',
+                409,
+                { code: 'device-unavailable' },
+            );
+    }
+    void notify(made.userId, 'approval-request', {}).catch((error: unknown) =>
+        serverLog.error({
+            message: 'Approval prompt push failed.',
+            notifications: {
+                kind: 'approval-request',
+                failure: error instanceof Error ? error.name : typeof error,
+            },
+        }),
+    );
+    return {
+        requestId: made.id,
+        // A sign-in has not been told its account's id yet, and the code covers it.
+        userId: made.userId,
+        expiresAt: made.expiresAt.toISOString(),
+    };
+}
+
+/* What an ended request tells the device that made it: never who ended it, or how. */
+const endedAs = (reason: string | null): 'replaced' | 'over' | 'refused' =>
+    reason === 'replaced' ? 'replaced' : reason === 'expired' ? 'over' : 'refused';
+
+/*
+ * GET /api/auth/approvals/:id, with the step token: where the request stands. The asking
+ * device learns the approving device's fresh key here, and reveals only after.
+ */
+export async function getDeviceApproval(
+    sessionToken: string | null,
+    stepToken: string | null,
+    requestId: string,
+) {
+    const signedIn = sessionToken !== null;
+    if (!stepToken || !TOKEN_PATTERN.test(stepToken)) throw requestOver(signedIn);
+    const tokenHash = hash(stepToken);
+    if (!(await twoStepRepository.getStepAttempt(tokenHash))) throw requestOver(signedIn);
+    const request = await twoStepRepository.getDeviceRequest({ tokenHash, requestId });
+    if (!request) throw new AuthError('This request is over. Start again.', 404);
+    return {
+        state: request.state,
+        ...(request.approverKey && request.state !== 'ended'
+            ? { approverKey: request.approverKey.toString('base64url') }
+            : {}),
+        ...(request.state === 'ended' ? { ended: endedAs(request.endedReason) } : {}),
+    };
+}
+
+/*
+ * POST /api/auth/approvals/:id/reveal: the asking device shows the key and the nonce it
+ * committed to, once, and only after an approving device opened the request.
+ */
+export async function revealDeviceApproval(
+    sessionToken: string | null,
+    requestId: string,
+    input: { stepToken: string; deviceSigningKey: string; nonce: string },
+) {
+    const signedIn = sessionToken !== null;
+    if (!TOKEN_PATTERN.test(input.stepToken)) throw requestOver(signedIn);
+    const tokenHash = hash(input.stepToken);
+    await limitApprovals(`reveal:${tokenHash.toString('hex')}`, 20);
+    const revealed = await twoStepRepository.revealDeviceRequest({
+        tokenHash,
+        requestId,
+        deviceKey: bytes32(input.deviceSigningKey, 'a device key'),
+        nonce: bytes32(input.nonce, 'a nonce'),
+    });
+    switch (revealed.status) {
+        case 'ok':
+            return { revealed: true as const };
+        case 'gone':
+            throw requestOver(signedIn);
+        case 'state':
+            throw new AuthError('This request can’t be revealed now.', 409);
+        default:
+            throw new AuthError('This request didn’t match what this device first sent.', 400, {
+                code: 'device-mismatch',
+            });
+    }
+}
+
+async function requireApprover(sessionToken: string | null) {
+    const { user, token } = await requireSession(sessionToken, 'Sign in to answer this.');
+    const sessionTokenHash = hash(token);
+    await limitApprovals(`answer:${sessionTokenHash.toString('hex')}`, 120);
+    return { user, sessionTokenHash };
+}
+
+const approvalOver = () => new AuthError('This request is over.', 404, { code: 'approval-over' });
+
+/*
+ * GET /api/auth/approvals: the requests this device may answer now. For each, what the code
+ * and the statement cover (the purpose, the token's hash, the commitment), what the asking
+ * device is (as the server knows it, or in its own words for one it does not), and, once this
+ * device opened it, what was revealed. Nothing for a device that may approve nothing.
+ */
+export async function listDeviceApprovals(sessionToken: string | null) {
+    const { user, token } = await requireSession(sessionToken, 'Sign in to answer this.');
+    await quietly('settle', () => settleDeviceApprovals(user.id));
+    const prompts = await twoStepRepository.listApprovalPrompts(hash(token));
+    return {
+        userId: user.id,
+        approvals: prompts.map((prompt) => ({
+            id: prompt.id,
+            purpose: prompt.purpose,
+            class: prompt.class,
+            device: prompt.device,
+            createdAt: prompt.createdAt.toISOString(),
+            expiresAt: prompt.expiresAt.toISOString(),
+            tokenDigest: prompt.tokenDigest.toString('base64url'),
+            commitment: prompt.commitment.toString('base64url'),
+            ...(prompt.opened
+                ? {
+                      approverKey: prompt.opened.approverKey.toString('base64url'),
+                      ...(prompt.opened.reveal
+                          ? {
+                                reveal: {
+                                    deviceSigningKey:
+                                        prompt.opened.reveal.deviceKey.toString('base64url'),
+                                    nonce: prompt.opened.reveal.nonce.toString('base64url'),
+                                },
+                            }
+                          : {}),
+                  }
+                : {}),
+        })),
+    };
+}
+
+/* POST /api/auth/approvals/:id/open: the first approving device posts its fresh key. */
+export async function openDeviceApproval(
+    sessionToken: string | null,
+    requestId: string,
+    input: { ephemeralKey: string },
+) {
+    const { sessionTokenHash } = await requireApprover(sessionToken);
+    const opened = await twoStepRepository.openDeviceRequest({
+        sessionTokenHash,
+        requestId,
+        approverKey: bytes32(input.ephemeralKey, 'a key'),
+    });
+    if (opened.status === 'taken')
+        throw new AuthError('Another of your devices is answering this.', 409, {
+            code: 'approval-taken',
+        });
+    if (opened.status !== 'ok') throw approvalOver();
+    return { approverKey: opened.approverKey.toString('base64url') };
+}
+
+/* POST /api/auth/approvals/:id/approve: the approving device's signature over its statement. */
+export async function approveDeviceApproval(
+    sessionToken: string | null,
+    requestId: string,
+    input: { signature: string },
+) {
+    const { sessionTokenHash } = await requireApprover(sessionToken);
+    if (!B64_64.test(input.signature)) throw new AuthError('That is not a signature.', 400);
+    const approved = await twoStepRepository.approveDeviceRequest({
+        sessionTokenHash,
+        requestId,
+        signature: Buffer.from(input.signature, 'base64url'),
+    });
+    switch (approved.status) {
+        case 'ok':
+            return { approved: true as const };
+        case 'state':
+            throw new AuthError('The other device hasn’t shown its code yet.', 409);
+        case 'signature':
+            throw new AuthError('This device couldn’t approve that. Start again.', 400, {
+                code: 'approval-refused',
+            });
+        default:
+            throw approvalOver();
+    }
+}
+
+/*
+ * POST /api/auth/approvals/:id/deny: Deny, a code that did not match, This wasn't me, or a
+ * reveal that was not what was committed to. The first three are a failed step.
+ */
+export async function denyDeviceApproval(
+    sessionToken: string | null,
+    requestId: string,
+    input: { reason: 'denied' | 'wrong-code' | 'not-me' | 'mismatch' },
+) {
+    const { sessionTokenHash } = await requireApprover(sessionToken);
+    const denied = await twoStepRepository.denyDeviceRequest({
+        sessionTokenHash,
+        requestId,
+        reason: input.reason,
+    });
+    if (denied.status !== 'ok') throw approvalOver();
+    if (denied.counted) await afterCounted(denied.counted);
+    return { ended: true as const };
+}
+
+/*
+ * Starts turning on Approve on another device: the password again and, once the step is on, the
+ * step. Answers the pending method and the step token its one confirming approval runs from:
+ * this device then asks (`startDeviceApproval`) and another device approves.
+ */
+export async function startDeviceEnrolment(sessionToken: string | null, input: TwoStepChange) {
+    const { user, token } = await requireChange(sessionToken, input);
+    await requireRecoveryKey(user.id);
+    const checked = await checkChangeStep({
+        userId: user.id,
+        sessionToken: token,
+        purpose: 'two-step',
+        step: input.twoStep,
+    });
+    const stepToken = randomToken();
+    const expiresAt = new Date(Date.now() + STEP_TOKEN_MS);
+    const started = await beforeSpending(checked, () =>
+        twoStepRepository.startDeviceFactor({
+            userId: user.id,
+            sessionTokenHash: hash(token),
+            credentialVersion: user.credentialVersion,
+            tokenHash: hash(stepToken),
+            expiresAt,
+            step: checked ? { sessionTokenHash: hash(token), ...checked.proof } : undefined,
+        }),
+    );
+    await settleChangeStep(checked, started, started.status === 'ok');
+    switch (started.status) {
+        case 'ok':
+            break;
+        case 'exists':
+            throw new AuthError('Approve on another device is already on.', 409, {
+                code: 'exists',
+            });
+        case 'unavailable':
+            throw new AuthError(
+                'Sign in to HushOS on another device first, then turn this on.',
+                409,
+                { code: 'device-unavailable' },
+            );
+        default:
+            throw new AuthError('Sign in to change two-step sign-in.', 401);
+    }
+    return { id: started.id, token: stepToken, expiresAt: expiresAt.toISOString() };
+}
+
+/*
+ * Confirms the pending method with the approval another device gave. The account's first
+ * method turns the step on: its backup codes are made here and returned once. Before any
+ * device approved it answers `step-pending`, and nothing changes.
+ */
+export async function confirmDeviceEnrolment(
+    sessionToken: string | null,
+    factorId: string,
+    input: { token: string; requestId: string },
+) {
+    requireEnabled();
+    const { user, token } = await requireSession(
+        sessionToken,
+        'Sign in to change two-step sign-in.',
+    );
+    await limitApprovals(`confirm:${hash(token).toString('hex')}`, 120);
+    await requireRecoveryKey(user.id);
+    if (!TOKEN_PATTERN.test(input.token)) throw setupOver();
+    const confirm = (backupCodes?: { keyId: Buffer; hashes: Buffer[] }) =>
+        twoStepRepository.confirmDeviceFactor({
+            userId: user.id,
+            factorId,
+            sessionTokenHash: hash(token),
+            credentialVersion: user.credentialVersion,
+            tokenHash: hash(input.token),
+            requestId: input.requestId,
+            backupCodes,
+        });
+    // Asked without codes first: making ten slow hashes is not worth it until a device approved.
+    let fresh: Awaited<ReturnType<typeof freshBackupCodes>> | null = null;
+    let result = await confirm();
+    if (result.status === 'codes-required') {
+        fresh = await freshBackupCodes(user.id);
+        result = await confirm(fresh.set);
+    }
+    switch (result.status) {
+        case 'ok':
+            break;
+        case 'pending':
+            throw refusals.pending();
+        case 'session':
+            throw new AuthError('Sign in to change two-step sign-in.', 401);
+        default:
+            throw setupOver();
+    }
+    if (result.turnedOn) {
+        await record({ userId: user.id, kind: 'two-step-on', method: 'device' });
+        notice(user.id, 'two-step-on', { method: 'Another of your devices' });
+    } else {
+        await record({ userId: user.id, kind: 'method-added', method: 'device' });
+        notice(user.id, 'two-step-device-added');
+    }
+    return result.turnedOn && fresh ? { backupCodes: fresh.codes } : { added: true as const };
 }

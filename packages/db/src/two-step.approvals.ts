@@ -989,3 +989,19 @@ export async function endRequestsOfRemovedMethod(tx: Tx, userId: string) {
             and(eq(twoStepAttempts.userId, userId), eq(twoStepAttempts.purpose, 'device-approval')),
         );
 }
+
+/*
+ * The token was answered another way (a code, a key, the phrase): its open request ends there,
+ * whatever that answer turns out to be. It is not a failed step of its own: the answer is
+ * counted, or not, as what it is.
+ */
+export async function endRequestsOfToken(attempt: StepAttempt) {
+    await db.transaction(async (tx) => {
+        if (!(await lockAccount(tx, attempt.userId))) return;
+        await endDeviceRequests(tx, {
+            userId: attempt.userId,
+            tokenHash: attempt.tokenHash,
+            reason: 'passed',
+        });
+    });
+}

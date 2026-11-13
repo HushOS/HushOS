@@ -25,13 +25,19 @@ export type LoginReply =
     | { kind: 'lost' };
 
 /* What this client can answer a step with, when the reply carries what each needs. */
-const METHODS: ReadonlySet<unknown> = new Set<StepMethod>(['webauthn', 'totp', 'backup', 'phrase']);
+const METHODS: ReadonlySet<unknown> = new Set<StepMethod>([
+    'webauthn',
+    'totp',
+    'device',
+    'backup',
+    'phrase',
+]);
 /*
  * The kinds of method this client names to the server beyond the ones every client answers
  * (docs/two-step-design.md 12): in `twoStepMethods`, when it can answer them here, and in
  * `?methods=`, to list them in settings.
  */
-export const NAMED_STEP_METHODS: readonly NamedStepMethod[] = ['webauthn'];
+export const NAMED_STEP_METHODS: readonly NamedStepMethod[] = ['webauthn', 'device'];
 const record = (value: unknown): value is Record<string, unknown> =>
     typeof value === 'object' && value !== null && !Array.isArray(value);
 const text = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
@@ -93,7 +99,7 @@ function challenge(value: unknown): StepChallenge | null {
             ? value.expiresAt.toISOString()
             : value.expiresAt;
     if (!text(expiresAt) || Number.isNaN(Date.parse(expiresAt))) return null;
-    // A method this client does not know (another device, later) is one it cannot answer.
+    // A method this client does not know is one it cannot answer.
     // The order is the server's: the account's usual way comes first (design 12).
     const [first] = value.methods as unknown[];
     const listed = [...new Set(value.methods as unknown[])].filter((method): method is StepMethod =>
@@ -202,7 +208,11 @@ function time(value: unknown) {
 }
 /* A method as the settings list shows it. */
 function method(value: unknown): TwoStepMethod | null {
-    if (!record(value) || !text(value.id) || (value.kind !== 'webauthn' && value.kind !== 'totp'))
+    if (
+        !record(value) ||
+        !text(value.id) ||
+        (value.kind !== 'webauthn' && value.kind !== 'totp' && value.kind !== 'device')
+    )
         return null;
     const createdAt = time(value.createdAt);
     if (!createdAt) return null;

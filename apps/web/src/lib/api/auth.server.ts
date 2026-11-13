@@ -8,6 +8,7 @@ import { authRepository, growthRepository } from '@hushos/db';
 import { intentSchema } from '@/lib/signup-intent';
 import { useLogger } from '@/lib/logging.server';
 import {
+    bytes32Schema,
     clientMethodsSchema,
     describeFailure,
     deviceRemovalSchema,
@@ -32,6 +33,15 @@ import {
     workspaceSetupSchema,
 } from '@/lib/api/shared.server';
 import {
+    approvalApprovedResponse,
+    approvalEndedResponse,
+    approvalOpenedResponse,
+    approvalRevealedResponse,
+    approvalStartedResponse,
+    approvalStatusResponse,
+    approvalsResponse,
+    deviceConfirmedResponse,
+    deviceEnrolmentResponse,
     accountSetupResponse,
     authUserResponse,
     backupCodesResponse,
@@ -471,7 +481,9 @@ export const authApi = new Elysia()
     .put(
         '/auth/two-step/default',
         {
-            body: t.Object({ kind: t.Union([t.Literal('webauthn'), t.Literal('totp')]) }),
+            body: t.Object({
+                kind: t.Union([t.Literal('webauthn'), t.Literal('totp'), t.Literal('device')]),
+            }),
             response: { 200: defaultKindResponse },
         },
         ({ request, sessionToken, body }) => {
@@ -509,6 +521,125 @@ export const authApi = new Elysia()
         ({ request, sessionToken, body }) => {
             guardAuthMutation(request);
             return auth.makeBackupCodes(sessionToken, body);
+        },
+    )
+    // Approve on another device (docs/two-step-design.md 12). Turning it on: the password
+    // again (and the step, once it is on), then one real approval from another device.
+    .post(
+        '/auth/two-step/device',
+        { body: twoStepChangeSchema, response: { 200: deviceEnrolmentResponse } },
+        ({ request, sessionToken, body }) => {
+            guardAuthMutation(request);
+            return auth.startDeviceEnrolment(sessionToken, body);
+        },
+    )
+    .post(
+        '/auth/two-step/device/:id/confirm',
+        {
+            params: t.Object({ id: uuidSchema }),
+            body: t.Object({ token: tokenSchema, requestId: uuidSchema }),
+            response: { 200: deviceConfirmedResponse },
+        },
+        ({ request, sessionToken, params, body }) => {
+            guardAuthMutation(request);
+            return auth.confirmDeviceEnrolment(sessionToken, params.id, body);
+        },
+    )
+    // The request itself. The device asking holds a step token and no session (a sign-in) or
+    // both (a change): the token is its bearer, in the body, or in a header where it only reads.
+    .post(
+        '/auth/approvals',
+        {
+            body: t.Object({
+                stepToken: tokenSchema,
+                commitment: bytes32Schema,
+                // What the device calls itself, for one the server does not know yet.
+                kind: t.Optional(
+                    t.Union([t.Literal('web'), t.Literal('ios'), t.Literal('android')]),
+                ),
+                name: t.Optional(t.String({ minLength: 1, maxLength: 200 })),
+            }),
+            response: { 200: approvalStartedResponse },
+        },
+        ({ request, sessionToken, body }) => {
+            guardAuthMutation(request);
+            return auth.startDeviceApproval(sessionToken, body);
+        },
+    )
+    .get('/auth/approvals', { response: { 200: approvalsResponse } }, ({ sessionToken, set }) => {
+        set.headers['Cache-Control'] = 'no-store';
+        return auth.listDeviceApprovals(sessionToken);
+    })
+    .get(
+        '/auth/approvals/:id',
+        { params: t.Object({ id: uuidSchema }), response: { 200: approvalStatusResponse } },
+        ({ request, sessionToken, params, set }) => {
+            set.headers['Cache-Control'] = 'no-store';
+            return auth.getDeviceApproval(
+                sessionToken,
+                request.headers.get('x-step-token'),
+                params.id,
+            );
+        },
+    )
+    .post(
+        '/auth/approvals/:id/reveal',
+        {
+            params: t.Object({ id: uuidSchema }),
+            body: t.Object({
+                stepToken: tokenSchema,
+                deviceSigningKey: bytes32Schema,
+                nonce: bytes32Schema,
+            }),
+            response: { 200: approvalRevealedResponse },
+        },
+        ({ request, sessionToken, params, body }) => {
+            guardAuthMutation(request);
+            return auth.revealDeviceApproval(sessionToken, params.id, body);
+        },
+    )
+    // The approving device, from its own session.
+    .post(
+        '/auth/approvals/:id/open',
+        {
+            params: t.Object({ id: uuidSchema }),
+            body: t.Object({ ephemeralKey: bytes32Schema }),
+            response: { 200: approvalOpenedResponse },
+        },
+        ({ request, sessionToken, params, body }) => {
+            guardAuthMutation(request);
+            return auth.openDeviceApproval(sessionToken, params.id, body);
+        },
+    )
+    .post(
+        '/auth/approvals/:id/approve',
+        {
+            params: t.Object({ id: uuidSchema }),
+            body: t.Object({ signature: signatureSchema }),
+            response: { 200: approvalApprovedResponse },
+        },
+        ({ request, sessionToken, params, body }) => {
+            guardAuthMutation(request);
+            return auth.approveDeviceApproval(sessionToken, params.id, body);
+        },
+    )
+    .post(
+        '/auth/approvals/:id/deny',
+        {
+            params: t.Object({ id: uuidSchema }),
+            body: t.Object({
+                reason: t.Union([
+                    t.Literal('denied'),
+                    t.Literal('wrong-code'),
+                    t.Literal('not-me'),
+                    t.Literal('mismatch'),
+                ]),
+            }),
+            response: { 200: approvalEndedResponse },
+        },
+        ({ request, sessionToken, params, body }) => {
+            guardAuthMutation(request);
+            return auth.denyDeviceApproval(sessionToken, params.id, body);
         },
     )
     .get(

@@ -843,7 +843,16 @@ export const stepAnswerSchema = t.Object({
             signature: t.String({ minLength: 86, maxLength: 86, pattern: '^[A-Za-z0-9_-]+$' }),
         }),
         t.Object({ kind: t.Literal('webauthn'), response: keyAssertionSchema }),
+        // The request another device approved (docs/two-step-design.md 12).
+        t.Object({ kind: t.Literal('device'), requestId: uuidSchema }),
     ]),
+});
+
+/* 32 bytes, base64url without padding: a commitment, a device key, a nonce, a fresh key. */
+export const bytes32Schema = t.String({
+    minLength: 43,
+    maxLength: 43,
+    pattern: '^[A-Za-z0-9_-]+$',
 });
 
 /*

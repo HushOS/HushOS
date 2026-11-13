@@ -263,6 +263,8 @@ const securitySubjects: Record<SecurityNoticeKind, (when: string) => string> = {
     'two-step-key-added': (when) => `A passkey or security key was added · ${when} · HushOS`,
     'two-step-key-removed': (when) => `A passkey or security key was removed · ${when} · HushOS`,
     'key-counter': (when) => `One of your security keys may have been copied · ${when} · HushOS`,
+    'two-step-device-added': (when) => `Approve on another device is on · ${when} · HushOS`,
+    'two-step-device-removed': (when) => `Approve on another device is off · ${when} · HushOS`,
 };
 
 type SecurityInput = {

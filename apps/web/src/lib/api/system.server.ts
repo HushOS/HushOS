@@ -44,6 +44,35 @@ function reportTwoStepKeys() {
         });
 }
 
+/*
+ * At its readiness checks this process also ends the requests to approve on another device
+ * whose time is up (docs/two-step-design.md 12): one that a sign-in which proved no device left
+ * unanswered is a failed step, with the notice that goes with it, and nobody else may ever
+ * touch that account to find it. Once a minute at most. The worker cannot do it: counting a
+ * failed step sends the account's notice, which is this service's to send.
+ */
+const SETTLE_MS = 60_000;
+let settledAt = Number.NEGATIVE_INFINITY;
+let settling = false;
+function settleDeviceApprovals() {
+    if (settling || performance.now() - settledAt < SETTLE_MS) return;
+    settling = true;
+    void auth
+        .settleDeviceApprovals()
+        .then(() => {
+            settledAt = performance.now();
+        })
+        .catch((error: unknown) =>
+            serverLog.error({
+                message: 'Requests to approve on another device could not be ended.',
+                twoStep: { failure: error instanceof Error ? error.name : typeof error },
+            }),
+        )
+        .finally(() => {
+            settling = false;
+        });
+}
+
 /* Health and readiness (/api/health, /api/ready). */
 export const systemApi = new Elysia()
     .use(requestContext)
@@ -60,6 +89,7 @@ export const systemApi = new Elysia()
             try {
                 await db.execute('select 1');
                 reportTwoStepKeys();
+                settleDeviceApprovals();
                 return { status: 'ok' as const };
             } catch (error) {
                 if (error instanceof Error) log.error(error);
