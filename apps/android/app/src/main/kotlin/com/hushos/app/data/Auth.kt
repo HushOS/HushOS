@@ -36,6 +36,9 @@ class NoRecoveryKey : AuthFailure("This account has no recovery key.")
 /* An account call that couldn't reach the server: offline, told apart by its type (Problems.offline), never by its words. */
 class AuthUnreachable : AuthFailure(Auth.UNREACHABLE)
 
+/* The password did not open what the server holds for the account: told apart by its type where that decides something (a reset's proof). */
+class WrongPassword : AuthFailure(Auth.MISMATCH)
+
 /* The session's device: which one, and whether it has described itself yet. */
 data class SessionDevice(val id: String, val registered: Boolean) {
     companion object {
@@ -274,17 +277,16 @@ object Auth {
         return if (said.isBlank() || said.startsWith("The recovery phrase does not match")) PHRASE_REFUSED else PHRASE_UNCHECKED
     }
 
-    /* Fixed words for a reset whose last step failed, whatever that step said. */
-    fun resetUnfinished(error: AuthFailure): String = if (error is AuthUnreachable) RESET_UNREACHABLE else RESET_UNFINISHED
-
     const val PHRASE_REFUSED = "These words didn’t open your account. Check you used your newest kit."
     const val PHRASE_UNCHECKED = "These words couldn’t be checked. Check you used your newest kit, then try again."
-    const val RESET_UNREACHABLE = "We couldn’t reach HushOS to finish the reset. Try signing in with your new password first: the reset may already have been applied."
-    const val RESET_UNFINISHED = "The reset didn’t finish. Try signing in with your new password first: it may already have been applied."
 
     private class Reply(val body: JSONObject, val cookie: String?, val enrollment: String? = null)
 
-    private fun post(origin: String, path: String, body: JSONObject, cookie: String? = null): Reply {
+    /* A reply as it arrived: the status, the body as text for the core to read, and the cookies if any came. */
+    internal class RawReply(val status: Int, val text: String, val body: JSONObject, val cookie: String?, val enrollment: String?)
+
+    /* Sends and returns whatever came back, any status; throws only when nothing did. */
+    internal fun send(origin: String, path: String, body: JSONObject, cookie: String? = null): RawReply {
         val connection = URL(origin + path).openConnection() as HttpURLConnection
         connection.requestMethod = "POST"
         connection.doOutput = true
@@ -305,15 +307,20 @@ object Auth {
             throw AuthUnreachable()
         }
         val parsed = runCatching { JSONObject(text) }.getOrDefault(JSONObject())
-        if (status !in 200..299) throw AuthFailure(Problems.signIn(status, parsed.optString("message")))
         var token: String? = null
         var enrollment: String? = null
         for (header in connection.headerFields["Set-Cookie"].orEmpty()) {
             val pair = header.split(";")[0].trim()
-            if (pair.startsWith("hushos-session=") || pair.startsWith("__Host-hushos-session=")) token = pair.substringAfter("=")
+            if (pair.startsWith("hushos-session=") || pair.startsWith("__Host-hushos-session=")) token = pair.substringAfter("=").ifEmpty { null }
             if (pair.startsWith("hushos-enrollment=") || pair.startsWith("__Host-hushos-enrollment=")) enrollment = pair.substringAfter("=").ifEmpty { null }
         }
-        return Reply(parsed, token, enrollment)
+        return RawReply(status, text, parsed, token, enrollment)
+    }
+
+    private fun post(origin: String, path: String, body: JSONObject, cookie: String? = null): Reply {
+        val reply = send(origin, path, body, cookie)
+        if (reply.status !in 200..299) throw AuthFailure(Problems.signIn(reply.status, reply.body.optString("message")))
+        return Reply(reply.body, reply.cookie, reply.enrollment)
     }
 
     /*
@@ -335,11 +342,47 @@ object Auth {
         return RecoveryEnrollment(enrollment.getString("email"), reply.enrollment ?: throw AuthFailure("This link didn’t work."))
     }
 
-    /* Resets the password with the phrase; returns the new phrase to save. The caller signs in with the new password. */
-    /* The account a recovery opened, and its new phrase. */
-    data class Recovered(val userId: String, val phrase: String)
+    /*
+     * The account a recovery opened, and its new phrase with the recovery key for the kit file. `user` is
+     * null when the sign-in after the reset didn't happen: the words are shown all the same, and the person
+     * signs in after them. `certain` is false when nothing says the reset was made (its reply was lost and
+     * so was the sign-in's): the words are shown, and said to be kept beside the old ones.
+     */
+    class Recovered(val userId: String, val email: String, val user: SessionUser?, val phrase: String, val recovery: JSONObject, val recoveryVersion: Long, val certain: Boolean)
 
-    fun recover(origin: String, enrollment: RecoveryEnrollment, phrase: String, password: String): Recovered {
+    /*
+     * Resets the password with the phrase, then signs in with the new one. Once `recover/finish` has been
+     * sent and not refused the new phrase is returned whatever happens next (Reset): the old one may be
+     * dead already, and the new one exists only here. `sent` runs then, before any session is stored, with
+     * the account's id: the caller marks the words as waiting.
+     */
+    fun recover(context: Context, origin: String, enrollment: RecoveryEnrollment, phrase: String, password: String, sent: (String) -> Unit = {}): Recovered {
+        val made = resetNow(origin, enrollment, phrase, password)
+        // Refused: nothing changed, and nothing is tried with the new password. Otherwise the sign-in is tried
+        // (twice at most). When the reset's own reply was lost, that sign-in is also what says whether it was made.
+        var proved: Reset.Proved = Reset.Proved.Unknown
+        if (made.sent !is Reset.Sent.Refused) {
+            sent(made.userId)
+            // Nothing after the reset's request may throw but an answered refusal: the new phrase may be the account's.
+            proved = runCatching { Reset.prove { proveReset(context, origin, enrollment.email, password, made) } }.getOrDefault(Reset.Proved.Unknown)
+        }
+        return when (val settled = Reset.settle(made.sent, proved)) {
+            is Reset.Settled.Refused -> throw AuthFailure(Reset.refusal(settled.said, StepWords.NOT_RESET))
+            is Reset.Settled.Show -> Recovered(made.userId, enrollment.email, settled.user, made.phrase, made.recovery, made.recovery.getLong("recoveryVersion"), settled.certain)
+        }
+    }
+
+    /*
+     * A change that replaces the recovery phrase (a reset, a rotation), once its last request has gone out: the new
+     * phrase, what that request answered, and the two salts this change generated (the account envelope's and the
+     * recovery key's), which a later reply carries only if the change was made. `memory`: what this phone remembers
+     * once it is known to have been made (a rotation's new root).
+     */
+    internal class ResetMade(val userId: String, val phrase: String, val recovery: JSONObject, val sent: Reset.Sent, val envelopeSalt: String, val recoverySalt: String,
+        val memory: com.hushos.core.DeviceMemory? = null)
+
+    /* The reset itself, up to and including `recover/finish`, and what that answered. Anything before it that fails is thrown: nothing was changed. */
+    internal fun resetNow(origin: String, enrollment: RecoveryEnrollment, phrase: String, password: String): ResetMade {
         val cookie = (if (origin.startsWith("https:")) "__Host-hushos-enrollment" else "hushos-enrollment") + "=" + enrollment.token
         val registration = opaqueStartRegistration(password)
         val challenge = post(origin, "/api/auth/recover/start", JSONObject().put("registrationRequest", registration.request), cookie).body
@@ -360,19 +403,104 @@ object Auth {
         val next = com.hushos.core.recoveryCreate(userId, accountKey, current.recoveryVersion + 1uL, current.keyVersion)
         val attempt = challenge.getString("attemptToken")
         val signature = com.hushos.core.recoveryResetSign(userId, phrase, current, attempt, credentialVersion, registered.record, sealed, next.envelope)
-        try {
-            post(origin, "/api/auth/recover/finish", JSONObject().put("userId", userId).put("attemptToken", attempt)
+        // Everything the caller needs is made before the request goes: nothing after it may throw.
+        val kit = json(next.envelope)
+        // From here the server may have taken the reset whatever comes back, or nothing does: never thrown, only read.
+        val sent = try {
+            val reply = send(origin, "/api/auth/recover/finish", JSONObject().put("userId", userId).put("attemptToken", attempt)
                 .put("credentialVersion", credentialVersion.toLong()).put("registrationRecord", registered.record)
                 .put("envelope", JSONObject().put("envelopeVersion", sealed.envelopeVersion.toInt()).put("keyVersion", sealed.keyVersion.toLong())
                     .put("credentialVersion", sealed.credentialVersion.toLong()).put("wrappingSalt", sealed.wrappingSalt)
                     .put("wrappingNonce", sealed.wrappingNonce).put("encryptedKey", sealed.encryptedKey))
-                .put("recovery", json(next.envelope)).put("signature", signature), cookie)
-        } catch (error: AuthFailure) {
-            // The server may have committed before the reply was lost: say so, as the web does, in fixed words.
-            android.util.Log.w("HushOS", "recovery finish failed", error)
-            throw AuthFailure(resetUnfinished(error))
+                .put("recovery", kit).put("signature", signature), cookie)
+            Reset.sent(reply.status, reply.body)
+        } catch (error: Exception) {
+            Reset.Sent.Unknown
         }
-        return Recovered(userId, next.phrase)
+        return ResetMade(userId, next.phrase, kit, sent, sealed.wrappingSalt, next.envelope.wrappingSalt)
+    }
+
+    /*
+     * One sign-in with the new password, and what it shows about the change. Signing in is not the evidence:
+     * someone who reset to the password they already had signs in against the unchanged account, and a rotation
+     * keeps the password. What the change made is: the session's envelope carries the wrapping salt this change
+     * generated only if the change was made, and a second step names the recovery key with this change's salt
+     * only then. Salts, not version numbers: "one more than before" is also what someone else's change makes.
+     *
+     * - Made: the session is opened; or the step (docs/two-step-design.md 4, 5) is answered with the phrase
+     *   just made here, which the person has not seen yet, so someone with only their phrase is not asked
+     *   for a method they may have lost. A step that does not pass still shows the change was made.
+     * - Another salt, or the new password refused: the look's session is ended and never stored, and the step
+     *   is not answered, so no wrong answer is counted. Not proof that nothing changed (Reset.settle).
+     * - No reply carries a salt: unknown.
+     */
+    private fun proveReset(context: Context, origin: String, email: String, password: String, made: ResetMade, keepsSession: Boolean = false): Reset.Proved = SessionGuard.signingIn {
+        proved(
+            probe = {
+                when (val met = passwordHalf(context, origin, email, password)) {
+                    is Met.Step -> Probe.Step(met.pending)
+                    is Met.Session -> Probe.Session(
+                        met.reply.body.optJSONObject("envelope")?.optString("wrappingSalt")?.ifEmpty { null },
+                        open = { openSession(context, origin, email, met.exportKey, met.reply) },
+                        end = { met.reply.cookie?.let { endSession(origin, it) } },
+                    )
+                }
+            },
+            answer = { pending, proof -> answerStep(context, pending, proof) },
+            envelopeSalt = made.envelopeSalt, recoverySalt = made.recoverySalt, freshPhrase = made.phrase, keepsSession = keepsSession,
+        )
+    }
+
+    /* What the sign-in with the new password met: a session not yet stored (with the salt its envelope was sealed under), or the step. */
+    internal sealed class Probe {
+        class Session(val envelopeSalt: String?, val open: () -> SessionUser, val end: () -> Unit) : Probe()
+        class Step(val pending: PendingSignIn) : Probe()
+    }
+
+    /* The rule above, over a sign-in and a step's answer the caller supplies, so every way it can end is tested. */
+    /*
+     * `keepsSession` (a rotation): a session on the account as it was is kept, not ended. The person was signed in
+     * with this password a moment ago and still is; they stay in the app, and the words are shown with "keep both".
+     * After a reset it is ended: whoever holds the emailed link and the phrase is not thereby signed in to an
+     * account the reset did not change.
+     */
+    internal fun proved(probe: () -> Probe, answer: (PendingSignIn, com.hushos.core.StepProof) -> SessionUser, envelopeSalt: String, recoverySalt: String, freshPhrase: String,
+        keepsSession: Boolean = false): Reset.Proved {
+        val met = try {
+            probe()
+        } catch (error: WrongPassword) {
+            return Reset.Proved.NotApplied
+        } catch (error: Exception) {
+            // No answer, a limit, or the session's own reply gone missing: nothing carries a salt.
+            return Reset.Proved.Unknown
+        }
+        return when (met) {
+            is Probe.Session -> when (met.envelopeSalt) {
+                envelopeSalt -> runCatching { Reset.Proved.SignedIn(met.open()) }.getOrDefault(Reset.Proved.Applied)
+                // Another envelope: the password signs in because it was the password already. The session was only asked
+                // for to look: ended, never stored. With no salt in the reply at all, nothing is known.
+                else -> when {
+                    met.envelopeSalt != null && keepsSession -> runCatching<Reset.Proved> { Reset.Proved.Unconfirmed(met.open()) }.getOrElse { runCatching { met.end() }; Reset.Proved.NotApplied }
+                    else -> { runCatching { met.end() }; if (met.envelopeSalt == null) Reset.Proved.Unknown else Reset.Proved.NotApplied }
+                }
+            }
+            is Probe.Step -> {
+                val challenge = met.pending.challenge
+                val signing = challenge.phrase ?: return Reset.Proved.Unknown
+                // Another recovery key than the one just made: the new phrase would be a wrong answer, and is not sent.
+                if (signing.wrappingSalt != recoverySalt) return Reset.Proved.NotApplied
+                if (com.hushos.core.StepMethod.PHRASE !in challenge.methods) return Reset.Proved.Applied
+                runCatching {
+                    Reset.Proved.SignedIn(answer(met.pending, com.hushos.core.StepProof.Phrase(com.hushos.core.twoStepPhraseSign(freshPhrase, signing.wrappingSalt, signing.userId, challenge.token))))
+                }.getOrDefault(Reset.Proved.Applied)
+            }
+        }
+    }
+
+    /* Ends a session by its cookie's token alone, touching nothing this phone has stored. Best effort: it runs out by itself otherwise. */
+    private fun endSession(origin: String, token: String) {
+        val cookieName = if (origin.startsWith("https:")) "__Host-hushos-session" else "hushos-session"
+        runCatching { send(origin, "/api/auth/logout", JSONObject(), "$cookieName=$token") }
     }
 
     /*
@@ -420,20 +548,120 @@ object Auth {
         return userId
     }
 
-    /* Under SessionGuard: a removal wipe never runs while a sign-in stores its session, in any screen of the app. */
+    /*
+     * Signs in and returns who signed in, for a caller with no step screen (a new account's first
+     * sign-in): an account that asks for a second step is told to sign in from the app's own screen.
+     */
     fun signIn(context: Context, origin: String, email: String, password: String): SessionUser =
-        SessionGuard.signingIn { signInNow(context, origin, email, password) }
+        when (val result = startSignIn(context, origin, email, password)) {
+            is SignIn.SignedIn -> result.user
+            is SignIn.Step -> throw AuthFailure(StepWords.OPEN_APP)
+        }
 
-    private fun signInNow(context: Context, origin: String, email: String, password: String): SessionUser {
+    /* Where a sign-in stands after the password: signed in, or stopped at the account's second step. */
+    sealed class SignIn {
+        data class SignedIn(val user: SessionUser) : SignIn()
+        class Step(val pending: PendingSignIn) : SignIn()
+    }
+
+    /* Under SessionGuard: a removal wipe never runs while a sign-in stores its session, in any screen of the app. */
+    fun startSignIn(context: Context, origin: String, email: String, password: String): SignIn =
+        SessionGuard.signingIn { startSignInNow(context, origin, email, password) }
+
+    /*
+     * The password's half of a sign-in (docs/two-step-design.md 4). `twoStep: 1` says this build can
+     * answer a second step; an account that has one gets no session, no cookie and no envelope here,
+     * only the step, and what the password opened waits in `PendingSignIn` for the answer. The reply
+     * is read whole by the core: one that is neither the session nor the step is a `LostReply`.
+     */
+    private fun startSignInNow(context: Context, origin: String, email: String, password: String): SignIn =
+        when (val met = passwordHalf(context, origin, email, password)) {
+            is Met.Session -> SignIn.SignedIn(openSession(context, origin, email, met.exportKey, met.reply))
+            is Met.Step -> SignIn.Step(met.pending)
+        }
+
+    /* What the password's half met, with nothing stored yet: the session's reply (whole, with its cookie), or the step. */
+    private sealed class Met {
+        class Session(val reply: RawReply, val exportKey: ByteArray) : Met()
+        class Step(val pending: PendingSignIn) : Met()
+    }
+
+    private fun passwordHalf(context: Context, origin: String, email: String, password: String): Met {
         val start = opaqueStartLogin(password)
         val started = post(origin, "/api/auth/login/start", JSONObject().put("email", email).put("startLoginRequest", start.request)).body
         val attemptToken = started.optString("attemptToken").ifEmpty { throw AuthFailure("HushOS didn’t answer as expected. Try again in a moment.") }
         val loginResponse = started.optString("loginResponse").ifEmpty { throw AuthFailure("HushOS didn’t answer as expected. Try again in a moment.") }
-        val finish = opaqueFinishLogin(password, start.state, loginResponse) ?: throw AuthFailure(MISMATCH)
-        val finishBody = JSONObject().put("attemptToken", attemptToken).put("finishLoginRequest", finish.request)
+        val finish = opaqueFinishLogin(password, start.state, loginResponse) ?: throw WrongPassword()
         // The device key's proof, only for the account it was made for: the same device comes back.
-        deviceProof(Shared.deviceIdentity(context), email, attemptToken)?.let { finishBody.put("device", it) }
-        val finished = post(origin, "/api/auth/login/finish", finishBody)
+        val reply = send(origin, "/api/auth/login/finish", finishBody(attemptToken, finish.request, deviceProof(Shared.deviceIdentity(context), email, attemptToken)))
+        return when (val read = signInReply(reply, StepWords.LOST_SIGN_IN)) {
+            null -> Met.Session(reply, finish.exportKey)
+            else -> Met.Step(PendingSignIn(origin, email, read, finish.exportKey))
+        }
+    }
+
+    /*
+     * A sign-in by a phone that holds the account's newest recovery phrase in memory (after its own rotation
+     * or reset): a second step that names that phrase's recovery key is answered with it, so nobody is sent to
+     * a step they would need those words for. A step that names another key is left for the person, and so is
+     * one whose answer did not come back as a session.
+     */
+    fun signInHolding(context: Context, origin: String, email: String, password: String, phrase: String, recoverySalt: String): SignIn =
+        holding(startSignIn(context, origin, email, password), phrase, recoverySalt) { pending, proof -> answerStep(context, pending, proof) }
+
+    /* `recoverySalt`: the held recovery key's own wrapping salt. The step names it only when that key is the account's. */
+    internal fun holding(taken: SignIn, phrase: String, recoverySalt: String, answer: (PendingSignIn, com.hushos.core.StepProof) -> SessionUser): SignIn {
+        val pending = (taken as? SignIn.Step)?.pending ?: return taken
+        val signing = pending.challenge.phrase ?: return taken
+        if (recoverySalt.isEmpty() || signing.wrappingSalt != recoverySalt || com.hushos.core.StepMethod.PHRASE !in pending.challenge.methods) return taken
+        return runCatching {
+            SignIn.SignedIn(answer(pending, com.hushos.core.StepProof.Phrase(com.hushos.core.twoStepPhraseSign(phrase, signing.wrappingSalt, signing.userId, pending.challenge.token))))
+        }.getOrDefault(taken)
+    }
+
+    /* What `login/finish` is sent. `twoStep: 1` is what lets an account with the step sign in here: without it the server answers `update-required`. */
+    internal fun finishBody(attemptToken: String, finishRequest: String, device: JSONObject?): JSONObject =
+        JSONObject().put("attemptToken", attemptToken).put("finishLoginRequest", finishRequest).put("twoStep", 1).apply { device?.let { put("device", it) } }
+
+    /*
+     * What `login/finish` or `login/two-step` answered, as the core reads it: null for the session,
+     * the step to answer, or a throw. A wrong password and the limiter's 429 are a sign-in's own
+     * refusals, in the server's words as before; a step's refusal is a `StepRefused` with its code; a
+     * reply that is not the server's answer is a `LostReply`, never a sign-in; so is the session's
+     * body without its cookie.
+     */
+    internal fun signInReply(reply: RawReply, lost: String, answering: Boolean = false): com.hushos.core.StepChallenge? =
+        when (val read = com.hushos.core.signInReplyRead(reply.status.toUShort(), reply.text)) {
+            // The session is its body and its cookie: a whole body that lost the cookie on the way hands over nothing.
+            is com.hushos.core.StepReply.Done -> if (reply.cookie == null) throw LostReply(lost) else null
+            // Another step in place of the session is not what the step's own route answers.
+            is com.hushos.core.StepReply.Step -> if (answering) throw LostReply(lost) else read.challenge
+            is com.hushos.core.StepReply.Refused ->
+                if (!answering && (read.refusal == com.hushos.core.StepRefusal.OTHER || read.refusal == com.hushos.core.StepRefusal.BUSY))
+                    throw AuthFailure(Problems.signIn(reply.status, read.message), reply.status)
+                else throw StepRefused(read.refusal, read.message, reply.status)
+            is com.hushos.core.StepReply.Lost -> throw LostReply(lost)
+        }
+
+    /*
+     * The step's answer: on a right one the server answers exactly what `login/finish` answers
+     * without a step, and the envelope opens under what the password gave. A wrong answer, an ended
+     * step and a lost reply are thrown; `StepOutcome` says what the screen does next.
+     */
+    fun answerStep(context: Context, pending: PendingSignIn, proof: com.hushos.core.StepProof): SessionUser = SessionGuard.signingIn {
+        val reply = answerStepAt(pending.origin, pending.challenge.token, proof)
+        openSession(context, pending.origin, pending.email, pending.exportKey, reply)
+    }
+
+    /* The request itself: the reply when it is the session's, a throw for anything else. */
+    internal fun answerStepAt(origin: String, token: String, proof: com.hushos.core.StepProof): RawReply {
+        val reply = send(origin, "/api/auth/login/two-step", StepAnswer(token, proof).json())
+        signInReply(reply, StepWords.LOST_STEP, answering = true)
+        return reply
+    }
+
+    /* The session's reply, whole (the core checked): the session and the device memory are stored, and the account returned. */
+    private fun openSession(context: Context, origin: String, email: String, exportKey: ByteArray, finished: RawReply): SessionUser {
         val user = finished.body.optJSONObject("user")?.let(SessionUser::from) ?: throw AuthFailure("Signed in, but the session was not returned.")
         val envelopeJson = finished.body.optJSONObject("envelope") ?: throw AuthFailure("Signed in, but the session was not returned.")
         val token = finished.cookie ?: throw AuthFailure("Signed in, but the session was not returned.")
@@ -453,7 +681,7 @@ object Auth {
         )
         val existing = Shared.device(context)
         if (existing != null && existing.bundle.userId.equals(user.id, ignoreCase = true) && existing.bundle.credentialVersion == envelope.credentialVersion) return user
-        val accountKey = accountUnlock(user.id, finish.exportKey, envelope)
+        val accountKey = accountUnlock(user.id, exportKey, envelope)
         val memory = deviceRemember(user.id, accountKey, envelope.keyVersion, envelope.credentialVersion, UUID.randomUUID().toString())
         Shared.writeDevice(context, memory)
         return user
@@ -496,12 +724,72 @@ object Auth {
         AccountDevice.from(call(context, "/api/auth/devices/$id", JSONObject().put("name", name), "PUT").getJSONObject("device"))
 
     /*
+     * One password re-check at a time on this phone. Each one is an OPAQUE exchange bound to the session,
+     * then the change it authorises (a new password, a rotation, deleting the account, removing devices,
+     * a change to the step). Turning the step on leaves one running behind the backup codes (the removal
+     * of the other devices) while the person is free to start another: taken in turn, the second starts
+     * only once the first has finished, under the session the first left. Fair, so they go in the order asked.
+     */
+    private val turnLock = java.util.concurrent.locks.ReentrantLock()
+    private val turnMoved = turnLock.newCondition()
+    /* Who asked, in order: the first holds the turn. */
+    private val turns = ArrayDeque<Any>()
+    /* How long a change waits for its turn before it gives up, with nothing sent. A test shortens it. */
+    internal var turnWaitMillis = 60_000L
+    private val holdsTurn = ThreadLocal<Boolean>()
+    private val turnCancelled = ThreadLocal<(() -> Boolean)?>()
+
+    /*
+     * Runs `block` with `cancelled` asked while a password turn inside it waits. These calls block a
+     * thread, so cancelling the coroutine that made one does not stop it: a caller whose screen or view
+     * model has gone would otherwise make its change once the turn came round, with nobody to see what
+     * it did. Asked here, it gives its place up and throws `CancellationException` instead.
+     */
+    fun <T> cancellable(cancelled: () -> Boolean, block: () -> T): T {
+        val before = turnCancelled.get()
+        turnCancelled.set(cancelled)
+        try { return block() } finally { turnCancelled.set(before) }
+    }
+
+    internal fun <T> passwordTurn(block: () -> T): T {
+        // Already this thread's turn (one change inside another): no second place in the line, which it would wait behind for ever.
+        if (holdsTurn.get() == true) return block()
+        val ticket = Any()
+        val cancelled = turnCancelled.get()
+        fun leave() { turnLock.lock(); try { turns.remove(ticket); turnMoved.signalAll() } finally { turnLock.unlock() } }
+        turnLock.lock()
+        try {
+            turns.addLast(ticket)
+            try {
+                val giveUp = System.nanoTime() + turnWaitMillis * 1_000_000
+                // Asked again at the head: cancelled while waiting, the change is not made late.
+                while (turns.first() !== ticket || cancelled?.invoke() == true) {
+                    if (cancelled?.invoke() == true) throw java.util.concurrent.CancellationException("Left before its turn came.")
+                    // The one ahead is taking a minute (a server that answers slowly, more than once): said, not sat through.
+                    if (System.nanoTime() > giveUp) throw AuthFailure(StepWords.TOO_LONG)
+                    turnMoved.await(50, java.util.concurrent.TimeUnit.MILLISECONDS)
+                }
+            } catch (error: Throwable) {
+                // Whatever ended the wait (cancelled, the thread interrupted, the probe itself failing): its place goes
+                // with it. A ticket left at the head would hold the turn for ever, and every later change with it.
+                turns.remove(ticket)
+                turnMoved.signalAll()
+                throw error
+            }
+        } finally {
+            turnLock.unlock()
+        }
+        holdsTurn.set(true)
+        try { return block() } finally { holdsTurn.set(false); leave() }
+    }
+
+    /*
      * Removing devices proves the password again (OPAQUE in the core, bound to this session), so a
      * session alone cannot sign the other devices out and have them clear what they kept.
      */
-    private fun passwordProof(context: Context, password: String): JSONObject {
+    private fun passwordProof(session: Shared.Session, password: String): JSONObject {
         val login = opaqueStartLogin(password)
-        val started = call(context, "/api/auth/devices/reauth", JSONObject().put("startLoginRequest", login.request))
+        val started = callAt(session, "/api/auth/devices/reauth", JSONObject().put("startLoginRequest", login.request))
         val finish = opaqueFinishLogin(password, login.state, started.getString("loginResponse"))
             ?: throw AuthFailure("That password isn’t right. Check it and try again.")
         return JSONObject().put("attemptToken", started.getString("attemptToken")).put("finishLoginRequest", finish.request)
@@ -509,11 +797,15 @@ object Auth {
 
     /* Signs another device out at once; the server refuses this phone (sign out instead). */
     fun removeDevice(context: Context, id: String, password: String) {
-        call(context, "/api/auth/devices/$id", passwordProof(context, password), "DELETE")
+        val session = sessionOf(context)
+        passwordTurn { callAt(session, "/api/auth/devices/$id", passwordProof(session, password), "DELETE") }
     }
 
-    fun removeOtherDevices(context: Context, password: String): Int =
-        call(context, "/api/auth/devices/others", passwordProof(context, password), "DELETE").optInt("removed")
+    fun removeOtherDevices(context: Context, password: String): Int = removeOtherDevicesAt(sessionOf(context), password)
+
+    /* Under the session named, in its turn: the whole exchange, so nothing of it goes out while another password change is under way. */
+    internal fun removeOtherDevicesAt(session: Shared.Session, password: String): Int =
+        passwordTurn { callAt(session, "/api/auth/devices/others", passwordProof(session, password), "DELETE").optInt("removed") }
 
     /*
      * Whether a late "removed" answer about `ended` may still clear the phone: only while nobody has
@@ -551,9 +843,17 @@ object Auth {
     private fun cookie(session: Shared.Session) =
         (if (session.origin.startsWith("https:")) "__Host-hushos-session" else "hushos-session") + "=" + session.token
 
+    private fun sessionOf(context: Context): Shared.Session = Shared.session(context) ?: throw AuthFailure("Sign in first.")
+
     /* `as` names the session to send: a vault's own, so what it writes never goes out under another account's. */
-    private fun call(context: Context, path: String, body: JSONObject? = null, method: String? = null, `as`: Shared.Session? = null): JSONObject {
-        val session = `as` ?: Shared.session(context) ?: throw AuthFailure("Sign in first.")
+    private fun call(context: Context, path: String, body: JSONObject? = null, method: String? = null, `as`: Shared.Session? = null, whole: Boolean = false, lost: String = StepWords.LOST_CHANGE): JSONObject =
+        callAt(`as` ?: Shared.session(context) ?: throw AuthFailure("Sign in first."), path, body, method, whole, lost)
+
+    /* A reply under a session, as it arrived. */
+    internal class SessionReply(val status: Int, val text: String, val body: JSONObject)
+
+    /* Sends under `session` and returns whatever came back, any status; throws only when nothing did. */
+    internal fun requestAt(session: Shared.Session, path: String, body: JSONObject? = null, method: String? = null): SessionReply {
         val connection = URL(session.origin + path).openConnection() as HttpURLConnection
         connection.requestMethod = method ?: if (body == null) "GET" else "POST"
         connection.setRequestProperty("Cookie", cookie(session))
@@ -575,10 +875,41 @@ object Auth {
         } catch (error: java.io.IOException) {
             throw AuthUnreachable()
         }
-        val parsed = runCatching { JSONObject(text) }.getOrDefault(JSONObject())
-        if (status == 401) throw NotAuthenticated()
-        if (status !in 200..299) throw AuthFailure(Problems.signIn(status, parsed.optString("message")), status)
-        return parsed
+        return SessionReply(status, text, runCatching { JSONObject(text) }.getOrDefault(JSONObject()))
+    }
+
+    /*
+     * `whole` is for a change that may carry a second step: its 200 must be the server's own JSON
+     * object, or the reply is lost (`LostReply`) and nothing says whether the change went through; so
+     * is a 5xx that does not name `step-unavailable`. A refusal that names one of the step's codes is
+     * thrown as `StepRefused` from any route, in the server's words; a bare 429 stays the route's own.
+     */
+    internal fun callAt(session: Shared.Session, path: String, body: JSONObject? = null, method: String? = null, whole: Boolean = false, lost: String = StepWords.LOST_CHANGE): JSONObject {
+        val reply = requestAt(session, path, body, method)
+        if (reply.status !in 200..299) {
+            val read = com.hushos.core.stepChangeReplyRead(reply.status.toUShort(), reply.text)
+            if (read is com.hushos.core.StepReply.Refused && stepNamed(read.refusal)) throw StepRefused(read.refusal, read.message, reply.status)
+            // A server error without the step's code (a 503 from something in the way): the change may have gone through.
+            if (whole && read is com.hushos.core.StepReply.Lost && reply.status >= 500) throw LostReply(lost)
+            if (reply.status == 401) throw NotAuthenticated()
+            throw AuthFailure(Problems.signIn(reply.status, reply.body.optString("message")), reply.status)
+        }
+        if (whole && com.hushos.core.stepChangeReplyRead(reply.status.toUShort(), reply.text) !is com.hushos.core.StepReply.Done) throw LostReply(lost)
+        return reply.body
+    }
+
+    /* Thrown as the step's own refusal: when the server named one of its codes. The address's own 429 and anything else stay the route's error. */
+    /*
+     * A security change or a deletion the server says it made: `{ "success": true }`, as the web's
+     * `readDone` reads it. Any other 200 says nothing either way, and is a lost reply.
+     */
+    internal fun done(reply: JSONObject, lost: String) {
+        if (reply.opt("success") != true) throw LostReply(lost)
+    }
+
+    private fun stepNamed(refusal: com.hushos.core.StepRefusal): Boolean = when (refusal) {
+        com.hushos.core.StepRefusal.BUSY, com.hushos.core.StepRefusal.OTHER -> false
+        else -> true
     }
 
     /* The identity envelope the server keeps for this account. */
@@ -711,17 +1042,73 @@ object Auth {
         recoveryEnvelope(call(context, "/api/auth/recovery-key").optJSONObject("recovery") ?: throw NoRecoveryKey())
 
     /*
+     * The new recovery phrase, with the recovery key as the server now holds it: what the kit file
+     * carries. `user`: who the sign-in after the rotation signed in, or null when no session came of it
+     * (the words are then shown from memory, and the sign-in follows them). `certain` is false when the
+     * rotation's reply was lost and no later reply showed a version either way: the words are shown,
+     * and kept beside the old ones.
+     */
+    class RotatedKeys(val phrase: String, val recovery: JSONObject, val recoveryVersion: Long, val certain: Boolean, val user: SessionUser?)
+
+    /*
      * Rotates the master key, as the web's "Rotate keys" does: a fresh account
      * key replaces the old one under the same password, the identity (and every
      * earlier one), the settings key and every workspace grant are sealed again
      * under it, and a new recovery phrase is
-     * minted. The server ends every session, so the caller signs in again.
-     * Returns the phrase to show once.
+     * minted. The server ends every session, so this signs in again, with `email`.
+     *
+     * Once the last request has gone out the new phrase is returned whatever happens next: the old one
+     * may be dead already, and for someone whose only second step is the phrase, losing the new one is
+     * losing the account. Only a refusal the server answered withholds it (`StepWords.NOT_ROTATED`).
+     * Whether the rotation was made is read as a reset's is (`proveReset`): the sign-in after it carries
+     * this rotation's salts only if it was. That sign-in's step is answered with the new phrase, which
+     * nobody has seen yet, so no one is sent to a step they would need those words for. When nothing shows
+     * the rotation was made, the words are shown all the same, with "keep both until you have signed in".
      */
-    fun rotateKeys(context: Context, password: String): String {
+    fun rotateKeysKit(context: Context, email: String, password: String, twoStep: StepAnswer? = null): RotatedKeys {
+        // The session it was asked under, read before waiting for the turn: one read after could be another
+        // account's, signed in while this waited, and rotating that one would be rotating the wrong account.
+        val session = sessionOf(context)
+        return passwordTurn { rotateKeysFor(context, session, email, password, twoStep) }
+    }
+
+    private fun rotateKeysFor(context: Context, session: Shared.Session, email: String, password: String, twoStep: StepAnswer?): RotatedKeys {
+        if (!stillSignedIn(Shared.session(context), session)) throw AuthFailure(SIGNED_OUT_MEANWHILE)
+        val made = rotateKeysAt(session, password, twoStep)
+        // From here nothing may throw but an answered refusal: the phrase is the account's, or may be.
+        // (An answered refusal changed nothing: the session is still this one, and nothing is tried with the password.)
+        val proved = if (made.sent is Reset.Sent.Refused) Reset.Proved.Unknown
+            else runCatching { Reset.prove { proveReset(context, session.origin, email, password, made, keepsSession = true) } }.getOrDefault(Reset.Proved.Unknown)
+        return rotated(made, Reset.settle(made.sent, proved)) { Shared.writeDevice(context, it) }
+    }
+
+    /* Said when a change waited its turn while this phone was signed out (and maybe into another account). */
+    internal const val SIGNED_OUT_MEANWHILE = "HushOS was signed out meanwhile. Nothing was changed."
+
+    /* Whether the session stored now is still the one a change was asked under. */
+    internal fun stillSignedIn(now: Shared.Session?, asked: Shared.Session) = now != null && now.userId == asked.userId && now.token == asked.token && now.origin == asked.origin
+
+    /*
+     * What a rotation hands back once it is settled. What this phone remembers follows the server: written
+     * only once the rotation is known to have been made (signed in, the sign-in has written it already, from
+     * the envelope it was handed). Best effort: a store that refuses the write costs an unlock later, never
+     * the new phrase, which is returned whatever `remember` does.
+     */
+    internal fun rotated(made: ResetMade, settled: Reset.Settled, remember: (com.hushos.core.DeviceMemory) -> Unit): RotatedKeys = when (settled) {
+        is Reset.Settled.Refused -> throw AuthFailure(Reset.refusal(settled.said, StepWords.NOT_ROTATED))
+        is Reset.Settled.Show -> {
+            if (settled.certain && settled.user == null) made.memory?.let { memory -> runCatching { remember(memory) } }
+            RotatedKeys(made.phrase, made.recovery, made.recovery.optLong("recoveryVersion"), settled.certain, settled.user)
+        }
+    }
+
+    /* The rotation itself, up to and including `security/finish`, under the session named and in its turn. A refusal is thrown: nothing changed. */
+    internal fun rotateKeysAt(session: Shared.Session, password: String, twoStep: StepAnswer?): ResetMade = passwordTurn { rotateKeysNow(session, password, twoStep) }
+
+    private fun rotateKeysNow(session: Shared.Session, password: String, twoStep: StepAnswer?): ResetMade {
         val login = opaqueStartLogin(password)
         val registration = opaqueStartRegistration(password)
-        val challenge = call(context, "/api/auth/security/start", JSONObject().put("action", "master-key")
+        val challenge = callAt(session, "/api/auth/security/start", JSONObject().put("action", "master-key")
             .put("startLoginRequest", login.request).put("registrationRequest", registration.request))
         val finish = opaqueFinishLogin(password, login.state, challenge.getString("loginResponse")) ?: throw AuthFailure("The password is not right.")
         val userId = challenge.getString("userId")
@@ -744,15 +1131,39 @@ object Auth {
             com.hushos.core.settingsKeyRewrap(userId, oldRoot, newRoot, com.hushos.core.SettingsKeyEnvelope(it.getString("nonce"), it.getString("ciphertext")))
         }
         val workspaces = rewrapGrants(challenge.getJSONArray("workspaces"), userId, oldRoot, newRoot, keyVersion)
-        call(context, "/api/auth/security/finish", JSONObject().put("action", "master-key").put("attemptToken", challenge.getString("attemptToken"))
+        // Everything the caller needs is made before the request goes: nothing after it may throw but a refusal.
+        val kit = json(recovery.envelope)
+        val memory = runCatching { deviceRemember(userId, newRoot, sealed.keyVersion, sealed.credentialVersion, UUID.randomUUID().toString()) }.getOrNull()
+        val body = JSONObject().put("action", "master-key").put("attemptToken", challenge.getString("attemptToken"))
             .put("finishLoginRequest", finish.request).put("registrationRecord", registered.record)
             .put("envelope", JSONObject().put("envelopeVersion", sealed.envelopeVersion.toInt()).put("keyVersion", sealed.keyVersion.toLong())
                 .put("credentialVersion", sealed.credentialVersion.toLong()).put("wrappingSalt", sealed.wrappingSalt)
                 .put("wrappingNonce", sealed.wrappingNonce).put("encryptedKey", sealed.encryptedKey))
-            .put("recovery", json(recovery.envelope)).put("identity", json(identity)).put("workspaces", workspaces)
-            .put("identityHistory", history).apply { settingsKey?.let { put("settingsKey", json(it)) } })
-        Shared.writeDevice(context, deviceRemember(userId, newRoot, sealed.keyVersion, sealed.credentialVersion, UUID.randomUUID().toString()))
-        return recovery.phrase
+            .put("recovery", kit).put("identity", json(identity)).put("workspaces", workspaces)
+            .put("identityHistory", history).apply { settingsKey?.let { put("settingsKey", json(it)) } }
+            .apply { twoStep?.let { put("twoStep", it.json()) } }
+        // From here the new phrase may be the account's only one: a reply that never arrives must not cost it. Only an
+        // answered refusal says nothing changed; anything else is kept for the caller to settle.
+        val reply = try { requestAt(session, "/api/auth/security/finish", body) } catch (error: Exception) { null }
+        return ResetMade(userId, recovery.phrase, kit, finishSent(reply), sealed.wrappingSalt, recovery.envelope.wrappingSalt, memory)
+    }
+
+    /*
+     * What `security/finish` answered to a rotation. The step's own refusals and an ended session are thrown as
+     * they always were (the server answered, and nothing changed): the form's step fields and the sign-in screen
+     * word those. Any other 4xx in the server's words is an answered refusal too. Everything else, no reply at
+     * all included, is unknown: the rotation may have been made.
+     */
+    internal fun finishSent(reply: SessionReply?): Reset.Sent {
+        if (reply == null) return Reset.Sent.Unknown
+        if (reply.status !in 200..299) {
+            val read = com.hushos.core.stepChangeReplyRead(reply.status.toUShort(), reply.text)
+            if (read is com.hushos.core.StepReply.Refused && stepNamed(read.refusal)) throw StepRefused(read.refusal, read.message, reply.status)
+            // An ended session only when it is the server's own 401: one from something in the way (a page, an empty
+            // body) says nothing, and the rotation may have been made, so its words are kept (unknown, below).
+            if (reply.status == 401 && read !is com.hushos.core.StepReply.Lost) throw NotAuthenticated()
+        }
+        return Reset.sent(reply.status, reply.body) { it.opt("success") == true }
     }
 
     /*
@@ -801,11 +1212,23 @@ object Auth {
         json.getString("wrappingSalt"), json.getString("wrappingNonce"), json.getString("encryptedKey"),
     )
 
-    /* The old password opens the account key; the new one seals it again one credential version up. */
-    fun changePassword(context: Context, current: String, new: String) {
+    /*
+     * The old password opens the account key; the new one seals it again one credential version up.
+     * `twoStep` is the second step's answer, for an account that has it on: without one the server
+     * refuses with `two-step` (`StepRefused`) and nothing changes. No replacement session is asked for
+     * (`keepSession`): this phone signs in again, and is asked for the step.
+     */
+    fun changePassword(context: Context, current: String, new: String, twoStep: StepAnswer? = null) =
+        Shared.writeDevice(context, changePasswordAt(sessionOf(context), current, new, twoStep))
+
+    /* Under the session named, in its turn; returns what this phone remembers from now on. */
+    internal fun changePasswordAt(session: Shared.Session, current: String, new: String, twoStep: StepAnswer?): com.hushos.core.DeviceMemory =
+        passwordTurn { changePasswordNow(session, current, new, twoStep) }
+
+    private fun changePasswordNow(session: Shared.Session, current: String, new: String, twoStep: StepAnswer?): com.hushos.core.DeviceMemory {
         val login = opaqueStartLogin(current)
         val registration = opaqueStartRegistration(new)
-        val challenge = call(context, "/api/auth/security/start", JSONObject().put("action", "password")
+        val challenge = callAt(session, "/api/auth/security/start", JSONObject().put("action", "password")
             .put("startLoginRequest", login.request).put("registrationRequest", registration.request))
         val finish = opaqueFinishLogin(current, login.state, challenge.getString("loginResponse")) ?: throw AuthFailure("The current password is not right.")
         val userId = challenge.getString("userId")
@@ -813,23 +1236,37 @@ object Auth {
         val accountKey = accountUnlock(userId, finish.exportKey, old)
         val registered = opaqueFinishRegistration(new, registration.state, challenge.getString("registrationResponse"))
         val sealed = accountSeal(userId, registered.exportKey, accountKey, old.keyVersion, old.credentialVersion + 1uL)
-        call(context, "/api/auth/security/finish", JSONObject().put("action", "password").put("attemptToken", challenge.getString("attemptToken"))
+        callAt(session, "/api/auth/security/finish", JSONObject().put("action", "password").put("attemptToken", challenge.getString("attemptToken"))
             .put("finishLoginRequest", finish.request).put("registrationRecord", registered.record)
             .put("envelope", JSONObject().put("envelopeVersion", sealed.envelopeVersion.toInt()).put("keyVersion", sealed.keyVersion.toLong())
                 .put("credentialVersion", sealed.credentialVersion.toLong()).put("wrappingSalt", sealed.wrappingSalt)
-                .put("wrappingNonce", sealed.wrappingNonce).put("encryptedKey", sealed.encryptedKey)))
-        Shared.writeDevice(context, deviceRemember(userId, accountKey, sealed.keyVersion, sealed.credentialVersion, UUID.randomUUID().toString()))
+                .put("wrappingNonce", sealed.wrappingNonce).put("encryptedKey", sealed.encryptedKey))
+            .apply { twoStep?.let { put("twoStep", it.json()) } }, whole = true, lost = StepWords.LOST_SAVED).let { done(it, StepWords.LOST_SAVED) }
+        return deviceRemember(userId, accountKey, sealed.keyVersion, sealed.credentialVersion, UUID.randomUUID().toString())
     }
 
     /* Proves the password once more, then the server removes the account; every local trace goes with it. */
-    fun deleteAccount(context: Context, password: String) {
-        val login = opaqueStartLogin(password)
-        val started = call(context, "/api/auth/delete/start", JSONObject().put("startLoginRequest", login.request))
-        val finish = opaqueFinishLogin(password, login.state, started.getString("loginResponse")) ?: throw AuthFailure("The password is not right.")
-        call(context, "/api/auth/delete/finish", JSONObject().put("attemptToken", started.getString("attemptToken")).put("finishLoginRequest", finish.request))
+    fun deleteAccount(context: Context, password: String, twoStep: StepAnswer? = null) {
+        val session = sessionOf(context)
+        deleteAccountAt(session, password, twoStep)
+        // What is cleared is the deleted account's. A sign-in by someone else while this waited is left alone; but the
+        // session may already be gone (the feed's poll can hear the server's 401 first), and then the deleted account's
+        // key and files still go, when this phone's data is theirs (as a removal's are, mayForgetRemoved).
+        val now = Shared.session(context)
+        if (now != null && !stillSignedIn(now, session)) return
+        if (now == null && !mayForgetRemoved(session, null, AccountStore.of(context).owner())) return
         Shared.clearSession(context)
         Shared.clearDevice(context)
         AccountStore.of(context).wipe()
+    }
+
+    /* Under the session named, in its turn: the server's part of deleting the account. */
+    internal fun deleteAccountAt(session: Shared.Session, password: String, twoStep: StepAnswer?) = passwordTurn {
+        val login = opaqueStartLogin(password)
+        val started = callAt(session, "/api/auth/delete/start", JSONObject().put("startLoginRequest", login.request))
+        val finish = opaqueFinishLogin(password, login.state, started.getString("loginResponse")) ?: throw AuthFailure("The password is not right.")
+        callAt(session, "/api/auth/delete/finish", JSONObject().put("attemptToken", started.getString("attemptToken")).put("finishLoginRequest", finish.request)
+            .apply { twoStep?.let { put("twoStep", it.json()) } }, whole = true, lost = StepWords.LOST_DELETED).let { done(it, StepWords.LOST_DELETED) }
     }
 
     /* Ends the session on the server, then removes it, the remembered account key and every file of the account from this phone. */

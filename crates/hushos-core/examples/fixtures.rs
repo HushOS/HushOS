@@ -295,6 +295,19 @@ fn main() {
         },
     });
 
+    // The same phrase's answer to a second step, made here: the web must build the same statement
+    // and its server-side check must accept the signature under the envelope's public key.
+    let step_token = e(&random_bytes(32).unwrap());
+    let step_user = user_id.to_uppercase();
+    let two_step_phrase = json!({
+        "userId": step_user,
+        "stepToken": step_token,
+        "tokenDigest": step_token_digest(step_token.clone()),
+        "publicKey": r.public_key,
+        "statement": e(&two_step_phrase_statement(step_user.clone(), step_token_digest(step_token.clone())).unwrap()),
+        "signature": two_step_phrase_sign(made.phrase.clone(), r.wrapping_salt.clone(), step_user.clone(), step_token.clone()).unwrap(),
+    });
+
     // Against the web's own fixture: its identity as the operator of a report, and its grant and identity rewrapped under a new root.
     let web: serde_json::Value =
         serde_json::from_str(include_str!("../fixtures/web.json")).expect("fixtures/web.json");
@@ -729,6 +742,7 @@ fn main() {
     let out = json!({
         "generatedBy": "crates/hushos-core/examples/fixtures.rs",
         "deviceSession": device_session,
+        "twoStepPhrase": two_step_phrase,
         "link": link,
         "recovery": recovery,
         "report": report,

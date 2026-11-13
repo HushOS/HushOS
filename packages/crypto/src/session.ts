@@ -1,5 +1,6 @@
 import { guardRowId, openGuardRow, sealGuardRow, type GuardRowKind } from './contact-guard';
 import { CryptoError, RefusedError } from './errors';
+import { recoveryStepKey, signTwoStepPhrase } from './two-step';
 import { checkPassword, normalizePassword } from './password';
 import {
     createSecurityChange,
@@ -164,6 +165,14 @@ type BaseRequests = {
         recovery: RecoveryEnvelope;
         phrase: string;
     };
+    /*
+     * The recovery phrase a reset (`recoverFinish`) or a rotation (`securityFinish` for a new
+     * recovery key or a new master key) just made, taken once. Each replaces the phrase, and
+     * the old one stops working the moment the server accepts the change: the new words must
+     * reach the person whatever happens to the sign-in that follows, and they are what
+     * answers that sign-in's second step (docs/two-step-design.md 5).
+     */
+    recoveredPhrase: Record<string, never>;
     registerFinish: { registrationResponse: string; userId: string; profileVersion: number };
     loginStart: { password: string };
     loginFinish: { loginResponse: string; profileVersion: number };
@@ -176,6 +185,13 @@ type BaseRequests = {
     reauthFinish: { loginResponse: string; profileVersion: number };
     /* Forgets a re-authentication's password and state, finished or not. */
     reauthCancel: Record<string, never>;
+    /*
+     * The recovery phrase's answer to a second step (docs/two-step-design.md 5): its signature
+     * over the step's statement, made from what the step's reply carries. It reads and
+     * changes nothing the session holds, so a sign-in waiting at its step keeps its place,
+     * and a mistyped phrase is a refusal, never a reset.
+     */
+    twoStepPhrase: { phrase: string; userId: string; wrappingSalt: string; stepToken: string };
     unlock: { userId: string; envelope: AccountKeyEnvelope };
     /*
      * Identity: opens the X25519 private key under the unlocked account and keeps
@@ -789,6 +805,7 @@ type BaseResults = {
         recovery: RecoveryEnvelope;
         signature: string;
     };
+    recoveredPhrase: { phrase: string };
     remember: RememberedAccount;
     restore: { userId: string };
     registerStart: { registrationRequest: string };
@@ -804,6 +821,7 @@ type BaseResults = {
     reauthStart: { startLoginRequest: string };
     reauthFinish: { finishLoginRequest: string };
     reauthCancel: { ok: true };
+    twoStepPhrase: { signature: string };
     unlock: { userId: string };
     identityOpen: {
         keyVersion: number;
@@ -943,6 +961,9 @@ export function createCryptoSession() {
     // The re-authentication's own OPAQUE state: never the sign-in's, never the root's.
     let reauthPassword = '';
     let reauthState = '';
+    // The phrase a reset made, until the client takes it (`recoveredPhrase`). Kept apart from
+    // what `clearState` drops: the reset's own tidying-up runs before it can be asked for.
+    let resetPhrase = '';
     let accountKey: Uint8Array<ArrayBuffer> | undefined;
     let unlockedUserId: string | null = null;
     /*
@@ -1485,6 +1506,7 @@ export function createCryptoSession() {
     function reset() {
         generation++;
         clearState();
+        resetPhrase = '';
         forgetDriveKeys();
         const error = new Error('Your account was locked. Please try again.');
         for (const reject of pending) reject(error);
@@ -1506,8 +1528,12 @@ export function createCryptoSession() {
             case 'securityStart':
                 clearState();
                 return security.start(message.input);
-            case 'securityFinish':
-                return security.finish(message.input);
+            case 'securityFinish': {
+                const update = await security.finish(message.input);
+                // A rotation's new words, for the client to take: see `recoveredPhrase`.
+                resetPhrase = security.takePhrase();
+                return update;
+            }
             case 'initialize': {
                 if (!accountKey || unlockedUserId !== message.input.userId)
                     throw new CryptoError('Unlock your account to finish setup.');
@@ -1627,12 +1653,14 @@ export function createCryptoSession() {
                         nonce,
                         accountKeyContext(message.input.userId, keyVersion, credentialVersion),
                     );
-                    const { recovery } = await createRecovery(
+                    const { recovery, phrase: madePhrase } = await createRecovery(
                         root,
                         message.input.userId,
                         recovering ? message.input.recovery.recoveryVersion + 1 : 1,
                         keyVersion,
                     );
+                    // A reset's new words, for the client to take: see `recoveredPhrase`.
+                    resetPhrase = recovering ? madePhrase : '';
                     const output = {
                         recovery,
                         registrationRecord: result.registrationRecord,
@@ -1678,6 +1706,12 @@ export function createCryptoSession() {
                     key?.fill(0);
                     clearState();
                 }
+            }
+            case 'recoveredPhrase': {
+                const phrase = resetPhrase;
+                resetPhrase = '';
+                if (!phrase) throw new RefusedError('There is no new recovery phrase to show.');
+                return { phrase };
             }
             case 'loginStart': {
                 clearState();
@@ -1739,6 +1773,26 @@ export function createCryptoSession() {
                     throw new RefusedError('That password isn’t right. Check it and try again.');
                 // The export key is not needed and not kept: this proves the password, nothing more.
                 return { finishLoginRequest: result.finishLoginRequest };
+            }
+            case 'twoStepPhrase': {
+                let key: Uint8Array | undefined;
+                try {
+                    key = await recoveryStepKey(message.input.phrase, message.input.wrappingSalt);
+                    return {
+                        signature: await signTwoStepPhrase(key, {
+                            userId: message.input.userId,
+                            stepToken: message.input.stepToken,
+                        }),
+                    };
+                } catch (error) {
+                    throw new RefusedError(
+                        error instanceof CryptoError
+                            ? error.message
+                            : 'That recovery phrase didn’t work. Check each word and try again.',
+                    );
+                } finally {
+                    key?.fill(0);
+                }
             }
             case 'identityOpen': {
                 const { userId, identity } = message.input;

@@ -250,6 +250,10 @@ const securitySubjects: Record<SecurityNoticeKind, (when: string) => string> = {
     'backup-codes-made': (when) => `New backup codes were made · ${when} · HushOS`,
     'backup-code-used': (when) => `A backup code was used · ${when} · HushOS`,
     'phrase-used': (when) => `Your recovery phrase was used as your second step · ${when} · HushOS`,
+    'phrase-replaced': (when) => `Your recovery phrase was replaced · ${when} · HushOS`,
+    'password-reset': (when) =>
+        `Your password was reset with your recovery phrase · ${when} · HushOS`,
+    'account-key-rotated': (when) => `Your account key was rotated · ${when} · HushOS`,
     'step-failed': (when) =>
         `Someone signed in with your password but did not pass the second step · ${when} · HushOS`,
     'change-step-failed': (when) =>

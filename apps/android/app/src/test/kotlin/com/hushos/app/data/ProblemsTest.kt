@@ -58,16 +58,13 @@ class ProblemsTest {
         assertEquals("Couldn’t share. Try again.", Problems.say(IllegalStateException(raw), "Couldn’t share. Try again."))
     }
 
-    /* Recovery's failures were the core's text, or another failure's text with a sentence added: now fixed words only. */
+    /* Recovery's failures were the core's text with a sentence added: now fixed words only. (What a reset's last request answered is read in TwoStepTest.) */
     @Test
-    fun recoverySaysFixedWordsWhateverTheCoreOrServerSaid() {
+    fun recoverySaysFixedWordsWhateverTheCoreSaid() {
         assertEquals(Auth.PHRASE_REFUSED, Auth.phraseRefused("CoreException.Invalid: The recovery phrase does not match this account"))
         val odd = Auth.phraseRefused("CoreException.Invalid: envelope version 7 is not supported")
         assertEquals(Auth.PHRASE_UNCHECKED, odd)
-        assertEquals(Auth.RESET_UNREACHABLE, Auth.resetUnfinished(AuthUnreachable()))
-        val server = Auth.resetUnfinished(AuthFailure("attempt token 9f2c expired"))
-        assertEquals(Auth.RESET_UNFINISHED, server)
-        assertFalse(server.contains("9f2c"))
+        assertFalse(odd.contains("version 7"))
     }
 
     @Test

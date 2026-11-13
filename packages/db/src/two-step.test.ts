@@ -1666,6 +1666,92 @@ describe('a step and what it authorises commit together', () => {
         expect(await twoStep.hasTwoStep(maya.userId)).toBe(true);
     });
 
+    test('a change that asked for a replacement session writes one only with the step passed: on the same device, stamped, and for ten minutes however long was asked', async () => {
+        const replacement = () => ({
+            tokenHash: sha256(randomUUID()),
+            expiresAt: new Date(Date.now() + 7 * 24 * HOUR),
+        });
+        const change = (
+            who: { userId: string; session: Session },
+            input: { twoStep?: twoStep.StepProof; replacement: ReturnType<typeof replacement> },
+        ) =>
+            auth.changeAccountSecurity({
+                userId: who.userId,
+                action: 'password',
+                sessionTokenHash: who.session.token,
+                credentialVersion: 1,
+                registrationRecord: 'record-2',
+                envelope: envelope(),
+                ...input,
+            });
+        const maya = await withApp('maya');
+        const elsewhere = await steppedSignIn(maya.userId);
+        // Without the step nothing changes, and nothing is written.
+        const refused = replacement();
+        expect(await change(maya, { replacement: refused })).toEqual({
+            status: 'two-step',
+            reason: 'required',
+        });
+        expect(await sessionRow(refused.tokenHash)).toBeUndefined();
+
+        const asked = replacement();
+        const before = Date.now();
+        expect(
+            await change(maya, {
+                twoStep: await stepUp(maya.userId, maya.session, 'password'),
+                replacement: asked,
+            }),
+        ).toBe('replaced');
+        // Every other session ended, the other device's included; the one written is this device's.
+        const left = await db.select().from(sessions);
+        expect(left).toHaveLength(1);
+        expect(left[0]).toMatchObject({
+            userId: maya.userId,
+            deviceId: maya.session.deviceId,
+            credentialVersion: 2,
+        });
+        expect(left[0]!.deviceId).not.toBe(elsewhere.deviceId);
+        expect(left[0]!.tokenHash.equals(asked.tokenHash)).toBe(true);
+        expect(left[0]!.twoStepAt!.getTime()).toBeGreaterThanOrEqual(before);
+        // A week was asked for; ten minutes is what a replacement gets.
+        expect(left[0]!.expiresAt.getTime()).toBeLessThanOrEqual(
+            Date.now() + twoStep.REPLACEMENT_SESSION_SECONDS * 1000,
+        );
+        expect(twoStep.REPLACEMENT_SESSION_SECONDS).toBe(600);
+
+        // Using it does not extend it. An ordinary session's deadline slides when it is used,
+        // five minutes or more after it was last seen; this one keeps the end it was given.
+        const lifetime = { idleSeconds: 7 * 24 * 3600, maxSeconds: 30 * 24 * 3600 };
+        const end = left[0]!.expiresAt.getTime();
+        const ordinary = await passwordSignIn((await registered()).user.id);
+        const ordinaryEnd = (await sessionRow(ordinary.token))!.expiresAt.getTime();
+        const start = Date.now();
+        vi.useFakeTimers({ now: start + 6 * MINUTE, toFake: ['Date'] });
+        try {
+            expect((await auth.getSession(asked.tokenHash, lifetime))?.user.id).toBe(maya.userId);
+            expect((await sessionRow(asked.tokenHash))!.expiresAt.getTime()).toBe(end);
+            // The same use slides the ordinary one, so the check above is not vacuous.
+            expect(await auth.getSession(ordinary.token, lifetime)).not.toBeNull();
+            expect((await sessionRow(ordinary.token))!.expiresAt.getTime()).toBeGreaterThan(
+                ordinaryEnd + 5 * MINUTE,
+            );
+            // At minute eleven it is over, used or not.
+            vi.setSystemTime(start + 11 * MINUTE);
+            expect(await auth.getSession(asked.tokenHash, lifetime)).toBeNull();
+            expect(await auth.getSession(ordinary.token, lifetime)).not.toBeNull();
+        } finally {
+            vi.useRealTimers();
+        }
+
+        // An account without the step: asked or not, a password change ends every session.
+        const { user } = await registered();
+        const sam = { userId: user.id, session: await passwordSignIn(user.id) };
+        expect(await change(sam, { replacement: replacement() })).toBe(true);
+        expect(
+            (await db.select().from(sessions)).filter((row) => row.userId === user.id),
+        ).toHaveLength(0);
+    });
+
     test('an account without the step changes its password as before, whatever proof is sent', async () => {
         const { user } = await registered();
         const session = await passwordSignIn(user.id);

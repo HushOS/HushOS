@@ -42,6 +42,12 @@ import {
     sealLinkSecret,
 } from '../src/links';
 import { createRecovery } from '../src/recovery';
+import {
+    recoveryStepKey,
+    signTwoStepPhrase,
+    stepTokenDigest,
+    twoStepPhraseStatement,
+} from '../src/two-step';
 import { createSettingsKey, sealSettings } from '../src/contacts';
 import {
     createSuccessor,
@@ -879,6 +885,28 @@ const deviceSession = {
     emailDigest: await emailDigest('  Maya.Example@HushOS.test '),
 };
 
+// The recovery phrase's answer to a second step (docs/two-step-design.md 5): from the phrase and
+// the recovery envelope's salt above, the statement and its Ed25519 signature for one step token.
+// The account id is upper case here and lower case in the statement, as the web builds it; the
+// core must produce these exact bytes, and the envelope's public key must verify them.
+const stepToken = encode(bytes(32, 47));
+const stepTokenHash = await stepTokenDigest(stepToken);
+const stepSigningKey = await recoveryStepKey(
+    recoveryMade.phrase,
+    recoveryMade.recovery.wrappingSalt,
+);
+const twoStepPhrase = {
+    userId,
+    phrase: recoveryMade.phrase,
+    wrappingSalt: recoveryMade.recovery.wrappingSalt,
+    publicKey: recoveryMade.recovery.publicKey,
+    stepToken,
+    tokenDigest: stepTokenHash,
+    statement: encode(twoStepPhraseStatement({ userId, tokenDigest: stepTokenHash })),
+    signature: await signTwoStepPhrase(stepSigningKey, { userId, stepToken }),
+};
+stepSigningKey.fill(0);
+
 const out = new URL('../../../crates/hushos-core/fixtures/', import.meta.url);
 await mkdir(out, { recursive: true });
 await writeFile(
@@ -905,6 +933,7 @@ await writeFile(
             fingerprints,
             ids,
             deviceSession,
+            twoStepPhrase,
         },
         null,
         2,

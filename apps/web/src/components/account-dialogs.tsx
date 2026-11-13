@@ -1,9 +1,11 @@
+import { DeviceStorageUnreadable } from '@hushos/auth/client';
 import type { SessionUser } from '@hushos/auth/protocol';
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '@hushos/auth/protocol';
 import { useQueryClient } from '@tanstack/react-query';
 import { useRouter } from '@tanstack/react-router';
 import { useState, type ReactNode } from 'react';
 import { DialogField } from '@/components/settings';
+import { StepUpFields } from '@/components/two-step-answer';
 import { Button } from '@/components/ui/button';
 import {
     Dialog,
@@ -19,14 +21,17 @@ import { succeedIdentity } from '@/lib/contacts';
 import { driveClient, driveError, driveOpenQueryOptions } from '@/lib/drive';
 import { authError } from '@/lib/form';
 import { cue } from '@/lib/sounds';
+import { showNewPhrase } from '@/lib/show-new-phrase';
 import { forgetDevice } from '@/lib/sign-out';
+import { useStepUp } from '@/lib/two-step';
 
 /*
  * The account's heavy actions, each a dialog that asks once: change the
  * password, make a new recovery phrase, rotate the account key (a new master
  * key), replace sharing keys (a new identity), delete the account. Those that
  * change what the password and phrase unlock ask for the password; the server
- * proves it with OPAQUE and it never leaves this device.
+ * proves it with OPAQUE and it never leaves this device. An account with two-step
+ * sign-in on is asked for its second step in the same dialog, before anything changes.
  */
 
 function Shell({
@@ -90,6 +95,7 @@ export function ChangePasswordDialog({
     const [tried, setTried] = useState(false);
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
+    const step = useStepUp('password');
     const errors = {
         current: current ? '' : 'Enter your current password.',
         next:
@@ -106,6 +112,7 @@ export function ChangePasswordDialog({
         setConfirm('');
         setTried(false);
         setError('');
+        step.reset();
     }
     async function submit() {
         setTried(true);
@@ -113,7 +120,17 @@ export function ChangePasswordDialog({
         setPending(true);
         setError('');
         try {
-            const result = await authClient.changeSecurity(user, 'password', current, next);
+            // An account with two-step sign-in: the fields for it appear, and the next press goes on.
+            if (await step.ask()) return;
+            const twoStep = await step.prove();
+            if (twoStep === null) return;
+            const result = await authClient.changeSecurity(
+                user,
+                'password',
+                current,
+                next,
+                twoStep,
+            );
             cue('success');
             router.options.context.queryClient.clear();
             if (!result.signedIn) {
@@ -134,7 +151,7 @@ export function ChangePasswordDialog({
             onChanged();
         } catch (cause) {
             cue('error');
-            setError(authError(cause));
+            if (!(await step.failed(cause))) setError(authError(cause));
         } finally {
             setPending(false);
         }
@@ -198,6 +215,7 @@ export function ChangePasswordDialog({
                     (tried || confirm.length >= next.length) && confirm ? errors.confirm : undefined
                 }
             />
+            <StepUpFields step={step} disabled={pending} />
             {error && (
                 <p role="alert" className="text-[13px] text-destructive">
                     {error}
@@ -329,6 +347,7 @@ export function NewKeyDialog({
     const [tried, setTried] = useState(false);
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
+    const step = useStepUp(action);
     const keys = action === 'master-key';
     async function submit() {
         setTried(true);
@@ -336,9 +355,36 @@ export function NewKeyDialog({
         setPending(true);
         setError('');
         try {
-            const result = await authClient.changeSecurity(user, action, password, '');
+            // The panel that shows a new phrase when nothing else will, loaded before anything
+            // is changed: a page that could not load it must not replace the phrase.
+            await import('@/components/new-phrase');
+            if (await step.ask()) {
+                setPending(false);
+                return;
+            }
+            const twoStep = await step.prove();
+            if (twoStep === null) {
+                setPending(false);
+                return;
+            }
+            const result = await authClient.changeSecurity(user, action, password, '', twoStep);
             cue('success');
             router.options.context.queryClient.clear();
+            // The new words, whenever the change went through or may have and the app will
+            // not show them itself: shown at once, over whatever page comes next, until they
+            // are saved. The old phrase is dead, or may be, and a sign-in's second step may
+            // need these. Gone on a lock or a sign-out, here or in another tab.
+            if (result.phrase) {
+                showNewPhrase({
+                    phrase: result.phrase,
+                    applied: result.uncertain ? 'unknown' : true,
+                    storage: result.storage
+                        ? new DeviceStorageUnreadable(result.storage).why
+                        : null,
+                    from: 'rotation',
+                });
+                onOpenChange(false);
+            }
             if (!result.signedIn) {
                 await router.navigate({
                     to: '/login',
@@ -350,6 +396,16 @@ export function NewKeyDialog({
                 });
                 return;
             }
+            if (result.uncertain) {
+                // Signed in, on the account as it was for now: nothing more to show than the
+                // words and what they may be. The pages read the account afresh.
+                await router.invalidate();
+                setPassword('');
+                setTried(false);
+                step.reset();
+                setPending(false);
+                return;
+            }
             await router.navigate({
                 to: '/setup/recovery-key',
                 search: { reason: action },
@@ -357,7 +413,7 @@ export function NewKeyDialog({
             });
         } catch (cause) {
             cue('error');
-            setError(authError(cause));
+            if (!(await step.failed(cause))) setError(authError(cause));
             setPending(false);
         }
     }
@@ -369,6 +425,7 @@ export function NewKeyDialog({
                     setPassword('');
                     setTried(false);
                     setError('');
+                    step.reset();
                 }
                 onOpenChange(value);
             }}
@@ -426,6 +483,7 @@ export function NewKeyDialog({
                 hint="Enter your password to confirm."
                 error={tried && !password ? 'Enter your password.' : undefined}
             />
+            <StepUpFields step={step} disabled={pending} />
             {error && (
                 <p role="alert" className="text-[13px] text-destructive">
                     {error}
@@ -448,13 +506,23 @@ export function DeleteAccountDialog({
     const [typed, setTyped] = useState('');
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
+    const step = useStepUp('delete');
     const ready = password.length > 0 && typed === 'DELETE';
     async function submit() {
         if (!ready) return;
         setPending(true);
         setError('');
         try {
-            await authClient.deleteAccount(password);
+            if (await step.ask()) {
+                setPending(false);
+                return;
+            }
+            const twoStep = await step.prove();
+            if (twoStep === null) {
+                setPending(false);
+                return;
+            }
+            await authClient.deleteAccount(password, twoStep);
             // The account is gone; what Drive kept of it on this device goes too.
             await forgetDevice();
             router.options.context.queryClient.clear();
@@ -462,7 +530,7 @@ export function DeleteAccountDialog({
             await router.navigate({ to: '/account-deleted', replace: true });
         } catch (cause) {
             cue('error');
-            setError(authError(cause));
+            if (!(await step.failed(cause))) setError(authError(cause));
             setPending(false);
         }
     }
@@ -474,6 +542,7 @@ export function DeleteAccountDialog({
                     setPassword('');
                     setTyped('');
                     setError('');
+                    step.reset();
                 }
                 onOpenChange(value);
             }}
@@ -516,6 +585,7 @@ export function DeleteAccountDialog({
                 disabled={pending}
                 onChange={(event) => setTyped(event.target.value)}
             />
+            <StepUpFields step={step} disabled={pending} />
             {error && (
                 <p role="alert" className="text-[13px] text-destructive">
                     {error}

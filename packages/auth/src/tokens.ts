@@ -23,6 +23,8 @@ export type TokenKind = 'session' | 'enrollment';
  * - `step-expired`: the token is over (five wrong answers, five minutes, or used): start again;
  * - `step-frozen`: the authenticator app is paused for this sign-in; use another method;
  * - `step-limited`: too many wrong codes in 15 minutes; the recovery phrase still works;
+ * - `step-unavailable`: the server cannot check this method right now (a row under a key it
+ *   no longer has); nothing was counted or changed, and the recovery phrase still works;
  * - `setup-required`: the account has no recovery key yet, so the step cannot be turned on:
  *   finish account setup first.
  */
@@ -36,6 +38,7 @@ export type AuthErrorCode =
     | 'step-expired'
     | 'step-frozen'
     | 'step-limited'
+    | 'step-unavailable'
     | 'setup-required';
 
 export class AuthError extends Error {

@@ -381,22 +381,24 @@ export async function registerAccount(
     // never reports it stable enough to click before the hook's budget is gone.
     await passwords.nth(1).press('Enter');
     await page.waitForURL(/\/setup\/recovery-key/, { timeout: 120_000 });
-    await saveKit(page);
+    // The 24 words, for a test that later needs the recovery phrase itself.
+    const phrase = (await saveKit(page)).join(' ');
     if (options.landsOn) {
         await page.waitForURL(options.landsOn, { timeout: 60_000 });
-        return { email };
+        return { email, phrase };
     }
     // A finished sign-up lands on Home, empty for a new account; the tests start in Files.
     await landedOnHome(page);
     await expect(page.getByText('Nothing here yet')).toBeVisible();
     await page.goto('/app/drive', { waitUntil: 'networkidle' });
     await expect(page.getByText('Nothing here yet')).toBeVisible({ timeout: 60_000 });
-    return { email };
+    return { email, phrase };
 }
 
 /*
  * On the recovery kit page: note the words, tick that they are saved, then pick
  * the three asked for back out of them, as a person with the kit in hand would.
+ * Returns the words.
  */
 export async function saveKit(page: Page) {
     const list = page.getByRole('list', { name: 'Recovery phrase' });
@@ -417,6 +419,7 @@ export async function saveKit(page: Page) {
     }
     // Exact: one of the words to pick can itself be “finish”.
     await page.getByRole('button', { name: 'Finish', exact: true }).click();
+    return words;
 }
 
 /* Sample files with known content, written to a temporary directory. */

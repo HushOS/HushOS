@@ -9,8 +9,18 @@ export {
 } from '@hushos/crypto/fingerprint';
 export { pinVerified, settingsRolledBack } from '@hushos/crypto/pins';
 import type { IdentityEnvelope } from '@hushos/crypto/identity';
-import type { AuthApi } from './api';
+import type { AuthApi, LoginSession, StepChallenge, StepInput, StepPurpose } from './api';
 import type { CryptoTransport, RequestOptions } from './crypto-transport';
+import {
+    readBackupCodes,
+    readConfirmed,
+    readDone,
+    readEnrolment,
+    readLoginReply,
+    readRemoved,
+    readReset,
+    readStepChallenge,
+} from './login-reply';
 import { ordinaryFailure } from './ordinary-failure';
 import { createAuthStore } from './store';
 import { withStorageEvents } from './with-storage-events';
@@ -81,7 +91,178 @@ export class DeviceStorageUnreadable extends Error {
 export type LoginOptions = {
     /* Skip reading the device key and sign in as a new device: the person's choice when it can't be read. */
     asNewDevice?: boolean;
+    /*
+     * Whose sign-in this is: the form that started it, by any object of its own. A step it
+     * stops at is that form's to answer, and `cancelStep(owner)` from another form (the same
+     * unlock form mounted twice, one closing) leaves it alone.
+     */
+    owner?: object;
 };
+
+/*
+ * Two-step sign-in (docs/two-step-design.md 4). The password was right and the account asks
+ * for a second step: `login` stops here, with what the password gave still held in the worker,
+ * and the page asks for the answer and hands it to `answerStep`.
+ */
+export class TwoStepRequired extends Error {
+    readonly challenge: StepChallenge;
+    constructor(challenge: StepChallenge) {
+        super('This account asks for a second step.');
+        this.name = 'TwoStepRequired';
+        this.challenge = challenge;
+    }
+}
+/* What a person answers a step with: a code as typed, or the recovery phrase's words. */
+export type StepAnswer =
+    | { kind: 'totp'; code: string }
+    | { kind: 'backup'; code: string }
+    | { kind: 'phrase'; phrase: string };
+/*
+ * Why a step's answer did not pass, for the page to act on rather than read:
+ * - `wrong`: the answer was wrong, and the step can be answered again;
+ * - `frozen`: the authenticator app is paused here; a backup code or the phrase still works;
+ * - `limited`: too many wrong codes for now; the phrase still works;
+ * - `unavailable`: the server cannot check this method right now; the phrase still works;
+ * - `offline`: no answer came back at all; the same answer can be sent again;
+ * - `busy`: too many requests from this address just now; the same answer can be sent again
+ *   in a moment;
+ * - `over`: the step has ended (five answers, five minutes, or it was used): start again;
+ * - `lost`: a reply came that was not the server's answer. The step may have passed there
+ *   or not, so it is over here too, and a code that was sent may be spent.
+ * `again` says whether the same step can still be answered.
+ */
+export type StepFailureReason =
+    | 'wrong'
+    | 'frozen'
+    | 'limited'
+    | 'unavailable'
+    | 'offline'
+    | 'busy'
+    | 'over'
+    | 'lost';
+export class StepFailure extends Error {
+    readonly reason: StepFailureReason;
+    readonly again: boolean;
+    constructor(reason: StepFailureReason, message: string, options?: { cause?: unknown }) {
+        super(message, options);
+        this.name = 'StepFailure';
+        this.reason = reason;
+        this.again = reason !== 'over' && reason !== 'lost';
+    }
+}
+/* How long a step is held here: the five minutes the server gives its token, and one more. */
+const STEP_HELD_MS = 6 * 60_000;
+/* How long one password exchange may take before the next is let through. */
+export const PASSWORD_EXCHANGE_MS = 60_000;
+const LOST_REPLY =
+    'The server’s answer didn’t arrive, so HushOS can’t tell whether you were signed in. Enter your password again. If you used a code, wait for the next one.';
+const STEP_OVER = 'This sign-in timed out. Enter your password again.';
+/* The codes a step's refusal carries (docs/two-step-design.md 4), and what each leaves possible. */
+const STEP_CODES: Record<string, StepFailureReason> = {
+    'step-wrong': 'wrong',
+    'step-frozen': 'frozen',
+    'step-limited': 'limited',
+    'step-unavailable': 'unavailable',
+    'step-expired': 'over',
+};
+/*
+ * A failed answer as the page needs it. A refusal with a code is the server's own. No status
+ * at all means no answer came back, and a 5xx without the server's code (a 500, a gateway's
+ * 502, 503 or 504) says as little: the answer may or may not have reached the server, and the
+ * step's token may still be good. So the step stays, the same answer can be sent again, and
+ * the server says what became of it: a token that was used or ran out answers `step-expired`,
+ * and only that ends the step. Any other refusal the server answered ends it too: it is not a
+ * wrong answer to try again.
+ */
+export function stepFailure(error: unknown): StepFailure {
+    if (error instanceof StepFailure) return error;
+    const { code, status, kept } = (error ?? {}) as {
+        code?: unknown;
+        status?: unknown;
+        kept?: unknown;
+    };
+    const message = error instanceof Error ? error.message : '';
+    const reason = typeof code === 'string' ? STEP_CODES[code] : undefined;
+    if (reason) return new StepFailure(reason, message, { cause: error });
+    // The worker refused a mistyped phrase before anything was sent.
+    if (kept === true) return new StepFailure('wrong', message, { cause: error });
+    // The address's own limit, not the step's (that one has a code): nothing about the step
+    // was looked at, and it is still there when the limit lets the next request through.
+    if (status === 429) return new StepFailure('busy', message, { cause: error });
+    if (typeof status !== 'number')
+        return new StepFailure(
+            'offline',
+            'We couldn’t reach HushOS. Check your connection, then try again.',
+            { cause: error },
+        );
+    if (status >= 500)
+        return new StepFailure(
+            'offline',
+            'Something went wrong on our side. Send your answer again.',
+            { cause: error },
+        );
+    return new StepFailure('over', message || STEP_OVER, { cause: error });
+}
+/* A change's refusals that are the step's: the server answered, and nothing was changed. */
+const STEP_REFUSALS = new Set([
+    'two-step',
+    'step-wrong',
+    'step-expired',
+    'step-frozen',
+    'step-limited',
+    'step-unavailable',
+]);
+export function stepRefused(error: unknown) {
+    const code = (error as { code?: unknown } | null)?.code;
+    return typeof code === 'string' && STEP_REFUSALS.has(code);
+}
+/*
+ * A refusal the server answered before doing anything: the step's own, by its code (a method
+ * it cannot check right now among them), or the address's limit (429). Nothing was changed,
+ * so nothing this browser keeps needs clearing and no other tab needs locking. A 503 without
+ * the server's code is not one of these: a proxy sends it too, after a change that went
+ * through as easily as before one, so it is treated as a reply that never came.
+ */
+export function nothingChanged(error: unknown) {
+    const status = (error as { status?: unknown } | null)?.status;
+    return stepRefused(error) || status === 429 || answeredRefusal(error);
+}
+/*
+ * A refusal that is the server's own: a 4xx whose body was the server's (`answered`, set by
+ * whoever read the reply). Only this says a change was not made. Anything else after the
+ * request has left (no reply, a 5xx, a proxy's page) leaves it open: the server may have made
+ * the change, or may yet.
+ */
+export function answeredRefusal(error: unknown) {
+    const { status, answered } = (error ?? {}) as { status?: unknown; answered?: unknown };
+    return typeof status === 'number' && status >= 400 && status < 500 && answered === true;
+}
+/* What a person is told when the server refused a change that would have replaced something. */
+const NOT_DONE: Record<SecurityAction, string> = {
+    password:
+        'Your password was not changed. Nothing changed, and your recovery phrase is still the one you have. Please try again.',
+    'master-key':
+        'Your account key was not rotated. Nothing changed, and your recovery phrase is still the one you have. Please try again.',
+    'recovery-key':
+        'Your recovery phrase was not replaced. Nothing changed, and your recovery phrase is still the one you have. Please try again.',
+};
+/* The server's reason, when it gave one of its own, then what that means for the account. */
+function notDone(error: unknown, action: SecurityAction) {
+    const said = error instanceof Error ? error.message : '';
+    const reason = said && said !== 'Please try again.' ? `${said} ` : '';
+    return new Error(`${reason}${NOT_DONE[action]}`, { cause: error });
+}
+/* A 200 that was not the server's answer to a change: what was asked for may or may not be done. */
+export class LostReply extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'LostReply';
+    }
+}
+const lostChange = (what: string) =>
+    new LostReply(
+        `The server’s answer didn’t arrive, so HushOS can’t tell whether ${what}. Check before you try again.`,
+    );
 
 export function createAuthClient(
     createTransport: () => CryptoTransport,
@@ -94,22 +275,68 @@ export function createAuthClient(
     const { store, canPersist } = createAuthStore();
     let restoring: Promise<void> | undefined;
     let busy = false;
+    /*
+     * A sign-in stopped at its second step: the worker holds what the password gave it until
+     * the answer brings the envelope. Like a running sign-in, it owns the worker (`owned`).
+     */
+    let pendingStep:
+        | { challenge: StepChallenge; epoch: number; until: number; owner: object | undefined }
+        | undefined;
+    /*
+     * The sign-in a page is waiting on, by number; 0 when the page that asked has gone
+     * (`cancelStep`). A reply that arrives after that finds nobody to ask for the step, so
+     * its challenge is refused instead of being left to hold the worker with no form to
+     * answer it.
+     */
+    let signIns = 0;
+    let askedBy: { attempt: number; owner: object | undefined } | null = null;
+    /*
+     * Whether the worker holds what a sign-in or a change is in the middle of: from its start
+     * until the account is open in the worker (or the flow ends). `busy` lasts longer, to the
+     * end of the flow: saving device access comes after the account is open, and by then other
+     * operations are as safe as they ever were and must not be refused.
+     */
+    let holding = false;
     let channel: BroadcastChannel | undefined;
     let listening = false;
     function lock() {
         epoch += 1;
+        pendingStep = undefined;
         const active = transport;
         transport = undefined;
         active?.lock();
         store.setState({ unlockedUserId: null });
     }
+    /*
+     * The step a sign-in is waiting at, while it can still be answered. Its life is counted
+     * from when it arrived, on a clock that only runs forward (`performance.now()`), never
+     * read off the device's own date: a phone or a computer whose clock runs minutes fast
+     * would otherwise find every step already over, and could never sign in. The server
+     * decides when a token has really ended; this only lets go of what the worker holds for
+     * one it has long refused.
+     */
+    function waitingStep() {
+        if (pendingStep && performance.now() > pendingStep.until) lock();
+        return pendingStep;
+    }
+    /*
+     * Whether a sign-in or a security change owns the worker. Between its two halves the worker
+     * holds state that any other account operation would throw away: one that fails resets
+     * the worker, and a restore or another sign-in replaces what it holds. So while this is
+     * true only the owner's own operations reach the worker (`own`); every other account
+     * operation is refused here, before it is sent. With a second step the gap between the
+     * halves is as long as a person takes to find a code.
+     */
+    const owned = () => busy || waitingStep() !== undefined;
+    /* Whether another account operation would throw away what the worker holds (see `rpc`). */
+    const guarded = () => holding || waitingStep() !== undefined;
     function listen() {
         if (listening) return;
         listening = true;
         void store.persist.rehydrate();
         withStorageEvents(store, () => {
             lock();
-            store.setState({ device: null });
+            store.setState({ device: null, locks: store.getState().locks + 1 });
         });
         store.subscribe((state, previous) => {
             if (
@@ -123,7 +350,9 @@ export function createAuthClient(
             if ('BroadcastChannel' in window) {
                 channel = new BroadcastChannel('hushos-auth');
                 channel.onmessage = (event) => {
-                    if (event.data === 'lock') lock();
+                    if (event.data !== 'lock') return;
+                    lock();
+                    store.setState({ locks: store.getState().locks + 1 });
                 };
             }
         } catch {
@@ -146,6 +375,7 @@ export function createAuthClient(
         }
     }
     function broadcastLock() {
+        store.setState({ locks: store.getState().locks + 1 });
         try {
             channel?.postMessage('lock');
         } catch {
@@ -156,8 +386,16 @@ export function createAuthClient(
         operation: K,
         input: WorkerRequests[K],
         options?: RequestOptions,
+        owner = false,
     ): Promise<WorkerResults[K]> {
         listen();
+        // Drive's and a family's operations fail without touching what the worker holds
+        // (ordinary-failure.ts), so they go through; an account operation that is not the
+        // owner's would not.
+        if (!owner && guarded() && !ordinaryFailure(String(operation)))
+            throw Object.assign(new Error('Please wait for the current sign-in attempt.'), {
+                kept: true,
+            });
         if (!transport) {
             const created = createTransport();
             transport = created;
@@ -190,6 +428,12 @@ export function createAuthClient(
             throw error;
         }
     }
+    /* The worker, for the sign-in or the change that owns it. */
+    const own = <K extends keyof WorkerRequests>(
+        operation: K,
+        input: WorkerRequests[K],
+        options?: RequestOptions,
+    ) => rpc(operation, input, options, true);
     /*
      * WebKit stores a CryptoKey in IndexedDB by wrapping it with a key from the system
      * keychain, and that step now and then fails at once with DataCloneError (seen in CI
@@ -390,33 +634,123 @@ export function createAuthClient(
     async function readSession() {
         const result = await api.session();
         // Not while a sign-in or a security change owns the worker: the next check will do it.
-        if (!result.user && result.removed && !busy) await forgetRemovedDevice().catch(() => {});
+        if (!result.user && result.removed && !owned()) await forgetRemovedDevice().catch(() => {});
         return result;
     }
-    async function login(email: string, password: string, options: LoginOptions = {}) {
+    /*
+     * `step`: what to do when the account asks for a second step. A page that can ask the
+     * person (`ask`) gets TwoStepRequired and answers with `answerStep`. A sign-in made on
+     * the person's behalf after something else (a new account, a reset, a security change)
+     * has nobody to ask, so it stops (`refuse`) and the person signs in themselves. The one
+     * that follows a reset (`AfterReset`) answers the step itself, with the recovery phrase the
+     * reset just made: the reset was authorised by the old phrase, the phrase answers any
+     * step, and nobody else holds the new one yet.
+     */
+    type AfterReset = {
+        /* The phrase the change made. */
+        phrase: string;
+        /*
+         * What this change made and no other could have: the salts of the account-key
+         * envelope and of the recovery envelope it sent. The server serving one of them back
+         * is the change itself showing. A version number is not: another device's change
+         * moves it to the same number.
+         */
+        envelopeSalt: string;
+        recoverySalt: string;
+        /*
+         * Called when the server's reply shows this change landed. Not being called proves
+         * nothing: the server may still commit a moment later. The password signing in is no
+         * evidence either: someone may reset to the password they already have, and a
+         * rotation keeps it.
+         */
+        landed: () => void;
+    };
+    async function login(
+        email: string,
+        password: string,
+        options: LoginOptions = {},
+        step: 'ask' | 'refuse' | AfterReset = 'refuse',
+    ) {
         const loginEpoch = epoch;
+        const attempt = ++signIns;
+        if (step === 'ask') askedBy = { attempt, owner: options.owner };
         const stored = identities && !options.asNewDevice ? await storedIdentity(identities) : null;
-        const start = await rpc('loginStart', { password });
+        const start = await own('loginStart', { password });
         const challenge = await api.loginStart({ email, ...start });
-        const finish = await rpc('loginFinish', challenge);
+        const finish = await own('loginFinish', challenge);
         const device = await deviceProof(stored, email, challenge.attemptToken);
         // A lock here has already dropped the export key; do not create a session for it.
         if (epoch !== loginEpoch) throw new Error('Your account was locked. Please sign in again.');
-        const result = await api.loginFinish({
-            attemptToken: challenge.attemptToken,
-            ...finish,
-            ...(device ? { device } : {}),
-        });
+        const reply = readLoginReply(
+            await api.loginFinish({
+                attemptToken: challenge.attemptToken,
+                ...finish,
+                ...(device ? { device } : {}),
+            }),
+        );
+        if (reply.kind === 'lost') throw new StepFailure('lost', LOST_REPLY);
+        if (reply.kind === 'step') {
+            if (step === 'refuse') throw new Error('This account asks for a second step.');
+            if (epoch !== loginEpoch)
+                throw new Error('Your account was locked. Please sign in again.');
+            if (typeof step === 'object') {
+                // The step names the recovery key the account has now. Only if that is the
+                // reset's is the new phrase the account's phrase: anything else is left
+                // unanswered, since the new words would only be a wrong answer, and counted.
+                if (reply.challenge.phrase?.wrappingSalt !== step.recoverySalt)
+                    throw new Error('This account asks for a second step.');
+                step.landed();
+                const answered = readLoginReply(
+                    await api.loginTwoStep(
+                        await proveStep(
+                            reply.challenge,
+                            { kind: 'phrase', phrase: step.phrase },
+                            own,
+                        ),
+                    ),
+                );
+                if (answered.kind !== 'session') throw new StepFailure('lost', LOST_REPLY);
+                return openSession(answered.session, loginEpoch);
+            }
+            // The page that asked left while the reply was on its way: nobody can answer.
+            if (askedBy?.attempt !== attempt)
+                throw new Error('This sign-in was left. Sign in again.');
+            const held = {
+                challenge: reply.challenge,
+                epoch: loginEpoch,
+                until: performance.now() + STEP_HELD_MS,
+                owner: options.owner,
+            };
+            pendingStep = held;
+            // A step left unanswered lets go of what the worker holds when its time is up, even
+            // with nothing else happening: the form can sit idle, and nothing else would look.
+            // A step answered, given up or replaced by then is not touched.
+            setTimeout(() => {
+                if (pendingStep === held) waitingStep();
+            }, STEP_HELD_MS + 1_000);
+            throw new TwoStepRequired(reply.challenge);
+        }
+        // The envelope the server hands over is the one this change sealed, if it landed.
+        if (typeof step === 'object' && reply.session.envelope.wrappingSalt === step.envelopeSalt)
+            step.landed();
+        return openSession(reply.session, loginEpoch);
+    }
+    /* The second half of a sign-in: the session is open, and the envelope opens the account here. */
+    async function openSession(result: LoginSession, loginEpoch: number) {
         // A device the proof did not bring back registers itself; never in the way of signing in.
         void ensureDevice(result.user, result.device).catch(() => {});
         try {
-            await rpc('unlock', { userId: result.user.id, envelope: result.envelope });
+            await own('unlock', { userId: result.user.id, envelope: result.envelope });
         } catch {
             throw new Error(
                 'Signed in, but your account key could not be unlocked. Please sign in again.',
             );
         }
         if (epoch !== loginEpoch) throw new Error('Your account was locked. Please sign in again.');
+        // The account is open in the worker: nothing is held that another operation could
+        // throw away. Let go before saying so, because the app acts on "unlocked" at once
+        // (Drive opens the identity), and saving device access below can take a while.
+        holding = false;
         store.setState({ unlockedUserId: result.user.id, rememberError: '' });
         // Which step a failed save stopped at, and why: the banner says only that it failed.
         let saving = 'storage';
@@ -428,7 +762,7 @@ export function createAuthClient(
             saving = 'lock check';
             if (epoch !== loginEpoch) throw new Error('Your account was locked.');
             saving = 'worker';
-            const device = await rpc('remember', {
+            const device = await own('remember', {
                 deviceKey: saved.key,
                 identity: {
                     userId: result.user.id,
@@ -453,6 +787,61 @@ export function createAuthClient(
             });
         }
         return result.user;
+    }
+    /* A step's answer as the server takes it: the phrase signs in the worker and never leaves it. */
+    async function proveStep(
+        challenge: StepChallenge,
+        answer: StepAnswer,
+        worker: typeof own,
+    ): Promise<StepInput> {
+        if (answer.kind !== 'phrase')
+            return {
+                token: challenge.token,
+                proof: { kind: answer.kind, code: answer.code.trim() },
+            };
+        if (!challenge.phrase)
+            throw new StepFailure('wrong', 'Your recovery phrase can’t be used for this step.');
+        const { signature } = await worker('twoStepPhrase', {
+            phrase: answer.phrase,
+            userId: challenge.phrase.userId,
+            wrappingSalt: challenge.phrase.wrappingSalt,
+            stepToken: challenge.token,
+        });
+        return { token: challenge.token, proof: { kind: 'phrase', signature } };
+    }
+    /*
+     * Answers the step a sign-in stopped at. A wrong answer leaves the step, and what the
+     * worker holds for it, in place: only a step that is over (or a reply that was lost)
+     * drops them, and then the person enters their password again.
+     */
+    async function answerStep(answer: StepAnswer) {
+        if (busy) throw new Error('Please wait for the current sign-in attempt.');
+        const pending = waitingStep();
+        if (!pending || pending.epoch !== epoch) throw new StepFailure('over', STEP_OVER);
+        busy = true;
+        holding = true;
+        try {
+            const reply = readLoginReply(
+                await api.loginTwoStep(await proveStep(pending.challenge, answer, own)),
+            );
+            if (reply.kind !== 'session') throw new StepFailure('lost', LOST_REPLY);
+            if (epoch !== pending.epoch) throw new StepFailure('over', STEP_OVER);
+            // The step is passed: from here this is an ordinary sign-in's second half.
+            pendingStep = undefined;
+            return await openSession(reply.session, pending.epoch);
+        } catch (error) {
+            // Passed, and then the account did not open here: a sign-in's failure, not the step's.
+            if (pendingStep !== pending) {
+                lock();
+                throw error;
+            }
+            const failure = stepFailure(error);
+            if (!failure.again) lock();
+            throw failure;
+        } finally {
+            busy = false;
+            holding = false;
+        }
     }
     let initializing: Promise<boolean> | undefined;
     function initializeAccount(user: SessionUser): Promise<boolean> {
@@ -487,13 +876,18 @@ export function createAuthClient(
     async function exclusive<T>(action: () => Promise<T>) {
         if (busy) throw new Error('Please wait for the current sign-in attempt.');
         busy = true;
+        holding = true;
+        // Whatever starts now takes the worker over: a sign-in left waiting at its step is dropped.
+        pendingStep = undefined;
         try {
             return await action();
         } catch (error) {
-            lock();
+            // A sign-in that stopped at its step has not failed: the worker keeps what it holds.
+            if (!(error instanceof TwoStepRequired)) lock();
             throw error;
         } finally {
             busy = false;
+            holding = false;
         }
     }
     /*
@@ -504,29 +898,89 @@ export function createAuthClient(
     async function withPassword<T>(
         password: string,
         action: (proof: { attemptToken: string; finishLoginRequest: string }) => Promise<T>,
+        // Which change the proof is for: the server binds the exchange to it.
+        reauth: AuthApi['devicesReauth'] = (input) => api.devicesReauth(input),
     ) {
-        try {
-            const start = await rpc('reauthStart', { password });
-            const challenge = await api.devicesReauth(start);
-            const finish = await rpc('reauthFinish', challenge);
-            return await action({ attemptToken: challenge.attemptToken, ...finish });
-        } finally {
-            // A server that refused the start (429, a lost session) leaves the password in the
-            // worker otherwise, until the next lock.
-            await rpc('reauthCancel', {}).catch(() => {});
-        }
+        // The session this was asked under: a lock or a sign-out since (and a sign-in by
+        // someone else after it) means the proof, or what it authorises, is not this person's.
+        const asked = epoch;
+        const proof = await provePassword(password, reauth, asked);
+        if (asked !== epoch) throw lockedSince();
+        return action(proof);
+    }
+    const lockedSince = () =>
+        new Error('This browser was locked or signed out meanwhile. Nothing was changed.');
+    /*
+     * One password exchange at a time. The worker holds a single exchange's state between its
+     * start and its finish, so a second one begun meanwhile would overwrite the first's, and
+     * its tidying-up would clear it: the first then fails with "Enter your password again"
+     * without its request ever being sent. That can happen without anyone pressing twice: other
+     * devices are removed in the background after two-step sign-in is turned on, while the
+     * person goes on to something else that asks for the password. Each exchange waits for
+     * the one before it to end. Only the exchange is queued: what is done with the proof (the
+     * request it authorises) runs outside the queue, so a slow request holds nobody up.
+     */
+    let proving: Promise<unknown> = Promise.resolve();
+    function provePassword(password: string, reauth: AuthApi['devicesReauth'], asked: number) {
+        const exchange = proving.then(async () => {
+            // Its turn came after a lock or a sign-out: never started, so it cannot prove a
+            // password against an account that signed in since.
+            if (asked !== epoch) throw lockedSince();
+            // An exchange that never settles (a request that hangs, a worker that goes quiet)
+            // is given up on after PASSWORD_EXCHANGE_MS, so it cannot hold every later one.
+            // Once given up on it does nothing more: its late reply must not finish, or
+            // clear, the exchange that took its place.
+            let over = false;
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            const run = (async () => {
+                const start = await rpc('reauthStart', { password });
+                const challenge = await reauth(start);
+                if (over) throw new Error('This took too long. Please try again.');
+                const finish = await rpc('reauthFinish', challenge);
+                return { attemptToken: challenge.attemptToken, ...finish };
+            })();
+            // Rejects only after it was given up on, when nobody is waiting for it any more.
+            run.catch(() => {});
+            try {
+                return await Promise.race([
+                    run,
+                    new Promise<never>((_resolve, reject) => {
+                        timer = setTimeout(() => {
+                            over = true;
+                            reject(new Error('This took too long. Please try again.'));
+                        }, PASSWORD_EXCHANGE_MS);
+                    }),
+                ]);
+            } finally {
+                clearTimeout(timer);
+                over = true;
+                // A server that refused the start (429, a lost session) leaves the password in
+                // the worker otherwise, until the next lock.
+                await rpc('reauthCancel', {}).catch(() => {});
+            }
+        });
+        // The next exchange waits for this one's end, whichever way it ends.
+        proving = exchange.catch(() => {});
+        return exchange;
     }
     return {
         store,
-        isAuthenticating: () => busy,
+        isAuthenticating: owned,
         initializeAccount,
         /* Other domains (Drive) reach the crypto worker through the same transport and lock. */
-        rpc,
+        rpc: <K extends keyof WorkerRequests>(
+            operation: K,
+            input: WorkerRequests[K],
+            options?: RequestOptions,
+        ) => rpc(operation, input, options),
         // `validated`: the caller has just confirmed `user` against the live session
         // (a route guard did), so the bundle can be checked without another request.
         async restore(user: SessionUser, options: { validated?: boolean } = {}) {
             listen();
             if (store.getState().unlockedUserId === user.id) return;
+            // A sign-in or a change owns the worker, a sign-in waiting at its step included:
+            // a restore would replace what the worker holds for it.
+            if (owned()) return;
             if (restoring) return restoring;
             restoring = (async () => {
                 // A trail of steps with timings: what a slow or failed restore was doing.
@@ -588,6 +1042,10 @@ export function createAuthClient(
                     if (epoch !== restoringEpoch) return stop('locked while opening the key');
                     store.setState({ unlockedUserId: user.id, rememberError: '' });
                 } catch (error) {
+                    // Refused before it reached the worker, because a sign-in began meanwhile
+                    // and owns it: that sign-in is left alone, and so is the saved access.
+                    if ((error as { kept?: unknown } | null)?.kept === true && owned())
+                        return stop('a sign-in began meanwhile');
                     lock();
                     // The trail is part of the message on purpose: a report from a phone
                     // then says which step stalled, and for how long. It goes to the
@@ -642,12 +1100,17 @@ export function createAuthClient(
         ) => api.requestEmail(purpose, email, intent),
         verifyEmail: (token: string) => api.verifyEmail(token),
         enrollment: (purpose: 'register' | 'recover' = 'register') => api.enrollment(purpose),
-        deleteAccount: (password: string) =>
+        deleteAccount: (password: string, twoStep?: StepInput) =>
             exclusive(async () => {
-                const start = await rpc('loginStart', { password });
+                const start = await own('loginStart', { password });
                 const challenge = await api.deleteStart(start);
-                const finish = await rpc('loginFinish', challenge);
-                await api.deleteFinish({ attemptToken: challenge.attemptToken, ...finish });
+                const finish = await own('loginFinish', challenge);
+                const reply = await api.deleteFinish({
+                    attemptToken: challenge.attemptToken,
+                    ...finish,
+                    ...(twoStep ? { twoStep } : {}),
+                });
+                if (!readDone(reply)) throw lostChange('your account was deleted');
                 lock();
                 store.setState({
                     device: null,
@@ -683,24 +1146,38 @@ export function createAuthClient(
         saveSettings: (input: Parameters<AuthApi['saveSettings']>[0]) => api.saveSettings(input),
         saveSettingsKey: (input: Parameters<AuthApi['saveSettingsKey']>[0]) =>
             api.saveSettingsKey(input),
+        /*
+         * Resets the password with the recovery phrase. A reset replaces the phrase: the old
+         * one stops working the moment the server accepts the reset, so the new one is taken
+         * out of the worker first and comes back with the result whatever follows. `user` is
+         * null when the sign-in after the reset did not happen here; `applied` is 'unknown'
+         * when the server's answer to the reset was lost and signing in could not settle it.
+         * Either way the page shows the new words: for someone whose only second step is the
+         * phrase, they are the one way back in.
+         */
         recover: (email: string, password: string, phrase: string) =>
             exclusive(async () => {
-                const start = await rpc('registerStart', { password });
+                const start = await own('registerStart', { password });
                 const challenge = await api.recoverStart(start);
-                const finish = await rpc('recoverFinish', { ...challenge, phrase });
+                const finish = await own('recoverFinish', { ...challenge, phrase });
+                const { phrase: fresh } = await own('recoveredPhrase', {});
+                // Whether the server said it applied the reset; false when its answer was lost.
+                let confirmed = true;
                 try {
-                    await api.recoverFinish({
+                    const reply = await api.recoverFinish({
                         userId: challenge.userId,
                         attemptToken: challenge.attemptToken,
                         credentialVersion: challenge.credentialVersion,
                         ...finish,
                     });
+                    if (!readReset(reply)) throw lostChange('your password was changed');
                 } catch (error) {
-                    // The server may have committed before the response was lost. Retrying
-                    // with the old phrase would then fail for the wrong reason.
-                    throw new Error(
-                        `${error instanceof Error ? error.message : 'Please try again.'} If it keeps failing, try signing in with your new password first: the reset may already have been applied.`,
-                    );
+                    // The server answered and refused: nothing changed, and the old phrase
+                    // is still the phrase. Only this says so.
+                    if (answeredRefusal(error)) throw notDone(error, 'password');
+                    // No answer, or not the server's: it may have applied the reset before the
+                    // reply was lost, or may apply it a moment from now.
+                    confirmed = false;
                 }
                 lock();
                 store.setState({
@@ -709,16 +1186,53 @@ export function createAuthClient(
                 });
                 broadcastLock();
                 await deviceKeys.clear().catch(() => {});
+                /*
+                 * Whether the reset landed: the server said so, or the sign-in below is
+                 * served what this reset made (the account-key envelope it sealed, or a step
+                 * naming the recovery key it sent). Without that the outcome is unknown,
+                 * whatever the sign-in did: the new password signing in may be the password
+                 * the account already had, and the account being as it was is no proof either,
+                 * since the server can commit a moment later. So from here on the new words
+                 * always come back: thrown away, they could turn out to be the only way in.
+                 */
+                let landed = confirmed;
                 try {
-                    return await login(email, password);
+                    // A second step is answered with the new phrase: nobody has seen it yet,
+                    // and someone whose only step is the phrase could not answer it otherwise.
+                    const user = await login(
+                        email,
+                        password,
+                        {},
+                        {
+                            phrase: fresh,
+                            envelopeSalt: finish.envelope.wrappingSalt,
+                            recoverySalt: finish.recovery.wrappingSalt,
+                            landed: () => {
+                                landed = true;
+                            },
+                        },
+                    );
+                    if (landed)
+                        return { user, phrase: fresh, applied: true as const, storage: null };
+                    // Signed in, to an account that is not what this reset made: perhaps the
+                    // password was the one it already had. The session was only the question.
+                    lock();
+                    await api.logout().catch(() => {});
+                    return {
+                        user: null,
+                        phrase: fresh,
+                        applied: 'unknown' as const,
+                        storage: null,
+                    };
                 } catch (error) {
-                    // The new password is in place either way; say why it did not sign in here.
-                    if (error instanceof DeviceStorageUnreadable)
-                        throw new Error(
-                            `Your password was changed, but ${error.why}, so you weren’t signed in here. Sign in with your new password.`,
-                            { cause: error },
-                        );
-                    throw new Error('Your password was changed. Sign in with your new password.');
+                    lock();
+                    // `storage` says when this browser's device key was why it did not sign in.
+                    return {
+                        user: null,
+                        phrase: fresh,
+                        applied: landed ? (true as const) : ('unknown' as const),
+                        storage: error instanceof DeviceStorageUnreadable ? error.why : null,
+                    };
                 }
             }),
         changeSecurity: (
@@ -726,26 +1240,51 @@ export function createAuthClient(
             action: SecurityAction,
             password: string,
             newPassword?: string,
+            /* The second step, for an account that has it on: asked for before this is called. */
+            twoStep?: StepInput,
         ) =>
+            /*
+             * `phrase` in the result: the recovery phrase a rotation made (a new recovery key
+             * or a new master key), whenever the change went through, or may have, and this
+             * browser was not signed in again. The old phrase is dead once the server accepts
+             * the change, and the page that shows the new one is behind the sign-in: someone
+             * whose only second step is the phrase would be locked out without these words.
+             */
             exclusive(async () => {
                 lock();
-                const start = await rpc('securityStart', { action, password, newPassword });
+                const start = await own('securityStart', { action, password, newPassword });
                 const challenge = await api.securityStart({ action, ...start });
                 if (challenge.userId !== user.id || challenge.action !== action)
                     throw new Error('Your account changed. Sign in again.');
                 const changeEpoch = epoch;
-                const finish = await rpc('securityFinish', challenge);
+                const finish = await own('securityFinish', challenge);
+                // A rotation's new words, out of the worker before anything is sent.
+                const fresh =
+                    action === 'password' ? null : (await own('recoveredPhrase', {})).phrase;
                 if (epoch !== changeEpoch)
                     throw new Error('Your account was locked. Please try again.');
                 let committed = true;
                 let failure: unknown;
                 try {
-                    await api.securityFinish({
+                    const reply = await api.securityFinish({
                         action,
                         attemptToken: challenge.attemptToken,
                         ...finish,
+                        ...(twoStep ? { twoStep } : {}),
+                        // This device signs in again below. With the step on, the server
+                        // then writes its session with the change, so that sign-in is not
+                        // asked for a second code a moment after the first.
+                        keepSession: 1,
                     });
+                    // A 200 that is not the server's answer says nothing either way: it is
+                    // handled below as a reply that never came.
+                    if (!readDone(reply)) throw lostChange('your change was saved');
                 } catch (error) {
+                    // The server answered, and refused before changing anything: nothing this
+                    // browser keeps needs clearing, and no other tab needs locking. The step's
+                    // own refusal goes to the page as it is, to be answered again.
+                    if (stepRefused(error)) throw error;
+                    if (nothingChanged(error)) throw notDone(error, action);
                     // A lost response leaves the outcome unknown: the server may have
                     // replaced the credentials and revoked every session. Clean up as if it
                     // had, then let the live session say which it was.
@@ -759,7 +1298,17 @@ export function createAuthClient(
                 });
                 broadcastLock();
                 await deviceKeys.clear().catch(() => {});
-                if (!committed) {
+                /*
+                 * Whether the change landed: the server said so, or the sign-in below is
+                 * served what this change made (see `AfterReset`). Without that the outcome
+                 * is unknown, and for a rotation the new words always come back: the account
+                 * looking as it was proves nothing, since the server can commit a moment
+                 * later, and words thrown away could be the only way in.
+                 */
+                let landed = committed;
+                if (!committed && !fresh) {
+                    // A password change replaces no phrase, and has nothing to learn by
+                    // signing in: the live session says which it was, as before.
                     let live: SessionUser | null = null;
                     try {
                         live = (await readSession()).user;
@@ -767,24 +1316,40 @@ export function createAuthClient(
                         /* Unknown either way. */
                     }
                     if (live && live.credentialVersion === user.credentialVersion) throw failure;
-                    return { signedIn: false, uncertain: true, storage: null };
+                    return { signedIn: false, uncertain: true, storage: null, phrase: null };
                 }
-                // Committed: the server replaced the credentials and ended every session, so a
-                // sign-in that fails here leaves the person signed out, on the sign-in page, with
-                // this browser's device key kept. `storage` says when that was the reason.
+                // The server replaced the credentials and ended every session, or may have.
+                // A sign-in that fails here leaves the person signed out, on the sign-in page,
+                // with this browser's device key kept. After a rotation it answers a second
+                // step with the new phrase, when the step names the recovery key it made.
+                let signedIn = false;
+                let storage: DeviceStorageReason | null = null;
                 try {
                     await login(
                         user.email,
                         action === 'password' ? (newPassword ?? password) : password,
+                        {},
+                        fresh && finish.recovery
+                            ? {
+                                  phrase: fresh,
+                                  envelopeSalt: finish.envelope.wrappingSalt,
+                                  recoverySalt: finish.recovery.wrappingSalt,
+                                  landed: () => {
+                                      landed = true;
+                                  },
+                              }
+                            : 'refuse',
                     );
-                    return { signedIn: true, uncertain: false, storage: null };
+                    signedIn = true;
                 } catch (error) {
-                    return {
-                        signedIn: false,
-                        uncertain: false,
-                        storage: error instanceof DeviceStorageUnreadable ? error.reason : null,
-                    };
+                    if (error instanceof DeviceStorageUnreadable) storage = error.reason;
                 }
+                // Signed in on what this change made (or the server said it was made): the app
+                // shows the new phrase itself. In every other case a rotation's words go to
+                // the page: with `uncertain`, beside the old ones until a sign-in settles it.
+                if (signedIn && landed)
+                    return { signedIn: true, uncertain: false, storage: null, phrase: null };
+                return { signedIn, uncertain: !landed, storage, phrase: fresh };
             }),
         session: () => readSession(),
         /* Whether this tab cleared a removed device; said once, on the sign-in page. */
@@ -805,13 +1370,95 @@ export function createAuthClient(
         removeOtherDevices: (password: string) =>
             withPassword(password, (proof) => api.removeOtherDevices(proof)),
         updateProfile: (name: string) => api.updateProfile(name),
+        /*
+         * Signs in. For an account that asks for a second step it throws TwoStepRequired with
+         * the step to answer, and `answerStep` finishes the sign-in.
+         */
         login: (email: string, password: string, options?: LoginOptions) =>
-            exclusive(() => login(email, password, options)),
+            exclusive(() => login(email, password, options, 'ask')),
+        answerStep,
+        /*
+         * Leaves a sign-in that is waiting at its step: what the worker held for it goes. With
+         * `owner`, only that form's own sign-in is left: another form going away (the unlock
+         * form is mounted in more than one place) must not take a step it never started.
+         */
+        cancelStep(owner?: object) {
+            const mine = (other: object | undefined) => owner === undefined || other === owner;
+            // A sign-in still on its way to the server is no longer anyone's to answer either.
+            if (askedBy && mine(askedBy.owner)) askedBy = null;
+            if (pendingStep && mine(pendingStep.owner)) lock();
+        },
+        /*
+         * The step for a change this session is about to make, or null for an account that
+         * has none: asked before the change, and answered with `proveStep`.
+         */
+        async stepChallenge(purpose: StepPurpose) {
+            let reply: unknown;
+            try {
+                reply = await api.twoStepChallenge(purpose);
+            } catch (error) {
+                if ((error as { status?: unknown } | null)?.status === 409) return null;
+                throw error;
+            }
+            const challenge = readStepChallenge(reply);
+            if (!challenge) throw new Error('Please try again.');
+            return challenge;
+        },
+        proveStep: (challenge: StepChallenge, answer: StepAnswer) =>
+            proveStep(challenge, answer, rpc),
+        twoStep: () => api.twoStep(),
+        /* Starts adding an authenticator app: the password again and, once the step is on, the step. */
+        startAuthenticator: (password: string, twoStep?: StepInput) =>
+            withPassword(
+                password,
+                async (proof) => {
+                    const app = readEnrolment(
+                        await api.twoStepStartTotp({ ...proof, ...(twoStep ? { twoStep } : {}) }),
+                    );
+                    if (!app) throw lostChange('the setup was started');
+                    return app;
+                },
+                (input) => api.twoStepReauth(input),
+            ),
+        /* Only the server's own answer says the app was confirmed: anything else is a lost reply. */
+        async confirmAuthenticator(id: string, code: string) {
+            const confirmed = readConfirmed(await api.twoStepConfirmTotp(id, code.trim()));
+            if (!confirmed) throw lostChange('your authenticator app was added');
+            return confirmed;
+        },
+        removeTwoStepMethod: (id: string, password: string, twoStep?: StepInput) =>
+            withPassword(
+                password,
+                async (proof) => {
+                    const removed = readRemoved(
+                        await api.twoStepRemoveMethod(id, {
+                            ...proof,
+                            ...(twoStep ? { twoStep } : {}),
+                        }),
+                    );
+                    if (!removed) throw lostChange('two-step sign-in was turned off');
+                    return removed;
+                },
+                (input) => api.twoStepReauth(input),
+            ),
+        newBackupCodes: (password: string, twoStep: StepInput) =>
+            withPassword(
+                password,
+                async (proof) => {
+                    const made = readBackupCodes(
+                        await api.twoStepBackupCodes({ ...proof, twoStep }),
+                    );
+                    if (!made) throw lostChange('new backup codes were made');
+                    return made;
+                },
+                (input) => api.twoStepReauth(input),
+            ),
+        securityEvents: () => api.securityEvents(),
         register: (email: string, name: string, password: string) =>
             exclusive(async () => {
-                const start = await rpc('registerStart', { password });
+                const start = await own('registerStart', { password });
                 const challenge = await api.registerStart(start);
-                const finish = await rpc('registerFinish', challenge);
+                const finish = await own('registerFinish', challenge);
                 await api.registerFinish({ name, ...finish });
                 try {
                     // A new account has no device here to prove: no need to read the store.

@@ -10,6 +10,8 @@ import VisionKit
  * and check. The link still works on the web too, on any device.
  */
 struct RecoveryView: View {
+    /* Which start of the reset screen this is (`AppModel.recoveryRun`). */
+    let run: Int
     @Environment(AppModel.self) private var model
     @State private var step: Step = .email
     @State private var email = ""
@@ -42,13 +44,18 @@ struct RecoveryView: View {
                 case .checking: checking
                 case let .linkFailed(why): linkFailed(why)
                 case let .kit(enrollment): RecoverKitStep(enrollment: enrollment) { step = .done($0) }
-                case let .done(account): NewPhraseStep(account: account) { model.wordsChecked(); model.recoveryDone() }
+                case let .done(account):
+                    NewPhraseStep(account: account) {
+                        // Signed in: the drive. Not signed in (the sign-in after the reset didn't happen): sign-in, told why.
+                        if account.user != nil { model.wordsChecked(); model.recoveryDone() } else { Task { await model.recoveredSignedOut(account) } }
+                    }
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if !finished {
-                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { model.recoveryDone() } }
+                    // Not while a reset is out: its new words come back to this screen, and closed it would show them nowhere.
+                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { model.recoveryDone() }.disabled(model.resetHolds) }
                 }
             }
         }
@@ -59,7 +66,8 @@ struct RecoveryView: View {
 
     /* The emailed link arrived (or opened the app): trade its token for the enrollment. */
     private func openLink() async {
-        guard let token = model.recoveryLink else { return }
+        // A screen the model has started over from (`recoveryRun`) is on its way out: the one-use link is the new screen's to spend.
+        guard run == model.recoveryRun, let token = model.recoveryLink else { return }
         step = .checking
         // Cleared only once the check is done: clearing it first changes the task's id, which
         // cancels this task and its request mid-flight.
@@ -444,28 +452,40 @@ private struct NewPhraseStep: View {
     let finish: () -> Void
     @State private var saved = false
     @State private var checking = false
+    /* The reset did not sign the app in: the words are shown from memory, in the web's panel and its words (`StepWords.newPhrase…`). */
+    private var held: Bool { account.user == nil }
 
     var body: some View {
         Form {
             Section {} header: {
-                Text("Your old phrase no longer works. Save these 24 words before you leave this page.")
+                // Nothing could say whether the reset was made (its reply was lost): the words are shown, and the old ones kept.
+                Text(!account.certain ? StepWords.resetUncertain
+                    : held ? StepWords.newPhraseAfterReset
+                    : "Your old phrase no longer works. Save these 24 words before you leave this page.")
                     .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).textCase(nil)
             }
-            Section { PhraseGrid(phrase: account.phrase, columns: 3).padding(.vertical, Alpine.Space.s2).alpineRow() }
+            Section {
+                PhraseGrid(phrase: account.phrase, columns: 3).padding(.vertical, Alpine.Space.s2).alpineRow()
+            } footer: {
+                if held { Text(StepWords.newPhraseOnce) }
+            }
             Section {
                 Button {
-                    Task { await KitShare.present(phrase: account.phrase, email: account.user.email, accountId: account.user.id) }
+                    // The new recovery key came with the reset: with no session there is nothing to read it back with.
+                    let recovery = try? JSONSerialization.jsonObject(with: account.recovery) as? [String: Any]
+                    Task { await KitShare.present(phrase: account.phrase, email: account.email, accountId: account.userId, recovery: recovery) }
                 } label: { Text("Save the kit").frame(maxWidth: .infinity) }
                     .buttonStyle(PrimaryCapsuleStyle())
                     .listRowBackground(Color.clear).listRowInsets(EdgeInsets())
             }
-            SavedCheck(saved: $saved, title: "Continue") { checking = true }
+            SavedCheck(saved: $saved, title: held ? StepWords.newPhraseSaved : "Continue") { checking = true }
         }
         .alpineGrouped()
-        .navigationTitle("Your new recovery phrase")
+        .navigationTitle(held ? StepWords.newPhraseTitle : "Your new recovery phrase")
         .navigationDestination(isPresented: $checking) {
-            CheckWordsView(phrase: account.phrase, recoveryVersion: account.recoveryVersion) {
-                NoticeCenter.shared.show("Recovery phrase saved")
+            // With no session the check is only made here; it is recorded at the sign-in that follows.
+            CheckWordsView(phrase: account.phrase, recoveryVersion: account.recoveryVersion, records: account.user != nil) {
+                if account.user != nil { NoticeCenter.shared.show("Recovery phrase saved") }
                 finish()
             }
         }

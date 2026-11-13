@@ -110,7 +110,12 @@ async function challenge(cookie: string, purpose: string) {
 }
 
 /* A password change as the client sends it: the old password proved, a record for the new one. */
-async function changePassword(cookie: string, to: string, twoStep?: unknown): Promise<Reply> {
+async function changePassword(
+    cookie: string,
+    to: string,
+    twoStep?: unknown,
+    extra: Record<string, unknown> = {},
+): Promise<Reply> {
     const registration = client.startRegistration({ password: to });
     const { challenge: started, proof } = await edge.passwordProof(
         '/security/start',
@@ -140,6 +145,71 @@ async function changePassword(cookie: string, to: string, twoStep?: unknown): Pr
                 encryptedKey: b64(48),
             },
             ...(twoStep ? { twoStep } : {}),
+            ...extra,
+        },
+        { cookie },
+    );
+}
+
+/*
+ * An account-key rotation as the client sends it: the password proved, a new record, and
+ * everything the old root wrapped (the recovery key, the identity, each workspace key) sent
+ * back re-wrapped under the next key version.
+ */
+async function rotateAccountKey(who: Account, cookie: string, twoStep: unknown): Promise<Reply> {
+    const registration = client.startRegistration({ password: 'correct horse battery staple' });
+    const { challenge: started, proof } = await edge.passwordProof(
+        '/security/start',
+        { action: 'master-key', registrationRequest: registration.registrationRequest },
+        { cookie },
+    );
+    const { registrationRecord } = client.finishRegistration({
+        password: 'correct horse battery staple',
+        clientRegistrationState: registration.clientRegistrationState,
+        registrationResponse: started.registrationResponse,
+        identifiers: OPAQUE_IDENTIFIERS,
+        keyStretching: KEY_STRETCHING,
+    });
+    const keyVersion = started.envelope.keyVersion + 1;
+    const made = await createRecovery(
+        new Uint8Array(randomBytes(32)),
+        who.userId,
+        started.recovery.recoveryVersion + 1,
+        keyVersion,
+    );
+    return edge.call(
+        'POST',
+        '/security/finish',
+        {
+            action: 'master-key',
+            ...proof,
+            registrationRecord,
+            envelope: {
+                envelopeVersion: 1,
+                keyVersion,
+                credentialVersion: started.envelope.credentialVersion + 1,
+                wrappingSalt: b64(32),
+                wrappingNonce: b64(24),
+                encryptedKey: b64(48),
+            },
+            recovery: made.recovery,
+            identity: {
+                ...started.identity,
+                encryptionPrivateKeyNonce: b64(24),
+                encryptedEncryptionPrivateKey: b64(48),
+                signingSeedNonce: b64(24),
+                encryptedSigningSeed: b64(48),
+            },
+            workspaces: (started.workspaces as Record<string, unknown>[]).map(
+                ({ groupId: _group, ...grant }) => ({
+                    ...grant,
+                    keyVersion,
+                    wrappingSalt: b64(32),
+                    wrappingNonce: b64(24),
+                    encryptedKey: b64(48),
+                }),
+            ),
+            twoStep,
         },
         { cookie },
     );
@@ -752,6 +822,43 @@ describe('changes that need the step', () => {
         );
     }, 120_000);
 
+    test('replacing the app answers that it was replaced, with no codes: the new app signs in and the old one no longer does', async () => {
+        const { who, cookie, secret, codes } = await stepped();
+        const step = await challenge(cookie, 'two-step');
+        const { proof } = await edge.passwordProof('/two-step/reauth', {}, { cookie });
+        const enrol = await edge.call(
+            'POST',
+            '/two-step/totp',
+            {
+                ...proof,
+                twoStep: { token: step.token, proof: { kind: 'backup', code: codes[0]! } },
+            },
+            { cookie },
+        );
+        expect(enrol.status).toBe(200);
+        const confirmed = await edge.call(
+            'POST',
+            `/two-step/totp/${enrol.body.id}/confirm`,
+            { code: await appCode(enrol.body.secret, -1) },
+            { cookie },
+        );
+        // Exactly this: a client takes nothing else without codes for a confirmation.
+        expect(confirmed).toMatchObject({ status: 200 });
+        expect(confirmed.body).toEqual({ replaced: true });
+        const status = (await edge.call('GET', '/two-step', undefined, { cookie })).body;
+        expect(status.methods).toMatchObject([{ id: enrol.body.id, kind: 'totp' }]);
+        expect(status.backupCodesLeft).toBe(9);
+        // The old app's code is a wrong answer now; the new app's passes.
+        const asked = await toStep(who);
+        expect(
+            await answer(asked.token, { kind: 'totp', code: await appCode(secret) }),
+        ).toMatchObject({ status: 401, body: { code: 'step-wrong' } });
+        expect(
+            (await answer(asked.token, { kind: 'totp', code: await appCode(enrol.body.secret) }))
+                .status,
+        ).toBe(200);
+    }, 90_000);
+
     test('the security log lists what happened, for the account’s own sessions only', async () => {
         const { who, cookie, secret } = await stepped();
         const step = await toStep(who);
@@ -867,6 +974,212 @@ describe('the recovery phrase and the step', () => {
         expect(passed.session).toBeTruthy();
     }, 90_000);
 
+    test('a rotation authorised with the old phrase tells of that use and of itself, once each: the new phrase then answers without a second email, until fifteen minutes on', async () => {
+        const { who, cookie } = await stepped();
+        const step = await challenge(cookie, 'recovery-key');
+        // The phrase from sign-up authorises its own replacement. It is the key that answered
+        // that counts, not the one the change leaves behind: that one is seconds old.
+        const rotated = await rotateRecoveryKey(who, cookie, {
+            token: step.token,
+            proof: await edge.phraseProof(who.phrase, step),
+        });
+        expect(rotated.reply.status).toBe(200);
+        expect(await edge.notices('phrase-used')).toMatchObject([{ to: who.email }]);
+        const replaced = await edge.notices('phrase-replaced');
+        expect(replaced).toMatchObject([
+            {
+                to: who.email,
+                subject: expect.stringContaining('Your recovery phrase was replaced'),
+            },
+        ]);
+        // A rotation ends every session, and its email says so: the device that made it is
+        // signed out here too (this client did not ask to be kept).
+        expect(await rows.sessions()).toHaveLength(0);
+        expect(replaced[0]!.text).toContain('your other devices were signed out');
+
+        // The sign-in that follows, answered with the new words (as the client does on the
+        // person's behalf), sends nothing on top of those two.
+        const first = await toStep(who);
+        expect(
+            (await answer(first.token, await edge.phraseProof(rotated.phrase, first))).status,
+        ).toBe(200);
+        await edge.quiet();
+        expect(edge.outbox.filter((notice) => notice.kind === 'phrase-used')).toHaveLength(1);
+        expect(edge.outbox.filter((notice) => notice.kind === 'phrase-replaced')).toHaveLength(1);
+        // It is in the security log all the same: a sign-in by phrase.
+        expect(await rows.log(who.userId)).toContain('sign-in:phrase');
+
+        // Sixteen minutes on, the phrase is no longer fresh from a change: its use is told.
+        vi.setSystemTime(Date.now() + 16 * 60_000);
+        edge.state.address = '198.51.100.7';
+        const later = await toStep(who);
+        expect(
+            (await answer(later.token, await edge.phraseProof(rotated.phrase, later))).status,
+        ).toBe(200);
+        expect(await edge.notices('phrase-used', 2)).toHaveLength(2);
+        expect(edge.outbox.filter((notice) => notice.kind === 'phrase-replaced')).toHaveLength(1);
+    }, 120_000);
+
+    test('a phrase made minutes ago that authorises the next rotation is not told of again, and a refused rotation tells of nothing', async () => {
+        const { who, cookie, secret } = await stepped();
+        const step = await challenge(cookie, 'recovery-key');
+        const rotated = await rotateRecoveryKey(who, cookie, {
+            token: step.token,
+            proof: { kind: 'totp', code: await appCode(secret) },
+        });
+        expect(rotated.reply.status).toBe(200);
+        expect(await edge.notices('phrase-replaced')).toHaveLength(1);
+        // The rotation signed this device out with the rest; it comes back with the new words.
+        const back = await toStep(who);
+        const session = (await answer(back.token, await edge.phraseProof(rotated.phrase, back)))
+            .session!;
+        expect(session).toBeTruthy();
+
+        // The words from sign-up no longer answer: nothing is rotated, and nothing is said of
+        // a rotation that did not happen.
+        const refused = await challenge(session, 'recovery-key');
+        const stale = await rotateRecoveryKey(who, session, {
+            token: refused.token,
+            proof: await edge.phraseProof(who.phrase, refused),
+        });
+        expect(stale.reply).toMatchObject({ status: 403, body: { code: 'step-wrong' } });
+
+        // The words the first rotation made, used at once to authorise a second: the person
+        // was handed them a moment ago, so only the rotation itself is told.
+        const again = await challenge(session, 'recovery-key');
+        const second = await rotateRecoveryKey(who, session, {
+            token: again.token,
+            proof: await edge.phraseProof(rotated.phrase, again),
+        });
+        expect(second.reply.status).toBe(200);
+        expect(await edge.notices('phrase-replaced', 2)).toHaveLength(2);
+        await edge.quiet();
+        expect(edge.outbox.filter((notice) => notice.kind === 'phrase-used')).toEqual([]);
+    }, 120_000);
+
+    test('an account-key rotation tells of itself once, as that and not as a new phrase alone', async () => {
+        const { who, cookie, secret } = await stepped();
+        const step = await challenge(cookie, 'master-key');
+        const rotated = await rotateAccountKey(who, cookie, {
+            token: step.token,
+            proof: { kind: 'totp', code: await appCode(secret) },
+        });
+        expect(rotated).toMatchObject({ status: 200, body: { success: true } });
+        expect(await edge.notices('account-key-rotated')).toMatchObject([
+            { to: who.email, subject: expect.stringContaining('Your account key was rotated') },
+        ]);
+        await edge.quiet();
+        expect(edge.outbox.filter((notice) => notice.kind === 'account-key-rotated')).toHaveLength(
+            1,
+        );
+        expect(edge.outbox.filter((notice) => notice.kind === 'phrase-replaced')).toEqual([]);
+    }, 90_000);
+
+    test('a reset with the recovery phrase tells the account once that it happened and signs every device out; its new phrase then answers the step without a second email', async () => {
+        const { who, cookie } = await stepped();
+        expect(await rows.sessions()).toHaveLength(1);
+        // Without the phrase's key nothing is reset, and nothing is said of a reset.
+        const refused = await edge.reset(who, who.phrase, 'a password chosen at the reset', {
+            spoiled: true,
+        });
+        expect(refused.reply.status).toBe(400);
+        await edge.quiet();
+        expect(edge.outbox.filter((notice) => notice.kind === 'password-reset')).toEqual([]);
+
+        const reset = await edge.reset(who, who.phrase, 'a password chosen at the reset');
+        expect(reset.reply.status).toBe(200);
+        // What the email says happened did: the device that was signed in no longer is.
+        expect(await rows.sessions()).toHaveLength(0);
+        expect((await edge.call('GET', '/two-step', undefined, { cookie })).status).toBe(401);
+        const told = await edge.notices('password-reset');
+        expect(told).toMatchObject([
+            {
+                to: who.email,
+                subject: expect.stringContaining(
+                    'Your password was reset with your recovery phrase',
+                ),
+            },
+        ]);
+        expect(told[0]!.text).toContain('every device was signed out');
+        // The old phrase proved the account at the reset; it answered no step, and no step's notice is sent.
+        await edge.quiet();
+        expect(edge.outbox.filter((notice) => notice.kind === 'phrase-used')).toEqual([]);
+
+        // The sign-in after it, with the new password, answers its step with the new words
+        // on the person's behalf: the reset has told the account, and nothing more is sent.
+        const first = await edge.signIn(who, {
+            twoStep: true,
+            password: 'a password chosen at the reset',
+        });
+        expect(first.status).toBe(200);
+        const stale = await answer(
+            first.body.twoStep.token,
+            await edge.phraseProof(who.phrase, first.body.twoStep),
+        );
+        expect(stale).toMatchObject({ status: 401, body: { code: 'step-wrong' } });
+        expect(
+            (
+                await answer(
+                    first.body.twoStep.token,
+                    await edge.phraseProof(reset.phrase, first.body.twoStep),
+                )
+            ).status,
+        ).toBe(200);
+        await edge.quiet();
+        expect(edge.outbox.filter((notice) => notice.kind === 'phrase-used')).toEqual([]);
+        expect(edge.outbox.filter((notice) => notice.kind === 'password-reset')).toHaveLength(1);
+
+        // Sixteen minutes on, the phrase is no longer fresh from the reset: its use is told.
+        vi.setSystemTime(Date.now() + 16 * 60_000);
+        edge.state.address = '198.51.100.7';
+        const later = await edge.signIn(who, {
+            twoStep: true,
+            password: 'a password chosen at the reset',
+        });
+        expect(
+            (
+                await answer(
+                    later.body.twoStep.token,
+                    await edge.phraseProof(reset.phrase, later.body.twoStep),
+                )
+            ).status,
+        ).toBe(200);
+        expect(await edge.notices('phrase-used')).toMatchObject([{ to: who.email }]);
+        expect(edge.outbox.filter((notice) => notice.kind === 'password-reset')).toHaveLength(1);
+    }, 120_000);
+
+    test('a password change sends no rotation notice, and an account’s first phrase is told of when it answers a sign-in', async () => {
+        const { who, cookie, secret } = await stepped();
+        const step = await challenge(cookie, 'password');
+        const changed = await changePassword(cookie, 'a new long password for this', {
+            token: step.token,
+            proof: { kind: 'totp', code: await appCode(secret) },
+        });
+        expect(changed.status).toBe(200);
+        // An account's first phrase was made at sign-up, by no change: its use is told at once.
+        const asked = await edge.signIn(who, {
+            twoStep: true,
+            password: 'a new long password for this',
+        });
+        expect(asked.status).toBe(200);
+        expect(
+            (
+                await answer(
+                    asked.body.twoStep.token,
+                    await edge.phraseProof(who.phrase, asked.body.twoStep),
+                )
+            ).status,
+        ).toBe(200);
+        expect(await edge.notices('phrase-used')).toMatchObject([{ to: who.email }]);
+        await edge.quiet();
+        expect(
+            edge.outbox.filter(
+                (notice) =>
+                    notice.kind === 'phrase-replaced' || notice.kind === 'account-key-rotated',
+            ),
+        ).toEqual([]);
+    }, 120_000);
+
     test('the step is not turned on for an account without a recovery key, and none can be added from a session once it is on', async () => {
         const recoveryRows = async () =>
             (await edge.db.select().from(edge.schema.accountRecoveryKeys)).map((row) => row.userId);
@@ -959,6 +1272,8 @@ describe('what the server does about its own faults', () => {
         const unavailable = {
             status: 503,
             body: {
+                // The server's own 503, told from a proxy's by its code.
+                code: 'step-unavailable',
                 message:
                     'Two-step sign-in is unavailable on this server right now. Use your recovery phrase, or try again later.',
             },
@@ -1164,5 +1479,102 @@ describe('a spent code budget', () => {
         const passed = await answer(step.token, await edge.phraseProof(who.phrase, step));
         expect(passed.status).toBe(200);
         expect(passed.session).toBeTruthy();
+    }, 120_000);
+});
+
+describe('the session of the device that made a security change', () => {
+    const next = 'a new password entirely';
+    const code = async (cookie: string, secret: string) => ({
+        token: (await challenge(cookie, 'password')).token,
+        proof: { kind: 'totp', code: await appCode(secret) },
+    });
+
+    test('is written with the change when the client asks and the step passed: capped, on the same device, and the sign-in that follows needs no second code', async () => {
+        const { who, cookie, secret, deviceId } = await stepped();
+        const changed = await changePassword(cookie, next, await code(cookie, secret), {
+            keepSession: 1,
+        });
+        expect(changed).toMatchObject({ status: 200, body: { success: true } });
+        // The token is the cookie and nowhere in the reply.
+        expect(changed.session).toMatch(/^[A-Za-z0-9_-]{43}$/);
+        expect(JSON.stringify(changed.body)).not.toContain(changed.session!);
+        const [kept, ...others] = await rows.sessions();
+        expect(others).toEqual([]);
+        expect(kept).toMatchObject({ userId: who.userId, deviceId, credentialVersion: 2 });
+        expect(kept!.tokenHash.equals(edge.sha256(changed.session!))).toBe(true);
+        expect(kept!.twoStepAt).toBeInstanceOf(Date);
+        // Ten minutes at most, however long an ordinary session lasts.
+        expect(kept!.expiresAt.getTime() - Date.now()).toBeLessThanOrEqual(10 * 60_000);
+        expect(kept!.expiresAt.getTime()).toBeGreaterThan(Date.now());
+
+        // The device signs in with the new password. The code it just used is spent, and it
+        // is not asked for another: the session it replaces passed the step a moment ago.
+        const back = await edge.signIn(who, {
+            cookie: changed.session,
+            twoStep: true,
+            password: next,
+        });
+        expect(back.status).toBe(200);
+        expect(back.body.twoStep).toBeUndefined();
+        expect(back.body.user.id).toBe(who.userId);
+        expect(back.body.device.id).toBe(deviceId);
+        expect(await rows.sessions()).toHaveLength(1);
+        // Anyone without that cookie is asked for the step, new password or not.
+        const stranger = await edge.signIn(who, { twoStep: true, password: next });
+        expect(stranger.body.twoStep).toBeDefined();
+        expect(stranger.session).toBeUndefined();
+    }, 90_000);
+
+    test('lasts its ten minutes and no longer, however much its cookie is used', async () => {
+        const { who, cookie, secret } = await stepped();
+        const changed = await changePassword(cookie, next, await code(cookie, secret), {
+            keepSession: 1,
+        });
+        const kept = changed.session!;
+        const session = () => edge.call('GET', '/session', undefined, { cookie: kept });
+        const start = Date.now();
+        expect((await session()).body.user.id).toBe(who.userId);
+        // Minute six: used, which slides an ordinary session's deadline by days.
+        vi.setSystemTime(start + 6 * 60_000);
+        expect((await session()).body.user.id).toBe(who.userId);
+        const [row] = await rows.sessions();
+        expect(row!.expiresAt.getTime()).toBeLessThanOrEqual(start + 10 * 60_000);
+        // Minute eleven: gone.
+        vi.setSystemTime(start + 11 * 60_000);
+        expect((await session()).body.user).toBeNull();
+    }, 90_000);
+
+    test('is not written for a client that did not ask, for a change the step refused, or for an account without the step', async () => {
+        // The phone apps and older bundles: today's reply, every session ended, the cookie cleared.
+        const quiet = await stepped();
+        const plain = await changePassword(
+            quiet.cookie,
+            next,
+            await code(quiet.cookie, quiet.secret),
+        );
+        expect(plain).toMatchObject({ status: 200, session: null });
+        expect(await rows.sessions()).toHaveLength(0);
+
+        // Asked for, with a wrong code: nothing changes and nothing is minted.
+        const refused = await stepped();
+        const wrong = await changePassword(
+            refused.cookie,
+            next,
+            {
+                token: (await challenge(refused.cookie, 'password')).token,
+                proof: { kind: 'totp', code: await wrongCode(refused.secret) },
+            },
+            { keepSession: 1 },
+        );
+        expect(wrong).toMatchObject({ status: 403, body: { code: 'step-wrong' } });
+        expect(wrong.session).toBeUndefined();
+        expect((await rows.sessions()).map((row) => row.credentialVersion)).toEqual([1]);
+
+        // No step on the account: asking changes nothing about today's password change.
+        await edge.resetDatabase();
+        const without = await signedIn();
+        const today = await changePassword(without.cookie, next, undefined, { keepSession: 1 });
+        expect(today).toMatchObject({ status: 200, body: { success: true }, session: null });
+        expect(await rows.sessions()).toHaveLength(0);
     }, 120_000);
 });

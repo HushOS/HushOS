@@ -44,6 +44,7 @@ import androidx.compose.material.icons.outlined.Password
 import androidx.compose.material.icons.outlined.PrivacyTip
 import androidx.compose.material.icons.outlined.Gavel
 import androidx.compose.material.icons.outlined.Group
+import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.Visibility
@@ -102,7 +103,7 @@ private fun shortDate(iso: String?): String? = iso?.let {
     }.getOrNull()
 }
 
-private enum class Page { MAIN, PLAN, PASSWORD, PHRASE, DEVICES, ADVANCED, RESET, REPLACE, TRASH }
+private enum class Page { MAIN, PLAN, PASSWORD, TWO_STEP, PHRASE, DEVICES, ADVANCED, RESET, REPLACE, TRASH }
 
 /*
  * Account, a tab of its own (the user's choice over the board's avatar): who is
@@ -133,11 +134,16 @@ fun AccountScreen(model: DriveViewModel, state: DriveState) {
         }
     }
     LaunchedEffect(Unit) { model.refreshStorage(); model.refreshAccount(); model.refreshUser() }
+    // Two-step sign-in's row: kept as it was when the server can't be asked, gone when it says it has two-step off.
+    var twoStep by remember { mutableStateOf<com.hushos.app.data.TwoStepStatus?>(null) }
+    var twoStepLook by remember { mutableStateOf(0) }
+    LaunchedEffect(twoStepLook) { model.twoStep { com.hushos.app.data.TwoStep.status(it) }.onSuccess { twoStep = it } }
     BackHandler(enabled = page != Page.MAIN) { page = if (page == Page.RESET || page == Page.REPLACE) Page.ADVANCED else Page.MAIN }
     when (page) {
         Page.TRASH -> { TrashScreen(model, state) { page = Page.MAIN; model.refreshStorage() }; return }
         Page.PLAN -> { PlanScreen(model, state) { page = Page.MAIN }; return }
         Page.PASSWORD -> { PasswordScreen(model) { page = Page.MAIN }; return }
+        Page.TWO_STEP -> { TwoStepScreen(model, state) { page = Page.MAIN; twoStepLook++ }; return }
         Page.PHRASE -> { PhraseScreen(model, fresh = false) { page = Page.MAIN }; return }
         Page.DEVICES -> { DevicesScreen(model) { page = Page.MAIN }; return }
         Page.ADVANCED -> { AdvancedScreen(model, state, onReset = { page = Page.RESET }, onReplace = { page = Page.REPLACE }) { page = Page.MAIN }; return }
@@ -176,6 +182,8 @@ fun AccountScreen(model: DriveViewModel, state: DriveState) {
             NotificationsSection()
             Subheader("Sign-in and recovery")
             AccountRow("Change password", "The password you sign in with", Icons.Outlined.Password) { page = Page.PASSWORD }
+            // Where this server offers it: nothing shows on one that has two-step off, or before it has answered.
+            twoStep?.let { AccountRow("Two-step sign-in", if (it.on) "On" else "Off", Icons.Outlined.Security) { page = Page.TWO_STEP } }
             AccountRow("Recovery phrase", "Gets you back in if you forget your password", Icons.Outlined.Key) { page = Page.PHRASE }
             AccountRow("Devices", "Where you’re signed in", Icons.Outlined.Devices) { page = Page.DEVICES }
             // As on iOS: who you share with, and the words they check, beside sign-in and recovery.
@@ -230,7 +238,7 @@ fun AccountScreen(model: DriveViewModel, state: DriveState) {
 }
 
 @Composable
-private fun AccountRow(title: String, detail: String?, icon: ImageVector, danger: Boolean = false, onClick: (() -> Unit)?) {
+internal fun AccountRow(title: String, detail: String?, icon: ImageVector, danger: Boolean = false, onClick: (() -> Unit)?) {
     val alpine = Alpine.colors
     Row(
         Modifier.fillMaxWidth().heightIn(min = 56.dp).then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier).padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2),
@@ -331,7 +339,7 @@ private fun planInk(state: DriveState) = plan(state).let { plan ->
 
 /* A pushed page inside Account: a back arrow, a title, and its own scrolling column. */
 @Composable
-private fun AccountPage(title: String, onBack: (() -> Unit)?, actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {}, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
+internal fun AccountPage(title: String, onBack: (() -> Unit)?, actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {}, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
     val alpine = Alpine.colors
     Scaffold(contentWindowInsets = WindowInsets(0), containerColor = alpine.ground, topBar = { DestinationBar(title, onBack = onBack, actions = actions) }) { padding ->
         // A settings page is a form: on a wide window its fields and buttons keep a phone's width.
@@ -471,19 +479,26 @@ private fun PasswordScreen(model: DriveViewModel, onBack: () -> Unit) {
     var pending by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val mismatch = repeat.isNotEmpty() && new != repeat
+    // The second step, for an account that has it on: its fields sit under the passwords.
+    val step = retain { StepUpHolder(model, com.hushos.app.data.StepPurpose.PASSWORD) }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(Unit) { step.prepare() }
     AccountPage("Change password", onBack = if (pending) null else onBack) {
         Column(Modifier.padding(horizontal = AlpineSpace.S4), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3)) {
             PasswordField(current, { current = it; error = null }, "Current password", error = error, enabled = !pending)
             PasswordField(new, { new = it }, "New password", hint = "At least 12 characters. A few unrelated words work well.", enabled = !pending)
             PasswordField(repeat, { repeat = it }, "Repeat new password", error = if (mismatch) "The new passwords don’t match." else null, enabled = !pending)
+            StepUpFields(step, enabled = !pending)
             Text("Your other devices will be signed out. Your recovery phrase stays the same.", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
             Button(
                 enabled = !pending && current.isNotEmpty() && new.length >= 12 && new == repeat,
                 onClick = {
+                    val (ready, twoStep) = step.prove()
+                    if (!ready) return@Button
                     pending = true
-                    model.changePassword(current, new) { message ->
-                        pending = false
-                        if (message == "Your password was changed.") { model.notify(message); onBack() } else error = message
+                    model.changePassword(current, new, twoStep) { failure ->
+                        if (failure == null) { pending = false; model.notify("Your password was changed."); onBack() }
+                        else scope.launch { error = step.failed(failure); pending = false }
                     }
                 },
                 modifier = Modifier.fillMaxWidth().height(48.dp),
@@ -593,7 +608,11 @@ internal fun PhraseWords(phrase: String) {
 }
 
 /* The kit as the web writes it (hushos-recovery-kit.txt), handed to the share sheet: print, save to Files, any app. */
-private fun shareKit(context: Context, user: com.hushos.app.data.SessionUser?, kit: DriveViewModel.RecoveryKit) {
+private fun shareKit(context: Context, user: com.hushos.app.data.SessionUser?, kit: DriveViewModel.RecoveryKit) =
+    shareKit(context, user?.email.orEmpty(), user?.id.orEmpty(), kit)
+
+/* The same, for an account named by the caller: new words held with no session name it themselves. */
+private fun shareKit(context: Context, email: String, userId: String, kit: DriveViewModel.RecoveryKit) {
     val words = kit.phrase.trim().split(Regex("\\s+"))
     val numbered = words.mapIndexed { i, w -> "${(i + 1).toString().padStart(2, ' ')}. $w".padEnd(16, ' ') }
     val lines = numbered.chunked(4).map { it.joinToString("").trimEnd() }
@@ -606,8 +625,8 @@ private fun shareKit(context: Context, user: com.hushos.app.data.SessionUser?, k
         "your password, nobody can get you back in, including HushOS.",
         "",
         "YOUR ACCOUNT",
-        "Email:       ${user?.email.orEmpty()}",
-        "Account ID:  ${user?.id.orEmpty()}",
+        "Email:       $email",
+        "Account ID:  $userId",
         "",
         "YOUR RECOVERY PHRASE (${words.size} words, in this order)",
         "This is what unlocks your account if you forget your password.",
@@ -644,7 +663,7 @@ private fun shareKit(context: Context, user: com.hushos.app.data.SessionUser?, k
 /* Three words picked back out of the kit before the phrase counts as saved, as on the web: each offered with two other words of the same phrase. */
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-private fun CheckWordsScreen(phrase: String, onBack: () -> Unit, onDone: () -> Unit) {
+internal fun CheckWordsScreen(phrase: String, onBack: () -> Unit, onDone: () -> Unit) {
     val alpine = Alpine.colors
     val words = remember(phrase) { phrase.trim().split(Regex("\\s+")) }
     val positions = remember(phrase) { words.indices.shuffled().take(3).sorted() }
@@ -708,20 +727,35 @@ private fun AdvancedScreen(model: DriveViewModel, state: DriveState, onReset: ()
         var typed by rememberSaveable { mutableStateOf("") }
         var pending by remember { mutableStateOf(false) }
         var error by remember { mutableStateOf<String?>(null) }
+        // The second step, for an account that has it on: asked for in the same dialog, before anything is deleted.
+        val step = retain { StepUpHolder(model, com.hushos.app.data.StepPurpose.DELETE) }
+        val scope = rememberCoroutineScope()
+        LaunchedEffect(Unit) { step.prepare() }
         AlertDialog(
             onDismissRequest = { if (!pending) deleting = false },
+            // A dialog is a window of its own: the page's secure flag does not reach it. Whenever the step here can be
+            // answered with the recovery phrase, the dialog itself stays out of screenshots, recordings and recents.
+            properties = androidx.compose.ui.window.DialogProperties(
+                securePolicy = if (com.hushos.core.StepMethod.PHRASE in step.step.methods) androidx.compose.ui.window.SecureFlagPolicy.SecureOn
+                    else androidx.compose.ui.window.SecureFlagPolicy.Inherit,
+            ),
             title = { Text("Delete account") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3)) {
+                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3)) {
                     Text("Every file, every earlier version and the account. It can’t be undone.")
                     PasswordField(password, { password = it; error = null }, "Password", error = error, enabled = !pending)
                     OutlinedTextField(value = typed, onValueChange = { typed = it }, singleLine = true, label = { Text("Type DELETE to confirm") }, enabled = !pending, modifier = Modifier.fillMaxWidth())
+                    StepUpFields(step, enabled = !pending)
                 }
             },
             confirmButton = {
                 TextButton(enabled = !pending && password.isNotEmpty() && typed == "DELETE", onClick = {
+                    val (ready, twoStep) = step.prove()
+                    if (!ready) return@TextButton
                     pending = true
-                    model.deleteAccount(password) { failure -> pending = false; if (failure != null) error = failure }
+                    model.deleteAccount(password, twoStep) { failure ->
+                        if (failure == null) pending = false else scope.launch { error = step.failed(failure); pending = false }
+                    }
                 }) { Text(if (pending) "Deleting…" else "Delete forever", color = alpine.danger) }
             },
             dismissButton = { TextButton(enabled = !pending, onClick = { deleting = false }) { Text("Cancel") } },
@@ -742,6 +776,9 @@ private fun ResetKeysScreen(model: DriveViewModel, onBack: () -> Unit) {
     // Only whether the keys were reset is saved state: the phrase is read again from the account when the page shows,
     // so it never lands in the saved-instance bundle (which the system writes to disk).
     var reset by rememberSaveable { mutableStateOf(false) }
+    val step = retain { StepUpHolder(model, com.hushos.app.data.StepPurpose.MASTER_KEY) }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(Unit) { step.prepare() }
     if (reset) {
         BackHandler {}
         PhraseScreen(model, fresh = true) { reset = false; onBack() }
@@ -754,10 +791,67 @@ private fun ResetKeysScreen(model: DriveViewModel, onBack: () -> Unit) {
                 Row { Text("•", modifier = Modifier.padding(end = AlpineSpace.S2)); Text(line, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted) }
             PasswordField(password, { password = it; error = null }, "Password", error = error, enabled = !pending)
             Text("Enter your password to confirm.", style = MaterialTheme.typography.bodySmall, color = alpine.inkMuted)
+            StepUpFields(step, enabled = !pending)
             Button(enabled = !pending && password.isNotEmpty(), onClick = {
+                val (ready, twoStep) = step.prove()
+                if (!ready) return@Button
                 pending = true
-                model.rotateKeys(password) { made, failure -> pending = false; if (made) reset = true else error = failure }
+                model.rotateKeys(password, twoStep) { made, failure ->
+                    if (made) {
+                        // The password has done its work: it is not left in a form that comes back after the sign-in.
+                        password = ""
+                        pending = false
+                        // Signed straight back in: the new words, read from the account. Otherwise the app's shell is
+                        // showing them from memory (DriveViewModel.heldWords), and this page is done with.
+                        if (model.heldWords == null) reset = true else onBack()
+                    } else scope.launch { error = failure?.let { step.failed(it) }; pending = false }
+                }
             }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(if (pending) "Rotating…" else "Rotate") }
+        }
+    }
+}
+
+/*
+ * New recovery words held in memory with no session to read them back with (DriveViewModel.HeldWords): after a
+ * rotation whose sign-in is still to come, or a phrase reset whose sign-in didn't happen. Drawn by the app's shell in
+ * place of everything else, tabs included, so nothing leaves them but saving and checking them.
+ */
+@Composable
+internal fun FreshWordsScreen(model: DriveViewModel, held: DriveViewModel.HeldWords, onDone: () -> Unit) {
+    val alpine = Alpine.colors
+    val context = LocalContext.current
+    val kit = held.kit
+    val phrase = kit.phrase
+    // The kit file is only on this phone while this page is open.
+    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { File(context.cacheDir, "kit").deleteRecursively() } }
+    var saved by rememberSaveable { mutableStateOf(false) }
+    var checking by rememberSaveable { mutableStateOf(false) }
+    SecureWindow()
+    if (checking) {
+        BackHandler { checking = false }
+        CheckWordsScreen(phrase, onBack = { checking = false }) { model.notify("Recovery phrase saved"); onDone() }
+        return
+    }
+    BackHandler {}
+    // The web's panel for words shown to someone not signed in again, in its words (StepWords.NEW_PHRASE_…).
+    AccountPage(com.hushos.app.data.StepWords.NEW_PHRASE_TITLE, onBack = null) {
+        Column(Modifier.padding(horizontal = AlpineSpace.S4), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S4)) {
+            // Nothing confirmed the change was made: the old words are not said to be dead.
+            Text(held.lead, style = MaterialTheme.typography.bodyMedium, color = if (held.certain) alpine.inkMuted else alpine.warning)
+            PhraseWords(phrase)
+            Row(horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
+                OutlinedButton(onClick = { shareKit(context, held.email, held.userId, kit) }) { Text("Save the kit") }
+                OutlinedButton(onClick = {
+                    SensitiveClipboard.copy(context, "Recovery phrase", phrase)
+                    model.notify("Copied. Paste it somewhere private, then clear your clipboard.")
+                }) { Icon(Icons.Outlined.ContentCopy, null, Modifier.size(18.dp)); Spacer(Modifier.width(AlpineSpace.S2)); Text("Copy") }
+            }
+            Text(com.hushos.app.data.StepWords.NEW_PHRASE_ONCE, style = MaterialTheme.typography.bodySmall, color = alpine.inkMuted)
+            Row(Modifier.fillMaxWidth().toggleable(value = saved, role = Role.Checkbox) { saved = it }, verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(checked = saved, onCheckedChange = null)
+                Text("I’ve saved my kit or written the words down, somewhere private.", modifier = Modifier.padding(start = AlpineSpace.S3))
+            }
+            Button(enabled = saved, onClick = { checking = true }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(com.hushos.app.data.StepWords.NEW_PHRASE_SAVED) }
         }
     }
 }

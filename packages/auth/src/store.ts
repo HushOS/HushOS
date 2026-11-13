@@ -12,6 +12,13 @@ type AuthState = {
     rememberError: string;
     device: RememberedAccount | null;
     lockRevision: number;
+    /*
+     * Locks this tab has sent or heard (a sign-out, a removal, another tab's lock), counted the
+     * moment they happen and never saved. `lockRevision` moves only once a sign-out's request
+     * has finished, and not at all when it fails; what must go on any lock (a new recovery
+     * phrase on screen) watches this as well.
+     */
+    locks: number;
 };
 function isDevice(value: unknown): value is RememberedAccount {
     if (!value || typeof value !== 'object') return false;
@@ -99,6 +106,7 @@ export function createAuthStore() {
                 rememberError: '',
                 device: null,
                 lockRevision: 0,
+                locks: 0,
             }),
             {
                 name: 'hushos-device-unlock',

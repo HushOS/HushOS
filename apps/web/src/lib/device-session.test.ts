@@ -44,7 +44,16 @@ function signedInClient() {
         loginStart: async () => ({ attemptToken: 'attempt' }),
         loginFinish: async () => ({
             user: { id: USER, email: 'maya@example.com', credentialVersion: 1 },
-            envelope: { keyVersion: 1, credentialVersion: 1 },
+            // The reply as the server sends it: the client takes nothing less for a sign-in.
+            envelope: {
+                envelopeVersion: 1,
+                keyVersion: 1,
+                credentialVersion: 1,
+                wrappingSalt: 'c2FsdA',
+                wrappingNonce: 'bm9uY2U',
+                encryptedKey: 'a2V5',
+            },
+            device: { id: 'device', attached: false, registered: true },
         }),
         logout: async () => ({}),
     } as unknown as AuthApi;

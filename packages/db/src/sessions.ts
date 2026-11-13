@@ -23,6 +23,13 @@ export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0
 export const DEVICE_ENROLMENT_SECONDS = 30 * 60;
 /* How long a device that keeps its session goes without being asked for the step again. */
 export const TWO_STEP_REMEMBER_SECONDS = 30 * 24 * 60 * 60;
+/*
+ * How long a replacement session lasts at most: the session a security change writes for the
+ * device that made it, when that device asked for one and passed the second step with the
+ * change (`changeAccountSecurity`). It is there to be replaced by the sign-in that follows
+ * at once, which then inherits its step; ten minutes covers a slow device and nothing more.
+ */
+export const REPLACEMENT_SESSION_SECONDS = 10 * 60;
 
 export type CreatedDevice = 'enrolment' | 'password';
 /* A device key's signature over one sign-in attempt (`deviceSessionStatement`). */

@@ -1,9 +1,11 @@
 import { revalidateLogic, useForm } from '@tanstack/react-form';
-import { useState } from 'react';
-import { DeviceStorageUnreadable } from '@hushos/auth/client';
+import type { StepChallenge } from '@hushos/auth/api';
+import { useEffect, useState } from 'react';
+import { DeviceStorageUnreadable, TwoStepRequired } from '@hushos/auth/client';
 import { z } from 'zod';
 import { AuthInput } from '@/components/auth-input';
 import { AuthNote } from '@/components/auth-layout';
+import { SignInStep } from '@/components/sign-in-step';
 import { Button } from '@/components/ui/button';
 import { authClient } from '@/lib/auth-client';
 import { authError } from '@/lib/form';
@@ -31,6 +33,14 @@ export function UnlockDevice({
     const [error, setError] = useState('');
     // This browser's device key could not be read: the person may unlock as a new device instead.
     const [offerNewDevice, setOfferNewDevice] = useState(false);
+    // Unlocking is a sign-in, so an account with two-step sign-in may be asked for its step:
+    // on a browser the account does not know, or one whose session did not pass it.
+    const [step, setStep] = useState<StepChallenge | null>(null);
+    // This form's own mark on the sign-ins it starts. The form is mounted in more than one
+    // place at once (the locked page, and the Unlock dialog behind its button): one of them
+    // going away lets go of its own waiting sign-in, never the other's.
+    const [owner] = useState(() => ({}));
+    useEffect(() => () => authClient.cancelStep(owner), [owner]);
     const form = useForm({
         defaultValues: { password: '' },
         validationLogic: revalidateLogic(),
@@ -44,6 +54,7 @@ export function UnlockDevice({
             try {
                 await authClient.login(user.email, value.password, {
                     asNewDevice: meta.asNewDevice,
+                    owner,
                 });
                 cue('success');
                 // Kept, and busy, while what unlocking opens takes over; emptied after,
@@ -51,6 +62,11 @@ export function UnlockDevice({
                 await onUnlocked?.();
                 form.reset();
             } catch (error) {
+                if (error instanceof TwoStepRequired) {
+                    setOfferNewDevice(false);
+                    setStep(error.challenge);
+                    return;
+                }
                 cue('error');
                 setOfferNewDevice(error instanceof DeviceStorageUnreadable);
                 setError(authError(error));
@@ -59,6 +75,32 @@ export function UnlockDevice({
             }
         },
     });
+    if (step)
+        return (
+            <div className={className}>
+                <div className="flex flex-col gap-4">
+                    <p className="text-sm text-muted-foreground">
+                        This account has two-step sign-in on.
+                    </p>
+                    <SignInStep
+                        key={step.token}
+                        challenge={step}
+                        owner={owner}
+                        size={onCancel ? 'default' : 'lg'}
+                        onSignedIn={async () => {
+                            await onUnlocked?.();
+                            setStep(null);
+                            form.reset();
+                        }}
+                        onOver={(reason) => {
+                            setStep(null);
+                            setError(reason);
+                            form.reset();
+                        }}
+                    />
+                </div>
+            </div>
+        );
     return (
         <form
             className={className}

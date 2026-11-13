@@ -23,6 +23,7 @@ import {
 import { decryptKey } from './aead';
 import { openLinkKey, openLinkSecret, passwordKey } from './links';
 import { openRecovery, readRecoveryPhrase } from './recovery';
+import { stepTokenDigest, twoStepPhraseStatement, verifyTwoStepPhrase } from './two-step';
 import { openReportKey } from './reports';
 import {
     openIdentityEncryptionKey,
@@ -791,6 +792,30 @@ describe('records sealed by the Rust core', () => {
         });
         expect(await verifyStatement(other, signature, publicKey)).toBe(false);
         expect(await emailDigest(session.email)).toBe(session.emailHash);
+    });
+
+    it("builds the core's recovery phrase statement for a second step byte for byte and accepts its signature for that token only", async () => {
+        const step = core.twoStepPhrase;
+        expect(await stepTokenDigest(step.stepToken)).toBe(step.tokenDigest);
+        // The id is upper case in the fixture and lower case in the bytes, on both sides.
+        expect(twoStepPhraseStatement(step)).toEqual(decode(step.statement));
+        // What the server runs: the recovery public key over the statement it rebuilds from its row.
+        expect(await verifyTwoStepPhrase(step, step.signature, step.publicKey)).toBe(true);
+        // Another token's digest, another account: the phone's signature does not carry over.
+        expect(
+            await verifyTwoStepPhrase(
+                { ...step, tokenDigest: await stepTokenDigest(`${step.stepToken}x`) },
+                step.signature,
+                step.publicKey,
+            ),
+        ).toBe(false);
+        expect(
+            await verifyTwoStepPhrase(
+                { ...step, userId: crypto.randomUUID() },
+                step.signature,
+                step.publicKey,
+            ),
+        ).toBe(false);
     });
 
     it('reads every rekeyed case the core declared exactly as the core reads it', async () => {

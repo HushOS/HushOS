@@ -387,6 +387,7 @@ jobs:
               run: |
                   bun run setup
                   echo 'GROUPS_ENABLED=true' >> .env
+                  echo 'TWO_STEP_ENABLED=true' >> .env
                   bun run infra:up
             - name: Apply migrations
               run: bun run db:migrate
@@ -426,9 +427,10 @@ jobs:
                   TRUSTED_PROXY_HEADER: x-forwarded-for
                   TURBO_LOG_ORDER: stream
             # GROUPS_ENABLED reaches the spec from .env too: with it on, a server that says
-            # families are off fails the run instead of skipping it.
-            - name: Run the families suite against the production build
-              run: bun run e2e -- --project=chromium e2e/families.spec.ts
+            # families are off fails the run instead of skipping it. TWO_STEP_ENABLED the same,
+            # for two-step.spec.ts: this is the job whose server has two-step sign-in on.
+            - name: Run the families and two-step suites against the production build
+              run: bun run e2e -- --project=chromium e2e/families.spec.ts e2e/two-step.spec.ts
             - name: Show the end of the server log
               if: failure()
               run: tail -n 60 scratchpad/e2e-server.log || true

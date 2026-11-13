@@ -228,6 +228,20 @@ pub fn recovery_open(user_id: String, phrase: String, envelope: RecoveryEnvelope
     Ok(key)
 }
 
+/*
+ * The recovery signing key's seed, from the phrase and the envelope's salt alone: what a
+ * second step signs with (two_step.rs). Nothing is compared with an envelope here; the
+ * server's check of the signature says whether the phrase is the account's.
+ */
+pub(crate) fn recovery_signing_seed(
+    phrase: &str,
+    wrapping_salt: &str,
+) -> CoreResult<Zeroizing<[u8; KEY_BYTES]>> {
+    let secret = entropy_from_phrase(phrase)?;
+    let salt = decode("wrappingSalt", wrapping_salt, Some(32))?;
+    derive(&secret, &salt, "authentication")
+}
+
 /// The message a recovery reset signs, byte for byte what `packages/crypto/recovery.ts`
 /// `recoveryResetMessage` makes (`JSON.stringify` of the fixed array), so the server's
 /// check accepts a reset made on a phone.

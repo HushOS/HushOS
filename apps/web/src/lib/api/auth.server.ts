@@ -332,13 +332,20 @@ export const authApi = new Elysia()
                 workspaces: t.Optional(t.Array(workspaceKeySchema, { maxItems: 200 })),
                 // The second step, for an account that has it on (docs/two-step-design.md 4).
                 twoStep: t.Optional(stepAnswerSchema),
+                // Sent by a client that will take a session for this device with the change,
+                // when the change passes the step. Without it nothing is minted.
+                keepSession: t.Optional(t.Literal(1)),
             }),
             response: { 200: successResponse },
         },
         async ({ sessionToken, body, set }) => {
-            const result = await auth.finishSecurityChange(sessionToken, body);
+            const { keepSession, ...change } = body;
+            const { sessionToken: kept, ...result } = await auth.finishSecurityChange(
+                sessionToken,
+                { ...change, keepSession: keepSession === 1 },
+            );
             set.headers['set-cookie'] = [
-                authCookie('session', null),
+                authCookie('session', kept),
                 authCookie('enrollment', null),
             ];
             return result;

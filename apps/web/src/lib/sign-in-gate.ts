@@ -74,6 +74,8 @@ type StartsSessions = {
     login: (...args: never[]) => Promise<unknown>;
     register: (...args: never[]) => Promise<unknown>;
     recover: (...args: never[]) => Promise<unknown>;
+    /* The second half of a sign-in that stopped at its second step: it opens the session. */
+    answerStep?: (...args: never[]) => Promise<unknown>;
     logout: () => Promise<unknown>;
 };
 
@@ -102,5 +104,8 @@ export function afterSignOut<C extends StartsSessions>(client: C): C {
         login: wait(client.login),
         register: wait(client.register),
         recover: wait(client.recover),
+        // A sign-in that stopped at its step opens its session here, not in `login`: the
+        // answer waits like the rest, or it would reopen the stores a sign-out is deleting.
+        ...(client.answerStep ? { answerStep: wait(client.answerStep) } : {}),
     };
 }

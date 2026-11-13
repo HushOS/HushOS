@@ -54,7 +54,22 @@ export async function unwrap<R extends { data: unknown; error: unknown }>(pendin
             typeof (value as { code?: unknown }).code === 'string'
                 ? (value as { code: string }).code
                 : undefined;
-        throw Object.assign(new Error(message), code ? { code } : {});
+        // The status too: a caller that must tell the server's own refusal from no answer at
+        // all (a second step, a security change) reads it.
+        const status = (error as { status?: unknown }).status;
+        // Whether the body was the server's own: its errors are an object with its words. A
+        // proxy's error page, or an empty body, is not, whatever the status says: a caller
+        // that must not take a proxy's 4xx for the server's refusal reads this.
+        const answered =
+            value !== null &&
+            typeof value === 'object' &&
+            typeof (value as { message?: unknown }).message === 'string';
+        throw Object.assign(
+            new Error(message),
+            code ? { code } : {},
+            typeof status === 'number' ? { status } : {},
+            answered ? { answered: true } : {},
+        );
     }
     return data as NonNullable<R['data']>;
 }

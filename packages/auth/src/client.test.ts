@@ -52,7 +52,20 @@ Object.defineProperty(globalThis, 'window', {
 
 const { createAuthClient, DeviceStorageUnreadable } = await import('./client');
 
-const user = { id: '0b7f1c2e-3d4a-4b5c-8d6e-7f8091a2b3c4', credentialVersion: 1 } as SessionUser;
+const user = {
+    id: '0b7f1c2e-3d4a-4b5c-8d6e-7f8091a2b3c4',
+    email: 'maya@example.com',
+    credentialVersion: 1,
+} as SessionUser;
+/* The password envelope as the server sends it; the fake worker never opens it. */
+const envelope = {
+    envelopeVersion: 1,
+    keyVersion: 1,
+    credentialVersion: 1,
+    wrappingSalt: 'c2FsdA',
+    wrappingNonce: 'bm9uY2U',
+    encryptedKey: 'a2V5',
+};
 const bundle = {
     version: 1 as const,
     keyVersion: 1,
@@ -63,13 +76,23 @@ const bundle = {
     encryptedKey: 'B'.repeat(64),
 };
 const transport: CryptoTransport = {
-    request: async (operation) => (operation === 'remember' ? bundle : {}) as never,
+    request: async (operation) =>
+        (operation === 'remember'
+            ? bundle
+            : // What a reset makes, as far as the client reads it: the salts of its envelopes.
+              operation === 'recoverFinish'
+              ? { envelope: { wrappingSalt: 'made' }, recovery: { wrappingSalt: 'made' } }
+              : {}) as never,
     lock() {},
     onLock() {},
 };
 const api = {
     loginStart: async () => ({ attemptToken: 'attempt' }),
-    loginFinish: async () => ({ user, envelope: { keyVersion: 1, credentialVersion: 1 } }),
+    loginFinish: async () => ({
+        user,
+        envelope,
+        device: { id: 'device', attached: false, registered: true },
+    }),
 } as unknown as AuthApi;
 
 /* A device key store whose create() fails with each of `failures` in turn, then works. */
@@ -187,7 +210,7 @@ describe('the device key at sign-in', () => {
                 sent.push(input);
                 return {
                     user: { ...user, email: 'maya@example.com' },
-                    envelope: { keyVersion: 1, credentialVersion: 1 },
+                    envelope,
                     device: { id: deviceId, attached: true, registered: true },
                 };
             },
@@ -308,7 +331,7 @@ describe('a device store that does not answer at sign-in', () => {
                 finished.push(input);
                 return {
                     user: { ...user, email: 'maya@example.com' },
-                    envelope: { keyVersion: 1, credentialVersion: 1 },
+                    envelope,
                     // A sign-in without a proof is a new device the server has not described yet.
                     device: input.device
                         ? { id: deviceId, attached: true, registered: true }
@@ -329,14 +352,18 @@ describe('a device store that does not answer at sign-in', () => {
                 userId: user.id,
                 attemptToken: 'recover',
                 credentialVersion: 1,
+                // The recovery envelope the reset opens, as far as the client reads it here.
+                recovery: { recoveryVersion: 1 },
             }),
-            recoverFinish: async () => ({}),
+            // The server's own answer to a reset it applied.
+            recoverFinish: async () => ({ user }),
             securityStart: async ({ action }: { action: string }) => ({
                 userId: user.id,
                 action,
                 attemptToken: 'security',
             }),
-            securityFinish: async () => ({}),
+            // The server's own answer: nothing less is read as a change that was made.
+            securityFinish: async () => ({ success: true }),
         } as unknown as AuthApi;
         const auth = createAuthClient(() => transport, keyStore([]).store, signing, {
             identities,
@@ -426,13 +453,13 @@ describe('a device store that does not answer at sign-in', () => {
 
     test('a reset with the recovery phrase says why it did not sign in here', async () => {
         const { auth, calls } = await client([unavailable]);
-        const error = await auth.recover('maya@example.com', 'new horse', 'words').then(
-            () => null,
-            (caught: unknown) => caught as Error,
-        );
-        expect(error?.message).toBe(
-            'Your password was changed, but this browser’s storage for HushOS can’t be read, so you weren’t signed in here. Sign in with your new password.',
-        );
+        // Not an error: the reset was applied, and the page still has the new phrase to show.
+        // It is told why this browser was not signed in, to say so beside the words.
+        expect(await auth.recover('maya@example.com', 'new horse', 'words')).toMatchObject({
+            user: null,
+            applied: true,
+            storage: 'this browser’s storage for HushOS can’t be read',
+        });
         expect(calls).toEqual([]);
     });
 
@@ -444,7 +471,12 @@ describe('a device store that does not answer at sign-in', () => {
             'correct horse',
             'new horse',
         );
-        expect(result).toEqual({ signedIn: false, uncertain: false, storage: 'blocked' });
+        expect(result).toEqual({
+            signedIn: false,
+            uncertain: false,
+            storage: 'blocked',
+            phrase: null,
+        });
         expect(calls).toEqual([]);
         const state = auth.store.getState();
         expect(state.unlockedUserId).toBeNull();

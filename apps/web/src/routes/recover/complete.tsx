@@ -1,17 +1,20 @@
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '@hushos/auth/protocol';
-import { createFileRoute, useRouter } from '@tanstack/react-router';
+import { createFileRoute, Link, useRouter } from '@tanstack/react-router';
 import { cn } from 'cn';
 import { CircleCheckIcon, FileTextIcon } from 'lucide-react';
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { AuthInput, StrengthHint } from '@/components/auth-input';
 import { AuthActions, AuthFields, AuthLayout, AuthNote, authLink } from '@/components/auth-layout';
+import { NewPhrase } from '@/components/new-phrase';
 import { PhraseGrid } from '@/components/recovery-phrase';
 import { VerifiedEmailStep } from '@/components/verified-email-step';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { getRecoveryEnrollment } from '@/lib/auth';
 import { authClient } from '@/lib/auth-client';
 import { authError } from '@/lib/form';
+import { whenPageLeaves } from '@/lib/new-phrase';
+import { whenBrowserLocks } from '@/lib/show-new-phrase';
 import { phraseFromKit, WORDS } from '@/lib/recovery-kit';
 import { cue } from '@/lib/sounds';
 
@@ -47,6 +50,26 @@ function RecoverForm({ enrollment }: { enrollment: { email: string } }) {
     const [tried, setTried] = useState(false);
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
+    // The reset went through, or may have, and this browser was not signed in by it: the new
+    // phrase is shown here, since nothing else will show it to someone who cannot sign in.
+    const [made, setMade] = useState<{
+        phrase: string;
+        applied: true | 'unknown';
+        storage: string | null;
+    } | null>(null);
+    // Held in this page's memory, so gone when the page is: brought back by the Back button
+    // from the back-forward cache, it would otherwise show them to whoever pressed it. Gone too
+    // when this browser is locked or signed out, here or in another tab, as the words a
+    // rotation holds are (`keepNewPhrase`): never left on screen for whoever comes next.
+    useEffect(() => {
+        if (!made) return undefined;
+        const leaving = whenPageLeaves(() => setMade(null));
+        const locked = whenBrowserLocks(() => setMade(null));
+        return () => {
+            leaving();
+            locked();
+        };
+    }, [made]);
     const count = wordsOf(typed).length;
     const words = mode === 'kit' ? (kit?.words ?? null) : wordsOf(typed);
     const ready = mode === 'kit' ? kit !== null : true;
@@ -84,9 +107,14 @@ function RecoverForm({ enrollment }: { enrollment: { email: string } }) {
         setPending(true);
         setError('');
         try {
-            await authClient.recover(enrollment.email, password, words.join(' '));
+            const reset = await authClient.recover(enrollment.email, password, words.join(' '));
             cue('success');
             router.options.context.queryClient.clear();
+            if (!reset.user) {
+                setMade(reset);
+                setPending(false);
+                return;
+            }
             await router.navigate({ to: '/setup/recovery-key', replace: true });
         } catch (cause) {
             cue('error');
@@ -96,6 +124,23 @@ function RecoverForm({ enrollment }: { enrollment: { email: string } }) {
     }
 
     const choosing = mode === 'kit' && !kit;
+    if (made)
+        return (
+            <NewPhrase
+                made={{ ...made, from: 'reset' }}
+                action={
+                    <Link
+                        to="/login"
+                        search={{
+                            securityChanged: made.applied === true ? 'password' : 'uncertain',
+                        }}
+                        className={buttonVariants({ size: 'lg' })}
+                    >
+                        Continue to sign in
+                    </Link>
+                }
+            />
+        );
     return (
         <AuthLayout
             wide

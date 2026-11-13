@@ -2,7 +2,7 @@ import '@/lib/server-only';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { KEY_STRETCHING, OPAQUE_IDENTIFIERS, OPAQUE_PROFILE_VERSION } from '@hushos/crypto';
 import { deviceSessionStatement } from '@hushos/crypto/device-identity';
-import { createRecovery } from '@hushos/crypto/recovery';
+import { createRecovery, openRecovery, signRecoveryReset } from '@hushos/crypto/recovery';
 import { client, ready, server } from '@hushos/crypto/server';
 import { formatBackupCode, recoveryStepKey, signTwoStepPhrase } from '@hushos/crypto/two-step';
 import {
@@ -157,7 +157,7 @@ export async function loadEdge(
         method: 'GET' | 'POST' | 'PUT' | 'DELETE',
         path: string,
         body?: unknown,
-        options: { cookie?: string | null; origin?: string } = {},
+        options: { cookie?: string | null; origin?: string; enrollment?: string } = {},
     ): Promise<Reply> {
         const init: RequestInit = {
             method,
@@ -165,6 +165,10 @@ export async function loadEdge(
                 origin: options.origin ?? ORIGIN,
                 ...(body === undefined ? {} : { 'content-type': 'application/json' }),
                 ...(options.cookie ? { cookie: `hushos-session=${options.cookie}` } : {}),
+                // A confirmed email's cookie, which sign-up and a reset are asked under.
+                ...(options.enrollment
+                    ? { cookie: `hushos-enrollment=${options.enrollment}` }
+                    : {}),
             },
         };
         if (body !== undefined) init.body = JSON.stringify(body);
@@ -230,6 +234,79 @@ export async function loadEdge(
         });
         if (registered.status !== 'created') throw new Error(`Registration ${registered.status}.`);
         return { userId: registered.user.id, email, phrase: made.phrase };
+    }
+
+    /*
+     * A reset as the client does it: the email confirmed (the link in the mail, past here), then
+     * a new password, a new account-key envelope and a new recovery key, signed by the key the
+     * old phrase opens. `spoiled` signs with another key, as someone without the phrase would.
+     */
+    async function reset(
+        who: Account,
+        phrase: string,
+        password: string,
+        options: { spoiled?: boolean } = {},
+    ) {
+        const verification = randomUUID();
+        const enrollment = randomBytes(32).toString('base64url');
+        const later = new Date(Date.now() + 60 * 60 * 1000);
+        await authRepository.createEnrollment({
+            purpose: 'recover',
+            email: who.email,
+            normalizedEmail: who.email,
+            verificationTokenHash: sha256(verification),
+            expiresAt: later,
+        });
+        await authRepository.verifyEnrollment(sha256(verification), sha256(enrollment), later);
+        const registration = client.startRegistration({ password });
+        const started = await call(
+            'POST',
+            '/recover/start',
+            { registrationRequest: registration.registrationRequest },
+            { enrollment },
+        );
+        if (started.status !== 200) throw new Error(`/recover/start answered ${started.status}.`);
+        const { registrationRecord } = client.finishRegistration({
+            password,
+            clientRegistrationState: registration.clientRegistrationState,
+            registrationResponse: started.body.registrationResponse,
+            identifiers: OPAQUE_IDENTIFIERS,
+            keyStretching: KEY_STRETCHING,
+        });
+        const old = started.body.recovery;
+        const opened = await openRecovery(phrase, who.userId, old);
+        const made = await createRecovery(
+            opened.accountKey,
+            who.userId,
+            old.recoveryVersion + 1,
+            old.keyVersion,
+        );
+        const change = {
+            userId: who.userId,
+            attemptToken: started.body.attemptToken as string,
+            credentialVersion: started.body.credentialVersion as number,
+            registrationRecord,
+            envelope: {
+                envelopeVersion: 1 as const,
+                keyVersion: old.keyVersion as number,
+                credentialVersion: (started.body.credentialVersion as number) + 1,
+                wrappingSalt: randomBytes(32).toString('base64url'),
+                wrappingNonce: randomBytes(24).toString('base64url'),
+                encryptedKey: randomBytes(48).toString('base64url'),
+            },
+            recovery: made.recovery,
+        };
+        const signature = await signRecoveryReset(
+            change,
+            options.spoiled ? new Uint8Array(randomBytes(64)) : opened.signingKey,
+        );
+        const reply = await call(
+            'POST',
+            '/recover/finish',
+            { ...change, signature },
+            { enrollment },
+        );
+        return { reply, phrase: made.phrase };
     }
 
     type Proof = { deviceId: string; seed: Buffer };
@@ -384,6 +461,7 @@ export async function loadEdge(
         account,
         signIn,
         passwordProof,
+        reset,
         phraseProof,
         giveDeviceKey,
         stepUnder,

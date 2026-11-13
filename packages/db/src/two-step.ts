@@ -96,7 +96,7 @@ export type {
     StepSpend,
     TwoStepRefusal,
 } from './two-step.core';
-export { TWO_STEP_REMEMBER_SECONDS } from './sessions';
+export { REPLACEMENT_SESSION_SECONDS, TWO_STEP_REMEMBER_SECONDS } from './sessions';
 
 /* A step-up's proof: the session asking, its step token, and what the answer spends. */
 export type SessionStep = StepProof & { sessionTokenHash: Buffer };
