@@ -13,7 +13,7 @@ import Testing
 private let token = String(repeating: "t", count: 43)
 
 private func challenge(_ methods: [StepMethod] = [.totp, .backup, .phrase], phrase: StepPhrase? = nil) -> StepChallenge {
-    StepChallenge(token: token, methods: methods, expiresAt: "2026-11-13T10:00:00.000Z", phrase: phrase)
+    StepChallenge(token: token, methods: methods, expiresAt: "2026-11-13T10:00:00.000Z", phrase: phrase, keyRequest: nil, withheld: false, defaultUnavailable: false)
 }
 
 /* What the step screen does after each way an answer can fail. */
@@ -188,7 +188,7 @@ private func challenge(_ methods: [StepMethod] = [.totp, .backup, .phrase], phra
         #expect(throws: StepUp.Unready.self) { try step.prove() }
         #expect(step.problem == "Enter the 6-digit code from your authenticator app.")
         step.draft.totp = "123456"
-        #expect((try? step.prove()) == StepAnswer(token: token, proof: .totp(code: "123456")))
+        #expect((try? step.prove()) == .ready(StepAnswer(token: token, proof: .totp(code: "123456"))))
     }
 
     @Test func whenTheWaysRanOutAfterRefusalsTheFormDoesNotSayToUpdate() {
@@ -220,7 +220,7 @@ private func challenge(_ methods: [StepMethod] = [.totp, .backup, .phrase], phra
         next.token = String(repeating: "n", count: 43)
         step.take(next, keep: true)
         #expect(step.draft.totp == "123456")
-        #expect((try? step.prove())?.token == next.token)
+        #expect((try? step.prove()) == .ready(StepAnswer(token: next.token, proof: .totp(code: "123456"))))
     }
 
     @Test func aPausedAppAndASpentBudgetNarrowWhatTheFormOffers() {
@@ -763,13 +763,21 @@ private func challenge(_ methods: [StepMethod] = [.totp, .backup, .phrase], phra
         #expect(words("step-failed", "backup") == "Wrong answer to the second step, with a backup code")
         #expect(words("two-step-off") == "Two-step sign-in turned off")
         #expect(words("totp-frozen", "totp") == "Authenticator app paused after many wrong answers")
-        // Said by the kind of method: a security key added is not "Authenticator app replaced".
-        #expect(words("method-added", "totp") == "Authenticator app replaced")
-        #expect(words("method-added", "webauthn") == "Security key added")
+        #expect(words("sign-in", "webauthn") == "Signed in with your password and a passkey or security key")
+        #expect(words("step-failed", "webauthn") == "Wrong answer to the second step, with a passkey or security key")
+        // Said by the kind of method. An app is "added", never "replaced": beside a key it can be either.
+        #expect(words("method-added", "totp") == "Authenticator app added")
+        #expect(words("method-added", "webauthn") == "Passkey or security key added")
         #expect(words("method-added") == "Second-step method added")
         #expect(words("method-removed", "totp") == "Authenticator app removed")
-        #expect(words("method-removed", "webauthn") == "Security key removed")
+        #expect(words("method-removed", "webauthn") == "Passkey or security key removed")
         #expect(words("method-removed") == "Second-step method removed")
+        // The default moving is its own line, by the kind it moved to; a kind this build does not know is still said.
+        #expect(words("default-changed", "webauthn") == "Default changed to passkey or security key")
+        #expect(words("default-changed", "totp") == "Default changed to authenticator app")
+        #expect(words("default-changed", "device") == "Default changed")
+        #expect(words("default-changed") == "Default changed")
+        #expect(words("key-counter", "webauthn") == "A security key was refused: it may have been copied")
         #expect(words("something-new") == "Security change")
         #expect(SecurityEvent(id: "e", kind: "sign-in", method: nil, deviceKind: "ios", createdAt: nil).device == "iPhone or iPad")
     }
@@ -780,8 +788,10 @@ final class StepServer: @unchecked Sendable {
     nonisolated(unsafe) static var current: StepServer?
     var status = 200
     var body = Data()
-    private(set) var requests: [(method: String, path: String, headers: [String: String], body: [String: Any])] = []
+    private(set) var requests: [(method: String, path: String, headers: [String: String], body: [String: Any], query: String?)] = []
     private let lock = NSLock()
+    /* An answer for one request (by its body), in place of the one answer for all; nil falls back to it. */
+    var script: (([String: Any]) -> (Int, String)?)?
 
     init(_ status: Int, _ body: String) {
         self.status = status
@@ -796,7 +806,8 @@ final class StepServer: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         let parsed = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
-        requests.append((request.httpMethod ?? "", request.url?.path() ?? "", request.allHTTPHeaderFields ?? [:], parsed))
+        requests.append((request.httpMethod ?? "", request.url?.path() ?? "", request.allHTTPHeaderFields ?? [:], parsed, request.url?.query()))
+        if let (status, text) = script?(parsed) { return (status, Data(text.utf8)) }
         return (status, self.body)
     }
 }

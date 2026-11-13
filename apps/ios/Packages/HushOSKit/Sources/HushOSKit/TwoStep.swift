@@ -16,13 +16,16 @@ public struct PendingSignIn: Sendable {
     let exportKey: Data
     /* When the step arrived, on the clock that runs since boot (sleep included) and that nobody can set. */
     let received: ContinuousClock.Instant
+    /* Whether this sign-in's `login/start` said the server reads `twoStepMethods`: remembered once the session is stored. */
+    let advertised: Bool?
 
-    public init(origin: String, email: String, challenge: StepChallenge, exportKey: Data, received: ContinuousClock.Instant = .now) {
+    public init(origin: String, email: String, challenge: StepChallenge, exportKey: Data, received: ContinuousClock.Instant = .now, advertised: Bool? = nil) {
         self.origin = origin
         self.email = email
         self.challenge = challenge
         self.exportKey = exportKey
         self.received = received
+        self.advertised = advertised
     }
 
     /* The server's five minutes and one more, as the web allows. */
@@ -119,6 +122,7 @@ public struct StepAnswer: Sendable, Equatable {
         case .totp: .totp
         case .backup: .backup
         case .phrase: .phrase
+        case .webauthn: .webauthn
         }
     }
 
@@ -184,6 +188,17 @@ public enum StepWords {
     public static let signedOutMeanwhile = "HushOS was signed out meanwhile. Nothing was changed."
     /* A step that ended with nothing said. */
     public static let over = "This sign-in timed out. Enter your password again."
+    /* The system's sheet was closed, or no key answered: nothing was sent, and the step is still there. */
+    public static let keyUnused = "Your passkey or security key wasn’t used. Try again, or use another way."
+    /* The same while adding one: the setup still stands. */
+    public static let keyNotAdded = "Your passkey or security key wasn’t added. Try again."
+    public static let lostKeyAdded = lost(whether: "your passkey or security key was added")
+    /* Above a step's fields (docs/two-step-design.md 12): one line, and never why. */
+    public static let updateForMore = "Update HushOS to use your passkey or another device."
+    public static let usualWaySignIn = "Your usual way isn’t available for this sign-in."
+    public static let usualWayChange = "Your usual way isn’t available for this change."
+    /* Settings, on a server this build cannot use a key for (self-hosted, localhost). */
+    public static let keysInBrowser = "Passkeys and security keys are added in a browser on this server. You can rename or remove them here."
 }
 
 /* A step that did not pass: the server's refusal in its own words, or a reply that was not the server's answer. */
@@ -228,14 +243,15 @@ public enum StepOutcome: Sendable, Equatable {
     /*
      * What is still offered after a refusal that takes something away (shared with `StepUp`):
      * - a paused app: everything but the app;
-     * - a spent budget: the budget is one for the app's codes and the backup codes, so both go together;
+     * - a spent budget: the budget is one for the app's codes and the backup codes, so both go together, and
+     *   what it does not cover stays: a passkey or security key, and the phrase;
      * - a method the server cannot check: only that one, the one that was `tried`. The app's secret and
      *   the backup codes can sit under different server keys, so one failing says nothing of the other.
      */
     public static func left(_ methods: [StepMethod], after refusal: StepRefusal, tried: StepMethod?) -> [StepMethod] {
         switch refusal {
         case .frozen: methods.filter { $0 != .totp }
-        case .limited: methods.filter { $0 != .totp && $0 != .backup }
+        case .limited: methods.filter { $0 == .webauthn || $0 == .phrase }
         case .unavailable: methods.filter { $0 != tried }
         default: methods
         }
@@ -245,6 +261,9 @@ public enum StepOutcome: Sendable, Equatable {
     public static func after(_ error: Error, methods: [StepMethod], tried: StepMethod? = nil) -> StepOutcome? {
         guard let words = ErrorWords.say(error) else { return nil }
         switch error {
+        case let unused as KeyUnused:
+            // The key's sheet was closed, or no key answered: nothing was sent, and every way is still there.
+            return .again(message: unused.message, field: true, methods: methods)
         case StepError.lost(let message):
             return .retry(message: message)
         case StepError.refused(let refusal, let message):
@@ -270,7 +289,76 @@ public enum StepOutcome: Sendable, Equatable {
     }
 }
 
-/* What a person has typed for a step: one field for each method, so switching loses nothing. */
+/* Where a step is asked: the words above its fields differ. */
+public enum StepFlow: Sendable, Equatable {
+    case signIn, change
+}
+
+/* What a step's screen offers and says above its fields, from the server's reply (docs/two-step-design.md 12). */
+public enum StepOffer {
+    /*
+     * The ways to answer, in the server's order: the first is what the screen opens on. A passkey or
+     * security key is one of them only with what a key is asked (`keyRequest`), on a phone that can
+     * use one for this server (`passkeys`): never a button that could only fail.
+     */
+    public static func methods(_ challenge: StepChallenge, passkeys: Bool) -> [StepMethod] {
+        challenge.methods.filter { $0 != .webauthn || (passkeys && challenge.keyRequest != nil) }
+    }
+
+    /*
+     * The one line above the fields, or none. A way was left out though this phone named every kind
+     * it knows: a newer HushOS has it. Otherwise, the account's usual way is not the first one here
+     * (the server said so, or a key was listed that this phone cannot ask): it can't be used, and
+     * the line never says why. One or the other, never both.
+     */
+    public static func note(_ challenge: StepChallenge, passkeys: Bool, flow: StepFlow) -> String {
+        if challenge.withheld && passkeys { return StepWords.updateForMore }
+        if challenge.defaultUnavailable || challenge.methods.first != methods(challenge, passkeys: passkeys).first {
+            return flow == .signIn ? StepWords.usualWaySignIn : StepWords.usualWayChange
+        }
+        return ""
+    }
+}
+
+/*
+ * What a press on a step is about to send: an answer that is ready (a code, a backup code, the
+ * phrase's signature), or a key still to be asked. A key is asked in `answer(key:)` and nowhere
+ * else, so nothing that only shows the step can open the system's sheet.
+ */
+public enum StepSending: Sendable, Equatable {
+    case ready(StepAnswer)
+    case key(token: String, request: StepKeyRequest)
+
+    /* The method this answers with: what a refusal about "this method" is about. */
+    public var method: StepMethod {
+        switch self {
+        case .ready(let answer): answer.method
+        case .key: .webauthn
+        }
+    }
+
+    /*
+     * The answer itself. For a key, `key` is asked here: when it throws (the sheet was closed, no key
+     * answered), `KeyUnused` is thrown in its place and there is no answer to send. A cancelled
+     * task stays a cancellation, and says nothing.
+     */
+    public func answer(key: KeyAsker) async throws -> StepAnswer {
+        switch self {
+        case .ready(let answer):
+            return answer
+        case .key(let token, let request):
+            do {
+                return StepAnswer(token: token, proof: .webauthn(assertion: try await key(request)))
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw KeyUnused.atStep
+            }
+        }
+    }
+}
+
+/* What a person has typed for a step: one field for each method, so switching loses nothing. A passkey or security key has no field. */
 public struct StepDraft: Sendable, Equatable {
     public var method: StepMethod
     public var totp = ""
@@ -300,6 +388,9 @@ public struct StepDraft: Sendable, Equatable {
         case .phrase:
             let count = Self.words(phrase).count
             return count == 24 ? nil : "Enter all 24 words of your recovery phrase. \(count) so far."
+        case .webauthn:
+            // Nothing is typed: the key is asked when the step is sent.
+            return nil
         }
     }
 
@@ -316,7 +407,111 @@ public struct StepDraft: Sendable, Equatable {
                 phrase: Self.words(phrase).joined(separator: " "), wrappingSalt: signing.wrappingSalt, userId: signing.userId, stepToken: challenge.token
             )
             return StepAnswer(token: challenge.token, proof: .phrase(signature: signature))
+        case .webauthn:
+            // A key's answer is made when it is sent (`sending`), never from what was typed.
+            throw AuthError.message(StepWords.cannotAnswer)
         }
+    }
+
+    /* What a press sends for `method`: the typed answer, or the key to ask. Asks no key itself. */
+    public func sending(to challenge: StepChallenge, method: StepMethod) throws -> StepSending {
+        guard method == .webauthn else { return .ready(try answer(to: challenge, method: method)) }
+        guard let request = challenge.keyRequest else { throw AuthError.message(StepWords.cannotAnswer) }
+        return .key(token: challenge.token, request: request)
+    }
+}
+
+/*
+ * The step a sign-in stopped at, as its screen shows it: what is offered, what was typed, what the
+ * last answer came to. Decided here, away from any view, so each rule is tested: it opens on the
+ * server's first method, a key is asked only by sending what a press returned, and a key that did
+ * not answer leaves everything as it was.
+ */
+public struct SignInStep: Sendable, Equatable {
+    public let challenge: StepChallenge
+    /* Whether this phone can use a passkey or security key for the server being signed in to. */
+    public let passkeys: Bool
+    /* What the step offered when it arrived: none means this build cannot answer it at all. */
+    private let offered: [StepMethod]
+    public private(set) var methods: [StepMethod]
+    public var draft: StepDraft {
+        didSet {
+            guard draft != oldValue else { return }
+            fieldError = ""
+            lost = nil
+        }
+    }
+    /* The field's own complaint. */
+    public private(set) var fieldError = ""
+    /* What the server, or a lost reply, said: above the field. */
+    public private(set) var notice = ""
+    /* The last reply was lost: the same answer goes again. */
+    public private(set) var lost: StepAnswer?
+
+    public init(challenge: StepChallenge, passkeys: Bool) {
+        self.challenge = challenge
+        self.passkeys = passkeys
+        offered = StepOffer.methods(challenge, passkeys: passkeys)
+        methods = offered
+        draft = StepDraft(methods: offered)
+    }
+
+    /* The method on screen; nil when nothing can answer. */
+    public var shown: StepMethod? { draft.shown(among: methods) }
+    /* Behind Use another way, in the server's order. */
+    public var others: [StepMethod] { methods.filter { $0 != shown } }
+    public var note: String { StepOffer.note(challenge, passkeys: passkeys, flow: .signIn) }
+    /* Why nothing can answer: nothing this build knows was offered (update), or the ways ran out after refusals (updating would not help). */
+    public var nothingLeft: String { offered.isEmpty ? StepWords.cannotAnswer : StepWords.noWayLeft }
+
+    public mutating func choose(_ method: StepMethod) {
+        guard methods.contains(method) else { return }
+        draft.method = method
+    }
+
+    /*
+     * The press: what to send, or nil with the field saying why not. It asks no key: the caller
+     * does, by sending what this returns (`StepSending.answer`).
+     */
+    public mutating func press() -> StepSending? {
+        guard let method = shown else { return nil }
+        if let lost { return .ready(lost) }
+        if let problem = draft.problem(for: method) {
+            fieldError = problem
+            return nil
+        }
+        do {
+            let sending = try draft.sending(to: challenge, method: method)
+            fieldError = ""
+            notice = ""
+            return sending
+        } catch {
+            // A mistyped phrase, refused here before anything is sent.
+            if case .again(let message, _, _)? = StepOutcome.after(error, methods: methods) { fieldError = message }
+            return nil
+        }
+    }
+
+    /*
+     * What a failed press means. Returns the reason when the step is over (back to the password),
+     * nil while it can still be answered. `answer` is what went out, if anything did: a lost reply
+     * offers it again.
+     */
+    public mutating func failed(_ error: Error, tried: StepMethod, answer: StepAnswer?) -> String? {
+        lost = nil
+        switch StepOutcome.after(error, methods: methods, tried: tried) {
+        case .again(let message, let field, let left)?:
+            methods = left
+            if field { fieldError = message } else { notice = message }
+        case .retry(let message)?:
+            notice = message
+            lost = answer
+        case .over(let message)?:
+            return message
+        case nil:
+            break
+        }
+        return nil
     }
 }
 
@@ -390,34 +585,107 @@ public enum StepPurpose: String, Sendable {
     case password, masterKey = "master-key", recoveryKey = "recovery-key", delete, twoStep = "two-step"
 }
 
-/* GET /api/auth/two-step: whether the step is on, its methods, the codes left, and whether the app is paused for new devices. */
+/* A kind of method an account can make its default: what the step asks for first. */
+public enum StepKind: String, Sendable, Equatable {
+    case webauthn, totp
+
+    public var words: String {
+        switch self {
+        case .webauthn: "Passkey or security key"
+        case .totp: "Authenticator app"
+        }
+    }
+
+    /* Said once the default moved to this kind. */
+    public var nowFirst: String { "\(words) is now asked for first." }
+}
+
+/*
+ * GET /api/auth/two-step: whether the step is on, its methods (the app, and the passkeys and
+ * security keys), which kind is asked for first, the codes left, and whether the app is paused for
+ * new devices.
+ */
 public struct TwoStepStatus: Sendable, Equatable {
     public struct Method: Sendable, Equatable, Identifiable {
         public let id: String
-        /* "totp", or "webauthn" once security keys exist. */
+        /* "totp" or "webauthn". */
         public let kind: String
         public let name: String?
         public let createdAt: Date?
         public let lastUsedAt: Date?
+        /* A passkey a password manager syncs. */
+        public let synced: Bool
+
+        public init(id: String, kind: String, name: String?, createdAt: Date?, lastUsedAt: Date?, synced: Bool = false) {
+            self.id = id
+            self.kind = kind
+            self.name = name
+            self.createdAt = createdAt
+            self.lastUsedAt = lastUsedAt
+            self.synced = synced
+        }
+
+        /* How a key is listed: the name it has, or the web's stand-in. */
+        public var shownName: String { name.flatMap { $0.isEmpty ? nil : $0 } ?? "Security key" }
+
+        /* The line under a method: where a passkey lives, when it was added and when it was last used. `day` words a date ("14 Nov"). */
+        public func line(day: (Date) -> String) -> String {
+            [synced ? "Saved in a password manager" : nil, createdAt.map { "Added \(day($0))" }, lastUsedAt.map { "Last used \(day($0))" }]
+                .compactMap { $0 }.joined(separator: " · ")
+        }
     }
 
     public let on: Bool
     public let methods: [Method]
     public let backupCodesLeft: Int
     public let totpFrozen: Bool
+    /* "webauthn", "totp" or "device": the kind the step asks for first; nil when the server names none. */
+    public let defaultKind: String?
 
     /* The authenticator app, if one is confirmed: an account has at most one. */
     public var app: Method? { methods.first { $0.kind == "totp" } }
+    /* The account's passkeys and security keys, as the server lists them. */
+    public var keys: [Method] { methods.filter { $0.kind == "webauthn" } }
 
     init?(_ json: [String: Any]) {
         guard let on = json["on"] as? Bool, let rows = json["methods"] as? [[String: Any]] else { return nil }
         self.on = on
         methods = rows.compactMap { row in
             guard let id = row["id"] as? String, let kind = row["kind"] as? String else { return nil }
-            return Method(id: id, kind: kind, name: row["name"] as? String, createdAt: TwoStep.date(row["createdAt"]), lastUsedAt: TwoStep.date(row["lastUsedAt"]))
+            return Method(
+                id: id, kind: kind, name: row["name"] as? String, createdAt: TwoStep.date(row["createdAt"]), lastUsedAt: TwoStep.date(row["lastUsedAt"]),
+                synced: (row["synced"] as AnyObject) === kCFBooleanTrue
+            )
         }
         backupCodesLeft = (json["backupCodesLeft"] as? NSNumber)?.intValue ?? 0
         totpFrozen = json["totpFrozen"] as? Bool ?? false
+        defaultKind = json["defaultKind"] as? String
+    }
+
+    /* The Default row is there only while the account has both kinds: with one, there is nothing to choose. */
+    public var choosing: Bool { on && app != nil && !keys.isEmpty }
+    /* Whether `kind` carries the Default badge. */
+    public func isDefault(_ kind: StepKind) -> Bool { choosing && defaultKind == kind.rawValue }
+    /* Whether `kind` offers Make default. */
+    public func canMakeDefault(_ kind: StepKind) -> Bool { choosing && defaultKind != kind.rawValue }
+
+    /* The last method is not removed: turning it off is turning the step off. */
+    public var removeWords: String { methods.count == 1 ? "Turn off" : "Remove" }
+    public var removesLast: Bool { methods.count == 1 }
+
+    /* Add is offered only where this phone can make a key for this server, and below the limit. */
+    public func canAddKey(passkeys: Bool) -> Bool { passkeys && keys.count < Passkeys.limit }
+
+    /* What the key list says beneath itself, each line only while it is true (the web's KeyNotes). */
+    public func keyNotes(passkeys: Bool) -> [String] {
+        [
+            keys.contains(where: \.synced) ? "A passkey saved in the same password manager as your password is one factor, not two: whoever opens the manager has both." : nil,
+            !keys.isEmpty && app != nil ? "A passkey stops a fake sign-in page only when you use it. A fake page can ask you to use another way instead." : nil,
+            keys.count == 1 ? "Add a second key and keep it somewhere else, in case this one is lost." : nil,
+            keys.count >= Passkeys.limit ? "You have ten, the most an account can have." : nil,
+            passkeys ? nil : StepWords.keysInBrowser,
+        ]
+        .compactMap { $0 }
     }
 
     /* "7 of 10 left", with what to do when they run low, as the web says it. */
@@ -486,7 +754,7 @@ public struct SecurityEvent: Sendable, Equatable, Identifiable {
         case "totp": "an authenticator code"
         case "backup": "a backup code"
         case "phrase": "your recovery phrase"
-        case "webauthn": "a security key"
+        case "webauthn": "a passkey or security key"
         default: nil
         }
         switch kind {
@@ -497,9 +765,11 @@ public struct SecurityEvent: Sendable, Equatable, Identifiable {
         case "phrase-used": return "Recovery phrase used for the second step"
         case "two-step-on": return "Two-step sign-in turned on"
         case "two-step-off": return "Two-step sign-in turned off"
-        // Said by the kind of method, so the line is right for a security key too.
-        case "method-added": return method == "webauthn" ? "Security key added" : method == "totp" ? "Authenticator app replaced" : "Second-step method added"
-        case "method-removed": return method == "webauthn" ? "Security key removed" : method == "totp" ? "Authenticator app removed" : "Second-step method removed"
+        // Said by the kind of method. An app is "added", never "replaced": beside a key it can be either.
+        case "method-added": return method == "webauthn" ? "Passkey or security key added" : method == "totp" ? "Authenticator app added" : "Second-step method added"
+        case "method-removed": return method == "webauthn" ? "Passkey or security key removed" : method == "totp" ? "Authenticator app removed" : "Second-step method removed"
+        case "default-changed": return method == "webauthn" ? "Default changed to passkey or security key" : method == "totp" ? "Default changed to authenticator app" : "Default changed"
+        case "key-counter": return "A security key was refused: it may have been copied"
         case "backup-codes-made": return "New backup codes made"
         default: return "Security change"
         }
@@ -523,9 +793,16 @@ public enum TwoStep {
             ?? (try? Date(text, strategy: .iso8601))
     }
 
+    /*
+     * The settings' address. `?methods=` names the kinds this build can list beyond the app, on every
+     * server (an older one ignores it): a key added in a browser is shown, renamed and removed here
+     * even where this phone cannot use one.
+     */
+    static var statusPath: String { "/api/auth/two-step?methods=" + stepMethodsShown().joined(separator: ",") }
+
     /* The account's two-step settings; nil on a server that has two-step off (501), where Account shows nothing of it. */
     public static func status() async throws -> TwoStepStatus? {
-        let reply = try await Auth.request("/api/auth/two-step")
+        let reply = try await Auth.request(statusPath)
         if reply.status == 501 { return nil }
         if reply.status == 401 { throw AuthError.sessionEnded(session: reply.session.tag) }
         guard reply.status == 200, let status = TwoStepStatus(reply.body) else {
@@ -546,8 +823,19 @@ public enum TwoStep {
      * managing it answer 501 while that is off): an account that has the step is asked for it on
      * every server.
      */
-    public static func challenge(_ purpose: StepPurpose) async throws -> StepChallenge? {
-        let reply = try await Auth.request("/api/auth/two-step/challenge", method: "POST", body: ["purpose": purpose.rawValue])
+    public static func challenge(_ purpose: StepPurpose, adverts: StepAdverts = .stored, linkHost: String? = Passkeys.linkHost) async throws -> StepChallenge? {
+        // The session is read once: what this phone names, and what it remembers, are for that session's server.
+        guard let session = Auth.currentSession else { throw AuthError.message("Sign in first.") }
+        // The methods are named to a server that said it reads them, and to one never heard either way (a session
+        // from before this build). One that refuses the field is asked again without, and remembered.
+        let sent = try await StepMethodsField.send(
+            advert: adverts.state(for: session.origin), named: stepMethodsNamed(passkeys: passkeysUsable(serverOrigin: session.origin, linkHost: linkHost)),
+            body: ["purpose": purpose.rawValue], status: \.status
+        ) { body in
+            try await Auth.request("/api/auth/two-step/challenge", method: "POST", body: body, as: session)
+        }
+        if sent.unread { adverts.remember(false, for: session.origin) }
+        let reply = sent.reply
         if reply.status == 401 { throw AuthError.sessionEnded(session: reply.session.tag) }
         if reply.status == 409 { return nil }
         switch stepChallengeReplyRead(status: UInt16(clamping: reply.status), body: reply.text) {
@@ -668,6 +956,92 @@ public enum TwoStep {
         return on
     }
 
+    /*
+     * Starts adding a passkey or security key: the password again and, once the step is on, the
+     * step. Answers what the key is then asked, with the registration token its answer goes back with.
+     */
+    public static func startKey(password: String, twoStep: StepAnswer? = nil) async throws -> KeyCreation {
+        try await PasswordTurn.take()
+        defer { PasswordTurn.shared.leaveSoon() }
+        let reply = try await Auth.request("/api/auth/two-step/keys/options", method: "POST", body: try await change(password, twoStep))
+        switch keyOptionsReplyRead(status: UInt16(clamping: reply.status), body: reply.text) {
+        case .options(let creation): return creation
+        case .refused, .lost: throw Auth.refusal(reply, whole: true, lost: StepWords.lostSetup) ?? StepError.lost(StepWords.lostSetup)
+        }
+    }
+
+    /*
+     * Thrown when the server refused a new key (ten already, this one already added, an answer that
+     * did not verify, a setup that timed out): a registration is good for one answer, so the setup
+     * starts again from the password, with the server's words.
+     */
+    public struct KeyRefused: Error, WordedError, Equatable {
+        public let message: String
+        public var errorDescription: String? { message }
+    }
+
+    /*
+     * Sends a new key's answer, with a name for it when the person gave one. Only the server's own
+     * answer says it was added: a reply that is not one, or none at all once the request has gone, is
+     * lost, and the settings are read again before anything is said either way.
+     */
+    public static func addKey(_ creation: KeyCreation, name: String?, registration: KeyRegistration) async throws -> KeyAdded {
+        let json = keyRegistrationJson(registrationToken: creation.registrationToken, name: name, registration: registration)
+        guard let body = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] else { throw AuthError.message(ErrorWords.generic) }
+        let reply: Auth.SessionReply
+        do {
+            reply = try await Auth.request("/api/auth/two-step/keys", method: "POST", body: body)
+        } catch AuthError.message(AuthError.unreachable) {
+            throw StepError.lost(StepWords.lostKeyAdded)
+        }
+        switch keyAddedReplyRead(status: UInt16(clamping: reply.status), body: reply.text) {
+        case .added(let key):
+            return key
+        case .refused(_, let message):
+            if reply.status == 401 { throw AuthError.sessionEnded(session: reply.session.tag) }
+            throw KeyRefused(message: message)
+        case .lost:
+            throw StepError.lost(StepWords.lostKeyAdded)
+        }
+    }
+
+    /* Why a key's name cannot be saved, in the field's own words; nil when it can. Counted as the web counts it. */
+    public static func nameProblem(_ name: String, required: Bool) -> String? {
+        let label = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if label.isEmpty { return required ? "Enter a name." : nil }
+        return label.unicodeScalars.count > 40 ? "Use no more than 40 characters." : nil
+    }
+
+    /* Renames a key: any session may, with no password. The server validates the name, and its words are shown. */
+    public static func renameMethod(_ id: String, name: String) async throws {
+        let reply = try await Auth.call(
+            "/api/auth/two-step/methods/\(id)", method: "PUT", body: ["name": name.trimmingCharacters(in: .whitespacesAndNewlines)], whole: true, lost: StepWords.lostSaved
+        )
+        guard reply["method"] is [String: Any] else { throw StepError.lost(StepWords.lostSaved) }
+    }
+
+    /*
+     * Which kind the step asks for first: it changes only an order, so no password and no step. A
+     * session that never passed the step (403) and an account without that kind (404) are refused in
+     * the server's words. Returns the default as the server now has it.
+     */
+    @discardableResult
+    public static func makeDefault(_ kind: StepKind) async throws -> String? {
+        let reply = try await Auth.request("/api/auth/two-step/default", method: "PUT", body: ["kind": kind.rawValue])
+        guard reply.status == 200 else { throw Auth.refusal(reply, whole: true, lost: StepWords.lostSaved) ?? StepError.lost(StepWords.lostSaved) }
+        // The server's own answer names the default; anything else says nothing either way.
+        guard stepChangeReplyRead(status: 200, body: reply.text) == .done, let moved = reply.body["defaultKind"], moved is String || moved is NSNull else {
+            throw StepError.lost(StepWords.lostSaved)
+        }
+        return moved as? String
+    }
+
+    /* What removing `method` is asked as, and says when done: the last one turns the step off. */
+    public static func removedWords(kind: String, on: Bool) -> String {
+        if !on { return "Two-step sign-in is off." }
+        return kind == "webauthn" ? "Passkey or security key removed." : "Authenticator app removed."
+    }
+
     /* A new set of ten backup codes, which replaces the old one, shown once. */
     public static func newBackupCodes(password: String, twoStep: StepAnswer?) async throws -> [String] {
         try await PasswordTurn.take()
@@ -693,6 +1067,8 @@ public enum TwoStep {
 public struct StepUp: Sendable, Equatable {
     public let purpose: StepPurpose
     public private(set) var challenge: StepChallenge?
+    /* Whether this phone can use a passkey or security key for the server it is signed in to. */
+    public private(set) var passkeys = false
     public private(set) var methods: [StepMethod] = []
     public var draft = StepDraft(methods: [])
     /* What the server said about the last answer. */
@@ -705,6 +1081,10 @@ public struct StepUp: Sendable, Equatable {
     /* Whether the form shows the step's fields. */
     public var asked: Bool { challenge != nil }
     public var shown: StepMethod? { draft.shown(among: methods) }
+    /* Behind Use another way, in the server's order. */
+    public var others: [StepMethod] { methods.filter { $0 != shown } }
+    /* The one line above the fields, or none. */
+    public var note: String { challenge.map { StepOffer.note($0, passkeys: passkeys, flow: .change) } ?? "" }
     /* What to show under the field: the field's own complaint once tried, else the server's words. */
     public var problem: String {
         if tried, let method = shown, let problem = draft.problem(for: method) { return problem }
@@ -713,26 +1093,41 @@ public struct StepUp: Sendable, Equatable {
 
     public mutating func typed() { error = "" }
 
-    public mutating func take(_ next: StepChallenge?, keep: Bool = false) {
+    public mutating func choose(_ method: StepMethod) {
+        guard methods.contains(method) else { return }
+        draft.method = method
+        error = ""
+    }
+
+    public mutating func take(_ next: StepChallenge?, keep: Bool = false, passkeys: Bool = false) {
         challenge = next
-        methods = next?.methods ?? []
+        self.passkeys = passkeys
+        methods = next.map { StepOffer.methods($0, passkeys: passkeys) } ?? []
         tried = false
         if !keep || next == nil { draft = StepDraft(methods: methods) }
     }
 
+    /* Why nothing can answer: nothing this build knows was offered (update), or the ways ran out after refusals (updating would not help). */
+    public var nothingLeft: String {
+        challenge.map { StepOffer.methods($0, passkeys: passkeys).isEmpty } == true ? StepWords.cannotAnswer : StepWords.noWayLeft
+    }
+
     /*
      * What the change carries: nil when no step is asked, and thrown `Unready` when what was typed
-     * cannot be sent yet (the field says why).
+     * cannot be sent yet (the field says why). A passkey or security key is not asked here: the
+     * change's own press sends what this returns (`StepSending.answer`), and the key is asked then.
      */
     public struct Unready: Error {}
-    public mutating func prove() throws -> StepAnswer? {
+    public mutating func prove() throws -> StepSending? {
         guard let challenge else { return nil }
         tried = true
-        // Nothing this build knows was offered: update. The ways ran out after refusals: updating would not help.
-        guard let method = shown else { throw AuthError.message(challenge.methods.isEmpty ? StepWords.cannotAnswer : StepWords.noWayLeft) }
+        guard let method = shown else { throw AuthError.message(nothingLeft) }
         if draft.problem(for: method) != nil { throw Unready() }
         do {
-            return try draft.answer(to: challenge, method: method)
+            let sending = try draft.sending(to: challenge, method: method)
+            // A new press: what the last one came to (a key that was not used) is no longer said.
+            if method == .webauthn { error = "" }
+            return sending
         } catch let error as CoreError {
             // A mistyped phrase: the core's words, beside the field.
             self.error = ErrorWords.say(error) ?? ""
@@ -752,6 +1147,12 @@ public struct StepUp: Sendable, Equatable {
     }
 
     public mutating func failed(_ failure: Error) -> Next {
+        if let unused = failure as? KeyUnused, challenge != nil {
+            // The key's sheet was closed, or no key answered: nothing was sent, and the same step still stands.
+            error = unused.message
+            tried = false
+            return .again
+        }
         guard case StepError.refused(let refusal, let message) = failure else { return .notStep }
         switch refusal {
         case .required:

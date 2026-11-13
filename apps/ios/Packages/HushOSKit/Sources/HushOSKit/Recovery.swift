@@ -474,10 +474,10 @@ extension Auth {
                 switch try await passwordHalf(origin: origin, email: email, password: password) {
                 case .step(let pending):
                     return .step(pending)
-                case .session(let reply, let exportKey):
+                case .session(let reply, let exportKey, let advertised):
                     let salt = (reply.body["envelope"] as? [String: Any])?["wrappingSalt"] as? String
                     return .session(envelopeSalt: salt.flatMap { $0.isEmpty ? nil : $0 },
-                                    open: { try await openSession(origin: origin, email: email, exportKey: exportKey, reply: reply) },
+                                    open: { try await openSession(origin: origin, email: email, exportKey: exportKey, reply: reply, advertised: advertised) },
                                     end: { if let token = reply.cookie { await endSession(origin: origin, token: token) } })
                 }
             },

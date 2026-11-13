@@ -208,13 +208,17 @@ final class AppModel {
         }
     }
 
-    /* The step's answer: on a right one the app is signed in, as a sign-in without a step leaves it. */
-    func answerStep(_ proof: StepProof) async throws {
+    /*
+     * The step's answer: on a right one the app is signed in, as a sign-in without a step leaves it.
+     * `sending` is what the press returned: a passkey or security key is asked here, by the system's
+     * sheet, and `made` hears the answer before it goes (a lost reply sends the same one again).
+     */
+    func answerStep(_ sending: StepSending, made: (StepAnswer) -> Void = { _ in }) async throws {
         guard let pending = pendingStep, pending.dropIn() > .zero else { throw StepError.refused(.expired, StepWords.over) }
         signInGeneration += 1
         await wiping?.value
         let previous = AccountStore.shared.owner()
-        let user = try await Auth.answerStep(pending, proof: proof)
+        let user = try await Auth.answerStep(pending, sending: sending, key: PasskeySheet.assert, made: made)
         await anotherAccount(since: previous)
         signedIn(user)
     }

@@ -69,6 +69,9 @@ targets:
                 CFBundleShortVersionString: '$(MARKETING_VERSION)'
                 CFBundleVersion: '$(CURRENT_PROJECT_VERSION)'
                 HushOSAppGroup: '$(APP_GROUP_ID)'
+                # The host of webcredentials: in the entitlements (App/HushOS.xcconfig): the one server this build can
+                # use a passkey or security key for (HushOSKit's Passkeys.linkHost).
+                HushOSLinkHost: '$(HUSHOS_LINK_HOST)'
                 UILaunchScreen:
                     UIColorName: LaunchBackground
                     UIImageName: SplashMark

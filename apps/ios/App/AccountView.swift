@@ -729,12 +729,14 @@ struct ChangePasswordSheet: View {
     }
 
     private func submit() {
-        let twoStep: StepAnswer?
-        do { twoStep = try step.prove() } catch { if !(error is StepUp.Unready) { self.error = ErrorWords.say(error) ?? "" }; return }
+        let sending: StepSending?
+        do { sending = try step.prove() } catch { if !(error is StepUp.Unready) { self.error = ErrorWords.say(error) ?? "" }; return }
         pending = true
         error = ""
         Task {
             do {
+                // A passkey or security key is asked here, on this press; closed, nothing is sent and the form stays.
+                let twoStep = try await step.answer(sending)
                 try await Auth.changePassword(current: current, new: new, twoStep: twoStep)
             } catch {
                 if let words = await step.failed(error) { self.error = words }
@@ -1026,8 +1028,8 @@ struct ResetKeysSheet: View {
     }
 
     private func reset() {
-        let twoStep: StepAnswer?
-        do { twoStep = try step.prove() } catch { if !(error is StepUp.Unready) { self.error = ErrorWords.say(error) ?? "" }; return }
+        let sending: StepSending?
+        do { sending = try step.prove() } catch { if !(error is StepUp.Unready) { self.error = ErrorWords.say(error) ?? "" }; return }
         pending = true
         error = ""
         // Raised before the request goes: the rotation ends this session, and another request's 401 can arrive first.
@@ -1036,6 +1038,7 @@ struct ResetKeysSheet: View {
             do {
                 // The rotation and the sign-in after it, whose second step the new phrase answers. The words are shown
                 // whatever follows: the old phrase no longer opens the account, and this is the only time the new one is shown.
+                let twoStep = try await step.answer(sending)
                 let made = try await model.rotateKeys(password: password, twoStep: twoStep)
                 recovery.value = made.recovery
                 recoveryVersion = made.recoveryVersion
@@ -1176,12 +1179,13 @@ struct DeleteAccountSheet: View {
     }
 
     private func submit() {
-        let twoStep: StepAnswer?
-        do { twoStep = try step.prove() } catch { if !(error is StepUp.Unready) { self.error = ErrorWords.say(error) ?? "" }; return }
+        let sending: StepSending?
+        do { sending = try step.prove() } catch { if !(error is StepUp.Unready) { self.error = ErrorWords.say(error) ?? "" }; return }
         pending = true
         error = ""
         Task {
             do {
+                let twoStep = try await step.answer(sending)
                 try await Auth.deleteAccount(password: password, twoStep: twoStep)
                 dismiss()
                 await model.deleted()

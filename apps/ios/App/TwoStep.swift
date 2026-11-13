@@ -3,12 +3,13 @@ import SwiftUI
 import UIKit
 
 /*
- * Two-step sign-in (docs/two-step-design.md 4 to 7), as the web has it: the step a sign-in stops at,
- * the step a security change asks for, and Account › Two-step sign-in, where it is turned on with an
- * authenticator app, its backup codes are shown once, the app is replaced or removed, new codes are
- * made, and the account's recent security activity is listed. Codes are checked on the server; the
- * recovery phrase is signed on this iPhone and never leaves it. The words are the web's and the
- * server's own.
+ * Two-step sign-in (docs/two-step-design.md 3 to 7 and 12), as the web has it: the step a sign-in
+ * stops at, the step a security change asks for, and Account › Two-step sign-in, where a passkey or
+ * security key or an authenticator app is added, renamed, removed or made the default, the backup
+ * codes are shown once and made again, and the account's recent security activity is listed. Codes
+ * are checked on the server; the recovery phrase is signed on this iPhone and never leaves it; a
+ * passkey or security key is asked by the system's sheet (PasskeySheet), only when a button is
+ * pressed. The words are the web's and the server's own.
  */
 
 /* MARK: The answer's field */
@@ -19,6 +20,7 @@ private extension StepMethod {
         case .totp: "Code from your authenticator app"
         case .backup: "Backup code"
         case .phrase: "Recovery phrase"
+        case .webauthn: "Passkey or security key"
         }
     }
 
@@ -27,6 +29,7 @@ private extension StepMethod {
         case .totp: "Use your authenticator app"
         case .backup: "Use a backup code"
         case .phrase: "Use your recovery phrase"
+        case .webauthn: "Use your passkey or security key"
         }
     }
 
@@ -35,11 +38,29 @@ private extension StepMethod {
         case .totp: "The 6-digit code. It changes every 30 seconds."
         case .backup: "One of the ten codes you saved. Each works once."
         case .phrase: "All 24 words, in order. They stay on this device."
+        case .webauthn: "Your phone asks for it when you continue."
         }
     }
 }
 
-/* The one field a step's answer is typed in: a code (filled from a password manager or a message), a backup code, or the phrase. */
+/* The other ways to answer a step, behind one control: the system's menu, in the server's order. */
+private struct OtherWays: View {
+    let others: [StepMethod]
+    let choose: (StepMethod) -> Void
+
+    var body: some View {
+        if !others.isEmpty {
+            Menu("Use another way") {
+                ForEach(others, id: \.self) { other in
+                    Button(other.other) { choose(other) }
+                }
+            }
+            .foregroundStyle(Alpine.primary)
+        }
+    }
+}
+
+/* The one field a step's answer is typed in: a code (filled from a password manager or a message), a backup code, or the phrase. A passkey or security key has none. */
 struct StepField: View {
     let method: StepMethod
     @Binding var draft: StepDraft
@@ -65,6 +86,9 @@ struct StepField: View {
                 // The field the recovery screens type the phrase in (PhraseEntry): no predictions, spelling, smart
                 // punctuation or Writing Tools, so the keyboard neither learns the words nor offers them elsewhere.
                 PhraseEntry(text: $draft.phrase).frame(minHeight: 112)
+            case .webauthn:
+                // Nothing to type: the step's own button asks the key.
+                EmptyView()
             }
         }
         .font(.body.monospaced()).foregroundStyle(Alpine.ink)
@@ -107,24 +131,31 @@ struct StepUpSections: View {
         if step.step.asked {
             if let method = step.step.shown {
                 Section {
-                    StepField(method: method, draft: Binding(get: { step.step.draft }, set: { step.step.draft = $0; step.step.typed() }))
-                        .disabled(disabled).alpineRow()
-                    ForEach(step.step.methods.filter { $0 != method }, id: \.self) { other in
-                        Button(other.other) { step.step.draft.method = other; step.step.typed() }
-                            .foregroundStyle(Alpine.primary).disabled(disabled).alpineRow()
+                    if method == .webauthn {
+                        // No field: the form's own button asks the key when it is pressed.
+                        StepNote(method: method, draft: step.step.draft, problem: step.step.problem).alpineRow()
+                    } else {
+                        StepField(method: method, draft: Binding(get: { step.step.draft }, set: { step.step.draft = $0; step.step.typed() }))
+                            .disabled(disabled).alpineRow()
                     }
+                    OtherWays(others: step.step.others) { step.step.choose($0) }
+                        .disabled(disabled).alpineRow()
                 } header: {
                     VStack(alignment: .leading, spacing: Alpine.Space.s2) {
                         Text("Two-step sign-in is on, so this needs your second step too.")
                             .font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted).textCase(nil)
+                        // The usual way is not on offer, or a newer HushOS has more: one line, never why.
+                        if !step.step.note.isEmpty {
+                            Text(step.step.note).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted).textCase(nil)
+                        }
                         FieldLabel(method.label)
                     }
                     .padding(.top, Alpine.Space.s2)
                 } footer: {
-                    StepNote(method: method, draft: step.step.draft, problem: step.step.problem)
+                    if method != .webauthn { StepNote(method: method, draft: step.step.draft, problem: step.step.problem) }
                 }
             } else {
-                Section { Text(step.step.challenge?.methods.isEmpty == true ? StepWords.cannotAnswer : StepWords.noWayLeft).foregroundStyle(Alpine.danger).alpineRow() }
+                Section { Text(step.step.nothingLeft).foregroundStyle(Alpine.danger).alpineRow() }
             }
         }
     }
@@ -144,10 +175,20 @@ final class StepUpModel {
     /* The form opened: an account with the step sees its fields from the start. Quiet when that can't be told; the change's own refusal asks then. */
     func prepare() async {
         guard !step.asked, let status = try? await TwoStep.status(), status.on else { return }
-        if let challenge = try? await TwoStep.challenge(step.purpose) { step.take(challenge) }
+        if let challenge = try? await TwoStep.challenge(step.purpose) { step.take(challenge, passkeys: Passkeys.usableNow) }
     }
 
-    func prove() throws -> StepAnswer? { try step.prove() }
+    /* What the change is about to carry, decided on the press; a passkey or security key is not asked yet. */
+    func prove() throws -> StepSending? { try step.prove() }
+
+    /*
+     * The step's answer, as the change goes out. A passkey or security key is asked here, by the
+     * system's sheet, and so only ever on the form's own button. Closed, it throws `KeyUnused`:
+     * nothing was sent, and `failed` puts the words beside the step.
+     */
+    func answer(_ sending: StepSending?) async throws -> StepAnswer? {
+        try await sending?.answer(key: PasskeySheet.assert)
+    }
 
     /* After a failed change: nil when the step's own fields say what happened, else the words for the form. */
     func failed(_ error: Error) async -> String? {
@@ -158,7 +199,7 @@ final class StepUpModel {
             return nil
         case .renew:
             do {
-                step.take(try await TwoStep.challenge(step.purpose), keep: true)
+                step.take(try await TwoStep.challenge(step.purpose), keep: true, passkeys: Passkeys.usableNow)
                 return nil
             } catch {
                 return ErrorWords.say(error)
@@ -170,42 +211,40 @@ final class StepUpModel {
 /* MARK: Signing in */
 
 /*
- * The second step of a sign-in: the password was right, and the account asks for a code, a backup
- * code or the recovery phrase before anything is handed over. A wrong answer stays here; a step
- * that is over goes back to the password with why; a reply that never arrived offers the same
- * answer again. Nothing leaves the person on a screen that can no longer be answered.
+ * The second step of a sign-in: the password was right, and the account asks for its passkey or
+ * security key, a code, a backup code or the recovery phrase before anything is handed over. It
+ * opens on the way the server put first (the account's default); the others are behind Use another
+ * way. A wrong answer stays here; a step that is over goes back to the password with why; a reply
+ * that never arrived offers the same answer again. Nothing leaves the person on a screen that can
+ * no longer be answered. What is offered and what each failure means is HushOSKit's `SignInStep`.
  */
 struct SignInStepView: View {
     @Environment(AppModel.self) private var model
     let pending: PendingSignIn
-    @State private var methods: [StepMethod]
-    @State private var draft: StepDraft
+    @State private var step: SignInStep
     @State private var busy = false
-    /* The field's own complaint. */
-    @State private var fieldError = ""
-    /* What the server, or a lost reply, said: above the field. */
-    @State private var notice = ""
-    /* The last reply was lost: the same answer goes again. */
-    @State private var lost: StepAnswer?
 
     init(pending: PendingSignIn) {
         self.pending = pending
-        _methods = State(initialValue: pending.challenge.methods)
-        _draft = State(initialValue: StepDraft(methods: pending.challenge.methods))
+        _step = State(initialValue: SignInStep(challenge: pending.challenge, passkeys: Passkeys.usable(for: pending.origin)))
     }
-
-    private var method: StepMethod? { draft.shown(among: methods) }
 
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: Alpine.Space.s6) {
-                    Text("This account has two-step sign-in on.").font(.body).foregroundStyle(Alpine.inkMuted)
-                        .padding(.horizontal, Alpine.Space.s1)
-                    if !notice.isEmpty {
+                    VStack(alignment: .leading, spacing: Alpine.Space.s2) {
+                        Text("This account has two-step sign-in on.").font(.body).foregroundStyle(Alpine.inkMuted)
+                        // The usual way is not on offer, or a newer HushOS has more: one line, never why.
+                        if !step.note.isEmpty {
+                            Text(step.note).font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted)
+                        }
+                    }
+                    .padding(.horizontal, Alpine.Space.s1)
+                    if !step.notice.isEmpty {
                         HStack(alignment: .firstTextBaseline, spacing: 10) {
                             Image(systemName: "exclamationmark.circle").font(Theme.Text.callout.weight(.semibold))
-                            Text(notice).font(Theme.Text.callout).frame(maxWidth: .infinity, alignment: .leading)
+                            Text(step.notice).font(Theme.Text.callout).frame(maxWidth: .infinity, alignment: .leading)
                         }
                         .foregroundStyle(Alpine.warning)
                         .padding(.horizontal, Alpine.Space.s4).padding(.vertical, Alpine.Space.s3)
@@ -213,28 +252,27 @@ struct SignInStepView: View {
                         .highContrastEdge(RoundedRectangle(cornerRadius: 20, style: .continuous))
                         .accessibilityElement(children: .combine)
                     }
-                    if let method {
+                    if let method = step.shown {
                         VStack(alignment: .leading, spacing: Alpine.Space.s2) {
                             FieldLabel(method.label).padding(.horizontal, Alpine.Space.s4)
-                            StepField(method: method, draft: $draft, submit: submit, focus: true)
-                                .disabled(busy)
-                                .padding(.horizontal, Alpine.Space.s4).padding(.vertical, Alpine.Space.s3)
-                                .frame(minHeight: 52)
-                                .background(Alpine.surface, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-                                .alpineCardEdge(RoundedRectangle(cornerRadius: 26, style: .continuous))
-                            StepNote(method: method, draft: draft, problem: fieldError).padding(.horizontal, Alpine.Space.s4)
-                        }
-                        VStack(alignment: .leading, spacing: 0) {
-                            ForEach(methods.filter { $0 != method }, id: \.self) { other in
-                                Button(other.other) { draft.method = other }
-                                    .font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.primary)
-                                    .frame(minHeight: Theme.control).disabled(busy)
+                            // A passkey or security key has no field: the button below asks it.
+                            if method != .webauthn {
+                                StepField(method: method, draft: $step.draft, submit: submit, focus: true)
+                                    .disabled(busy)
+                                    .padding(.horizontal, Alpine.Space.s4).padding(.vertical, Alpine.Space.s3)
+                                    .frame(minHeight: 52)
+                                    .background(Alpine.surface, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+                                    .alpineCardEdge(RoundedRectangle(cornerRadius: 26, style: .continuous))
                             }
+                            StepNote(method: method, draft: step.draft, problem: step.fieldError).padding(.horizontal, Alpine.Space.s4)
                         }
-                        .padding(.horizontal, Alpine.Space.s4)
+                        OtherWays(others: step.others) { step.choose($0) }
+                            .font(Theme.Text.callout.weight(.semibold))
+                            .frame(minHeight: Theme.control).disabled(busy)
+                            .padding(.horizontal, Alpine.Space.s4)
                     } else {
                         // Nothing this build knows was offered: update. The ways ran out after refusals: updating would not help.
-                        Text(pending.challenge.methods.isEmpty ? StepWords.cannotAnswer : StepWords.noWayLeft)
+                        Text(step.nothingLeft)
                             .font(Theme.Text.callout).foregroundStyle(Alpine.danger).padding(.horizontal, Alpine.Space.s4)
                     }
                 }
@@ -243,9 +281,9 @@ struct SignInStepView: View {
             .scrollDismissesKeyboard(.interactively)
 
             VStack(spacing: Alpine.Space.s2) {
-                if method != nil {
+                if step.shown != nil {
                     Button(action: submit) {
-                        Text(busy ? "Checking" : lost == nil ? "Continue" : "Try again").font(.body.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 52)
+                        Text(action).font(.body.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 52)
                     }
                     .buttonStyle(PrimaryCapsuleStyle())
                     .disabled(busy)
@@ -260,43 +298,27 @@ struct SignInStepView: View {
         .navigationTitle("One more step")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(busy)
-        .onChange(of: draft) { fieldError = ""; lost = nil }
+    }
+
+    /* The one button: it sends what was typed, or asks the key. */
+    private var action: String {
+        if busy { return "Checking" }
+        if step.lost != nil { return "Try again" }
+        return step.shown == .webauthn ? "Use your passkey" : "Continue"
     }
 
     private func submit() {
-        guard !busy, let method else { return }
-        let answer: StepAnswer
-        if let lost {
-            answer = lost
-        } else {
-            if let problem = draft.problem(for: method) { fieldError = problem; return }
-            do {
-                answer = try draft.answer(to: pending.challenge, method: method)
-            } catch {
-                // A mistyped phrase, refused here before anything is sent.
-                if case .again(let message, _, _)? = StepOutcome.after(error, methods: methods) { fieldError = message }
-                return
-            }
-        }
-        fieldError = ""
-        notice = ""
+        // The press decides what goes. For a passkey or security key the system's sheet opens from here, and only from here.
+        guard !busy, let sending = step.press() else { return }
         busy = true
         Task {
+            var sent: StepAnswer?
             do {
-                try await model.answerStep(answer.proof)
+                try await model.answerStep(sending) { sent = $0 }
             } catch {
-                lost = nil
-                switch StepOutcome.after(error, methods: methods, tried: answer.method) {
-                case .again(let message, let field, let left)?:
-                    methods = left
-                    if field { fieldError = message } else { notice = message }
-                case .retry(let message)?:
-                    notice = message
-                    lost = answer
-                case .over(let message)?:
-                    model.cancelStep(message, token: pending.challenge.token)
-                case nil:
-                    break
+                // A sheet that was closed sent nothing and keeps the step; a lost reply keeps the answer to send again.
+                if let over = step.failed(error, tried: sending.method, answer: sent) {
+                    model.cancelStep(over, token: pending.challenge.token)
                 }
             }
             busy = false
@@ -315,10 +337,27 @@ struct TwoStepView: View {
     @State private var events: [SecurityEvent] = []
     @State private var allEvents = false
     @State private var open: Open?
+    /* Whether this iPhone can use a passkey or security key for the server it is signed in to: read with the settings. */
+    @State private var passkeys = false
+    /* The default is being moved: one change at a time. */
+    @State private var moving = false
 
-    enum Open: String, Identifiable {
-        case on, replace, off, codes
-        var id: String { rawValue }
+    enum Open: Identifiable {
+        case app(AuthenticatorSheet.Mode)
+        case key(first: Bool)
+        case rename(TwoStepStatus.Method)
+        case remove(TwoStepStatus.Method, last: Bool)
+        case codes
+
+        var id: String {
+            switch self {
+            case .app(let mode): "app-\(mode.rawValue)"
+            case .key: "key"
+            case .rename(let method): "rename-\(method.id)"
+            case .remove(let method, _): "remove-\(method.id)"
+            case .codes: "codes"
+            }
+        }
     }
 
     private static let shown = 5
@@ -337,18 +376,23 @@ struct TwoStepView: View {
                     Text("A second step stops someone who has your password from signing in. It doesn’t change how your files are encrypted.")
                         .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).textCase(nil)
                 }
+                Section {
+                    if status.on {
+                        Text("On").fontWeight(.semibold).foregroundStyle(Alpine.ink).alpineRow()
+                    } else {
+                        Text("Off. Your password alone signs you in.").foregroundStyle(Alpine.inkMuted).alpineRow()
+                    }
+                } header: {
+                    SectionTitle("Status")
+                }
+                keys(status)
+                app(status)
                 if status.on {
-                    methods(status)
                     Section {
                         Text(status.codesLeft).foregroundStyle(Alpine.inkMuted).alpineRow()
                         Button("New codes") { open = .codes }.foregroundStyle(Alpine.primary).alpineRow()
                     } header: {
                         SectionTitle("Backup codes")
-                    }
-                } else {
-                    Section {
-                        Text("Off. Your password alone signs you in.").foregroundStyle(Alpine.inkMuted).alpineRow()
-                        Button("Turn on") { open = .on }.foregroundStyle(Alpine.primary).alpineRow()
                     }
                 }
                 activity
@@ -362,36 +406,100 @@ struct TwoStepView: View {
         .refreshable { await load() }
         .sheet(item: $open) { which in
             switch which {
-            case .on, .replace:
-                AuthenticatorSheet(replacing: which == .replace, email: model.user?.email ?? "") { said in finish(said) }
-            case .off:
-                TurnOffSheet(methodId: status?.app?.id ?? status?.methods.first?.id) { said in finish(said) }
+            case .app(let mode):
+                AuthenticatorSheet(mode: mode, email: model.user?.email ?? "") { said in finish(said) }
+            case .key(let first):
+                KeySheet(first: first, email: model.user?.email ?? "") { said in finish(said) }
+            case .rename(let method):
+                RenameKeySheet(method: method) { said in finish(said) }
+            case .remove(let method, let last):
+                RemoveMethodSheet(method: method, last: last) { said in finish(said) }
             case .codes:
                 NewCodesSheet(email: model.user?.email ?? "") { said in finish(said) }
             }
         }
     }
 
-    @ViewBuilder private func methods(_ status: TwoStepStatus) -> some View {
+    /* A kind's name over its rows, with Default beside it while it is the one asked for first. */
+    private func kindTitle(_ kind: StepKind, _ status: TwoStepStatus) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: Alpine.Space.s2) {
+            SectionTitle(kind.words)
+            if status.isDefault(kind) {
+                Text("Default").font(Theme.Text.footnote.weight(.semibold)).foregroundStyle(Alpine.onTint).textCase(nil)
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Alpine.tint, in: RoundedRectangle(cornerRadius: Alpine.Radius.chip, style: .continuous))
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    /* Offered on the kind that is not asked for first, and only while the account has both. */
+    @ViewBuilder private func makeDefault(_ kind: StepKind, _ status: TwoStepStatus) -> some View {
+        if status.canMakeDefault(kind) {
+            Button("Make default") { move(to: kind) }
+                .foregroundStyle(Alpine.primary).disabled(moving).alpineRow()
+                .accessibilityLabel("Make \(kind.words.lowercased()) the default")
+        }
+    }
+
+    @ViewBuilder private func keys(_ status: TwoStepStatus) -> some View {
         Section {
-            ForEach(status.methods) { method in
-                // The app is the section's own name; a kind added later (a security key) is listed by its name.
-                let paused = method.kind == "totp" && status.totpFrozen
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: Alpine.Space.s2) {
-                        if method.kind != "totp" { Text(method.name ?? "Security key").foregroundStyle(Alpine.ink) }
-                        Text(paused ? "Paused" : "On").fontWeight(.semibold).foregroundStyle(paused ? Alpine.warning : Alpine.ink)
+            if status.keys.isEmpty {
+                Text("Not added. It stops fake sign-in pages, which a code can’t.").foregroundStyle(Alpine.inkMuted).alpineRow()
+            }
+            ForEach(status.keys) { key in
+                HStack(spacing: Alpine.Space.s3) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(key.shownName).foregroundStyle(Alpine.ink)
+                        Text(key.line(day: Self.day)).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
                     }
-                    Text(used(method)).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
+                    Spacer(minLength: 0)
+                    Menu {
+                        Button("Rename") { open = .rename(key) }
+                        // The last method is not removed: turning it off is turning the step off.
+                        Button(status.removeWords, role: .destructive) { open = .remove(key, last: status.removesLast) }
+                    } label: {
+                        Image(systemName: "ellipsis").foregroundStyle(Alpine.inkMuted).frame(width: 44, height: 44)
+                    }
+                    .accessibilityLabel("Actions for \(key.shownName)")
                 }
                 .alpineRow()
             }
-            if status.app != nil {
-                Button("Replace") { open = .replace }.foregroundStyle(Alpine.primary).alpineRow()
+            // Only where this iPhone can make a key for this server; on any other, keys are added in a browser.
+            if status.canAddKey(passkeys: passkeys) {
+                Button("Add") { open = .key(first: !status.on) }
+                    .foregroundStyle(Alpine.primary).alpineRow().accessibilityLabel("Add passkey or security key")
             }
-            Button("Turn off", role: .destructive) { open = .off }.foregroundStyle(Alpine.danger).alpineRow()
+            makeDefault(.webauthn, status)
         } header: {
-            SectionTitle("Authenticator app")
+            kindTitle(.webauthn, status)
+        } footer: {
+            VStack(alignment: .leading, spacing: Alpine.Space.s2) {
+                ForEach(status.keyNotes(passkeys: passkeys), id: \.self) { Text($0) }
+            }
+        }
+    }
+
+    @ViewBuilder private func app(_ status: TwoStepStatus) -> some View {
+        Section {
+            if let app = status.app {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(status.totpFrozen ? "Paused" : "On").fontWeight(.semibold).foregroundStyle(status.totpFrozen ? Alpine.warning : Alpine.ink)
+                    Text(app.line(day: Self.day)).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
+                }
+                .alpineRow()
+                Button("Replace") { open = .app(.replace) }.foregroundStyle(Alpine.primary).alpineRow()
+                Button(status.removeWords, role: .destructive) { open = .remove(app, last: status.removesLast) }
+                    .foregroundStyle(Alpine.danger).alpineRow().accessibilityLabel("\(status.removeWords) authenticator app")
+            } else {
+                Text("Not added. A 6-digit code from an app on your phone.").foregroundStyle(Alpine.inkMuted).alpineRow()
+                // Beside a key the step is already on: the app is added, and nothing is turned on.
+                Button("Add") { open = .app(status.on ? .add : .on) }
+                    .foregroundStyle(Alpine.primary).alpineRow().accessibilityLabel("Add authenticator app")
+            }
+            makeDefault(.totp, status)
+        } header: {
+            kindTitle(.totp, status)
         } footer: {
             if status.totpFrozen {
                 Text("Its codes are refused on devices HushOS doesn’t recognise, after many wrong ones. A backup code or your recovery phrase works there, and lifts the pause.")
@@ -419,12 +527,6 @@ struct TwoStepView: View {
         }
     }
 
-    private func used(_ method: TwoStepStatus.Method) -> String {
-        let added = method.createdAt.map { "Added \(Self.day($0))" }
-        let last = method.lastUsedAt.map { "Last used \(Self.day($0))" }
-        return [added, last].compactMap { $0 }.joined(separator: " · ")
-    }
-
     /* "13 Nov", and the minute as the emails carry it: "13 Nov, 14:08". */
     private static func day(_ date: Date) -> String { date.formatted(Date.FormatStyle().day().month(.abbreviated).locale(.dayMonth)) }
     private static func when(_ date: Date) -> String { "\(day(date)), \(date.formatted(date: .omitted, time: .shortened))" }
@@ -434,9 +536,27 @@ struct TwoStepView: View {
         Task { await load() }
     }
 
+    /* Which kind is asked for first: it changes only an order, so no password and no step. */
+    private func move(to kind: StepKind) {
+        guard !moving else { return }
+        moving = true
+        Task {
+            do {
+                try await TwoStep.makeDefault(kind)
+                finish(kind.nowFirst)
+            } catch {
+                if endsSession(error) { store.report(error) } else if let words = ErrorWords.say(error) { store.notify(words, important: true) }
+                // The refusal, or a lost reply, may sit beside a default that moved: the settings are read again.
+                await load()
+            }
+            moving = false
+        }
+    }
+
     private func load() async {
         do {
             let next = try await TwoStep.status()
+            passkeys = Passkeys.usableNow
             status = next
             problem = ""
             loaded = true
@@ -476,6 +596,61 @@ private struct SheetIntro: View {
     let text: String
     var body: some View {
         Section {} header: { Text(text).font(Theme.Text.callout).foregroundStyle(Alpine.ink).textCase(nil) }
+    }
+}
+
+private extension View {
+    /*
+     * A sheet's title in its bar. These are questions and instructions ("Remove this passkey or
+     * security key?"), longer than a bar's title usually is: it shrinks to fit before it is cut off.
+     */
+    func stepSheetTitle(_ title: String) -> some View {
+        navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text(title).font(.headline).foregroundStyle(Alpine.ink).lineLimit(1).minimumScaleFactor(0.7)
+                        .accessibilityAddTraits(.isHeader)
+                }
+            }
+    }
+}
+
+/* The offer to remove the other devices when the step is turned on, as the authenticator app's and a key's setup both make it. */
+private struct RemoveOthersOffer: View {
+    @Binding var ticked: Bool
+    /* How many other devices are signed in, for the words only: nil until the list answers, or when it doesn't. */
+    let others: Int?
+    let disabled: Bool
+
+    var body: some View {
+        Section {
+            Toggle("Remove my other devices", isOn: $ticked).tint(Alpine.primary).disabled(disabled).alpineRow()
+        } footer: {
+            Text(TotpEnrolment.othersLine(others))
+        }
+    }
+}
+
+/* The removal of other devices, which runs behind the backup codes and never holds them or their sheet. */
+private enum RemovingOthers { case no, running, failed }
+
+/* The backup codes a first method came with: shown once, with how the removal of the other devices behind them is going. */
+private struct TurnedOnCodes: View {
+    let codes: [String]
+    let email: String
+    let removing: RemovingOthers
+    let done: () -> Void
+
+    var body: some View {
+        SheetIntro(text: "Two-step sign-in is on.")
+        BackupCodesList(codes: codes, email: email)
+        if removing == .running {
+            Section {} footer: { Text("Removing your other devices") }
+        } else if removing == .failed {
+            Section {} footer: { Text(StepWords.othersNotRemoved).foregroundStyle(Alpine.danger) }
+        }
+        primaryRow("Done", disabled: false, action: done)
     }
 }
 
@@ -557,11 +732,14 @@ private final class CodesNote: NSObject, UIActivityItemSource {
 }
 
 /*
- * Turning the step on, or replacing the app: the password (and the step, once it is on), the key to
- * add to an authenticator app, a code from the app to confirm, and, the first time, the backup codes.
+ * Adding an authenticator app: the password (and the step, once it is on), the key to add to the
+ * app, a code from the app to confirm, and, when it is the account's first method, the backup codes.
  */
 struct AuthenticatorSheet: View {
-    let replacing: Bool
+    /* `on`: the account's first method, which turns the step on. `add`: an app beside its keys. `replace`: a new app for the old. */
+    enum Mode: String { case on, add, replace }
+
+    let mode: Mode
     let email: String
     let done: (String) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -577,10 +755,10 @@ struct AuthenticatorSheet: View {
     @State private var others: Int?
     @State private var signOutOthers = true
     @State private var codes: [String]?
-    /* The removal of other devices, which runs behind the codes and never holds them or this sheet. */
-    @State private var removing = Removing.no
-    private enum Removing { case no, running, failed }
+    @State private var removing = RemovingOthers.no
     @State private var capture = ScreenCapture.shared
+
+    private var replacing: Bool { mode == .replace }
 
     private var codeReady: Bool {
         let digits = code.filter { !$0.isWhitespace }
@@ -591,14 +769,7 @@ struct AuthenticatorSheet: View {
         NavigationStack {
             Form {
                 if let codes {
-                    SheetIntro(text: "Two-step sign-in is on.")
-                    BackupCodesList(codes: codes, email: email)
-                    if removing == .running {
-                        Section {} footer: { Text("Removing your other devices") }
-                    } else if removing == .failed {
-                        Section {} footer: { Text(StepWords.othersNotRemoved).foregroundStyle(Alpine.danger) }
-                    }
-                    primaryRow("Done", disabled: false) {
+                    TurnedOnCodes(codes: codes, email: email, removing: removing) {
                         done("Two-step sign-in is on.")
                         dismiss()
                     }
@@ -641,20 +812,12 @@ struct AuthenticatorSheet: View {
                     } footer: {
                         if tried && !codeReady { Text("Enter the 6-digit code the app shows.").foregroundStyle(Alpine.danger) }
                     }
-                    // Offered whenever the step is being turned on, whatever the device list said or didn't.
-                    if !replacing {
-                        Section {
-                            Toggle("Remove my other devices", isOn: $signOutOthers).tint(Alpine.primary).disabled(pending).alpineRow()
-                        } footer: {
-                            Text(TotpEnrolment.othersLine(others))
-                        }
-                    }
+                    // Offered whenever the step is being turned on, whatever the device list said or didn't; never beside a key or for a new app.
+                    if mode == .on { RemoveOthersOffer(ticked: $signOutOthers, others: others, disabled: pending) }
                     FormProblem(text: error)
-                    primaryRow(pending ? "Checking" : replacing ? "Replace app" : "Turn on", disabled: pending) { confirm() }
+                    primaryRow(pending ? "Checking" : mode == .replace ? "Replace app" : mode == .on ? "Turn on" : "Add app", disabled: pending) { confirm() }
                 } else {
-                    SheetIntro(text: replacing
-                        ? "The new app takes over once you confirm it. Your backup codes stay as they are."
-                        : "After your password, HushOS will ask for a code from an authenticator app on your phone. Your recovery phrase works as the second step too, so keep it apart from your password.")
+                    SheetIntro(text: intro)
                     ConfirmPassword(password: $password, tried: tried)
                     StepUpSections(step: step, disabled: pending)
                     FormProblem(text: error)
@@ -663,31 +826,44 @@ struct AuthenticatorSheet: View {
             }
             .alpineGrouped()
             .scrollDismissesKeyboard(.interactively)
-            .navigationTitle(title)
-            .navigationBarTitleDisplayMode(.inline)
+            .stepSheetTitle(title)
             .toolbar { if codes == nil { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(pending) } } }
             .interactiveDismissDisabled(codes != nil || pending)
-            // Replacing needs the step from the start: its fields are there when the sheet opens.
-            .task { if replacing { await step.prepare() } }
-            .task { if !replacing { others = (try? await Devices.list())?.filter { !$0.current }.count } }
+            // Once the step is on (a new app, or an app beside a key) it is needed from the start: its fields are there when the sheet opens.
+            .task { if mode != .on { await step.prepare() } }
+            .task { if mode == .on { others = (try? await Devices.list())?.filter { !$0.current }.count } }
         }
     }
 
     private var title: String {
         if codes != nil { return "Save your backup codes" }
         if app != nil { return replacing ? "Add your new authenticator app" : "Add your authenticator app" }
-        return replacing ? "Replace your authenticator app?" : "Turn on two-step sign-in?"
+        switch mode {
+        case .on: return "Turn on two-step sign-in?"
+        case .add: return "Add an authenticator app?"
+        case .replace: return "Replace your authenticator app?"
+        }
+    }
+
+    private var intro: String {
+        switch mode {
+        case .on: "After your password, HushOS will ask for a code from an authenticator app on your phone. Your recovery phrase works as the second step too, so keep it apart from your password."
+        case .add: "A code from the app will pass your second step too. Your other ways to sign in stay as they are."
+        case .replace: "The new app takes over once you confirm it. Your backup codes stay as they are."
+        }
     }
 
     private func start() {
         tried = true
         guard !password.isEmpty else { return }
-        let twoStep: StepAnswer?
-        do { twoStep = try step.prove() } catch { if !(error is StepUp.Unready) { self.error = ErrorWords.say(error) ?? "" }; return }
+        let sending: StepSending?
+        do { sending = try step.prove() } catch { if !(error is StepUp.Unready) { self.error = ErrorWords.say(error) ?? "" }; return }
         pending = true
         error = ""
         Task {
             do {
+                // A passkey or security key is asked here, on this press.
+                let twoStep = try await step.answer(sending)
                 app = try await TwoStep.startAuthenticator(password: password, twoStep: twoStep)
                 tried = false
             } catch {
@@ -708,8 +884,9 @@ struct AuthenticatorSheet: View {
                 guard case .turnedOn(let made) = try await TwoStep.confirmAuthenticator(id: app.id, code: code) else {
                     // Turning the step on always comes back with the codes. An answer without them is not the
                     // server's answer to that: nothing is claimed, and the settings behind are read again.
-                    if !replacing { throw StepError.lost(StepWords.lostTurnedOn) }
-                    done("Authenticator app replaced.")
+                    if mode == .on { throw StepError.lost(StepWords.lostTurnedOn) }
+                    // The server answers the same for a new app and for one added beside a key.
+                    done(replacing ? "Authenticator app replaced." : "Authenticator app added.")
                     dismiss()
                     return
                 }
@@ -719,8 +896,8 @@ struct AuthenticatorSheet: View {
                 // Then the other devices, which signed in before the step was on: removed whenever the box is ticked,
                 // whatever the list said (the server removes none when there are none). It runs behind the codes and
                 // never holds them or this sheet: Done closes it meanwhile, and a failure is then a notice.
-                // Only when turning the step on: replacing an app never removes a device, whatever the box last said.
-                if signOutOthers && !replacing {
+                // Only when turning the step on: a new app, or one beside a key, never removes a device, whatever the box last said.
+                if signOutOthers && mode == .on {
                     removing = .running
                     let typed = password
                     Task {
@@ -755,9 +932,14 @@ struct AuthenticatorSheet: View {
     }
 }
 
-/* Turning the step off is removing its last method: the password and the step itself. */
-struct TurnOffSheet: View {
-    let methodId: String?
+/*
+ * Removing a method: the password and the step itself. The account's only method is not removed but
+ * turned off, with the step; any other leaves the rest as they are.
+ */
+struct RemoveMethodSheet: View {
+    let method: TwoStepStatus.Method
+    /* The account's only method: removing it turns the step off. */
+    let last: Bool
     let done: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var step = StepUpModel(.twoStep)
@@ -766,16 +948,34 @@ struct TurnOffSheet: View {
     @State private var pending = false
     @State private var error = ""
 
+    private var app: Bool { method.kind == "totp" }
+
+    private var title: String {
+        if last { return "Turn off two-step sign-in?" }
+        return app ? "Remove your authenticator app?" : "Remove this passkey or security key?"
+    }
+
+    private var intro: String {
+        if last { return "Your password alone will sign you in, and your backup codes will stop working." }
+        if app { return "Its codes will stop passing your second step. Your other ways to sign in stay as they are." }
+        return "\(method.name.flatMap { $0.isEmpty ? nil : $0 } ?? "This key") will stop passing your second step. Your other ways to sign in stay as they are."
+    }
+
+    private var action: String {
+        if last { return pending ? "Turning off" : "Turn off" }
+        return pending ? "Removing" : "Remove"
+    }
+
     var body: some View {
         NavigationStack {
             Form {
-                SheetIntro(text: "Your password alone will sign you in, and your backup codes will stop working.")
+                SheetIntro(text: intro)
                 ConfirmPassword(password: $password, tried: tried)
                 StepUpSections(step: step, disabled: pending)
                 FormProblem(text: error)
                 Section {
                     Button { submit() } label: {
-                        Text(pending ? "Turning off" : "Turn off").font(.body.weight(.semibold))
+                        Text(action).font(.body.weight(.semibold))
                             .foregroundStyle(pending ? Alpine.inkMuted : Color.white).frame(maxWidth: .infinity, minHeight: Theme.control)
                             .background(pending ? Alpine.ink.opacity(0.08) : Alpine.danger, in: Capsule())
                     }
@@ -785,8 +985,7 @@ struct TurnOffSheet: View {
             }
             .alpineGrouped()
             .scrollDismissesKeyboard(.interactively)
-            .navigationTitle("Turn off two-step sign-in?")
-            .navigationBarTitleDisplayMode(.inline)
+            .stepSheetTitle(title)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(pending) } }
             .interactiveDismissDisabled(pending)
             .task { await step.prepare() }
@@ -795,21 +994,238 @@ struct TurnOffSheet: View {
 
     private func submit() {
         tried = true
-        guard !password.isEmpty, let methodId else { return }
-        let twoStep: StepAnswer?
-        do { twoStep = try step.prove() } catch { if !(error is StepUp.Unready) { self.error = ErrorWords.say(error) ?? "" }; return }
+        guard !password.isEmpty else { return }
+        let sending: StepSending?
+        do { sending = try step.prove() } catch { if !(error is StepUp.Unready) { self.error = ErrorWords.say(error) ?? "" }; return }
         pending = true
         error = ""
         Task {
             do {
-                let on = try await TwoStep.removeMethod(methodId, password: password, twoStep: twoStep)
-                done(on ? "Authenticator app removed." : "Two-step sign-in is off.")
+                // A passkey or security key is asked here, on this press; closed, nothing is sent and nothing was removed.
+                let twoStep = try await step.answer(sending)
+                let on = try await TwoStep.removeMethod(method.id, password: password, twoStep: twoStep)
+                // What is said follows the server's answer: the step is off only when it says so.
+                done(TwoStep.removedWords(kind: method.kind, on: on))
                 dismiss()
+            } catch let unused as KeyUnused {
+                // Nothing was sent: there is nothing behind to read again.
+                _ = await step.failed(unused)
             } catch {
                 // Any failure may hide a removal that went through (a lost reply, a dropped connection, a gateway's 502): the
                 // settings behind are read again, so they never keep saying On on a guess.
                 done("")
                 if let words = await step.failed(error) { self.error = words }
+            }
+            pending = false
+        }
+    }
+}
+
+/*
+ * Adding a passkey or security key: the password (and the step, once it is on), then the key
+ * itself, asked by the system's sheet on the press of Add, with a name for it if the person wants
+ * one. The account's first method turns the step on, and its backup codes follow.
+ */
+struct KeySheet: View {
+    /* The account has no method yet: this key turns the step on. */
+    let first: Bool
+    let email: String
+    let done: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var step = StepUpModel(.twoStep)
+    @State private var password = ""
+    @State private var tried = false
+    @State private var pending = false
+    @State private var error = ""
+    /* What the key is asked, with the registration token its answer goes back with: good for one answer. */
+    @State private var started: KeyCreation?
+    @State private var name = ""
+    @State private var others: Int?
+    @State private var signOutOthers = true
+    @State private var codes: [String]?
+    @State private var removing = RemovingOthers.no
+
+    private var title: String {
+        if codes != nil { return "Save your backup codes" }
+        if started != nil { return "Add your passkey or security key" }
+        return first ? "Turn on two-step sign-in?" : "Add a passkey or security key?"
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                if let codes {
+                    TurnedOnCodes(codes: codes, email: email, removing: removing) {
+                        done("Two-step sign-in is on.")
+                        dismiss()
+                    }
+                } else if started != nil {
+                    SheetIntro(text: "Your phone will ask for it. Have your security key ready, or choose where to save a passkey.")
+                    Section {
+                        TextField("Security key", text: Binding(get: { name }, set: { name = Self.fitted($0); error = "" }))
+                            .autocorrectionDisabled().disabled(pending).alpineRow()
+                    } header: {
+                        FieldLabel("Name")
+                    } footer: {
+                        Text("Optional. It tells your keys apart in this list. Names aren’t encrypted.")
+                    }
+                    // Offered whenever the step is being turned on, whatever the device list said or didn't.
+                    if first { RemoveOthersOffer(ticked: $signOutOthers, others: others, disabled: pending) }
+                    FormProblem(text: error)
+                    // The system's sheet opens on this press, and only on it.
+                    primaryRow(pending ? "Waiting for your key" : first ? "Add and turn on" : "Add", disabled: pending) { add() }
+                } else {
+                    SheetIntro(text: first
+                        ? "After your password, HushOS will ask for your passkey or security key. Your recovery phrase works as the second step too, so keep it apart from your password."
+                        : "It will pass your second step too. Your other ways to sign in stay as they are.")
+                    ConfirmPassword(password: $password, tried: tried)
+                    StepUpSections(step: step, disabled: pending)
+                    FormProblem(text: error)
+                    primaryRow(pending ? "Checking" : "Continue", disabled: pending) { start() }
+                }
+            }
+            .alpineGrouped()
+            .scrollDismissesKeyboard(.interactively)
+            .stepSheetTitle(title)
+            .toolbar { if codes == nil { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(pending) } } }
+            .interactiveDismissDisabled(codes != nil || pending)
+            // Once the step is on it is needed from the start: its fields are there when the sheet opens.
+            .task { if !first { await step.prepare() } }
+            .task { if first { others = (try? await Devices.list())?.filter { !$0.current }.count } }
+        }
+    }
+
+    /* No more than the 40 characters a name may have, counted as the server counts them. */
+    private static func fitted(_ typed: String) -> String {
+        var name = typed
+        while name.unicodeScalars.count > 40 { name.removeLast() }
+        return name
+    }
+
+    private func start() {
+        tried = true
+        guard !password.isEmpty else { return }
+        let sending: StepSending?
+        do { sending = try step.prove() } catch { if !(error is StepUp.Unready) { self.error = ErrorWords.say(error) ?? "" }; return }
+        pending = true
+        error = ""
+        Task {
+            do {
+                // With a key already on the account, the step may itself be answered by one: asked here, on this press.
+                let twoStep = try await step.answer(sending)
+                started = try await TwoStep.startKey(password: password, twoStep: twoStep)
+                tried = false
+            } catch {
+                if let words = await step.failed(error) { self.error = words }
+            }
+            pending = false
+        }
+    }
+
+    private func add() {
+        guard let started else { return }
+        if let problem = TwoStep.nameProblem(name, required: false) { error = problem; return }
+        pending = true
+        error = ""
+        Task {
+            do {
+                let registration = try await PasskeySheet.make(started)
+                let added = try await TwoStep.addKey(started, name: name, registration: registration)
+                guard !added.backupCodes.isEmpty else {
+                    // Turning the step on always comes back with the codes. An answer without them is not the
+                    // server's answer to that: nothing is claimed, and the settings behind are read again.
+                    if first { throw StepError.lost(StepWords.lostTurnedOn) }
+                    done("Passkey or security key added.")
+                    dismiss()
+                    return
+                }
+                // The codes first: they are shown once, and nothing that follows may cost them.
+                codes = added.backupCodes
+                done("")
+                // Then the other devices, which signed in before the step was on, as the authenticator app's setup removes them.
+                if signOutOthers && first {
+                    removing = .running
+                    let typed = password
+                    Task {
+                        do {
+                            try await Devices.removeOthers(password: typed)
+                            removing = .no
+                            done("")
+                        } catch {
+                            removing = .failed
+                            NoticeCenter.shared.show(StepWords.othersNotRemoved, important: true)
+                        }
+                    }
+                }
+                password = ""
+            } catch let unused as KeyUnused {
+                // The sheet was closed, or no key answered: nothing was sent, and the same setup still stands.
+                error = unused.message
+            } catch {
+                // Anything the server answered ends the setup (a registration is good for one answer), and any failure may
+                // hide a key that was added: back to the password with why, and the settings behind are read again.
+                self.started = nil
+                tried = false
+                done("")
+                if let words = ErrorWords.say(error) { self.error = words }
+            }
+            pending = false
+        }
+    }
+}
+
+/* A key's name: shown in the list only, changed by any session, with no password. */
+struct RenameKeySheet: View {
+    let method: TwoStepStatus.Method
+    let done: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var name: String
+    @State private var pending = false
+    @State private var error = ""
+
+    init(method: TwoStepStatus.Method, done: @escaping (String) -> Void) {
+        self.method = method
+        self.done = done
+        _name = State(initialValue: method.name ?? "")
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                SheetIntro(text: "Shown in this list only. Names aren’t encrypted.")
+                Section {
+                    TextField("Security key", text: Binding(get: { name }, set: { name = $0; error = "" }))
+                        .autocorrectionDisabled().disabled(pending).submitLabel(.done).onSubmit { save() }.alpineRow()
+                } header: {
+                    FieldLabel("Name")
+                } footer: {
+                    if !error.isEmpty { Text(error).foregroundStyle(Alpine.danger) }
+                }
+                primaryRow("Save name", disabled: pending) { save() }
+            }
+            .alpineGrouped()
+            .scrollDismissesKeyboard(.interactively)
+            .stepSheetTitle("Rename passkey or security key")
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(pending) } }
+            .interactiveDismissDisabled(pending)
+        }
+    }
+
+    private func save() {
+        guard !pending else { return }
+        if let problem = TwoStep.nameProblem(name, required: true) { error = problem; return }
+        pending = true
+        error = ""
+        Task {
+            do {
+                try await TwoStep.renameMethod(method.id, name: name)
+                done("")
+                dismiss()
+            } catch {
+                // The server's rules for a name are the server's to say.
+                if let words = ErrorWords.say(error) { self.error = words }
+                // A lost reply may hide a name that was saved: the list behind is read again.
+                if case StepError.lost = error { done("") }
             }
             pending = false
         }
@@ -848,8 +1264,7 @@ struct NewCodesSheet: View {
             }
             .alpineGrouped()
             .scrollDismissesKeyboard(.interactively)
-            .navigationTitle(codes == nil ? "Make new backup codes?" : "Save your new backup codes")
-            .navigationBarTitleDisplayMode(.inline)
+            .stepSheetTitle(codes == nil ? "Make new backup codes?" : "Save your new backup codes")
             .toolbar { if codes == nil { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(pending) } } }
             .interactiveDismissDisabled(codes != nil || pending)
             .task { await step.prepare() }
@@ -859,12 +1274,14 @@ struct NewCodesSheet: View {
     private func submit() {
         tried = true
         guard !password.isEmpty else { return }
-        let twoStep: StepAnswer?
-        do { twoStep = try step.prove() } catch { if !(error is StepUp.Unready) { self.error = ErrorWords.say(error) ?? "" }; return }
+        let sending: StepSending?
+        do { sending = try step.prove() } catch { if !(error is StepUp.Unready) { self.error = ErrorWords.say(error) ?? "" }; return }
         pending = true
         error = ""
         Task {
             do {
+                // A passkey or security key is asked here, on this press.
+                let twoStep = try await step.answer(sending)
                 codes = try await TwoStep.newBackupCodes(password: password, twoStep: twoStep)
                 password = ""
                 done("")
