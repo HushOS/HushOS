@@ -32,7 +32,8 @@ import kotlinx.coroutines.CancellationException
  * - It needs the Activity, and is called only from a button's press (`KeySheet`).
  * - No `origin` is set on a request: this app is not a browser. Android reports the app itself
  *   (`android:apk-key-hash:…`, from the certificate the build was signed with), which the server
- *   accepts from its `WEBAUTHN_ANDROID_ORIGINS`, and the RP's `assetlinks.json` names the app.
+ *   accepts for the certificates in its `ANDROID_APP_CERT_SHA256` (or its `WEBAUTHN_ANDROID_ORIGINS`,
+ *   when set), and the RP's `assetlinks.json` names the app.
  * - Whatever ends without a key's answer is null: the sheet closed
  *   (`GetCredentialCancellationException`, `CreateCredentialCancellationException`), no key for this
  *   account on the phone (`NoCredentialException`), no provider, an interruption, or an answer that

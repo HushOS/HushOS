@@ -20,11 +20,19 @@ import { appCode, loadEdge, type Account, type Edge, type Reply } from '@/test/a
 
 const ANDROID = 'android:apk-key-hash:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8';
 const OTHER_APP = 'android:apk-key-hash:_-7d3Nva2djX1tXU09LR0M_OzczLysrJyMfGxcTDwsE';
+/* A certificate the server vouches for in assetlinks.json (SHA-256 of nothing), and its origin. */
+const VOUCHED =
+    'E3:B0:C4:42:98:FC:1C:14:9A:FB:F4:C8:99:6F:B9:24:27:AE:41:E4:64:9B:93:4C:A4:95:99:1B:78:52:B8:55';
+const VOUCHED_APP = 'android:apk-key-hash:47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU';
 
 let edge: Edge;
 
 beforeAll(async () => {
-    edge = await loadEdge({ TWO_STEP_ENABLED: 'true', WEBAUTHN_ANDROID_ORIGINS: ANDROID });
+    edge = await loadEdge({
+        TWO_STEP_ENABLED: 'true',
+        WEBAUTHN_ANDROID_ORIGINS: ANDROID,
+        ANDROID_APP_CERT_SHA256: VOUCHED,
+    });
 });
 beforeEach(async () => {
     vi.useFakeTimers({ now: Date.now(), toFake: ['Date'] });
@@ -597,6 +605,9 @@ describe('a key at sign-in', () => {
         expect((await withKeyAnswer(await toStep(who), key, { origin: ANDROID })).status).toBe(200);
         const other = await withKeyAnswer(await toStep(who), key, { origin: OTHER_APP });
         expect(other.status).toBe(401);
+        // The list, once set, is the whole answer: the certificate's own origin is not added to it.
+        const vouched = await withKeyAnswer(await toStep(who), key, { origin: VOUCHED_APP });
+        expect(vouched.status).toBe(401);
     });
 
     test('a key’s answer is the step for a change, and only for the change its token was asked for', async () => {

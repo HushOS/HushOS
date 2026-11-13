@@ -11,7 +11,7 @@ import type {
 } from '@simplewebauthn/server';
 import { authEnv } from '@hushos/env/auth';
 import type { KeyCreationOptions, KeyDescriptor, KeyRequestOptions } from './api';
-import { twoStepEnv } from '@hushos/env/two-step';
+import { androidOrigins, twoStepEnv } from '@hushos/env/two-step';
 
 /*
  * Passkeys and security keys as a second step (docs/two-step-design.md 3): the options the
@@ -19,7 +19,9 @@ import { twoStepEnv } from '@hushos/env/two-step';
  * the COSE keys and verifies responses to the specification; this module fixes what HushOS
  * asks for and accepts, in one place:
  * - the RP ID is the host of APP_ORIGIN, and a response's origin must be APP_ORIGIN exactly,
- *   or one of the Android app origins the operator listed (WEBAUTHN_ANDROID_ORIGINS);
+ *   or one of the Android apps' origins: the ones the operator listed
+ *   (WEBAUTHN_ANDROID_ORIGINS), else the ones of the certificates this server vouches for in
+ *   its `assetlinks.json` (ANDROID_APP_CERT_SHA256);
  * - no attestation, no resident key, no user verification: the password is the knowledge
  *   factor, and the server learns no maker or model;
  * - Ed25519, ES256 and RS256, offered and accepted, and nothing else;
@@ -54,7 +56,10 @@ export function relyingParty() {
     const origin = new URL(authEnv.APP_ORIGIN);
     return {
         id: origin.hostname,
-        origins: [origin.origin, ...twoStepEnv.WEBAUTHN_ANDROID_ORIGINS],
+        origins: [
+            origin.origin,
+            ...androidOrigins(twoStepEnv.WEBAUTHN_ANDROID_ORIGINS, authEnv.ANDROID_APP_CERT_SHA256),
+        ],
     };
 }
 

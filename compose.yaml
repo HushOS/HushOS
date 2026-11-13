@@ -139,6 +139,7 @@ services:
             TWO_STEP_KEY_FILE: ${TWO_STEP_KEY_FILE:-}
             TWO_STEP_PREVIOUS_KEY_FILE: ${TWO_STEP_PREVIOUS_KEY_FILE:-}
             # The Android apps a passkey may answer from, beside APP_ORIGIN (android:apk-key-hash:…).
+            # Unset, worked out from ANDROID_APP_CERT_SHA256.
             WEBAUTHN_ANDROID_ORIGINS: ${WEBAUTHN_ANDROID_ORIGINS:-}
             PUSH_RELAY_URL: ${PUSH_RELAY_URL-https://push.hushos.com}
             GROUP_SEAT_LIMIT_DEFAULT: ${GROUP_SEAT_LIMIT_DEFAULT:-6}

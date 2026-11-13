@@ -64,7 +64,8 @@ export function assetLinks() {
         [
             'delegate_permission/common.handle_all_urls',
             // Saved passwords, and this site's passkeys through Credential Manager. The server
-            // takes the app's answers only from the origins in WEBAUTHN_ANDROID_ORIGINS.
+            // takes the app's answers from these same certificates' origins, unless
+            // WEBAUTHN_ANDROID_ORIGINS lists others (packages/env/src/two-step.ts).
             'delegate_permission/common.get_login_creds',
         ].map((relation) => ({
             relation: [relation],
