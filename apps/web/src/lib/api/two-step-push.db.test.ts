@@ -234,12 +234,13 @@ describe('two-step notices on the account’s devices', () => {
         expect((await listed(laptop.cookie)).map((event) => event.kind)).toEqual([...STEP_KINDS]);
     }, 90_000);
 
-    test('new backup codes made with a backup code: the notice says how many the used set had left, never ten', async () => {
+    test('new backup codes made with a backup code: one notice, that new codes were made, and the use is in the security log', async () => {
         const who = await edge.account();
         const laptop = await device(who);
         const { codes } = await turnOn(laptop.cookie);
         await pinged(1);
         pings.length = 0;
+        edge.outbox.length = 0;
 
         // New codes, the step answered with one of the old ones, as the settings screen sends it.
         const step = await edge.call(
@@ -262,39 +263,73 @@ describe('two-step notices on the account’s devices', () => {
         expect(made.status).toBe(200);
         expect(made.body.codes).toHaveLength(10);
 
-        // The code was one of ten, so nine were left when it was used. Counted after the new
-        // set was written it would be ten: a number no notice of a used code can carry.
-        const [mail] = await edge.notices('backup-code-used');
-        expect(mail!.count).toBe(9);
-        expect(await edge.notices('backup-codes-made')).toHaveLength(1);
-        await pinged(2);
+        // The code that was used belonged to the set that is gone now. "A backup code was
+        // used, 9 are left" would count codes that no longer work (and counted after the new
+        // set was written it said ten, which no app can read). One notice says what happened.
+        const [mail] = await edge.notices('backup-codes-made');
+        expect(mail!.text).toContain('no longer work');
+        await pinged(1);
+        await edge.quiet();
+        expect(edge.outbox.map((notice) => notice.kind)).toEqual(['backup-codes-made']);
 
-        // The device is handed both events, and everything else in its list with them.
+        // The device is handed that one event, with the rest of its list.
         const list = await edge.call('GET', '', undefined, {
             cookie: laptop.cookie,
             ...NOTIFICATIONS,
         });
         expect(list.status).toBe(200);
-        const events = list.body.notifications as { id: string; kind: string; data: unknown }[];
-        expect(events.map((event) => event.kind).sort()).toEqual([
-            'backup-code-used',
-            'backup-codes-made',
-            'two-step-on',
-        ]);
-        expect(events.find((event) => event.kind === 'backup-code-used')!.data).toEqual({
-            left: 9,
+        const events = list.body.notifications as { id: string; kind: string }[];
+        expect(events.map((event) => event.kind)).toEqual(['two-step-on', 'backup-codes-made']);
+        expect(pings.map((ping) => ping.id)).toEqual([events[1]!.id]);
+
+        // The use is not lost: the account's security log has it, beside the new set.
+        const log = await edge.call('GET', '/security-events', undefined, {
+            cookie: laptop.cookie,
         });
-        expect(pings.map((ping) => ping.id).sort()).toEqual(
-            events
-                .filter((event) => event.kind !== 'two-step-on')
-                .map((event) => event.id)
+        expect(
+            (log.body.events as { kind: string; method: string | null }[])
+                .filter((line) => line.kind.startsWith('backup-code'))
+                .map((line) => `${line.kind}:${line.method}`)
                 .sort(),
-        );
-        // And the settings show the new set whole.
+        ).toEqual(['backup-code-used:backup', 'backup-codes-made:null']);
         expect(
             (await edge.call('GET', '/two-step', undefined, { cookie: laptop.cookie })).body
                 .backupCodesLeft,
         ).toBe(10);
+    }, 90_000);
+
+    test('a backup code that passes another change still says how many are left, from when it was used', async () => {
+        const who = await edge.account();
+        const laptop = await device(who);
+        const { codes, secret } = await turnOn(laptop.cookie);
+        await pinged(1);
+        edge.outbox.length = 0;
+
+        // Starting a new authenticator app, the step answered with a backup code: the set stays.
+        const step = await edge.call(
+            'POST',
+            '/two-step/challenge',
+            { purpose: 'two-step' },
+            { cookie: laptop.cookie },
+        );
+        const { proof } = await edge.passwordProof('/two-step/reauth', {}, laptop);
+        const started = await edge.call(
+            'POST',
+            '/two-step/totp',
+            {
+                ...proof,
+                twoStep: { token: step.body.token, proof: { kind: 'backup', code: codes[0] } },
+            },
+            { cookie: laptop.cookie },
+        );
+        expect(started.status).toBe(200);
+        expect(started.body.secret).not.toBe(secret);
+        const [mail] = await edge.notices('backup-code-used');
+        expect(mail!.count).toBe(9);
+        const used = (await listed(laptop.cookie)).find(
+            (event) => event.kind === 'backup-code-used',
+        );
+        expect(used!.data).toEqual({ left: 9 });
     }, 90_000);
 
     test('an event no app can read is left out by itself: the rest of the page still reaches the device', async () => {

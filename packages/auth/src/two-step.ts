@@ -546,6 +546,13 @@ async function settle(
         signIn?: boolean;
         /* The action deleted the account: nobody is left to log for or to tell. */
         accountGone?: boolean;
+        /*
+         * The action replaced the account's backup codes: a code that answered the step was
+         * one of the set that is gone now, so "a backup code was used, N are left" would
+         * count codes that no longer work. The "new backup codes were made" notice says what
+         * happened; the use is still written to the security log.
+         */
+        codesReplaced?: boolean;
     } = {},
 ) {
     const { attempt, method, flow, freshPhrase } = checked;
@@ -575,6 +582,7 @@ async function settle(
         if (method === 'backup') {
             if (!passed.signIn)
                 await record({ userId, kind: 'backup-code-used', method, deviceId });
+            if (passed.codesReplaced) return;
             // How many were left when the code was spent, as the repository counted it in that
             // transaction. Never counted again here: the action the code authorised may have
             // made a new set (ten) or deleted the set, and that would be another set's count.
@@ -802,7 +810,7 @@ export async function settleChangeStep(
     checked: Checked | null,
     result: unknown,
     done: boolean,
-    options: { accountGone?: boolean } = {},
+    options: { accountGone?: boolean; codesReplaced?: boolean } = {},
 ) {
     const refusal =
         typeof result === 'object' &&
@@ -1090,7 +1098,7 @@ export async function makeBackupCodes(sessionToken: string | null, input: TwoSte
         });
         return { fresh, replaced };
     });
-    await settleChangeStep(checked, replaced, replaced.status === 'ok');
+    await settleChangeStep(checked, replaced, replaced.status === 'ok', { codesReplaced: true });
     if (replaced.status !== 'ok') throw new AuthError('Turn on two-step sign-in first.', 409);
     await record({ userId: user.id, kind: 'backup-codes-made' });
     notice(user.id, 'backup-codes-made');
