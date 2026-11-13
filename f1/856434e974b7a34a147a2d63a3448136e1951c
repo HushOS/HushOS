@@ -1,0 +1,45 @@
+packages/db/src/two-step.approvals.ts
+  s_566b8e0c4467a4::t_6cc4d8945f75c8 1-987
+  s_566b8e0c4467a4::t_9f4fb4fed01682 988-990
+packages/db/src/two-step.approvals.test.ts
+  s_566b8e0c4467a4::t_24adfbfda76236 1-1119
+  s_566b8e0c4467a4::t_bc0ac0f5a43ded 1120-1137
+packages/db/drizzle/20261113232239_two_step_device/migration.sql
+  s_566b8e0c4467a4::t_6c217c8a77d9d6 1-60
+packages/db/drizzle/20261113232239_two_step_device/snapshot.json
+  s_566b8e0c4467a4::t_37d0ef75df4a82 1-940
+packages/db/drizzle/20261113232239_two_step_device/undo.sql
+  s_566b8e0c4467a4::t_4741cd32e73fd4 1-59
+packages/db/src/auth.ts
+  s_566b8e0c4467a4::t_7437eb147e122a 74,862,896-902
+packages/db/src/schema/notifications.ts
+  s_566b8e0c4467a4::t_2db792af438b0d 46-50,81-84
+packages/db/src/schema/two-step.ts
+  s_566b8e0c4467a4::t_841898cc50576c 25,30,60-62,64-66,105-108,112-113,282-405,436
+packages/db/src/sessions.ts
+  s_566b8e0c4467a4::t_c2c1e38acff9f5 34-35,243-244,257-262,268
+packages/db/src/signatures.ts
+  s_566b8e0c4467a4::t_093abf62028c05 283-348
+packages/db/src/two-step.core.ts
+  s_566b8e0c4467a4::t_97f84e2f7c6954 2,10,345-376,419,496-497,503-504,631-635,641-647,650-799
+packages/db/src/two-step.migration.test.ts
+  s_566b8e0c4467a4::t_61215ce50dd81b 23,462-620
+packages/db/src/two-step.ts
+  s_566b8e0c4467a4::t_78d8ba0554fa36 43,123-147,533-534,554,1142
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f1856434e974b7a34a147a2d63a3448136e1951c",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
