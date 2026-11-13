@@ -21,15 +21,17 @@ import { requestContext } from '@/lib/api/shared.server';
  * answer's, and the next check tries again.
  */
 const KEY_REPORT_MS = 15_000;
-let keysReportedAt = 0;
+// On the process's own steady clock: the wall clock can be set back, and a process that then
+// stayed silent for as long as it was set back would be taken for gone.
+let keysReportedAt = Number.NEGATIVE_INFINITY;
 let keysReporting = false;
 function reportTwoStepKeys() {
-    if (keysReporting || Date.now() - keysReportedAt < KEY_REPORT_MS) return;
+    if (keysReporting || performance.now() - keysReportedAt < KEY_REPORT_MS) return;
     keysReporting = true;
     void auth
         .reportTwoStepKeys()
         .then(() => {
-            keysReportedAt = Date.now();
+            keysReportedAt = performance.now();
         })
         .catch((error: unknown) =>
             serverLog.error({
