@@ -195,21 +195,23 @@ export function readRemoved(reply: unknown) {
     return { removed: true as const, on: reply.on };
 }
 
+/* A time as the server sent it. The web's API client hands one over as a Date; anything else sends the string. */
+function time(value: unknown) {
+    if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString();
+    return text(value) && !Number.isNaN(Date.parse(value)) ? value : null;
+}
 /* A method as the settings list shows it. */
 function method(value: unknown): TwoStepMethod | null {
-    if (
-        !record(value) ||
-        !text(value.id) ||
-        (value.kind !== 'webauthn' && value.kind !== 'totp') ||
-        !text(value.createdAt)
-    )
+    if (!record(value) || !text(value.id) || (value.kind !== 'webauthn' && value.kind !== 'totp'))
         return null;
+    const createdAt = time(value.createdAt);
+    if (!createdAt) return null;
     return {
         id: value.id,
         kind: value.kind,
         name: typeof value.name === 'string' ? value.name : null,
-        createdAt: value.createdAt,
-        lastUsedAt: typeof value.lastUsedAt === 'string' ? value.lastUsedAt : null,
+        createdAt,
+        lastUsedAt: time(value.lastUsedAt),
         synced: value.synced === true,
     };
 }

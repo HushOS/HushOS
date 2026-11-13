@@ -232,10 +232,22 @@ describe('a key being added', () => {
             method: method(),
             backupCodes: ['7KQ2M-9XD4P'],
         });
+        // The web's API client turns the server's times into Dates before anyone reads them.
+        expect(
+            readKeyAdded({
+                method: {
+                    ...method(),
+                    createdAt: new Date(method().createdAt),
+                    lastUsedAt: new Date('2026-11-13T11:00:00.000Z'),
+                },
+            }),
+        ).toEqual({ method: { ...method(), lastUsedAt: '2026-11-13T11:00:00.000Z' } });
         for (const reply of [
             null,
             {},
             { success: true },
+            { method: { ...method(), createdAt: new Date(Number.NaN) } },
+            { method: { ...method(), createdAt: 'soon' } },
             { method: { ...method(), kind: 'totp' } },
             { method: { ...method(), id: '' } },
             { method: method(), backupCodes: [] },

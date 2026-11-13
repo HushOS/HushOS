@@ -42,8 +42,11 @@ vi.mock('@/lib/auth-client', () => ({
         answerStep: (answer: unknown) => answerStep(answer),
         // Leaving the form lets go of a sign-in waiting at its second step.
         cancelStep: (owner?: object) => cancelStep(owner),
+        canUsePasskeys: () => passkeysHere,
     },
 }));
+/* Whether this browser can use a passkey: it named the method to the server, or it did not. */
+let passkeysHere = true;
 vi.mock('@/lib/sounds', () => ({ cue: vi.fn() }));
 const { UnlockDevice } = await import('./unlock-device');
 
@@ -106,12 +109,17 @@ describe('unlocking when the device key could not be read', () => {
 describe('unlocking an account that asks for a second step', () => {
     const challenge = {
         token: 'a-step-token_'.padEnd(43, 'x'),
-        methods: ['totp', 'backup', 'phrase'] as ('totp' | 'backup' | 'phrase')[],
+        methods: ['totp', 'backup', 'phrase'] as ('webauthn' | 'totp' | 'backup' | 'phrase')[],
         expiresAt: new Date(Date.now() + 300_000).toISOString(),
     };
-    async function toStep(onUnlocked = vi.fn()) {
+    /* The other ways are behind one button: opens it, and presses the way named. */
+    async function another(user: ReturnType<typeof userEvent.setup>, way: string) {
+        await user.click(screen.getByRole('button', { name: 'Use another way' }));
+        await user.click(screen.getByRole('button', { name: way }));
+    }
+    async function toStep(onUnlocked = vi.fn(), asked: object = challenge) {
         login.mockReset();
-        login.mockRejectedValueOnce(new TwoStepRequired(challenge));
+        login.mockRejectedValueOnce(new TwoStepRequired(asked as typeof challenge));
         answerStep.mockReset();
         const user = userEvent.setup();
         render(<UnlockDevice user={{ email: 'maya@example.com' }} onUnlocked={onUnlocked} />);
@@ -149,10 +157,10 @@ describe('unlocking an account that asks for a second step', () => {
 
     test('choosing another way moves the cursor to its field, and what the address limit refused can be sent again', async () => {
         const { user, code } = await toStep();
-        await user.click(screen.getByRole('button', { name: 'Use your recovery phrase' }));
+        await another(user, 'Use your recovery phrase');
         const phrase = await screen.findByLabelText('Recovery phrase');
         await vi.waitFor(() => expect(phrase).toHaveFocus());
-        await user.click(screen.getByRole('button', { name: 'Use your authenticator app' }));
+        await another(user, 'Use your authenticator app');
         await vi.waitFor(() =>
             expect(screen.getByLabelText('Code from your authenticator app')).toHaveFocus(),
         );
@@ -164,7 +172,9 @@ describe('unlocking an account that asks for a second step', () => {
         await user.click(screen.getByRole('button', { name: 'Continue' }));
         await screen.findByText('Too many requests. Try again.');
         // The step is still here, with every way still offered.
+        await user.click(screen.getByRole('button', { name: 'Use another way' }));
         expect(screen.getByRole('button', { name: 'Use a backup code' })).toBeEnabled();
+        expect(screen.getByRole('button', { name: 'Use your recovery phrase' })).toBeEnabled();
         answerStep.mockResolvedValueOnce(undefined);
         await user.click(screen.getByRole('button', { name: 'Continue' }));
         await vi.waitFor(() => expect(answerStep).toHaveBeenCalledTimes(2));
@@ -183,6 +193,7 @@ describe('unlocking an account that asks for a second step', () => {
         await screen.findByText('Two-step sign-in is unavailable on this server right now.');
         // The backup codes are under their own key: still offered, beside the phrase.
         const backup = await screen.findByLabelText('Backup code');
+        await user.click(screen.getByRole('button', { name: 'Use another way' }));
         expect(screen.getByRole('button', { name: 'Use your recovery phrase' })).toBeEnabled();
         expect(screen.queryByRole('button', { name: 'Use your authenticator app' })).toBeNull();
         answerStep.mockResolvedValueOnce(undefined);
@@ -223,7 +234,7 @@ describe('unlocking an account that asks for a second step', () => {
 
     test('a lock in another tab takes a typed recovery phrase off the screen and goes back to the password', async () => {
         const { user } = await toStep();
-        await user.click(screen.getByRole('button', { name: 'Use your recovery phrase' }));
+        await another(user, 'Use your recovery phrase');
         const phrase = await screen.findByLabelText('Recovery phrase');
         await user.type(phrase, 'abandon ability able about above');
         act(() => locks.lock());
@@ -235,7 +246,7 @@ describe('unlocking an account that asks for a second step', () => {
 
     test('leaving the page takes a typed recovery phrase with it, so the Back button cannot bring it back', async () => {
         const { user } = await toStep();
-        await user.click(screen.getByRole('button', { name: 'Use your recovery phrase' }));
+        await another(user, 'Use your recovery phrase');
         await user.type(
             await screen.findByLabelText('Recovery phrase'),
             'abandon ability able about above',
@@ -303,5 +314,145 @@ describe('unlocking an account that asks for a second step', () => {
         // The form that started it does let go of it when it goes.
         inline.unmount();
         expect(cancelStep).toHaveBeenLastCalledWith(started);
+    });
+});
+
+/*
+ * One way to confirm (docs/two-step-design.md 12): the step opens on the account's usual way,
+ * with the rest behind Use another way. A passkey is a button, and its sheet opens on the
+ * press, never when the step appears. When the usual way is not on offer the form says one
+ * line that names no reason.
+ */
+describe('the step opens on the account’s usual way', () => {
+    const base = {
+        token: 'a-step-token_'.padEnd(43, 'x'),
+        expiresAt: new Date(Date.now() + 300_000).toISOString(),
+    };
+    const webauthn = {
+        challenge: 'Y2hhbGxlbmdl',
+        rpId: 'localhost',
+        timeout: 300_000,
+        userVerification: 'discouraged',
+        allowCredentials: [{ id: 'a2V5', type: 'public-key' }],
+    };
+    async function stepWith(challenge: object, onUnlocked = vi.fn()) {
+        passkeysHere = true;
+        login.mockReset();
+        login.mockRejectedValueOnce(new TwoStepRequired({ ...base, ...challenge } as never));
+        answerStep.mockReset();
+        const user = userEvent.setup();
+        render(<UnlockDevice user={{ email: 'maya@example.com' }} onUnlocked={onUnlocked} />);
+        await user.type(screen.getByLabelText('Password'), 'correct horse');
+        await user.click(screen.getByRole('button', { name: 'Unlock' }));
+        await vi.waitFor(() => expect(screen.queryByLabelText('Password')).toBeNull());
+        return { user, onUnlocked };
+    }
+
+    test('a passkey first is a button: nothing asks the key until it is pressed, and the others wait behind Use another way', async () => {
+        const { user, onUnlocked } = await stepWith({
+            methods: ['webauthn', 'totp', 'backup', 'phrase'],
+            webauthn,
+        });
+        const press = await screen.findByRole('button', { name: 'Use your passkey' });
+        // The step is on screen, and the key has not been asked: no sheet on load.
+        expect(answerStep).not.toHaveBeenCalled();
+        // No code field, and no list of other ways until it is asked for.
+        expect(screen.queryByLabelText('Code from your authenticator app')).toBeNull();
+        expect(screen.queryByRole('button', { name: 'Use your authenticator app' })).toBeNull();
+        expect(screen.queryByText('Your usual way isn’t available for this sign-in.')).toBeNull();
+
+        // A sheet that was closed: said here, and the same step takes the press again.
+        answerStep.mockRejectedValueOnce(
+            new StepFailure(
+                'wrong',
+                'Your passkey or security key wasn’t used. Try again, or use another way.',
+            ),
+        );
+        await user.click(press);
+        await screen.findByText(/wasn’t used/);
+        expect(onUnlocked).not.toHaveBeenCalled();
+        answerStep.mockResolvedValueOnce(undefined);
+        await user.click(screen.getByRole('button', { name: 'Use your passkey' }));
+        await vi.waitFor(() => expect(onUnlocked).toHaveBeenCalledTimes(1));
+        expect(answerStep).toHaveBeenLastCalledWith({ kind: 'webauthn' });
+    });
+
+    test('Use another way lists the rest in the server’s order, and the one chosen is what is sent', async () => {
+        const { user } = await stepWith({
+            methods: ['webauthn', 'totp', 'backup', 'phrase'],
+            webauthn,
+        });
+        await user.click(await screen.findByRole('button', { name: 'Use another way' }));
+        const ways = screen
+            .getAllByRole('button')
+            .map((button) => button.textContent)
+            .filter((text) => text?.startsWith('Use ') && text !== 'Use your passkey');
+        expect(ways).toEqual([
+            'Use your authenticator app',
+            'Use a backup code',
+            'Use your recovery phrase',
+        ]);
+        await user.click(screen.getByRole('button', { name: 'Use a backup code' }));
+        answerStep.mockResolvedValueOnce(undefined);
+        await user.type(await screen.findByLabelText('Backup code'), '7KQ2M-9XD4P');
+        // The button is the form's own again, and the passkey is one of the other ways now.
+        expect(screen.queryByRole('button', { name: 'Use your passkey' })).toBeNull();
+        await user.click(screen.getByRole('button', { name: 'Use another way' }));
+        expect(
+            screen.getByRole('button', { name: 'Use your passkey or security key' }),
+        ).toBeEnabled();
+        await user.click(screen.getByRole('button', { name: 'Continue' }));
+        await vi.waitFor(() =>
+            expect(answerStep).toHaveBeenLastCalledWith({ kind: 'backup', code: '7KQ2M-9XD4P' }),
+        );
+    });
+
+    test('an account whose default is its app opens on the code, though it has a passkey too', async () => {
+        await stepWith({ methods: ['totp', 'webauthn', 'backup', 'phrase'], webauthn });
+        expect(await screen.findByLabelText('Code from your authenticator app')).toBeVisible();
+        expect(screen.queryByRole('button', { name: 'Use your passkey' })).toBeNull();
+        expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled();
+    });
+
+    test('when the usual way is not on offer the form says so in one line that names no reason', async () => {
+        await stepWith({ methods: ['totp', 'backup', 'phrase'], defaultUnavailable: true });
+        const note = await screen.findByText('Your usual way isn’t available for this sign-in.');
+        expect(note).toBeVisible();
+        expect(note.textContent).not.toMatch(/passkey|device|paused|frozen/i);
+    });
+
+    test('a way left out of a list this browser named everything for means a newer HushOS has it; left out because this browser can’t, only the one line', async () => {
+        const first = await stepWith({
+            methods: ['totp', 'backup', 'phrase'],
+            withheld: true,
+            defaultUnavailable: true,
+        });
+        expect(
+            await screen.findByText('Update HushOS to use your passkey or another device.'),
+        ).toBeVisible();
+        expect(screen.queryByText(/Your usual way/)).toBeNull();
+        expect(first.user).toBeDefined();
+    });
+
+    test('a browser that can’t use passkeys is not told to update for one', async () => {
+        login.mockReset();
+        login.mockRejectedValueOnce(
+            new TwoStepRequired({
+                ...base,
+                methods: ['totp', 'backup', 'phrase'],
+                withheld: true,
+                defaultUnavailable: true,
+            } as never),
+        );
+        passkeysHere = false;
+        const user = userEvent.setup();
+        render(<UnlockDevice user={{ email: 'maya@example.com' }} />);
+        await user.type(screen.getByLabelText('Password'), 'correct horse');
+        await user.click(screen.getByRole('button', { name: 'Unlock' }));
+        expect(
+            await screen.findByText('Your usual way isn’t available for this sign-in.'),
+        ).toBeVisible();
+        expect(screen.queryByText(/Update HushOS/)).toBeNull();
+        passkeysHere = true;
     });
 });

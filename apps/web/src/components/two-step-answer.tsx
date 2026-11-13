@@ -1,30 +1,35 @@
 import type { StepMethod } from '@hushos/auth/api';
 import { cn } from 'cn';
-import { useEffect, useId, useRef } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { authLink } from '@/components/auth-layout';
 import { SECRET_FIELD } from '@/components/password-input';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { phraseWords, type StepDraft, type StepUp } from '@/lib/two-step';
+import { preloadPasskeys } from '@/lib/passkeys';
+import { phraseWords, stepNote, type StepDraft, type StepUp } from '@/lib/two-step';
 
 /*
- * What a person answers a second step with (docs/two-step-design.md 4): a code from their
- * authenticator app, a backup code, or their recovery phrase. One field at a time, with the
- * other ways offered beneath it in plain words. The same fields serve the sign-in page, the
- * unlock form and the dialogs that change the account.
+ * What a person answers a second step with (docs/two-step-design.md 4, 12): their passkey or
+ * security key, a code from their authenticator app, a backup code, or their recovery phrase.
+ * One way at a time, opening on the account's usual one, with the rest behind Use another
+ * way. The same fields serve the sign-in page, the unlock form and the dialogs that change
+ * the account. A passkey has no field: the form's own button asks for it.
  */
 
 const labels: Record<StepMethod, string> = {
+    webauthn: 'Passkey or security key',
     totp: 'Code from your authenticator app',
     backup: 'Backup code',
     phrase: 'Recovery phrase',
 };
 const others: Record<StepMethod, string> = {
+    webauthn: 'Use your passkey or security key',
     totp: 'Use your authenticator app',
     backup: 'Use a backup code',
     phrase: 'Use your recovery phrase',
 };
 const hints: Record<StepMethod, string> = {
+    webauthn: 'Your browser asks for it when you continue.',
     totp: 'The 6-digit code. It changes every 30 seconds.',
     backup: 'One of the ten codes you saved. Each works once.',
     phrase: 'All 24 words, in order. They stay on this device.',
@@ -39,6 +44,7 @@ export function StepFields({
     focus = false,
     refocus = 0,
     reload = false,
+    note = '',
 }: {
     /* What can answer this step, in the order to offer it. */
     methods: readonly StepMethod[];
@@ -56,8 +62,17 @@ export function StepFields({
      * only then is reloading worth suggesting. When the ways ran out after refusals, it is not.
      */
     reload?: boolean;
+    /* One line above the fields: the usual way is not on offer, or a newer HushOS has more. */
+    note?: string;
 }) {
     const id = useId();
+    // The other ways stay behind one button until asked for; choosing one puts them away again.
+    const [choosing, setChoosing] = useState(false);
+    // The library a key is asked through is fetched once a key is on offer, ahead of the press.
+    const keyed = methods.includes('webauthn');
+    useEffect(() => {
+        if (keyed) preloadPasskeys();
+    }, [keyed]);
     const field = useRef<HTMLInputElement & HTMLTextAreaElement>(null);
     // The draft follows the methods on offer (`draftFor`); this only guards a render between.
     const method = methods.includes(draft.method) ? draft.method : methods[0];
@@ -87,11 +102,20 @@ export function StepFields({
     const count = phraseWords(draft.phrase).length;
     return (
         <div className="flex flex-col gap-2.5" data-step-method={method}>
+            {note && (
+                <p data-step-note className="text-[13px] text-muted-foreground">
+                    {note}
+                </p>
+            )}
             <div className="flex flex-col gap-1.5">
                 <div className="flex items-baseline justify-between gap-3">
-                    <label htmlFor={id} className="text-[13px] font-semibold">
-                        {labels[method]}
-                    </label>
+                    {method === 'webauthn' ? (
+                        <span className="text-[13px] font-semibold">{labels[method]}</span>
+                    ) : (
+                        <label htmlFor={id} className="text-[13px] font-semibold">
+                            {labels[method]}
+                        </label>
+                    )}
                     {method === 'phrase' && (
                         <span
                             className={cn(
@@ -180,19 +204,33 @@ export function StepFields({
             </div>
             {methods.length > 1 && (
                 <div className="flex flex-wrap gap-x-5 gap-y-1.5 text-sm">
-                    {methods
-                        .filter((other) => other !== method)
-                        .map((other) => (
-                            <button
-                                key={other}
-                                type="button"
-                                disabled={disabled}
-                                onClick={() => onChange({ ...draft, method: other })}
-                                className={cn(authLink, 'disabled:opacity-60')}
-                            >
-                                {others[other]}
-                            </button>
-                        ))}
+                    {choosing ? (
+                        methods
+                            .filter((other) => other !== method)
+                            .map((other) => (
+                                <button
+                                    key={other}
+                                    type="button"
+                                    disabled={disabled}
+                                    onClick={() => {
+                                        setChoosing(false);
+                                        onChange({ ...draft, method: other });
+                                    }}
+                                    className={cn(authLink, 'disabled:opacity-60')}
+                                >
+                                    {others[other]}
+                                </button>
+                            ))
+                    ) : (
+                        <button
+                            type="button"
+                            disabled={disabled}
+                            onClick={() => setChoosing(true)}
+                            className={cn(authLink, 'disabled:opacity-60')}
+                        >
+                            Use another way
+                        </button>
+                    )}
                 </div>
             )}
         </div>
@@ -217,6 +255,7 @@ export function StepUpFields({ step, disabled }: { step: StepUp; disabled?: bool
                 error={step.invalid || step.error}
                 disabled={disabled}
                 refocus={step.refocus}
+                note={stepNote(step.challenge, 'change')}
             />
         </div>
     );

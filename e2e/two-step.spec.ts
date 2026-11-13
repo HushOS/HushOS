@@ -1,6 +1,6 @@
 import { createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { expect, test, type Browser, type Page } from '@playwright/test';
+import { expect, test, type Browser, type Locator, type Page } from '@playwright/test';
 import {
     hydrated,
     mailSubjects,
@@ -94,6 +94,12 @@ async function account(browser: Browser) {
     return { page, ...person };
 }
 
+/* The step opens on the account's usual way; the others are behind one button. */
+async function another(scope: Page | Locator, way: string) {
+    await scope.getByRole('button', { name: 'Use another way' }).click();
+    await scope.getByRole('button', { name: way }).click();
+}
+
 const toasts = (p: Page) => p.locator('[data-slot=toast]');
 const clipboard = (p: Page) => p.evaluate(() => navigator.clipboard.readText());
 
@@ -103,7 +109,7 @@ const clipboard = (p: Page) => p.evaluate(() => navigator.clipboard.readText());
  * offer to remove the account's other devices.
  */
 async function turnOn(page: Page, options: { copyKey?: boolean; keepOthers?: boolean } = {}) {
-    await section(page).getByRole('button', { name: 'Turn on' }).click();
+    await section(page).getByRole('button', { name: 'Add authenticator app' }).click();
     await dialog(page).getByLabel('Password', { exact: true }).fill(PASSWORD);
     await dialog(page).getByRole('button', { name: 'Continue' }).click();
     await expect(
@@ -239,7 +245,7 @@ test('turning it on shows the codes once, and a code, a backup code or the phras
     await signOut(page);
     await enterPassword(page, email);
     await expect(stepHeading(page)).toBeVisible({ timeout: 60_000 });
-    await page.getByRole('button', { name: 'Use a backup code' }).click();
+    await another(page, 'Use a backup code');
     // The button pressed is gone; the cursor is in the field that took its place.
     await expect(page.getByLabel('Backup code')).toBeFocused();
     await page.getByLabel('Backup code').fill(codes[0]!.toLowerCase());
@@ -255,13 +261,13 @@ test('turning it on shows the codes once, and a code, a backup code or the phras
     await signOut(page);
     await enterPassword(page, email);
     await expect(stepHeading(page)).toBeVisible({ timeout: 60_000 });
-    await page.getByRole('button', { name: 'Use a backup code' }).click();
+    await another(page, 'Use a backup code');
     await page.getByLabel('Backup code').fill(codes[0]!);
     await page.getByLabel('Backup code').press('Enter');
     await expect(page.getByRole('alert')).toContainText('That backup code didn’t work', {
         timeout: 60_000,
     });
-    await page.getByRole('button', { name: 'Use your recovery phrase' }).click();
+    await another(page, 'Use your recovery phrase');
     await page.getByLabel('Recovery phrase').fill(phrase);
     await expect(page.getByText('24 of 24 words')).toBeVisible();
     await page.getByRole('button', { name: 'Continue' }).click();
@@ -404,7 +410,7 @@ test('new backup codes replace the old ones, and turning it off needs the step a
     await section(page).getByRole('button', { name: 'Turn off' }).click();
     const off = dialog(page);
     await off.getByLabel('Password', { exact: true }).fill(PASSWORD);
-    await off.getByRole('button', { name: 'Use a backup code' }).click();
+    await another(off, 'Use a backup code');
     await off.getByLabel('Backup code').fill(codes[0]!);
     await off.getByRole('button', { name: 'Turn off' }).click();
     await expect(off.getByRole('alert')).toContainText('That backup code didn’t work', {
@@ -558,7 +564,7 @@ test('someone with only their recovery phrase resets the password and is not str
     await other.goto('/login', { waitUntil: 'networkidle' });
     await enterPassword(other, email, next);
     await expect(stepHeading(other)).toBeVisible({ timeout: 60_000 });
-    await other.getByRole('button', { name: 'Use your recovery phrase' }).click();
+    await another(other, 'Use your recovery phrase');
     await other.getByLabel('Recovery phrase').fill(phrase);
     await other.getByRole('button', { name: 'Continue' }).click();
     await expect(other.getByRole('alert')).toContainText('That recovery phrase didn’t work', {
@@ -605,7 +611,7 @@ test('when the sign-in after a reset does not happen, the new phrase is shown on
     await expect(page.getByText('Sign in with your new password.')).toBeVisible();
     await enterPassword(page, email, next);
     await expect(stepHeading(page)).toBeVisible({ timeout: 60_000 });
-    await page.getByRole('button', { name: 'Use your recovery phrase' }).click();
+    await another(page, 'Use your recovery phrase');
     await page.getByLabel('Recovery phrase').fill(phrase);
     await page.getByRole('button', { name: 'Continue' }).click();
     await expect(page.getByRole('alert')).toContainText('That recovery phrase didn’t work', {
@@ -634,7 +640,7 @@ test('a new recovery phrase whose reply is lost does not lock out someone with o
     await expect(make.getByLabel('Code from your authenticator app')).toBeVisible({
         timeout: 60_000,
     });
-    await make.getByRole('button', { name: 'Use your recovery phrase' }).click();
+    await another(make, 'Use your recovery phrase');
     await make.getByLabel('Recovery phrase').fill(phrase);
 
     // The change reaches the server and is made; its reply, and the session it carried, are
@@ -673,7 +679,7 @@ test('a new recovery phrase whose reply is lost does not lock out someone with o
     await expect(page.getByRole('heading', { name: 'Welcome back' })).toBeVisible();
     await enterPassword(page, email);
     await expect(stepHeading(page)).toBeVisible({ timeout: 60_000 });
-    await page.getByRole('button', { name: 'Use your recovery phrase' }).click();
+    await another(page, 'Use your recovery phrase');
     await page.getByLabel('Recovery phrase').fill(phrase);
     await page.getByRole('button', { name: 'Continue' }).click();
     await expect(page.getByRole('alert')).toContainText('That recovery phrase didn’t work', {
