@@ -1,0 +1,47 @@
+apps/web/src/components/recovery-phrase.test.tsx
+  s_566b8e0c4467a4::t_f4e3b34a751d42 1-75
+apps/web/src/lib/api/two-step.db.test.ts
+  s_566b8e0c4467a4::t_28e9ea5eb294e1 154-217,977-978,980-981,984,987-996,1002-1003,1014-1016,1018-1080,1082-1086,1088-1093,1095-1102
+apps/web/src/lib/new-phrase.test.ts
+  s_566b8e0c4467a4::t_35ed4b83617d5b 2-8,69-102
+apps/web/src/routes/recover/complete.tsx
+  s_566b8e0c4467a4::t_a56f0df3c66d49 5,16,59-61
+docs/two-step-design.md
+  s_566b8e0c4467a4::t_4e4b9f461f7649 314,484-497
+packages/emails/scripts/render.tsx
+  s_566b8e0c4467a4::t_77719863835ce5 134-135
+packages/emails/src/rendered/security-notice.ts
+  s_566b8e0c4467a4::t_dcd0737366f254 47-54
+packages/emails/src/service.ts
+  s_566b8e0c4467a4::t_26440d422cc5fd 253-254
+packages/emails/src/templates/security-notice.tsx
+  s_566b8e0c4467a4::t_4857c86c748f05 40-41,165-180
+apps/web/src/components/recovery-phrase.tsx
+  s_1e3406041198f8::t_a469cb2ef6752e 24,44-46
+apps/web/src/lib/new-phrase.ts
+  s_1e3406041198f8::t_60f153d32569a0 16-23,48,51-64,71-82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9ca1a2d215536a11820c2959829d45a819f556dd",
+  "prompts": {},
+  "sessions": {
+    "s_1e3406041198f8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a0e21c7cc47809e54",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
