@@ -19,6 +19,12 @@
 //!   answer, a refusal in the server's words, or a reply that is not the server's answer
 //!   at all. An app that guessed at the last would sit on a screen nothing can finish.
 //! - **The answer** a step is sent, as the routes take it.
+//! - **Passkeys and security keys** (`docs/two-step-design.md` 3, 12): what a key is asked at
+//!   a step and when it is added, in the JSON the platforms' own sheets take, and a key's two
+//!   answers cut down to what the server checks. The platform runs the ceremony and verifies
+//!   nothing is left to this crate: it only moves fields, and never sees a private key.
+//! - **What this build names to the server** as answerable beyond a code and the phrase, and
+//!   whether the server said it reads that.
 
 use crate::bytes::{decode, encode};
 use crate::envelope::context;
@@ -145,7 +151,7 @@ pub fn backup_code_normalize(typed: String) -> Option<String> {
     .then_some(code)
 }
 
-/// One way to answer a step. A method this build does not know (a security key, later) is
+/// One way to answer a step. A method this build does not know (another device, later) is
 /// one it cannot answer, and is left out of a challenge's list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
@@ -156,6 +162,28 @@ pub enum StepMethod {
     Backup,
     /// The recovery phrase, signed on the device.
     Phrase,
+    /// A passkey or security key, asked by the platform's own sheet.
+    Webauthn,
+}
+
+/// One of the account's keys, as a step or a registration names it: the credential id
+/// (base64url) and the transports the key reported when it was added.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct StepKey {
+    pub id: String,
+    pub transports: Vec<String>,
+}
+
+/// What a passkey or security key is asked at a step: this token's own challenge
+/// (base64url), the RP ID the keys are bound to, and the account's keys. No user
+/// verification is asked: the password was the knowledge factor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct StepKeyRequest {
+    pub challenge: String,
+    pub rp_id: String,
+    pub keys: Vec<StepKey>,
 }
 
 /// What the device needs to sign with the recovery phrase: the account's id (a sign-in has
@@ -174,20 +202,40 @@ pub struct StepPhrase {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct StepChallenge {
     pub token: String,
+    /// In the server's order: the account's usual way first (`docs/two-step-design.md` 12).
     pub methods: Vec<StepMethod>,
     /// ISO 8601, as the server sent it.
     pub expires_at: String,
     pub phrase: Option<StepPhrase>,
+    /// What a key is asked. Present exactly when `methods` holds `Webauthn`.
+    pub key_request: Option<StepKeyRequest>,
+    /// A way to answer was left out because this build did not name it.
+    pub withheld: bool,
+    /// The account's usual way is not the first one here: it can't be used for this step.
+    /// The app says one line that names no reason.
+    pub default_unavailable: bool,
+}
+
+/// A key's answer to a step, cut down to what the server checks: the credential id, the
+/// client data, the authenticator data and the signature, each base64url without padding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct KeyAssertion {
+    pub credential_id: String,
+    pub client_data_json: String,
+    pub authenticator_data: String,
+    pub signature: String,
 }
 
 /// An answer to a step, as a person gave it. The phrase's is its signature
-/// (`two_step_phrase_sign`), never the words.
+/// (`two_step_phrase_sign`), never the words; a key's is its assertion.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum StepProof {
     Totp { code: String },
     Backup { code: String },
     Phrase { signature: String },
+    Webauthn { assertion: KeyAssertion },
 }
 
 /// Why the server refused, for the app to act on (`docs/two-step-design.md` 4). The words
@@ -275,6 +323,40 @@ fn instant_shaped(value: &str) -> bool {
         && bytes[17..19].iter().all(u8::is_ascii_digit)
 }
 
+/* Base64url without padding, and not empty: how WebAuthn's JSON carries bytes. */
+fn webauthn_bytes(value: &str) -> bool {
+    !value.is_empty()
+        && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+}
+
+/* A list of key descriptors (`{ id, type: "public-key", transports? }`), or none if any entry is not one. */
+fn keys_of(value: Option<&Value>) -> Option<Vec<StepKey>> {
+    value?
+        .as_array()?
+        .iter()
+        .map(|entry| {
+            let entry = object(entry)?;
+            let id = text(entry, "id").filter(|id| webauthn_bytes(id))?;
+            (entry.get("type").and_then(Value::as_str) == Some("public-key")).then_some(())?;
+            let transports = entry
+                .get("transports")
+                .and_then(Value::as_array)
+                .map(|list| list.iter().filter_map(Value::as_str).map(str::to_string).collect())
+                .unwrap_or_default();
+            Some(StepKey { id: id.to_string(), transports })
+        })
+        .collect()
+}
+
+/* What a key is asked at a step, or none: a key cannot answer without a challenge and a key to ask. */
+fn key_request_of(value: Option<&Value>) -> Option<StepKeyRequest> {
+    let map = value.and_then(object)?;
+    let challenge = text(map, "challenge").filter(|challenge| webauthn_bytes(challenge))?;
+    let rp_id = text(map, "rpId")?;
+    let keys = keys_of(map.get("allowCredentials")).filter(|keys| !keys.is_empty())?;
+    Some(StepKeyRequest { challenge: challenge.to_string(), rp_id: rp_id.to_string(), keys })
+}
+
 fn challenge_of(value: &Value) -> Option<StepChallenge> {
     let map = object(value)?;
     let token = text(map, "token").filter(|token| token_shaped(token))?;
@@ -287,19 +369,43 @@ fn challenge_of(value: &Value) -> Option<StepChallenge> {
             wrapping_salt: text(phrase, "wrappingSalt")?.to_string(),
         })
     });
-    let names = |name: &str| listed.iter().any(|method| method.as_str() == Some(name));
+    let key_request = key_request_of(map.get("webauthn"));
+    // The order is the server's: the account's usual way comes first. A method listed twice
+    // is offered once; one this build does not know, or cannot answer with what the reply
+    // carries (the phrase without what it signs with, a key without its challenge), is left out.
     let mut methods = Vec::new();
-    if names("totp") {
-        methods.push(StepMethod::Totp);
+    for name in listed {
+        let method = match name.as_str() {
+            Some("totp") => StepMethod::Totp,
+            Some("backup") => StepMethod::Backup,
+            Some("phrase") if phrase.is_some() => StepMethod::Phrase,
+            Some("webauthn") if key_request.is_some() => StepMethod::Webauthn,
+            _ => continue,
+        };
+        if !methods.contains(&method) {
+            methods.push(method);
+        }
     }
-    if names("backup") {
-        methods.push(StepMethod::Backup);
-    }
-    // Without what the phrase signs with, the phrase cannot answer, whatever the list says.
-    if names("phrase") && phrase.is_some() {
-        methods.push(StepMethod::Phrase);
-    }
-    Some(StepChallenge { token: token.to_string(), methods, expires_at: expires_at.to_string(), phrase })
+    let webauthn = methods.contains(&StepMethod::Webauthn);
+    // What the server put first is not what is first here: the usual way is not on offer.
+    let first_dropped = listed.first().is_some_and(|first| {
+        let kept = methods.first().map(|method| match method {
+            StepMethod::Totp => "totp",
+            StepMethod::Backup => "backup",
+            StepMethod::Phrase => "phrase",
+            StepMethod::Webauthn => "webauthn",
+        });
+        first.as_str() != kept
+    });
+    Some(StepChallenge {
+        token: token.to_string(),
+        methods,
+        expires_at: expires_at.to_string(),
+        phrase,
+        key_request: key_request.filter(|_| webauthn),
+        withheld: map.get("withheld") == Some(&Value::Bool(true)),
+        default_unavailable: first_dropped || map.get("defaultUnavailable") == Some(&Value::Bool(true)),
+    })
 }
 
 /* The session's reply: the account, its wrapped key and the session's device, each whole. */
@@ -357,9 +463,9 @@ fn refusal_of(status: u16, body: &str) -> StepReply {
 /// ```
 /// use hushos_core::*;
 /// let token = "t".repeat(43);
-/// let step = format!(r#"{{"twoStep":{{"token":"{token}","methods":["totp","backup","webauthn"],"expiresAt":"2026-11-13T10:00:00.000Z"}}}}"#);
+/// let step = format!(r#"{{"twoStep":{{"token":"{token}","methods":["totp","backup","webauthn","phrase"],"expiresAt":"2026-11-13T10:00:00.000Z"}}}}"#);
 /// let StepReply::Step { challenge } = sign_in_reply_read(200, step) else { panic!("a step") };
-/// // A security key is not something this build can answer with; the phrase has nothing to sign with.
+/// // A key has no challenge to answer, and the phrase nothing to sign with: neither is offered.
 /// assert_eq!(challenge.methods, vec![StepMethod::Totp, StepMethod::Backup]);
 /// assert_eq!(sign_in_reply_read(200, "{}".into()), StepReply::Lost);
 /// assert_eq!(sign_in_reply_read(200, "<html>".into()), StepReply::Lost);
@@ -457,8 +563,445 @@ pub fn step_answer_json(token: String, proof: StepProof) -> String {
         StepProof::Totp { code } => format!(r#"{{"kind":"totp","code":{}}}"#, json!(spaceless(&code))),
         StepProof::Backup { code } => format!(r#"{{"kind":"backup","code":{}}}"#, json!(code.trim())),
         StepProof::Phrase { signature } => format!(r#"{{"kind":"phrase","signature":{}}}"#, json!(signature)),
+        StepProof::Webauthn { assertion } => {
+            format!(r#"{{"kind":"webauthn","response":{}}}"#, assertion_value(&assertion))
+        }
     };
     format!(r#"{{"token":{},"proof":{proof}}}"#, json!(token))
+}
+
+/* A key's assertion as the server takes it (AuthenticationResponseJSON, only what it checks). */
+fn assertion_value(assertion: &KeyAssertion) -> Value {
+    json!({
+        "id": assertion.credential_id,
+        "rawId": assertion.credential_id,
+        "type": "public-key",
+        "response": {
+            "clientDataJSON": assertion.client_data_json,
+            "authenticatorData": assertion.authenticator_data,
+            "signature": assertion.signature,
+        },
+    })
+}
+
+/* A key descriptor as WebAuthn's JSON has it: the transports only when the key reported some. */
+fn descriptor(key: &StepKey) -> Value {
+    let mut entry = json!({ "type": "public-key", "id": key.id });
+    if !key.transports.is_empty() {
+        entry["transports"] = json!(key.transports);
+    }
+    entry
+}
+
+/* Five minutes, as long as the token a ceremony belongs to. */
+const KEY_TIMEOUT_MS: u64 = 300_000;
+
+/// What a step asks a key, as the platform's sheet takes it
+/// (`PublicKeyCredentialRequestOptionsJSON`, for Android's Credential Manager): this token's
+/// challenge, the RP ID, the account's keys, and no user verification.
+///
+/// ```
+/// use hushos_core::*;
+/// let request = StepKeyRequest {
+///     challenge: "Y2hhbGxlbmdl".into(),
+///     rp_id: "hushos.com".into(),
+///     keys: vec![StepKey { id: "a2V5".into(), transports: vec!["usb".into()] }],
+/// };
+/// assert_eq!(
+///     key_request_json(request),
+///     r#"{"allowCredentials":[{"id":"a2V5","transports":["usb"],"type":"public-key"}],"challenge":"Y2hhbGxlbmdl","rpId":"hushos.com","timeout":300000,"userVerification":"discouraged"}"#,
+/// );
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn key_request_json(request: StepKeyRequest) -> String {
+    json!({
+        "challenge": request.challenge,
+        "rpId": request.rp_id,
+        "timeout": KEY_TIMEOUT_MS,
+        "userVerification": "discouraged",
+        "allowCredentials": request.keys.iter().map(descriptor).collect::<Vec<_>>(),
+    })
+    .to_string()
+}
+
+/// A key's assertion, read from the JSON a platform's sheet hands back
+/// (`AuthenticationResponseJSON`). Only what the server checks is kept; a reply without
+/// any of it is not an assertion.
+///
+/// ```
+/// use hushos_core::*;
+/// let handed = r#"{"id":"a2V5","rawId":"a2V5","type":"public-key","authenticatorAttachment":"cross-platform","response":{"clientDataJSON":"ZGF0YQ","authenticatorData":"YXV0aA","signature":"c2ln","userHandle":"aA"},"clientExtensionResults":{}}"#;
+/// let assertion = key_assertion_read(handed.into()).unwrap();
+/// assert_eq!(assertion.credential_id, "a2V5");
+/// assert_eq!(key_assertion_read(r#"{"id":"a2V5","response":{}}"#.into()), None);
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn key_assertion_read(handed: String) -> Option<KeyAssertion> {
+    let parsed: Value = serde_json::from_str(&handed).ok()?;
+    let map = object(&parsed)?;
+    let response = map.get("response").and_then(object)?;
+    let bytes = |map: &Map<String, Value>, key: &str| {
+        text(map, key).filter(|value| webauthn_bytes(value)).map(str::to_string)
+    };
+    Some(KeyAssertion {
+        credential_id: bytes(map, "id")?,
+        client_data_json: bytes(response, "clientDataJSON")?,
+        authenticator_data: bytes(response, "authenticatorData")?,
+        signature: bytes(response, "signature")?,
+    })
+}
+
+/// A key about to be added: the registration token its answer goes back with, and what
+/// the key is asked. No attestation, no resident key and no user verification are asked,
+/// whatever a reply says: a second step needs none of them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct KeyCreation {
+    pub registration_token: String,
+    /// Base64url.
+    pub challenge: String,
+    pub rp_id: String,
+    pub rp_name: String,
+    /// The account's WebAuthn handle (base64url): random, never the account id.
+    pub user_id: String,
+    pub user_name: String,
+    pub user_display_name: String,
+    /// COSE algorithm identifiers, in the server's order of preference.
+    pub algorithms: Vec<i64>,
+    /// The account's keys, so the same one is not added twice.
+    pub exclude: Vec<StepKey>,
+}
+
+/// What `two-step/keys/options` answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum KeyOptionsReply {
+    Options {
+        creation: KeyCreation,
+    },
+    Refused {
+        refusal: StepRefusal,
+        message: String,
+    },
+    /// Not the server's answer; nothing was added, and the app starts again.
+    Lost,
+}
+
+/// Reads `two-step/keys/options`: the options whole, a refusal in the server's words, or
+/// a lost reply. Options short of what the server always sets are not its answer.
+///
+/// ```
+/// use hushos_core::*;
+/// let token = "r".repeat(43);
+/// let body = format!(r#"{{"registrationToken":"{token}","options":{{"challenge":"Y2g","rp":{{"id":"hushos.com","name":"HushOS"}},"user":{{"id":"aGFuZGxl","name":"maya@example.org","displayName":"maya@example.org"}},"pubKeyCredParams":[{{"type":"public-key","alg":-7}}],"excludeCredentials":[]}}}}"#);
+/// let KeyOptionsReply::Options { creation } = key_options_reply_read(200, body) else { panic!("options") };
+/// assert_eq!(creation.algorithms, vec![-7]);
+/// assert_eq!(key_options_reply_read(200, "{}".into()), KeyOptionsReply::Lost);
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn key_options_reply_read(status: u16, body: String) -> KeyOptionsReply {
+    if status != 200 {
+        return match refusal_of(status, &body) {
+            StepReply::Refused { refusal, message } => KeyOptionsReply::Refused { refusal, message },
+            _ => KeyOptionsReply::Lost,
+        };
+    }
+    let read = || {
+        let parsed: Value = serde_json::from_str(&body).ok()?;
+        let map = object(&parsed)?;
+        let options = map.get("options").and_then(object)?;
+        let rp = options.get("rp").and_then(object)?;
+        let user = options.get("user").and_then(object)?;
+        let algorithms: Vec<i64> = options
+            .get("pubKeyCredParams")?
+            .as_array()?
+            .iter()
+            .filter_map(|entry| {
+                let entry = object(entry)?;
+                (entry.get("type").and_then(Value::as_str) == Some("public-key")).then_some(())?;
+                entry.get("alg")?.as_i64()
+            })
+            .collect();
+        (!algorithms.is_empty()).then_some(())?;
+        let user_name = text(user, "name")?.to_string();
+        Some(KeyCreation {
+            registration_token: text(map, "registrationToken")
+                .filter(|token| token_shaped(token))?
+                .to_string(),
+            challenge: text(options, "challenge").filter(|value| webauthn_bytes(value))?.to_string(),
+            rp_id: text(rp, "id")?.to_string(),
+            rp_name: text(rp, "name")?.to_string(),
+            user_id: text(user, "id").filter(|value| webauthn_bytes(value))?.to_string(),
+            user_display_name: text(user, "displayName").unwrap_or(&user_name).to_string(),
+            user_name,
+            algorithms,
+            exclude: keys_of(options.get("excludeCredentials"))?,
+        })
+    };
+    read().map_or(KeyOptionsReply::Lost, |creation| KeyOptionsReply::Options { creation })
+}
+
+/// What a key is asked when it is added, as the platform's sheet takes it
+/// (`PublicKeyCredentialCreationOptionsJSON`, for Android's Credential Manager).
+///
+/// ```
+/// use hushos_core::*;
+/// let creation = KeyCreation {
+///     registration_token: "r".repeat(43), challenge: "Y2g".into(),
+///     rp_id: "hushos.com".into(), rp_name: "HushOS".into(),
+///     user_id: "aGFuZGxl".into(), user_name: "maya@example.org".into(), user_display_name: "maya@example.org".into(),
+///     algorithms: vec![-8, -7], exclude: vec![],
+/// };
+/// let asked: serde_json::Value = serde_json::from_str(&key_creation_json(creation)).unwrap();
+/// assert_eq!(asked["attestation"], "none");
+/// assert_eq!(asked["authenticatorSelection"]["userVerification"], "discouraged");
+/// assert_eq!(asked["authenticatorSelection"]["residentKey"], "discouraged");
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn key_creation_json(creation: KeyCreation) -> String {
+    json!({
+        "challenge": creation.challenge,
+        "rp": { "id": creation.rp_id, "name": creation.rp_name },
+        "user": {
+            "id": creation.user_id,
+            "name": creation.user_name,
+            "displayName": creation.user_display_name,
+        },
+        "pubKeyCredParams": creation
+            .algorithms
+            .iter()
+            .map(|alg| json!({ "type": "public-key", "alg": alg }))
+            .collect::<Vec<_>>(),
+        "timeout": KEY_TIMEOUT_MS,
+        "attestation": "none",
+        "excludeCredentials": creation.exclude.iter().map(descriptor).collect::<Vec<_>>(),
+        "authenticatorSelection": {
+            "residentKey": "discouraged",
+            "requireResidentKey": false,
+            "userVerification": "discouraged",
+        },
+    })
+    .to_string()
+}
+
+/// A key's registration, cut down to what the server checks: the credential id, the client
+/// data and the attestation object (base64url), and the transports the platform reported.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct KeyRegistration {
+    pub credential_id: String,
+    pub client_data_json: String,
+    pub attestation_object: String,
+    pub transports: Vec<String>,
+}
+
+/// A key's registration, read from the JSON a platform's sheet hands back
+/// (`RegistrationResponseJSON`).
+///
+/// ```
+/// use hushos_core::*;
+/// let handed = r#"{"id":"a2V5","rawId":"a2V5","type":"public-key","response":{"clientDataJSON":"ZGF0YQ","attestationObject":"b2Jq","transports":["internal","hybrid"],"publicKey":"cGs"}}"#;
+/// let registration = key_registration_read(handed.into()).unwrap();
+/// assert_eq!(registration.transports, vec!["internal", "hybrid"]);
+/// assert_eq!(key_registration_read("{}".into()), None);
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn key_registration_read(handed: String) -> Option<KeyRegistration> {
+    let parsed: Value = serde_json::from_str(&handed).ok()?;
+    let map = object(&parsed)?;
+    let response = map.get("response").and_then(object)?;
+    let bytes = |map: &Map<String, Value>, key: &str| {
+        text(map, key).filter(|value| webauthn_bytes(value)).map(str::to_string)
+    };
+    Some(KeyRegistration {
+        credential_id: bytes(map, "id")?,
+        client_data_json: bytes(response, "clientDataJSON")?,
+        attestation_object: bytes(response, "attestationObject")?,
+        transports: response
+            .get("transports")
+            .and_then(Value::as_array)
+            .map(|list| list.iter().filter_map(Value::as_str).take(8).map(str::to_string).collect())
+            .unwrap_or_default(),
+    })
+}
+
+/// The body of `two-step/keys`: the registration token, the key's answer, and a name for
+/// the key when the person gave one (the server names it otherwise).
+///
+/// ```
+/// use hushos_core::*;
+/// let registration = KeyRegistration {
+///     credential_id: "a2V5".into(), client_data_json: "ZGF0YQ".into(),
+///     attestation_object: "b2Jq".into(), transports: vec![],
+/// };
+/// assert_eq!(
+///     key_registration_json("tok".into(), None, registration),
+///     r#"{"registrationToken":"tok","response":{"id":"a2V5","rawId":"a2V5","response":{"attestationObject":"b2Jq","clientDataJSON":"ZGF0YQ"},"type":"public-key"}}"#,
+/// );
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn key_registration_json(
+    registration_token: String,
+    name: Option<String>,
+    registration: KeyRegistration,
+) -> String {
+    let mut response = json!({
+        "clientDataJSON": registration.client_data_json,
+        "attestationObject": registration.attestation_object,
+    });
+    if !registration.transports.is_empty() {
+        response["transports"] = json!(registration.transports);
+    }
+    let mut body = Map::new();
+    body.insert("registrationToken".into(), json!(registration_token));
+    if let Some(name) = name.map(|name| name.trim().to_string()).filter(|name| !name.is_empty()) {
+        body.insert("name".into(), json!(name));
+    }
+    body.insert(
+        "response".into(),
+        json!({
+            "id": registration.credential_id,
+            "rawId": registration.credential_id,
+            "type": "public-key",
+            "response": response,
+        }),
+    );
+    Value::Object(body).to_string()
+}
+
+/// A key the server says it added: how the list shows it, and the backup codes when it
+/// turned the step on (empty otherwise).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct KeyAdded {
+    pub id: String,
+    pub name: String,
+    /// A passkey a password manager syncs.
+    pub synced: bool,
+    pub backup_codes: Vec<String>,
+}
+
+/// What `two-step/keys` answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum KeyAddedReply {
+    Added {
+        key: KeyAdded,
+    },
+    Refused {
+        refusal: StepRefusal,
+        message: String,
+    },
+    /// Not the server's answer: the key may have been added or not. The app reads the
+    /// settings again before it says either way.
+    Lost,
+}
+
+/// Reads `two-step/keys`: only the server's own answer says a key was added.
+///
+/// ```
+/// use hushos_core::*;
+/// let body = r#"{"method":{"id":"f1","kind":"webauthn","name":"Passkey","createdAt":"2026-11-13T10:00:00.000Z","lastUsedAt":null,"synced":true}}"#;
+/// let KeyAddedReply::Added { key } = key_added_reply_read(200, body.into()) else { panic!("added") };
+/// assert!(key.synced && key.backup_codes.is_empty());
+/// assert_eq!(key_added_reply_read(200, r#"{"success":true}"#.into()), KeyAddedReply::Lost);
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn key_added_reply_read(status: u16, body: String) -> KeyAddedReply {
+    if status != 200 {
+        return match refusal_of(status, &body) {
+            StepReply::Refused { refusal, message } => KeyAddedReply::Refused { refusal, message },
+            _ => KeyAddedReply::Lost,
+        };
+    }
+    let read = || {
+        let parsed: Value = serde_json::from_str(&body).ok()?;
+        let map = object(&parsed)?;
+        let method = map.get("method").and_then(object)?;
+        (method.get("kind").and_then(Value::as_str) == Some("webauthn")).then_some(())?;
+        let backup_codes = match map.get("backupCodes") {
+            None => Vec::new(),
+            // Sent, the codes are a set: anything else is not the server's answer.
+            Some(codes) => {
+                let codes: Vec<String> = codes
+                    .as_array()?
+                    .iter()
+                    .map(|code| code.as_str().filter(|code| !code.is_empty()).map(str::to_string))
+                    .collect::<Option<_>>()?;
+                (!codes.is_empty()).then_some(codes)?
+            }
+        };
+        Some(KeyAdded {
+            id: text(method, "id")?.to_string(),
+            name: text(method, "name")?.to_string(),
+            synced: method.get("synced") == Some(&Value::Bool(true)),
+            backup_codes,
+        })
+    };
+    read().map_or(KeyAddedReply::Lost, |key| KeyAddedReply::Added { key })
+}
+
+/// The kinds of method this build names to the server beyond the ones every client answers
+/// (the app's code, a backup code, the phrase), for `twoStepMethods` at sign-in and at a
+/// change (`docs/two-step-design.md` 12). `passkeys`: whether this device can use a passkey or
+/// security key for this server. One that cannot names none, and is never shown one.
+///
+/// ```
+/// use hushos_core::step_methods_named;
+/// assert_eq!(step_methods_named(true), vec!["webauthn"]);
+/// assert!(step_methods_named(false).is_empty());
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn step_methods_named(passkeys: bool) -> Vec<String> {
+    if passkeys {
+        vec!["webauthn".to_string()]
+    } else {
+        Vec::new()
+    }
+}
+
+/// The kinds of method this build can list in settings (`?methods=`), whether or not this
+/// device can use them: a passkey added in a browser is still shown, named and removed here.
+///
+/// ```
+/// use hushos_core::step_methods_shown;
+/// assert_eq!(step_methods_shown(), vec!["webauthn"]);
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn step_methods_shown() -> Vec<String> {
+    vec!["webauthn".to_string()]
+}
+
+/// Whether `login/start`'s reply says the server reads `twoStepMethods`. It is sent only to
+/// a server that said so; a release from before passkeys says nothing.
+///
+/// ```
+/// use hushos_core::step_methods_advertised;
+/// assert!(step_methods_advertised(r#"{"attemptToken":"a","twoStepMethods":true}"#.into()));
+/// assert!(!step_methods_advertised(r#"{"attemptToken":"a"}"#.into()));
+/// assert!(!step_methods_advertised(r#"{"twoStepMethods":"true"}"#.into()));
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn step_methods_advertised(login_start_body: String) -> bool {
+    serde_json::from_str::<Value>(&login_start_body)
+        .ok()
+        .as_ref()
+        .and_then(object)
+        .is_some_and(|map| map.get("twoStepMethods") == Some(&Value::Bool(true)))
+}
+
+/// Whether a refusal may be the server's schema refusing a field it does not know
+/// (`twoStepMethods`): a 422, or the 400 its auth routes answer a body they cannot read
+/// with. The app asks once more without the field, on the same attempt.
+///
+/// ```
+/// use hushos_core::step_methods_refused;
+/// assert!(step_methods_refused(422) && step_methods_refused(400));
+/// assert!(!step_methods_refused(401) && !step_methods_refused(200));
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn step_methods_refused(status: u16) -> bool {
+    status == 422 || status == 400
 }
 
 #[cfg(test)]
@@ -636,10 +1179,14 @@ mod tests {
             whole.phrase,
             Some(StepPhrase { user_id: USER.into(), recovery_version: 3, wrapping_salt: "c2FsdA".into() })
         );
-        // A security key (later) is skipped, in whatever order the server lists things.
+        // Another device (later) is skipped, and the server's order is kept for the rest.
         let mut later = step_body();
-        later["methods"] = json!(["webauthn", "phrase", "totp"]);
-        assert_eq!(read(later).methods, vec![StepMethod::Totp, StepMethod::Phrase]);
+        later["methods"] = json!(["device", "phrase", "totp"]);
+        let later = read(later);
+        assert_eq!(later.methods, vec![StepMethod::Phrase, StepMethod::Totp]);
+        // What the server put first is not on offer here: the app says its one line.
+        assert!(later.default_unavailable);
+        assert!(!whole.default_unavailable && !whole.withheld);
         // The phrase is offered only with what it signs with.
         for field in ["userId", "wrappingSalt", "recoveryVersion"] {
             let mut step = step_body();
@@ -650,8 +1197,332 @@ mod tests {
         }
         // Nothing this build can answer with is still the server's step: the app says to update.
         let mut keys_only = step_body();
-        keys_only["methods"] = json!(["webauthn"]);
+        keys_only["methods"] = json!(["device"]);
         assert!(read(keys_only).methods.is_empty());
+    }
+
+    fn key_step() -> Value {
+        let mut step = step_body();
+        step["methods"] = json!(["webauthn", "totp", "backup", "phrase"]);
+        step["webauthn"] = json!({
+            "challenge": "Y2hhbGxlbmdl",
+            "rpId": "hushos.com",
+            "timeout": 300000,
+            "userVerification": "discouraged",
+            "allowCredentials": [
+                { "id": "a2V5LW9uZQ", "type": "public-key", "transports": ["usb", "nfc"] },
+                { "id": "a2V5LXR3bw", "type": "public-key" },
+            ],
+        });
+        step
+    }
+
+    #[test]
+    fn a_step_opens_on_the_servers_first_method_and_a_key_is_offered_only_with_its_challenge() {
+        let read = |step: Value| match sign_in_reply_read(200, json!({ "twoStep": step }).to_string()) {
+            StepReply::Step { challenge } => challenge,
+            other => panic!("expected a step, got {other:?}"),
+        };
+        let keyed = read(key_step());
+        assert_eq!(
+            keyed.methods,
+            vec![StepMethod::Webauthn, StepMethod::Totp, StepMethod::Backup, StepMethod::Phrase]
+        );
+        assert_eq!(
+            keyed.key_request,
+            Some(StepKeyRequest {
+                challenge: "Y2hhbGxlbmdl".into(),
+                rp_id: "hushos.com".into(),
+                keys: vec![
+                    StepKey { id: "a2V5LW9uZQ".into(), transports: vec!["usb".into(), "nfc".into()] },
+                    StepKey { id: "a2V5LXR3bw".into(), transports: vec![] },
+                ],
+            })
+        );
+        assert!(!keyed.default_unavailable);
+        // An account whose usual way is its app is opened on the app, key or no key.
+        let mut app_first = key_step();
+        app_first["methods"] = json!(["totp", "webauthn", "backup", "phrase"]);
+        assert_eq!(read(app_first).methods[0], StepMethod::Totp);
+        // Without its challenge, its RP ID or a key to ask, a key cannot answer: it is not
+        // offered, the options are not handed on, and the usual way is said to be unavailable.
+        for broken in ["challenge", "rpId", "allowCredentials"] {
+            let mut step = key_step();
+            step["webauthn"].as_object_mut().unwrap().remove(broken);
+            let challenge = read(step);
+            assert_eq!(challenge.methods[0], StepMethod::Totp, "{broken}");
+            assert!(!challenge.methods.contains(&StepMethod::Webauthn), "{broken}");
+            assert_eq!(challenge.key_request, None, "{broken}");
+            assert!(challenge.default_unavailable, "{broken}");
+        }
+        let mut no_keys = key_step();
+        no_keys["webauthn"]["allowCredentials"] = json!([]);
+        assert!(!read(no_keys).methods.contains(&StepMethod::Webauthn));
+        let mut odd_key = key_step();
+        odd_key["webauthn"]["allowCredentials"][0]["type"] = json!("password");
+        assert!(!read(odd_key).methods.contains(&StepMethod::Webauthn));
+        // A key's options are not kept when no key is on offer.
+        let mut unlisted = key_step();
+        unlisted["methods"] = json!(["totp"]);
+        assert_eq!(read(unlisted).key_request, None);
+        // The server's two words about its list: only `true` is a yes.
+        let mut told = step_body();
+        told["withheld"] = json!(true);
+        told["defaultUnavailable"] = json!(true);
+        let told = read(told);
+        assert!(told.withheld && told.default_unavailable);
+        let mut loose = step_body();
+        loose["withheld"] = json!("true");
+        loose["defaultUnavailable"] = json!(1);
+        let loose = read(loose);
+        assert!(!loose.withheld && !loose.default_unavailable);
+    }
+
+    #[test]
+    fn a_keys_answer_goes_as_the_server_takes_it_and_carries_nothing_else() {
+        // What a platform hands back, with what it adds beside what the server checks.
+        let handed = json!({
+            "id": "a2V5LW9uZQ", "rawId": "a2V5LW9uZQ", "type": "public-key",
+            "authenticatorAttachment": "platform",
+            "clientExtensionResults": { "credProps": { "rk": true } },
+            "response": {
+                "clientDataJSON": "Y2xpZW50", "authenticatorData": "YXV0aA",
+                "signature": "c2ln", "userHandle": "aGFuZGxl",
+            },
+        });
+        let assertion = key_assertion_read(handed.to_string()).unwrap();
+        let sent: Value = serde_json::from_str(&step_answer_json(
+            token('a'),
+            StepProof::Webauthn { assertion: assertion.clone() },
+        ))
+        .unwrap();
+        assert_eq!(
+            sent,
+            json!({
+                "token": token('a'),
+                "proof": {
+                    "kind": "webauthn",
+                    "response": {
+                        "id": "a2V5LW9uZQ", "rawId": "a2V5LW9uZQ", "type": "public-key",
+                        "response": {
+                            "clientDataJSON": "Y2xpZW50", "authenticatorData": "YXV0aA", "signature": "c2ln",
+                        },
+                    },
+                },
+            })
+        );
+        // Short of any field the server checks, or with bytes that are not base64url, it is no assertion.
+        for missing in ["clientDataJSON", "authenticatorData", "signature"] {
+            let mut cut = handed.clone();
+            cut["response"].as_object_mut().unwrap().remove(missing);
+            assert_eq!(key_assertion_read(cut.to_string()), None, "{missing}");
+        }
+        let mut padded = handed.clone();
+        padded["response"]["signature"] = json!("c2ln==");
+        assert_eq!(key_assertion_read(padded.to_string()), None);
+        assert_eq!(key_assertion_read("not json".into()), None);
+    }
+
+    #[test]
+    fn a_key_is_asked_for_this_tokens_challenge_and_this_accounts_keys_and_no_verification() {
+        let StepReply::Step { challenge } =
+            sign_in_reply_read(200, json!({ "twoStep": key_step() }).to_string())
+        else {
+            panic!("a step")
+        };
+        let asked: Value = serde_json::from_str(&key_request_json(challenge.key_request.unwrap())).unwrap();
+        assert_eq!(
+            asked,
+            json!({
+                "challenge": "Y2hhbGxlbmdl",
+                "rpId": "hushos.com",
+                "timeout": 300000,
+                "userVerification": "discouraged",
+                "allowCredentials": [
+                    { "type": "public-key", "id": "a2V5LW9uZQ", "transports": ["usb", "nfc"] },
+                    { "type": "public-key", "id": "a2V5LXR3bw" },
+                ],
+            })
+        );
+    }
+
+    fn options_body() -> Value {
+        json!({
+            "registrationToken": token('r'),
+            "expiresAt": "2026-11-13T10:05:00.000Z",
+            "options": {
+                "challenge": "Y2hhbGxlbmdl",
+                "rp": { "id": "hushos.com", "name": "HushOS" },
+                "user": { "id": "aGFuZGxl", "name": "maya@example.org", "displayName": "maya@example.org" },
+                "pubKeyCredParams": [
+                    { "type": "public-key", "alg": -8 },
+                    { "type": "public-key", "alg": -7 },
+                    { "type": "public-key", "alg": -257 },
+                ],
+                "timeout": 300000,
+                "attestation": "direct",
+                "excludeCredentials": [{ "id": "a2V5LW9uZQ", "type": "public-key", "transports": ["usb"] }],
+                "authenticatorSelection": { "residentKey": "required", "userVerification": "required" },
+            },
+        })
+    }
+
+    #[test]
+    fn a_key_being_added_is_asked_what_the_server_sent_and_never_for_more_than_a_second_step_needs() {
+        let KeyOptionsReply::Options { creation } = key_options_reply_read(200, options_body().to_string())
+        else {
+            panic!("options")
+        };
+        assert_eq!(creation.registration_token, token('r'));
+        assert_eq!(creation.algorithms, vec![-8, -7, -257]);
+        assert_eq!(
+            creation.exclude,
+            vec![StepKey { id: "a2V5LW9uZQ".into(), transports: vec!["usb".into()] }]
+        );
+        let asked: Value = serde_json::from_str(&key_creation_json(creation)).unwrap();
+        assert_eq!(asked["challenge"], "Y2hhbGxlbmdl");
+        assert_eq!(asked["rp"], json!({ "id": "hushos.com", "name": "HushOS" }));
+        assert_eq!(asked["user"]["id"], "aGFuZGxl");
+        assert_eq!(asked["excludeCredentials"][0]["id"], "a2V5LW9uZQ");
+        // Whatever the reply said, the key is asked for no attestation and no verification.
+        assert_eq!(asked["attestation"], "none");
+        assert_eq!(
+            asked["authenticatorSelection"],
+            json!({ "residentKey": "discouraged", "requireResidentKey": false, "userVerification": "discouraged" })
+        );
+        // Options short of what the server always sets are not its answer.
+        for path in [
+            vec!["registrationToken"],
+            vec!["options", "challenge"],
+            vec!["options", "rp"],
+            vec!["options", "user"],
+            vec!["options", "pubKeyCredParams"],
+            vec!["options", "excludeCredentials"],
+        ] {
+            let mut body = options_body();
+            let (last, parents) = path.split_last().unwrap();
+            let mut at = &mut body;
+            for key in parents {
+                at = &mut at[*key];
+            }
+            at.as_object_mut().unwrap().remove(*last);
+            assert_eq!(key_options_reply_read(200, body.to_string()), KeyOptionsReply::Lost, "{path:?}");
+        }
+        assert_eq!(key_options_reply_read(200, "<html>".into()), KeyOptionsReply::Lost);
+        // A refusal is the server's, by its code and in its words.
+        assert_eq!(
+            key_options_reply_read(
+                403,
+                r#"{"message":"This needs your second step.","code":"two-step"}"#.into()
+            ),
+            KeyOptionsReply::Refused {
+                refusal: StepRefusal::Required,
+                message: "This needs your second step.".into()
+            }
+        );
+        assert_eq!(key_options_reply_read(502, "Bad gateway".into()), KeyOptionsReply::Lost);
+    }
+
+    #[test]
+    fn a_keys_registration_goes_as_the_server_takes_it_with_a_name_only_when_one_was_given() {
+        let handed = json!({
+            "id": "a2V5LW9uZQ", "rawId": "a2V5LW9uZQ", "type": "public-key",
+            "authenticatorAttachment": "cross-platform",
+            "clientExtensionResults": {},
+            "response": {
+                "clientDataJSON": "Y2xpZW50", "attestationObject": "b2JqZWN0",
+                "transports": ["usb", "nfc"], "publicKey": "cGs", "publicKeyAlgorithm": -7,
+                "authenticatorData": "YXV0aA",
+            },
+        });
+        let registration = key_registration_read(handed.to_string()).unwrap();
+        let named: Value = serde_json::from_str(&key_registration_json(
+            token('r'),
+            Some("  Desk key ".into()),
+            registration.clone(),
+        ))
+        .unwrap();
+        assert_eq!(
+            named,
+            json!({
+                "registrationToken": token('r'),
+                "name": "Desk key",
+                "response": {
+                    "id": "a2V5LW9uZQ", "rawId": "a2V5LW9uZQ", "type": "public-key",
+                    "response": {
+                        "clientDataJSON": "Y2xpZW50", "attestationObject": "b2JqZWN0",
+                        "transports": ["usb", "nfc"],
+                    },
+                },
+            })
+        );
+        // No name, or only spaces: the field is left out, and the server names the key.
+        for name in [None, Some("   ".to_string())] {
+            let unnamed: Value =
+                serde_json::from_str(&key_registration_json(token('r'), name, registration.clone())).unwrap();
+            assert!(unnamed.get("name").is_none());
+        }
+        // A name cannot break out of its string.
+        let hostile: Value = serde_json::from_str(&key_registration_json(
+            token('r'),
+            Some(r#"","registrationToken":"x"#.into()),
+            registration,
+        ))
+        .unwrap();
+        assert_eq!(hostile["registrationToken"], json!(token('r')));
+        let mut cut = handed.clone();
+        cut["response"].as_object_mut().unwrap().remove("attestationObject");
+        assert_eq!(key_registration_read(cut.to_string()), None);
+    }
+
+    #[test]
+    fn a_key_was_added_only_on_the_servers_own_answer() {
+        let method = json!({
+            "id": "f1", "kind": "webauthn", "name": "Security key",
+            "createdAt": "2026-11-13T10:00:00.000Z", "lastUsedAt": null, "synced": false,
+        });
+        assert_eq!(
+            key_added_reply_read(200, json!({ "method": method }).to_string()),
+            KeyAddedReply::Added {
+                key: KeyAdded {
+                    id: "f1".into(),
+                    name: "Security key".into(),
+                    synced: false,
+                    backup_codes: vec![]
+                }
+            }
+        );
+        let first = json!({ "method": method, "backupCodes": ["7KQ2M-9XD4P", "0A1B2-C3D4E"] });
+        let KeyAddedReply::Added { key } = key_added_reply_read(200, first.to_string()) else {
+            panic!("added")
+        };
+        assert_eq!(key.backup_codes, vec!["7KQ2M-9XD4P", "0A1B2-C3D4E"]);
+        // A proxy's page, a bare success, an app's row, or codes that are not a set: not a key added.
+        let mut app = method.clone();
+        app["kind"] = json!("totp");
+        for body in [
+            "<html>".to_string(),
+            "{}".to_string(),
+            r#"{"success":true}"#.to_string(),
+            json!({ "method": app }).to_string(),
+            json!({ "method": method, "backupCodes": [] }).to_string(),
+            json!({ "method": method, "backupCodes": ["7KQ2M-9XD4P", 7] }).to_string(),
+        ] {
+            assert_eq!(key_added_reply_read(200, body.clone()), KeyAddedReply::Lost, "{body}");
+        }
+        // The server's refusals carry its words; one that used the key's one answer is `Other`.
+        assert_eq!(
+            key_added_reply_read(
+                409,
+                r#"{"message":"This passkey or security key is already on your account.","code":"exists"}"#
+                    .into()
+            ),
+            KeyAddedReply::Refused {
+                refusal: StepRefusal::Other,
+                message: "This passkey or security key is already on your account.".into()
+            }
+        );
+        assert_eq!(key_added_reply_read(504, String::new()), KeyAddedReply::Lost);
     }
 
     #[test]

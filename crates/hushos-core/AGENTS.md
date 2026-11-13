@@ -84,7 +84,7 @@ Every module with a TypeScript twin is held to it by fixtures in both directions
 | `links.rs`                |                                                                                                                     | Link keys                                                                    |
 | `reports.rs`              | `packages/crypto/src/reports.ts`                                                                                    | Report seals, `pair_key`                                                     |
 | `recovery.rs`             |                                                                                                                     | Recovery phrases                                                             |
-| `two_step.rs`             | `packages/crypto/src/two-step.ts`, `packages/auth/src/login-reply.ts`                                               | The phrase's answer to a second step, reading a sign-in's reply              |
+| `two_step.rs`             | `packages/crypto/src/two-step.ts`, `packages/auth/src/login-reply.ts`                                               | The phrase's answer to a second step, reading a sign-in's reply, passkeys    |
 | `contacts.rs`             | `packages/crypto/src/contacts.ts`                                                                                   | Fingerprints, key digests, pins, the settings document                       |
 | `first_seen.rs`           | `packages/drive` (`comparePin`), `packages/crypto/src/first-seen.test.ts`                                           | First-seen pins and the guard's rule                                         |
 | `canonical.rs`            |                                                                                                                     | The group statement grammar                                                  |
@@ -340,7 +340,7 @@ Design: docs/identity-pq-design.md.
 
 ### Two-step sign-in (`two_step.rs`)
 
-`docs/two-step-design.md` 4 to 6. Codes are checked on the server; nothing here makes or checks one.
+`docs/two-step-design.md` 3 to 6 and 12. Codes are checked on the server; nothing here makes or checks one, and a passkey's ceremony is the platform's: this crate only moves its fields.
 
 - `two_step_phrase_statement(user_id, token_digest)` is `["hushos/two-step/phrase",1,userId,sha256(stepToken)]`, the id lowercased, the digest base64url (`step_token_digest`).
 - `two_step_phrase_sign(phrase, wrapping_salt, user_id, step_token)` derives the recovery signing key (`recovery_signing_seed`, the same HKDF a phrase reset uses) and signs. It compares nothing with an envelope: the server's check says whether the phrase is the account's.
@@ -350,8 +350,14 @@ Design: docs/identity-pq-design.md.
     - `Refused { refusal, message }` for a refusal in the server's words, by its `code` (`step-unavailable` is `Unavailable`; a 429 without a code is `Busy`, the address's own limit);
     - `Lost` for anything else, a 5xx without `step-unavailable` included. Never a sign-in, never a refusal.
 - `step_challenge_reply_read` and `step_change_reply_read` read `two-step/challenge` and the changes that carry a step.
-- A method this build does not know is left out of a challenge; the phrase is left out without what it signs with.
-- `step_answer_json(token, proof)` writes the body both phones send.
+- A challenge's `methods` are in the server's order (the account's usual way first). A method this build does not know is left out; so is the phrase without what it signs with, and a key without its challenge and a key to ask. `default_unavailable` is true when the server said so, or when what it listed first was left out here; `withheld` is the server's word that it left out a kind this build did not name.
+- `step_answer_json(token, proof)` writes the body both phones send. A key's proof is its assertion, cut down to what the server checks.
+- Passkeys and security keys:
+    - `key_request_json(StepKeyRequest)` and `key_creation_json(KeyCreation)` are what a platform's sheet is asked (WebAuthn's JSON option forms; Android's Credential Manager takes them as they are, iOS reads the same fields). No attestation, resident key or user verification is ever asked, whatever a reply said.
+    - `key_assertion_read` and `key_registration_read` take the JSON a platform hands back and keep only what the server checks.
+    - `key_options_reply_read`, `key_registration_json` and `key_added_reply_read` are the two routes that add a key. Only the server's own answer says a key was added.
+    - `step_methods_named(passkeys)` is what the app sends as `twoStepMethods`; `step_methods_shown()` is what it asks settings to list; `step_methods_advertised(body)` reads `login/start`'s word that the server takes the field, and `step_methods_refused(status)` says when to ask once more without it (422, or this server's 400).
+    - `fixtures/two-step-keys.json` is hand-stated and read by `tests/two_step_keys.rs` and by the web (`apps/web/src/lib/api/two-step-keys-fixture.test.ts`), which sends its replies through the server's response schemas and its requests through the routes' body schemas: a phone and a browser ask a key the same thing and send the same answer.
 - `backup_code_normalize` reads a typed code as the server does.
 - Fixtures: `twoStepPhrase` in both base files (the web's statement and signature made here byte for byte, and this crate's verified by the web's `verifyTwoStepPhrase`).
 
