@@ -1,0 +1,77 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_52eeda07fd5c41 200-203,207,210-219,223-225,227-229
+apps/android/app/src/main/kotlin/com/hushos/app/data/Auth.kt
+  s_566b8e0c4467a4::t_fd49a6468d1faf 39-41,345-380,382-383,404-406,412,414,416-493,567-579,584,586,588-589,593-614,619-620,624-625,722-740,742-763,770,772,780-781,784-788,826-827,1024-1032,1038-1046,1048-1061,1063-1067,1069,1072,1095-1113,1168-1173,1175,1178,1186,1192,1196-1201,1203-1204,1206,1208
+apps/android/app/src/main/kotlin/com/hushos/app/data/TwoStep.kt
+  s_566b8e0c4467a4::t_4d5c05668e5047 26-216,254-263,408-409,558-561
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AccountScreen.kt
+  s_566b8e0c4467a4::t_0bc7cee155a368 611-615,628-629,794-801,809-811,814,817,829,832-834,837
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_520426fe498c02 337-342,362-364,537-565,572-574,577-581,583-587,595-596,600-601,604-605,615,628,633-699,712,752-755,1333-1338,1343-1344,1352-1355,1360-1372,1375,1382,1832-1840,1843,1845-1849,1851,1853-1859,1863-1866,1868-1876,1879-1881,1883-1884,1886-1905,1907-1911,1948-1950,1952,1956,1958,1973
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HushOSApp.kt
+  s_566b8e0c4467a4::t_68068ddb738a0f 120-127
+apps/android/app/src/test/kotlin/com/hushos/app/data/ProblemsTest.kt
+  s_566b8e0c4467a4::t_60c5554c80597f 61,63,67
+apps/android/app/src/test/kotlin/com/hushos/app/data/TwoStepTest.kt
+  s_566b8e0c4467a4::t_eb3616e7069913 129,131,133-137,145-536,581-588
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_329f10fe2cc303 325-326,328,333,335-343,347-348,350
+apps/ios/App/AccountView.swift
+  s_566b8e0c4467a4::t_0f92f91cfe4fd8 933-935,942-944,992-994,998-1001,1017-1018,1021-1023,1025-1026,1028-1031,1033
+apps/ios/App/AppModel.swift
+  s_566b8e0c4467a4::t_4e08ffd99e92f5 146-148,150,158-159,165-170,201-208,259-262,375,401,403,565-580,588-593,596-610
+apps/ios/App/RecoveryView.swift
+  s_566b8e0c4467a4::t_76e9efc6adda4c 45-49,455-456,462-464,474-476
+apps/ios/App/SignInView.swift
+  s_566b8e0c4467a4::t_562d247fce5c07 165-166
+apps/ios/App/TwoStep.swift
+  s_71a46c0012ed21::t_f78c36e2729b7c 62-64,442-443,593-594,693-694,778-779
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Account.swift
+  s_566b8e0c4467a4::t_06bf97217cc7f3 328,364,501,503-522,526-532,534-535,582-607
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Auth.swift
+  s_566b8e0c4467a4::t_51cb0b56d07c1e 185-220,230-231,234-236,247-256,267,278,397-402
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Devices.swift
+  s_566b8e0c4467a4::t_2662c78381328e 121,129
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Recovery.swift
+  s_566b8e0c4467a4::t_86ba8e47fa05f9 193-196,199-272,377-475,477-479,481-482,484-488,490-504
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/TwoStep.swift
+  s_566b8e0c4467a4::t_cfadf8e5a4697d 24-91,145-154,319-331,490-493,527,610,619,677-678
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/TwoStepTests.swift
+  s_566b8e0c4467a4::t_8ab35a059d9436 138-146,194-205,244-527,564-579,762-809
+docs/two-step-design.md
+  s_566b8e0c4467a4::t_1bc91a3f8e3266 440,442-451
+apps/android/app/src/main/kotlin/com/hushos/app/ui/TwoStepScreen.kt
+  s_a7b7a6f08ce4bb::t_c891ceddbf38cc 125-126,230-233,235,318-320,330-338,341-343,360,380-381,384,443-448,457-458,461,465-467,470-472,481-482,484-485,494-495,512,528,536-537,551-554,568,576-578,586,588,591-592,600,602,610-611,623-624,628-630,646,648,654
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4e2e7f97b35eed32458364c5dafe39a4c89c9d72",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_71a46c0012ed21": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "159305f7-8bd6-48d2-a2f7-dada81916a25",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_a7b7a6f08ce4bb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a2fc93fc7e1974125",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
