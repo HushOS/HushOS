@@ -1,0 +1,27 @@
+DESIGN.md
+  s_566b8e0c4467a4::t_83a11ebbe6530c 325
+apps/web/src/components/user-menu.tsx
+  s_566b8e0c4467a4::t_da1bd77be5b121 17,34,98-104,110,114-115,123,153,177-183,191,197-223
+apps/web/src/routes/_authenticated/app/route.tsx
+  s_566b8e0c4467a4::t_927a068d05cd55 10,290
+e2e/mobile.spec.ts
+  s_566b8e0c4467a4::t_9bed2edddf1d98 76-100
+e2e/sign-in-out.spec.ts
+  s_566b8e0c4467a4::t_2cbd3ffcf05c31 40
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c3b84de5e36dd1f394a340b76e17ef20be124f8d",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
