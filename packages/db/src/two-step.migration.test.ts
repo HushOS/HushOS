@@ -20,7 +20,7 @@ const TABLES = '20261112160538_two_step';
 const GUARD = '20261112174853_two_step_session_guard';
 const READERS = '20261113181124_two_step_key_readers';
 const PASSKEYS = '20261113195154_two_step_passkeys';
-const DEVICE = '20261113232239_two_step_device';
+const DEVICE = '20261114015359_two_step_device';
 
 const migrationsFolder = fileURLToPath(new URL('../drizzle', import.meta.url));
 const undo = (migration: string) =>

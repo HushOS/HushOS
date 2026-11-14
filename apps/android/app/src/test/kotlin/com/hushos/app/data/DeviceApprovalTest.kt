@@ -594,7 +594,7 @@ class DeviceApprovalTest {
             val purpose = made.getString("purpose")
             val key = deviceSigningCreate()
             val prompt = ApprovalPrompt(
-                made.getString("requestId"), purpose, "unknown", "web", "Chrome on Windows", "2026-11-14T10:00:00.000Z", "2026-11-14T10:05:00.000Z",
+                made.getString("requestId"), purpose, "unknown", "web", "Chrome on Windows", "near Lyon, France", "2026-11-14T10:00:00.000Z", "2026-11-14T10:05:00.000Z",
                 made.getString("tokenDigest"), made.getString("commitment"), null, null, null,
             )
             val signed = mutableListOf<String>()
@@ -614,6 +614,8 @@ class DeviceApprovalTest {
             }
             // The browser's QR code is this request's.
             val scanning = ApprovalAnswering(prompt, wire, made.getString("userId"), key.seed)
+            // The sheet says what is asked, by which device, and the place the server gave for it.
+            assertTrue(purpose, scanning.asks.endsWith(" on Chrome on Windows, near Lyon, France"))
             assertTrue(purpose, scanning.openScanned(made.getString("qr")))
             assertTrue(purpose, scanning.revealed())
             // The browser's code is the code; one that is not it would have ended the request instead.

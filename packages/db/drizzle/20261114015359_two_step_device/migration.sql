@@ -2,7 +2,9 @@
 --   - "two_step_factors" takes the kind 'device': the account takes an approval from one of its
 --     other devices as its second step. No new column: the row holds no secret and no name. One
 --     per account. The session guard already counts a confirmed factor of any kind.
---   - "two_step_device_requests", empty: one request to approve, from its commitment to its end.
+--   - "two_step_device_requests", empty: one request to approve, from its commitment to its end,
+--     with the rough place the asking device is in while the request is open, where the operator's
+--     proxy says one (TRUSTED_COUNTRY_HEADER, TRUSTED_REGION_HEADER, TRUSTED_CITY_HEADER).
 --   - 'device' among the methods a line of the security log may name.
 --   - three kinds among those a notification event may have: the method added, the method
 --     removed, and the prompt an approving device is pinged for.
@@ -25,6 +27,7 @@ CREATE TABLE "two_step_device_requests" (
 	"device_id" uuid,
 	"device_kind" text,
 	"device_name" text,
+	"location" text,
 	"commitment" bytea NOT NULL,
 	"approver_device_id" uuid,
 	"approver_key" bytea,
@@ -42,6 +45,7 @@ CREATE TABLE "two_step_device_requests" (
 	CONSTRAINT "two_step_device_requests_device_valid" CHECK (("device_kind" is null or "device_kind" in ('web', 'ios', 'android')) and ("device_name" is null or char_length("device_name") between 1 and 40)),
 	CONSTRAINT "two_step_device_requests_lengths_valid" CHECK (octet_length("token_hash") = 32 and octet_length("commitment") = 32 and ("approver_key" is null or octet_length("approver_key") = 32) and ("device_key" is null or octet_length("device_key") = 32) and ("nonce" is null or octet_length("nonce") = 32) and ("signature" is null or octet_length("signature") = 64)),
 	CONSTRAINT "two_step_device_requests_state_valid" CHECK ("state" in ('waiting', 'opened', 'revealed', 'approved', 'ended') and ("state" <> 'waiting' or ("approver_device_id" is null and "approver_key" is null)) and ("state" not in ('opened', 'revealed', 'approved') or ("approver_device_id" is not null and "approver_key" is not null)) and ("state" not in ('waiting', 'opened') or ("device_key" is null and "nonce" is null and "signature" is null)) and ("state" not in ('revealed', 'approved') or ("device_key" is not null and "nonce" is not null)) and (("device_key" is null) = ("nonce" is null)) and ("state" <> 'revealed' or "signature" is null) and ("state" <> 'approved' or "signature" is not null)),
+	CONSTRAINT "two_step_device_requests_location_valid" CHECK ("location" is null or ("state" <> 'ended' and char_length("location") between 1 and 200)),
 	CONSTRAINT "two_step_device_requests_end_valid" CHECK (("state" = 'ended') = ("ended_reason" is not null) and ("state" = 'ended') = ("ended_at" is not null) and ("ended_reason" is null or "ended_reason" in ('used', 'passed', 'denied', 'wrong-code', 'not-me', 'mismatch', 'replaced', 'expired', 'off')) and "expires_at" > "created_at")
 );
 --> statement-breakpoint

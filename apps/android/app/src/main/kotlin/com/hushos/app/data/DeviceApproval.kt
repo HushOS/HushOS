@@ -396,8 +396,8 @@ class ApprovalAnswering(
 
     val id: String = asked.id
 
-    /* "Sign-in on Chrome on Windows": what is asked, and by which device. */
-    val asks: String = approvalAsks(asked.purpose, asked.deviceName)
+    /* "Sign-in on Chrome on Windows, near Lyon, France": what is asked, by which device, and roughly from where when the server was told. */
+    val asks: String = approvalAsks(asked.purpose, asked.deviceName, asked.location)
 
     /* This phone's own value, once it opened the request: the first one, if it opened it before. */
     private var approverKey: String? = null

@@ -732,7 +732,7 @@ export async function endDeviceRequests(
 ) {
     await tx
         .update(twoStepDeviceRequests)
-        .set({ state: 'ended', endedReason: input.reason, endedAt: new Date() })
+        .set({ state: 'ended', location: null, endedReason: input.reason, endedAt: new Date() })
         .where(
             and(
                 eq(twoStepDeviceRequests.userId, input.userId),
@@ -798,7 +798,7 @@ async function useDeviceApproval(tx: Tx, attempt: StepAttempt, requestId: string
     if (used.length !== 1) return null;
     await tx
         .update(twoStepDeviceRequests)
-        .set({ state: 'ended', endedReason: 'used', endedAt: new Date() })
+        .set({ state: 'ended', location: null, endedReason: 'used', endedAt: new Date() })
         .where(eq(twoStepDeviceRequests.id, request.id));
     return approver;
 }

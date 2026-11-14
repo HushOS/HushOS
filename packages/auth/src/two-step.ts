@@ -27,6 +27,7 @@ import { authEnv } from '@hushos/env/auth';
 import { twoStepEnv } from '@hushos/env/two-step';
 import { log as serverLog } from '@hushos/logging';
 import { hash, noticeWhen, randomToken, serverSetup, supportedEnvelope } from './internal';
+import { requestLocation } from './location';
 import { notify } from './notifications';
 import { consumeBoundAttempt, normalizeDeviceName, requireSession, startLogin } from './server';
 import { AuthError, SESSION_IDLE_SECONDS, TOKEN_PATTERN } from './tokens';
@@ -1669,10 +1670,15 @@ export async function settleDeviceApprovals(userId?: string) {
  * it. It sends only its commitment, and what it calls itself when the server does not know it
  * yet (a new sign-in). Every device of the account is pinged with an event that says nothing;
  * each asks for what it may answer over its own session.
+ *
+ * `headers` are the request's own: where the operator named the headers their proxy puts a
+ * place in, the rough place is kept with the request for the approving device's prompt, and
+ * deleted when the request ends (location.ts). Nothing is looked up.
  */
 export async function startDeviceApproval(
     sessionToken: string | null,
     input: { stepToken: string; commitment: string; kind?: DeviceKind; name?: string },
+    headers?: Headers,
 ) {
     const signedIn = sessionToken !== null;
     if (!TOKEN_PATTERN.test(input.stepToken)) throw requestOver(signedIn);
@@ -1689,6 +1695,7 @@ export async function startDeviceApproval(
         commitment: bytes32(input.commitment, 'a commitment'),
         kind: input.kind ?? null,
         name,
+        location: headers ? requestLocation(headers, authEnv) : null,
     });
     for (const counted of made.counted ?? []) await afterCounted(counted);
     switch (made.status) {
@@ -1819,6 +1826,7 @@ export async function listDeviceApprovals(sessionToken: string | null) {
             purpose: prompt.purpose,
             class: prompt.class,
             device: prompt.device,
+            location: prompt.location,
             createdAt: prompt.createdAt.toISOString(),
             expiresAt: prompt.expiresAt.toISOString(),
             tokenDigest: prompt.tokenDigest.toString('base64url'),

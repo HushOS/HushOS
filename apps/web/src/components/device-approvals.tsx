@@ -170,7 +170,9 @@ function AnswerDialog({ asked, onClose }: { asked: ApprovalPrompt | null; onClos
                 >
                     <DialogHeader>
                         <DialogTitle>
-                            {asked ? approvalAsks(asked.purpose, asked.device.name) : ''}
+                            {asked
+                                ? approvalAsks(asked.purpose, asked.device.name, asked.location)
+                                : ''}
                         </DialogTitle>
                     </DialogHeader>
                     {over ? (
@@ -315,7 +317,7 @@ export function ApprovalRows() {
                     }
                 >
                     <span className="font-semibold">
-                        {approvalAsks(asked.purpose, asked.device.name)}
+                        {approvalAsks(asked.purpose, asked.device.name, asked.location)}
                     </span>
                 </Setting>
             ))}

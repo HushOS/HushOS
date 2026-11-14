@@ -50,6 +50,8 @@ import {
  *   only between devices that have been on the account for seven days;
  * - an approval is the approving device's signature over this account, request, purpose, token
  *   and asking device, checked here against its stored key;
+ * - where the asking device is, when the server was told, is kept only while the request is
+ *   open: every way a request ends deletes it, and the table refuses an ended one that has it;
  * - requests are budgeted by class, and the classes never share room: a sign-in that proved no
  *   device (five a day for the account, one open at a time), a sign-in that proved its device
  *   (five a day for that device), and a step-up (five a day for that device, ten for the account);
@@ -240,6 +242,7 @@ async function settleAccount(tx: Tx, userId: string): Promise<CountedRequest[]> 
             .update(twoStepDeviceRequests)
             .set({
                 state: 'ended',
+                location: null,
                 endedReason: 'expired',
                 endedAt: now,
                 counted: failed,
@@ -350,6 +353,8 @@ export async function createDeviceRequest(input: {
     commitment: Buffer;
     kind?: DeviceKind | null;
     name?: string | null;
+    /* Roughly where the asking device is, as the operator's proxy said it; kept while the request is open. */
+    location?: string | null;
 }): Promise<CreateRequestResult> {
     return db.transaction(async (tx): Promise<CreateRequestResult> => {
         const [seen] = await tx
@@ -408,7 +413,12 @@ export async function createDeviceRequest(input: {
         if (open.length)
             await tx
                 .update(twoStepDeviceRequests)
-                .set({ state: 'ended', endedReason: 'replaced', endedAt: new Date() })
+                .set({
+                    state: 'ended',
+                    location: null,
+                    endedReason: 'replaced',
+                    endedAt: new Date(),
+                })
                 .where(
                     inArray(
                         twoStepDeviceRequests.id,
@@ -425,6 +435,7 @@ export async function createDeviceRequest(input: {
                 deviceId,
                 deviceKind: asked.device ? asked.device.kind : (input.kind ?? null),
                 deviceName: asked.device ? asked.device.name : (input.name ?? null),
+                location: input.location ?? null,
                 commitment: input.commitment,
                 expiresAt: attempt.expiresAt,
             })
@@ -528,7 +539,12 @@ export async function revealDeviceRequest(input: {
         if (!honest) {
             await tx
                 .update(twoStepDeviceRequests)
-                .set({ state: 'ended', endedReason: 'mismatch', endedAt: new Date() })
+                .set({
+                    state: 'ended',
+                    location: null,
+                    endedReason: 'mismatch',
+                    endedAt: new Date(),
+                })
                 .where(eq(twoStepDeviceRequests.id, request.id));
             return { status: 'mismatch' };
         }
@@ -579,6 +595,8 @@ export type ApprovalPrompt = {
     purpose: TwoStepPurpose;
     class: DeviceRequestClass;
     device: { kind: DeviceKind | null; name: string | null };
+    /* Roughly where the asking device is ("near Lyon, France"), where the server was told. */
+    location: string | null;
     createdAt: Date;
     expiresAt: Date;
     /* The token's hash and the asking device's commitment: what the code and the statement cover. */
@@ -629,6 +647,7 @@ export async function listApprovalPrompts(sessionTokenHash: Buffer): Promise<App
             purpose: request.purpose,
             class: request.class,
             device: { kind: request.deviceKind, name: request.deviceName },
+            location: request.location,
             createdAt: request.createdAt,
             expiresAt: request.expiresAt,
             tokenDigest: request.tokenHash,
@@ -733,7 +752,12 @@ export async function approveDeviceRequest(input: {
         if (!signed) {
             await tx
                 .update(twoStepDeviceRequests)
-                .set({ state: 'ended', endedReason: 'mismatch', endedAt: new Date() })
+                .set({
+                    state: 'ended',
+                    location: null,
+                    endedReason: 'mismatch',
+                    endedAt: new Date(),
+                })
                 .where(eq(twoStepDeviceRequests.id, request.id));
             return { status: 'signature' };
         }
@@ -771,6 +795,7 @@ export async function denyDeviceRequest(input: {
             .update(twoStepDeviceRequests)
             .set({
                 state: 'ended',
+                location: null,
                 endedReason: input.reason,
                 endedAt: new Date(),
                 counted: failed,
@@ -992,7 +1017,7 @@ export async function confirmDeviceFactor(input: {
         await tx.delete(twoStepAttempts).where(eq(twoStepAttempts.tokenHash, input.tokenHash));
         await tx
             .update(twoStepDeviceRequests)
-            .set({ state: 'ended', endedReason: 'used', endedAt: now })
+            .set({ state: 'ended', location: null, endedReason: 'used', endedAt: now })
             .where(eq(twoStepDeviceRequests.id, request.id));
         return { status: 'ok', turnedOn, approverDeviceId };
     });

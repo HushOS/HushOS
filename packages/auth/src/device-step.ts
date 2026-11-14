@@ -173,6 +173,8 @@ export type ApprovalPrompt = {
     purpose: string;
     class: 'unknown' | 'known' | 'change';
     device: { kind: DeviceKind | null; name: string | null };
+    /* Roughly where the asking device is, in the server's words ("near Lyon, France"), or null. */
+    location: string | null;
     createdAt: string;
     expiresAt: string;
     tokenDigest: string;
@@ -205,6 +207,13 @@ function prompt(value: unknown): ApprovalPrompt | null {
             kind: kind === 'web' || kind === 'ios' || kind === 'android' ? kind : null,
             name: text(device.name) ? device.name : null,
         },
+        // Words for a line of a prompt, and nothing longer or stranger than that.
+        location:
+            text(value.location) &&
+            value.location.length <= 200 &&
+            !/[\p{Cc}\p{Cf}]/u.test(value.location)
+                ? value.location
+                : null,
         createdAt,
         expiresAt,
         tokenDigest: value.tokenDigest,
