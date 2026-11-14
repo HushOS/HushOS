@@ -23,7 +23,6 @@ import {
     useListSelection,
 } from '@/components/drive/file-list';
 import { FileMark } from '@/components/drive/file-mark';
-import { HotkeyHints } from '@/components/drive/hotkey-hints';
 import { InfoDialog } from '@/components/drive/info-dialog';
 import { MoveDialog } from '@/components/drive/move-dialog';
 import {
@@ -754,7 +753,6 @@ export function HomeView() {
                     <AccessCell access={access.get(node.id)} inherited={inherited(node)} />
                 )}
             />
-            <HotkeyHints />
         </div>
     );
 }
