@@ -32,7 +32,6 @@ import {
 import { folderTint } from '@/components/folder-mark';
 import { FileMark } from '@/components/drive/file-mark';
 import { useIsMobile } from '@/hooks/use-mobile';
-import { HotkeyHints } from '@/components/drive/hotkey-hints';
 import { InfoDialog } from '@/components/drive/info-dialog';
 import { MoveDialog } from '@/components/drive/move-dialog';
 import {
@@ -1623,7 +1622,6 @@ export function FolderView({ folderId }: { folderId: string }) {
                           )
                 }
             />
-            <HotkeyHints />
         </div>
     );
 }

@@ -1,6 +1,6 @@
 import { cn } from 'cn';
 import { SearchIcon } from 'lucide-react';
-import { Kbd } from '@/components/drive/hotkey-hints';
+import { Kbd } from '@/components/drive/kbd';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { setPaletteOpen } from '@/lib/palette';

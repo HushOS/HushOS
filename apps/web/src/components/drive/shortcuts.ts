@@ -1,6 +1,6 @@
 /*
- * One list of Drive's keyboard shortcuts, so the hint overlay, the command
- * palette and the menus all say the same thing. `mod` renders as ⌘ or Ctrl.
+ * One list of Drive's keyboard shortcuts, so the command palette and the menus
+ * say the same thing. `mod` renders as ⌘ or Ctrl.
  */
 export type Shortcut = { id: string; keys: string[]; label: string };
 
