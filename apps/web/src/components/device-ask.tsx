@@ -20,6 +20,9 @@ const ENDED = {
     refused: 'Your other device didn’t approve this.',
 } as const;
 
+/* The request the form last opened with, by its token and purpose: made once however often it mounts. */
+let opening: { key: string; made: Promise<Asked> } | null = null;
+
 export function DeviceAsk({
     token,
     purpose,
@@ -52,10 +55,21 @@ export function DeviceAsk({
         told.current = onApproved;
     });
 
-    async function request() {
+    /*
+     * `again`: a press asked, so a new request is made whatever came before. Otherwise this is
+     * the request the form opened with, and it is made once: React mounts a form twice in
+     * development, and a second request would replace the first and spend the day's count.
+     */
+    async function request(again: boolean) {
         const mine = ++run.latest;
+        const key = `${token}:${purpose}`;
         try {
-            const made = await authClient.askAnotherDevice({ token }, purpose);
+            const asking =
+                !again && opening?.key === key
+                    ? opening.made
+                    : authClient.askAnotherDevice({ token }, purpose);
+            opening = { key, made: asking };
+            const made = await asking;
             if (mine !== run.latest) return;
             setAsked(made);
             setHeld({ state: 'waiting' });
@@ -70,10 +84,10 @@ export function DeviceAsk({
         setProblem('');
         setHeld(null);
         setAsked(null);
-        void request();
+        void request(true);
     }
     useEffect(() => {
-        if (auto) void request();
+        if (auto) void request(false);
         return () => {
             // Whatever is still on its way belongs to a form that is gone.
             run.latest++;

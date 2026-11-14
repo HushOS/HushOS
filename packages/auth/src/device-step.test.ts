@@ -223,7 +223,7 @@ describe('the device that approves', () => {
                 { name: 'Ed25519' },
                 approver.verifyKey,
                 Buffer.from(signature!, 'base64url'),
-                message,
+                message.slice(),
             );
         expect(await verifies(statement)).toBe(true);
         // Not over the same request for another purpose.

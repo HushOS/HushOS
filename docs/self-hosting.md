@@ -866,12 +866,17 @@ Off by default while the apps that show them are built: `NOTIFICATIONS_ENABLED=t
 
 Off by default: `TWO_STEP_ENABLED=true` lets accounts turn it on. Only `true` and `false` are accepted; any other value (`1`, `yes`) fails the environment check, so the web service answers 500 and fails its health check. Only the web service reads it. The web service and the worker both read the two keys below, and must be given the same ones: the worker re-seals authenticator secrets after a key rotation, and trims the security log. The design is `docs/two-step-design.md`.
 
-- **What it is.** After the password, an account that has the step on gets no session and no keys until it passes a second step: a passkey or security key, a code from an authenticator app, a backup code, or its recovery phrase. The account's usual way (its default) is offered first, and the others are one press away. The same step is asked before a password change, a key rotation, deleting the account, and any change to the step itself.
+- **What it is.** After the password, an account that has the step on gets no session and no keys until it passes a second step: a passkey or security key, a code from an authenticator app, an approval from another of its devices, a backup code, or its recovery phrase. The account's usual way (its default) is offered first, and the others are one press away. The same step is asked before a password change, a key rotation, deleting the account, and any change to the step itself.
 - **What it protects.** It is the server's rule. It stops someone who has a password from signing in to your server. It does not change how files are encrypted, and it does nothing against whoever controls the server, or holds a copy of its database with the OPAQUE setup.
-- **With the flag off,** nobody can turn the step on, and the routes that set it up or manage it answer 501. An account that already has the step is still asked for it: turning the flag off is never a way past someone's second step. Such an account also cannot remove its step until the flag is on again.
+- **With the flag off,** nobody can turn the step on, and the routes that set it up or manage it answer 501. An account that already has the step is still asked for it: turning the flag off is never a way past someone's second step. Such an account also cannot remove its step until the flag is on again. The web app shows no requests to approve on another device while the flag is off, so a sign-in that would have been approved that way uses a backup code or the recovery phrase.
 - **Clients.** A client that cannot answer the step is told to update (409 `update-required`) when it signs in to an account that has it. The web app and the iPhone and Android apps from version 1.6 offer the settings and answer the step. An older phone app is told to update when it signs in to an account that has the step on.
     - **A client says what it can answer.** From the release with passkeys, a client names the methods it can use beyond a code and the phrase (`twoStepMethods`), and the server lists only those. A 1.6 app names none, so it is never shown a passkey: on an account with a passkey and an app it is asked for the app's code; on one with only passkeys it is asked for a backup code or the recovery phrase, which every account with the step has.
     - The server says it reads that field in every `login/start` reply, for any address, and a client sends it only to a server that says so. A 1.6 server ignores the field if it ever arrives.
+- **Approve on another device.** A device already signed in confirms a sign-in on another one: the new device shows a code of two digits and a word, and the person types it on the other device, or scans the new screen with a phone. Turning it on takes one real approval from another device.
+    - Only a device with a device key and a live session that passed the step approves, and never the device asking. A change to the account (the password, the keys, the step, deletion) is approved only between two devices that have each been on the account for seven days.
+    - Requests are limited by who asks: five a day for sign-ins the server cannot tie to a known device, five a day for each known device, and for changes five a day for a device and ten for the account. The limits do not share room.
+    - A request denied, answered with a wrong code or left unanswered counts as a failed second step, with the notices that go with it.
+    - The server keeps no location for a request and looks none up.
 - **Passkeys and security keys** (WebAuthn). A person adds up to ten, from the web app or, on hushos.com, from the phone apps. Synced passkeys are allowed.
     - **The domain is part of every key.** The RP ID is the host of `APP_ORIGIN`, and a key's answer must come from `APP_ORIGIN` exactly. **Move the instance to another domain and every registered key stops working there.** Nothing can carry them over. People sign in with their authenticator app, a backup code or their recovery phrase, and add their keys again. Changing only the port or the scheme of `APP_ORIGIN` changes the origin too: a key added on `http://localhost:5173` does not answer for `https://localhost`.
     - Keys need a secure context: HTTPS, or `localhost`. On plain HTTP elsewhere the browser offers none, and the page says so.
@@ -2534,6 +2539,50 @@ To roll back to the previous release:
 
 - The schema can stay: the previous release writes none of the new kinds, the wider check refuses nothing it writes, and it never looks at `two_step_key_readers`. This release's worker exits without the migration, and the previous worker does not look for it.
 - Keep `TWO_STEP_KEY` and `TWO_STEP_PREVIOUS_KEY` as they are. Secrets the worker moved to the current key stay readable, since the previous release reads under the same keys. It does not read the `_FILE` forms: put the keys in the variables before rolling back, or it seals under the derived key and cannot open what is under yours.
+
+#### Approve on another device release (`20261113232239_two_step_device`)
+
+This release adds approving on another device as a second step ([Two-step sign-in](#two-step-sign-in)). Nothing changes for an account until it turns the method on. No new setting is needed.
+
+What the migration does:
+
+- Lets `two_step_factors.kind` be `device`, at most one such row per account. The row has no secret and no name. The session guard (`sessions_two_step_guard`) is untouched: it already counts a confirmed method of any kind, so an account whose only method is another device is covered by it.
+- Adds one empty table, `two_step_device_requests`: a request to approve, from the asking device's commitment to its end. It holds no secret and no location. The worker deletes its rows two days after they were made.
+- Replaces the check on `account_security_events.method` with one that also accepts `device`, and the check on `notification_events.kind` with one that also accepts `two-step-device-added`, `two-step-device-removed` and `approval-request`.
+
+Locks:
+
+- The replaced checks take an exclusive lock on `two_step_factors`, `account_security_events` and `notification_events` and read each once; the new table's foreign keys lock `users` and `account_devices` against writes. All are held until drizzle's transaction commits: milliseconds. Each waits at most five seconds (`lock_timeout`); not had in time, the migration fails with nothing applied. Run it again.
+
+What runs where:
+
+- **The web service ends requests whose time is up,** at its readiness checks (`/api/ready`), once a minute at most. A request that a sign-in without a known device left unanswered is a failed second step, and counting it can send the account its notice, which is the web service's to send. Something has to ask `/api/ready` for this, as every health check does; without it the count waits until the account's requests are next read.
+- **Pushes.** A request pings the account's devices through the same relay and Web Push as every notice, with an event id and nothing else. With `NOTIFICATIONS_ENABLED=false` nothing is pinged, and a person opens HushOS on the other device themselves: the request is listed in Account, Your devices.
+- **No location.** The prompt names the device asking and what it asks for. It names no place: the server has no local database to look an address up in, and never asks an outside service.
+
+Containers of the previous release beside the new ones:
+
+- A previous web container lists no other device at a step and takes none as an answer. Someone whose sign-in reaches it is asked for their other methods, a backup code or the phrase, and their next try may reach a new container.
+- It cannot serve a method, a log line or an event of the new kinds: a new client that asks it for an account's methods while one is `device` gets a 500 from it. **Finish the rollout before people turn the method on.**
+- It still enforces the step for an account whose only method is another device: the guard refuses a session that did not pass it.
+
+To roll back to the previous release, run the undo script that ships beside the migration, as the role that migrates:
+
+```bash
+psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f packages/db/drizzle/20261113232239_two_step_device/undo.sql
+```
+
+- It is one transaction. It deletes every account's `device` method, every request, the notification events of the three new kinds, and the method named on log lines that name `device` (the lines stay). An account whose default was another device is offered another kind it has first.
+- **An account whose only method was another device has no method left afterwards:** its step is off, and its backup codes are deleted with it, as when the last method is removed in the app. So while any such account exists the script stops, changing nothing, until the session says it is meant, as the tables' undo does:
+
+    ```bash
+    PGOPTIONS="-c hushos.delete_two_step=yes" psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f packages/db/drizzle/20261113232239_two_step_device/undo.sql
+    ```
+
+    Tell those people first: after it, their password alone signs them in until they turn a method on again.
+
+- `packages/db/src/two-step.migration.test.ts` runs the migration and the script against a migrated database and checks that the schema is exactly what it was before.
+- Run it before the undo scripts of the migrations above it, if those are being taken back too.
 
 #### Passkeys and the default method release (`20261113195154_two_step_passkeys`)
 
