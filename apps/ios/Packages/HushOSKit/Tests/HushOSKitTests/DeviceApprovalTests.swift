@@ -25,7 +25,7 @@ import Testing
  * - the answering phone signs such a request on a press, with nothing typed, never after a scan,
  *   and hands back the code the asking phone expects; no other request is approved untyped;
  * - the answer sheet is held only by an approval or an ending that is out, never by its wait for
- *   the other device, and a cancel while it waits ends the request;
+ *   the other device, and a cancel only closes it: the request stays open, whatever the sheet was doing;
  * - a list that came back for a session since left is not counted in the next account's limit;
  * - `twoStepMethods` names `device`, the settings ask for it, and the settings' row says what is true.
  *
@@ -1172,23 +1172,12 @@ private final class LimitBox: @unchecked Sendable {
 
 /* The answer sheet's own order (`ApprovalAnswer`): what holds it, what a cancel does, and a request that turns the method on. */
 @MainActor @Suite struct ApprovalAnswerTests {
-    /* Whether the request is still the signed-in session's, which a test changes under the sheet. */
-    private final class Standing: @unchecked Sendable {
-        private let lock = NSLock()
-        private var stands = true
-        var value: Bool {
-            get { lock.withLock { stands } }
-            set { lock.withLock { stands = newValue } }
-        }
-    }
-
     private struct Sheet {
         let answer: ApprovalAnswer
         let key: DeviceSigningKey
         /* The notices the app was told to show, and the requests it was told have left the list. */
         let said: Seen<String>
         let finished: Seen<String>
-        let standing: Standing
     }
 
     /* The sheet for the server's request, as the list shows it now. `wire`: the same server behind a gate, where a test holds a request. */
@@ -1199,9 +1188,8 @@ private final class LimitBox: @unchecked Sendable {
         let flow = ApprovalAnswering(prompt: prompt, wire: wire ?? server.wire(), userId: account, seed: key.seed, memory: ApprovalMemory())
         let said = Seen<String>()
         let finished = Seen<String>()
-        let standing = Standing()
-        let around = ApprovalAnswer.Around(say: { words, _ in said.add(words) }, finished: { finished.add($0) }, stands: { _ in standing.value })
-        return Sheet(answer: ApprovalAnswer(flow: flow, around: around, every: .milliseconds(5)), key: key, said: said, finished: finished, standing: standing)
+        let around = ApprovalAnswer.Around(say: { words, _ in said.add(words) }, finished: { finished.add($0) })
+        return Sheet(answer: ApprovalAnswer(flow: flow, around: around, every: .milliseconds(5)), key: key, said: said, finished: finished)
     }
 
     private func looks(_ server: ApprovalServer) -> Int { server.calls.filter { $0.method == "GET" && $0.path == "/api/auth/approvals" }.count }
@@ -1251,8 +1239,9 @@ private final class LimitBox: @unchecked Sendable {
         #expect(server.deniedFor == "not-me")
     }
 
-    @Test func cancellingWhileItWaitsEndsTheRequestAndAnywhereElseSendsNothing() async throws {
-        // Waiting: this phone opened the request, and the other screen would wait on a phone that put it down.
+    @Test func cancellingOnlyClosesTheSheetAndTheRequestStaysOpenWhateverItWasDoing() async throws {
+        // Waiting after a scan: backing out is not refusing. Nothing is ended, so nothing is a failed step,
+        // and the request is still in the list to be answered, or to run out unanswered.
         let server = ApprovalServer()
         _ = server.asked()
         let sheet = try await makeSheet(server)
@@ -1260,14 +1249,9 @@ private final class LimitBox: @unchecked Sendable {
         sheet.answer.scanned(try approvalQr(requestId: server.requestId, commitment: try #require(server.commitment)))
         try await waiting(sheet, server)
         #expect(sheet.answer.cancel())
-        // Closed at once, without waiting for the server; the ending goes by itself.
         #expect(sheet.answer.closed)
-        try await until("ended") { server.deniedFor == "denied" }
-        try await until("left the list") { sheet.finished.values == [server.requestId] }
-        #expect(sheet.said.values == ["Denied"])
-        #expect(server.calls("/approve").isEmpty)
 
-        // Before anything was opened: Cancel only closes, and the request stays in the list.
+        // Before anything was opened: the same.
         let untouched = ApprovalServer()
         _ = untouched.asked()
         let unopened = try await makeSheet(untouched)
@@ -1282,17 +1266,16 @@ private final class LimitBox: @unchecked Sendable {
         revealed.set("revealed")
         try await until("the field") { typing.answer.phase == .typing }
         #expect(typing.answer.cancel() && typing.answer.closed)
-        // Waiting, on a phone that has since left the account (the sheet went with its session): nothing is ended for it.
+        // Waiting, when the sheet goes away by itself (a swipe, or its session ended): the same.
         let left = ApprovalServer()
         _ = left.asked()
         let gone = try await makeSheet(left)
         gone.answer.type()
         try await waiting(gone, left)
-        gone.standing.value = false
         gone.answer.gone()
         #expect(gone.answer.closed)
         try await Task.sleep(for: .milliseconds(40))
-        for (name, server, sheet) in [("unopened", untouched, unopened), ("typing", revealed, typing), ("left", left, gone)] {
+        for (name, server, sheet) in [("waiting", server, sheet), ("unopened", untouched, unopened), ("typing", revealed, typing), ("left", left, gone)] {
             #expect(server.calls("/deny").isEmpty, "\(name)")
             #expect(server.current != "ended", "\(name)")
             #expect(sheet.said.values.isEmpty && sheet.finished.values.isEmpty, "\(name)")

@@ -838,9 +838,10 @@ public final class ApprovalInbox {
  * - Waiting for the other device is not sending. The wait for what it reveals can last minutes
  *   and never holds the sheet: Cancel, a swipe, Deny and This wasn’t me all work through it. Only
  *   an approval or an ending that is out (`sending`) holds it, until its answer is in.
- * - Cancel or a swipe while it waits ends the request (`denied`): this phone opened it, and the
- *   other screen would otherwise wait on a phone that has put it down. Anywhere else they only
- *   close the sheet, and the request stays in the list.
+ * - Cancel or a swipe only closes the sheet, in every phase: nothing is sent, and the request
+ *   stays in the list, to be answered again or to run out (an unanswered one is counted then, by
+ *   the server). Only Deny and This wasn’t me end a request: someone backing out of their own
+ *   approval has not refused anything, and must not set off a failed-step notice.
  * - A request that turns the method on is opened as the sheet comes up, offers no scan and no
  *   field, and is approved on a press once the other device revealed. Its code is then shown here
  *   until Done: nothing closes the sheet meanwhile, and nothing says the request is over.
@@ -862,21 +863,17 @@ public final class ApprovalAnswer {
         case shown(String)
     }
 
-    /* What the app does around the sheet: the notice it shows, the list the request leaves, and whether an error ended the session. */
+    /* What the app does around the sheet: the notice it shows, and the list the request leaves. */
     public struct Around: Sendable {
         let say: @MainActor @Sendable (_ words: String, _ important: Bool) -> Void
         let finished: @MainActor @Sendable (_ id: String) -> Void
-        /* The request is still the signed-in session's: nothing is ended for an account the phone has since left. */
-        let stands: @MainActor @Sendable (_ id: String) -> Bool
 
         public init(
             say: @escaping @MainActor @Sendable (String, Bool) -> Void,
-            finished: @escaping @MainActor @Sendable (String) -> Void = { ApprovalInbox.shared.finished($0) },
-            stands: @escaping @MainActor @Sendable (String) -> Bool = { ApprovalInbox.shared.holds($0) }
+            finished: @escaping @MainActor @Sendable (String) -> Void = { ApprovalInbox.shared.finished($0) }
         ) {
             self.say = say
             self.finished = finished
-            self.stands = stands
         }
     }
 
@@ -1015,8 +1012,8 @@ public final class ApprovalAnswer {
 
     /*
      * Cancel, or a swipe. False when held: an approval or an ending is out, and everything stays.
-     * While the sheet waits for the other device the request is ended (`denied`), by a request of
-     * its own that the sheet going away does not cancel. Anywhere else nothing is sent.
+     * Otherwise the sheet closes and nothing is sent, waiting or not: the request stays in the
+     * list. Ending it is Deny's and This wasn’t me's alone.
      */
     @discardableResult
     public func cancel() -> Bool {
@@ -1026,18 +1023,6 @@ public final class ApprovalAnswer {
         work?.cancel()
         work = nil
         closed = true
-        guard phase == .waiting, around.stands(flow.id) else { return true }
-        let (flow, around) = (flow, around)
-        Task {
-            do { try await flow.end(.denied) } catch is ApprovalProblem {
-                // Over already: it leaves the list all the same.
-            } catch {
-                // Not told: the request stays listed, to be answered or ended from there.
-                return
-            }
-            around.finished(flow.id)
-            around.say(StepWords.denied, false)
-        }
         return true
     }
 
