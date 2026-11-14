@@ -124,9 +124,12 @@ class PasskeysTest {
 
     @Test
     fun aServerThatIsNotTheLinkHostIsNamedNoMethodsAndOffersNoAdd() {
-        assertEquals(listOf("webauthn"), StepNames.named("https://hushos.com", link))
-        assertEquals(emptyList<String>(), StepNames.named("https://drive.example.org", link))
-        assertEquals(emptyList<String>(), StepNames.named("http://localhost:5173", "localhost"))
+        // A key is named only for the linked host; another device is named wherever this phone has a device key to ask it with.
+        assertEquals(listOf("webauthn"), StepNames.named("https://hushos.com", link, device = false))
+        assertEquals(emptyList<String>(), StepNames.named("https://drive.example.org", link, device = false))
+        assertEquals(emptyList<String>(), StepNames.named("http://localhost:5173", "localhost", device = false))
+        assertEquals(listOf("webauthn", "device"), StepNames.named("https://hushos.com", link))
+        assertEquals(listOf("device"), StepNames.named("https://drive.example.org", link))
         val none = TwoStepStatus(on = false, methods = emptyList(), backupCodesLeft = 0, totpFrozen = false)
         assertTrue(none.canAddKey(passkeys = true))
         assertFalse(none.canAddKey(passkeys = false))
@@ -137,7 +140,7 @@ class PasskeysTest {
         val session = serving { 200 to """{"on":true,"methods":[{"id":"k","kind":"webauthn","name":"Desk key","createdAt":"2026-11-14T09:30:00.000Z","lastUsedAt":null,"synced":false}],"backupCodesLeft":10,"totpFrozen":false,"defaultKind":"webauthn"}""" }
         assertFalse(Passkeys.usable(session.origin, link))
         val status = TwoStep.status(session)!!
-        assertEquals("methods=webauthn", asked.single().query)
+        assertEquals("methods=webauthn,device", asked.single().query)
         assertEquals("/api/auth/two-step", asked.single().path)
         assertEquals("Desk key", status.keys.single().shownName)
         assertFalse(status.canAddKey(Passkeys.usable(session.origin, link)))
@@ -441,12 +444,13 @@ class PasskeysTest {
         // Advertised: the field goes, beside `twoStep: 1`, which never changes.
         var (sent, status) = finishing(memory, advertising, true, 200)
         assertEquals(200, status)
-        assertEquals(listOf("webauthn"), sent.single().getJSONArray("twoStepMethods").let { list -> (0 until list.length()).map(list::getString) })
+        // A sign-in always names another device: a phone the account knows asks with its key, and one with none makes it to ask with.
+        assertEquals(listOf("webauthn", "device"), sent.single().getJSONArray("twoStepMethods").let { list -> (0 until list.length()).map(list::getString) })
         assertEquals(1, sent.single().get("twoStep"))
         assertEquals(true, memory.read("https://hushos.com"))
-        // A phone that can't use a key for this server says so with an empty list: the server then never lists one.
+        // A phone that can't use a key for this server leaves the key out: the server then never lists one.
         sent = finishing(memory, advertising, false, 200).first
-        assertEquals(0, sent.single().getJSONArray("twoStepMethods").length())
+        assertEquals(listOf("device"), sent.single().getJSONArray("twoStepMethods").let { list -> (0 until list.length()).map(list::getString) })
         // A release from before passkeys says nothing, and never sees the field.
         sent = finishing(memory, silent, true, 200).first
         assertFalse(sent.single().has("twoStepMethods"))

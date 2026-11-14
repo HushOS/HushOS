@@ -774,7 +774,8 @@ private fun QrDialog(url: String, name: String, password: Boolean, dismiss: () -
     )
 }
 
-private fun qrBitmap(text: String, size: Int): Bitmap {
+/* Also the code an approval's request is shown as (DeviceApprovalUi.kt). */
+internal fun qrBitmap(text: String, size: Int): Bitmap {
     val matrix = com.google.zxing.qrcode.QRCodeWriter().encode(text, com.google.zxing.BarcodeFormat.QR_CODE, size, size,
         mapOf(com.google.zxing.EncodeHintType.MARGIN to 1, com.google.zxing.EncodeHintType.ERROR_CORRECTION to com.google.zxing.qrcode.decoder.ErrorCorrectionLevel.M))
     val pixels = IntArray(size * size) { i -> if (matrix.get(i % size, i / size)) android.graphics.Color.BLACK else android.graphics.Color.WHITE }

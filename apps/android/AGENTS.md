@@ -258,6 +258,25 @@ Design: `docs/devices-design.md` 5; as built: `docs/push-relay-plan.md`, PR 4.
 - R8 keeps `androidx.credentials.playservices` (`proguard-rules.pro`): the provider for phones before Android 14 is found by name.
 - A real ceremony needs a real phone with Play services, a build signed with a certificate `ANDROID_APP_CERT_SHA256` names, and hushos.com as the server. An emulator, a debug build or a self-hosted server can't run one. Not yet run on a device: the sheet itself, a USB or NFC key, a synced passkey, and what the sheet does across a rotation.
 
+#### Approve on another device
+
+`docs/two-step-design.md` 12 ("What was built (item 2)"). `data/DeviceApproval.kt` holds the order of the requests and every check; `ui/DeviceApprovalUi.kt` the panel, the list, the banner and the sheet. The cryptography and every reply's reading are the core's. The twin of iOS's two `DeviceApproval.swift` files.
+
+- Asking (`DeviceAsk`): the commitment goes first; the key and nonce are revealed only on `opened`, once; the step is answered only with an approved request (`answered`). `step-pending` keeps waiting and is never an error or a wrong answer (`StepOutcome.after`, `StepUp.failed`).
+    - Nothing is asked without a press: the step's button (Use another device), choosing it under Use another way, or Ask again. Opening a screen or a form never sends a prompt. One request at a time (`DeviceAskModel.phase` is idle or ended before another is made).
+    - In a form the other device is asked from the step's own row (`StepFields(inlineAsk = true)`); the form's own button then sends the change with the approved request (`StepDraft.approved`, good for its own token only).
+    - The key: `StepDeviceKey`. A sign-in that sent its device proof asks with that key; one that sent none makes a key before it has a session (`Auth.pending`) and registers with it (`Auth.registerDevice(made =)`); one that could not be registered is dropped, and the next launch registers a fresh one. A change asks with the stored key (`DeviceApprovals.ownKey`, `DriveViewModel.changeAsk`), and names `device` only when there is one (`TwoStep.challenge(device =)`).
+    - `twoStepMethods` always names `device` at sign-in (`Auth.finishNamed`).
+    - `DeviceAskModel` runs in the view model's scope: the sign-in's is `DriveViewModel.stepAsk` (let go by `dropStep`), a form's is its `StepUpHolder.ask` (let go when `StepUpFields` is retired, not on a rotation), the settings' is `setupAsk`.
+- Answering (`ApprovalAnswering`): holds the request as first listed, before this phone opened it. A reveal that is not that commitment, or a scanned code for another request or commitment, ends it (`mismatch`) with nothing signed. Only the exact typed code is signed; anything else ends it (`wrong-code`). The account id signed over is the phone's own, never the list reply's.
+    - `ApprovalInbox` (`DriveViewModel.approvals`) reads the list when the app comes to the front (`resumed`), at sign-in, every five seconds while Account is on screen, when Devices opens, and when a push of kind `approvalRequest` is fetched (`ApprovalPushes`, from `PushNotifications.notice`). Home's banner and Devices' rows open `ApprovalSheet`, drawn by `Main`; what the sheet holds is `ApprovalAnswer`, in the view model's scope, so a rotation keeps it.
+    - Scanning is the camera the recovery kit is scanned with (`QrCamera`: CameraX frames decoded by ZXing on the phone, the CAMERA permission asked on the press); the QR code shown is ZXing's too (`qrBitmap`). No new dependency. A phone without a camera, or without the permission, types.
+    - `PromptLimit`: five prompts a day for each class, counted by the core, kept in `approval-prompts.json` (an account file, wiped with the account).
+- Settings: `TwoStepStatus.showsDevice`, `deviceValue`, `canTurnOnDevice`; Turn on is `DeviceMethodScreen` (`DriveViewModel.startDevice`, `askDeviceSetup`, `TwoStepFlow.device`; no offer to remove other devices), Turn off is `RemoveScreen`. The flow is pending while the confirmation is out, since it may make the backup codes.
+    - `canMakeDefault` is offered only on a kind the account has.
+- Tests: `DeviceApprovalTest` (an in-memory server that can be made to lie, `ApprovalServer`; the web's fixture `web-device-approval.json`), `DeviceApprovalUiTest` (`DeviceAskModel`, `ApprovalAnswer`).
+- Not run on an emulator or a device, or against a live server: the sign-in step screen, the forms' row and the settings row in place, the answer sheet, the camera scan, and the push.
+
 ### Account and plan
 
 - Account shows name, plan and storage, read only, with no way to buy.

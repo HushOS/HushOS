@@ -418,6 +418,8 @@ object PushNotifications {
             if (reply.status != 200) return pushNoticeFallback()
             val event = pushEventRead(reply.text, id)
             markSeen(context, listOf(id))
+            // Another device is asking this one to confirm it's you: an app that is open reads its requests now (ApprovalPushes).
+            if (event.kind == PushEventKind.APPROVAL_REQUEST) ApprovalPushes.arrived()
             pushNotice(event, sender(context, event, session))
         }.getOrElse { pushNoticeFallback() }
     }

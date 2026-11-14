@@ -91,6 +91,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.repeatOnLifecycle
 import com.hushos.app.data.PlanDisplay
 import com.hushos.tokens.AlpineRadius
 import com.hushos.tokens.AlpineSpace
@@ -141,6 +142,14 @@ fun AccountScreen(model: DriveViewModel, state: DriveState) {
         }
     }
     LaunchedEffect(Unit) { model.refreshStorage(); model.refreshAccount(); model.refreshUser() }
+    // Requests from another device to confirm it's you: looked for every five seconds while Account (Devices included)
+    // is on screen and the app is in front. Nothing looks in the background.
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(lifecycle) {
+        lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.RESUMED) {
+            while (true) { model.approvals.loadNow(); kotlinx.coroutines.delay(5_000) }
+        }
+    }
     // Two-step sign-in's row: kept as it was when the server can't be asked, gone when it says it has two-step off.
     var twoStep by remember { mutableStateOf<com.hushos.app.data.TwoStepStatus?>(null) }
     var twoStepLook by remember { mutableStateOf(0) }
