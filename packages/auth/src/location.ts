@@ -39,16 +39,37 @@ function decoded(value: string) {
 }
 
 /*
- * A place name fit to show: letters, marks, digits, spaces and the punctuation place names
- * carry, up to 60 characters. Anything else is no name: these words reach another device's
- * screen, so nothing a header could smuggle (a line break, a direction mark, a sentence) does.
+ * A value with the shape of a place name, or nothing. These words reach another device's
+ * screen beside a request to approve, so a value is shown only when it is:
+ * - letters, each with at most two combining marks (no stack of marks drawn over the lines
+ *   around it), and no digits or symbols;
+ * - joined by single spaces, hyphens and apostrophes, each between two letters;
+ * - with a period only to close an abbreviation of one to three letters ("St. John’s",
+ *   "D.C."), never to end a word and start a sentence, and at most two of them;
+ * - at most 40 characters ("Dadra and Nagar Haveli and Daman and Diu" is the longest region
+ *   Cloudflare names).
+ * Anything else is dropped whole, never trimmed to fit.
+ *
+ * What this does not do is tell a place from other words of the same shape: whoever can write
+ * the header can write "Head Office" there. That is the proxy's word, and the operator's that
+ * the proxy is the only way in (docs/self-hosting.md).
  */
-const PLACE = /^[\p{L}\p{M}\p{N}][\p{L}\p{M}\p{N} .'’()\-/]{0,59}$/u;
+const PLACE_MAX = 40;
+const LETTER = String.raw`\p{L}\p{M}{0,2}`;
+const PLACE = new RegExp(
+    String.raw`^${LETTER}(?:${LETTER}|[ '’-](?=\p{L})|\.(?=$|[ -]?\p{L}))*$`,
+    'u',
+);
+/* A period after a fourth letter in a row closes a word, not an abbreviation. */
+const SENTENCE = new RegExp(String.raw`(?:${LETTER}){4}\.`, 'u');
 function place(value: string | null) {
     if (!value) return null;
     // Only runs of plain spaces are folded: a line break or a tab is not a space in a name.
     const name = decoded(value).replace(/ {2,}/g, ' ');
-    return PLACE.test(name) ? name : null;
+    // Marks are counted as they are written out, one by one: composed, "ó" would hide its first.
+    const spelled = name.normalize('NFD');
+    if (name.length > PLACE_MAX || !PLACE.test(spelled) || SENTENCE.test(spelled)) return null;
+    return (name.match(/\./g)?.length ?? 0) > 2 ? null : name;
 }
 
 const regions = new Intl.DisplayNames(['en'], { type: 'region', fallback: 'none' });
