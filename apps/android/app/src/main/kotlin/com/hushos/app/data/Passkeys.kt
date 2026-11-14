@@ -124,8 +124,8 @@ interface StepAdverts {
  * server that never advertised it.
  */
 object StepNames {
-    /* What this phone names for `origin`: a passkey or security key only where it can use one. */
-    fun named(origin: String, linkHost: String = BuildConfig.LINK_HOST): List<String> = stepMethodsNamed(Passkeys.usable(origin, linkHost))
+    /* What this phone names for `origin`: a passkey or security key only where it can use one, and another device only with a device key to ask it with (`device`). */
+    fun named(origin: String, linkHost: String = BuildConfig.LINK_HOST, device: Boolean = true): List<String> = stepMethodsNamed(Passkeys.usable(origin, linkHost), device)
 
     /*
      * `login/finish`. `advertised` is what this sign-in's own `login/start` reply said. A rolling
@@ -161,9 +161,14 @@ object StepNames {
  * it (the step's own challenge) and only where this phone can use one: listed without either, it is
  * left out, and the rest stay in the server's order.
  */
-fun StepChallenge.offered(passkeys: Boolean): StepChallenge =
-    if (StepMethod.WEBAUTHN in methods && (keyRequest == null || !passkeys)) copy(methods = methods.filter { it != StepMethod.WEBAUTHN }, keyRequest = null)
-    else this
+fun StepChallenge.offered(passkeys: Boolean, device: Boolean = true): StepChallenge {
+    val keys = if (StepMethod.WEBAUTHN in methods && (keyRequest == null || !passkeys)) copy(methods = methods.filter { it != StepMethod.WEBAUTHN }, keyRequest = null) else this
+    // Another device is offered only on a phone with a device key to ask it with. Left out when it was the first way,
+    // the account's usual way is not on offer here, and the step says so (StepNote), never why.
+    return if (StepMethod.DEVICE in keys.methods && !device)
+        keys.copy(methods = keys.methods.filter { it != StepMethod.DEVICE }, defaultUnavailable = keys.defaultUnavailable || keys.methods.first() == StepMethod.DEVICE)
+    else keys
+}
 
 /*
  * The one line a step says above its fields when the server left something out
@@ -207,13 +212,27 @@ data class SignInStep(
 
     fun typed(next: StepDraft) = copy(draft = next, fieldError = "", lost = null)
 
-    /* The one button's words. A key has no field, so its button says what the press does. */
-    fun button(busy: Boolean): String = when {
+    /* The press that asks another device: what the last answer came to is no longer said, as after any other press. */
+    fun asking() = copy(fieldError = "", notice = "", lost = null)
+
+    /*
+     * The one button's words. A key has no field, so its button says what the press does; so does another
+     * device's, which asks it, waits for it, or asks again (`ask`: where the request to it stands).
+     */
+    fun button(busy: Boolean, ask: AskPhase = AskPhase.Idle): String = when {
         busy -> "Checking"
         lost != null -> "Try again"
         shown == StepMethod.WEBAUTHN -> "Use your passkey"
+        shown == StepMethod.DEVICE -> when {
+            ask is AskPhase.Ended -> StepWords.ASK_AGAIN
+            ask is AskPhase.Idle -> "Use another device"
+            else -> StepWords.ASK_WAITING
+        }
         else -> "Continue"
     }
+
+    /* Whether the one button can be pressed: not while an answer is out, and not while another device is being waited for. */
+    fun pressable(busy: Boolean, ask: AskPhase = AskPhase.Idle): Boolean = !busy && !(shown == StepMethod.DEVICE && lost == null && (ask.out || ask is AskPhase.Approved))
 
     /* What a press came to: an answer to send, or the step as it stays (with why, if there is a why). */
     sealed class Pressed {
@@ -243,8 +262,11 @@ data class SignInStep(
         is Pressed.Send -> pressed.step.also { send(it, pressed.answer) }
     }
 
-    /* What the server made of `answer` (null: signed in, or the step is over and the view model has moved on). */
-    fun after(outcome: StepOutcome?, answer: StepAnswer): SignInStep = when (outcome) {
+    /*
+     * What the server made of `answer` (null outcome: signed in, or the step is over and the view model has moved on).
+     * `answer` is null when nothing was sent: another device could not be asked at all.
+     */
+    fun after(outcome: StepOutcome?, answer: StepAnswer?): SignInStep = when (outcome) {
         is StepOutcome.Again -> copy(lost = null, methods = outcome.methods, fieldError = if (outcome.field) outcome.message else fieldError, notice = if (outcome.field) notice else outcome.message)
         is StepOutcome.Retry -> copy(notice = outcome.message, lost = answer)
         is StepOutcome.Over, null -> copy(lost = null)

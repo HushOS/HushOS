@@ -459,6 +459,8 @@ private fun Main(model: DriveViewModel, state: DriveState) {
     // The family sheets outlive what started them: the invitation (from a link) and a member's check (from a row).
     model.families.invitation?.let { token -> InvitationSheet(model, state, token) { model.families.invitation = null } }
     model.families.checking?.let { check -> MemberCheckSheet(model, check) { model.families.checking = null } }
+    // Answering another device's request, from Home's banner or Devices' row.
+    model.approvals.answering?.let { answer -> ApprovalSheet(model.approvals, answer) }
     BackgroundSheet(active = state.queued.any { !it.done })
     }
 }

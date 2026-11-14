@@ -32,7 +32,11 @@ import org.json.JSONObject
  */
 
 /* A sign-in stopped at its second step: the step, and what the password opened, kept in memory until the answer brings the envelope. */
-class PendingSignIn(val origin: String, val email: String, val challenge: StepChallenge, internal val exportKey: ByteArray, internal val received: Long = uptime()) {
+class PendingSignIn(
+    val origin: String, val email: String, val challenge: StepChallenge, internal val exportKey: ByteArray, internal val received: Long = uptime(),
+    /* The device key this sign-in asks another device with (DeviceApproval.kt); null when the step lists no other device, or no key could be had. */
+    val deviceKey: StepDeviceKey? = null,
+) {
     /*
      * How long until this is dropped, with what the password opened (zero or less: now): the server's
      * five minutes and one more, as the web allows, counted from when the step arrived. Nothing can
@@ -192,6 +196,8 @@ data class TwoStepFlow(
     val enrolment: TotpEnrolment? = null,
     /* The pending passkey or security key: what the phone's sheet is asked, until a key answers or the server refuses one. */
     val creation: KeyCreation? = null,
+    /* The pending Approve on another device: its one approval is asked for from here, until it is confirmed or the request fails. */
+    val device: DeviceEnrolment? = null,
     /* Backup codes, shown once: kept until the person has said they are done with them, whatever page they were on when the codes arrived. */
     val codes: List<String>? = null,
     /* The codes replace an earlier set (New codes), rather than come with turning the step on. */
@@ -254,12 +260,34 @@ data class TwoStepFlow(
     /* New codes, or why not. A lost reply may have replaced the old set: the count is read again. */
     fun newCodes(fresh: List<String>) = copy(pending = false, codes = fresh, codesReplace = true)
 
-    /* A method removed (`on`: whether the step is still on; `app`: it was the authenticator app, not a key). */
-    fun removed(on: Boolean, app: Boolean = true) = copy(pending = false, finished = when {
-        !on -> "Two-step sign-in is off."
-        app -> "Authenticator app removed."
-        else -> "Passkey or security key removed."
-    })
+    /* A method removed (`on`: whether the step is still on; `app`: it was the authenticator app, not a key; `device`: it was Approve on another device). */
+    fun removed(on: Boolean, app: Boolean = true, device: Boolean = false) =
+        copy(pending = false, finished = TwoStepStatus.removedWords(if (device) TwoStepStatus.DEVICE else if (app) TwoStepStatus.TOTP else TwoStepStatus.WEBAUTHN, on))
+
+    /* The pending Approve on another device: another device is asked from here (Continue was the press). */
+    fun deviceStarted(started: DeviceEnrolment) = copy(pending = false, device = started)
+
+    /*
+     * What confirming it did, once another device approved. `first`: the account had no method, so this turns the
+     * step on, which always comes back with the codes (kept before anything else is done). "Added" for a step that
+     * was being turned on is not the server's answer to that: nothing is claimed, and the settings are read again.
+     */
+    fun deviceConfirmed(confirmed: TwoStep.DeviceConfirmed, first: Boolean): TwoStepFlow = when (confirmed) {
+        is TwoStep.DeviceConfirmed.TurnedOn -> copy(pending = false, device = null, codes = confirmed.backupCodes)
+        TwoStep.DeviceConfirmed.Added ->
+            if (first) copy(pending = false, device = null, error = StepWords.LOST_TURNED_ON, reread = reread + 1)
+            else copy(pending = false, device = null, finished = StepWords.DEVICE_ON)
+    }
+
+    /*
+     * The server would not ask another device, or the confirmation failed: back to the password with why. Any
+     * failure may hide a method that was turned on, so the settings are read again.
+     */
+    fun deviceFailed(failure: Throwable): TwoStepFlow = when (failure) {
+        // The session ended: sign-in is on screen, and says so.
+        is NotAuthenticated -> copy(pending = false, device = null)
+        else -> copy(pending = false, device = null, error = Problems.say(failure, Problems.SERVER), reread = reread + 1)
+    }
 
     /* The pending key: the phone's sheet is asked from here, on the press that adds it. */
     fun keyStarted(key: KeyCreation) = copy(pending = false, creation = key)
@@ -321,6 +349,7 @@ data class StepAnswer(val token: String, val proof: StepProof) {
         is StepProof.Backup -> StepMethod.BACKUP
         is StepProof.Phrase -> StepMethod.PHRASE
         is StepProof.Webauthn -> StepMethod.WEBAUTHN
+        is StepProof.Device -> StepMethod.DEVICE
     }
 
     /* The core writes the JSON, so both phones send the same bytes. */
@@ -385,6 +414,37 @@ object StepWords {
     const val TOO_LONG = "This took too long. Please try again."
     /* A step that ended with nothing said. */
     const val OVER = "This sign-in timed out. Enter your password again."
+    /*
+     * Approve on another device (docs/two-step-design.md 12), on the device that asks: what it says
+     * before a device opened its request, over the code once one has, while it waits, and when the
+     * request ended without an approval. Never who ended it.
+     */
+    const val ASK_OPEN = "Open HushOS on another device and choose Answer."
+    const val ASK_CODE = "Code for your other device"
+    const val ASK_WAITING = "Waiting for your other device"
+    const val ASK_AGAIN = "Ask again"
+    const val ASK_REFUSED = "Your other device didn’t approve this."
+    const val ASK_REPLACED = "Another sign-in replaced this request."
+    const val ASK_OVER = "This request timed out."
+    fun ended(why: com.hushos.core.ApprovalEnded): String = when (why) {
+        com.hushos.core.ApprovalEnded.REPLACED -> ASK_REPLACED
+        com.hushos.core.ApprovalEnded.OVER -> ASK_OVER
+        com.hushos.core.ApprovalEnded.REFUSED -> ASK_REFUSED
+    }
+    /* On the device that answers. */
+    const val APPROVAL_WAITING = "Another device is asking to confirm it’s you"
+    const val APPROVAL_ANSWER = "Answer"
+    const val APPROVAL_CODE_FIELD = "Code on the other device"
+    const val APPROVED = "Approved"
+    const val DENIED = "Denied"
+    const val APPROVAL_MISMATCH = "The other device didn’t match its request, so nothing was approved."
+    const val APPROVAL_WRONG_CODE = "That code didn’t match, so nothing was approved."
+    /* A request that left this phone's list while it was being answered: the server's own words for one that is over. */
+    const val APPROVAL_OVER = "This request is over."
+    /* Settings. */
+    const val DEVICE_ON = "Approve on another device is on"
+    const val DEVICE_OFF = "Approve on another device is off"
+    val LOST_DEVICE_ON = lost("approving on another device was turned on")
 }
 
 /* The server refused a step, or a request that needed one, in its own words. */
@@ -417,12 +477,14 @@ sealed class StepOutcome {
          * - a spent budget: the budget is one for the app's codes and the backup codes, so both go together, and
          *   only what it does not cover stays (a passkey or security key, and the phrase), as the web's `methodsAfter`;
          * - a method the server cannot check: only that one, the one that was `tried`. The app's secret and
-         *   the backup codes can sit under different server keys, so one failing says nothing of the other.
+         *   the backup codes can sit under different server keys, so one failing says nothing of the other;
+         * - no other device to ask, one that is busy, or one asked too often today: only the other device.
          */
         fun left(methods: List<StepMethod>, refusal: StepRefusal, tried: StepMethod?): List<StepMethod> = when (refusal) {
             StepRefusal.FROZEN -> methods.filter { it != StepMethod.TOTP }
             StepRefusal.LIMITED -> methods.filter { it == StepMethod.WEBAUTHN || it == StepMethod.PHRASE }
             StepRefusal.UNAVAILABLE -> methods.filter { it != tried }
+            StepRefusal.DEVICE_UNAVAILABLE, StepRefusal.DEVICE_BUSY, StepRefusal.DEVICE_LIMITED -> methods.filter { it != StepMethod.DEVICE }
             else -> methods
         }
 
@@ -435,9 +497,14 @@ sealed class StepOutcome {
                 when (error.refusal) {
                     StepRefusal.WRONG -> Again(message, true, methods)
                     // Nothing changed; what the refusal was about is withdrawn, and the rest stays offered.
-                    StepRefusal.FROZEN, StepRefusal.LIMITED, StepRefusal.UNAVAILABLE -> Again(message, false, left(methods, error.refusal, tried))
+                    StepRefusal.FROZEN, StepRefusal.LIMITED, StepRefusal.UNAVAILABLE, StepRefusal.DEVICE_UNAVAILABLE, StepRefusal.DEVICE_BUSY, StepRefusal.DEVICE_LIMITED ->
+                        Again(message, false, left(methods, error.refusal, tried))
                     // The address's own limit: nothing about the step was looked at, and nothing is taken away.
                     StepRefusal.BUSY -> Again(message, false, methods)
+                    // The other device has not approved yet: nothing was counted, nothing failed, and nothing is said.
+                    StepRefusal.PENDING -> Again("", false, methods)
+                    // A request to another device ended. The step's token is as it was, and every way is still there.
+                    StepRefusal.DEVICE_MISMATCH, StepRefusal.APPROVAL_OVER, StepRefusal.APPROVAL_TAKEN, StepRefusal.APPROVAL_REFUSED -> Again(message, false, methods)
                     StepRefusal.EXPIRED, StepRefusal.REQUIRED, StepRefusal.SETUP_REQUIRED, StepRefusal.UPDATE_REQUIRED, StepRefusal.OTHER ->
                         Over(message.ifBlank { StepWords.OVER })
                 }
@@ -456,7 +523,11 @@ sealed class StepOutcome {
  * What a person has typed for a step: one field for each method, so switching loses nothing. A
  * passkey or security key has no field: its answer is made when the step is sent (`proved`).
  */
-data class StepDraft(val method: StepMethod, val totp: String = "", val backup: String = "", val phrase: String = "") {
+data class StepDraft(
+    val method: StepMethod, val totp: String = "", val backup: String = "", val phrase: String = "",
+    /* Nothing is typed for another device: this is the request it approved, once it has. */
+    val approved: ApprovedRequest? = null,
+) {
     /* The method shown: the chosen one while it is still offered, else the first that is; null when none is. */
     fun shown(methods: List<StepMethod>): StepMethod? = if (method in methods) method else methods.firstOrNull()
 
@@ -468,6 +539,8 @@ data class StepDraft(val method: StepMethod, val totp: String = "", val backup: 
         StepMethod.BACKUP -> if (backupCodeNormalize(backup) != null) null else "Enter one of your backup codes, 10 characters."
         StepMethod.PHRASE -> words(phrase).size.let { count -> if (count == 24) null else "Enter all 24 words of your recovery phrase. $count so far." }
         StepMethod.WEBAUTHN -> null
+        // Nothing is typed here either: there is an answer once the other device approved.
+        StepMethod.DEVICE -> if (approved == null) StepWords.ASK_WAITING else null
     }
 
     /*
@@ -491,6 +564,9 @@ data class StepDraft(val method: StepMethod, val totp: String = "", val backup: 
             val signing = challenge.phrase ?: throw AuthFailure(StepWords.CANNOT_ANSWER)
             StepAnswer(challenge.token, StepProof.Phrase(twoStepPhraseSign(words(phrase).joinToString(" "), signing.wrappingSalt, signing.userId, challenge.token)))
         }
+        // Only the request approved for this very token: one made for an earlier step answers nothing.
+        StepMethod.DEVICE -> approved?.takeIf { it.token == challenge.token }?.let { StepAnswer(challenge.token, StepProof.Device(it.requestId)) }
+            ?: throw AuthFailure(StepWords.ASK_WAITING)
     }
 
     companion object {
@@ -528,13 +604,23 @@ data class StepUp(
     val shown: StepMethod? get() = draft.shown(methods)
     /* What to show under the field: the field's own complaint once tried, else the server's words. */
     val problem: String get() = shown?.takeIf { tried }?.let(draft::problem) ?: error
+    /* Whether another device approved a request for the step as it stands now. */
+    val deviceApproved: Boolean get() = challenge != null && draft.approved?.token == challenge.token
 
     fun typed(next: StepDraft) = copy(draft = next, error = "")
 
     fun take(next: StepChallenge?, keep: Boolean = false): StepUp {
         val offered = next?.methods.orEmpty()
-        return copy(challenge = next, methods = offered, tried = false, draft = if (keep && next != null) draft else StepDraft.of(offered))
+        val kept = if (keep && next != null) draft else StepDraft.of(offered)
+        // What was typed is kept for the new step; an approval is not: it was for the token before.
+        return copy(challenge = next, methods = offered, tried = false, draft = if (kept.approved?.token != next?.token) kept.copy(approved = null) else kept)
     }
+
+    /* Another device approved `request`: taken only for the step as it stands, and the form's own button then sends it. */
+    fun approved(request: ApprovedRequest): StepUp = if (request.token != challenge?.token) this else copy(draft = draft.copy(approved = request), error = "")
+
+    /* Something the step's own fields say that no refusal carried (the other device could not be asked at all). */
+    fun say(words: String) = copy(error = words)
 
     /* What `prove` found: nothing to carry, an answer, or a field that is not ready (the step says why). */
     sealed class Proof {
@@ -582,8 +668,13 @@ data class StepUp(
             StepRefusal.EXPIRED -> Next.RENEW to copy(error = message)
             StepRefusal.WRONG -> Next.AGAIN to copy(error = message, tried = false)
             // The method on screen is the one the refused change carried.
-            StepRefusal.FROZEN, StepRefusal.LIMITED, StepRefusal.UNAVAILABLE ->
+            StepRefusal.FROZEN, StepRefusal.LIMITED, StepRefusal.UNAVAILABLE, StepRefusal.DEVICE_UNAVAILABLE, StepRefusal.DEVICE_BUSY, StepRefusal.DEVICE_LIMITED ->
                 Next.AGAIN to copy(error = message, tried = false, methods = StepOutcome.left(methods, failure.refusal, shown))
+            // The approval had not landed where the change went: nothing was counted and nothing is said. The wait goes on.
+            StepRefusal.PENDING -> Next.AGAIN to copy(error = "", tried = false, draft = draft.copy(approved = null))
+            // The request to the other device ended; the step itself still stands, and can be asked again.
+            StepRefusal.DEVICE_MISMATCH, StepRefusal.APPROVAL_OVER, StepRefusal.APPROVAL_TAKEN, StepRefusal.APPROVAL_REFUSED ->
+                Next.AGAIN to copy(error = message, tried = false, draft = draft.copy(approved = null))
             StepRefusal.SETUP_REQUIRED, StepRefusal.UPDATE_REQUIRED, StepRefusal.BUSY, StepRefusal.OTHER -> Next.NOT_STEP to this
         }
     }
@@ -594,8 +685,15 @@ data class StepUp(
  * paused for new devices, and which kind is asked for first (`defaultKind`: "webauthn", "totp",
  * "device", or null).
  */
-data class TwoStepStatus(val on: Boolean, val methods: List<Method>, val backupCodesLeft: Int, val totpFrozen: Boolean, val defaultKind: String? = null) {
-    /* `kind`: "totp", or "webauthn" for a passkey or security key. `synced`: a passkey a password manager keeps. */
+data class TwoStepStatus(
+    val on: Boolean, val methods: List<Method>, val backupCodesLeft: Int, val totpFrozen: Boolean, val defaultKind: String? = null,
+    /*
+     * Whether this phone could turn on Approve on another device now: another of the account's devices could
+     * approve it. Null from a server that does not know the method, where its row is not shown at all.
+     */
+    val otherDevice: Boolean? = null,
+) {
+    /* `kind`: "totp", "webauthn" for a passkey or security key, or "device" for Approve on another device. `synced`: a passkey a password manager keeps. */
     data class Method(val id: String, val kind: String, val name: String?, val createdAt: String?, val lastUsedAt: String?, val synced: Boolean = false) {
         val isApp: Boolean get() = kind == TOTP
 
@@ -616,15 +714,27 @@ data class TwoStepStatus(val on: Boolean, val methods: List<Method>, val backupC
     /* The account's passkeys and security keys, in the server's order. */
     val keys: List<Method> get() = methods.filter { it.kind == WEBAUTHN }
 
+    /* Approve on another device, when it is on. */
+    val device: Method? get() = methods.firstOrNull { it.kind == DEVICE }
+
     /* The account's only method is not removed: turning it off is turning the step off. */
     fun last(method: Method): Boolean = methods.size == 1 && methods.single().id == method.id
-    fun removeWords(method: Method): String = if (last(method)) "Turn off" else "Remove"
+    /* Approve on another device is turned off, never "removed", whether or not it is the last method. */
+    fun removeWords(method: Method): String = if (last(method) || method.kind == DEVICE) "Turn off" else "Remove"
 
-    /* Which kind is asked for first is a choice only with both kinds. */
-    private val choosing: Boolean get() = on && app != null && keys.isNotEmpty()
-    /* The Default badge sits on the kind `defaultKind` names, and Make default on the other; neither with one kind. */
+    /* Whether Approve on another device has a row here: where the server knows the method. */
+    val showsDevice: Boolean get() = device != null || otherDevice != null
+    /* The row's value: On, Off, or that it needs a device this account does not have signed in. */
+    val deviceValue: String get() = if (device != null) "On" else if (otherDevice == false) "Needs another device" else "Off"
+    /* Turn on is offered only while another device could approve it, on a phone with a device key of its own to ask with. */
+    fun canTurnOnDevice(ownKey: Boolean): Boolean = device == null && otherDevice == true && ownKey
+
+    /* Which kind is asked for first is a choice only with more than one kind. */
+    private val choosing: Boolean get() = on && listOf(keys.isNotEmpty(), app != null, device != null).count { it } > 1
+    /* The Default badge sits on the kind `defaultKind` names, and Make default on the others; neither with one kind. */
     fun isDefault(kind: String): Boolean = choosing && defaultKind == kind
-    fun canMakeDefault(kind: String): Boolean = choosing && defaultKind != kind
+    /* Only a kind the account has can be made the default: never a row that says "Not added" or "Off". */
+    fun canMakeDefault(kind: String): Boolean = choosing && defaultKind != kind && methods.any { it.kind == kind }
 
     /* Add is offered only where this phone can use a key for this server (`passkeys`), and below the limit. */
     fun canAddKey(passkeys: Boolean): Boolean = passkeys && keys.size < Passkeys.LIMIT
@@ -650,9 +760,22 @@ data class TwoStepStatus(val on: Boolean, val methods: List<Method>, val backupC
     companion object {
         const val TOTP = "totp"
         const val WEBAUTHN = "webauthn"
+        const val DEVICE = "device"
 
         /* A kind's name, as the settings' rows and the default's line say it. */
-        fun kindWords(kind: String): String = if (kind == WEBAUTHN) "Passkey or security key" else "Authenticator app"
+        fun kindWords(kind: String): String = when (kind) {
+            WEBAUTHN -> "Passkey or security key"
+            DEVICE -> "Approve on another device"
+            else -> "Authenticator app"
+        }
+
+        /* What removing a method of `kind` says once the server has (`on`: whether the step is still on): the last one turns the step off. */
+        fun removedWords(kind: String, on: Boolean): String = when {
+            !on -> "Two-step sign-in is off."
+            kind == DEVICE -> StepWords.DEVICE_OFF
+            kind == WEBAUTHN -> "Passkey or security key removed."
+            else -> "Authenticator app removed."
+        }
 
         /* What changing the default says once the server has. */
         fun defaultSaid(kind: String): String = "${kindWords(kind)} is now the default."
@@ -668,7 +791,8 @@ data class TwoStepStatus(val on: Boolean, val methods: List<Method>, val backupC
             if (json.opt("on") !is Boolean) return null
             val rows = json.optJSONArray("methods") ?: return null
             val methods = (0 until rows.length()).mapNotNull { index -> rows.optJSONObject(index)?.let(::method) }
-            return TwoStepStatus(json.getBoolean("on"), methods, json.optInt("backupCodesLeft"), json.optBoolean("totpFrozen"), json.opt("defaultKind") as? String)
+            // The JSON booleans themselves: a 1 is not a yes.
+            return TwoStepStatus(json.getBoolean("on"), methods, json.optInt("backupCodesLeft"), json.optBoolean("totpFrozen"), json.opt("defaultKind") as? String, json.opt("otherDevice") as? Boolean)
         }
     }
 }
@@ -700,6 +824,7 @@ data class SecurityEvent(val id: String, val kind: String, val method: String?, 
             "backup" -> "a backup code"
             "phrase" -> "your recovery phrase"
             "webauthn" -> "a passkey or security key"
+            "device" -> "another device"
             else -> null
         }
         return when (kind) {
@@ -711,11 +836,11 @@ data class SecurityEvent(val id: String, val kind: String, val method: String?, 
             "two-step-on" -> "Two-step sign-in turned on"
             "two-step-off" -> "Two-step sign-in turned off"
             // Said by the kind of method. An app is "added", not "replaced": with keys, one can be added beside a method too.
-            "method-added" -> when (method) { "webauthn" -> "Passkey or security key added"; "totp" -> "Authenticator app added"; else -> "Second-step method added" }
-            "method-removed" -> when (method) { "webauthn" -> "Passkey or security key removed"; "totp" -> "Authenticator app removed"; else -> "Second-step method removed" }
+            "method-added" -> when (method) { "webauthn" -> "Passkey or security key added"; "totp" -> "Authenticator app added"; "device" -> "Approve on another device turned on"; else -> "Second-step method added" }
+            "method-removed" -> when (method) { "webauthn" -> "Passkey or security key removed"; "totp" -> "Authenticator app removed"; "device" -> "Approve on another device turned off"; else -> "Second-step method removed" }
             "backup-codes-made" -> "New backup codes made"
             // The kind the default moved to is the line's method.
-            "default-changed" -> when (method) { "webauthn" -> "Default changed to passkey or security key"; "totp" -> "Default changed to authenticator app"; else -> "Default changed" }
+            "default-changed" -> when (method) { "webauthn" -> "Default changed to passkey or security key"; "totp" -> "Default changed to authenticator app"; "device" -> "Default changed to another device"; else -> "Default changed" }
             "key-counter" -> "A security key was refused: it may have been copied"
             else -> "Security change"
         }
@@ -771,14 +896,15 @@ object TwoStep {
      * (`twoStepMethods`) to a server that reads the field, by the rule in `StepNames.atChange`, and a
      * passkey or security key is offered only where this phone can use one (`offered`).
      */
-    fun challenge(at: Shared.Session, purpose: StepPurpose, adverts: StepAdverts, passkeys: Boolean = Passkeys.usable(at.origin)): StepChallenge? {
+    fun challenge(at: Shared.Session, purpose: StepPurpose, adverts: StepAdverts, passkeys: Boolean = Passkeys.usable(at.origin), device: Boolean = false): StepChallenge? {
+        // Another device is named only by a phone that holds this account's device key (`device`): it asks with that key.
         val reply = StepNames.atChange<Auth.SessionReply>(adverts, at.origin, { it.status }) { named ->
-            Auth.requestAt(at, "/api/auth/two-step/challenge", challengeBody(purpose, if (named) com.hushos.core.stepMethodsNamed(passkeys) else null))
+            Auth.requestAt(at, "/api/auth/two-step/challenge", challengeBody(purpose, if (named) com.hushos.core.stepMethodsNamed(passkeys, device) else null))
         }
         if (reply.status == 401) throw NotAuthenticated()
         if (reply.status == 409) return null
         return when (val read = stepChallengeReplyRead(status(reply.status), reply.text)) {
-            is StepReply.Step -> read.challenge.offered(passkeys)
+            is StepReply.Step -> read.challenge.offered(passkeys, device)
             is StepReply.Refused -> throw StepRefused(read.refusal, read.message, reply.status)
             else -> throw LostReply(StepWords.LOST_CHANGE)
         }
@@ -891,6 +1017,48 @@ object TwoStep {
             is KeyAddedReply.Added -> read.key
             is KeyAddedReply.Refused -> if (reply.status == 401) throw NotAuthenticated() else throw KeyRefused(Problems.signIn(reply.status, read.message), reply.status)
             KeyAddedReply.Lost -> throw LostReply(StepWords.LOST_KEY_ADDED)
+        }
+    }
+
+    /*
+     * Starts turning on Approve on another device: the password again and, once the step is on, the
+     * step. Another device then approves the request made from the token this answers (DeviceAsk,
+     * purpose `device-approval`). The core reads the reply whole: anything short of it is lost.
+     */
+    fun startDevice(at: Shared.Session, password: String, twoStep: StepAnswer? = null): DeviceEnrolment = Auth.passwordTurn {
+        deviceEnrolment(Auth.requestAt(at, "/api/auth/two-step/device", change(at, password, twoStep)))
+    }
+
+    /* What `two-step/device` answered: the pending method, the step's or the route's own refusal thrown as every change's is, or a lost reply. */
+    internal fun deviceEnrolment(reply: Auth.SessionReply): DeviceEnrolment {
+        if (reply.status !in 200..299) Auth.refused(reply, whole = true, lost = StepWords.LOST_SETUP)
+        return (com.hushos.core.deviceEnrolmentReplyRead(status(reply.status), reply.text) as? com.hushos.core.DeviceEnrolmentReply.Started)
+            ?.let { DeviceEnrolment(it.id, it.token) } ?: throw LostReply(StepWords.LOST_SETUP)
+    }
+
+    /* What confirming did: it turned the step on (the ten backup codes, shown once), or added the method beside the account's others. */
+    sealed class DeviceConfirmed {
+        data class TurnedOn(val backupCodes: List<String>) : DeviceConfirmed()
+        data object Added : DeviceConfirmed()
+    }
+
+    /*
+     * Confirms it with the request another device approved. `StepRefused(PENDING)` until one has:
+     * nothing changed. Only the server's own two answers say it is on (the core's
+     * `deviceConfirmedReplyRead`); anything else with a 200, and a request that never came back, is lost.
+     */
+    fun confirmDevice(at: Shared.Session, started: DeviceEnrolment, requestId: String): DeviceConfirmed {
+        val reply = try {
+            Auth.requestAt(at, "/api/auth/two-step/device/${started.id}/confirm", JSONObject(com.hushos.core.deviceConfirmJson(started.token, requestId)))
+        } catch (unreachable: AuthUnreachable) {
+            throw LostReply(StepWords.LOST_DEVICE_ON)
+        }
+        return when (val read = com.hushos.core.deviceConfirmedReplyRead(status(reply.status), reply.text)) {
+            is com.hushos.core.DeviceConfirmedReply.TurnedOn -> DeviceConfirmed.TurnedOn(read.backupCodes)
+            com.hushos.core.DeviceConfirmedReply.Added -> DeviceConfirmed.Added
+            is com.hushos.core.DeviceConfirmedReply.Refused ->
+                if (reply.status == 401 && read.refusal == StepRefusal.OTHER) throw NotAuthenticated() else throw StepRefused(read.refusal, read.message, reply.status)
+            com.hushos.core.DeviceConfirmedReply.Lost -> throw LostReply(StepWords.LOST_DEVICE_ON)
         }
     }
 
