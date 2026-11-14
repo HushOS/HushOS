@@ -146,8 +146,10 @@ function CommandGroup({
     return (
         <CommandPrimitive.Group
             data-slot="command-group"
+            // A group's name is for assistive tech (it labels the group); nothing small and grey sits
+            // above the items. Groups are told apart by the rule between them (CommandSeparator).
             className={cn(
-                'overflow-hidden text-foreground **:[[cmdk-group-heading]]:text-[13px] **:[[cmdk-group-heading]]:px-2 **:[[cmdk-group-heading]]:py-2 **:[[cmdk-group-heading]]:text-muted-foreground',
+                'overflow-hidden text-foreground **:[[cmdk-group-heading]]:sr-only',
                 className,
             )}
             {...props}
