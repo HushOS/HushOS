@@ -1776,7 +1776,7 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
             timeout: 60_000,
         });
         await expect(choose).toContainText(
-            `Choose a plan before you invite anyone to ${family} or make family folders.`,
+            'Choose a plan to invite people and make family folders.',
         );
         // The three tiers, smallest first, the toggle above them.
         const cards = choose.locator('[data-plan]');
@@ -1784,18 +1784,14 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
         await expect(cards.nth(0)).toContainText('$10 a month');
         await expect(cards.nth(1)).toContainText('$20 a month');
         await expect(cards.nth(2)).toContainText('$30 a month');
-        await expect(choose).toContainText('Plus tax where it applies; Polar adds it at checkout.');
-        await expect(cards.nth(0)).toContainText('For up to 4 members, sharing 800 GB.');
-        await expect(cards.nth(1)).toContainText('For up to 4 members, sharing 2 TB.');
-        await expect(cards.nth(2)).toContainText('For up to 4 members, sharing 4 TB.');
-        await expect(cards.nth(1)).toContainText(
-            'Then $1.50 a month for each member after that, up to 20.',
-        );
+        await expect(choose).toContainText('Plus tax where it applies. Payments by Polar.');
+        await expect(cards.nth(0)).toContainText('800 GB');
+        await expect(cards.nth(1)).toContainText('2 TB');
+        await expect(cards.nth(2)).toContainText('4 TB');
+        await expect(cards.nth(1)).toContainText('4 members, then $1.50 a month each, up to 20');
         await choose.getByRole('button', { name: /^Yearly/ }).click();
         await expect(cards.nth(1)).toContainText('$192 a year');
-        await expect(cards.nth(1)).toContainText(
-            'Then $15 a year for each member after that, up to 20.',
-        );
+        await expect(cards.nth(1)).toContainText('4 members, then $15 a year each, up to 20');
         for (const name of ['Choose Family Plus', 'Choose Family Pro', 'Choose Family Max'])
             await expect(choose.getByRole('button', { name, exact: true })).toBeEnabled();
         // Invite sits under the member list: wait for the list, or its absence proves nothing.
