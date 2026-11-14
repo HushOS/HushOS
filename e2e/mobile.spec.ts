@@ -41,13 +41,18 @@ async function noSidewaysScroll(p: Page) {
 
 test('the folder view fits the phone: no sideways scroll, one-line toolbar, a compact top bar', async () => {
     await noSidewaysScroll(page);
-    // The compact top bar keeps the menu, search and the account menu on one line.
+    // The compact top bar keeps the menu and search on one line; the account menu is the
+    // last row of the sheet the menu opens.
     const menu = page.getByRole('button', { name: 'Menu', exact: true });
     const search = page.getByRole('button', { name: 'Search' });
-    const account = page.getByRole('button', { name: 'Account menu' });
-    for (const control of [menu, search, account]) await expect(control).toBeVisible();
+    for (const control of [menu, search]) await expect(control).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Account menu' })).toHaveCount(0);
+    await menu.click();
+    await expect(page.getByRole('button', { name: 'Account menu' })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('button', { name: 'Account menu' })).toHaveCount(0);
     const middles = await Promise.all(
-        [menu, search, account].map(async (control) => {
+        [menu, search].map(async (control) => {
             const box = (await control.boundingBox())!;
             return box.y + box.height / 2;
         }),
@@ -66,6 +71,31 @@ test('the folder view fits the phone: no sideways scroll, one-line toolbar, a co
     const fits = await toolbar.evaluate((el) => el.scrollWidth <= el.clientWidth + 1);
     expect(fits, 'toolbar overflows').toBe(true);
     await noSidewaysScroll(page);
+});
+
+test('the account menu is in the sheet, and what it opens is the page’s: the sheet closes and the dialog stays', async () => {
+    const menu = page.getByRole('button', { name: 'Menu', exact: true });
+    const account = page.getByRole('button', { name: 'Account menu' });
+    // Your twelve words, then Sign out: each from the sheet, each over the page with the sheet gone.
+    await menu.click();
+    await account.click();
+    await page.getByRole('menuitem', { name: 'Your twelve words' }).click();
+    const words = page.getByRole('dialog', { name: 'Your twelve words' });
+    await expect(words).toBeVisible();
+    await expect(account).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await expect(words).toHaveCount(0);
+
+    await menu.click();
+    await account.click();
+    await page.getByRole('menuitem', { name: 'Sign out' }).click();
+    const leave = page.getByRole('alertdialog', { name: 'Sign out of HushOS?' });
+    await expect(leave).toBeVisible();
+    await expect(account).toHaveCount(0);
+    await leave.getByRole('button', { name: 'Cancel' }).click();
+    await expect(leave).toHaveCount(0);
+    // Still signed in, on the same page.
+    await expect(menu).toBeVisible();
 });
 
 test('the viewer opens full screen and closes from its own control', async () => {

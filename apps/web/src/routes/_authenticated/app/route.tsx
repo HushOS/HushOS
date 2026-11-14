@@ -6,8 +6,8 @@ import { useAuthView, useSigningOut } from '@/lib/auth-view';
 import { createFileRoute, Outlet, useRouter } from '@tanstack/react-router';
 import { AppSidebar } from '@/components/app-sidebar';
 import { SearchButton } from '@/components/search-button';
-import { UserMenu } from '@/components/user-menu';
 import { DeviceControl, openDeviceDialog } from '@/components/device-control';
+import { AccountDialogs } from '@/components/user-menu';
 import { NavigationBar } from '@/components/navigation-bar';
 import { NotificationsAsk } from '@/components/notifications-ask';
 import { ReleaseNotice } from '@/components/release-notice';
@@ -205,9 +205,9 @@ function AppLayout() {
              */}
             <SidebarInset className="min-w-0 bg-panel md:my-2.5 md:mr-2.5 md:h-[calc(100svh-1.25rem)] md:overflow-hidden md:rounded-xl md:border md:border-rule">
                 {/*
-                 * Below a desk the sidebar is a rail or a sheet, so a compact bar keeps the menu,
-                 * search and the account menu in reach. On a desk the sidebar's brand line holds
-                 * search and the account menu, and the page's own header starts the sheet.
+                 * Below a desk the sidebar is a rail or a sheet, so a compact bar keeps the menu
+                 * and search in reach. On a desk the sidebar's brand line holds search, and the
+                 * page's own header starts the sheet. The account menu is the sidebar's last row.
                  */}
                 <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-1 bg-panel px-3 sm:px-5 md:px-8 lg:hidden">
                     {/* The sheet on a phone; on a tablet it opens or folds the rail. A desk has the rail's edge and Mod+B. */}
@@ -217,8 +217,7 @@ function AppLayout() {
                         className="-ml-2 text-muted-foreground hover:text-foreground"
                     />
                     <div className="flex-1" />
-                    <SearchButton />
-                    <UserMenu user={user} className="-mr-0.5" />
+                    <SearchButton className="-mr-0.5" />
                 </header>
                 <div
                     data-scroll-restoration-id="app-sheet"
@@ -288,6 +287,7 @@ function AppLayout() {
             <CollisionDialog />
             <CommandCenter user={user} />
             {/* The lock and unlock dialogs; the account menu and the palette open them. */}
+            <AccountDialogs user={user} />
             <DeviceControl
                 user={user}
                 onUnlocked={() => queryClient.invalidateQueries(storageQueryOptions)}
