@@ -4,8 +4,8 @@ import com.hushos.app.data.ApprovalAnswering
 import com.hushos.app.data.ApprovalServer
 import com.hushos.app.data.AskPhase
 import com.hushos.app.data.DeviceApprovals
+import com.hushos.app.data.DeviceEnrolment
 import com.hushos.app.data.LostReply
-import com.hushos.app.data.PromptLimit
 import com.hushos.app.data.StepAnswer
 import com.hushos.app.data.StepRefused
 import com.hushos.app.data.StepWords
@@ -19,6 +19,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -29,8 +30,11 @@ import org.junit.Test
  * What a screen holds while a request to another device is out, and while one is being answered
  * (`DeviceAskModel`, `ApprovalAnswer`): nothing is asked until a press, a request let go is not
  * looked at again or answered with, a pending answer waits on the same request, a second press
- * sends nothing twice, and the sheet closes saying what happened. The requests themselves are
- * `DeviceApprovalTest`'s; the server is the same one, in memory.
+ * sends nothing twice, and the sheet closes saying what happened. Waiting for the other device
+ * holds nothing up: only a request of the sheet's own on its way does. The request that turns the
+ * method on is opened by Answer, approved on a press with nothing scanned or typed, and its code
+ * then stays up until Done. The requests themselves are `DeviceApprovalTest`'s; the server is the
+ * same one, in memory.
  */
 class DeviceApprovalUiTest {
     @org.junit.Before
@@ -139,14 +143,18 @@ class DeviceApprovalUiTest {
 
     // Answering.
 
-    private class Sheet(val answer: ApprovalAnswer, val closes: MutableList<Pair<String, Boolean>>)
+    private class Sheet(val answer: ApprovalAnswer, val closes: MutableList<Pair<String, Boolean>>, val shown: MutableList<String>)
 
     private fun answering(server: ApprovalServer, scope: CoroutineScope): Sheet {
         val wire = server.wire()
-        val prompt = DeviceApprovals.list(wire, PromptLimit({ "" }, {})).single()
+        val prompt = DeviceApprovals.listed(wire).single()
         val closes = mutableListOf<Pair<String, Boolean>>()
+        val shown = mutableListOf<String>()
         val flow = ApprovalAnswering(prompt, wire, ApprovalServer.ACCOUNT, deviceSigningCreate().seed)
-        return Sheet(ApprovalAnswer(flow, scope, closed = { said, important -> closes += said to important }, sessionEnded = { fail("signed out") }, every = 5), closes)
+        return Sheet(
+            ApprovalAnswer(flow, scope, closed = { said, important -> closes += said to important }, sessionEnded = { fail("signed out") }, every = 5, codeShown = { shown += flow.id }),
+            closes, shown,
+        )
     }
 
     /* The other device reveals, as the server records it, and the code both sides then hold. */
@@ -260,5 +268,93 @@ class DeviceApprovalUiTest {
         assertEquals("mismatch", other.deniedFor)
         assertTrue(other.calls("/open").isEmpty())
         assertNull(other.signature)
+    }
+
+    @Test
+    fun waitingForTheOtherDeviceAfterAScanHoldsNothingUpAndDenyEndsTheRequest(): Unit = runBlocking {
+        val server = ApprovalServer()
+        server.asked()
+        val sheet = answering(server, this)
+        sheet.answer.scan()
+        sheet.answer.scanned(approvalQr(server.requestId, server.commitment!!))
+        waitFor("the open") { server.state == "opened" }
+        waitFor("the wait") { sheet.answer.phase == ApprovalAnswer.Phase.WAITING }
+        // Opened, and the other device has revealed nothing yet. That can last minutes: the sheet is not busy, so it
+        // can be closed, and Deny and This wasn’t me are within reach.
+        waitFor("the sheet let go") { !sheet.answer.busy }
+        delay(20)
+        assertFalse(sheet.answer.busy)
+        assertEquals(ApprovalAnswer.Phase.WAITING, sheet.answer.phase)
+        sheet.answer.end(ApprovalAnswering.Ending.DENIED)
+        waitFor("the close") { sheet.closes.isNotEmpty() }
+        assertEquals(listOf("Denied" to false), sheet.closes)
+        assertEquals("denied", server.deniedFor)
+        assertNull(server.signature)
+        // The wait went with it: nothing looks for the reveal any more.
+        delay(30)
+        val looks = server.calls.size
+        delay(60)
+        assertEquals(looks, server.calls.size)
+    }
+
+    @Test
+    fun theRequestThatTurnsTheMethodOnIsNeitherScannedNorTypedAndItsCodeStaysUpUntilDone(): Unit = runBlocking {
+        val server = ApprovalServer()
+        val asked = server.asked(purpose = DeviceEnrolment.PURPOSE)
+        val sheet = answering(server, this)
+        assertTrue(sheet.answer.turnsOn)
+        // No camera and no field for it, whatever is pressed or read: nothing is opened by either road.
+        sheet.answer.scan()
+        assertEquals(ApprovalAnswer.Phase.CHOOSE, sheet.answer.phase)
+        sheet.answer.scanned(approvalQr(server.requestId, server.commitment!!))
+        sheet.answer.typing()
+        delay(30)
+        assertEquals(ApprovalAnswer.Phase.CHOOSE, sheet.answer.phase)
+        assertTrue(server.calls("/open").isEmpty())
+        // Opened (Answer was the press), and nothing can be approved before the other device revealed.
+        sheet.answer.open()
+        sheet.answer.open()
+        assertEquals(ApprovalAnswer.Phase.WAITING, sheet.answer.phase)
+        waitFor("the open") { server.state == "opened" }
+        sheet.answer.approve()
+        delay(20)
+        assertEquals(1, server.calls("/open").size)
+        assertTrue(server.calls("/approve").isEmpty())
+        // Waiting holds nothing up here either.
+        assertFalse(sheet.answer.busy)
+        val code = reveal(server, asked)
+        waitFor("Approve") { sheet.answer.phase == ApprovalAnswer.Phase.CONFIRM }
+        assertNull(sheet.answer.code)
+        // The press: signed once with nothing typed, and the code is up. Nothing is said, and nothing closes.
+        sheet.answer.approve()
+        sheet.answer.approve()
+        waitFor("the code") { sheet.answer.phase == ApprovalAnswer.Phase.SHOWING }
+        assertEquals(code, sheet.answer.code)
+        assertEquals(1, server.calls("/approve").size)
+        assertNotNull(server.signature)
+        assertEquals(listOf(server.requestId), sheet.shown)
+        // Approved: there is nothing left to deny, and the code stays for as long as the person needs to type it.
+        sheet.answer.end(ApprovalAnswering.Ending.NOT_ME)
+        sheet.answer.scan()
+        delay(60)
+        assertTrue(server.calls("/deny").isEmpty())
+        assertEquals(ApprovalAnswer.Phase.SHOWING, sheet.answer.phase)
+        assertEquals(code, sheet.answer.code)
+        assertTrue(sheet.closes.isEmpty())
+        // Done closes it, with the brief confirmation.
+        sheet.answer.done()
+        assertEquals(listOf("Approved" to false), sheet.closes)
+
+        // A sign-in's sheet is not opened by `open`, and Done closes nothing there: it is scanned or typed.
+        val signIn = ApprovalServer()
+        signIn.asked()
+        val other = answering(signIn, this)
+        assertFalse(other.answer.turnsOn)
+        other.answer.open()
+        other.answer.done()
+        delay(30)
+        assertEquals(ApprovalAnswer.Phase.CHOOSE, other.answer.phase)
+        assertTrue(signIn.calls("/open").isEmpty())
+        assertTrue(other.closes.isEmpty())
     }
 }
