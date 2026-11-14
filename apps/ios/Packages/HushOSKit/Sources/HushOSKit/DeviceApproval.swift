@@ -14,7 +14,10 @@ import Observation
  *   typed exactly, or its QR code scanned and found to be this very request;
  * - the answering phone's half of the code is its own: made here after it saw the commitment, kept
  *   here, and never taken from the server (`ApprovalMemory`);
- * - turning the method on asks the one device the person chose, and no other (`DeviceSetup`).
+ * - turning the method on asks the one device the person chose, and no other, and for that one
+ *   request the code runs the other way: the phone that approves signs on a press and then shows
+ *   the code, and the phone that asked shows none and takes it typed (`DeviceSetup`). Whoever
+ *   turns the method on has then read the approving device's screen, whatever it called itself.
  *
  * The screens are the app's (`App/DeviceApproval.swift`); nothing here draws anything, so all of
  * it is tested without one (`DeviceApprovalTests`).
@@ -139,17 +142,21 @@ public actor DeviceAsk {
     public enum State: Sendable, Equatable {
         /* No device has opened it: there is no code yet, only the QR code. */
         case waiting
-        /* A device opened it: the code to type there. */
+        /* A device opened it: the code to type there. Never for a request that turns the method on. */
         case code(String)
-        /* Approved: the step can be answered with this request. */
+        /* A device opened a request that turns the method on: the code is that device's to show, and this phone shows none. */
+        case opened
+        /* Approved: the step can be answered with this request. Turning the method on, the approval is half of it (`typed`). */
         case approved
         /* Over without an approval. */
         case ended(ApprovalEnded)
     }
 
     public nonisolated let requestId: String
-    /* What a camera on the other device reads, in place of typing the code. */
-    public nonisolated let qr: String
+    /* What a camera on the other device reads, in place of typing the code. None for a request that turns the method on: it is never answered by a scan. */
+    public nonisolated let qr: String?
+    /* The request turns the method on (the core's `approvalTurnsOn`): its code is shown on the device that approves and typed on this one. */
+    public nonisolated let turnsOn: Bool
     /* The step token the request was made for. */
     public nonisolated let token: String
     private let wire: ApprovalWire
@@ -160,10 +167,11 @@ public actor DeviceAsk {
     /* On the clock nobody can set: the request ends with its token, whatever the phone's date says. */
     private let began: ContinuousClock.Instant = .now
 
-    private init(wire: ApprovalWire, token: String, qr: String, step: DeviceStep, nonce: String) {
+    private init(wire: ApprovalWire, token: String, commitment: String, step: DeviceStep, nonce: String) throws {
         self.wire = wire
         self.token = token
-        self.qr = qr
+        turnsOn = approvalTurnsOn(purpose: step.purpose)
+        qr = turnsOn ? nil : try approvalQr(requestId: step.requestId, commitment: commitment)
         self.step = step
         self.nonce = nonce
         requestId = step.requestId
@@ -192,7 +200,7 @@ public actor DeviceAsk {
         switch approvalStartReplyRead(status: reply.code, body: reply.text) {
         case .started(let requestId, let userId, _):
             let step = DeviceStep(userId: userId, requestId: requestId, purpose: purpose, tokenDigest: digest, deviceSigningKey: deviceSigningKey)
-            return DeviceAsk(wire: wire, token: stepToken, qr: try approvalQr(requestId: requestId, commitment: commitment), step: step, nonce: nonce)
+            return try DeviceAsk(wire: wire, token: stepToken, commitment: commitment, step: step, nonce: nonce)
         case .refused(let refusal, let message):
             throw wire.refused(reply, refusal, message)
         case .lost:
@@ -203,7 +211,8 @@ public actor DeviceAsk {
     /*
      * Asks where the request stands, and reveals once it may. Before a device opened it nothing is
      * revealed: the commitment is all the server and the other device hold. The code is worked out
-     * from the first value the other device fixed, and stays that one.
+     * from the first value the other device fixed, and stays that one. For a request that turns
+     * the method on it is worked out all the same and never handed out: `typed` checks against it.
      */
     public func poll() async throws -> State {
         let reply = try await wire.send("GET", "/api/auth/approvals/\(requestId)", nil, token)
@@ -227,7 +236,8 @@ public actor DeviceAsk {
                     code = shown
                 }
                 if state == .opened { try await reveal() }
-                return state == .approved ? .approved : .code(shown)
+                if state == .approved { return .approved }
+                return turnsOn ? .opened : .code(shown)
             }
         }
     }
@@ -274,7 +284,7 @@ public actor DeviceAsk {
                 await shown(state)
                 switch state {
                 case .approved, .ended: return state
-                case .waiting, .code: break
+                case .waiting, .code, .opened: break
                 }
             } catch let refusal as StepError {
                 throw refusal
@@ -287,6 +297,17 @@ public actor DeviceAsk {
             }
             try await Task.sleep(for: interval)
         }
+    }
+
+    /*
+     * Turning the method on: what the person typed here, as it is written ("47 river"), when it is
+     * exactly the code this phone worked out for the request, the one the approving device shows
+     * once it approved. Nil for anything else, for any other request, and until a device opened
+     * this one. The check is the core's (`approvalCodeTyped`); the server makes it again.
+     */
+    public func typed(_ typed: String) -> String? {
+        guard turnsOn, let code else { return nil }
+        return approvalCodeTyped(code: code, typed: typed)
     }
 
     /*
@@ -474,6 +495,12 @@ public actor ApprovalAnswering {
     public nonisolated let asks: String
     /* "The other device asked for this device to approve.", when it named this one; nil otherwise. */
     public nonisolated let chosenLine: String?
+    /*
+     * The request turns the method on (the core's `approvalTurnsOn`, over the purpose as first
+     * listed, which the commitment binds). Then nothing is typed or scanned here: this phone signs
+     * on the person's press and hands back the code for them to type on the device that asked.
+     */
+    public nonisolated let turnsOn: Bool
     /* The request as it stood before this phone opened it: as remembered, if this run opened it before. */
     private let asked: ApprovalPrompt
     /* The list said a device had opened it already when this was made. */
@@ -502,6 +529,7 @@ public actor ApprovalAnswering {
         // A name the server does not vouch for is said as the asking device's own words.
         asks = approvalAsks(purpose: before.purpose, deviceName: before.deviceName, selfNamed: before.selfNamed, location: before.location)
         chosenLine = before.chosen ? StepWords.approvalChosen : nil
+        turnsOn = approvalTurnsOn(purpose: before.purpose)
         asked = before
         listedOpened = prompt.approverKey != nil
         self.wire = wire
@@ -526,9 +554,13 @@ public actor ApprovalAnswering {
      * (another QR code in view): nothing happens. A code for another request, or with another
      * commitment than the server listed for this one, is not the request on that screen: this one
      * is ended (`mismatch`) and nothing is opened. Otherwise the request is opened.
+     *
+     * A request that turns the method on is never answered by a scan, whatever was read: a scan is
+     * this phone's own word that it saw the other screen, and this phone is the one in doubt.
+     * False, with nothing opened, nothing marked as scanned and nothing sent.
      */
     public func open(scanned text: String) async throws -> Bool {
-        guard let read = approvalQrRead(text: text) else { return false }
+        guard !turnsOn, let read = approvalQrRead(text: text) else { return false }
         if let refused { throw refused }
         guard read.requestId == asked.id, read.commitment == asked.commitment else { throw await refuse(.mismatch) }
         try await open()
@@ -610,16 +642,38 @@ public actor ApprovalAnswering {
         }
     }
 
+    /* What stands between the press of Approve and the signature. */
+    private enum Check {
+        /* The code on the other screen, typed here exactly. */
+        case typed
+        /* That screen's QR code was read, and it was this very request: nothing is typed. */
+        case scanned
+        /* Turning the method on: nothing is checked here. The code is shown afterwards, and checked where it is typed. */
+        case shownAfter
+    }
+
+    /* Decided here and nowhere else. Nothing typed is enough only for these two; `scanned` is never set for a request that turns the method on. */
+    private var check: Check { turnsOn ? .shownAfter : scanned ? .scanned : .typed }
+
     /*
      * Approves. After a scan the commitment was the check and nothing is typed (`typed` nil).
      * Otherwise only the exact code is approved: anything else ends the request (`wrong-code`),
      * and nothing is signed. The signature is this phone's device key's, over the statement that
      * names this phone's own account, the request, its purpose, its token and the asking device.
+     *
+     * A request that turns the method on is signed on the press, with nothing typed, and its code
+     * comes back: the person types it on the device that asked. Nil back for every other request.
      */
-    public func approve(typed: String?) async throws {
+    @discardableResult
+    public func approve(typed: String?) async throws -> String? {
         if let refused { throw refused }
         guard let ready else { throw Unanswered() }
-        if !(scanned && typed == nil) {
+        switch check {
+        case .shownAfter:
+            break
+        case .scanned where typed == nil:
+            break
+        case .scanned, .typed:
             guard let typed, approvalCodeNormalize(typed: typed) == ready.code else {
                 try? await end(.wrongCode)
                 throw ApprovalProblem.wrongCode
@@ -627,6 +681,34 @@ public actor ApprovalAnswering {
         }
         let signature = try deviceStepSign(seed: seed, step: ready.step)
         guard case .done = try await post("approve", approvalApproveJson(signature: signature)) else { throw StepError.lost(StepWords.lostChange) }
+        return turnsOn ? ready.code : nil
+    }
+
+    /*
+     * Opens, then waits for the reveal, for the sheet that has nothing to fall back to (a request
+     * that turns the method on offers no scan and no field). An open that got no answer is made
+     * again, as a look is: it sends the same value every time.
+     */
+    public func openAndAwaitReveal(every interval: Duration = .seconds(2)) async throws {
+        let began = ContinuousClock.now
+        while true {
+            try Task.checkCancellation()
+            do {
+                try await open()
+                break
+            } catch let problem as ApprovalProblem {
+                throw problem
+            } catch let ended as AuthError {
+                if case .sessionEnded = ended { throw ended }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // Nothing came back: asked again.
+            }
+            if began.duration(to: .now) > PendingSignIn.life { throw ApprovalProblem.over(StepWords.approvalOver) }
+            try await Task.sleep(for: interval)
+        }
+        try await awaitReveal(every: interval)
     }
 
     /* Deny, or This wasn’t me: the request ends, and is counted as a failed step. */
@@ -731,6 +813,12 @@ public final class ApprovalInbox {
         memory.forget(id)
     }
 
+    /* Whether a request being answered is still the signed-in session's: false once the phone holds another session, or none. */
+    public func holds(_ id: String) -> Bool {
+        guard let owner, source.session()?.tag == owner else { return false }
+        return flows[id] != nil
+    }
+
     private func clear() {
         // Not written when already empty: every look of a signed-out phone would redraw whatever shows the list.
         if !prompts.isEmpty { prompts = [] }
@@ -740,6 +828,244 @@ public final class ApprovalInbox {
         owner = nil
         // A new one, never the old one emptied: a request of the last session still in flight keeps writing to its own.
         memory = ApprovalMemory()
+    }
+}
+
+/*
+ * The answer sheet, as it follows one request: what it shows, and what it lets the person do
+ * meanwhile. The checks are `ApprovalAnswering`'s; what is here is the sheet's own order:
+ *
+ * - Waiting for the other device is not sending. The wait for what it reveals can last minutes
+ *   and never holds the sheet: Cancel, a swipe, Deny and This wasn’t me all work through it. Only
+ *   an approval or an ending that is out (`sending`) holds it, until its answer is in.
+ * - Cancel or a swipe while it waits ends the request (`denied`): this phone opened it, and the
+ *   other screen would otherwise wait on a phone that has put it down. Anywhere else they only
+ *   close the sheet, and the request stays in the list.
+ * - A request that turns the method on is opened as the sheet comes up, offers no scan and no
+ *   field, and is approved on a press once the other device revealed. Its code is then shown here
+ *   until Done: nothing closes the sheet meanwhile, and nothing says the request is over.
+ */
+@Observable
+@MainActor
+public final class ApprovalAnswer {
+    public enum Phase: Sendable, Equatable {
+        /* Scan the other screen, or type its code. Never for a request that turns the method on. */
+        case choose
+        case scanning
+        /* Opened, or being opened: looking for what the other device reveals. */
+        case waiting
+        /* The other device revealed: its code is typed here. */
+        case typing
+        /* Nothing to type: after a scan of this very request, or for a request that turns the method on. */
+        case confirm
+        /* Turning the method on, approved: the code for the person to type on the device that asked. */
+        case shown(String)
+    }
+
+    /* What the app does around the sheet: the notice it shows, the list the request leaves, and whether an error ended the session. */
+    public struct Around: Sendable {
+        let say: @MainActor @Sendable (_ words: String, _ important: Bool) -> Void
+        let finished: @MainActor @Sendable (_ id: String) -> Void
+        /* The request is still the signed-in session's: nothing is ended for an account the phone has since left. */
+        let stands: @MainActor @Sendable (_ id: String) -> Bool
+
+        public init(
+            say: @escaping @MainActor @Sendable (String, Bool) -> Void,
+            finished: @escaping @MainActor @Sendable (String) -> Void = { ApprovalInbox.shared.finished($0) },
+            stands: @escaping @MainActor @Sendable (String) -> Bool = { ApprovalInbox.shared.holds($0) }
+        ) {
+            self.say = say
+            self.finished = finished
+            self.stands = stands
+        }
+    }
+
+    public nonisolated let flow: ApprovalAnswering
+    public nonisolated let turnsOn: Bool
+    public private(set) var phase: Phase
+    /* An approval or an ending is out. This alone holds the sheet; waiting for the other device never does. */
+    public private(set) var sending = false
+    public private(set) var error = ""
+    /* Over: the sheet goes. */
+    public private(set) var closed = false
+    @ObservationIgnored private let around: Around
+    @ObservationIgnored private let interval: Duration
+    @ObservationIgnored private var work: Task<Void, Never>?
+    /* What `work` was started as: a task let go changes nothing afterwards. */
+    @ObservationIgnored private var turn = 0
+
+    public init(flow: ApprovalAnswering, around: Around, every interval: Duration = .seconds(2)) {
+        self.flow = flow
+        self.around = around
+        self.interval = interval
+        turnsOn = flow.turnsOn
+        phase = flow.turnsOn ? .waiting : .choose
+    }
+
+    /* Whether Cancel, a swipe, Deny and This wasn’t me are held back: only over a request that is out. */
+    public var held: Bool { sending }
+
+    /* The sheet came up. A request that turns the method on has nothing to choose: it is opened now, and the reveal waited for. */
+    public func appeared() {
+        guard turnsOn, phase == .waiting, work == nil, !closed else { return }
+        wait { [flow, interval] in
+            try await flow.openAndAwaitReveal(every: interval)
+            return .confirm
+        }
+    }
+
+    /* Scan the code. Not for a request that turns the method on. */
+    public func scan() {
+        guard !sending, !turnsOn, phase == .choose else { return }
+        error = ""
+        phase = .scanning
+    }
+
+    /* Type the code: the request is opened, and the field appears once the other device has revealed what it committed to. */
+    public func type() {
+        guard !sending, !turnsOn, phase == .choose else { return }
+        wait { [flow, interval] in
+            try await flow.open()
+            try await flow.awaitReveal(every: interval)
+            return .typing
+        }
+    }
+
+    /* What the camera read. Anything that is not an approval's code is passed over; this request's own opens it. */
+    public func scanned(_ text: String) {
+        // Another QR code in view is not looked at twice, and holds nothing up.
+        guard !sending, !turnsOn, phase == .scanning, approvalQrRead(text: text) != nil else { return }
+        wait { [flow, interval] in
+            // Not this request's after all: the camera goes on looking.
+            guard try await flow.open(scanned: text) else { return .scanning }
+            try await flow.awaitReveal(every: interval)
+            return .confirm
+        }
+    }
+
+    /* The wait for the other device, and what the sheet shows after it. Not `sending`: it may take minutes, and holds nothing. */
+    private func wait(_ opened: @escaping @Sendable () async throws -> Phase) {
+        error = ""
+        phase = .waiting
+        turn += 1
+        let mine = turn
+        work = Task {
+            do {
+                let next = try await opened()
+                guard turn == mine else { return }
+                phase = next
+            } catch {
+                guard turn == mine else { return }
+                failed(error)
+            }
+        }
+    }
+
+    /* The field changed: what was said about the last try no longer applies. */
+    public func edited() { error = "" }
+
+    /*
+     * Approve. `typed` is what the field holds, and counts only while the field is up; with
+     * nothing to type (`confirm`) nothing is passed, and `ApprovalAnswering` decides whether that
+     * is enough. A request that turns the method on comes back with its code, which stays up.
+     */
+    public func approve(typed: String = "") {
+        guard !sending, phase == .typing || phase == .confirm else { return }
+        let sent = phase == .typing ? typed : nil
+        send({ [flow] in try await flow.approve(typed: sent) }) { [self] code in
+            guard let code else { return close(StepWords.approved) }
+            // Approved: it leaves the list now, and the code stays here until Done.
+            around.finished(flow.id)
+            phase = .shown(code)
+        }
+    }
+
+    /* Deny, or This wasn’t me, at any point before the request is approved. */
+    public func end(_ why: ApprovalAnswering.Ending) {
+        guard !sending, !closed else { return }
+        if case .shown = phase { return }
+        send({ [flow] in try await flow.end(why) }) { [self] in close(StepWords.denied) }
+    }
+
+    /* A request that is out: whatever was waiting is let go, and the sheet is held until the answer is in and `then` has heard it. */
+    private func send<Got: Sendable>(_ request: @escaping @Sendable () async throws -> Got, then: @escaping @MainActor (Got) -> Void) {
+        sending = true
+        error = ""
+        work?.cancel()
+        turn += 1
+        let mine = turn
+        work = Task {
+            do {
+                let got = try await request()
+                guard turn == mine else { return }
+                then(got)
+            } catch {
+                guard turn == mine else { return }
+                failed(error)
+            }
+            sending = false
+        }
+    }
+
+    /* Done, under the code. */
+    public func done() {
+        guard case .shown = phase else { return }
+        closed = true
+    }
+
+    /*
+     * Cancel, or a swipe. False when held: an approval or an ending is out, and everything stays.
+     * While the sheet waits for the other device the request is ended (`denied`), by a request of
+     * its own that the sheet going away does not cancel. Anywhere else nothing is sent.
+     */
+    @discardableResult
+    public func cancel() -> Bool {
+        guard !sending else { return false }
+        guard !closed else { return true }
+        turn += 1
+        work?.cancel()
+        work = nil
+        closed = true
+        guard phase == .waiting, around.stands(flow.id) else { return true }
+        let (flow, around) = (flow, around)
+        Task {
+            do { try await flow.end(.denied) } catch is ApprovalProblem {
+                // Over already: it leaves the list all the same.
+            } catch {
+                // Not told: the request stays listed, to be answered or ended from there.
+                return
+            }
+            around.finished(flow.id)
+            around.say(StepWords.denied, false)
+        }
+        return true
+    }
+
+    /* The sheet went away, by a swipe or because its session ended. A request that is out is let go with it. */
+    public func gone() {
+        guard !cancel() else { return }
+        turn += 1
+        work?.cancel()
+        closed = true
+    }
+
+    private func close(_ said: String, important: Bool = false) {
+        around.say(said, important)
+        around.finished(flow.id)
+        closed = true
+    }
+
+    /* A request that is over, or that did not match, closes with why. Anything else stays, to be tried again. */
+    private func failed(_ error: Error) {
+        if ErrorWords.isCancellation(error) { return }
+        if let problem = error as? ApprovalProblem {
+            close(problem.errorDescription ?? ErrorWords.generic, important: true)
+            return
+        }
+        // An ended session is said by the app as everywhere; nothing of this account's is left to answer.
+        if endsSession(error) { closed = true; return }
+        if !turnsOn, phase == .waiting || phase == .scanning { phase = .choose }
+        self.error = ErrorWords.say(error) ?? ""
     }
 }
 
@@ -768,12 +1094,15 @@ public extension TwoStep {
     }
 
     /*
-     * Confirms it with the request another device approved. `StepError.refused(.pending, …)` until
-     * one has: nothing changed. Only the server's own two answers say it is on: the backup codes
-     * when this turned the step on (`turnedOn`), or `replaced` never: `added` beside other methods.
+     * Confirms it with the request another device approved and the code that device shows, as the
+     * person typed it here and `DeviceAsk.typed` wrote it ("47 river"); the server works the code
+     * out again (a wrong one is 409 `device-code`, in its own words, and ends the request).
+     * `StepError.refused(.pending, …)` until a device approved: nothing changed. Only the server's
+     * own two answers say it is on: the backup codes when this turned the step on (`turnedOn`), or
+     * `replaced` never: `added` beside other methods.
      */
-    static func confirmDevice(_ started: DeviceEnrolment, requestId: String) async throws -> DeviceConfirmed {
-        let json = deviceConfirmJson(token: started.token, requestId: requestId)
+    static func confirmDevice(_ started: DeviceEnrolment, requestId: String, code: String) async throws -> DeviceConfirmed {
+        let json = deviceConfirmJson(token: started.token, requestId: requestId, code: code)
         guard let body = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] else { throw AuthError.message(ErrorWords.generic) }
         let reply: Auth.SessionReply
         do {
@@ -807,6 +1136,13 @@ public extension TwoStep {
  *   device looks alike to the server, one someone else opened with the password among them, so a
  *   request any of them could answer would let that one answer first. Nothing is sent, not the
  *   pending method and not a request, until a device is chosen; every request names it.
+ * - No device is ever chosen for them, even when there is one. The list is the devices' own
+ *   words: someone with the password can sign in as "Maya’s iPhone" and be its only entry.
+ * - The approval alone turns nothing on, and sends nothing. The device that approved then shows a
+ *   code; the person types it here, it is checked against the code this phone worked out itself
+ *   (`DeviceAsk.typed`), and only then is the confirmation sent, with it. A device they are not
+ *   holding shows them nothing to type. One try: a code that is not it drops the request here,
+ *   and Ask again asks the same device afresh.
  * - The confirmation is marked as out before it goes, and what it answers is kept here, not in a
  *   view: the backup codes are shown once, and a sheet closed over a confirmation the server took
  *   would turn the step on with nobody ever seeing them. The sheet does not close while it is out,
@@ -824,6 +1160,11 @@ public final class DeviceSetup {
         public var errorDescription: String? { StepWords.chooseApprover }
     }
 
+    /* What was typed is not the code the approving device shows: the request was dropped here, and nothing was sent. */
+    public struct WrongCode: Error, WordedError, Equatable {
+        public var errorDescription: String? { StepWords.turnOnWrongCode }
+    }
+
     /* What the confirmation did. */
     public enum Confirmed: Sendable, Equatable {
         /* The step is on: `codes` holds the backup codes until Done. */
@@ -833,7 +1174,7 @@ public final class DeviceSetup {
     }
 
     public typealias Start = @Sendable (_ password: String, _ twoStep: StepAnswer?) async throws -> DeviceEnrolment
-    public typealias Confirm = @Sendable (_ started: DeviceEnrolment, _ requestId: String) async throws -> TwoStep.DeviceConfirmed
+    public typealias Confirm = @Sendable (_ started: DeviceEnrolment, _ requestId: String, _ code: String) async throws -> TwoStep.DeviceConfirmed
     public typealias Remove = @Sendable (_ password: String, _ keep: String) async throws -> Void
 
     /* The account has no method yet: this turns the step on. */
@@ -845,6 +1186,10 @@ public final class DeviceSetup {
     public var removeOthers = true
     /* The pending method, and the step token its one approval runs from: good for ten minutes. */
     public private(set) var started: DeviceEnrolment?
+    /* The request the chosen device approved: its code is asked for now. Nothing was sent on the approval. */
+    @ObservationIgnored private var approved: DeviceAsk?
+    /* The chosen device approved, and the code it shows has not been typed here yet: the sheet shows the field. */
+    public private(set) var awaitsCode = false
     /* The confirmation is out: nothing closes the sheet until it is answered. */
     public private(set) var confirming = false
     /* The backup codes, shown once: held until Done. */
@@ -854,8 +1199,8 @@ public final class DeviceSetup {
     public init(first: Bool, approvers: [TwoStepStatus.Approver]) {
         self.first = first
         self.approvers = approvers
-        // With one device to choose from it is chosen, and still named.
-        chosenId = approvers.count == 1 ? approvers[0].id : nil
+        // Never chosen for the person, even when there is one: the names are the devices' own words.
+        chosenId = nil
     }
 
     public var chosen: TwoStepStatus.Approver? { approvers.first { $0.id == chosenId } }
@@ -877,7 +1222,13 @@ public final class DeviceSetup {
     public func close() -> Bool {
         guard mayClose else { return false }
         started = nil
+        forget()
         return true
+    }
+
+    private func forget() {
+        approved = nil
+        awaitsCode = false
     }
 
     /* Done, under the codes. */
@@ -900,11 +1251,26 @@ public final class DeviceSetup {
     public func failed() {
         guard !confirming else { return }
         started = nil
+        forget()
     }
 
     /*
-     * Another device approved `requestId`: confirms the method with it.
+     * The chosen device approved `ask`'s request. Nothing is sent: an approval is that device's
+     * word alone, and it turns nothing on. What follows is the code it now shows, typed here.
+     * Only a request made for this setup's own token, to turn the method on, is taken.
+     */
+    public func approved(by ask: DeviceAsk) {
+        guard let started, ask.token == started.token, ask.turnsOn, !confirming, codes == nil else { return }
+        approved = ask
+        awaitsCode = true
+    }
+
+    /*
+     * The code the approving device shows was typed, and the button pressed: confirms the method
+     * with the approved request and that code.
      *
+     * - The code is checked here first, against the one this phone worked out itself. One try:
+     *   anything else drops the request (`WrongCode`), and nothing is sent to the server.
      * - `confirming` is set before the request goes, and stays until its answer is kept.
      * - The request is not cancelled with whoever waits for it: once sent, its answer is taken.
      * - `step-pending` (the approval had not landed where this went) changed nothing: thrown, and the
@@ -914,24 +1280,33 @@ public final class DeviceSetup {
      * - `removal` hears how the removal of the other devices ended (true: removed), after the codes.
      */
     public func confirm(
-        requestId: String, password: String,
-        send: @escaping Confirm = { try await TwoStep.confirmDevice($0, requestId: $1) },
+        typed: String, password: String,
+        send: @escaping Confirm = { try await TwoStep.confirmDevice($0, requestId: $1, code: $2) },
         remove: @escaping Remove = { _ = try await Devices.removeOthers(password: $0, keep: $1) },
         removal: @escaping @MainActor @Sendable (Bool) -> Void = { _ in }
     ) async throws -> Confirmed {
-        // Let go meanwhile (Cancel was pressed before the approval was heard of): nothing is confirmed.
-        guard let started, let chosen, !confirming, codes == nil else { throw CancellationError() }
+        // Let go meanwhile (Cancel was pressed), or no device has approved: nothing is confirmed.
+        guard let started, let chosen, let approved, !confirming, codes == nil else { throw CancellationError() }
+        // Before anything else: nothing closes the sheet from here until the answer is kept.
         confirming = true
+        guard let code = await approved.typed(typed) else {
+            confirming = false
+            forget()
+            throw WrongCode()
+        }
         let answer: TwoStep.DeviceConfirmed
         do {
-            answer = try await Task { try await send(started, requestId) }.value
+            answer = try await Task { try await send(started, approved.requestId, code) }.value
         } catch {
             confirming = false
+            // The approval had not landed where this went: the same request and code are confirmed again.
             if case StepError.refused(.pending, _) = error { throw error }
             // Anything else may hide a method that was turned on: this setup is over either way.
             self.started = nil
+            forget()
             throw error
         }
+        forget()
         switch answer {
         case .turnedOn(let made):
             // The codes first: they are shown once, and nothing that follows may cost them.
