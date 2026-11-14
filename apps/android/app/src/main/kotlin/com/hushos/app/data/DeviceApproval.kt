@@ -484,8 +484,9 @@ class ApprovalAnswering(
 
     /*
      * Opens the request: this phone's own 32 fresh bytes go in, and only then does the other device
-     * reveal. The bytes are remembered with the commitment seen before they were posted; opening
-     * again in this process sends the same ones.
+     * reveal. The bytes are remembered, with the commitment seen, before they are posted; opening
+     * again in this process sends the same ones, so an open whose reply was lost is not a second
+     * value, which the server (holding the first) would have to answer with another than was sent.
      *
      * The server answers with the value the request was opened with. It must be the one this phone
      * sent: a server that answers another chose the value itself, after seeing the commitment, and
@@ -499,9 +500,9 @@ class ApprovalAnswering(
         val before = opened.of(id)
         if (before == null && asked.approverKey != null) throw notOwn(StepWords.APPROVAL_RESTARTED)
         val own = before ?: opened.made(asked.commitment)
+        opened.keep(id, own)
         val echoed = (post("open", approvalOpenJson(own.value)) as? ApprovalAckReply.Done)?.approverKey ?: throw Unanswered()
         if (echoed != own.value) throw notOwn(StepWords.APPROVAL_STEERED)
-        opened.keep(id, own)
         mine = own
     }
 

@@ -50,6 +50,7 @@ internal class ApprovalServer {
     var listedReveal: Pair<String, String>? = null
     /* Takes the next reveal and answers it with a gateway's page. */
     var loseRevealReply = false
+    var loseOpenReply = false
     /* Says `opened` however often it is asked, even after the reveal. */
     var staysOpened = false
     /* Refuses to make a request, with this status and body. */
@@ -143,6 +144,8 @@ internal class ApprovalServer {
                 if (state !in listOf("waiting", "opened", "revealed")) return 404 to refusal("This request is over.", "approval-over")
                 approverKey = approverKey ?: body.optString("ephemeralKey")
                 if (state == "waiting") state = "opened"
+                // The value was taken, and what came back is not the server's answer (a proxy's page, a cut connection).
+                if (loseOpenReply) return 200 to "{}"
                 200 to JSONObject().put("approverKey", echoes ?: approverKey).toString()
             }
             method == "POST" && path == "$own/approve" -> {
