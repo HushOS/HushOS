@@ -1,0 +1,89 @@
+packages/auth/src/location.test.ts
+  s_566b8e0c4467a4::t_d330ff9d4cebf0 1-111
+  s_566b8e0c4467a4::t_30609a148cb8f4 112
+packages/auth/src/location.ts
+  s_566b8e0c4467a4::t_29ef5a8b68b213 1-105,107
+  s_566b8e0c4467a4::t_333fc0e7183162 106,108
+.env.example
+  s_566b8e0c4467a4::t_30c27509b89c99 147-152
+.env.production.example
+  s_566b8e0c4467a4::t_4d8532e2fbfb2d 46-52
+apps/android/app/src/main/kotlin/com/hushos/app/data/DeviceApproval.kt
+  s_566b8e0c4467a4::t_afa745e5465c20 399-400
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DeviceApprovalUi.kt
+  s_566b8e0c4467a4::t_2ac62d824fdca2 460
+apps/android/app/src/test/kotlin/com/hushos/app/data/DeviceApprovalTest.kt
+  s_566b8e0c4467a4::t_16b5f4d3afccd9 597,617-618
+apps/ios/App/DevicesView.swift
+  s_566b8e0c4467a4::t_54186d27f4bb70 29
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/DeviceApproval.swift
+  s_566b8e0c4467a4::t_d0a7ae6837d00c 407,423
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/DeviceApprovalTests.swift
+  s_566b8e0c4467a4::t_87d464b8f512d8 622,644-645
+apps/web/src/components/device-approvals.tsx
+  s_566b8e0c4467a4::t_8e6e9eede22bdb 173-175,320
+apps/web/src/content/security.mdx
+  s_566b8e0c4467a4::t_ba7105436f5515 99,548
+apps/web/src/lib/api/auth-responses.server.ts
+  s_566b8e0c4467a4::t_cb920edd521e84 386-388,403
+apps/web/src/lib/api/auth.server.ts
+  s_566b8e0c4467a4::t_c79ac5be128d53 566-567
+apps/web/src/lib/api/two-step-device.db.test.ts
+  s_566b8e0c4467a4::t_4379a6f99df424 26-33,101,126,140,607-666
+apps/web/src/lib/approvals.ts
+  s_566b8e0c4467a4::t_8986bcb9431dd1 23-25,27-29
+compose.yaml
+  s_566b8e0c4467a4::t_9054ccc7917c01 85-86
+crates/hushos-core/src/two_step.rs
+  s_566b8e0c4467a4::t_cc84fc36d71e8c 1093-1100,1270-1272,1304,1333,1529-1533,1537-1543,1546,1558-1562,1569-1593
+docs/devices-design.md
+  s_566b8e0c4467a4::t_abe22870c70b8a 9
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_76cff34f216639 203-210,420-447,888,2552,2559,2571,2582,2589
+docs/two-step-design.md
+  s_566b8e0c4467a4::t_b6139a5c8f4c43 938-949,961,963
+packages/auth/src/device-step.test.ts
+  s_566b8e0c4467a4::t_b28e6d6562abc3 105,349-362
+packages/auth/src/device-step.ts
+  s_566b8e0c4467a4::t_62b796696abac5 176-177,210-216
+packages/auth/src/two-step.ts
+  s_566b8e0c4467a4::t_b7d5ce389b8ef4 30,1673-1676,1681,1698,1829
+packages/db/drizzle/20261114015359_two_step_device/migration.sql
+  s_566b8e0c4467a4::t_d18acb5a71168e 5-7,30,48
+packages/db/drizzle/20261114015359_two_step_device/snapshot.json
+  s_566b8e0c4467a4::t_743063331654b3 5,390-405,858-867
+packages/db/drizzle/20261114015359_two_step_device/undo.sql
+  s_566b8e0c4467a4::t_53759e866b69bd 1,58
+packages/db/src/readiness.ts
+  s_566b8e0c4467a4::t_075ac48a231903 14
+packages/db/src/schema/two-step.ts
+  s_566b8e0c4467a4::t_193e236f730211 344-348,363,413-417
+packages/db/src/two-step.approvals.test.ts
+  s_566b8e0c4467a4::t_dc1311170dd006 1136-1257
+packages/db/src/two-step.approvals.ts
+  s_566b8e0c4467a4::t_47c6ba09f397fb 53-54,245,356-357,416-421,438,542-547,598-599,650,755-760,798,1020
+packages/db/src/two-step.core.ts
+  s_566b8e0c4467a4::t_16a67db6eb9431 735,801
+packages/db/src/two-step.migration.test.ts
+  s_566b8e0c4467a4::t_58dfdb61c28ac3 23
+packages/env/src/app.ts
+  s_566b8e0c4467a4::t_6c7e616d753fa9 122-134
+turbo.json
+  s_566b8e0c4467a4::t_f2b08c2f92f229 16-17,96-97
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2e5595af5002c60438182b16b258dcd5568eedfa",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
