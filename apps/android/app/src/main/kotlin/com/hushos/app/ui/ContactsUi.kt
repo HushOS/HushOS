@@ -179,7 +179,6 @@ private fun AddSomeone(model: DriveViewModel, writer: String?, go: (ContactStep)
         }
     }
     StepTitle(if (writer == null) "Add someone" else "Check who wrote this")
-    if (writer != null) Muted("Enter the email they use for HushOS. Once they’re in your contacts, what they add and change shows as theirs.")
     OutlinedTextField(
         value = email, onValueChange = { email = it; hint = null }, singleLine = true, label = { Text("Email") },
         supportingText = { Text(hint?.first ?: "The email they use for HushOS.", color = if (hint?.second == true) Alpine.colors.danger else Alpine.colors.inkMuted) },

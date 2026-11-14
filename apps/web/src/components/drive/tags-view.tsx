@@ -282,7 +282,7 @@ export function TagsView() {
                         <AlertDialogDescription>
                             The tag comes off {removing ? (counts.get(removing.id) ?? 0) : 0}{' '}
                             {removing && (counts.get(removing.id) ?? 0) === 1 ? 'item' : 'items'}{' '}
-                            and leaves your list. The items themselves aren’t touched.
+                            and leaves your list.
                         </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>

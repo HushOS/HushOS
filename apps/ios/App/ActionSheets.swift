@@ -429,7 +429,7 @@ struct VersionsSheet: View {
                     }
                 }
             } message: {
-                if let deleting { Text("It’s deleted for good and its \(size(deleting) ?? "space") is freed. The current version isn’t touched.") }
+                if let deleting { Text("It’s deleted for good.") }
             }
             .sheet(item: $sending) { version in SendCopySheet(item: shown, version: version).environment(store) }
             .fullScreenCover(item: $previewing) { version in

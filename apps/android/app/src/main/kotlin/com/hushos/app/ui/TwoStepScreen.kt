@@ -468,9 +468,11 @@ fun TwoStepScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) 
     // Backup codes nobody has seen yet come before everything else here, whichever page asked for them and wherever
     // the person went while the request was out: the server has made them, and they are shown nowhere else.
     flow.codes?.let { made ->
-        // The codes' screen has said it (the step is on; the earlier codes no longer work): closing it says nothing more.
+        // The codes' screen no longer says the step is on: closing it does, once.
         CodesScreen(model, flow, made, email) {
+            val turnedOn = !flow.codesReplace
             model.twoStepCodesSeen()
+            if (turnedOn) model.notify("Two-step sign-in is on.")
             page = TwoStepPage.MAIN
         }
         return
@@ -584,7 +586,6 @@ private fun RenameKeyDialog(model: DriveViewModel, key: TwoStepStatus.Method, on
         title = { Text("Rename passkey or security key") },
         text = {
             Column {
-                Text("Names aren’t encrypted.", modifier = Modifier.padding(bottom = AlpineSpace.S3))
                 OutlinedTextField(value = name, onValueChange = { name = it; error = null }, singleLine = true, label = { Text("Name") }, enabled = !saving,
                     isError = error != null, supportingText = error?.let { { Text(it) } })
             }
@@ -711,7 +712,6 @@ private fun AuthenticatorScreen(model: DriveViewModel, setup: AppSetup, onBack: 
             SecureWindow()
             AccountPage(if (replacing) "Add your new authenticator app" else "Add your authenticator app", onBack = if (pending) null else onBack) {
                 FormBody {
-                    Text("Add HushOS to your authenticator app, then enter the code it shows.", style = MaterialTheme.typography.bodyLarge)
                     enrolment.link?.let { link ->
                         OutlinedButton(onClick = {
                             try {
@@ -762,12 +762,6 @@ private fun AuthenticatorScreen(model: DriveViewModel, setup: AppSetup, onBack: 
             val title = when (setup) { AppSetup.ON -> "Turn on two-step sign-in?"; AppSetup.REPLACE -> "Replace your authenticator app?"; AppSetup.ADD -> "Add an authenticator app?" }
             AccountPage(title, onBack = if (pending) null else onBack) {
                 FormBody {
-                    // Adding an app beside a key has no opening words: its title says it.
-                    when (setup) {
-                        AppSetup.ON -> "After your password, HushOS will ask for a code from an authenticator app."
-                        AppSetup.REPLACE -> "The new app takes over once you confirm it."
-                        AppSetup.ADD -> null
-                    }?.let { Text(it, style = MaterialTheme.typography.bodyLarge) }
                     ConfirmPassword(password, { password = it; local = null }, tried, enabled = !pending)
                     StepUpFields(holder, enabled = !pending)
                     error?.let { Text(it, color = alpine.danger, style = MaterialTheme.typography.bodyMedium) }
@@ -823,10 +817,9 @@ private fun KeyScreen(model: DriveViewModel, first: Boolean, onBack: () -> Unit)
     if (creation != null) {
         AccountPage("Add your passkey or security key", onBack = if (pending) null else onBack) {
             FormBody {
-                Text("Your phone will ask for it.", style = MaterialTheme.typography.bodyLarge)
                 OutlinedTextField(
                     value = name, onValueChange = { name = it; local = null }, label = { Text("Name") }, placeholder = { Text("Security key") }, singleLine = true, enabled = !pending,
-                    supportingText = { Text("Optional. Names aren’t encrypted.") },
+                    supportingText = { Text("Optional.") },
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences), modifier = Modifier.fillMaxWidth(),
                 )
                 if (first) OthersOffer(signOutOthers, { signOutOthers = it }, others, enabled = !pending)
@@ -852,7 +845,6 @@ private fun KeyScreen(model: DriveViewModel, first: Boolean, onBack: () -> Unit)
     }
     AccountPage(if (first) "Turn on two-step sign-in?" else "Add a passkey or security key?", onBack = if (pending) null else onBack) {
         FormBody {
-            if (first) Text("After your password, HushOS will ask for your passkey or security key.", style = MaterialTheme.typography.bodyLarge)
             ConfirmPassword(password, { password = it; local = null }, tried, enabled = !pending)
             StepUpFields(holder, enabled = !pending)
             error?.let { Text(it, color = alpine.danger, style = MaterialTheme.typography.bodyMedium) }
@@ -930,7 +922,7 @@ private fun NewCodesScreen(model: DriveViewModel, onBack: () -> Unit) {
     BackHandler { if (!pending) onBack() }
     AccountPage("Make new backup codes?", onBack = if (pending) null else onBack) {
         FormBody {
-            Text("You get ten new codes, and the ones you have now stop working.", style = MaterialTheme.typography.bodyLarge)
+            Text("The codes you have now stop working.", style = MaterialTheme.typography.bodyLarge)
             ConfirmPassword(password, { password = it }, tried, enabled = !pending)
             StepUpFields(holder, enabled = !pending)
             flow.error?.let { Text(it, color = alpine.danger, style = MaterialTheme.typography.bodyMedium) }
@@ -954,7 +946,6 @@ private fun CodesScreen(model: DriveViewModel, flow: com.hushos.app.data.TwoStep
     BackHandler {}
     AccountPage(if (flow.codesReplace) "Save your new backup codes" else "Save your backup codes", onBack = null) {
         FormBody {
-            Text(if (flow.codesReplace) "Your earlier codes no longer work." else "Two-step sign-in is on.", style = MaterialTheme.typography.bodyLarge)
             BackupCodes(model, codes, email)
             if (flow.removing) Text("Removing your other devices", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
             if (flow.notRemoved) Text(StepWords.OTHERS_NOT_REMOVED, style = MaterialTheme.typography.bodyMedium, color = alpine.danger)

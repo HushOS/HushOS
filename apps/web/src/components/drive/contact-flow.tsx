@@ -9,13 +9,7 @@ import {
 import { AccountChangedStep } from '@/components/drive/account-changed';
 import { AddSomeone, firstName } from '@/components/drive/add-someone';
 import { CheckContactStep, type Checking } from '@/components/drive/check-contact';
-import {
-    Dialog,
-    DialogContent,
-    DialogDescription,
-    DialogHeader,
-    DialogTitle,
-} from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/toast';
 import type { AccountChange } from '@/lib/contacts';
 
@@ -61,12 +55,6 @@ export function ContactFlow({
                         <DialogTitle>
                             {step.kind === 'add' ? 'Add someone' : 'Check who wrote this'}
                         </DialogTitle>
-                        {step.kind === 'find' && (
-                            <DialogDescription>
-                                Enter the email they use for HushOS. Once they’re in your contacts,
-                                what they add and change shows as theirs.
-                            </DialogDescription>
-                        )}
                     </DialogHeader>
                     <AddSomeone
                         userId={userId}

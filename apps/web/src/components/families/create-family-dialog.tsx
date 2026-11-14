@@ -17,12 +17,7 @@ import { authError } from '@/lib/form';
 import { usePageRestored } from '@/lib/page-restore';
 import { familyTierName } from '@/lib/plans';
 import { tierTooSmall } from '@/lib/family-billing';
-import {
-    catalogueQueryOptions,
-    formatQuota,
-    storageQueryOptions,
-    useBillingEnabled,
-} from '@/lib/queries';
+import { catalogueQueryOptions, formatQuota, storageQueryOptions } from '@/lib/queries';
 import { afterFamilyChange, familiesQueryOptions, familyContext } from '@/lib/families';
 import { checkoutNotOpening, checkoutOpening, leftForCheckout } from '@/lib/family-checkout';
 import { createInFamilyCopy, errorCopy, outcomeCopy } from '@/lib/groups/copy';
@@ -65,7 +60,6 @@ export function CreateFamilyDialog({
     const queryClient = useQueryClient();
     const navigate = useNavigate();
     // Where plans are sold, a family chooses one before anyone can join (docs/groups-design.md 3.5).
-    const billing = useBillingEnabled();
     // Null until they type: until then the field shows `defaultName`, which may arrive later.
     const [typed, setName] = useState<string | null>(null);
     const name = typed ?? defaultName ?? '';
@@ -214,14 +208,15 @@ export function CreateFamilyDialog({
             <DialogContent className="sm:max-w-[440px]">
                 <DialogHeader>
                     <DialogTitle>Create a family</DialogTitle>
-                    <DialogDescription>
-                        {refusal ||
-                            (plan
-                                ? `You’ll be its organizer. Then you pay for ${familyTierName(plan.plan)}, ${formatQuota(plan.plan.quotaBytes)} for everyone’s own files and the family folders, and invite people by email.`
-                                : billing
-                                  ? 'You’ll be its organizer. Then choose a plan and invite people by email.'
-                                  : 'You’ll be its organizer. Then invite people by email.')}
-                    </DialogDescription>
+                    {/* Said only when there is a refusal, or money: what choosing this tier will charge. */}
+                    {(refusal || plan) && (
+                        <DialogDescription>
+                            {refusal ||
+                                (plan
+                                    ? `You pay for ${familyTierName(plan.plan)}, ${formatQuota(plan.plan.quotaBytes)} for everyone’s own files and the family folders.`
+                                    : null)}
+                        </DialogDescription>
+                    )}
                     {!refusal && plan && personalPlan && (
                         <p className="text-sm" data-personal-plan-ends>
                             {personalPlan} From then on your files use the family’s storage.

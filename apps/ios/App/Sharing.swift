@@ -537,7 +537,7 @@ private struct LinkCard: View {
             Button("Cancel", role: .cancel) {}
             Button("Turn off link", role: .destructive) { turnOff() }
         } message: {
-            Text("Anyone who has it can’t open “\(item.name)” any more. Other links keep working.")
+            Text("Anyone who has it can’t open “\(item.name)” any more.")
         }
     }
 
@@ -748,7 +748,7 @@ private struct PersonAccessSheet: View {
                 Button("Cancel", role: .cancel) {}
                 Button("Stop sharing", role: .destructive) { stop() }
             } message: {
-                Text("They can’t open “\(item.name)” in HushOS any more. Copies they already downloaded stay with them. You can share it again later.")
+                Text("They can’t open “\(item.name)” in HushOS any more, but copies they downloaded stay with them.")
             }
         }
         // Taller while their account changed, so Stop sharing (which never waits on Review) is in view without scrolling.
@@ -1085,9 +1085,6 @@ struct OwnWordsSheet: View {
                     } else {
                         ProgressView().accessibilityLabel("Opening your words").alpineRow()
                     }
-                } header: {
-                    Text("When someone checks it’s you, read these to them. They’re the same on all your devices.")
-                        .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).textCase(nil)
                 }
             }
             .listStyle(.insetGrouped)

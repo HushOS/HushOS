@@ -33,7 +33,6 @@ import { Button } from '@/components/ui/button';
 import {
     Dialog,
     DialogContent,
-    DialogDescription,
     DialogFooter,
     DialogHeader,
     DialogTitle,
@@ -322,7 +321,7 @@ export function TagView({ tagId }: { tagId: string }) {
                         <AlertDialogTitle>Remove “{tag?.name}”?</AlertDialogTitle>
                         <AlertDialogDescription>
                             The tag comes off {items.length} {items.length === 1 ? 'item' : 'items'}{' '}
-                            and leaves your list. The items themselves aren’t touched.
+                            and leaves your list.
                         </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
@@ -392,9 +391,6 @@ export function RenameTagDialog({
                 >
                     <DialogHeader>
                         <DialogTitle>Rename tag</DialogTitle>
-                        <DialogDescription>
-                            The new name shows everywhere at once; the items are not touched.
-                        </DialogDescription>
                     </DialogHeader>
                     <div className="flex flex-col gap-2">
                         <label htmlFor={id} className="text-[13px] font-semibold">

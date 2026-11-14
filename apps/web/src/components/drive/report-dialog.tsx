@@ -125,7 +125,7 @@ function ReportForm({
                     {node.kind === 'folder'
                         ? 'this folder, everything inside it, and anything added to it later'
                         : 'this file and its earlier versions'}
-                    , so they can look. Whoever shared it isn’t told who reported it.
+                    .
                 </DialogDescription>
             </DialogHeader>
             <div className="flex flex-col gap-1.5">

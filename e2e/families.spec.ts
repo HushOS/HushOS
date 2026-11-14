@@ -939,9 +939,7 @@ test.describe.serial('removal, leaving and key changes', () => {
         await maya.page.getByRole('menuitem', { name: 'Remove from family' }).click();
         const confirm = maya.page.getByRole('alertdialog', { name: `Remove Sam from ${family}?` });
         await expect(
-            confirm.getByText(
-                'Sam loses the family folders straight away. HushOS replaces their keys, which can take a few minutes.',
-            ),
+            confirm.getByText('Sam loses the family folders straight away.'),
         ).toBeVisible();
         await confirm.getByRole('button', { name: 'Remove from family' }).click();
         const sheet = maya.page.getByRole('dialog', { name: 'Remove Sam' });
@@ -1137,9 +1135,7 @@ test.describe.serial('removal, leaving and key changes', () => {
         await openTechnical(ana.page);
         await ana.page.getByRole('button', { name: 'Leave family' }).click();
         const dialog = ana.page.getByRole('alertdialog', { name: `Leave ${family}?` });
-        await expect(
-            dialog.getByText('You’ll lose the family folders. Your own files stay yours.'),
-        ).toBeVisible();
+        await expect(dialog.getByText('You’ll lose the family folders.')).toBeVisible();
         await ana.page.screenshot({ path: test.info().outputPath('leave.png') });
         await dialog.getByRole('button', { name: 'Leave family' }).click();
         await expect(ana.page).toHaveURL(/\/app\/drive/, { timeout: 60_000 });
@@ -1460,7 +1456,6 @@ test.describe.serial('a manager role asked for at Invite someone', () => {
         const asked = maya.page.locator('[data-invited-to-manage]');
         await expect(asked).toBeVisible({ timeout: 90_000 });
         await expect(asked).toContainText('Sam was invited to manage the family');
-        await expect(asked).toContainText('Let them manage it now?');
         await asked.getByRole('button', { name: 'Let them manage it' }).click();
         await expect(maya.page.getByText('Sam can manage the family')).toBeVisible({
             timeout: 120_000,
@@ -2624,7 +2619,7 @@ test.describe.serial('signing up for a family plan from the pricing page', () =>
         expect(landed.searchParams.get('create')).toBe(tier!.id);
         expect(landed.searchParams.get('currency')).toBe(shownIn);
         const dialog = page.getByRole('dialog', { name: 'Create a family' });
-        await expect(dialog).toContainText(`Then you pay for ${planTierName(tier!)}`, {
+        await expect(dialog).toContainText(`You pay for ${planTierName(tier!)}`, {
             timeout: 60_000,
         });
         await expect(dialog.getByLabel('Name')).toHaveValue('Rosa Ekström’s family');
@@ -2693,7 +2688,6 @@ test.describe.serial('declining a pending join', () => {
         await page.getByRole('button', { name: 'Decline invitation to Berg family' }).click();
         const ask = sam.page.getByRole('alertdialog');
         await expect(ask).toContainText('Decline the invitation to Berg family?');
-        await expect(ask).toContainText('You can be invited again.');
         await ask.getByRole('button', { name: 'Decline invitation' }).click();
         await expect(ask).toHaveCount(0, { timeout: 60_000 });
         await expect(page.getByRole('link', { name: 'Continue joining Berg family' })).toHaveCount(
@@ -2901,10 +2895,8 @@ test.describe.serial('deleting a family folder', () => {
         await ida.page.getByRole('button', { name: 'More for Photos' }).click();
         await ida.page.getByRole('menuitem', { name: 'Delete family folder' }).click();
         const confirm = ida.page.getByRole('alertdialog', { name: 'Delete “Photos”?' });
-        await expect(confirm).toContainText(
-            'deleted from the server, normally after 30 days, and their space is freed when they are',
-        );
-        await expect(confirm).toContainText('Anyone who kept copies or keys keeps them');
+        await expect(confirm).toContainText('can’t be restored');
+        await expect(confirm).toContainText('anyone who kept copies or keys keeps them');
         const deleted = ida.page.waitForResponse(
             (response) =>
                 response.request().method() === 'POST' &&
@@ -3290,7 +3282,7 @@ test.describe.serial('one view for a family member, with one pool', () => {
         const dialog = rosa.page.getByRole('dialog', { name: 'Create a family' });
         const gib = Number(plus.quotaBytes) / 1024 ** 3;
         await expect(dialog).toContainText(
-            `Then you pay for ${tier}, ${gib >= 1024 ? `${gib / 1024} TB` : `${gib} GB`} for everyone’s own files and the family folders`,
+            `You pay for ${tier}, ${gib >= 1024 ? `${gib / 1024} TB` : `${gib} GB`} for everyone’s own files and the family folders`,
         );
         await dialog.getByLabel('Name').fill(family);
         await dialog.getByRole('button', { name: 'Create and pay' }).click();
@@ -3581,7 +3573,7 @@ test.describe.serial('creating a family from Plans: where it stops', () => {
         await nora.page.locator('input[autocomplete=current-password]').press('Enter');
         // Unlocked, the dialog opens with the tier chosen on Plans.
         const dialog = nora.page.getByRole('dialog', { name: 'Create a family' });
-        await expect(dialog).toContainText(`Then you pay for ${tierOf(plus)},`, {
+        await expect(dialog).toContainText(`You pay for ${tierOf(plus)},`, {
             timeout: 60_000,
         });
         await expect(dialog.getByRole('button', { name: 'Create and pay' })).toBeVisible();

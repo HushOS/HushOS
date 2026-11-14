@@ -897,10 +897,9 @@ function AppDialog({
                 locked
                 pending={false}
                 title="Save your backup codes"
-                description="Two-step sign-in is on."
                 onClose={onClose}
                 onSubmit={() => {
-                    onDone('');
+                    onDone('Two-step sign-in is on');
                     onClose();
                 }}
                 // Never held by the removal: a request that hangs must not keep the person here.
@@ -926,7 +925,6 @@ function AppDialog({
                 open={open}
                 pending={pending}
                 title={replacing ? 'Add your new authenticator app' : 'Add your authenticator app'}
-                description="Scan this code with your authenticator app, then enter the code it shows."
                 onClose={onClose}
                 onSubmit={() => void confirm()}
                 footer={
@@ -1017,13 +1015,6 @@ function AppDialog({
                     : turningOn
                       ? 'Turn on two-step sign-in?'
                       : 'Add an authenticator app?'
-            }
-            description={
-                replacing
-                    ? 'The new app takes over once you confirm it.'
-                    : turningOn
-                      ? 'After your password, HushOS will ask for a code from an authenticator app.'
-                      : undefined
             }
             onClose={onClose}
             onSubmit={() => void start()}
@@ -1226,10 +1217,9 @@ function KeyDialog({
                 locked
                 pending={false}
                 title="Save your backup codes"
-                description="Two-step sign-in is on."
                 onClose={onClose}
                 onSubmit={() => {
-                    onDone('');
+                    onDone('Two-step sign-in is on');
                     onClose();
                 }}
                 footer={<Button type="submit">Done</Button>}
@@ -1253,7 +1243,6 @@ function KeyDialog({
                 open={open}
                 pending={pending}
                 title="Add your passkey or security key"
-                description="Your browser will ask for it."
                 onClose={onClose}
                 onSubmit={() => void add()}
                 footer={
@@ -1276,7 +1265,7 @@ function KeyDialog({
                         setName(event.target.value);
                         setError('');
                     }}
-                    hint="Optional. Names aren’t encrypted."
+                    hint="Optional."
                 />
                 {first && (
                     <RemoveOthersOffer
@@ -1294,11 +1283,6 @@ function KeyDialog({
             open={open}
             pending={pending}
             title={first ? 'Turn on two-step sign-in?' : 'Add a passkey or security key?'}
-            description={
-                first
-                    ? 'After your password, HushOS will ask for your passkey or security key.'
-                    : undefined
-            }
             onClose={onClose}
             onSubmit={() => void start()}
             footer={
@@ -1370,7 +1354,6 @@ function RenameKeyDialog({
             open={method !== null}
             pending={saving}
             title="Rename passkey or security key"
-            description="Names aren’t encrypted."
             onClose={leave}
             onSubmit={() => void save()}
             footer={
@@ -1565,7 +1548,6 @@ function NewCodesDialog({
                 locked
                 pending={false}
                 title="Save your new backup codes"
-                description="Your earlier codes no longer work."
                 onClose={onClose}
                 onSubmit={() => {
                     onDone('');
@@ -1581,7 +1563,7 @@ function NewCodesDialog({
             open={open}
             pending={pending}
             title="Make new backup codes?"
-            description="You get ten new codes, and the ones you have now stop working."
+            description="The codes you have now stop working."
             onClose={onClose}
             onSubmit={() => void submit()}
             footer={

@@ -6,7 +6,6 @@ import { Button } from '@/components/ui/button';
 import {
     Dialog,
     DialogContent,
-    DialogDescription,
     DialogFooter,
     DialogHeader,
     DialogTitle,
@@ -78,9 +77,6 @@ function InfoBody({
                     heading={(name) => (
                         <DialogHeader>
                             <DialogTitle className="wrap-anywhere">{name}</DialogTitle>
-                            <DialogDescription className="sr-only">
-                                About this {node.kind === 'folder' ? 'folder' : 'file'}.
-                            </DialogDescription>
                         </DialogHeader>
                     )}
                     {...details}

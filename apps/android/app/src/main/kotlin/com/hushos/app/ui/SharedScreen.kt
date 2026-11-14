@@ -310,7 +310,7 @@ fun SharedScreen(model: DriveViewModel, state: DriveState) {
         AlertDialog(
             onDismissRequest = { stopping = null },
             title = { Text(if (row.link != null) "Turn off this link?" else "Stop sharing “${row.name}”?") },
-            text = { Text(if (row.link != null) "Anyone who has it can’t open “${row.name}” any more. Other links keep working." else "$who can’t open it in HushOS any more. Copies they already downloaded stay with them. You can share it again later.") },
+            text = { Text(if (row.link != null) "Anyone who has it can’t open “${row.name}” any more." else "$who can’t open it in HushOS any more, but copies they downloaded stay with them.") },
             confirmButton = { TextButton(onClick = {
                 stopping = null
                 scope.launch {

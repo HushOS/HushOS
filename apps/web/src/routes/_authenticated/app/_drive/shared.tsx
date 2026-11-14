@@ -710,9 +710,9 @@ function ByMe() {
                         </AlertDialogTitle>
                         <AlertDialogDescription>
                             {stopping?.kind === 'link'
-                                ? `Anyone who has it can’t open “${displayName(stopping.link.node)}” any more. Other links keep working.`
+                                ? `Anyone who has it can’t open “${displayName(stopping.link.node)}” any more.`
                                 : stopping
-                                  ? `${stopping.share.grantee.name} can’t open it in HushOS any more. Copies they already downloaded stay with them. You can share it again later.`
+                                  ? `${stopping.share.grantee.name} can’t open it in HushOS any more, but copies they downloaded stay with them.`
                                   : ''}
                         </AlertDialogDescription>
                     </AlertDialogHeader>

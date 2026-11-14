@@ -448,7 +448,7 @@ struct PlansView: View {
             Button("Cancel", role: .cancel) {}
             Button("Remove", role: .destructive) { removeVersions() }
         } message: {
-            Text("Every file keeps its current version. The \(formatSpace(versions)) of earlier versions is deleted and can’t be restored.")
+            Text("The \(formatSpace(versions)) of earlier versions is deleted and can’t be restored.")
         }
         .refreshable { await reload() }
     }
@@ -969,9 +969,7 @@ struct ResetKeysSheet: View {
                 } else {
                     Section {} header: {
                         VStack(alignment: .leading, spacing: Alpine.Space.s2) {
-                            Text("A new master key for your account. Your files, sharing keys and links stay as they are.").foregroundStyle(Alpine.ink)
-                            Text("• Use it if you think someone saw your password or recovery phrase.\n• You get a new recovery phrase. The old one stops working.\n• Your other devices are signed out.")
-                                .foregroundStyle(Alpine.inkMuted)
+                            Text("Your recovery phrase is replaced, and your other devices are signed out.").foregroundStyle(Alpine.ink)
                         }
                         .font(Theme.Text.callout).textCase(nil)
                     }
@@ -1080,9 +1078,7 @@ struct ReplaceKeysSheet: View {
             Form {
                 Section {} header: {
                     VStack(alignment: .leading, spacing: Alpine.Space.s2) {
-                        Text("New keys for sharing, signed by your old ones, so people you share with don’t need to compare words from scratch.").foregroundStyle(Alpine.ink)
-                        Text("• Your twelve words change. People who checked the old ones see that your new keys are signed by them.\n• Everything you shared is sealed again under the new keys.\n• Your password, recovery phrase and devices stay as they are.")
-                            .foregroundStyle(Alpine.inkMuted)
+                        Text("Your twelve words change.").foregroundStyle(Alpine.ink)
                     }
                     .font(Theme.Text.callout).textCase(nil)
                 }
@@ -1148,7 +1144,7 @@ struct DeleteAccountSheet: View {
         NavigationStack {
             Form {
                 Section {} header: {
-                    Text("Deleting removes every file, every earlier version, every share and link, and the account itself. \(Text("It can’t be undone.").fontWeight(.semibold))")
+                    Text("Every file, earlier version, share and link is deleted with the account, and can’t be recovered.")
                         .font(Theme.Text.callout).foregroundStyle(Alpine.ink).textCase(nil)
                 }
                 if !error.isEmpty { Section { Text(error).foregroundStyle(Alpine.danger).alpineRow() } }

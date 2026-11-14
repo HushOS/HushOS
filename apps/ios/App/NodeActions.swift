@@ -276,7 +276,7 @@ enum Rename {
     static func newFolder(in folderId: String, named folderName: String, store: DriveStore) {
         let taken = (store.folders[folderId] ?? []).map(\.name)
         TextPrompt.present(
-            title: "New folder", message: "In “\(folderName)”", text: DriveStore.freeName("Untitled folder", among: taken),
+            title: "New folder", message: nil, text: DriveStore.freeName("Untitled folder", among: taken),
             placeholder: "Name", action: "Create", selectStem: false,
             validate: { name in problem(name, among: taken) }
         ) { name in

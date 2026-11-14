@@ -539,10 +539,9 @@ describe('a manager role held back at Let them in', () => {
         expect(prompt()).toBeNull();
         await checkSamInTheFamily(user);
         await user.click(await screen.findByRole('button', { name: 'Family words match' }));
-        const asked = await screen.findByRole('alertdialog', {
+        await screen.findByRole('alertdialog', {
             name: 'Sam was invited to manage the family',
         });
-        expect(asked.textContent).toContain('Let them manage it now?');
         // Let them manage it: the role, and nothing waits any more.
         await user.click(screen.getByRole('button', { name: 'Let them manage it' }));
         await waitFor(() => expect(promotedSam()).toBe(true));

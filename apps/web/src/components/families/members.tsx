@@ -591,8 +591,7 @@ function PendingRow({
                     <AlertDialogHeader>
                         <AlertDialogTitle>Turn {first} down?</AlertDialogTitle>
                         <AlertDialogDescription>
-                            They’ll need a new invitation to join {family}. To decide later, close
-                            this instead: nothing is lost.
+                            They’ll need a new invitation to join {family}.
                         </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
@@ -1115,9 +1114,6 @@ export function MemberList({
                                 <AlertDialogTitle>
                                     {firstName(askInvited.name)} was invited to manage the family
                                 </AlertDialogTitle>
-                                <AlertDialogDescription>
-                                    Let them manage it now?
-                                </AlertDialogDescription>
                             </AlertDialogHeader>
                             <AlertDialogFooter>
                                 <AlertDialogCancel>Not now</AlertDialogCancel>
@@ -1142,8 +1138,7 @@ export function MemberList({
                                 </AlertDialogTitle>
                                 <AlertDialogDescription>
                                     Managers can let people in and change the family, so check it’s{' '}
-                                    {firstName(checkFirst.member.name)} before they manage it. It
-                                    takes a minute on a call or in person.
+                                    {firstName(checkFirst.member.name)} first.
                                 </AlertDialogDescription>
                             </AlertDialogHeader>
                             <AlertDialogFooter>
@@ -1383,7 +1378,7 @@ function RoleConfirm({
         },
         organizer: {
             title: `Make ${who} the organizer?`,
-            body: `${who} takes over the family’s billing. You keep managing the family.`,
+            body: `${who} takes over the family’s billing.`,
             action: 'Make organizer',
         },
     }[change.kind];
@@ -1495,8 +1490,7 @@ export function InvitationList({
                                         : 'Cancel this invitation?'}
                                 </AlertDialogTitle>
                                 <AlertDialogDescription>
-                                    The link in their email stops working. You can invite them
-                                    again.
+                                    The link in their email stops working.
                                 </AlertDialogDescription>
                             </AlertDialogHeader>
                             <AlertDialogFooter>

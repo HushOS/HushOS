@@ -694,7 +694,7 @@ fun VersionsSheet(model: DriveViewModel, state: DriveState, item: Opened, dismis
         AlertDialog(
             onDismissRequest = { deleting = null },
             title = { Text("Delete the earlier version?") },
-            text = { Text("It’s deleted for good${sizes[v.id]?.let { " and its ${formatBytes(it)} is freed" } ?: ""}. The current version isn’t touched.") },
+            text = { Text("It’s deleted for good.") },
             confirmButton = { TextButton(onClick = {
                 deleting = null
                 scope.launch { if (model.discardVersion(current, v)) { model.notify("Earlier version deleted"); reload++ } }

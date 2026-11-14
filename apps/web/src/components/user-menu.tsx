@@ -265,8 +265,6 @@ function SignOutDialog({
                     <AlertDialogDescription>
                         This browser leaves your list of devices, and you’ll need your email and
                         password to get back in.
-                        {unlocked &&
-                            ' To hide your files without signing out, lock HushOS on this browser instead.'}
                     </AlertDialogDescription>
                 </AlertDialogHeader>
                 {failed && (

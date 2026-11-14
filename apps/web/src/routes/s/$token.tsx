@@ -8,13 +8,7 @@ import { Brand } from '@/components/brand';
 import { Cover } from '@/components/cover';
 import { SiteFooter } from '@/components/site-header';
 import { Button, buttonVariants } from '@/components/ui/button';
-import {
-    Dialog,
-    DialogContent,
-    DialogDescription,
-    DialogHeader,
-    DialogTitle,
-} from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { PasswordInput } from '@/components/password-input';
 import { toast } from '@/components/ui/toast';
@@ -801,10 +795,6 @@ function SaveToDrive({ opened }: { opened: Opened }) {
                 <DialogContent>
                     <DialogHeader>
                         <DialogTitle>Unlock HushOS on this browser</DialogTitle>
-                        <DialogDescription>
-                            Your copy is saved under your own keys, so HushOS needs your password
-                            first.
-                        </DialogDescription>
                     </DialogHeader>
                     {user && (
                         <UnlockDevice

@@ -768,7 +768,7 @@ fun TransferSheet(model: DriveViewModel, transfers: List<TransferItem>, offline:
         AlertDialog(
             onDismissRequest = { cancelling = null },
             title = { Text(if (list.size == 1) "Cancel this transfer?" else "Cancel ${list.size} transfers?") },
-            text = { Text("What is still on its way stops and isn’t kept. What already finished stays where it is.") },
+            text = { Text("What is still on its way stops and isn’t kept.") },
             confirmButton = { TextButton(onClick = { list.forEach { it.cancel?.invoke() }; cancelling = null }) { Text(if (list.size == 1) "Cancel it" else "Cancel them all", color = alpine.danger) } },
             dismissButton = { TextButton(onClick = { cancelling = null }) { Text("Keep going") } },
         )

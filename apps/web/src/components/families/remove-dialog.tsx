@@ -124,8 +124,7 @@ export function RemoveDialog({
                             Remove {who} from {family}?
                         </AlertDialogTitle>
                         <AlertDialogDescription>
-                            {who} loses the family folders straight away. HushOS replaces their
-                            keys, which can take a few minutes.
+                            {who} loses the family folders straight away.
                         </AlertDialogDescription>
                     </AlertDialogHeader>
                     {planLine && (
@@ -181,8 +180,7 @@ export function RemoveDialog({
                 <DialogHeader>
                     <DialogTitle>Remove {who}</DialogTitle>
                     <DialogDescription>
-                        {who} loses the family folders straight away. HushOS replaces their keys,
-                        which can take a few minutes.
+                        {who} loses the family folders straight away.
                     </DialogDescription>
                 </DialogHeader>
                 <ol className="flex flex-col gap-2 text-[15px]" aria-label="Progress">

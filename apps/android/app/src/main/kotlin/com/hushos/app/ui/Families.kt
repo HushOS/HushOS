@@ -455,7 +455,6 @@ private fun InviteDialog(model: DriveViewModel, ask: InviteAsk) {
         title = { Text("Invite someone") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3)) {
-                Text("We’ll email them a link. Once they accept, you let them in.")
                 androidx.compose.material3.OutlinedTextField(value = ask.email, onValueChange = { families.typeInvite(it) }, singleLine = true,
                     label = { Text("Email") }, placeholder = { Text("them@example.com") }, isError = ask.error != null, enabled = !ask.busy,
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Email),
@@ -485,7 +484,7 @@ private fun RoleConfirmDialog(model: DriveViewModel, ask: RoleAsk, family: Strin
     val (title, body, action) = when (ask.kind) {
         RoleKind.MANAGE -> Triple("Let $who manage the family?", "$who can invite people, let them in and change who manages $family.", "Let them manage")
         RoleKind.STOP -> Triple("Stop $who managing the family?", "$who stays in $family and keeps the family folders, but can’t change who’s in it any more.", "Stop managing")
-        RoleKind.ORGANIZER, RoleKind.FINISH -> Triple("Make $who the organizer?", "$who takes over the family’s billing. You keep managing the family.", "Make organizer")
+        RoleKind.ORGANIZER, RoleKind.FINISH -> Triple("Make $who the organizer?", "$who takes over the family’s billing.", "Make organizer")
     }
     androidx.compose.material3.AlertDialog(
         onDismissRequest = { model.families.dismissRole() },
@@ -503,7 +502,7 @@ private fun CheckFirstDialog(model: DriveViewModel, ask: RoleAsk, check: () -> U
     androidx.compose.material3.AlertDialog(
         onDismissRequest = { model.families.dismissCheckFirst() },
         title = { Text("Check it’s $who first") },
-        text = { Text("Managers can let people in and change the family, so check it’s $who before they manage it. It takes a minute on a call or in person.") },
+        text = { Text("Managers can let people in and change the family, so check it’s $who first.") },
         confirmButton = { TextButton(onClick = check) { Text("Check it’s $who") } },
         dismissButton = { TextButton(onClick = { model.families.dismissCheckFirst() }) { Text("Cancel") } },
     )
@@ -516,7 +515,7 @@ private fun TurnDownDialog(model: DriveViewModel, groupId: String, person: com.h
     androidx.compose.material3.AlertDialog(
         onDismissRequest = { model.families.turningDown = null },
         title = { Text("Turn $first down?") },
-        text = { Text("They’ll need a new invitation to join $family. To decide later, close this instead: nothing is lost.") },
+        text = { Text("They’ll need a new invitation to join $family.") },
         confirmButton = { TextButton(onClick = { model.families.turnDown(groupId, person) }) { Text("Turn down", color = alpine.danger) } },
         dismissButton = { TextButton(onClick = { model.families.turningDown = null }) { Text("Cancel") } },
     )
@@ -528,7 +527,7 @@ private fun CancelInvitationDialog(model: DriveViewModel, groupId: String, invit
     androidx.compose.material3.AlertDialog(
         onDismissRequest = { model.families.cancelling = null },
         title = { Text(invitation.email?.let { "Cancel the invitation to $it?" } ?: "Cancel this invitation?") },
-        text = { Text("The link in their email stops working. You can invite them again.") },
+        text = { Text("The link in their email stops working.") },
         confirmButton = { TextButton(onClick = { model.families.cancelInvitation(groupId, invitation) }) { Text("Cancel invitation", color = alpine.danger) } },
         dismissButton = { TextButton(onClick = { model.families.cancelling = null }) { Text("Keep invitation") } },
     )
