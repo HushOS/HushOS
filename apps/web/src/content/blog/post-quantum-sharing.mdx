@@ -1,6 +1,6 @@
 ---
-title: Sharing that outlasts X25519
-description: Shares between accounts are sealed with ML-KEM-768 beside X25519, so a copy of the database taken today stays shut to a quantum computer later. How the seal works, and how pins cover the second key.
+title: 'Post-quantum sharing between accounts: X25519 with ML-KEM-768'
+description: What you share with someone in HushOS is sealed to them with ML-KEM-768 beside X25519 and signed with ML-DSA-65 beside Ed25519, so a copy of our database taken today stays shut to a quantum computer later. There is nothing to set up.
 date: 2026-09-18
 order: 2
 author: HushOS
@@ -8,41 +8,55 @@ cover: ML-KEM
 tone: graphite
 ---
 
-import { Cta, Ledger, Note } from '../../components/mdx';
+import { Cta, Ledger } from '../../components/mdx';
 
-Every file in HushOS is encrypted with a symmetric cipher, and symmetric ciphers with 256-bit keys are not what a quantum computer breaks. The place a quantum computer could hurt a service like this is sharing: when you share a folder with someone, your device seals that folder's key to their public key. If that seal rested on X25519 alone, a copy of the database taken today, plus a large enough quantum computer some years from now, would open every share ever made.
-
-So it does not rest on X25519 alone. Shares between accounts are sealed with two key exchanges at once: an X25519 agreement, and an ML-KEM-768 encapsulation to a post-quantum key every identity carries. The two secrets are combined into one key, so the envelope opens only for someone who holds both private halves, and it stays shut unless both problems fall.
+What you share with someone in HushOS is built to stay shut to a future quantum computer. Every share between accounts is sealed with two key exchanges at once, one of them designed to resist a quantum computer, so a copy of our database taken today stays shut even if the older method is broken years from now. You do nothing to get this: both keys are made on your device at sign-up and used for every share.
 
 <Ledger
     rows={[
-        ['The seal', 'X25519 and ML-KEM-768 (FIPS 203) together, a 1160-byte envelope'],
-        ['Your files', 'XChaCha20-Poly1305 with 256-bit keys, which is not the weak point'],
         [
-            'Your fingerprint',
-            'The X25519 key alone: the post-quantum key is signed by your identity, not folded into the fingerprint',
+            'The seal',
+            'X25519 and ML-KEM-768 (FIPS 203) together, with a fresh X25519 key for every share',
         ],
-        ['What you do', 'Nothing. Both keys are made at sign-up and used for every share'],
+        [
+            'The signature',
+            'Ed25519 and ML-DSA-65 (FIPS 204) together, checked before a share opens',
+        ],
+        ['The envelope', '4565 bytes, which nobody ever sees'],
+        ['Your files', 'XChaCha20-Poly1305 with 256-bit keys'],
+        [
+            'The twelve words',
+            'Cover all four of a person’s public keys, both post-quantum ones included',
+        ],
+        [
+            'What you do',
+            'Nothing. The keys are made at sign-up and used for every share between accounts',
+        ],
     ]}
 />
+
+## Where a quantum computer would aim
+
+Every file in HushOS is encrypted with a symmetric cipher, and symmetric ciphers with 256-bit keys are not what a quantum computer breaks. The place a quantum computer could hurt a service like this is sharing: when you share a folder with someone, your device seals that folder's key to their public key. If that seal rested on X25519 alone, a copy of the database taken today, plus a large enough quantum computer some years from now, would open every share ever made.
+
+So it does not rest on X25519 alone. Your device makes a fresh X25519 key for the share and agrees a secret with the other person's identity key, and it encapsulates a second secret to the ML-KEM-768 key every identity carries. The two secrets are combined into one key, so the envelope opens only for someone who holds both private halves, and it stays shut unless both problems fall.
 
 ## Why two, and not just the new one
 
 ML-KEM is young. X25519 has two decades of attention behind it. Sealing to both means a flaw found in either one leaves the share shut, and the cost is a larger envelope that nobody ever sees.
 
-## Pins cover the second key
+## Signed twice as well
 
-The server serves public keys, and a dishonest server could serve its own. Pins catch that, with a fingerprint two people compare over the X25519 key and the identity's signing key. The post-quantum key is vouched for by that signing key: the server refuses to store one without the signature, your device verifies it against the pinned signing key before using it, and a digest of it joins the pin. A different key served later is refused like any changed key, and a share is never sealed to X25519 alone, so withholding the post-quantum key gets a server nothing.
+A seal says who can open a share. A signature says who made it. Your identity signs every share with a person with Ed25519 and ML-DSA-65 together, and the other person's device checks both halves against the keys it pinned for you before it opens anything. A quantum computer that could forge Ed25519 still could not pass a share off as yours.
 
-_Updated October 2026: the fingerprint first covered only the X25519 key, which left a server room to pair the real X25519 key with a signing key and post-quantum key of its own. The words now cover both, and people added before are asked to compare them once more._
+## The words you compare cover every key
 
-The same holds when you stop sharing with someone. Your device re-keys the folder and re-seals it to whoever remains, and it takes their keys through your pins, not from the server directly. A share to someone whose served key the pin refuses is left closed rather than sealed to a key you never vouched for.
+The server hands out public keys, so HushOS lets you check them. Your identity signs a statement over all four of its public keys (X25519, ML-KEM-768, Ed25519 and ML-DSA-65) with both signing keys. The server refuses an identity whose statement does not verify, and every device checks it again.
 
-<Note title="What this does not cover">
-    Sign-in rests on OPAQUE, which has no post-quantum standard; the security page says what that
-    means. Report escrow uses the same hybrid envelope as shares.
-</Note>
+The twelve words two people compare are worked out from all four keys, so one comparison vouches for the post-quantum keys too. From then on, a key for that person that their own keys did not sign is never used silently: sharing with them pauses until you continue or check them again. A share is never sealed to X25519 alone, so withholding someone's post-quantum key gets a server nothing.
 
-The full construction is on the [security page](/security), and `docs/drive-design.md` in the repository fixes the byte layout.
+The same holds when you stop sharing with someone. Your device re-keys the folder and re-seals it to whoever remains, and it takes their keys through your pins, not from the server directly.
+
+The full construction, and what a quantum computer would mean for the rest of HushOS, is in [how HushOS protects your files](/security). `docs/identity-pq-design.md` in the repository fixes the byte layout.
 
 <Cta title="Share something">It is sealed to the person you pick, twice over, on your device.</Cta>
