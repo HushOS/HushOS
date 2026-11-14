@@ -222,6 +222,13 @@ async function approveFrom(approver: Signed, userId: string, asked: Asked) {
     return { approved, id, codes: { asking: ours, approving: theirs } };
 }
 
+const settings = async (cookie: string, query = '?methods=webauthn,device') =>
+    (await edge.call('GET', `/two-step${query}`, undefined, { cookie })).body;
+
+/* A well-formed code that is not `code`: the same word under the next number. */
+const another = (code: string) =>
+    `${String((Number(code.slice(0, 2)) + 1) % 100).padStart(2, '0')}${code.slice(2)}`;
+
 /* An account with the method on: the laptop asked, the phone approved. */
 async function withDeviceStep() {
     const who = await edge.account();
@@ -236,12 +243,13 @@ async function withDeviceStep() {
         approver: phone,
     });
     expect(asked.reply.status).toBe(200);
-    const { approved, id } = await approveFrom(phone, who.userId, asked);
+    const { approved, id, codes } = await approveFrom(phone, who.userId, asked);
     expect(approved.status).toBe(200);
     const confirmed = await edge.call(
         'POST',
         `/two-step/device/${started.body.id}/confirm`,
-        { token: started.body.token, requestId: id },
+        // The code the phone shows, typed on the laptop.
+        { token: started.body.token, requestId: id, code: codes.approving },
         { cookie: laptop.cookie },
     );
     expect(confirmed.status).toBe(200);
@@ -275,8 +283,6 @@ describe('turning it on', () => {
         const who = await edge.account();
         const laptop = await device(who, 'Maya’s Laptop');
         const phone = await device(who, 'Maya’s Phone');
-        const settings = async (cookie: string, query = '?methods=webauthn,device') =>
-            (await edge.call('GET', `/two-step${query}`, undefined, { cookie })).body;
         // The devices the person can choose from: the other one, as the list of devices shows it.
         const before = await settings(laptop.cookie);
         expect(before).toMatchObject({ on: false, otherDevice: true });
@@ -288,11 +294,11 @@ describe('turning it on', () => {
             cookie: laptop.cookie,
         });
         expect(started.status).toBe(200);
-        const confirm = (requestId: string) =>
+        const confirm = (requestId: string, code?: string) =>
             edge.call(
                 'POST',
                 `/two-step/device/${started.body.id}/confirm`,
-                { token: started.body.token, requestId },
+                { token: started.body.token, requestId, ...(code ? { code } : {}) },
                 { cookie: laptop.cookie },
             );
         // Without saying which device is to approve, nothing is asked of any.
@@ -307,7 +313,9 @@ describe('turning it on', () => {
         });
         expect(asked.reply.status).toBe(200);
         // Pending, it is no step: the account still signs in with its password alone.
-        expect((await confirm(asked.reply.body.requestId)).body.code).toBe('step-pending');
+        expect((await confirm(asked.reply.body.requestId, '47 river')).body.code).toBe(
+            'step-pending',
+        );
         expect((await settings(laptop.cookie)).on).toBe(false);
         expect((await edge.signIn(who)).status).toBe(200);
 
@@ -326,11 +334,18 @@ describe('turning it on', () => {
 
         const { approved, id, codes } = await approveFrom(phone, who.userId, asked);
         expect(approved.status).toBe(200);
-        // Both screens show the same two digits and a word.
+        // Both devices come to the same two digits and a word. Here the phone shows them.
         expect(codes.asking).toBe(codes.approving);
         expect(codes.asking).toMatch(/^\d{2} [a-z]+$/);
 
-        const confirmed = await confirm(id);
+        // The approval alone turns nothing on: the code the phone shows must be typed here,
+        // and the server will not take the request without one, or with something that is none.
+        for (const none of [undefined, 'river 47', '47 hushos'])
+            expect((await confirm(id, none)).status).toBe(400);
+        expect((await settings(laptop.cookie)).on).toBe(false);
+        // Typed as a person types it: the case and what stands between the two are forgiven.
+        const typed = codes.approving.toUpperCase().replace(' ', '-');
+        const confirmed = await confirm(id, ` ${typed} `);
         expect(confirmed.status).toBe(200);
         expect(confirmed.body.backupCodes).toHaveLength(10);
         expect(await settings(laptop.cookie)).toMatchObject({
@@ -342,7 +357,7 @@ describe('turning it on', () => {
         // The password alone no longer signs in.
         expect((await edge.signIn(who)).body.code).toBe('update-required');
         // The same approval turns nothing on twice.
-        expect((await confirm(id)).status).toBe(404);
+        expect((await confirm(id, codes.approving)).status).toBe(404);
 
         const [told] = await edge.notices('two-step-on');
         expect(told).toMatchObject({ to: who.email, method: 'Another of your devices' });
@@ -382,12 +397,12 @@ describe('turning it on', () => {
                 ).status,
             ).toBe(404);
         // The phone the owner chose still answers.
-        const { approved } = await approveFrom(phone, who.userId, asked);
+        const { approved, codes } = await approveFrom(phone, who.userId, asked);
         expect(approved.status).toBe(200);
         const confirmed = await edge.call(
             'POST',
             `/two-step/device/${started.body.id}/confirm`,
-            { token: started.body.token, requestId: id },
+            { token: started.body.token, requestId: id, code: codes.approving },
             { cookie: laptop.cookie },
         );
         expect(confirmed.status).toBe(200);
@@ -419,6 +434,56 @@ describe('turning it on', () => {
         expect(
             (await edge.call('GET', '/session', undefined, { cookie: phone.cookie })).body.user,
         ).not.toBeNull();
+    });
+
+    test('a device chosen by the name it gave itself approves, and without the code it shows nothing is turned on', async () => {
+        const who = await edge.account();
+        const laptop = await device(who, 'Maya’s Laptop');
+        // Someone with the password, signed in under the name of the owner's phone. The owner
+        // has no other device here: the list they choose from is this one entry.
+        const intruder = await device(who, 'Maya’s iPhone');
+        const before = await settings(laptop.cookie);
+        expect(before.approvers).toMatchObject([{ id: intruder.deviceId, name: 'Maya’s iPhone' }]);
+        const started = await edge.call('POST', '/two-step/device', await password(laptop.cookie), {
+            cookie: laptop.cookie,
+        });
+        const confirm = (cookie: string, requestId: string, code: string) =>
+            edge.call(
+                'POST',
+                `/two-step/device/${started.body.id}/confirm`,
+                { token: started.body.token, requestId, code },
+                { cookie },
+            );
+        const asked = await ask(started.body.token, 'device-approval', laptop.key, {
+            cookie: laptop.cookie,
+            approver: intruder,
+        });
+        // It approves at once, and reads the code off its own screen.
+        const { approved, id, codes } = await approveFrom(intruder, who.userId, asked);
+        expect(approved.status).toBe(200);
+        // The owner sees no code. Whatever is typed on the laptop, one guess is all there is:
+        // the request ends, it is a failed step, and the account is told as for any other.
+        const guessed = await confirm(laptop.cookie, id, another(codes.approving));
+        expect(guessed.status).toBe(409);
+        expect(guessed.body.code).toBe('device-code');
+        expect((await confirm(laptop.cookie, id, codes.approving)).status).toBe(404);
+        expect(await events(laptop.cookie)).toContain('step-failed:device');
+        expect(await settings(laptop.cookie)).toMatchObject({ on: false, methods: [] });
+        // The password alone still signs in: nothing was turned on, and nobody is locked out.
+        expect((await edge.signIn(who)).status).toBe(200);
+
+        // Asked again, approved again; and the intruder, who knows this code, cannot use it:
+        // the setup is the laptop's session's, and the token is the laptop's to hold.
+        const again = await ask(started.body.token, 'device-approval', laptop.key, {
+            cookie: laptop.cookie,
+            approver: intruder,
+        });
+        const second = await approveFrom(intruder, who.userId, again);
+        expect(second.approved.status).toBe(200);
+        expect((await confirm(intruder.cookie, second.id, second.codes.approving)).status).toBe(
+            404,
+        );
+        expect((await settings(laptop.cookie)).on).toBe(false);
     });
 
     test('a client that does not name the method never sees it, in settings or at a step', async () => {

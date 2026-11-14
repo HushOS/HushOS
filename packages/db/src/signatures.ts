@@ -334,6 +334,17 @@ export function deviceStepCodeDigest(
         .update(sized(input.nonce, 'nonce'))
         .digest();
 }
+/*
+ * The code as the two numbers it is read from: 0 to 99 from the first four bytes, and the
+ * word's place in the BIP-39 list from the next eleven bits. Both devices show them as
+ * "47 river"; the server, where the method is turned on, compares the numbers.
+ */
+export function deviceStepCodeParts(
+    input: DeviceStepInput & { approverKey: Uint8Array; nonce: Uint8Array },
+) {
+    const digest = deviceStepCodeDigest(input);
+    return { number: digest.readUInt32BE(0) % 100, word: (digest[4]! << 3) | (digest[5]! >> 5) };
+}
 export function deviceStepStatement(input: DeviceStepInput) {
     return statement([
         'hushos/two-step/device',

@@ -17,7 +17,12 @@ import {
     type TwoStepPurpose,
 } from './schema';
 import { lockAccount, sessionIsCurrent, type Executor, type Tx } from './sessions';
-import { deviceStepCommitment, deviceStepStatement, verifySignature } from './signatures';
+import {
+    deviceStepCodeParts,
+    deviceStepCommitment,
+    deviceStepStatement,
+    verifySignature,
+} from './signatures';
 import {
     PENDING_FACTOR_SECONDS,
     agedPurpose,
@@ -1006,7 +1011,9 @@ export type ConfirmDeviceFactorResult =
     /* `turnedOn`: this was the account's first method, so the step is now on and the codes were stored. */
     | { status: 'ok'; turnedOn: boolean; approverDeviceId: string }
     /* `pending`: no device has approved yet. */
-    | { status: 'session' | 'missing' | 'pending' | 'codes-required' };
+    | { status: 'session' | 'missing' | 'pending' | 'codes-required' }
+    /* The code typed on the device turning it on is not the request's: ended, and a failed step. */
+    | { status: 'code'; counted: CountedRequest };
 
 /*
  * Confirms the pending method with the one real approval it waits for. Under the account's lock:
@@ -1014,6 +1021,11 @@ export type ConfirmDeviceFactorResult =
  * - the method must be this account's, pending and younger than ten minutes, and the token the
  *   one made with it, for this session;
  * - the request must be that token's, and approved by a device that may still approve;
+ * - `code` must be the request's code, which only the approving device shows: the person read
+ *   it off that device and typed it on this one, so the device that approved is one they are
+ *   holding, whatever it calls itself. The server works the code out from what both devices
+ *   posted and compares; a wrong one ends the request and is a failed step, so each request is
+ *   one guess at one code in 204,800;
  * - the account's first method turns the step on, as an app's does: it needs `backupCodes`,
  *   becomes the default, and both sessions are stamped as having passed the step, the one that
  *   turned it on and the one that approved, so each counts as another device from then on.
@@ -1026,6 +1038,8 @@ export async function confirmDeviceFactor(input: {
     credentialVersion: number;
     tokenHash: Buffer;
     requestId: string;
+    /* What the person typed, as its two numbers (`deviceStepCodeParts`). */
+    code: { number: number; word: number };
     backupCodes?: { keyId: Buffer; hashes: Buffer[] };
 }): Promise<ConfirmDeviceFactorResult> {
     return db.transaction(async (tx): Promise<ConfirmDeviceFactorResult> => {
@@ -1061,6 +1075,41 @@ export async function confirmDeviceFactor(input: {
         const approverDeviceId = request.approverDeviceId;
         if (!approverDeviceId || !(await mayApprove(tx, request, approverDeviceId)))
             return { status: 'missing' };
+        if (!request.deviceKey || !request.approverKey || !request.nonce)
+            return { status: 'missing' };
+        const expected = deviceStepCodeParts({
+            userId: request.userId,
+            requestId: request.id,
+            purpose: request.purpose,
+            tokenDigest: request.tokenHash,
+            deviceSigningKey: request.deviceKey,
+            approverKey: request.approverKey,
+            nonce: request.nonce,
+        });
+        if (input.code.number !== expected.number || input.code.word !== expected.word) {
+            await tx
+                .update(twoStepDeviceRequests)
+                .set({
+                    state: 'ended',
+                    location: null,
+                    endedReason: 'wrong-code',
+                    endedAt: new Date(),
+                    counted: true,
+                })
+                .where(eq(twoStepDeviceRequests.id, request.id));
+            return {
+                status: 'code',
+                counted: {
+                    userId: request.userId,
+                    requestId: request.id,
+                    purpose: request.purpose,
+                    class: request.class,
+                    reason: 'wrong-code',
+                    deviceId: request.deviceId,
+                    ...(await countPoolFailure(tx, request.userId, poolOf(request.deviceId))),
+                },
+            };
+        }
         const confirmed = await confirmedFactors(tx, input.userId);
         const turnedOn = confirmed.length === 0;
         const codes = input.backupCodes;

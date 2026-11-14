@@ -13,6 +13,7 @@ import { devicesQueryOptions } from '@/components/account-devices';
 import { CopyCheckIcon } from '@/components/copy-button';
 import { SECRET_FIELD } from '@/components/password-input';
 import { QrCode } from '@/components/qr-code';
+import { CodeField, useCodes } from '@/components/device-approvals';
 import { DeviceAsk } from '@/components/device-ask';
 import { DialogField, Setting, SettingsGroup } from '@/components/settings';
 import { StepUpFields } from '@/components/two-step-answer';
@@ -1410,6 +1411,11 @@ function KeyDialog({
  * with the password among them: a request any of them could answer would let that one answer
  * first, and count as the person's own from then on.
  *
+ * The list alone proves nothing: a device's name and kind are its own words, and someone with
+ * the password can sign in as "Maya’s iPhone". So none is ever chosen for the person, and the
+ * approval is not enough: the device that approved shows a code, and the person types it here
+ * (the server checks it again). A device they are not holding shows them nothing to type.
+ *
  * Turning the step on offers to remove the other devices, ticked, as the authenticator app
  * does: every device but this one and the one that approved, which is the method.
  */
@@ -1437,15 +1443,23 @@ function DeviceDialog({
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
     const [started, setStarted] = useState<{ id: string; token: string } | null>(null);
-    const [approved, setApproved] = useState('');
+    // The request the chosen device approved, and the check its code must pass, typed here.
+    const [ready, setReady] = useState<{
+        requestId: string;
+        matches: (typed: string) => Promise<string | null>;
+    } | null>(null);
+    const [typed, setTyped] = useState('');
+    const words = useCodes(started !== null);
     const [codes, setCodes] = useState<string[] | null>(null);
-    // With one device to choose from it is chosen, and still named.
-    const [chosenId, setChosenId] = useState(approvers.length === 1 ? approvers[0]!.id : '');
+    // Never chosen for the person, even when there is one: the names are the devices' own words.
+    const [chosenId, setChosenId] = useState('');
     const chosen = approvers.find((device) => device.id === chosenId);
     const [signOutOthers, setSignOutOthers] = useState(true);
     const [removing, setRemoving] = useState<'no' | 'running' | 'failed'>('no');
     const era = useForgottenOnLock(open, () => {
         setStarted(null);
+        setReady(null);
+        setTyped('');
         setCodes(null);
         setPassword('');
         onClose();
@@ -1478,14 +1492,24 @@ function DeviceDialog({
             setPending(false);
         }
     }
-    async function confirm(requestId: string) {
-        if (!started) return;
-        setApproved(requestId);
+    async function confirm() {
+        if (!started || !ready) return;
         setPending(true);
         setError('');
         try {
             const at = era.current;
-            const confirmed = await authClient.confirmDeviceMethod(started, requestId);
+            // Checked here first, against what this browser itself worked out; the server
+            // checks it again. One try: a wrong code is the end of this request.
+            const code = await ready.matches(typed);
+            if (at !== era.current) return;
+            if (!code) {
+                cue('error');
+                setReady(null);
+                setTyped('');
+                setError('That code didn’t match, so nothing was turned on.');
+                return;
+            }
+            const confirmed = await authClient.confirmDeviceMethod(started, ready.requestId, code);
             if (at !== era.current) return;
             cue('success');
             if ('backupCodes' in confirmed) {
@@ -1525,7 +1549,8 @@ function DeviceDialog({
             // The approval is used up or over either way: the setup starts again, and the
             // section behind is read again in case it went through.
             setStarted(null);
-            setApproved('');
+            setReady(null);
+            setTyped('');
             onDone('');
             setError(authError(cause));
         } finally {
@@ -1572,20 +1597,48 @@ function DeviceDialog({
                 pending={pending}
                 title={`Approve on ${approverName(chosen)}`}
                 onClose={onClose}
-                onSubmit={() => {}}
-                footer={cancel}
+                onSubmit={() => void confirm()}
+                footer={
+                    <>
+                        {cancel}
+                        {ready && (
+                            <Button
+                                type="submit"
+                                disabled={pending || words?.normalizeApprovalCode(typed) == null}
+                            >
+                                {pending ? 'Checking' : first ? 'Turn on' : 'Add'}
+                            </Button>
+                        )}
+                    </>
+                }
             >
                 {/* The press of Continue asked for it: the request goes out as this opens. */}
                 <DeviceAsk
                     key={started.token}
                     token={started.token}
                     purpose="device-approval"
-                    approved={approved}
+                    approved={ready?.requestId ?? ''}
                     auto
                     disabled={pending}
                     approver={{ id: chosen.id, name: approverName(chosen) }}
-                    onApproved={(requestId) => void confirm(requestId)}
+                    onApproved={(requestId, matches) => {
+                        setError('');
+                        setReady({ requestId, matches });
+                    }}
                 />
+                {/* That device approved: it now shows the code, and it is typed here. */}
+                {ready && (
+                    <CodeField
+                        label={`Code on ${approverName(chosen)}`}
+                        codes={words}
+                        value={typed}
+                        onChange={(next) => {
+                            setTyped(next);
+                            setError('');
+                        }}
+                        readOnly={pending}
+                    />
+                )}
                 <Problem>{error}</Problem>
             </Shell>
         );

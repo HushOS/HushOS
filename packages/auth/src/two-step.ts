@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { approvalCodeParts } from '@hushos/crypto/device-approval';
 import {
     formatBackupCode,
     normalizeBackupCode,
@@ -2004,14 +2005,16 @@ export async function startDeviceEnrolment(sessionToken: string | null, input: T
 }
 
 /*
- * Confirms the pending method with the approval another device gave. The account's first
- * method turns the step on: its backup codes are made here and returned once. Before any
- * device approved it answers `step-pending`, and nothing changes.
+ * Confirms the pending method with the approval another device gave, and with the code that
+ * device shows, typed here: the proof that the person turning this on is holding the device
+ * that approved, whatever name it gave itself. The account's first method turns the step on:
+ * its backup codes are made here and returned once. Before any device approved it answers
+ * `step-pending`, and nothing changes. A wrong code ends the request (`device-code`).
  */
 export async function confirmDeviceEnrolment(
     sessionToken: string | null,
     factorId: string,
-    input: { token: string; requestId: string },
+    input: { token: string; requestId: string; code: string },
 ) {
     requireEnabled();
     const { user, token } = await requireSession(
@@ -2021,6 +2024,8 @@ export async function confirmDeviceEnrolment(
     await limitApprovals(`confirm:${hash(token).toString('hex')}`, 120);
     await requireRecoveryKey(user.id);
     if (!TOKEN_PATTERN.test(input.token)) throw setupOver();
+    const code = approvalCodeParts(input.code);
+    if (!code) throw new AuthError('Enter the code your other device shows.', 400);
     const confirm = (backupCodes?: { keyId: Buffer; hashes: Buffer[] }) =>
         twoStepRepository.confirmDeviceFactor({
             userId: user.id,
@@ -2029,6 +2034,7 @@ export async function confirmDeviceEnrolment(
             credentialVersion: user.credentialVersion,
             tokenHash: hash(input.token),
             requestId: input.requestId,
+            code,
             backupCodes,
         });
     // Asked without codes first: making ten slow hashes is not worth it until a device approved.
@@ -2043,6 +2049,11 @@ export async function confirmDeviceEnrolment(
             break;
         case 'pending':
             throw refusals.pending();
+        case 'code':
+            await afterCounted(result.counted);
+            throw new AuthError('That code didn’t match, so nothing was turned on.', 409, {
+                code: 'device-code',
+            });
         case 'session':
             throw new AuthError('Sign in to change two-step sign-in.', 401);
         default:

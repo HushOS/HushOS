@@ -1485,10 +1485,25 @@ pub fn device_enrolment_reply_read(status: u16, body: String) -> DeviceEnrolment
     read().unwrap_or(DeviceEnrolmentReply::Lost)
 }
 
-/// What the asking device sends to confirm the method, once another device approved.
+/// What the asking device sends to confirm the method, once another device approved: the
+/// request, and the code that device shows, as the person typed it here and
+/// `approval_code_typed` wrote it. The server works the code out again and compares.
+///
+/// ```
+/// use hushos_core::device_confirm_json;
+/// assert_eq!(
+///     device_confirm_json("tok".into(), "7C9E6679-7425-40DE-944B-E07FC1F90AE7".into(), "07 river".into()),
+///     r#"{"token":"tok","requestId":"7c9e6679-7425-40de-944b-e07fc1f90ae7","code":"07 river"}"#
+/// );
+/// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
-pub fn device_confirm_json(token: String, request_id: String) -> String {
-    format!(r#"{{"token":{},"requestId":{}}}"#, json!(token), json!(request_id.to_lowercase()))
+pub fn device_confirm_json(token: String, request_id: String, code: String) -> String {
+    format!(
+        r#"{{"token":{},"requestId":{},"code":{}}}"#,
+        json!(token),
+        json!(request_id.to_lowercase()),
+        json!(code)
+    )
 }
 
 /// What confirming the method answered (`POST /api/auth/two-step/device/:id/confirm`).

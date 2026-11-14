@@ -1,6 +1,6 @@
-import type { ApprovalPrompt } from '@hushos/auth/client';
+import type { ApprovalPrompt, OpenedApproval } from '@hushos/auth/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -29,7 +29,11 @@ const asked = (over: Partial<ApprovalPrompt> = {}): ApprovalPrompt => ({
 });
 const api = {
     approvals: vi.fn<() => Promise<ApprovalPrompt[]>>(),
-    openApproval: vi.fn(() => new Promise<never>(() => {})),
+    openApproval: vi.fn<(asked: ApprovalPrompt) => Promise<OpenedApproval>>(),
+    approveRequest:
+        vi.fn<
+            (opened: OpenedApproval, reveal: unknown, typed?: string) => Promise<string | null>
+        >(),
 };
 vi.mock('@/lib/auth-client', () => ({ authClient: api }));
 vi.mock('@/lib/sounds', () => ({ cue: vi.fn() }));
@@ -53,7 +57,8 @@ const view = () =>
 
 beforeEach(() => {
     api.approvals.mockReset();
-    api.openApproval.mockClear();
+    api.openApproval.mockReset().mockReturnValue(new Promise<never>(() => {}));
+    api.approveRequest.mockReset();
     localStorage.clear();
 });
 
@@ -96,5 +101,75 @@ describe('another device waiting for an answer', () => {
             }),
         ).toBeTruthy();
         expect(screen.getByText('The other device asked for this device to approve.')).toBeTruthy();
+    });
+
+    test('a request to turn the method on is approved on a press, and then shows the code to type on the other device', async () => {
+        const person = userEvent.setup();
+        const reveal = { deviceSigningKey: 'C'.repeat(43), nonce: 'D'.repeat(43) };
+        const turningOn = asked({
+            purpose: 'device-approval',
+            class: 'change',
+            selfNamed: false,
+            chosen: true,
+            approverKey: 'E'.repeat(43),
+            reveal,
+        });
+        const opened: OpenedApproval = {
+            id: turningOn.id,
+            purpose: turningOn.purpose,
+            tokenDigest: turningOn.tokenDigest,
+            commitment: turningOn.commitment,
+            approverKey: 'E'.repeat(43),
+        };
+        api.approvals.mockResolvedValue([turningOn]);
+        api.openApproval.mockResolvedValue(opened);
+        api.approveRequest.mockResolvedValue('47 river');
+        view();
+        await person.click(await screen.findByRole('button', { name: 'Answer' }));
+        // Nothing to type here: the code is this browser's to show, and only once it approved.
+        const approve = await screen.findByRole('button', { name: 'Approve' });
+        await waitFor(() => expect(approve).toHaveProperty('disabled', false));
+        expect(screen.queryByRole('textbox')).toBeNull();
+        expect(screen.queryByText('47 river')).toBeNull();
+        await person.click(approve);
+        expect(api.approveRequest).toHaveBeenCalledWith(opened, reveal, undefined);
+        expect(await screen.findByText('Code for your other device')).toBeTruthy();
+        expect(screen.getByText('47 river')).toBeTruthy();
+        // Approved, the request leaves the list. The code stays up until Done: it is still
+        // to be typed on the other device.
+        const looks = api.approvals.mock.calls.length;
+        api.approvals.mockResolvedValue([]);
+        await waitFor(() => expect(api.approvals.mock.calls.length).toBeGreaterThan(looks), {
+            timeout: 5_000,
+        });
+        expect(screen.getByText('47 river')).toBeTruthy();
+        expect(screen.queryByText('This request is over.')).toBeNull();
+        await person.click(screen.getByRole('button', { name: 'Done' }));
+        await waitFor(() => expect(screen.queryByText('47 river')).toBeNull());
+    });
+
+    test('a sign-in is approved only with the code typed here, never on a bare press', async () => {
+        const person = userEvent.setup();
+        const reveal = { deviceSigningKey: 'C'.repeat(43), nonce: 'D'.repeat(43) };
+        const signIn = asked({ approverKey: 'E'.repeat(43), reveal });
+        const opened: OpenedApproval = {
+            id: signIn.id,
+            purpose: signIn.purpose,
+            tokenDigest: signIn.tokenDigest,
+            commitment: signIn.commitment,
+            approverKey: 'E'.repeat(43),
+        };
+        api.approvals.mockResolvedValue([signIn]);
+        api.openApproval.mockResolvedValue(opened);
+        api.approveRequest.mockResolvedValue(null);
+        view();
+        await person.click(await screen.findByRole('button', { name: 'Answer' }));
+        const field = await screen.findByLabelText('Code on the other device');
+        const approve = screen.getByRole('button', { name: 'Approve' });
+        expect(approve).toHaveProperty('disabled', true);
+        await person.type(field, '47 river');
+        await waitFor(() => expect(approve).toHaveProperty('disabled', false));
+        await person.click(approve);
+        expect(api.approveRequest).toHaveBeenCalledWith(opened, reveal, '47 river');
     });
 });

@@ -8,6 +8,7 @@ import type { AuthApi } from './api';
 import {
     DeviceStepError,
     approvalCode,
+    TURNING_ON,
     approve,
     askAnotherDevice,
     openApproval,
@@ -184,6 +185,106 @@ describe('the device that asks', () => {
         });
         server.held.denied = 'not-me';
         expect(await asked.poll()).toEqual({ state: 'ended', ended: 'refused' });
+    });
+});
+
+/*
+ * Turning the method on: the code runs the other way. The device that approves shows it, and
+ * the one that asked takes it typed. Neither a name in a list nor an approval says the person
+ * is holding the device that answered; reading its screen does.
+ */
+describe('turning the method on', () => {
+    async function turningOn() {
+        const server = relay();
+        const asked = await askAnotherDevice(server.api, {
+            stepToken: TOKEN,
+            purpose: TURNING_ON,
+            deviceSigningKey: (await deviceKey()).publicKey,
+        });
+        // Before another device opened the request there is no code, so nothing typed is it.
+        expect(await asked.matches('47 river')).toBeNull();
+        const opened = await openApproval(server.api, server.prompt(TURNING_ON));
+        await asked.poll();
+        return { server, asked, opened, reveal: server.held.reveal! };
+    }
+
+    test('the approving device signs on a press and is handed the code to show; nothing is typed there', async () => {
+        const { server, opened, reveal } = await turningOn();
+        const approver = await deviceKey();
+        const shown = await approve(server.api, {
+            opened,
+            reveal,
+            userId: USER,
+            privateKey: approver.privateKey,
+        });
+        expect(shown).toMatch(/^\d{2} [a-z]+$/);
+        expect(shown).toBe(await approvalCode(server.api, opened, reveal, USER));
+        expect(server.sent('approve')).toHaveLength(1);
+        expect(server.sent('deny')).toEqual([]);
+    });
+
+    test('a sign-in’s approval hands no code back: there the asking device showed it', async () => {
+        const server = relay();
+        const asked = await askAnotherDevice(server.api, {
+            stepToken: TOKEN,
+            purpose: 'login',
+            deviceSigningKey: (await deviceKey()).publicKey,
+        });
+        const opened = await openApproval(server.api, server.prompt());
+        const state = await asked.poll();
+        if (state.state !== 'code') throw new Error(state.state);
+        expect(
+            await approve(server.api, {
+                opened,
+                reveal: server.held.reveal!,
+                userId: USER,
+                privateKey: (await deviceKey()).privateKey,
+                typed: state.code,
+            }),
+        ).toBeNull();
+    });
+
+    test('the device that asked takes only the exact code the other one shows', async () => {
+        const { server, asked, opened, reveal } = await turningOn();
+        const shown = (await approve(server.api, {
+            opened,
+            reveal,
+            userId: USER,
+            privateKey: (await deviceKey()).privateKey,
+        }))!;
+        const [digits, word] = shown.split(' ') as [string, string];
+        // As a person types it, and handed on as it is written.
+        expect(await asked.matches(` ${digits}-${word.toUpperCase()} `)).toBe(shown);
+        const other = String((Number(digits) + 1) % 100).padStart(2, '0');
+        for (const wrong of [
+            `${other} ${word}`,
+            `${digits} ${word === 'zoo' ? 'abandon' : 'zoo'}`,
+            digits,
+            '',
+        ])
+            expect(await asked.matches(wrong)).toBeNull();
+    });
+
+    test('a value the server swapped for the approving device’s gives a code that device never showed', async () => {
+        const server = relay();
+        const asked = await askAnotherDevice(server.api, {
+            stepToken: TOKEN,
+            purpose: TURNING_ON,
+            deviceSigningKey: (await deviceKey()).publicKey,
+        });
+        const opened = await openApproval(server.api, server.prompt(TURNING_ON));
+        // The server tells the asking device a value of its own in place of the one the
+        // approving device opened with.
+        server.held.approverKey = random();
+        await asked.poll();
+        const shown = (await approve(server.api, {
+            opened,
+            reveal: server.held.reveal!,
+            userId: USER,
+            privateKey: (await deviceKey()).privateKey,
+        }))!;
+        // What the person reads off the approving device is not what this device worked out.
+        expect(await asked.matches(shown)).toBeNull();
     });
 });
 
@@ -437,6 +538,16 @@ describe('replies', () => {
         expect(place(42)).toBeNull();
         expect(read[1]!.reveal).toBeNull();
         expect(readApprovals('<html>')).toEqual([]);
+    });
+
+    test('a list that came back for another account than the one signed in now is nobody’s', () => {
+        const reply = { userId: USER, approvals: [whole] };
+        expect(readApprovals(reply, USER.toUpperCase())).toHaveLength(1);
+        // Signed out since, or signed in as someone else: nothing to show, and nothing to count.
+        expect(readApprovals(reply, null)).toEqual([]);
+        expect(readApprovals(reply, '7c9e6679-7425-40de-944b-e07fc1f90ae7')).toEqual([]);
+        // A reply that does not say whose it is belongs to no account either.
+        expect(readApprovals({ approvals: [whole] }, USER)).toEqual([]);
     });
 
     test('only the server’s own shapes say the method was started or turned on', () => {

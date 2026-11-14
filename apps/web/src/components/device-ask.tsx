@@ -11,6 +11,11 @@ import { authError } from '@/lib/form';
  * that; once a device opens the request it shows the code, two digits and a word, for the
  * person to type there. Nothing is sent until a press asks for it: a form that merely opens on
  * this method must not spend the day's requests.
+ *
+ * Turning the method on (`approver`) runs the code the other way. This browser shows no code
+ * and no QR code: the device that approves shows the code, and the person types it here. So
+ * the approval says nothing by itself; `onApproved` hands over the check the typed code must
+ * pass (`matches`), and the form that turns the method on asks for it.
  */
 
 const POLL_MS = 2_000;
@@ -40,13 +45,14 @@ export function DeviceAsk({
     purpose: string;
     /* The request the other device approved, once it has: the step is then answered with it. */
     approved: string;
-    onApproved: (requestId: string) => void;
+    /* `matches`: what a code typed here must pass, where the method is being turned on. */
+    onApproved: (requestId: string, matches: Asked['matches']) => void;
     /* The press that brought the person here already asked: start without another one. */
     auto?: boolean;
     disabled?: boolean;
     /*
-     * Turning the method on: the device the person chose to approve. Only it is asked, and
-     * the screen says which one to pick up.
+     * Turning the method on: the device the person chose to approve. Only it is asked, the
+     * screen says which one to pick up, and the code is that device's to show, not this one's.
      */
     approver?: { id: string; name: string };
 }) {
@@ -116,7 +122,8 @@ export function DeviceAsk({
                 const next = await asked.poll();
                 if (mine !== run.latest) return;
                 setHeld(next);
-                if (next.state === 'approved') told.current(asked.requestId);
+                if (next.state === 'approved')
+                    told.current(asked.requestId, (typed) => asked.matches(typed));
             } catch (cause) {
                 // The token is over, or the request is: nothing more will come of asking.
                 const status = (cause as { status?: unknown } | null)?.status;
@@ -134,6 +141,8 @@ export function DeviceAsk({
         return () => clearInterval(timer);
     }, [asked, waiting, run]);
 
+    // Turning the method on: the approval is half of it, and the form asks for the code now.
+    if (approved && approver) return null;
     if (approved)
         return (
             <output data-device-ask="approved" className="text-sm font-semibold text-success">
@@ -155,7 +164,7 @@ export function DeviceAsk({
                     onClick={ask}
                     className="self-start"
                 >
-                    {starting ? 'Asking' : problem ? 'Ask again' : 'Use another device'}
+                    {starting ? 'Asking' : problem || approver ? 'Ask again' : 'Use another device'}
                 </Button>
             </div>
         );
@@ -176,6 +185,12 @@ export function DeviceAsk({
                 </Button>
             </div>
         );
+    if (approver)
+        return (
+            <p className="text-sm" data-device-ask={state.state}>
+                Open HushOS on {approver.name} and choose Answer.
+            </p>
+        );
     return (
         <div className="flex flex-col gap-3" data-device-ask={state.state}>
             {state.state === 'code' ? (
@@ -190,11 +205,7 @@ export function DeviceAsk({
                     </output>
                 </div>
             ) : (
-                <p className="text-sm">
-                    {approver
-                        ? `Open HushOS on ${approver.name} and choose Answer.`
-                        : 'Open HushOS on another device and choose Answer.'}
-                </p>
+                <p className="text-sm">Open HushOS on another device and choose Answer.</p>
             )}
             {/* Square modules at whole pixels: a phone's camera reads this off the screen. */}
             <div className="self-start rounded-md border border-rule bg-white p-2">

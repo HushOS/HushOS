@@ -315,6 +315,44 @@ pub fn approval_code_normalize(typed: String) -> Option<String> {
     listed.then(|| format!("{digits} {word}"))
 }
 
+/// Whether a request of this purpose is the one that turns Approve on another device on
+/// (`device-approval`). Its code runs the other way round from every other request's: the
+/// device that approves signs on the person's press and then shows the code, and the device
+/// that asked takes it typed (`approval_code_typed`) and sends it with the confirmation, where
+/// the server checks it again. A person can only type what they can read, so the device that
+/// approved is one they are holding, whatever name it gave itself. Such a request is never
+/// answered by a scan, and its asking device shows neither a code nor a QR code.
+///
+/// ```
+/// use hushos_core::approval_turns_on;
+/// assert!(approval_turns_on("device-approval".into()));
+/// assert!(!approval_turns_on("login".into()));
+/// assert!(!approval_turns_on("two-step".into()));
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn approval_turns_on(purpose: String) -> bool {
+    purpose == "device-approval"
+}
+
+/// On the device turning the method on: what the person typed, as it is written, when it is
+/// exactly `code` (what this device worked out with `device_step_code`), else `None`. One
+/// try: a device that gets `None` ends its request and asks again.
+///
+/// ```
+/// use hushos_core::approval_code_typed;
+/// assert_eq!(approval_code_typed("07 river".into(), " 07-River ".into()), Some("07 river".into()));
+/// assert_eq!(approval_code_typed("07 river".into(), "08 river".into()), None);
+/// assert_eq!(approval_code_typed("07 river".into(), "07 rival".into()), None);
+/// assert_eq!(approval_code_typed("07 river".into(), "".into()), None);
+/// // What is not a code matches nothing, itself included.
+/// assert_eq!(approval_code_typed("river".into(), "river".into()), None);
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn approval_code_typed(code: String, typed: String) -> Option<String> {
+    let typed = approval_code_normalize(typed)?;
+    (approval_code_normalize(code)? == typed).then_some(typed)
+}
+
 /// The words a typed beginning could become, for completion: up to `limit`, in the
 /// list's order. Nothing for an empty beginning.
 ///

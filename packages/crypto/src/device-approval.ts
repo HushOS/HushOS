@@ -175,6 +175,16 @@ export function normalizeApprovalCode(typed: string) {
     return wordlist.includes(word) ? `${match[1]} ${word}` : null;
 }
 
+/*
+ * A typed code as the two numbers it stands for, or null when it is not one: the digits, and
+ * the word's place in the list. The server, which has no list of words, compares these.
+ */
+export function approvalCodeParts(typed: string) {
+    const code = normalizeApprovalCode(typed);
+    if (!code) return null;
+    return { number: Number(code.slice(0, 2)), word: wordlist.indexOf(code.slice(3)) };
+}
+
 /* The words a typed beginning could become, for completion: a few, in the list's order. */
 export function approvalWords(prefix: string, limit = 6) {
     const typed = prefix.trim().toLowerCase();

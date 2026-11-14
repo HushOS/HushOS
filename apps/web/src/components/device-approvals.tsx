@@ -1,4 +1,9 @@
-import { DeviceStepError, type ApprovalPrompt, type OpenedApproval } from '@hushos/auth/client';
+import {
+    DeviceStepError,
+    TURNING_ON,
+    type ApprovalPrompt,
+    type OpenedApproval,
+} from '@hushos/auth/client';
 import type { approvalWords, normalizeApprovalCode } from '@hushos/crypto/device-approval';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useId, useRef, useState } from 'react';
@@ -24,6 +29,10 @@ import { cue } from '@/lib/sounds';
  * types the code the other screen shows, two digits and a word; only an exact match is signed
  * with this browser's device key. A browser has no camera to count on, so it types; the phones
  * scan too.
+ *
+ * A request to turn the method on is the other way round: this browser approves on a press and
+ * then shows the code, and the person types it on the device that asked. Whoever turns the
+ * method on has then read this screen, so the device they chose is one they are holding.
  */
 
 const WAITING_MS = 30_000;
@@ -50,7 +59,7 @@ type Codes = {
     approvalWords: typeof approvalWords;
     normalizeApprovalCode: typeof normalizeApprovalCode;
 };
-function useCodes(wanted: boolean) {
+export function useCodes(wanted: boolean) {
     const [codes, setCodes] = useState<Codes | null>(null);
     useEffect(() => {
         if (!wanted || codes) return;
@@ -69,8 +78,71 @@ function wordsFor(codes: Codes | null, typed: string) {
     return found.length === 1 && found[0] === word ? [] : found;
 }
 
-function AnswerDialog({ asked, onClose }: { asked: ApprovalPrompt | null; onClose: () => void }) {
+/*
+ * Where a code from another device's screen is typed: two digits and a word, with the words
+ * the typed beginning could become offered beneath. `codes` is `useCodes`; until it has loaded
+ * nothing typed is a code yet.
+ */
+export function CodeField({
+    label,
+    codes,
+    value,
+    onChange,
+    readOnly,
+}: {
+    label: string;
+    codes: Codes | null;
+    value: string;
+    onChange: (next: string) => void;
+    readOnly: boolean;
+}) {
     const id = useId();
+    const field = useRef<HTMLInputElement>(null);
+    const words = wordsFor(codes, value);
+    return (
+        <div className="flex flex-col gap-1.5">
+            <label htmlFor={id} className="text-[13px] font-semibold">
+                {label}
+            </label>
+            <Input
+                id={id}
+                ref={field}
+                // oxlint-disable-next-line jsx-a11y/no-autofocus -- the one field the dialog asks for
+                autoFocus
+                autoComplete="off"
+                autoCapitalize="none"
+                spellCheck={false}
+                placeholder="47 river"
+                maxLength={16}
+                value={value}
+                readOnly={readOnly}
+                onChange={(event) => onChange(event.target.value)}
+                className="font-mono text-[15px]"
+            />
+            {words.length > 0 && (
+                <div className="flex flex-wrap gap-1.5" data-approval-words>
+                    {words.map((word) => (
+                        <Button
+                            key={word}
+                            type="button"
+                            size="xs"
+                            variant="outline"
+                            disabled={readOnly}
+                            onClick={() => {
+                                onChange(`${value.trim().slice(0, 2)} ${word}`);
+                                field.current?.focus();
+                            }}
+                        >
+                            {word}
+                        </Button>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function AnswerDialog({ asked, onClose }: { asked: ApprovalPrompt | null; onClose: () => void }) {
     const queryClient = useQueryClient();
     const open = asked !== null;
     const listed = useQuery({
@@ -83,10 +155,11 @@ function AnswerDialog({ asked, onClose }: { asked: ApprovalPrompt | null; onClos
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
     const codes = useCodes(open);
-    const words = wordsFor(codes, typed);
-    const wellFormed = codes?.normalizeApprovalCode(typed) != null;
-    const field = useRef<HTMLInputElement>(null);
     const requestId = asked?.id ?? null;
+    // Turning the method on: nothing is typed here. This browser approves, then shows the code.
+    const turningOn = asked?.purpose === TURNING_ON;
+    const wellFormed = turningOn || codes?.normalizeApprovalCode(typed) != null;
+    const [shown, setShown] = useState('');
 
     // Opening is this browser's own value going in: once, when the dialog opens on a request.
     // (The dialog is keyed by the request, so nothing of an earlier one is left in it.)
@@ -107,7 +180,8 @@ function AnswerDialog({ asked, onClose }: { asked: ApprovalPrompt | null; onClos
     const now = listed.data?.find((prompt) => prompt.id === requestId) ?? null;
     const reveal = now?.reveal ?? null;
     // Gone from the list: it timed out, was answered another way, or another device has it.
-    const over = open && listed.isSuccess && !listed.isFetching && now === null && !pending;
+    const over =
+        open && listed.isSuccess && !listed.isFetching && now === null && !pending && !shown;
     const done = () => {
         // An approval can turn the step on for this browser too, or add a device to the list:
         // everything Account shows of the account is read again.
@@ -120,10 +194,16 @@ function AnswerDialog({ asked, onClose }: { asked: ApprovalPrompt | null; onClos
         setPending(true);
         setError('');
         try {
-            await authClient.approveRequest(opened, reveal, typed);
+            const code = await authClient.approveRequest(
+                opened,
+                reveal,
+                turningOn ? undefined : typed,
+            );
             cue('success');
             toast.add({ type: 'success', title: 'Approved' });
-            done();
+            // Turning the method on: the code stays up until the person has typed it over there.
+            if (code) setShown(code);
+            else done();
         } catch (cause) {
             cue('error');
             // A code that did not match, or a device that did not match its request, ended it.
@@ -157,7 +237,15 @@ function AnswerDialog({ asked, onClose }: { asked: ApprovalPrompt | null; onClos
     }
 
     return (
-        <Dialog open={open} onOpenChange={(next) => !next && !pending && onClose()}>
+        <Dialog
+            open={open}
+            onOpenChange={(next) => {
+                if (next || pending) return;
+                // With the code up, closing is Done: what this approval changed is read again.
+                if (shown) done();
+                else onClose();
+            }}
+        >
             <DialogContent className="sm:max-w-[480px]">
                 <form
                     noValidate
@@ -181,49 +269,30 @@ function AnswerDialog({ asked, onClose }: { asked: ApprovalPrompt | null; onClos
                         <p role="alert" className="text-sm">
                             This request is over.
                         </p>
-                    ) : reveal ? (
-                        <div className="flex flex-col gap-1.5">
-                            <label htmlFor={id} className="text-[13px] font-semibold">
-                                Code on the other device
-                            </label>
-                            <Input
-                                id={id}
-                                ref={field}
-                                // oxlint-disable-next-line jsx-a11y/no-autofocus -- the one field the dialog asks for
-                                autoFocus
-                                autoComplete="off"
-                                autoCapitalize="none"
-                                spellCheck={false}
-                                placeholder="47 river"
-                                maxLength={16}
-                                value={typed}
-                                readOnly={pending}
-                                onChange={(event) => {
-                                    setTyped(event.target.value);
-                                    setError('');
-                                }}
-                                className="font-mono text-[15px]"
-                            />
-                            {words.length > 0 && (
-                                <div className="flex flex-wrap gap-1.5" data-approval-words>
-                                    {words.map((word) => (
-                                        <Button
-                                            key={word}
-                                            type="button"
-                                            size="xs"
-                                            variant="outline"
-                                            disabled={pending}
-                                            onClick={() => {
-                                                setTyped(`${typed.trim().slice(0, 2)} ${word}`);
-                                                field.current?.focus();
-                                            }}
-                                        >
-                                            {word}
-                                        </Button>
-                                    ))}
-                                </div>
-                            )}
+                    ) : shown ? (
+                        <div className="flex flex-col gap-1">
+                            <span className="text-[13px] font-semibold">
+                                Code for your other device
+                            </span>
+                            <output
+                                data-approval-code
+                                aria-live="polite"
+                                className="font-mono text-[28px] leading-9 font-semibold tracking-[0.04em]"
+                            >
+                                {shown}
+                            </output>
                         </div>
+                    ) : reveal && turningOn ? null : reveal ? (
+                        <CodeField
+                            label="Code on the other device"
+                            codes={codes}
+                            value={typed}
+                            onChange={(next) => {
+                                setTyped(next);
+                                setError('');
+                            }}
+                            readOnly={pending}
+                        />
                     ) : (
                         <output className="text-sm text-muted-foreground">
                             Waiting for the other device
@@ -238,6 +307,10 @@ function AnswerDialog({ asked, onClose }: { asked: ApprovalPrompt | null; onClos
                         {over ? (
                             <Button type="button" variant="outline" onClick={onClose}>
                                 Close
+                            </Button>
+                        ) : shown ? (
+                            <Button type="button" onClick={done}>
+                                Done
                             </Button>
                         ) : (
                             <>
