@@ -1,0 +1,47 @@
+apps/ios/App/DeviceApproval.swift
+  s_566b8e0c4467a4::t_6c9145606235e7 1-508
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/DeviceApprovalTests.swift
+  s_566b8e0c4467a4::t_429fda547fabb3 1-865
+  s_566b8e0c4467a4::t_53538a2c908863 866-869
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/DeviceApproval.swift
+  s_566b8e0c4467a4::t_c4f32542a94212 1-583
+  s_566b8e0c4467a4::t_8f02d10980c2b4 584-586
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_33bacc85c07f8b 384-399
+apps/ios/App/AccountView.swift
+  s_566b8e0c4467a4::t_cc1d015f85e3fc 158-165
+apps/ios/App/DevicesView.swift
+  s_566b8e0c4467a4::t_be7eb18aad82d9 25-32,75-78,80-81
+apps/ios/App/MainView.swift
+  s_566b8e0c4467a4::t_2642874e173ad9 110-113,123-124,234-235
+apps/ios/App/RecentsView.swift
+  s_566b8e0c4467a4::t_18f74a9ef9ad5b 48-53
+apps/ios/App/TransferNotices.swift
+  s_566b8e0c4467a4::t_f5d85eb94d8080 190-191
+apps/ios/App/TwoStep.swift
+  s_566b8e0c4467a4::t_0254b7efcb86b7 24,34,44-45,93-94,141-147,152,166-171,188-189,196-202,205-246,263-267,271,295-296,300,329-346,349,369,381-382,385,389-425,429-433,467-468,473,482,509,534-535,634-656,707,1101-1102,1106,1112-1113,1119,1329-1440
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Auth.swift
+  s_566b8e0c4467a4::t_1e85c430d85021 240-241,247,259-261,270-279,303-305,330-333,359,390,399-416,418-420
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/TwoStep.swift
+  s_566b8e0c4467a4::t_dfaf6ccedf2288 21-22,24-27,34,132,209-241,262-263,291-292,299,317,323-328,352-353,355-356,365,367,412-422,429-430,458-460,480-483,505-506,524,527-528,537,546-552,671,677,693,731-736,742-743,758-760,763-777,871,883-891,946-948,951-952,956,985,1166,1197-1198,1214-1216,1231,1234-1235,1238-1246,1249-1251,1254,1262-1264,1313,1319-1330
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/PasskeyStepTests.swift
+  s_566b8e0c4467a4::t_9eefdfd2b45d5a 839
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/TwoStepTests.swift
+  s_566b8e0c4467a4::t_aac6ffbf267393 782
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "35602355333bcdffa05f0e8fa57ea51c7f9a859b",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}

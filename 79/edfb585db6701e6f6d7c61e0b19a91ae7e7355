@@ -1,0 +1,62 @@
+apps/android/app/src/test/kotlin/com/hushos/app/data/DeviceApprovalTest.kt
+  s_566b8e0c4467a4::t_a419fdb839222a 1-877
+  s_566b8e0c4467a4::t_51a234b5f0a10a 878
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DeviceApprovalUi.kt
+  s_566b8e0c4467a4::t_5a0b1c4876374f 1-530,533
+  s_566b8e0c4467a4::t_fa022b4083ae5b 531-532,534-535
+apps/android/app/src/main/kotlin/com/hushos/app/data/DeviceApproval.kt
+  s_566b8e0c4467a4::t_c5975d90545391 1-516
+  s_566b8e0c4467a4::t_661a0c248d2e0f 517-528
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_cbb72a67a9619f 261-279
+apps/android/app/src/main/kotlin/com/hushos/app/data/AccountStore.kt
+  s_566b8e0c4467a4::t_24f3fd8265242e 74
+apps/android/app/src/main/kotlin/com/hushos/app/data/Auth.kt
+  s_566b8e0c4467a4::t_53902d15860d82 597-598,605,609-621,633-634,690,701-702,714-715,746-766,768-770,912-939
+apps/android/app/src/main/kotlin/com/hushos/app/data/Passkeys.kt
+  s_566b8e0c4467a4::t_7cd71983250075 127-128,164-171,215-222,226-230,234-236,265-269
+apps/android/app/src/main/kotlin/com/hushos/app/data/PushNotifications.kt
+  s_566b8e0c4467a4::t_48fdc679e00f9b 421-422
+apps/android/app/src/main/kotlin/com/hushos/app/data/TwoStep.kt
+  s_566b8e0c4467a4::t_ca75e913812d53 35-39,199-200,263-290,352,417-447,480-481,487,500-501,504-507,526-530,542-543,567-569,607-608,614-616,619-624,671,673-677,688-696,717-719,722-734,736-737,763,766-778,794-795,827,839-840,843,899-900,902,907,1023-1064
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AccountScreen.kt
+  s_566b8e0c4467a4::t_0d743a22e41239 89,138-145
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DevicesScreen.kt
+  s_566b8e0c4467a4::t_4e1e8a5441aaa8 52-53,60-61
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_2369dcbf2e2d19 63,282-283,293-294,350-352,560-612,618,733,737-741,769-773,780-866,966,1002,2240-2241
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HomeScreen.kt
+  s_566b8e0c4467a4::t_cc121aafb57f33 159-160
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HushOSApp.kt
+  s_566b8e0c4467a4::t_455d14d67adaa2 462-463
+apps/android/app/src/main/kotlin/com/hushos/app/ui/LinksUi.kt
+  s_566b8e0c4467a4::t_942c72ed731746 777-778
+apps/android/app/src/main/kotlin/com/hushos/app/ui/RecoverScreen.kt
+  s_566b8e0c4467a4::t_64ff50ef2b281f 301-309,329,331
+apps/android/app/src/main/kotlin/com/hushos/app/ui/TwoStepScreen.kt
+  s_566b8e0c4467a4::t_c573304963dd61 31,52,74,76-77,117,125,133-134,144-146,153,162,205-212,238-278,287,297-301,320-327,329,339-340,344-347,385-405,409-410,440-441,443-444,452,532-535,549,571,590,656-672,997-1044,1063-1070,1073-1079,1089,1091
+apps/android/app/src/test/kotlin/com/hushos/app/data/ApprovalServer.kt
+  s_566b8e0c4467a4::t_69bf5ca2d8bac8 1-154
+apps/android/app/src/test/kotlin/com/hushos/app/data/PasskeysTest.kt
+  s_566b8e0c4467a4::t_ba21c17555dd8d 127-132,143,447-448,451,453
+apps/android/app/src/test/kotlin/com/hushos/app/data/TwoStepTest.kt
+  s_566b8e0c4467a4::t_18b218a502baac 839
+apps/android/app/src/test/kotlin/com/hushos/app/ui/DeviceApprovalUiTest.kt
+  s_566b8e0c4467a4::t_286fa7839ec1e1 1-264
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "79edfb585db6701e6f6d7c61e0b19a91ae7e7355",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
