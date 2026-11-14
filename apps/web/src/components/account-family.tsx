@@ -23,8 +23,27 @@ export function AccountFamily({ userId }: { userId: string }) {
     const yours = activeFamily(families.data);
     return (
         <SettingsGroup title="Family">
-            {/* No label: the group is already called Family, and the row is the family itself. */}
+            {/* The family is the row's label, from the label column on: the group is already called Family. */}
             <Setting
+                label={
+                    yours ? (
+                        <span className="flex min-w-0 items-center gap-3" data-your-family>
+                            <PersonAvatar name={yours.name} seed={yours.id} />
+                            <span className="flex min-w-0 flex-col">
+                                <span className="truncate text-[15px] font-medium">
+                                    {yours.name}
+                                </span>
+                                <span className="truncate text-[13px] font-normal text-muted-foreground">
+                                    {rolesLine(yours.roles)}
+                                </span>
+                            </span>
+                        </span>
+                    ) : (
+                        <span className="text-[15px] font-normal text-muted-foreground">
+                            {families.isPending ? 'Checking' : 'Not in a family'}
+                        </span>
+                    )
+                }
                 action={
                     families.isSuccess && (
                         <Link
@@ -36,23 +55,7 @@ export function AccountFamily({ userId }: { userId: string }) {
                         </Link>
                     )
                 }
-            >
-                {yours ? (
-                    <span className="flex min-w-0 items-center gap-3" data-your-family>
-                        <PersonAvatar name={yours.name} seed={yours.id} />
-                        <span className="flex min-w-0 flex-col">
-                            <span className="truncate font-medium">{yours.name}</span>
-                            <span className="truncate text-[13px] text-muted-foreground">
-                                {rolesLine(yours.roles)}
-                            </span>
-                        </span>
-                    </span>
-                ) : (
-                    <span className="text-muted-foreground">
-                        {families.isPending ? 'Checking' : 'Not in a family'}
-                    </span>
-                )}
-            </Setting>
+            />
         </SettingsGroup>
     );
 }
