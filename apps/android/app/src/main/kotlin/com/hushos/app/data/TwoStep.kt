@@ -424,6 +424,10 @@ object StepWords {
     const val ASK_OPEN = "Open HushOS on another device and choose Answer."
     /* Turning the method on: the one device the person chose is the only one asked, and is named. */
     fun askOpen(device: String) = "Open HushOS on $device and choose Answer."
+    /* Once that device approved it shows the code, and the person types it here. */
+    fun codeOn(device: String) = "Code on $device"
+    /* What was typed is not the code this phone worked out: one try, and the request is dropped here. */
+    const val DEVICE_CODE_WRONG = "That code didn’t match, so nothing was turned on."
     fun approveOn(device: String) = "Approve on $device"
     const val APPROVER_HEADING = "Device that will approve"
     const val APPROVER_UNKNOWN = "Unknown device"
@@ -724,11 +728,12 @@ data class TwoStepStatus(
         fun detail(day: (String?) -> String?): String = listOfNotNull(AccountDevice.kindWords(kind), day(createdAt)?.let { "Added $it" }).joinToString(" · ")
     }
 
-    /* The device chosen to approve, by its id; null for an id the server did not list. */
-    fun approver(id: String?): Approver? = approvers.firstOrNull { it.id == id }
-
-    /* Which device is chosen when the page opens: the only one there is. With several, none until the person picks. */
-    val soleApprover: String? get() = approvers.singleOrNull()?.id
+    /*
+     * The device chosen to approve, by the id the person picked; null for an id the server did not list, and null
+     * until they pick. None is ever chosen for them, even when the list has one: a device's name and kind are its
+     * own words, and someone with only the password can sign in as "Maya’s iPhone".
+     */
+    fun approver(picked: String?): Approver? = picked?.let { id -> approvers.firstOrNull { it.id == id } }
 
     /* `kind`: "totp", "webauthn" for a passkey or security key, or "device" for Approve on another device. `synced`: a passkey a password manager keeps. */
     data class Method(val id: String, val kind: String, val name: String?, val createdAt: String?, val lastUsedAt: String?, val synced: Boolean = false) {
@@ -1096,13 +1101,16 @@ object TwoStep {
     }
 
     /*
-     * Confirms it with the request another device approved. `StepRefused(PENDING)` until one has:
-     * nothing changed. Only the server's own two answers say it is on (the core's
-     * `deviceConfirmedReplyRead`); anything else with a 200, and a request that never came back, is lost.
+     * Confirms it with the request another device approved and the code that device shows, as the
+     * person typed it on this phone and `DeviceAsk.matches` wrote it ("47 river"): the server works the
+     * code out again, and one that is not the request's ends it (409 `device-code`, in the server's
+     * words). `StepRefused(PENDING)` until a device approved: nothing changed. Only the server's own two
+     * answers say it is on (the core's `deviceConfirmedReplyRead`); anything else with a 200, and a
+     * request that never came back, is lost.
      */
-    fun confirmDevice(at: Shared.Session, started: DeviceEnrolment, requestId: String): DeviceConfirmed {
+    fun confirmDevice(at: Shared.Session, started: DeviceEnrolment, requestId: String, code: String): DeviceConfirmed {
         val reply = try {
-            Auth.requestAt(at, "/api/auth/two-step/device/${started.id}/confirm", JSONObject(com.hushos.core.deviceConfirmJson(started.token, requestId)))
+            Auth.requestAt(at, "/api/auth/two-step/device/${started.id}/confirm", JSONObject(com.hushos.core.deviceConfirmJson(started.token, requestId, code)))
         } catch (unreachable: AuthUnreachable) {
             throw LostReply(StepWords.LOST_DEVICE_ON)
         }

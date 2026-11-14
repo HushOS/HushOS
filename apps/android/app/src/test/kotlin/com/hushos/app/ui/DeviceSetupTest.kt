@@ -10,7 +10,9 @@ import com.hushos.app.data.TwoStep
 import com.hushos.app.data.TwoStepFlow
 import com.hushos.app.data.TwoStepStatus
 import com.hushos.app.data.uptime
+import com.hushos.core.DeviceStep
 import com.hushos.core.StepRefusal
+import com.hushos.core.deviceStepCode
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
@@ -27,8 +29,11 @@ import org.junit.Test
  * Turning on Approve on another device, as Account › Two-step sign-in runs it (`DeviceSetupModel`,
  * docs/two-step-design.md 12, "Turning it on first"). What these hold:
  *
- * - nothing is sent without a device chosen to approve, and every request, the first and each Ask
- *   again, names that device and no other;
+ * - nothing is sent without a device chosen to approve, none is ever chosen for the person, and
+ *   every request, the first and each Ask again, names that device and no other;
+ * - the page shows no code and no QR code, and the approval alone confirms nothing: the code the
+ *   chosen device then shows is typed here, a wrong one sends nothing and drops the request, and
+ *   the right one goes with the confirmation as it is written;
  * - the flow is pending from before the confirmation goes out, the page cannot be left meanwhile,
  *   and the backup codes it made are kept whatever happens to the page or the request, until Done;
  * - a confirmation whose reply was lost says it can't tell, once, and the settings are read again;
@@ -54,13 +59,17 @@ class DeviceSetupTest {
 
     /* The view model's part, in the test's hands: the flow it keeps, its session count, and what its requests answered. */
     private inner class Page(scope: CoroutineScope) {
-        val server = ApprovalServer()
+        val server = ApprovalServer().apply { purpose = DeviceEnrolment.PURPOSE }
+        /* This phone's device key, which each request commits to. */
+        val key = ApprovalServer.random32()
         var flow = TwoStepFlow()
         var era = 0
         /* The passwords the pending method was asked for with. */
         val starts = mutableListOf<String>()
         /* Each confirmation that went out, answered when the test says; and whether the flow was pending as it went. */
         val confirms = mutableListOf<CompletableDeferred<Result<TwoStep.DeviceConfirmed>>>()
+        /* What each carried: the request and the code. */
+        val confirmed = mutableListOf<Pair<String, String>>()
         val pendingAsItWent = mutableListOf<Boolean>()
         /* Each removal asked for: the password, the device kept, and its answer. */
         val removals = mutableListOf<Triple<String, String, (Boolean) -> Unit>>()
@@ -68,13 +77,15 @@ class DeviceSetupTest {
         val model = DeviceSetupModel(
             scope, ask, { flow }, { flow = it }, { era },
             start = { password, _ -> starts += password; Result.success(pending) },
-            request = { token, approver -> DeviceAskModel.Request(server.wire(), token, DeviceEnrolment.PURPOSE, ApprovalServer.random32(), approver) },
-            confirm = { _, _ ->
+            request = { token, approver -> DeviceAskModel.Request(server.wire(), token, DeviceEnrolment.PURPOSE, key, approver) },
+            confirm = { _, requestId, code ->
                 pendingAsItWent += flow.pending
+                confirmed += requestId to code
                 CompletableDeferred<Result<TwoStep.DeviceConfirmed>>().also { confirms += it }.await()
             },
             removeOthers = { password, keep, done -> removals += Triple(password, keep, done) },
             sessionEnded = { fail("signed out") },
+            every = 5,
         )
 
         /* The requests made to another device, and which device each named. */
@@ -83,12 +94,25 @@ class DeviceSetupTest {
         fun begin(approver: TwoStepStatus.Approver?, first: Boolean = true, signOutOthers: Boolean = true) =
             model.begin("password here", null, first, approver, signOutOthers) { failure -> fail("$failure"); null }
 
-        /* Continue, then the chosen device approves: the confirmation is out, waiting for the test's answer. */
+        /* The code the chosen device shows for the request that is out: worked out from what both sides posted, as the server does. */
+        fun code(): String = deviceStepCode(DeviceStep(ApprovalServer.ACCOUNT, server.requestId, DeviceEnrolment.PURPOSE, server.tokenDigest!!, key), server.approverKey!!, server.reveal!!.second)
+
+        /* The chosen device opens the request that is out, this phone reveals, and that device approves: the page now asks for its code. */
+        suspend fun approve() {
+            waitFor("the request") { ask.phase == AskPhase.Asked }
+            val before = server.reveal
+            server.open()
+            waitFor("the reveal") { server.reveal != before }
+            server.set("approved")
+            waitFor("the code field") { model.ready }
+        }
+
+        /* Continue, the chosen device approves, and its code is typed here: the confirmation is out, waiting for the test's answer. */
         suspend fun approvedBy(approver: TwoStepStatus.Approver, first: Boolean = true, signOutOthers: Boolean = true) {
             begin(approver, first, signOutOthers)
-            waitFor("the QR code") { ask.phase is AskPhase.Waiting }
-            server.open()
-            server.set("approved")
+            approve()
+            model.code.type(code())
+            model.turnOn()
             waitFor("the confirmation") { confirms.size == 1 }
         }
     }
@@ -96,9 +120,17 @@ class DeviceSetupTest {
     @Test
     fun withNoDeviceChosenNothingIsSentAndTheChosenOneIsNamedTheFirstTimeAndEveryTimeAgain(): Unit = runBlocking {
         val page = Page(this)
-        // Two devices could approve and the person picked neither: Continue sends nothing, to the server or to any device.
+        // One device could approve, and the person has not picked it: it is not chosen for them (its name is its own
+        // words), and Continue sends nothing, to the server or to any device.
+        val one = TwoStepStatus(on = false, methods = emptyList(), backupCodesLeft = 0, totpFrozen = false, otherDevice = true, approvers = listOf(laptop))
+        page.begin(one.approver(null))
+        delay(40)
+        assertTrue(page.starts.isEmpty())
+        assertTrue(page.server.calls.isEmpty())
+        assertEquals(TwoStepFlow(), page.flow)
+        // Nor with two to choose from and neither picked.
         val two = TwoStepStatus(on = false, methods = emptyList(), backupCodesLeft = 0, totpFrozen = false, otherDevice = true, approvers = listOf(laptop, tablet))
-        page.begin(two.approver(two.soleApprover))
+        page.begin(two.approver(null))
         delay(40)
         assertTrue(page.starts.isEmpty())
         assertTrue(page.server.calls.isEmpty())
@@ -106,7 +138,7 @@ class DeviceSetupTest {
         // Picked: the pending method is made, and the request names that device.
         page.begin(two.approver(tablet.id))
         assertTrue(page.flow.pending)
-        waitFor("the QR code") { page.ask.phase is AskPhase.Waiting }
+        waitFor("the request") { page.ask.phase == AskPhase.Asked }
         assertEquals(listOf("password here"), page.starts)
         assertEquals(tablet, page.flow.approver)
         assertEquals(listOf<String?>(tablet.id), page.named())
@@ -118,7 +150,7 @@ class DeviceSetupTest {
         page.server.set("ended", "refused")
         waitFor("the end") { page.ask.phase is AskPhase.Ended }
         page.model.askAgain()
-        waitFor("the QR code again") { page.ask.phase is AskPhase.Waiting }
+        waitFor("the request again") { page.ask.phase == AskPhase.Asked }
         assertEquals(listOf<String?>(tablet.id, tablet.id), page.named())
         assertEquals(1, page.starts.size)
         assertTrue(page.confirms.isEmpty())
@@ -142,6 +174,91 @@ class DeviceSetupTest {
         page.model.askAgain()
         delay(20)
         assertEquals(1, page.named().size)
+    }
+
+    @Test
+    fun theApprovalAloneConfirmsNothingAWrongCodeDropsTheRequestAndTheRightOneGoesWithTheConfirmation(): Unit = runBlocking {
+        val page = Page(this)
+        page.begin(laptop)
+        waitFor("the request") { page.ask.phase == AskPhase.Asked }
+        // The chosen device opened it and this phone revealed: the page still has no code and no QR code to show.
+        page.server.open()
+        waitFor("the reveal") { page.server.reveal != null }
+        delay(30)
+        assertEquals(AskPhase.Asked, page.ask.phase)
+        assertFalse(page.model.ready)
+        // Approved. That sends no confirmation and turns nothing on: the page asks for the code that device now shows.
+        page.server.set("approved")
+        waitFor("the code field") { page.model.ready }
+        delay(40)
+        assertTrue(page.confirms.isEmpty())
+        assertFalse(page.flow.pending)
+        assertNull(page.flow.codes)
+        val first = page.code()
+        // Something that is no code changes nothing: the button is not there to press, and the keyboard's Done does the same.
+        page.model.code.type(first.substringAfter(" "))
+        assertFalse(page.model.code.isCode)
+        page.model.turnOn()
+        assertTrue(page.model.ready)
+        // A code, and not this request's: one try. Nothing is sent, to the server or to the device; the request is
+        // dropped here and the page says so, with Ask again.
+        val calls = page.server.calls.size
+        val (digits, word) = first.split(" ")
+        page.model.code.type("%02d $word".format((digits.toInt() + 1) % 100))
+        assertTrue(page.model.code.isCode)
+        page.model.turnOn()
+        assertFalse(page.model.ready)
+        assertEquals(AskPhase.Ended("That code didn’t match, so nothing was turned on."), page.ask.phase)
+        assertEquals("", page.model.code.typed)
+        // The dropped request takes no code any more, the right one included.
+        page.model.code.type(first)
+        page.model.turnOn()
+        delay(40)
+        assertTrue(page.confirms.isEmpty())
+        assertEquals(calls, page.server.calls.size)
+        assertFalse(page.flow.pending)
+        assertNotNull(page.flow.device)
+        // Ask again: a new request, to the same device, with a code of its own.
+        page.model.askAgain()
+        assertEquals("", page.model.code.typed)
+        page.approve()
+        assertEquals(listOf<String?>(laptop.id, laptop.id), page.named())
+        assertEquals(1, page.starts.size)
+        val second = page.code()
+        // Typed as a person types it: the confirmation carries the approved request and the code as it is written.
+        page.model.code.type(second.split(" ").let { (number, name) -> " $number-${name.replaceFirstChar(Char::uppercase)} " })
+        page.model.turnOn()
+        waitFor("the confirmation") { page.confirms.size == 1 }
+        assertEquals(listOf(page.server.requestId to second), page.confirmed)
+        assertEquals(listOf(true), page.pendingAsItWent)
+        // A second press while it is out sends nothing more.
+        page.model.turnOn()
+        delay(20)
+        assertEquals(1, page.confirms.size)
+        page.confirms.single().complete(Result.success(TwoStep.DeviceConfirmed.TurnedOn(codes)))
+        waitFor("the codes") { page.flow.codes != null }
+        assertFalse(page.model.ready)
+        assertEquals("", page.model.code.typed)
+    }
+
+    @Test
+    fun aCodeTheServerRefusesGoesBackToThePasswordInItsWordsAndTheSettingsAreReadAgain(): Unit = runBlocking {
+        val page = Page(this)
+        page.approvedBy(laptop)
+        val before = page.flow.reread
+        page.confirms.single().complete(Result.failure(StepRefused(StepRefusal.OTHER, "That code didn’t match, so nothing was turned on.", 409)))
+        waitFor("the answer") { !page.flow.pending }
+        assertEquals("That code didn’t match, so nothing was turned on.", page.flow.error)
+        assertNull(page.flow.device)
+        assertNull(page.flow.codes)
+        assertEquals(before + 1, page.flow.reread)
+        assertTrue(page.removals.isEmpty())
+        // The request it was typed for is used up: nothing of it is left on the page, and another setup asks afresh.
+        assertFalse(page.model.ready)
+        assertTrue(page.ask.idle)
+        page.begin(laptop)
+        waitFor("the request again") { page.named().size == 2 }
+        assertTrue(page.model.left())
     }
 
     @Test

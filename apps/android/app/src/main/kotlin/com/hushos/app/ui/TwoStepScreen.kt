@@ -1009,8 +1009,12 @@ private fun KeyScreen(model: DriveViewModel, first: Boolean, onBack: () -> Unit)
  *
  * The person says which of their devices approves (`status.approvers`), and only that one is asked:
  * with no method yet every signed-in device looks alike to the server, one that someone else opened
- * with the password among them. One device is chosen already, and still shown; with several none
- * is, and Continue only says to choose one.
+ * with the password among them. None is ever chosen for them, even when there is only one (a
+ * device's name and kind are its own words), and until one is Continue only says to choose one.
+ *
+ * The approval is not enough either. Once that device approved it shows a code, and this page takes
+ * it typed: only someone holding the device they chose can read it. This page shows no code and no
+ * QR code of its own; a code that does not match drops the request, with Ask again.
  *
  * Turning the step on offers to remove the other devices, ticked, as the authenticator app does:
  * all but this phone and the one that approves, which is the method. The requests run in the view
@@ -1029,9 +1033,9 @@ private fun DeviceMethodScreen(model: DriveViewModel, first: Boolean, status: Tw
     var password by retain { mutableStateOf("") }
     var tried by remember { mutableStateOf(false) }
     val approvers = status?.approvers.orEmpty()
-    // The person's pick, by id. Until there is one, the only device there is counts as chosen.
+    // The person's pick, by id. Until there is one nothing is chosen, however short the list.
     var picked by rememberSaveable { mutableStateOf<String?>(null) }
-    val chosen = status?.approver(picked ?: status.soleApprover)
+    val chosen = status?.approver(picked)
     var signOutOthers by rememberSaveable { mutableStateOf(true) }
 
     // Once the step is on it is needed from the start: its fields are there when the page opens.
@@ -1041,8 +1045,16 @@ private fun DeviceMethodScreen(model: DriveViewModel, first: Boolean, status: Tw
     val asked = flow.approver?.takeIf { flow.device != null }
     AccountPage(asked?.let { StepWords.approveOn(it.shownName) } ?: "Turn on ${TwoStepStatus.kindWords(TwoStepStatus.DEVICE)}?", onBack = if (pending) null else onBack) {
         FormBody {
-            if (asked != null) {
-                // The chosen device's QR code, then the code to type there; how it ended, with Ask again (the same device).
+            val setup = model.deviceSetup
+            if (asked != null && setup.ready) {
+                // That device approved and shows the code now: typed here, checked here, and again by the server.
+                CodeField(StepWords.codeOn(asked.shownName), setup.code.typed, setup.code.completions, enabled = !pending, onType = setup.code::type, onComplete = setup.code::complete) { model.confirmDeviceSetup() }
+                flow.error?.let { Text(it, color = alpine.danger, style = MaterialTheme.typography.bodyMedium) }
+                Button(enabled = !pending && setup.code.isCode, onClick = { model.confirmDeviceSetup() }, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                    Text(if (flow.pending) "Checking" else if (first) "Turn on" else "Add")
+                }
+            } else if (asked != null) {
+                // Which device to pick up, and nothing else: no QR code and no code here. How it ended, with Ask again (the same device).
                 DeviceAskPanel(model.setupAsk.phase, inlineAgain = true, enabled = !pending, open = StepWords.askOpen(asked.shownName)) { model.askDeviceSetup() }
                 flow.error?.let { Text(it, color = alpine.danger, style = MaterialTheme.typography.bodyMedium) }
             } else {

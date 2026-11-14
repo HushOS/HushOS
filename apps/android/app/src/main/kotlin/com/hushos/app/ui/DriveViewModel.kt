@@ -817,7 +817,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         viewModelScope, setupAsk, { twoStepFlow }, { twoStepFlow = it }, { twoStepSession },
         start = { password, step -> twoStep { com.hushos.app.data.TwoStep.startDevice(it, password, step) } },
         request = { token, approver -> changeAsk(token, com.hushos.app.data.DeviceEnrolment.PURPOSE, approver) },
-        confirm = { started, requestId -> twoStep { com.hushos.app.data.TwoStep.confirmDevice(it, started, requestId) } },
+        confirm = { started, requestId, code -> twoStep { com.hushos.app.data.TwoStep.confirmDevice(it, started, requestId, code) } },
         removeOthers = { password, keep, done -> removeOtherDevices(password, keep, done) },
         sessionEnded = ::sessionEnded,
     )
@@ -835,6 +835,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
 
     /* Ask again: the same device, for the same pending method. From a press only. */
     fun askDeviceSetup() = deviceSetup.askAgain()
+
+    /* Turn on, or Add: the code the chosen device shows, typed here, and with it the confirmation. From a press only. */
+    fun confirmDeviceSetup() = deviceSetup.turnOn()
 
     /* Starts adding a passkey or security key: the password and, once the step is on, the step. What the phone's sheet is asked waits in the flow. */
     fun startKey(password: String, twoStep: com.hushos.app.data.StepAnswer?, failed: suspend (Throwable) -> String?) =

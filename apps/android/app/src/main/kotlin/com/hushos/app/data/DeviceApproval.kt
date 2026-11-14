@@ -18,6 +18,7 @@ import com.hushos.core.approvalApproveJson
 import com.hushos.core.approvalAsks
 import com.hushos.core.approvalCodeExpected
 import com.hushos.core.approvalCodeNormalize
+import com.hushos.core.approvalCodeTyped
 import com.hushos.core.approvalDenyJson
 import com.hushos.core.approvalOpenJson
 import com.hushos.core.approvalPromptsAllowed
@@ -27,6 +28,7 @@ import com.hushos.core.approvalRevealJson
 import com.hushos.core.approvalStartJson
 import com.hushos.core.approvalStartReplyRead
 import com.hushos.core.approvalStatusReplyRead
+import com.hushos.core.approvalTurnsOn
 import com.hushos.core.approvalsReplyRead
 import com.hushos.core.base64urlEncode
 import com.hushos.core.deviceSigningCreate
@@ -54,7 +56,11 @@ import kotlinx.coroutines.withContext
  * - the answering phone keeps the commitment as it stood before it opened the request, and the
  *   value it opened it with, which it made itself and never takes from the server; it refuses a
  *   reveal that is not that commitment, and signs only after the code on the other screen was
- *   typed exactly, or its QR code scanned and found to be this very request.
+ *   typed exactly, or its QR code scanned and found to be this very request;
+ * - the request that turns the method on (`approvalTurnsOn`) runs the code the other way: the
+ *   asking phone shows no code and no QR code, the answering phone signs on a press, with no scan
+ *   and nothing typed, and then shows the code, and the asking phone takes it typed (`matches`)
+ *   and sends it with the confirmation. An approval alone turns nothing on.
  *
  * The screens are `ui/DeviceApprovalUi.kt`; nothing here draws anything, so all of it is tested
  * without one (`DeviceApprovalTest`). The twin of the iPhone app's `HushOSKit/DeviceApproval.swift`.
@@ -126,6 +132,8 @@ sealed class AskPhase {
     data object Starting : AskPhase()
     /* No device has opened the request: the QR code. */
     data class Waiting(val qr: String) : AskPhase()
+    /* Turning the method on, until the chosen device approved: this phone has neither a QR code nor a code to show. */
+    data object Asked : AskPhase()
     /* A device opened it: the code to type there. */
     data class Code(val code: String) : AskPhase()
     data object Approved : AskPhase()
@@ -133,7 +141,7 @@ sealed class AskPhase {
     data class Ended(val line: String) : AskPhase()
 
     /* A request is out and not yet answered either way. */
-    val out: Boolean get() = this is Starting || this is Waiting || this is Code
+    val out: Boolean get() = this is Starting || this is Waiting || this is Asked || this is Code
 }
 
 /*
@@ -145,8 +153,8 @@ class DeviceAsk private constructor(
     private val wire: ApprovalWire,
     /* The step token the request was made for. */
     val token: String,
-    /* What a camera on the other device reads, in place of typing the code. */
-    val qr: String,
+    /* What a camera on the other device reads, in place of typing the code. None for the request that turns the method on: it is never answered by a scan. */
+    val qr: String?,
     private val step: DeviceStep,
     private val nonce: String,
     /* On the clock nobody can set: the request ends with its token, whatever the phone's date says. */
@@ -158,7 +166,9 @@ class DeviceAsk private constructor(
         data object Waiting : State()
         /* A device opened it: the code to type there. */
         data class Code(val code: String) : State()
-        /* Approved: the step can be answered with this request. */
+        /* A device opened the request that turns the method on: its code is that device's to show, never this phone's. */
+        data object Opened : State()
+        /* Approved: the step can be answered with this request. Not the one that turns the method on, which also needs its code typed here (`matches`). */
         data object Approved : State()
         /* Over without an approval. */
         data class Ended(val why: ApprovalEnded) : State()
@@ -166,11 +176,21 @@ class DeviceAsk private constructor(
 
     val requestId: String get() = step.requestId
 
+    /* The request turns the method on: the code runs the other way, shown on the device that approves and typed on this one. */
+    val turnsOn: Boolean = approvalTurnsOn(step.purpose)
+
     /* What a step answered with this request carries. */
     val answer: StepAnswer get() = StepAnswer(token, StepProof.Device(requestId))
 
     private var revealed = false
-    private var code: String? = null
+    @Volatile private var code: String? = null
+
+    /*
+     * Turning the method on: what the person typed here from the approving device's screen, as it is written, when
+     * it is exactly the code this phone worked out itself from its own nonce and that device's value; else null.
+     * Null too before a device opened the request. The server works the code out again at the confirmation.
+     */
+    fun matches(typed: String): String? = code?.let { approvalCodeTyped(it, typed) }
 
     /*
      * Asks where the request stands, and reveals once it may. Before a device opened it nothing is
@@ -191,7 +211,12 @@ class DeviceAsk private constructor(
                     val approverKey = read.approverKey ?: throw Unanswered()
                     val shown = code ?: deviceStepCode(step, approverKey, nonce).also { code = it }
                     if (read.state == ApprovalState.OPENED) reveal()
-                    if (read.state == ApprovalState.APPROVED) State.Approved else State.Code(shown)
+                    when {
+                        read.state == ApprovalState.APPROVED -> State.Approved
+                        // The code is the approving device's to show: this phone hands it to no screen.
+                        turnsOn -> State.Opened
+                        else -> State.Code(shown)
+                    }
                 }
             }
         }
@@ -290,7 +315,10 @@ class DeviceAsk private constructor(
             val reply = wire.send("POST", "/api/auth/approvals", approvalStartJson(stepToken, commitment, kind, name, approverDeviceId), null)
             return when (val read = approvalStartReplyRead(reply.code, reply.text)) {
                 is ApprovalStartReply.Started ->
-                    DeviceAsk(wire, stepToken, approvalQr(read.requestId, commitment), DeviceStep(read.userId, read.requestId, purpose, digest, deviceSigningKey), nonce, uptime())
+                    DeviceAsk(
+                        wire, stepToken, if (approvalTurnsOn(purpose)) null else approvalQr(read.requestId, commitment),
+                        DeviceStep(read.userId, read.requestId, purpose, digest, deviceSigningKey), nonce, uptime(),
+                    )
                 is ApprovalStartReply.Refused -> throw wire.refused(reply, read.refusal, read.message)
                 ApprovalStartReply.Lost -> throw Unanswered()
             }
@@ -309,7 +337,7 @@ data class ApprovedRequest(val token: String, val requestId: String)
  * What it counted is kept with the account's files on this phone and goes with them at sign-out.
  */
 class PromptLimit(private val load: () -> String, private val save: (String) -> Unit) {
-    /* The requests to show of those the server lists, in its order. */
+    /* The requests to show of those the server lists, in its order. Counts them, in this account's record: call it only for a list known to be this account's. */
     @Synchronized
     fun shown(listed: List<ApprovalPrompt>, day: String = day()): List<ApprovalPrompt> {
         // Nothing listed is nothing to count: the list is looked at every few seconds, and mostly empty.
@@ -354,10 +382,12 @@ object DeviceApprovals {
      */
     fun asks(asked: ApprovalPrompt): String = approvalAsks(asked.purpose, asked.deviceName, asked.selfNamed, asked.location)
 
-    /* The requests this phone may answer now, after its own limit. Blocking. */
-    fun list(wire: ApprovalWire, limit: PromptLimit, day: String = PromptLimit.day()): List<ApprovalPrompt> = limit.shown(listed(wire), day)
-
-    /* Everything the server lists for this phone, uncounted: for a request already on screen. */
+    /*
+     * Everything the server lists for this phone, uncounted. The phone's own limit (`PromptLimit.shown`) is applied
+     * by whoever asked, and only once the list is known to be the signed-in account's: the limit's record is an
+     * account file, and a list that came back for an account since signed out of must write nothing into the next
+     * one's (`ApprovalInbox.loadNow`). Blocking.
+     */
     internal fun listed(wire: ApprovalWire): List<ApprovalPrompt> {
         val reply = wire.send("GET", "/api/auth/approvals", null, null)
         return when (val read = approvalsReplyRead(reply.code, reply.text)) {
@@ -440,6 +470,13 @@ class ApprovalAnswering(
     /* The asking device chose this phone to answer: no other device is shown the request. */
     val chosen: Boolean = asked.chosen
 
+    /*
+     * The request turns the method on: this phone signs on a press, with nothing typed and never after a scan, and
+     * then shows the code for the person to type on the device that asked. This phone is the one in doubt there, so
+     * its own word that it saw the other screen (a scan) counts for nothing.
+     */
+    val turnsOn: Boolean = approvalTurnsOn(asked.purpose)
+
     /* This phone's own value and the commitment it saw before it posted it, once it opened the request: the first ones, if it opened it before. */
     private var mine: OpenedValues.Opened? = null
 
@@ -467,9 +504,13 @@ class ApprovalAnswering(
      * (another QR code in view): nothing happens. A code for another request, or with another
      * commitment than the server listed for this one, is not the request on that screen: this one
      * is ended (`mismatch`) and nothing is opened. Otherwise the request is opened.
+     *
+     * The request that turns the method on is never answered by a scan: false whatever was read, with
+     * nothing opened, nothing ended and nothing marked as scanned.
      */
     @Synchronized
     fun openScanned(text: String): Boolean {
+        if (turnsOn) return false
         val read = approvalQrRead(text) ?: return false
         // Against the commitment remembered from before this phone opened the request, when it did: never a later listing's.
         if (read.requestId != asked.id || read.commitment != (opened.of(id)?.commitment ?: asked.commitment)) {
@@ -565,11 +606,16 @@ class ApprovalAnswering(
      * Otherwise only the exact code is approved: anything else ends the request (`wrong-code`),
      * and nothing is signed. The signature is this phone's device key's, over the statement that
      * names this phone's own account, the request, its purpose, its token and the asking device.
+     *
+     * The request that turns the method on is the one exception, and the only one: nothing is typed
+     * here (`typed` is not looked at), the press is the approval, and what comes back is the code for
+     * the person to type on the device that asked, which is where it is checked. For every other
+     * request nothing comes back, and nothing is signed untyped but after a scan of that very request.
      */
     @Synchronized
-    fun approve(typed: String?) {
+    fun approve(typed: String?): String? {
         val (code, step) = ready ?: throw Unanswered()
-        if (!(scanned && typed == null)) {
+        if (!turnsOn && !(scanned && typed == null)) {
             if (typed == null || approvalCodeNormalize(typed) != code) {
                 runCatching { end(Ending.WRONG_CODE) }
                 throw ApprovalProblem.WrongCode()
@@ -578,6 +624,7 @@ class ApprovalAnswering(
         val signature = deviceStepSign(seed, step)
         if (post("approve", approvalApproveJson(signature)) !is ApprovalAckReply.Done) throw LostReply(StepWords.LOST_CHANGE)
         opened.forget(id)
+        return code.takeIf { turnsOn }
     }
 
     /* Deny, or This wasn’t me: the request ends, and is counted as a failed step. */

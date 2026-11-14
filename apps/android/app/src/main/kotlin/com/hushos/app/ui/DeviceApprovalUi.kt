@@ -81,6 +81,7 @@ import com.hushos.app.data.TwoStepStatus
 import com.hushos.core.ApprovalPrompt
 import com.hushos.core.StepProof
 import com.hushos.core.StepRefusal
+import com.hushos.core.approvalCodeNormalize
 import com.hushos.core.approvalQrRead
 import com.hushos.core.approvalWords
 import com.hushos.tokens.AlpineSpace
@@ -88,7 +89,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -97,6 +98,8 @@ import kotlinx.coroutines.withContext
  * asking side shows (a QR code, then the code to type on the other device), and the answering
  * side's list, banner and sheet. The order of every request, and every check, is `data/DeviceApproval.kt`'s
  * (`DeviceAsk`, `ApprovalAnswering`); nothing here decides what is revealed, approved or signed.
+ * Turning the method on runs the code the other way: the asking page shows no code and no QR code
+ * and takes the code typed, and the answering sheet approves on a press and then shows it.
  * The twin of the iPhone app's `App/DeviceApproval.swift`.
  */
 
@@ -157,7 +160,7 @@ internal class DeviceAskModel(private val scope: CoroutineScope, private val nam
             answer = ask.answer
             val following = Following(ask, approved, failed)
             current = following
-            phase = AskPhase.Waiting(ask.qr)
+            phase = waiting(ask.qr)
             follow(following, mine)
         }
     }
@@ -183,14 +186,24 @@ internal class DeviceAskModel(private val scope: CoroutineScope, private val nam
         }
     }
 
-    private fun show(state: DeviceAsk.State, qr: String) {
+    /* Before a device opened the request: its QR code, or for the one that turns the method on (which has none) only that it was asked. */
+    private fun waiting(qr: String?): AskPhase = qr?.let { AskPhase.Waiting(it) } ?: AskPhase.Asked
+
+    private fun show(state: DeviceAsk.State, qr: String?) {
         phase = when (state) {
-            DeviceAsk.State.Waiting -> AskPhase.Waiting(qr)
+            DeviceAsk.State.Waiting -> waiting(qr)
             is DeviceAsk.State.Code -> AskPhase.Code(state.code)
+            DeviceAsk.State.Opened -> AskPhase.Asked
             DeviceAsk.State.Approved -> AskPhase.Approved
             is DeviceAsk.State.Ended -> AskPhase.Ended(StepWords.ended(state.why))
         }
     }
+
+    /*
+     * Turning the method on: what was typed here from the approving device's screen, as it is written, when it is
+     * exactly the code this phone worked out for the request that is out; else null (`DeviceAsk.matches`).
+     */
+    fun matches(typed: String): String? = current?.ask?.matches(typed)
 
     /* Lets the request go: nothing is looked at again, and nothing of it is shown. The server ends it with its token. */
     fun stop() {
@@ -201,6 +214,35 @@ internal class DeviceAskModel(private val scope: CoroutineScope, private val nam
         answer = null
         phase = AskPhase.Idle
     }
+
+    /* Gives the request up from here, saying why: let go as by `stop`, with nothing sent, and the panel offers Ask again. */
+    fun drop(line: String) {
+        stop()
+        phase = AskPhase.Ended(line)
+    }
+}
+
+/*
+ * A code from another device's screen as it is typed: two digits and a word, with the words the typed beginning
+ * could become. The answer sheet's field and the page that turns the method on both hold one.
+ */
+internal class CodeEntry {
+    var typed by mutableStateOf("")
+        private set
+
+    /* The digits as typed, and the word begun after them. */
+    private val digits: String get() = typed.takeWhile { it in '0'..'9' }
+    private val word: String get() = typed.dropWhile { !it.isLetter() }.lowercase()
+
+    /* Words the beginning could become; none once it is one of them and nothing longer. */
+    val completions: List<String> get() = approvalWords(word, 6u).let { found -> if (found == listOf(word)) emptyList() else found }
+
+    /* What is typed is a code, whichever one: two digits and a word of the list, however it was spaced or cased. */
+    val isCode: Boolean get() = approvalCodeNormalize(typed) != null
+
+    fun type(text: String) { typed = text.take(24) }
+    fun complete(completion: String) { typed = "$digits $completion" }
+    fun clear() { typed = "" }
 }
 
 /* MARK: Turning the method on */
@@ -208,7 +250,12 @@ internal class DeviceAskModel(private val scope: CoroutineScope, private val nam
 /*
  * Turning on Approve on another device, as Account › Two-step sign-in follows it (docs/two-step-design.md 12,
  * "Turning it on first"): the password, the device the person chose to approve, the request to that device and
- * no other, the confirmation, and behind the backup codes the removal of the other devices but that one.
+ * no other, the code that device shows once it approved, typed here, the confirmation with that code, and behind
+ * the backup codes the removal of the other devices but that one.
+ *
+ * The approval alone confirms nothing. The list the device was chosen from is made of the devices' own words, so
+ * the device that approved has to be one the person is holding: it shows the code, and only a person who can read
+ * its screen can type it here. This phone shows neither a code nor a QR code for this request.
  *
  * It runs in the view model's scope, and what it made is the view model's flow (`TwoStepFlow`), so a screen
  * rebuilt meanwhile finds it. Everything that reaches the server is handed in, so the order of things is tested
@@ -226,22 +273,33 @@ internal class DeviceSetupModel(
     private val start: suspend (password: String, twoStep: StepAnswer?) -> Result<DeviceEnrolment>,
     /* What the chosen device is asked with: this session and this phone's device key. Null with neither. */
     private val request: (token: String, approverDeviceId: String) -> DeviceAskModel.Request?,
-    /* `two-step/device/:id/confirm`, with the request that device approved. */
-    private val confirm: suspend (started: DeviceEnrolment, requestId: String) -> Result<TwoStep.DeviceConfirmed>,
+    /* `two-step/device/:id/confirm`, with the request that device approved and the code it shows, as typed here and written by the core. */
+    private val confirm: suspend (started: DeviceEnrolment, requestId: String, code: String) -> Result<TwoStep.DeviceConfirmed>,
     /* `DELETE devices/others`, keeping the device that approved (`keep`). */
     private val removeOthers: (password: String, keep: String, done: (Boolean) -> Unit) -> Unit,
     private val sessionEnded: (Shared.Session?) -> Unit,
+    /* How long a confirmation that found the approval not landed yet (`step-pending`) waits before it goes again. */
+    private val every: Long = DeviceAsk.EVERY_MS,
 ) {
     /* What the page was sent with: kept in memory from Continue until the method is on, the setup failed, or the page was left. */
     private class Setup(val password: String, val first: Boolean, val signOutOthers: Boolean)
 
     private var setup: Setup? = null
 
+    /* The request the chosen device approved, until its code was typed here or it was dropped. It confirms nothing by itself. */
+    private var approvedId by mutableStateOf<String?>(null)
+
+    /* The chosen device approved and shows the code now: the page asks for it, with Turn on (or Add). */
+    val ready: Boolean get() = approvedId != null
+
+    /* The code as it is typed here, from the chosen device's screen. */
+    val code = CodeEntry()
+
     /*
      * Continue: the pending method, then the chosen device is asked at once (Continue was the press). `first`: the
-     * account has no method yet, so the approval turns the step on. Nothing at all is sent without a device chosen
-     * to approve: with the step off, a request any signed-in device could answer would let one that someone else
-     * opened with the password answer first.
+     * account has no method yet, so this turns the step on. Nothing at all is sent without a device chosen to
+     * approve, and none is ever chosen for the person: with the step off, a request any signed-in device could
+     * answer would let one that someone else opened with the password answer first.
      */
     fun begin(password: String, twoStep: StepAnswer?, first: Boolean, approver: TwoStepStatus.Approver?, signOutOthers: Boolean, failed: suspend (Throwable) -> String?) {
         approver ?: return
@@ -264,54 +322,79 @@ internal class DeviceSetupModel(
     }
 
     /*
-     * Asks the chosen device, and no other, to approve the pending method; then confirms it with that approval.
-     * From a press only (Continue, or Ask again), and every request names the same device. One at a time: asked
-     * when nothing is out, or again once the last one ended. A request that could not be made goes back to the
-     * password with why, in the server's words.
+     * Asks the chosen device, and no other, to approve the pending method. From a press only (Continue, or Ask
+     * again), and every request names the same device. One at a time: asked when nothing is out, or again once the
+     * last one ended. A request that could not be made goes back to the password with why, in the server's words.
+     *
+     * Its approval sends nothing: it only brings up the field for the code that device then shows (`turnOn`).
      */
     fun askAgain() {
         val now = flow()
         val started = now.device ?: return
         val approver = now.approver ?: return
-        val setup = setup ?: return
+        if (setup == null) return
         if (now.pending || !(ask.phase is AskPhase.Idle || ask.phase is AskPhase.Ended)) return
         val mine = era()
         val request = request(started.token, approver.id) ?: run { back(AuthFailure(Problems.SERVER)); return }
+        approvedId = null
+        code.clear()
         ask.begin(
             request,
             approved = { answer ->
                 val requestId = (answer.proof as? StepProof.Device)?.requestId
-                if (requestId != null && mine == era()) confirmed(started, requestId, approver, setup, mine)?.let { throw it }
+                if (requestId != null && mine == era() && flow().device == started) approvedId = requestId
             },
             failed = { failure ->
                 if (failure is NotAuthenticated) sessionEnded(request.wire.session)
-                // A confirmation that failed has said so itself, and the setup went with it.
                 if (mine == era() && flow().device != null) back(failure)
             },
         )
     }
 
     /*
-     * The confirmation: the request that may turn the step on and make the backup codes, which the server shows once.
+     * Turn on, or Add: the press under the code. What was typed is checked here first, against the code this phone
+     * worked out itself for the approved request (`DeviceAsk.matches`), and the server checks it again.
      *
-     * - The flow is pending from before it goes out, so Back and leaving the page are held (`left`) until it has
-     *   answered: nothing lets the request go while the codes may be on their way.
-     * - What it answered is put in the flow here, in the view model's scope and not in the request's own job: a
-     *   request let go meanwhile still leaves the codes where the page finds them, until Done.
+     * - One try. A code that is not the request's sends nothing: the request is dropped here, the page says so, and
+     *   Ask again makes a new one to the same device. Something that is no code at all changes nothing.
+     * - The confirmation is the request that may turn the step on and make the backup codes, which the server shows
+     *   once. The flow is pending from before it goes out, so Back and leaving the page are held (`left`) until it
+     *   has answered, and what it answered is put in the flow in the view model's scope: a page or a request let go
+     *   meanwhile still leaves the codes where the page finds them, until Done.
      * - The codes first; only then, when this turned the step on with the box ticked, are the other devices removed,
      *   all but the one that approved. A removal that fails never costs the codes.
      * - A lost reply says HushOS can't tell whether it was turned on, and the settings are read again (`deviceFailed`).
-     *
-     * What is handed back is thrown to the request: `step-pending` keeps it waiting on the same approval.
+     *   So does a refusal, the server's own of the code included (`device-code`), in its words.
+     * - `step-pending` (the approval had not landed where the confirmation went) changed and counted nothing: the
+     *   same confirmation goes again, a few times, before it is said as a failure.
      */
-    private suspend fun confirmed(started: DeviceEnrolment, requestId: String, approver: TwoStepStatus.Approver, sent: Setup, mine: Int): Throwable? {
+    fun turnOn() {
+        val now = flow()
+        val started = now.device ?: return
+        val approver = now.approver ?: return
+        val sent = setup ?: return
+        val requestId = approvedId ?: return
+        if (now.pending || !code.isCode) return
+        val written = ask.matches(code.typed)
+        if (written == null) {
+            approvedId = null
+            code.clear()
+            ask.drop(StepWords.DEVICE_CODE_WRONG)
+            return
+        }
+        val mine = era()
         set(flow().started())
-        return scope.async {
-            val result = confirm(started, requestId)
-            if (mine != era()) return@async null
+        scope.launch {
+            var result = confirm(started, requestId, written)
+            var again = 0
+            while (mine == era() && again++ < PENDING_TRIES && result.exceptionOrNull().let { it is StepRefused && it.refusal == StepRefusal.PENDING }) {
+                delay(every)
+                result = confirm(started, requestId, written)
+            }
+            if (mine != era()) return@launch
             result.fold(
                 { made ->
-                    setup = null
+                    forget()
                     set(flow().deviceConfirmed(made, sent.first))
                     if (TwoStepFlow.removesOthers(made is TwoStep.DeviceConfirmed.TurnedOn, sent.signOutOthers, sent.first)) {
                         set(flow().copy(removing = true))
@@ -319,21 +402,24 @@ internal class DeviceSetupModel(
                             if (mine == era() && flow().codes != null) set(flow().copy(removing = false, notRemoved = !removed))
                         }
                     }
-                    null
                 },
-                { failure ->
-                    // Not approved where the confirmation went: nothing changed, and the same request is waited on.
-                    if (failure is StepRefused && failure.refusal == StepRefusal.PENDING) set(flow().copy(pending = false)) else back(failure)
-                    failure
-                },
+                { failure -> back(failure) },
             )
-        }.await()
+        }
     }
 
     /* Back to the password with why; any failure may hide a method that was turned on, so the settings are read again. */
     private fun back(failure: Throwable) {
-        setup = null
+        forget()
         set(flow().deviceFailed(failure))
+    }
+
+    /* The request to the other device, its approval, what was typed and what the page was sent with: all let go. */
+    private fun forget() {
+        ask.stop()
+        setup = null
+        approvedId = null
+        code.clear()
     }
 
     /*
@@ -343,15 +429,16 @@ internal class DeviceSetupModel(
      */
     fun left(): Boolean {
         if (flow().pending) return false
-        ask.stop()
-        setup = null
+        forget()
         return true
     }
 
     /* The session went: everything of it goes, whatever is out. */
-    fun end() {
-        ask.stop()
-        setup = null
+    fun end() = forget()
+
+    companion object {
+        /* How often a confirmation answered `step-pending` goes again before that is said as a failure. */
+        const val PENDING_TRIES = 5
     }
 }
 
@@ -373,13 +460,9 @@ internal fun DeviceAskPanel(phase: AskPhase, inlineAgain: Boolean, enabled: Bool
             }
             Text(open, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, textAlign = TextAlign.Center)
         }
-        is AskPhase.Code -> Column(
-            Modifier.fillMaxWidth().semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
-            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(AlpineSpace.S2),
-        ) {
-            Text(StepWords.ASK_CODE, style = MaterialTheme.typography.titleSmall, color = alpine.ink)
-            Text(phase.code, style = MaterialTheme.typography.displaySmall.copy(fontFamily = FontFamily.Monospace), fontWeight = FontWeight.Bold, color = alpine.ink, maxLines = 1)
-        }
+        // Turning the method on: no QR code and no code here, only which device to pick up.
+        AskPhase.Asked -> Text(open, style = MaterialTheme.typography.bodyLarge, color = alpine.ink, modifier = Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite })
+        is AskPhase.Code -> ShownCode(phase.code)
         AskPhase.Approved -> Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Outlined.CheckCircle, null, tint = alpine.success)
             Text(StepWords.APPROVED, style = MaterialTheme.typography.bodyLarge, color = alpine.success, modifier = Modifier.padding(start = AlpineSpace.S2))
@@ -388,6 +471,38 @@ internal fun DeviceAskPanel(phase: AskPhase, inlineAgain: Boolean, enabled: Bool
             Text(phase.line, style = MaterialTheme.typography.bodyMedium, color = alpine.ink, textAlign = TextAlign.Center, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
             // A form has no button of its own for it: Ask again sits in the panel. The sign-in screen's own button asks again.
             if (inlineAgain) TextButton(onClick = again, enabled = enabled) { Text(StepWords.ASK_AGAIN) }
+        }
+    }
+}
+
+/* A code for the person to type on their other device, under its label: large and monospaced, read out when it appears. */
+@Composable
+internal fun ShownCode(code: String, modifier: Modifier = Modifier) {
+    val alpine = Alpine.colors
+    Column(
+        modifier.fillMaxWidth().semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(AlpineSpace.S2),
+    ) {
+        Text(StepWords.ASK_CODE, style = MaterialTheme.typography.titleSmall, color = alpine.ink)
+        Text(code, style = MaterialTheme.typography.displaySmall.copy(fontFamily = FontFamily.Monospace), fontWeight = FontWeight.Bold, color = alpine.ink, maxLines = 1)
+    }
+}
+
+/*
+ * Where a code from another device's screen is typed: two digits and a word, with the words the typed beginning
+ * could become offered beneath. `onDone`: the keyboard's Done.
+ */
+@Composable
+internal fun CodeField(label: String, typed: String, completions: List<String>, enabled: Boolean, onType: (String) -> Unit, onComplete: (String) -> Unit, onDone: () -> Unit) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
+        OutlinedTextField(
+            value = typed, onValueChange = onType, label = { Text(label) }, placeholder = { Text("47 river") },
+            singleLine = true, enabled = enabled, textStyle = MaterialTheme.typography.titleLarge.copy(fontFamily = FontFamily.Monospace),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { onDone() }), modifier = Modifier.fillMaxWidth(),
+        )
+        if (completions.isNotEmpty()) Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
+            for (completion in completions) SuggestionChip(onClick = { onComplete(completion) }, enabled = enabled, label = { Text(completion) })
         }
     }
 }
@@ -407,7 +522,8 @@ internal fun DeviceAskPanel(phase: AskPhase, inlineAgain: Boolean, enabled: Bool
  * Everything it holds is one account's: the list, the request being answered, and the values this
  * phone opened requests with. All of it goes the moment the phone's session is another one, before
  * anything else is looked at, and a list that comes back for a session that is no longer the
- * phone's shows nothing.
+ * phone's shows nothing and is not counted: the limit's record is an account file too, written only
+ * for a list known to be the account's that is signed in as it is written.
  */
 internal class ApprovalInbox(
     private val scope: CoroutineScope,
@@ -456,14 +572,18 @@ internal class ApprovalInbox(
         if (loading == session) return
         loading = session
         try {
-            val listed = withContext(Dispatchers.IO) { runCatching { DeviceApprovals.list(wire(session), limit()) } }
+            // Uncounted: whose list this is has to be known before the phone's own limit is written for it.
+            val listed = withContext(Dispatchers.IO) { runCatching { DeviceApprovals.listed(wire(session)) } }
             if (owner != session) return
             // The session may have changed while the list was out with no look since to notice (a sign-in from a file
-            // picker has its own view model): asked again before anything of the reply is shown.
-            if (withContext(Dispatchers.IO) { held() } != session) { if (owner == session) clear(); return }
+            // picker has its own view model): asked again before anything of the reply is shown or counted. The count
+            // is kept in an account file (`approval-prompts.json`), so it is written only here, behind that check: a
+            // late list of the account that was here before writes nothing into the next one's storage.
+            val counted = withContext(Dispatchers.IO) { if (held() != session) null else listed.mapCatching { limit().shown(it) } }
+            if (counted == null) { if (owner == session) clear(); return }
             if (owner != session) return
             // Kept as it was when the server can't be asked: the next look asks again.
-            val list = listed.getOrElse { failure -> if (failure is NotAuthenticated) sessionEnded(session); return }
+            val list = counted.getOrElse { failure -> if (failure is NotAuthenticated) sessionEnded(session); return }
             for (asked in list) first.getOrPut(asked.id) { asked }
             val live = list.map { it.id }.toSet() + listOfNotNull(answering?.id)
             first.keys.retainAll(live)
@@ -481,13 +601,25 @@ internal class ApprovalInbox(
         val own = identity ?: return
         val flow = flows.getOrPut(asked.id) { ApprovalAnswering(first[asked.id] ?: asked, wire(session), own.userId, own.seed, opened) }
         answering?.cancel()
-        answering = ApprovalAnswer(flow, scope, closed = { said, important -> notify(said, important); finished(flow.id) }, sessionEnded = { dismiss(); sessionEnded(session) })
+        val sheet = ApprovalAnswer(
+            flow, scope, closed = { said, important -> notify(said, important); finished(flow.id) }, sessionEnded = { dismiss(); sessionEnded(session) },
+            // Approved, with its code up for the person to read: it leaves the list at once, and its sheet stays until Done.
+            codeShown = { prompts = prompts.filterNot { it.id == flow.id } },
+        )
+        answering = sheet
+        // Turning the method on has nothing to choose between: Answer was the press that opens the request.
+        sheet.open()
     }
 
-    /* The sheet was closed without an answer: the request stays in the list until it is answered or over. */
+    /*
+     * The sheet was closed. Without an answer the request stays in the list until it is answered or over; with its
+     * code up it was approved already, and nothing of it is left to answer.
+     */
     fun dismiss() {
-        answering?.cancel()
+        val was = answering ?: return
+        was.cancel()
         answering = null
+        if (was.code != null) finished(was.id)
     }
 
     /* Approved, denied or over: it leaves the list at once, without waiting for the next look. */
@@ -516,6 +648,14 @@ internal class ApprovalInbox(
  * checks that it is this very request before anything is asked; or type the code that screen shows.
  * Only then Approve. Deny and This wasn’t me end it at any point. Anything that does not match ends
  * it and says so. In the view model's scope: the sheet is only its view.
+ *
+ * The request that turns the method on is the other way round (`turnsOn`): nothing is scanned and
+ * nothing typed here. It is opened as the sheet opens, Approve signs once the other device revealed,
+ * and then the sheet shows the code for the person to type on the device that asked, until Done.
+ *
+ * `busy` is a request of this sheet's own on its way (the open after a scan, the approval, the denial).
+ * Waiting for the other device to reveal is not: it can take minutes, and Deny, This wasn’t me and
+ * closing the sheet all stay within reach meanwhile.
  */
 internal class ApprovalAnswer(
     private val flow: ApprovalAnswering,
@@ -524,8 +664,10 @@ internal class ApprovalAnswer(
     private val closed: (said: String, important: Boolean) -> Unit,
     private val sessionEnded: () -> Unit,
     private val every: Long = DeviceAsk.EVERY_MS,
+    /* Turning the method on: approved, and its code is up. The sheet stays; the request is nobody's to answer any more. */
+    private val codeShown: () -> Unit = {},
 ) {
-    enum class Phase { CHOOSE, SCANNING, WAITING, TYPING, CONFIRM }
+    enum class Phase { CHOOSE, SCANNING, WAITING, TYPING, CONFIRM, SHOWING }
 
     val id: String get() = flow.id
     val asks: String get() = flow.asks
@@ -533,31 +675,33 @@ internal class ApprovalAnswer(
     /* The one line under what is asked: that the other device chose this phone to answer, when it did. */
     val note: String? get() = StepWords.APPROVAL_CHOSEN.takeIf { flow.chosen }
 
+    /* The request turns the method on: no scan and no field, Approve on a press, then the code to show. */
+    val turnsOn: Boolean get() = flow.turnsOn
+
     var phase by mutableStateOf(Phase.CHOOSE)
-        private set
-    var typed by mutableStateOf("")
         private set
     var busy by mutableStateOf(false)
         private set
     var error by mutableStateOf("")
         private set
 
+    /* Turning the method on, once approved: the code for the person to type on the device that asked. Up until Done. */
+    var code by mutableStateOf<String?>(null)
+        private set
+
+    private val entry = CodeEntry()
+    val typed: String get() = entry.typed
+    val completions: List<String> get() = entry.completions
+
     private var work: Job? = null
     private var turn = 0
 
-    /* The digits as typed, and the word begun after them. */
-    private val digits: String get() = typed.takeWhile { it in '0'..'9' }
-    private val word: String get() = typed.dropWhile { !it.isLetter() }.lowercase()
+    fun type(text: String) { entry.type(text); error = "" }
+    fun complete(completion: String) { entry.complete(completion); error = "" }
 
-    /* Words the beginning could become; none once it is one of them and nothing longer. */
-    val completions: List<String> get() = approvalWords(word, 6u).let { found -> if (found == listOf(word)) emptyList() else found }
-
-    fun type(text: String) { typed = text.take(24); error = "" }
-    fun complete(completion: String) { typed = "$digits $completion"; error = "" }
-
-    /* Scan the code: the camera, once it may be used. */
-    fun scan() { if (!busy) { error = ""; phase = Phase.SCANNING } }
-    fun choose() { if (!busy) phase = Phase.CHOOSE }
+    /* Scan the code: the camera, once it may be used. Never for the request that turns the method on. */
+    fun scan() { if (!busy && !turnsOn && phase != Phase.SHOWING) { error = ""; phase = Phase.SCANNING } }
+    fun choose() { if (!busy && phase != Phase.SHOWING) phase = Phase.CHOOSE }
 
     /* One piece of work at a time: a later one (Deny over a wait) takes over, and an earlier one that ends afterwards changes nothing. */
     private fun run(block: suspend () -> Unit) {
@@ -577,13 +721,30 @@ internal class ApprovalAnswer(
 
     /* Type the code: the request is opened, and the field appears once the other device has revealed what it committed to. */
     fun typing() {
-        if (busy) return
+        if (busy || turnsOn || phase == Phase.SHOWING) return
         error = ""
         phase = Phase.WAITING
         run {
             withContext(Dispatchers.IO) { flow.open() }
             flow.awaitReveal(every)
             phase = Phase.TYPING
+        }
+    }
+
+    /*
+     * Turning the method on: the request is opened and the reveal awaited exactly as for a typed code, and then
+     * only Approve is asked. Answer was the press (the inbox calls this as the sheet opens); Try again is the
+     * press after an open that got no answer. Nothing for any other request, which is opened by a scan or by
+     * choosing to type.
+     */
+    fun open() {
+        if (!turnsOn || busy || phase != Phase.CHOOSE) return
+        error = ""
+        phase = Phase.WAITING
+        run {
+            withContext(Dispatchers.IO) { flow.open() }
+            flow.awaitReveal(every)
+            phase = Phase.CONFIRM
         }
     }
 
@@ -595,27 +756,39 @@ internal class ApprovalAnswer(
         run {
             if (!withContext(Dispatchers.IO) { flow.openScanned(text) }) return@run
             phase = Phase.WAITING
+            // Opened: from here it only waits for the other device, which holds nothing up.
             busy = false
             flow.awaitReveal(every)
             phase = Phase.CONFIRM
         }
     }
 
-    /* Approve: with what was typed, or after a scan with nothing typed. */
+    /*
+     * Approve: with what was typed, or after a scan with nothing typed. The request that turns the method on is
+     * approved on the press alone, and its code then stays up (`SHOWING`): nothing closes the sheet but Done.
+     */
     fun approve() {
         if (busy || (phase != Phase.TYPING && phase != Phase.CONFIRM)) return
-        val code = typed.takeIf { phase == Phase.TYPING }
+        val written = typed.takeIf { phase == Phase.TYPING }
         busy = true
         error = ""
         run {
-            withContext(Dispatchers.IO) { flow.approve(code) }
-            closed(StepWords.APPROVED, false)
+            val shown = withContext(Dispatchers.IO) { flow.approve(written) }
+            if (shown == null) closed(StepWords.APPROVED, false)
+            else {
+                code = shown
+                phase = Phase.SHOWING
+                codeShown()
+            }
         }
     }
 
-    /* Deny, or This wasn’t me. */
+    /* Done, under the code: the person has typed it on the other device, or will not. */
+    fun done() { if (phase == Phase.SHOWING) closed(StepWords.APPROVED, false) }
+
+    /* Deny, or This wasn’t me. Over a wait too: only a request of this sheet's own on its way holds it. */
     fun end(why: ApprovalAnswering.Ending) {
-        if (busy) return
+        if (busy || phase == Phase.SHOWING) return
         busy = true
         error = ""
         work?.cancel()
@@ -671,7 +844,10 @@ internal fun ApprovalBanner(inbox: ApprovalInbox) {
 /* Whether this phone has a camera to scan with; without one, typing remains. */
 private fun hasCamera(context: Context): Boolean = context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
 
-/* The answer sheet, drawn by `Main` while a request is being answered. */
+/*
+ * The answer sheet, drawn by `Main` while a request is being answered. It can be closed whenever no request of
+ * its own is on its way (`busy`): waiting for the other device holds nothing.
+ */
 @Composable
 internal fun ApprovalSheet(inbox: ApprovalInbox, answer: ApprovalAnswer) {
     val alpine = Alpine.colors
@@ -686,7 +862,10 @@ internal fun ApprovalSheet(inbox: ApprovalInbox, answer: ApprovalAnswer) {
                 modifier = Modifier.padding(horizontal = AlpineSpace.S6).padding(bottom = AlpineSpace.S3).semantics { heading() })
             answer.note?.let { Text(it, style = MaterialTheme.typography.bodyLarge, color = alpine.ink, modifier = Modifier.padding(horizontal = AlpineSpace.S6).padding(bottom = AlpineSpace.S3)) }
             when (answer.phase) {
-                ApprovalAnswer.Phase.CHOOSE -> {
+                // Turning the method on is never scanned or typed here: this is only where an open that got no answer is asked again.
+                ApprovalAnswer.Phase.CHOOSE -> if (answer.turnsOn) {
+                    TextButton(onClick = { answer.open() }, modifier = Modifier.padding(horizontal = AlpineSpace.S4)) { Text("Try again") }
+                } else {
                     if (hasCamera(context)) SheetRow("Scan the code", Icons.Outlined.QrCodeScanner, action = true) {
                         if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) answer.scan()
                         else permission.launch(Manifest.permission.CAMERA)
@@ -703,26 +882,25 @@ internal fun ApprovalSheet(inbox: ApprovalInbox, answer: ApprovalAnswer) {
                     Text(StepWords.ASK_WAITING, style = MaterialTheme.typography.bodyLarge, color = alpine.inkMuted, modifier = Modifier.padding(start = AlpineSpace.S4))
                 }
                 ApprovalAnswer.Phase.TYPING -> Column(Modifier.padding(horizontal = AlpineSpace.S6), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
-                    OutlinedTextField(
-                        value = answer.typed, onValueChange = answer::type, label = { Text(StepWords.APPROVAL_CODE_FIELD) }, placeholder = { Text("47 river") },
-                        singleLine = true, enabled = !busy, textStyle = MaterialTheme.typography.titleLarge.copy(fontFamily = FontFamily.Monospace),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, imeAction = ImeAction.Done),
-                        keyboardActions = KeyboardActions(onDone = { answer.approve() }), modifier = Modifier.fillMaxWidth(),
-                    )
-                    val completions = answer.completions
-                    if (completions.isNotEmpty()) Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
-                        for (completion in completions) SuggestionChip(onClick = { answer.complete(completion) }, enabled = !busy, label = { Text(completion) })
-                    }
+                    CodeField(StepWords.APPROVAL_CODE_FIELD, answer.typed, answer.completions, enabled = !busy, onType = answer::type, onComplete = answer::complete) { answer.approve() }
                     ApproveButton(busy) { answer.approve() }
                 }
                 ApprovalAnswer.Phase.CONFIRM -> Box(Modifier.padding(horizontal = AlpineSpace.S6)) { ApproveButton(busy) { answer.approve() } }
+                // Approved: the code for the device that asked, until Done. Nothing here ends it or closes it by itself.
+                ApprovalAnswer.Phase.SHOWING -> Column(Modifier.padding(horizontal = AlpineSpace.S6), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S4)) {
+                    ShownCode(answer.code.orEmpty())
+                    Button(onClick = { answer.done() }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text("Done") }
+                }
             }
             if (answer.error.isNotEmpty()) Text(
                 answer.error, color = alpine.danger, style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(horizontal = AlpineSpace.S6, vertical = AlpineSpace.S2).semantics { liveRegion = LiveRegionMode.Polite },
             )
-            SheetRow("Deny", Icons.Outlined.Block, enabled = !busy) { answer.end(ApprovalAnswering.Ending.DENIED) }
-            SheetRow("This wasn’t me", Icons.Outlined.ReportProblem, danger = true, enabled = !busy) { answer.end(ApprovalAnswering.Ending.NOT_ME) }
+            // Approved already: there is nothing left to deny.
+            if (answer.phase != ApprovalAnswer.Phase.SHOWING) {
+                SheetRow("Deny", Icons.Outlined.Block, enabled = !busy) { answer.end(ApprovalAnswering.Ending.DENIED) }
+                SheetRow("This wasn’t me", Icons.Outlined.ReportProblem, danger = true, enabled = !busy) { answer.end(ApprovalAnswering.Ending.NOT_ME) }
+            }
         }
     }
 }

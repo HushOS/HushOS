@@ -274,17 +274,29 @@ Design: `docs/devices-design.md` 5; as built: `docs/push-relay-plan.md`, PR 4.
     - `ApprovalInbox` (`DriveViewModel.approvals`) reads the list when the app comes to the front (`resumed`), at sign-in, every five seconds while Account is on screen, when Devices opens, and when a push of kind `approvalRequest` is fetched (`ApprovalPushes`, from `PushNotifications.notice`). Home's banner and Devices' rows open `ApprovalSheet`, drawn by `Main`; what the sheet holds is `ApprovalAnswer`, in the view model's scope, so a rotation keeps it.
     - The inbox never asks whether the server has two-step on (`TwoStep.status`, 501): only the settings and turning it on follow that flag. An account that has the step is still asked for it.
     - Everything the inbox holds is one account's (the list, the request being answered, the opened values). `loadNow` reads the session first and clears all of it when the session is another one, before the look-already-out guard; a list that comes back for a session that is no longer the phone's shows nothing (the session is read again after the reply). Keep that order.
+    - `busy` on the sheet (`ApprovalAnswer`) is a request of its own on its way (the open after a scan, the approval, the denial). Waiting for the reveal is not busy: Deny, This wasn’t me and closing the sheet stay within reach. Closing leaves the request in the list.
     - Scanning is the camera the recovery kit is scanned with (`QrCamera`: CameraX frames decoded by ZXing on the phone, the CAMERA permission asked on the press); the QR code shown is ZXing's too (`qrBitmap`). No new dependency. A phone without a camera, or without the permission, types.
     - `PromptLimit`: five prompts a day for each class, counted by the core, kept in `approval-prompts.json` (an account file, wiped with the account).
+        - `loadNow` fetches the list uncounted (`DeviceApprovals.listed`), reads the session again, and only then counts and writes (`PromptLimit.shown`), in the same step as that check. A late list of the account that was here before writes nothing into the next one's record. Keep that order.
 - Settings: `TwoStepStatus.showsDevice`, `deviceValue`, `canTurnOnDevice`; Turn on is `DeviceMethodScreen`, Turn off is `RemoveScreen`.
     - `canMakeDefault` is offered only on a kind the account has.
-- Turning it on (`DeviceSetupModel` in `ui/DeviceApprovalUi.kt`, held by the view model as `deviceSetup`; `DriveViewModel.startDevice`, `askDeviceSetup`): the person chooses the device that approves, from `TwoStepStatus.approvers` ("Turning it on first" in the design).
-    - One device is chosen already and still shown (`soleApprover`); with several none is, and nothing is sent until one is picked. `canTurnOnDevice` needs a device to choose.
+- Turning it on (`DeviceSetupModel` in `ui/DeviceApprovalUi.kt`, held by the view model as `deviceSetup`; `DriveViewModel.startDevice`, `askDeviceSetup`, `confirmDeviceSetup`): the person chooses the device that approves, from `TwoStepStatus.approvers` ("Turning it on first" in the design).
+    - No device is ever chosen for the person, even when the list has one (`TwoStepStatus.approver(picked)` is null until they pick): a device's name and kind are its own words. Nothing is sent until one is picked. `canTurnOnDevice` needs a device to choose.
     - The request names the chosen device (`approvalStartJson(…, approverDeviceId)`), the first time and at every Ask again; it is `TwoStepFlow.approver` while it is asked, and the page names it.
-    - The flow is pending from before the confirmation goes out (it may make the backup codes): Back is held, and `DeviceSetupModel.left` refuses to let the request go. What the confirmation answered is put in the flow in the view model's scope, never in the request's own job.
+    - This request (`approvalTurnsOn(purpose)`, never a string comparison) runs the code the other way. Where it is asked:
+        - no code and no QR code at any state (`DeviceAsk.qr` is null, `State.Opened`, `AskPhase.Asked`): the page only says which device to pick up;
+        - the approval sends nothing. It brings up the code field (`DeviceSetupModel.ready`, `CodeEntry`) with Turn on, or Add;
+        - the press checks what was typed against the code this phone worked out (`DeviceAsk.matches`, the core's `approvalCodeTyped`). One try: a wrong code sends nothing and drops the request (`DeviceAskModel.drop`), with Ask again;
+        - the right one goes with the confirmation as written (`deviceConfirmJson(token, requestId, code)`). The server checks it again; its refusal (409 `device-code`) is said in its words, back at the password.
+    - Where it is answered (`ApprovalAnswering.turnsOn`, `ApprovalAnswer`):
+        - never by a scan: `openScanned` returns false with nothing opened, and the sheet offers neither the camera nor a field;
+        - Answer opens the request (`ApprovalAnswer.open`), the reveal is awaited and checked as for any request, and Approve signs with nothing typed. `approve` hands back the code only for this request;
+        - the sheet then shows the code until Done (`Phase.SHOWING`). The request leaves the list at once; later looks neither close the sheet nor say it is over.
+        - Every other request is still signed only on its exact code, or untyped after a scan of that very request.
+    - The flow is pending from before the confirmation goes out (it may make the backup codes): Back is held, and `DeviceSetupModel.left` refuses to let the request go. What the confirmation answered is put in the flow in the view model's scope, never in the request's own job. A `step-pending` answer sends the same confirmation again, at most five times.
     - "Remove my other devices" is offered, ticked, when this turns the step on. It runs behind the codes with `keep`, the device that approved (`Auth.removeOtherDevices(keep =)`).
 - Tests: `DeviceApprovalTest` (an in-memory server that can be made to lie, `ApprovalServer`; the web's fixture `web-device-approval.json`), `DeviceApprovalUiTest` (`DeviceAskModel`, `ApprovalAnswer`), `DeviceSetupTest` (`DeviceSetupModel`), `ApprovalInboxTest`.
-- Not run on an emulator or a device, or against a live server: the sign-in step screen, the forms' row and the settings row in place, the answer sheet, the camera scan, and the push.
+- Not run on an emulator or a device, or against a live server: the sign-in step screen, the forms' row and the settings row in place, the turn-on page's code field, the answer sheet and the code it shows, the camera scan, and the push.
 
 ### Account and plan
 

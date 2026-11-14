@@ -8,7 +8,9 @@ import com.hushos.app.data.PromptLimit
 import com.hushos.app.data.Shared
 import com.hushos.app.data.TwoStep
 import com.hushos.app.data.uptime
+import com.hushos.core.DeviceStep
 import com.hushos.core.deviceSigningCreate
+import com.hushos.core.deviceStepCode
 import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
 import java.util.Collections
@@ -34,7 +36,10 @@ import org.junit.Test
  *   the settings follow that flag (501), and an account that already has the step is still asked;
  * - everything held is one account's. The moment the phone's session is another one, the list,
  *   the request being answered and the values this phone opened requests with all go, even while
- *   a look for the earlier session is still out, and its reply then shows nothing.
+ *   a look for the earlier session is still out, and its reply then shows nothing and is counted
+ *   nowhere: the phone's own limit keeps its record in an account file, which is the next account's;
+ * - a request that turns the method on is opened by Answer, leaves the list once approved, and its
+ *   code stays up through later looks until Done.
  */
 class ApprovalInboxTest {
     private val account = ApprovalServer.ACCOUNT
@@ -59,8 +64,11 @@ class ApprovalInboxTest {
     private inner class Phone(scope: CoroutineScope, @Volatile var session: Shared.Session?, @Volatile var key: Shared.DeviceIdentity?, wire: (Shared.Session) -> ApprovalWire) {
         val said: MutableList<Pair<String, Boolean>> = Collections.synchronizedList(mutableListOf())
         val opened = OpenedValues()
+        /* The limit's record (`approval-prompts.json`, an account file), and every write to it. */
+        @Volatile var record = ""
+        val writes: MutableList<String> = Collections.synchronizedList(mutableListOf())
         val inbox = ApprovalInbox(
-            scope, { session }, { key }, wire, { PromptLimit({ "" }, {}) },
+            scope, { session }, { key }, wire, { PromptLimit({ record }, { record = it; writes += it }) },
             sessionEnded = { fail("signed out") }, notify = { words, important -> said += words to important }, opened = opened,
         )
     }
@@ -125,11 +133,61 @@ class ApprovalInboxTest {
         phone.inbox.dismiss()
     }
 
+    @Test
+    fun aRequestThatTurnsTheMethodOnIsOpenedByAnswerLeavesTheListOnceApprovedAndItsCodeStaysUntilDone(): Unit = runBlocking {
+        fun asked(): Triple<ApprovalServer, Phone, Pair<String, String>> {
+            val server = ApprovalServer()
+            val made = server.asked(purpose = "device-approval")
+            server.chosen = true
+            val phone = Phone(this, Shared.Session("http://step.test", "session-token", account), key(account)) { server.wire(it) }
+            return Triple(server, phone, made)
+        }
+        /* Answer, the other device's reveal, Approve: the code is up. */
+        suspend fun approved(server: ApprovalServer, phone: Phone, made: Pair<String, String>): ApprovalAnswer {
+            phone.inbox.loadNow()
+            phone.inbox.answer(phone.inbox.prompts.single())
+            val sheet = phone.inbox.answering!!
+            // Answer was the press: the request is opened with nothing more chosen.
+            waitFor("the open") { server.state == "opened" }
+            server.reveal = made
+            server.state = "revealed"
+            waitFor("Approve") { sheet.phase == ApprovalAnswer.Phase.CONFIRM }
+            sheet.approve()
+            waitFor("the code") { sheet.phase == ApprovalAnswer.Phase.SHOWING }
+            assertEquals(deviceStepCode(DeviceStep(account, server.requestId, "device-approval", server.tokenDigest!!, made.first), server.approverKey!!, made.second), sheet.code)
+            return sheet
+        }
+        val (server, phone, made) = asked()
+        val sheet = approved(server, phone, made)
+        // Approved: nobody is asked to answer it any more, at once.
+        assertTrue(phone.inbox.prompts.isEmpty())
+        // The server no longer lists it, and looks go on: the sheet neither closes nor says the request is over.
+        repeat(3) { phone.inbox.loadNow() }
+        delay(40)
+        assertTrue(phone.inbox.answering === sheet)
+        assertEquals(ApprovalAnswer.Phase.SHOWING, sheet.phase)
+        assertTrue(phone.said.isEmpty())
+        // Done: closed, with the brief confirmation.
+        sheet.done()
+        assertNull(phone.inbox.answering)
+        assertEquals(listOf("Approved" to false), phone.said.toList())
+
+        // Closed without Done, the code up: the request was approved, so nothing of it is left to answer or to say.
+        val (again, other, second) = asked()
+        approved(again, other, second)
+        other.inbox.dismiss()
+        assertNull(other.inbox.answering)
+        assertTrue(other.inbox.prompts.isEmpty())
+        assertTrue(other.said.isEmpty())
+        assertTrue(again.calls("/deny").isEmpty())
+    }
+
     /* Two accounts on one phone, each with its own server; a look for the first can be held on its way back. */
     private inner class TwoAccounts(scope: CoroutineScope) {
         val first = Shared.Session("http://step.test", "token-a", account)
         val second = Shared.Session("http://step.test", "token-b", another)
-        val firstServer = ApprovalServer().apply { asked() }
+        /* The two accounts' requests are of different classes, so one counted in the other's record would change it. */
+        val firstServer = ApprovalServer().apply { asked(); klass = "known" }
         val secondServer = ApprovalServer().apply { asked(purpose = "password") }
         /* The next list asked for under the first session waits at `release`; `held` says it has been asked for. */
         val hold = AtomicBoolean(false)
@@ -150,6 +208,9 @@ class ApprovalInboxTest {
         fun switch() {
             phone.session = second
             phone.key = key(another)
+            // Signing out wiped the first account's files, the limit's record among them: what is there now is the second's.
+            phone.record = ""
+            phone.writes.clear()
         }
 
         /* Whatever a test finds, the held look is let go: a failed check must fail the test, not leave it waiting. */
@@ -181,9 +242,12 @@ class ApprovalInboxTest {
             assertNull(phone.inbox.answering)
             assertTrue(phone.opened.isEmpty)
             assertEquals(listOf("password"), phone.inbox.prompts.map { it.purpose })
+            // The second account's own list was counted in its own record, once.
+            assertEquals(1, phone.writes.size)
         }
-        // The first account's list arrives after the switch: it shows nothing.
+        // The first account's list arrives after the switch: it shows nothing, and adds nothing to that record.
         late.join()
+        assertEquals(1, phone.writes.size)
         assertEquals(listOf("password"), phone.inbox.prompts.map { it.purpose })
         assertNull(phone.inbox.answering)
         assertTrue(phone.opened.isEmpty)
@@ -202,9 +266,13 @@ class ApprovalInboxTest {
         }
         late.join()
         assertTrue(phone.inbox.prompts.isEmpty())
-        // The next look reads the second account's own.
+        // Nor is it counted: the limit's record is the second account's now, and the first account's list wrote nothing into it.
+        assertTrue(phone.writes.isEmpty())
+        assertEquals("", phone.record)
+        // The next look reads the second account's own, and counts it there.
         phone.inbox.loadNow()
         assertEquals(listOf("password"), phone.inbox.prompts.map { it.purpose })
+        assertEquals(1, phone.writes.size)
         // Signed out: nothing is held, and nothing is asked.
         val looks = two.secondServer.calls.size
         phone.session = null
