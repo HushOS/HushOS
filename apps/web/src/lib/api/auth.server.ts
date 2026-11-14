@@ -537,7 +537,12 @@ export const authApi = new Elysia()
         '/auth/two-step/device/:id/confirm',
         {
             params: t.Object({ id: uuidSchema }),
-            body: t.Object({ token: tokenSchema, requestId: uuidSchema }),
+            // `code`: what the approving device shows, typed on this one ("47 river").
+            body: t.Object({
+                token: tokenSchema,
+                requestId: uuidSchema,
+                code: t.String({ minLength: 4, maxLength: 32 }),
+            }),
             response: { 200: deviceConfirmedResponse },
         },
         ({ request, sessionToken, params, body }) => {

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import {
-    deviceStepCodeDigest,
+    deviceStepCodeParts,
     deviceStepCommitment,
     deviceStepStatement,
     verifySignature,
@@ -63,13 +63,15 @@ describe.each(Object.entries(sources))('requests the %s built', (_name, cases) =
                     nonce: b64(item.nonce),
                 }).toString('base64url'),
             ).toBe(item.commitment);
-            const digest = deviceStepCodeDigest({
+            // The two numbers the server compares a typed code by are the clients' code.
+            const parts = deviceStepCodeParts({
                 ...stepOf(item),
                 approverKey: b64(item.approverKey),
                 nonce: b64(item.nonce),
             });
-            const number = String(digest.readUInt32BE(0) % 100).padStart(2, '0');
-            expect(`${number} ${wordlist[(digest[4]! << 3) | (digest[5]! >> 5)]}`).toBe(item.code);
+            expect(`${String(parts.number).padStart(2, '0')} ${wordlist[parts.word]}`).toBe(
+                item.code,
+            );
             expect(deviceStepStatement(stepOf(item)).toString('base64url')).toBe(item.statement);
         }
     });

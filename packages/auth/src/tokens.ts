@@ -36,6 +36,7 @@ export type TokenKind = 'session' | 'enrollment';
  *   could approve);
  * - `device-choice`: turning the method on did not say which device is to approve;
  * - `device-mismatch`: what the asking device revealed is not what it committed to;
+ * - `device-code`: the code typed to turn the method on is not the one the approving device shows;
  * - `approval-over`, `approval-taken`, `approval-refused`: a request an approving device
  *   can no longer answer, one another device is answering, and a signature that did not verify.
  */
@@ -60,6 +61,7 @@ export type AuthErrorCode =
     | 'device-unavailable'
     | 'device-choice'
     | 'device-mismatch'
+    | 'device-code'
     | 'approval-over'
     | 'approval-taken'
     | 'approval-refused';

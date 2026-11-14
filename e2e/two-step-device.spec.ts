@@ -6,8 +6,9 @@ import { landedOnHome, mailSubjects, newPage, PASSWORD, registerAccount } from '
  * with two browsers on one account, against a server that offers two-step sign-in. What is
  * proved here and nowhere else: the two pages really exchange the commitment, the code and
  * the signature through the server, each computing its half in the browser; the person
- * chooses the device that turns the method on; a sign-in asks nothing of the other device
- * until a press; a wrong code and Deny both end the request without signing anyone in, and
+ * chooses the device that turns the method on, none is chosen for them, and the method turns
+ * on only with the code that device shows typed on this one; a sign-in asks nothing of the
+ * other device until a press; a wrong code and Deny both end the request without signing anyone in, and
  * are counted; the right code signs the other browser in by itself; and a change is not
  * offered the method while the devices are newer than seven days.
  */
@@ -112,32 +113,70 @@ test('another browser turns the step on, then answers a sign-in: a wrong code an
     await section(a).getByRole('button', { name: 'Turn on Approve on another device' }).click();
     const setup = dialog(a);
     await expect(setup.getByRole('heading', { name: 'Turn on two-step sign-in?' })).toBeVisible();
-    // The person chooses which device approves: with one other device it is chosen, and named.
+    // The person chooses which device approves. Its name is its own word for itself, so even
+    // the only one there is not chosen for them, and nothing is asked until they choose.
     const choices = setup.getByRole('group', { name: 'Device that will approve' });
     await expect(choices.getByRole('radio')).toHaveCount(1);
-    await expect(choices.getByRole('radio')).toBeChecked();
+    await expect(choices.getByRole('radio')).not.toBeChecked();
     const approver = (await choices.locator('label').innerText()).trim();
     expect(approver).not.toBe('');
     // The other devices are offered for removal, as whenever the step is turned on.
     await expect(setup.getByRole('checkbox', { name: /Remove my other devices/ })).toBeChecked();
     await setup.getByLabel('Password', { exact: true }).fill(PASSWORD);
     await setup.getByRole('button', { name: 'Continue' }).click();
+    await expect(setup.getByText('Choose the device that will approve.')).toBeVisible();
+    await expect(setup.getByRole('heading', { name: 'Turn on two-step sign-in?' })).toBeVisible();
+    await choices.getByRole('radio').check();
+    await setup.getByRole('button', { name: 'Continue' }).click();
     await expect(setup.getByRole('heading', { name: `Approve on ${approver}` })).toBeVisible({
         timeout: 60_000,
     });
-    await expect(ask(setup, 'waiting')).toContainText(
-        `Open HushOS on ${approver} and choose Answer.`,
-    );
+    await expect(ask(setup, 'waiting')).toHaveText(`Open HushOS on ${approver} and choose Answer.`);
 
-    // B is asked, by the name the account has for A, and told it was the one chosen.
+    // B is asked, by the name the account has for A, and told it was the one chosen. Turning
+    // the method on runs the code the other way: nothing is typed on B. It approves on a
+    // press, and then shows the code; A shows none, and no QR code, and waits for it typed.
     await openAccount(b);
-    await openRequest(b, /^Turn on Approve on another device on .+/);
+    const turnOn = /^Turn on Approve on another device on .+/;
+    const approveOn = async (page: Page) => {
+        await openRequest(page, turnOn);
+        await expect(
+            answer(page).getByText('The other device asked for this device to approve.'),
+        ).toBeVisible();
+        await expect(answer(page).getByRole('textbox')).toHaveCount(0);
+        await expect(answer(page).locator('[data-approval-code]')).toHaveCount(0);
+        await answer(page).getByRole('button', { name: 'Approve' }).click();
+        await expect(toast(page, 'Approved').first()).toBeVisible({ timeout: 60_000 });
+        const shown = answer(page).locator('[data-approval-code]');
+        await expect(shown).toHaveText(/^\d{2} [a-z]+$/);
+        return shown.innerText();
+    };
+    const field = setup.getByLabel(`Code on ${approver}`);
+    await expect(field).toHaveCount(0);
+    const first = await approveOn(b);
+    await expect(field).toBeVisible({ timeout: 30_000 });
+    await expect(setup.locator('[data-device-code]')).toHaveCount(0);
+    await expect(setup.getByRole('img', { name: 'QR code for your other device' })).toHaveCount(0);
+    // The approval alone turned nothing on, and a code that is not B's does not either: one
+    // try, and this request is over.
+    const turnOnButton = setup.getByRole('button', { name: 'Turn on', exact: true });
+    await expect(turnOnButton).toBeDisabled();
+    await field.fill(another(first));
+    await turnOnButton.click();
     await expect(
-        answer(b).getByText('The other device asked for this device to approve.'),
+        setup.getByText('That code didn’t match, so nothing was turned on.'),
     ).toBeVisible();
-    // Only now, with B's own value in, does A show the code. B types it; A goes on by itself.
-    await typeCode(b, await codeOn(setup));
-    await expect(toast(b, 'Approved')).toBeVisible({ timeout: 60_000 });
+    await expect(field).toHaveCount(0);
+    // (B's own page says so once its dialog is closed: the method is still off.)
+    await answer(b).getByRole('button', { name: 'Done' }).click();
+    await openAccount(b);
+    await expect(section(b).locator('[data-two-step=off]')).toBeVisible();
+    // Asked again: a new request, a new code on B, and typed on A it turns the method on.
+    await setup.getByRole('button', { name: 'Ask again' }).click();
+    await expect(ask(setup, 'waiting')).toBeVisible({ timeout: 30_000 });
+    const second = await approveOn(b);
+    await field.fill(second);
+    await turnOnButton.click();
     await expect(setup.getByRole('heading', { name: 'Save your backup codes' })).toBeVisible({
         timeout: 60_000,
     });
@@ -188,8 +227,7 @@ test('another browser turns the step on, then answers a sign-in: a wrong code an
     await openRequest(a, signIn);
     await expect(answer(a).getByText(/asked for this device/)).toHaveCount(0);
     // A wrong code: nothing is approved, the request is over, and B is not signed in.
-    const first = await codeOn(b);
-    await typeCode(a, another(first));
+    await typeCode(a, another(await codeOn(b)));
     await expect(toast(a, 'That code didn’t match, so nothing was approved.')).toBeVisible({
         timeout: 60_000,
     });

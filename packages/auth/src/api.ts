@@ -383,7 +383,10 @@ export interface AuthApi {
      * approval runs from, then the confirmation once another device approved.
      */
     twoStepStartDevice(input: TwoStepChange): Promise<unknown>;
-    twoStepConfirmDevice(id: string, input: { token: string; requestId: string }): Promise<unknown>;
+    twoStepConfirmDevice(
+        id: string,
+        input: { token: string; requestId: string; code: string },
+    ): Promise<unknown>;
     /* The device that holds a step token asks, polls (the token in a header) and reveals. */
     approvalStart(input: {
         stepToken: string;

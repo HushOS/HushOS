@@ -51,6 +51,10 @@ export function approvalAsks(asked: {
  */
 const PROMPTS_KEY = 'hushos-approval-prompts';
 function withinBudget(listed: ApprovalPrompt[]) {
+    // Nothing listed is nothing to count: the record is the signed-in account's, and a list
+    // that came back for an account since signed out of is empty by now (`authClient.approvals`),
+    // so it writes nothing into what sign-out just cleared.
+    if (listed.length === 0) return [];
     let record: PromptRecord | null = null;
     try {
         record = JSON.parse(localStorage.getItem(PROMPTS_KEY) ?? 'null') as PromptRecord | null;

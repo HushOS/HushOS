@@ -54,6 +54,7 @@ import {
 import {
     DeviceStepError,
     approve,
+    TURNING_ON,
     askAnotherDevice,
     openApproval,
     readApprovals,
@@ -73,7 +74,7 @@ import type { WorkerRequests, WorkerResults } from './worker';
  * says this device was removed, after the auth client cleared its own storage,
  * for the app to clear the rest (Drive's mirror and stashes).
  */
-export { DeviceStepError } from './device-step';
+export { DeviceStepError, TURNING_ON } from './device-step';
 export type { ApprovalPrompt, DeviceAsk, DeviceAskState, OpenedApproval } from './device-step';
 
 export type AuthClientOptions = {
@@ -1708,7 +1709,10 @@ export function createAuthClient(
         /* The requests this device may answer now: empty for one that holds no device key. */
         async approvals() {
             if (!identities) return [];
-            return readApprovals(await api.approvals());
+            const reply = await api.approvals();
+            // Whose device this is now, not when it asked: the account may have changed since.
+            const identity = await identities.load().catch(() => null);
+            return readApprovals(reply, identity?.userId ?? null);
         },
         /* Opens a request: this device's own fresh value goes in, and the code can then be computed. */
         openApproval: (asked: ApprovalPrompt) => openApproval(api, asked),
@@ -1716,19 +1720,25 @@ export function createAuthClient(
          * Approves a request this device opened, with what the person typed from the other
          * screen. Only an exact match is signed, with this device's own key; anything else
          * ends the request.
+         *
+         * A request that turns the method on is the other way round: nothing is typed here,
+         * and what comes back is the code to show, for the person to type on the other device.
+         * Only that request may come without `typed`.
          */
         async approveRequest(
             opened: OpenedApproval,
             reveal: { deviceSigningKey: string; nonce: string },
-            typed: string,
+            typed?: string,
         ) {
+            if (typed === undefined && opened.purpose !== TURNING_ON)
+                throw new DeviceStepError('unsupported', 'Type the code on the other device.');
             const identity = await identities?.load().catch(() => null);
             if (!identity)
                 throw new DeviceStepError(
                     'unsupported',
                     'This browser can’t approve for another device.',
                 );
-            await approve(api, {
+            return approve(api, {
                 opened,
                 reveal,
                 userId: identity.userId,
@@ -1756,10 +1766,22 @@ export function createAuthClient(
                 },
                 (input) => api.twoStepReauth(input),
             ),
-        /* Confirms it with the approval another device gave. Only the server's own answer says it is on. */
-        async confirmDeviceMethod(started: { id: string; token: string }, requestId: string) {
+        /*
+         * Confirms it with the approval another device gave and the code that device shows,
+         * as the person typed it here (`DeviceAsk.matches` checked it first; the server checks
+         * it again). Only the server's own answer says it is on.
+         */
+        async confirmDeviceMethod(
+            started: { id: string; token: string },
+            requestId: string,
+            code: string,
+        ) {
             const confirmed = readDeviceConfirmed(
-                await api.twoStepConfirmDevice(started.id, { token: started.token, requestId }),
+                await api.twoStepConfirmDevice(started.id, {
+                    token: started.token,
+                    requestId,
+                    code,
+                }),
             );
             if (!confirmed) throw lostChange('approving on another device was turned on');
             return confirmed;

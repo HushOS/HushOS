@@ -7,6 +7,7 @@ import {
     approvalPromptsAllowed,
     approvalQr,
     approvalWords,
+    approvalCodeParts,
     deviceStepCode,
     deviceStepCommitment,
     deviceStepStatement,
@@ -129,6 +130,12 @@ describe('the code', () => {
         expect(normalizeApprovalCode('7 river')).toBeNull();
         expect(normalizeApprovalCode('07 rivr')).toBeNull();
         expect(normalizeApprovalCode('07 river 3')).toBeNull();
+        // The server compares a typed code by its two numbers: the digits, and the word's place.
+        expect(approvalCodeParts(' 07-River ')).toEqual({ number: 7, word: 1494 });
+        expect(approvalCodeParts('99 zoo')).toEqual({ number: 99, word: 2047 });
+        expect(approvalCodeParts('00 abandon')).toEqual({ number: 0, word: 0 });
+        for (const none of ['07 rivr', '7 river', 'river 07', '', '07'])
+            expect(approvalCodeParts(none)).toBeNull();
         expect(approvalWords('riv')).toEqual(['rival', 'river']);
         expect(approvalWords('')).toEqual([]);
         expect(approvalWords('a', 3)).toHaveLength(3);
