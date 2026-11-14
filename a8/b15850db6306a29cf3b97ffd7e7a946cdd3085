@@ -1,0 +1,23 @@
+e2e/two-step-device.spec.ts
+  s_566b8e0c4467a4::t_b4ab578b0ff627 1-252
+.github/workflows/ci.yml
+  s_566b8e0c4467a4::t_2ae8e822bbd8dd 431-434,436
+docs/two-step-design.md
+  s_566b8e0c4467a4::t_cf271ffd3b04b0 793,958
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a8b15850db6306a29cf3b97ffd7e7a946cdd3085",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}

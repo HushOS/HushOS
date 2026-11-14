@@ -1,0 +1,68 @@
+apps/web/src/lib/approvals.test.ts
+  s_566b8e0c4467a4::t_87e5a45861b110 1-55
+  s_566b8e0c4467a4::t_5e89ba3a2069d0 56-58
+apps/web/src/components/account-two-step.tsx
+  s_566b8e0c4467a4::t_8712883d8e60a5 16,1414-1418,1446-1452,1454-1455,1461-1462,1495-1496,1501-1512,1552-1553,1600-1613,1620,1624-1627,1629-1641
+apps/web/src/components/device-approvals.test.tsx
+  s_566b8e0c4467a4::t_dc9b3d621b58de 1,3,32-36,60-61,105-174
+apps/web/src/components/device-approvals.tsx
+  s_566b8e0c4467a4::t_6e1de877b6435c 1-6,32-35,62,81-98,100-145,159-162,183-184,197-201,204-206,240-248,272-283,285-295,311-314
+apps/web/src/components/device-ask.tsx
+  s_566b8e0c4467a4::t_79432b95c7bb69 14-18,48-49,54-55,125-126,144-145,167,188-193,208
+apps/web/src/content/security.mdx
+  s_566b8e0c4467a4::t_3a9e3bc4f17740 99,548
+apps/web/src/lib/api/auth.server.ts
+  s_566b8e0c4467a4::t_902ab001f33c89 540-545
+apps/web/src/lib/api/two-step-device.db.test.ts
+  s_566b8e0c4467a4::t_17358cd306cb8d 225-231,246,251-252,297,301,316-318,337,341-348,360,400,405,439-488
+apps/web/src/lib/approvals.ts
+  s_566b8e0c4467a4::t_e1a86f7a69f7aa 54-57
+crates/hushos-core/src/device_approval.rs
+  s_566b8e0c4467a4::t_8894e99d1a7037 318-355
+crates/hushos-core/src/two_step.rs
+  s_566b8e0c4467a4::t_12cabf9cd3ed27 1488-1498,1500-1506
+docs/two-step-design.md
+  s_566b8e0c4467a4::t_4b0d85e1015809 793,844,949,954,964
+e2e/two-step-device.spec.ts
+  s_566b8e0c4467a4::t_4f81f854dde5ed 9-11,116-117,120,127-130,134,136-138,140-165,167,169-179,230
+packages/auth/src/api.ts
+  s_566b8e0c4467a4::t_be85f8ed35e9d3 386-389
+packages/auth/src/client.ts
+  s_566b8e0c4467a4::t_6c8382f4e04922 57,77,1712-1715,1723-1726,1731,1733-1734,1741,1769-1778,1780-1784
+packages/auth/src/device-step.test.ts
+  s_566b8e0c4467a4::t_31fbf1c51ff09a 11,191-290,543-552
+packages/auth/src/device-step.ts
+  s_566b8e0c4467a4::t_e2884a413f0c28 75-81,84-91,180-184,261-268,270-276,391-394,408-413,426
+packages/auth/src/tokens.ts
+  s_566b8e0c4467a4::t_1ea229912cf455 39,64
+packages/auth/src/two-step.ts
+  s_566b8e0c4467a4::t_4e4bf281e701f1 2,2008-2012,2017,2027-2028,2037,2052-2056
+packages/crypto/src/device-approval.test.ts
+  s_566b8e0c4467a4::t_babc7dfe82e012 10,133-138
+packages/crypto/src/device-approval.ts
+  s_566b8e0c4467a4::t_92a305b6b46ac0 178-187
+packages/db/src/signatures.device-step.test.ts
+  s_566b8e0c4467a4::t_f15deca82c65d4 4,66-67,72-74
+packages/db/src/signatures.ts
+  s_566b8e0c4467a4::t_335274117b16e5 337-347
+packages/db/src/two-step.approvals.test.ts
+  s_566b8e0c4467a4::t_c2e54f193b4cae 19-24,184-213,223-224,228,273,349-350,359,377,385-386,1328-1410,1435,1439,1470
+packages/db/src/two-step.approvals.ts
+  s_566b8e0c4467a4::t_e6273bf6bc96ea 20-25,1014-1016,1024-1028,1041-1042,1078-1112
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "30b2b417ff92169f184a1d346b2f56bb207d694c",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}

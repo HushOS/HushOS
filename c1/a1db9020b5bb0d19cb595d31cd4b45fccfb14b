@@ -1,0 +1,37 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_f58e8847080e78 277,280,283-284,286-296,299
+apps/android/app/src/main/kotlin/com/hushos/app/data/DeviceApproval.kt
+  s_566b8e0c4467a4::t_dfd9d649865a1f 21,31,59-63,135-136,144,156-157,169-171,179-181,186-193,214-219,318-321,340,385-390,473-479,507-509,513,609-613,616,618,627
+apps/android/app/src/main/kotlin/com/hushos/app/data/TwoStep.kt
+  s_566b8e0c4467a4::t_e4f89fa1c41815 427-430,731-736,1104-1109,1111,1113
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DeviceApprovalUi.kt
+  s_566b8e0c4467a4::t_3d4e774858e5d7 84,92,101-102,163,189-192,194,196,202-207,217-245,253-258,276-277,281-282,289-297,300-302,325-329,335,339-340,345,355-356,358-363,367-369,371-385,387-394,397,406,408,413,417-424,432,437-441,463-465,478-509,525-526,575-576,579-583,586,604-611,614-617,619-620,622,651-658,667-668,670,678-680,688-690,692-694,696-697,699-700,702-704,724,734-750,759,766-769,772,776-782,786-789,791,847-850,865-868,885,889-893,899-903
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_b00ffaf454dac7 820,839-841
+apps/android/app/src/main/kotlin/com/hushos/app/ui/TwoStepScreen.kt
+  s_566b8e0c4467a4::t_b39a5f49b36765 1012-1017,1036,1038,1048-1057
+apps/android/app/src/test/kotlin/com/hushos/app/data/DeviceApprovalTest.kt
+  s_566b8e0c4467a4::t_a9e4ab0f4ed96a 52-57,299,383,774-778,783,805,809,812,815,818,820,823-824,1002,1004,1010-1014,1056-1057,1061-1063,1069,1087-1089,1113-1228
+apps/android/app/src/test/kotlin/com/hushos/app/ui/ApprovalInboxTest.kt
+  s_566b8e0c4467a4::t_6789acd871a913 11,13,39-42,67-69,71,136-184,189-190,211-213,245-246,248,250,269-272,275
+apps/android/app/src/test/kotlin/com/hushos/app/ui/DeviceApprovalUiTest.kt
+  s_566b8e0c4467a4::t_e66c62b69f2f47 7,22,33-37,146,150,152,154-157,272-359
+apps/android/app/src/test/kotlin/com/hushos/app/ui/DeviceSetupTest.kt
+  s_566b8e0c4467a4::t_0884b0642f8809 13,15,32-36,62-64,71-72,80-81,83,88,97-103,105,107-115,123-131,133,141,153,179-263
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c1a1db9020b5bb0d19cb595d31cd4b45fccfb14b",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
