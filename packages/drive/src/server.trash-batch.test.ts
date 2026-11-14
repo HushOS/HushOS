@@ -36,6 +36,20 @@ async function refusal(promise: Promise<unknown>) {
         throw new Error('expected a DriveError', { cause: error });
     return { status: error.status, code: error.code };
 }
+/*
+ * A request sent again while the answer is 409, the workspace's lock being busy: what a client
+ * does with that answer. Any other refusal, and a 409 that never clears, is the caller's to see.
+ */
+async function unlessBusy<T>(send: () => Promise<T>, tries = 5): Promise<T> {
+    for (let sent = 1; ; sent++) {
+        try {
+            return await send();
+        } catch (error) {
+            const busy = error instanceof server.DriveError && error.status === 409;
+            if (!busy || sent >= tries) throw error;
+        }
+    }
+}
 async function workspaceSeq() {
     const result = await db.$client.query<{ change_seq: string }>(
         'select change_seq from workspaces where id = $1',
@@ -72,9 +86,39 @@ describe('the whole request', () => {
                     status: 400,
                     code: 'invalid',
                 });
-        expect(
-            (await server.trashNodes(owner.userId, owner.workspaceId, many.slice(0, -1))).results,
-        ).toHaveLength(MAX_TRASH_BATCH);
+        // Exactly the most is taken. A batch that large may run past its share of the workspace's
+        // lock on a loaded machine and be answered 409 to try again (driveRepository's
+        // BATCH_HOLD_MS), which is the server working as meant and says nothing about the count:
+        // sent again, as a client sends it, until it is answered for what it is.
+        const most = await unlessBusy(() =>
+            server.trashNodes(owner.userId, owner.workspaceId, many.slice(0, -1)),
+        );
+        expect(most.results).toHaveLength(MAX_TRASH_BATCH);
+    });
+
+    test('400 for a batch that is wrong in itself even while the workspace is locked elsewhere: it is read before the lock is asked for', async () => {
+        const item = await folder(owner, top);
+        const many = [item.id, ...Array.from({ length: MAX_TRASH_BATCH }, () => randomUUID())];
+        const seq = await workspaceSeq();
+        // Another transaction holds the workspace's row, as a long write would. A batch that
+        // waited for it would be answered 409 two seconds later, whatever was wrong with it.
+        const other = await db.$client.connect();
+        await other.query('begin');
+        await other.query('select id from workspaces where id = $1 for update', [
+            owner.workspaceId,
+        ]);
+        try {
+            for (const nodeIds of [many, [], [item.id, item.id]])
+                for (const send of [server.trashNodes, server.restoreNodes])
+                    expect(await refusal(send(owner.userId, owner.workspaceId, nodeIds))).toEqual({
+                        status: 400,
+                        code: 'invalid',
+                    });
+        } finally {
+            await other.query('rollback');
+            other.release();
+        }
+        expect(await workspaceSeq()).toBe(seq);
     });
 
     test(`429 past ${TRASH_BATCHES_PER_MINUTE} a minute for one account, trash and restore together`, async () => {
