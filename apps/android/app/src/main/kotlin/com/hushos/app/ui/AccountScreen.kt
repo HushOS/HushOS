@@ -78,6 +78,11 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -103,7 +108,7 @@ private fun shortDate(iso: String?): String? = iso?.let {
     }.getOrNull()
 }
 
-private enum class Page { MAIN, PLAN, PASSWORD, TWO_STEP, PHRASE, DEVICES, ADVANCED, RESET, REPLACE, TRASH }
+private enum class Page { MAIN, PLAN, PASSWORD, TWO_STEP, PHRASE, DEVICES, SERVER, RESET, REPLACE, TRASH }
 
 /*
  * Account, a tab of its own (the user's choice over the board's avatar): who is
@@ -116,6 +121,8 @@ fun AccountScreen(model: DriveViewModel, state: DriveState) {
     val alpine = Alpine.colors
     val context = LocalContext.current
     var page by rememberSaveable { mutableStateOf(Page.MAIN) }
+    // Advanced, folded away until its row is pressed; still open on the way back from one of its pages.
+    var advancedOpen by rememberSaveable { mutableStateOf(false) }
     var editingName by rememberSaveable { mutableStateOf(false) }
     var signingOut by rememberSaveable { mutableStateOf(false) }
     var showingPeople by rememberSaveable { mutableStateOf(false) }
@@ -138,7 +145,7 @@ fun AccountScreen(model: DriveViewModel, state: DriveState) {
     var twoStep by remember { mutableStateOf<com.hushos.app.data.TwoStepStatus?>(null) }
     var twoStepLook by remember { mutableStateOf(0) }
     LaunchedEffect(twoStepLook) { model.twoStep { com.hushos.app.data.TwoStep.status(it) }.onSuccess { twoStep = it } }
-    BackHandler(enabled = page != Page.MAIN) { page = if (page == Page.RESET || page == Page.REPLACE) Page.ADVANCED else Page.MAIN }
+    BackHandler(enabled = page != Page.MAIN) { page = Page.MAIN }
     when (page) {
         Page.TRASH -> { TrashScreen(model, state) { page = Page.MAIN; model.refreshStorage() }; return }
         Page.PLAN -> { PlanScreen(model, state) { page = Page.MAIN }; return }
@@ -146,9 +153,10 @@ fun AccountScreen(model: DriveViewModel, state: DriveState) {
         Page.TWO_STEP -> { TwoStepScreen(model, state) { page = Page.MAIN; twoStepLook++ }; return }
         Page.PHRASE -> { PhraseScreen(model, fresh = false) { page = Page.MAIN }; return }
         Page.DEVICES -> { DevicesScreen(model) { page = Page.MAIN }; return }
-        Page.ADVANCED -> { AdvancedScreen(model, state, onReset = { page = Page.RESET }, onReplace = { page = Page.REPLACE }) { page = Page.MAIN }; return }
-        Page.RESET -> { ResetKeysScreen(model) { page = Page.ADVANCED }; return }
-        Page.REPLACE -> { ReplaceKeysScreen(model, state) { page = Page.ADVANCED }; return }
+        // Advanced's rows are on this page, folded under their row: its pages come back here, where it is still open.
+        Page.SERVER -> { SelfHostingScreen(model, state, signedIn = true) { page = Page.MAIN }; return }
+        Page.RESET -> { ResetKeysScreen(model) { page = Page.MAIN }; return }
+        Page.REPLACE -> { ReplaceKeysScreen(model, state) { page = Page.MAIN }; return }
         Page.MAIN -> {}
     }
     when (val route = FamilyRoute.of(familyRoute)) {
@@ -195,7 +203,11 @@ fun AccountScreen(model: DriveViewModel, state: DriveState) {
             Subheader("This phone")
             AccountRow("HushOS in Files", "Open and save files from the Files app and other apps", Icons.Outlined.FolderOpen, onClick = null)
             BackgroundStatus()
-            AccountRow("Advanced", "Keys, account ID, delete account", Icons.Outlined.Settings) { page = Page.ADVANCED }
+            // Folded away, as on the web: the row opens the rest in place, and its chevron turns. Closed until pressed.
+            ExpandRow("Advanced", Icons.Outlined.Settings, advancedOpen) { advancedOpen = !advancedOpen }
+            AnimatedVisibility(advancedOpen) {
+                Column { AdvancedRows(model, state, onReset = { page = Page.RESET }, onReplace = { page = Page.REPLACE }, onServer = { page = Page.SERVER }) }
+            }
             // The signed-in server's own pages (hushos.com's by default), as the stores require.
             Subheader("About")
             AccountRow("Privacy policy", null, Icons.Outlined.PrivacyTip) { openWebPage(context, privacyUrl(state.origin)) }
@@ -689,15 +701,30 @@ internal fun CheckWordsScreen(phrase: String, onBack: () -> Unit, onDone: () -> 
     }
 }
 
-/* Advanced: sharing keys, what identifies this account, and deleting it. */
+/* A row that opens what is folded under it, in place: its chevron turns, and a screen reader hears whether it is open. */
 @Composable
-private fun AdvancedScreen(model: DriveViewModel, state: DriveState, onReset: () -> Unit, onReplace: () -> Unit, onBack: () -> Unit) {
+private fun ExpandRow(title: String, icon: ImageVector, open: Boolean, onToggle: () -> Unit) {
+    val alpine = Alpine.colors
+    val turn by animateFloatAsState(if (open) 90f else 0f, label = "chevron")
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(role = Role.Button, onClick = onToggle)
+            .semantics { stateDescription = if (open) "Expanded" else "Collapsed" }
+            .padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, null, tint = alpine.inkMuted)
+        Text(title, style = MaterialTheme.typography.bodyLarge, color = alpine.ink, modifier = Modifier.weight(1f).padding(start = AlpineSpace.S4))
+        Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = alpine.inkMuted, modifier = Modifier.rotate(turn))
+    }
+}
+
+/* Advanced's rows, shown on Account under its row while that is open: sharing keys, what identifies this account, and deleting it. */
+@Composable
+private fun AdvancedRows(model: DriveViewModel, state: DriveState, onReset: () -> Unit, onReplace: () -> Unit, onServer: () -> Unit) {
     val alpine = Alpine.colors
     val context = LocalContext.current
     var deleting by rememberSaveable { mutableStateOf(false) }
-    var selfHosting by rememberSaveable { mutableStateOf(false) }
-    if (selfHosting) { SelfHostingScreen(model, state, signedIn = true) { selfHosting = false }; return }
-    AccountPage("Advanced", onBack) {
+    Column {
         // What each does is said by the page it opens, not under its row.
         AccountRow("Rotate account key", null, Icons.Outlined.Sync, onClick = onReset)
         AccountRow("Replace sharing keys", state.resealing?.let { (done, total) -> "Sealing your shares again · $done of $total" }, Icons.Outlined.Key, onClick = onReplace)
@@ -715,7 +742,7 @@ private fun AdvancedScreen(model: DriveViewModel, state: DriveState, onReset: ()
             }
         }
         // The server this phone signs in to; it opens Self-hosting, read-only while signed in.
-        Column(Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable { selfHosting = true }.padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2)) {
+        Column(Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(onClick = onServer).padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2)) {
             Text("Server address", style = MaterialTheme.typography.bodyLarge)
             Text(state.origin.substringAfter("://").trimEnd('/') + if (state.origin.contains("hushos.com")) "" else " · self-hosted", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
         }
