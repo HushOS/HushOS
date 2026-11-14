@@ -1,0 +1,19 @@
+apps/web/src/content/blog/family-plans.mdx
+  s_566b8e0c4467a4::t_db7b0fdb6d168f 2-3,22,42,81-97,99-119,121,123,125,127,148
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "dc78fa451588443510a1b74c9c360e5749281c1e",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}

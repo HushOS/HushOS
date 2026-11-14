@@ -1,0 +1,19 @@
+apps/web/src/content/blog/phone-apps.mdx
+  s_566b8e0c4467a4::t_18962e85af8a45 2-3,15,35-37,47,53
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "30762f01f3e72f91f2e799471b5e31e0f8d92590",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
