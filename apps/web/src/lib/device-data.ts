@@ -23,6 +23,10 @@ export const ACCOUNT_DATA = {
             'hushos-device-unlock',
             // A saved return to a link, its key in the fragment (lib/return-to.ts).
             'hushos.return',
+            // Which requests to approve on another device this browser showed today, by class
+            // (lib/approvals.ts): the day, and request ids, to hold its own five-a-day limit.
+            // In the clear while locked: random ids of requests that ended within minutes.
+            'hushos-approval-prompts',
         ],
         prefixes: [
             // Rollback marks, sealed (lib/rollback-marks.ts).
@@ -138,6 +142,7 @@ export const STORAGE_OWNERS: Record<
     'apps/web/src/lib/theme.ts': { cookies: ['hushos-theme', 'hushos-contrast', 'sidebar_state'] },
     'apps/web/src/lib/sounds.ts': { local: ['hushos-sounds'] },
     'apps/web/src/lib/return-to.ts': { local: ['hushos.return'] },
+    'apps/web/src/lib/approvals.ts': { local: ['hushos-approval-prompts'] },
     'apps/web/src/lib/web-push.ts': { local: ['hushos.web-push:', 'hushos.web-push-ask:'] },
     'apps/web/src/lib/rollback-marks.ts': {
         // The storage it is given; the keys it finds there by listing them.

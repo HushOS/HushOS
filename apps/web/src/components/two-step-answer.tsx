@@ -2,6 +2,7 @@ import type { StepMethod } from '@hushos/auth/api';
 import { cn } from 'cn';
 import { useEffect, useId, useRef, useState } from 'react';
 import { authLink } from '@/components/auth-layout';
+import { DeviceAsk } from '@/components/device-ask';
 import { SECRET_FIELD } from '@/components/password-input';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -10,7 +11,8 @@ import { phraseWords, stepNote, type StepDraft, type StepUp } from '@/lib/two-st
 
 /*
  * What a person answers a second step with (docs/two-step-design.md 4, 12): their passkey or
- * security key, a code from their authenticator app, a backup code, or their recovery phrase.
+ * security key, a code from their authenticator app, another of their devices, a backup code,
+ * or their recovery phrase.
  * One way at a time, opening on the account's usual one, with the rest behind Use another
  * way. The same fields serve the sign-in page, the unlock form and the dialogs that change
  * the account. A passkey has no field: the form's own button asks for it.
@@ -19,18 +21,21 @@ import { phraseWords, stepNote, type StepDraft, type StepUp } from '@/lib/two-st
 const labels: Record<StepMethod, string> = {
     webauthn: 'Passkey or security key',
     totp: 'Code from your authenticator app',
+    device: 'Another device',
     backup: 'Backup code',
     phrase: 'Recovery phrase',
 };
 const others: Record<StepMethod, string> = {
     webauthn: 'Use your passkey or security key',
     totp: 'Use your authenticator app',
+    device: 'Use another device',
     backup: 'Use a backup code',
     phrase: 'Use your recovery phrase',
 };
 const hints: Record<StepMethod, string> = {
     webauthn: 'Your browser asks for it when you continue.',
     totp: 'The 6-digit code. It changes every 30 seconds.',
+    device: 'A device already signed in to your account confirms it’s you.',
     backup: 'One of the ten codes you saved. Each works once.',
     phrase: 'All 24 words, in order. They stay on this device.',
 };
@@ -45,6 +50,7 @@ export function StepFields({
     refocus = 0,
     reload = false,
     note = '',
+    ask,
 }: {
     /* What can answer this step, in the order to offer it. */
     methods: readonly StepMethod[];
@@ -64,10 +70,15 @@ export function StepFields({
     reload?: boolean;
     /* One line above the fields: the usual way is not on offer, or a newer HushOS has more. */
     note?: string;
+    /* The step itself, for asking another device: its token, and what it is for. */
+    ask?: { token: string; purpose: string };
 }) {
     const id = useId();
     // The other ways stay behind one button until asked for; choosing one puts them away again.
     const [choosing, setChoosing] = useState(false);
+    // Another device is asked only on a press. Choosing it among the other ways is that press;
+    // a form that merely opened on it shows a button first.
+    const [pressed, setPressed] = useState(false);
     // The library a key is asked through is fetched once a key is on offer, ahead of the press.
     const keyed = methods.includes('webauthn');
     useEffect(() => {
@@ -109,7 +120,7 @@ export function StepFields({
             )}
             <div className="flex flex-col gap-1.5">
                 <div className="flex items-baseline justify-between gap-3">
-                    {method === 'webauthn' ? (
+                    {method === 'webauthn' || method === 'device' ? (
                         <span className="text-[13px] font-semibold">{labels[method]}</span>
                     ) : (
                         <label htmlFor={id} className="text-[13px] font-semibold">
@@ -151,6 +162,19 @@ export function StepFields({
                         }
                         className={cn(mono, 'tracking-[0.2em]')}
                         {...SECRET_FIELD}
+                    />
+                )}
+                {method === 'device' && ask && (
+                    <DeviceAsk
+                        key={ask.token}
+                        token={ask.token}
+                        purpose={ask.purpose}
+                        approved={draft.device}
+                        auto={pressed}
+                        disabled={disabled}
+                        onApproved={(requestId) =>
+                            onChange({ ...draft, method: 'device', device: requestId })
+                        }
                     />
                 )}
                 {method === 'backup' && (
@@ -214,6 +238,7 @@ export function StepFields({
                                     disabled={disabled}
                                     onClick={() => {
                                         setChoosing(false);
+                                        setPressed(other === 'device');
                                         onChange({ ...draft, method: other });
                                     }}
                                     className={cn(authLink, 'disabled:opacity-60')}
@@ -256,6 +281,7 @@ export function StepUpFields({ step, disabled }: { step: StepUp; disabled?: bool
                 disabled={disabled}
                 refocus={step.refocus}
                 note={stepNote(step.challenge, 'change')}
+                ask={{ token: step.challenge.token, purpose: step.purpose }}
             />
         </div>
     );

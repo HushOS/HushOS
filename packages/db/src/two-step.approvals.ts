@@ -265,6 +265,24 @@ async function settleAccount(tx: Tx, userId: string): Promise<CountedRequest[]> 
  */
 export async function settleDeviceRequests(userId?: string): Promise<CountedRequest[]> {
     const now = new Date();
+    // Asked on every look at an account's requests: with none still open, no lock is taken.
+    if (userId) {
+        const [open] = await db
+            .select({ id: twoStepDeviceRequests.id })
+            .from(twoStepDeviceRequests)
+            .where(
+                and(
+                    eq(twoStepDeviceRequests.userId, userId),
+                    eq(twoStepDeviceRequests.counted, false),
+                    or(
+                        ne(twoStepDeviceRequests.state, 'ended'),
+                        eq(twoStepDeviceRequests.endedReason, 'replaced'),
+                    ),
+                ),
+            )
+            .limit(1);
+        if (!open) return [];
+    }
     const accounts = userId
         ? [userId]
         : (

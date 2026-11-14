@@ -46,6 +46,7 @@ describe('what is typed for a second step', () => {
             totp: '123456',
             backup: '7KQ2M-9XD4P',
             phrase: words.join(' '),
+            device: 'a-request',
         };
         expect(draftAnswer(draft)).toEqual({ kind: 'backup', code: '7KQ2M-9XD4P' });
     });

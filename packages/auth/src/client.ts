@@ -73,6 +73,9 @@ import type { WorkerRequests, WorkerResults } from './worker';
  * says this device was removed, after the auth client cleared its own storage,
  * for the app to clear the rest (Drive's mirror and stashes).
  */
+export { DeviceStepError } from './device-step';
+export type { ApprovalPrompt, DeviceAsk, DeviceAskState, OpenedApproval } from './device-step';
+
 export type AuthClientOptions = {
     identities?: DeviceIdentityStore;
     describeDevice?: () => { kind: DeviceKind; name: string };

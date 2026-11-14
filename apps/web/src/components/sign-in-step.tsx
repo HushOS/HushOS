@@ -1,6 +1,6 @@
 import type { StepChallenge } from '@hushos/auth/api';
 import { StepFailure } from '@hushos/auth/client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AuthNote } from '@/components/auth-layout';
 import { StepFields } from '@/components/two-step-answer';
 import { Button } from '@/components/ui/button';
@@ -10,6 +10,7 @@ import { whenPageLeaves } from '@/lib/new-phrase';
 import { whenBrowserLocks } from '@/lib/show-new-phrase';
 import { cue } from '@/lib/sounds';
 import {
+    afterRefusal,
     draftAnswer,
     draftError,
     draftFor,
@@ -21,7 +22,8 @@ import {
 /*
  * The second step of a sign-in (docs/two-step-design.md 4, 12): the password was right, and
  * the account asks for its passkey, a code, a backup code or the recovery phrase before
- * anything is handed over. It opens on the account's usual way. A passkey is a button, Use
+ * anything is handed over. Another device answers by approving: this page shows a code for
+ * it, and signs in by itself once that device has approved. It opens on the account's usual way. A passkey is a button, Use
  * your passkey: the browser's sheet opens on the press, never when the page loads. A wrong answer stays here and can be tried again. A step that is over, or a reply
  * that never arrived, goes back to the password with the reason (`onOver`): the person is
  * never left on a form that can no longer be answered.
@@ -68,6 +70,16 @@ export function SignInStep({
         // eslint-disable-next-line react-hooks/exhaustive-deps
         [],
     );
+    // Another device approved: the sign-in goes on by itself, as the person is watching the
+    // other screen by then. Each approval is sent once.
+    const sent = useRef('');
+    useEffect(() => {
+        if (draft.method !== 'device' || !draft.device || sent.current === draft.device) return;
+        sent.current = draft.device;
+        void submit();
+        // Only when an approval arrives.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [draft.method, draft.device]);
     async function submit() {
         const invalid = draftError(draft);
         setError(invalid);
@@ -89,7 +101,7 @@ export function SignInStep({
                 // never sent for a method that is no longer shown.
                 const left = methodsAfter(methods, cause.reason, draft.method);
                 setMethods(left);
-                setDraft((typed) => draftFor(typed, left));
+                setDraft((typed) => draftFor(afterRefusal(typed, cause.reason), left));
                 setRefocus((count) => count + 1);
                 // A wrong answer is the field's own error; anything else is said above it.
                 if (cause.reason === 'wrong') setError(cause.message);
@@ -130,6 +142,7 @@ export function SignInStep({
                     refocus={refocus}
                     reload={challenge.methods.length === 0}
                     note={stepNote(challenge, 'sign-in')}
+                    ask={{ token: challenge.token, purpose: 'login' }}
                 />
                 <div className={wide ? 'mt-1 flex flex-col gap-3' : 'flex justify-end gap-2'}>
                     {!wide && (
@@ -145,7 +158,8 @@ export function SignInStep({
                             Start again
                         </Button>
                     )}
-                    {methods.length > 0 && (
+                    {/* Another device has no button of this form's: its approval signs in. */}
+                    {methods.length > 0 && (draft.method !== 'device' || pending) && (
                         <Button
                             type="submit"
                             size={size}
