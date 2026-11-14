@@ -244,7 +244,7 @@ export function TagView({ tagId }: { tagId: string }) {
                                 <tr
                                     key={node.id}
                                     data-node-id={node.id}
-                                    className="h-14 border-b border-rule hover:bg-muted"
+                                    className="h-14 border-b border-rule hover:bg-hover"
                                 >
                                     <td className="min-w-0 pr-5 pl-5 sm:pl-8">
                                         <span className="flex min-w-0 items-center gap-4">

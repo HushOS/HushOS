@@ -84,7 +84,7 @@ export function AuthInput({
                         onClick={() => setRevealed((value) => !value)}
                         aria-label={revealed ? 'Hide password' : 'Show password'}
                         aria-pressed={revealed}
-                        className="absolute inset-y-1 right-1 flex cursor-pointer items-center rounded-sm px-2.5 text-[13px] font-semibold text-primary transition-colors hover:bg-muted"
+                        className="absolute inset-y-1 right-1 flex cursor-pointer items-center rounded-sm px-2.5 text-[13px] font-semibold text-primary transition-colors hover:bg-hover"
                     >
                         <TextSwap>{revealed ? 'Hide' : 'Show'}</TextSwap>
                     </button>

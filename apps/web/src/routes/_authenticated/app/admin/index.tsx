@@ -79,7 +79,7 @@ function StatGrid({ stats }: { stats: Stat[] }) {
                             key={stat.label}
                             to={stat.to.to}
                             search={stat.to.search}
-                            className={cn(box, 'group hover:bg-muted')}
+                            className={cn(box, 'group hover:bg-hover-solid')}
                         >
                             {body}
                             <span className="sr-only">, open the list</span>
@@ -90,7 +90,7 @@ function StatGrid({ stats }: { stats: Stat[] }) {
                         <a
                             key={stat.label}
                             href={stat.anchor}
-                            className={cn(box, 'hover:bg-muted')}
+                            className={cn(box, 'hover:bg-hover-solid')}
                         >
                             {body}
                         </a>
@@ -291,7 +291,7 @@ function AdminPage() {
                             </thead>
                             <tbody className="font-mono">
                                 {data.missing.map((row) => (
-                                    <tr key={row.objectId} className="hover:bg-muted">
+                                    <tr key={row.objectId} className="hover:bg-hover">
                                         <td className={td}>{row.objectId}</td>
                                         <td className={td}>{row.workspaceId}</td>
                                         <td className={cn(td, 'text-right tabular-nums')}>
@@ -340,7 +340,7 @@ function AdminPage() {
                                 </thead>
                                 <tbody className="font-mono">
                                     {data.stuckPlanChanges.map((row) => (
-                                        <tr key={row.subscriptionId} className="hover:bg-muted">
+                                        <tr key={row.subscriptionId} className="hover:bg-hover">
                                             <td className={td}>{row.groupId}</td>
                                             <td className={td}>{row.subscriptionId}</td>
                                             <td className={td}>{row.wanted ?? '–'}</td>
@@ -383,7 +383,7 @@ function AdminPage() {
                                 </thead>
                                 <tbody className="font-mono">
                                     {data.refundsOwed.map((row) => (
-                                        <tr key={row.orderId} className="hover:bg-muted">
+                                        <tr key={row.orderId} className="hover:bg-hover">
                                             <td className={td}>{row.orderId}</td>
                                             <td className={td}>
                                                 {row.groupId ? `family ${row.groupId}` : row.userId}
@@ -430,7 +430,7 @@ function AdminPage() {
                                 </thead>
                                 <tbody className="font-mono">
                                     {data.lapsedRevokeRefusals.map((row) => (
-                                        <tr key={row.subscriptionId} className="hover:bg-muted">
+                                        <tr key={row.subscriptionId} className="hover:bg-hover">
                                             <td className={td}>{row.groupId}</td>
                                             <td className={td}>
                                                 {row.subscriptionId} ({row.status})
@@ -472,7 +472,7 @@ function AdminPage() {
                                 </thead>
                                 <tbody className="font-mono">
                                     {data.unlistedFamilies.map((row) => (
-                                        <tr key={row.groupId} className="hover:bg-muted">
+                                        <tr key={row.groupId} className="hover:bg-hover">
                                             <td className={td}>{row.groupId}</td>
                                             <td className={cn(td, 'tabular-nums')}>
                                                 {row.since ? formatWhen(row.since) : '–'}
@@ -508,7 +508,7 @@ function AdminPage() {
                                     {data.doubleCharges.map((row) => (
                                         <tr
                                             key={`${row.kind}:${row.id}`}
-                                            className="hover:bg-muted"
+                                            className="hover:bg-hover"
                                         >
                                             <td className={td}>
                                                 {row.kind === 'family'
@@ -555,7 +555,7 @@ function AdminPage() {
                                 </thead>
                                 <tbody className="font-mono">
                                     {data.orphanedPlans.map((row) => (
-                                        <tr key={row.subscriptionId} className="hover:bg-muted">
+                                        <tr key={row.subscriptionId} className="hover:bg-hover">
                                             <td className={td}>{row.groupId}</td>
                                             <td className={td}>{row.subscriptionId}</td>
                                             <td className={cn(td, 'font-sans')}>
@@ -618,7 +618,7 @@ function AdminPage() {
                                 </thead>
                                 <tbody className="font-mono">
                                     {data.unrefundable.map((row) => (
-                                        <tr key={row.subscriptionId} className="hover:bg-muted">
+                                        <tr key={row.subscriptionId} className="hover:bg-hover">
                                             <td className={td}>{row.subscriptionId}</td>
                                             <td className={td}>
                                                 {row.groupId ? `family ${row.groupId}` : row.userId}

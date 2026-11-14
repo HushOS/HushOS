@@ -469,7 +469,7 @@ const sidebarMenuButtonVariants = cva(
             variant: {
                 default: 'hover:bg-ink/6 hover:text-sidebar-accent-foreground',
                 outline:
-                    'border border-input bg-card hover:bg-muted hover:text-sidebar-accent-foreground',
+                    'border border-input bg-card hover:bg-hover hover:text-sidebar-accent-foreground',
             },
             size: {
                 default: 'h-8 text-sm',

@@ -250,7 +250,7 @@ function MovePicker({
                             onClick={() =>
                                 setAt({ folderId: place.rootId, workspaceId: place.workspaceId })
                             }
-                            className="flex h-14 w-full shrink-0 cursor-pointer items-center gap-3 border-b border-rule px-3 text-left last:border-0 hover:bg-muted"
+                            className="flex h-14 w-full shrink-0 cursor-pointer items-center gap-3 border-b border-rule px-3 text-left last:border-0 hover:bg-hover"
                         >
                             <FileMark kind="folder" name={place.name} />
                             <span className="min-w-0 flex-1 truncate text-[15px] font-semibold">
@@ -302,7 +302,7 @@ function MovePicker({
                                             workspaceId: folder.workspaceId,
                                         })
                                     }
-                                    className="flex h-14 w-full shrink-0 cursor-pointer items-center gap-3 border-b border-rule px-3 text-left last:border-0 hover:bg-muted disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent"
+                                    className="flex h-14 w-full shrink-0 cursor-pointer items-center gap-3 border-b border-rule px-3 text-left last:border-0 hover:bg-hover disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent"
                                 >
                                     <FileMark kind="folder" name={folder.name} />
                                     <span className="min-w-0 flex-1 truncate text-[15px] font-semibold">

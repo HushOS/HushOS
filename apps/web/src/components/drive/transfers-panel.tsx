@@ -525,7 +525,7 @@ export function TransfersPanel() {
                     aria-label={collapsed ? 'Expand transfers' : 'Collapse transfers'}
                     aria-expanded={!collapsed}
                     // The ghost variant paints an expanded trigger as open, meant for menus; this one is open most of the time.
-                    className="aria-expanded:bg-transparent hover:aria-expanded:bg-muted"
+                    className="aria-expanded:bg-transparent hover:aria-expanded:bg-highlight"
                     onClick={() => setCollapsed((value) => !value)}
                 >
                     <ChevronDownIcon className={collapsed ? 'rotate-180' : ''} />

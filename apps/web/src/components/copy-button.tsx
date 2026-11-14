@@ -74,7 +74,7 @@ export function CopyButton({
             onClick={() => void copy()}
             aria-label={copied ? 'Copied' : label}
             title={label}
-            className={`grid size-8 shrink-0 cursor-pointer place-items-center rounded-md border border-input bg-card text-muted-foreground transition-colors hover:bg-muted hover:text-foreground ${copied ? 'text-success' : ''} ${className}`}
+            className={`grid size-8 shrink-0 cursor-pointer place-items-center rounded-md border border-input bg-card text-muted-foreground transition-colors hover:bg-hover hover:text-foreground ${copied ? 'text-success' : ''} ${className}`}
         >
             <CopyCheckIcon done={copied} className="size-3.5" />
         </button>

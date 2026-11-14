@@ -437,7 +437,7 @@ function WithMeRow({
     return (
         <li
             data-shared={share.node.name}
-            className={cn(WITH_ME, 'h-14 border-b border-rule hover:bg-muted')}
+            className={cn(WITH_ME, 'h-14 border-b border-rule hover:bg-hover')}
         >
             <span className="flex size-10 items-center justify-center">
                 <FileMark node={share.node} size="list" />
@@ -774,7 +774,7 @@ function OutgoingRow({
     return (
         <li
             {...data}
-            className="flex min-h-16 items-center gap-4 border-b border-rule py-2 pr-3 pl-5 hover:bg-muted sm:pr-5 sm:pl-8"
+            className="flex min-h-16 items-center gap-4 border-b border-rule py-2 pr-3 pl-5 hover:bg-hover sm:pr-5 sm:pl-8"
         >
             <span className="flex size-10 shrink-0 items-center justify-center">
                 <FileMark node={node} size="list" />

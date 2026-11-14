@@ -71,7 +71,7 @@ function AutocompleteItem({ className, ...props }: AutocompletePrimitive.Item.Pr
         <AutocompletePrimitive.Item
             data-slot="autocomplete-item"
             className={cn(
-                'flex min-h-9 w-full min-w-0 cursor-pointer items-center gap-2 rounded-md px-3 py-1.5 font-sans text-sm outline-hidden select-none pointer-coarse:min-h-11 data-highlighted:bg-muted data-disabled:pointer-events-none data-disabled:opacity-50',
+                'flex min-h-9 w-full min-w-0 cursor-pointer items-center gap-2 rounded-md px-3 py-1.5 font-sans text-sm outline-hidden select-none pointer-coarse:min-h-11 data-highlighted:bg-highlight data-disabled:pointer-events-none data-disabled:opacity-50',
                 className,
             )}
             {...props}

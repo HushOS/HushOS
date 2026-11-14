@@ -39,7 +39,7 @@ export function PasswordInput({
                 aria-label={shown ? 'Hide password' : 'Show password'}
                 aria-pressed={shown}
                 disabled={props.disabled}
-                className="absolute inset-y-1 right-1 flex cursor-pointer items-center rounded-sm px-2.5 text-[13px] font-semibold text-primary transition-colors hover:bg-muted disabled:cursor-default disabled:opacity-50 disabled:hover:bg-transparent"
+                className="absolute inset-y-1 right-1 flex cursor-pointer items-center rounded-sm px-2.5 text-[13px] font-semibold text-primary transition-colors hover:bg-hover disabled:cursor-default disabled:opacity-50 disabled:hover:bg-transparent"
             >
                 <TextSwap>{shown ? 'Hide' : 'Show'}</TextSwap>
             </button>

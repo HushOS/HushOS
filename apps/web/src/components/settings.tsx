@@ -270,7 +270,7 @@ export function DialogField({
                         onClick={() => setShown((value) => !value)}
                         aria-label={shown ? 'Hide password' : 'Show password'}
                         aria-pressed={shown}
-                        className="absolute inset-y-1 right-1 cursor-pointer rounded-sm px-2.5 text-[13px] font-semibold text-primary hover:bg-muted"
+                        className="absolute inset-y-1 right-1 cursor-pointer rounded-sm px-2.5 text-[13px] font-semibold text-primary hover:bg-hover"
                     >
                         {shown ? 'Hide' : 'Show'}
                     </button>

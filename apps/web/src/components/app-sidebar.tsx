@@ -351,7 +351,7 @@ const collapsed = 'rail:size-10! rail:justify-center rail:p-0! rail:[&>span:last
 /* Every place is one size: a 40px row, 15px label, 18px icon. */
 /* The active place is tinted, semibold and its icon heavier: never tint alone. */
 const item =
-    'h-10 gap-3 rounded-md px-3 text-[15px] font-normal text-foreground hover:bg-muted hover:text-foreground data-active:bg-accent data-active:font-semibold data-active:text-accent-foreground data-active:hover:bg-accent [&_svg]:size-[18px] [&_svg]:stroke-[1.9] data-active:[&_svg]:stroke-[2.3]';
+    'h-10 gap-3 rounded-md px-3 text-[15px] font-normal text-foreground hover:bg-hover hover:text-foreground data-active:bg-accent data-active:font-semibold data-active:text-accent-foreground data-active:hover:bg-accent [&_svg]:size-[18px] [&_svg]:stroke-[1.9] data-active:[&_svg]:stroke-[2.3]';
 const group = 'p-0';
 
 function NavItems({ items, pathname }: { items: NavItem[]; pathname: string }) {

@@ -158,7 +158,7 @@ function AccountsPage() {
                                     <tr
                                         key={account.id}
                                         data-account={account.email}
-                                        className="hover:bg-muted"
+                                        className="hover:bg-hover"
                                     >
                                         <td className={cn(td, 'max-w-[320px]')}>
                                             <Link

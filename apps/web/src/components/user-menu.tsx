@@ -115,7 +115,7 @@ export function UserMenu({
                     aria-label={`${user.name}, account menu`}
                     title={user.name}
                     className={cn(
-                        'flex h-11 w-full min-w-0 shrink-0 cursor-pointer items-center gap-3 rounded-md px-3 text-left transition-colors outline-none hover:bg-muted focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring aria-expanded:bg-muted rail:size-10 rail:justify-center rail:gap-0 rail:px-0',
+                        'flex h-11 w-full min-w-0 shrink-0 cursor-pointer items-center gap-3 rounded-md px-3 text-left transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring aria-expanded:bg-highlight rail:size-10 rail:justify-center rail:gap-0 rail:px-0',
                         className,
                     )}
                 >
