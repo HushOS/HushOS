@@ -1,0 +1,31 @@
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_c1c23b99ee045f 395
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/DeviceApproval.swift
+  s_37d568498419e7::t_9359982451007d 841-844,866,873,1015-1016
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/DeviceApprovalTests.swift
+  s_37d568498419e7::t_241bd2ff5ce0c1 28,1191-1192,1242-1244,1254,1269,1278
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "74f00c1c7e0ba8ffbc343381c2f7f4d2c93375a3",
+  "prompts": {},
+  "sessions": {
+    "s_37d568498419e7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a8d1fd19c28d372a9",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
