@@ -97,16 +97,53 @@ describe('what a header says', () => {
             'Lyon. Call 555 0100 now!',
             '<b>Lyon</b>',
             'https://evil.example',
-            'L'.repeat(61),
+            'L'.repeat(41),
             '   ',
+            // A sentence after the name, with no digit or mark to give it away.
+            'Paris. HushOS support says approve this',
+            'Lyon. Approve',
+            'Rome. Say yes',
+            'A.B.C. Approve',
+            // Digits, and punctuation no place name needs here.
+            'Lyon 555',
+            'Lyon (approve)',
+            'Lyon/Paris',
+            'Lyon, approve',
+            'Lyon:',
+            // Separators that join nothing.
+            'Lyon-',
+            'Lyon -Paris',
+            "Lyon''s",
+            '.Lyon',
+            // Marks stacked on one letter, to draw over the lines around the name.
+            'Lyo\u0301\u0301\u0301n',
+            `Ly${'\u0336'.repeat(30)}on`,
         ])
             expect(locationWords({ city, country: 'FR' })).toBe('in France');
+        // Dropped whole, never cut to a name that fits.
+        expect(locationWords({ city: `Lyon ${'x'.repeat(40)}` })).toBeNull();
         expect(locationWords({ city: 'Lyon', region: 'x\u0000y', country: 'FR' })).toBe(
             'near Lyon, France',
         );
         expect(locationWords({ country: 'France; DROP' })).toBeNull();
         // Real names with their punctuation pass.
-        for (const city of ['Saint-Étienne', 'St. John’s', "N'Djamena", 'Frankfurt (Oder)'])
-            expect(locationWords({ city })).toBe(`near ${city}`);
+        for (const city of [
+            'Saint-Étienne',
+            'St. John’s',
+            "N'Djamena",
+            'Washington D.C.',
+            'Stratford-upon-Avon',
+            'San Fernando del Valle de Catamarca',
+            // Two marks on a letter is as many as a name is written with.
+            'Ly\u0061\u0323\u0302n'.normalize('NFD'),
+            'กรุงเทพมหานคร',
+        ])
+            expect(locationWords({ city })).toBe(`near ${city.normalize('NFC')}`);
+        // The longest region Cloudflare names is exactly as long as a name may be.
+        const longest = 'Dadra and Nagar Haveli and Daman and Diu';
+        expect(longest).toHaveLength(40);
+        expect(locationWords({ city: 'Silvassa', region: longest, country: 'IN' })).toBe(
+            `near Silvassa, ${longest}, India`,
+        );
     });
 });
