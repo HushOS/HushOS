@@ -1,6 +1,6 @@
 ---
-title: Notifications that don't say what happened
-description: HushOS can now tell your browser and the iPhone and Android apps when something happens in your account, without the notification itself carrying any of it. How it works, and what Google, Apple and Mozilla see.
+title: Private notifications for new sign-ins, shares and family invitations
+description: HushOS tells you when a new device signs in, something is shared with you or a family invites you, in your browser and on iPhone and Android. The notification carries nothing about what happened on its way to you. The words are written on your own device.
 date: 2026-11-09
 order: 0
 author: HushOS
@@ -10,16 +10,19 @@ tone: blue
 
 import { Cta } from '../../components/mdx';
 
-**Update:** notifications are now in the iPhone and Android apps too, from version 1.4.1. Turn them on in the app under **Account → Notifications**.
+HushOS tells you when something happens in your account, even while it's closed: a new sign-in, a device removed, something shared with you, an invitation to a family. It works in your browser and in the iPhone and Android apps.
 
-HushOS can now tell you when something happens in your account, even while it's closed: a new sign-in, a device removed, something shared with you, an invitation to a family. Turn it on for a browser under **Account → Notifications → On this browser**.
+- **In a browser**: turn it on under **Account → Notifications → On this browser**.
+- **On iPhone and Android**: turn it on in the app under **Account → Notifications → On this phone**, from version 1.4.1.
 
-What makes this different is what the notification carries on its way to you: nothing about what happened.
+The notification carries nothing about what happened on its way to you. The words you read are written on your own device.
 
 ## What you'll be told
 
 - **Security notices**, always: a new sign-in, a device removed, or someone repeatedly trying to confirm your password. These still come by email too.
 - **Shared with you** and **Families**: when someone shares something with you, invites you to a family, or is waiting to join yours. You can turn either off.
+
+When someone shares something with you, the notification names them only if you've checked them as a contact yourself. Anyone else shows as **Someone**, so a stranger can't put words of their choosing on your screen by picking a misleading name.
 
 ## How a notification stays private
 
@@ -29,17 +32,13 @@ A notification has to pass through your browser's push service on the way: Googl
 2. Your browser wakes HushOS, which fetches that event from our server over your own signed-in connection.
 3. HushOS writes the notification on your computer, from what only your account can read.
 
-So the push service sees that your browser got a small encrypted message, and when, and even inside it there is nothing about what happened. That matters most on phones, where Apple and Google can read what an app sends.
+So the push service sees that your browser got a small encrypted message, and when, and even inside it there is nothing about what happened.
 
-If no HushOS tab is open and unlocked, there is nothing on your computer that can read the event, so you see a plain **New activity in HushOS**. Open HushOS to see what it was.
-
-When someone shares something with you, the notification names them only if you've checked them as a contact yourself. Anyone else shows as **Someone**, so a stranger can't put words of their choosing on your screen by picking a misleading name.
+While HushOS is closed or locked in that browser, the notification says **New activity in HushOS**, and opening HushOS shows what it was.
 
 ## On your phone
 
-The iPhone and Android apps get notifications the same way, through a small service of ours at [push.hushos.com](https://push.hushos.com). Apple and Google only deliver to an app from its publisher, so that service hands them a random event ID and nothing about what happened, and the app writes the notification on the phone. The page at push.hushos.com says exactly what it keeps and what Apple and Google can see.
-
-On iPhone and iPad, Safari shows notifications only for a site added to the Home Screen, so the app is the better way there.
+The iPhone and Android apps get notifications the same way, through a small service of ours at [push.hushos.com](https://push.hushos.com). Apple and Google only deliver to an app from its publisher, so that service hands them a random event ID and nothing about what happened, and the app writes the notification on the phone. That matters most on phones, where Apple and Google can read what an app sends. The page at push.hushos.com says exactly what it keeps and what Apple and Google can see.
 
 ## Running your own server?
 
