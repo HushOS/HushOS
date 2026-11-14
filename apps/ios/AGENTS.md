@@ -383,13 +383,16 @@ Markdown files (`text/markdown`, or `.md`, `.markdown`, `.mdx`) up to 2 MB open 
 
 #### Approve on another device
 
-`docs/two-step-design.md` 12 ("What was built (item 2)"). `DeviceApproval.swift` in HushOSKit holds the order of the requests and every check; `App/DeviceApproval.swift` the panel, the list and the sheet. The cryptography and every reply's reading are the core's.
+`docs/two-step-design.md` 12 ("What was built (item 2)"). `DeviceApproval.swift` in HushOSKit holds the order of the requests and every check, and what holds the answer sheet (`ApprovalAnswer`); `App/DeviceApproval.swift` the panel, the list and the sheet. The cryptography and every reply's reading are the core's.
 
 - Asking (`DeviceAsk`): the commitment goes first; the key and nonce are revealed only on `opened`, once; the step is answered only with an approved request (`answered`). `step-pending` keeps waiting and is never an error or a wrong answer.
     - Nothing is asked without a press: the step's button (Use another device) or choosing it under Use another way. Opening a form never sends a prompt. The form's own button then sends the change with the approved request (`StepDraft.approved`, good for its own token only).
     - The key: `StepDeviceKey`. A sign-in that sent its device proof asks with that key; one that sent none makes a key before it has a session and registers with it (`Auth.registerDevice(made:)`). A change asks with the stored key (`DeviceApprovals.ownKey`), and names `device` only when there is one.
     - `twoStepMethods` always names `device` at sign-in (`Auth.namedAtSignIn`).
 - Answering (`ApprovalAnswering`): holds the request as first listed, before this phone opened it. A reveal that is not that commitment, or a scanned code for another request or commitment, ends it (`mismatch`) with nothing signed. Only the exact typed code is signed; anything else ends it (`wrong-code`). The account id signed over is the phone's own, never the list reply's.
+    - Nothing typed is enough in two cases only, decided in `ApprovalAnswering.check`: after a scan of this very request, and for a request that turns the method on (below). Keep it there, with `noOtherRequestIsApprovedWithNothingTypedAndNothingScanned`.
+    - The sheet's own order is `ApprovalAnswer` (HushOSKit): its phases, and what holds it. Waiting for the other device's reveal is not `sending` and holds nothing: Cancel, a swipe, Deny and This wasn’t me work through it. Only an approval or an ending that is out holds the sheet.
+        - Cancel or a swipe while it waits ends the request (`denied`), by a request the sheet going away does not cancel, and only while the request is still the session's (`ApprovalInbox.holds`). In any other phase they send nothing and the request stays in the list.
     - The 32 bytes it opens a request with are its own: made here after it saw the commitment, and kept in `ApprovalMemory` (in memory, with the request as it stood) before they are posted. Never fill them from a reply or from the list.
         - The reply to `open` must echo them: another value ends the request (`ApprovalProblem.changed`).
         - A request listed as already opened (`approverKey`) that this run holds no value for (the app was restarted) is ended without an `open` (`ApprovalProblem.restarted`).
@@ -402,13 +405,18 @@ Markdown files (`text/markdown`, or `.md`, `.markdown`, `.mdx`) up to 2 MB open 
     - `PromptLimit`: five prompts a day for each class, counted by the core, kept in `state/approval-prompts.json` (wiped with the account). Counted only after the reply is known to be the current session's.
 - Settings: `TwoStepStatus.showsDevice`, `deviceValue`, `canTurnOnDevice` (needs a device in `approvers`); Turn off is `RemoveMethodSheet`.
 - Turning it on is `DeviceMethodSheet` over HushOSKit's `DeviceSetup`, which decides what is sent and when the sheet may close.
-    - The person chooses the approving device from `TwoStepStatus.approvers` (one is chosen already, and still shown). Nothing is sent with none chosen: not the pending method, not a request. Every request, Ask again included, carries it (`DeviceAsk.Request.approver`, `approverDeviceId`).
+    - The person chooses the approving device from `TwoStepStatus.approvers`. None is ever chosen for them, even when there is one: a device's name and kind are its own words. Nothing is sent with none chosen: not the pending method, not a request. Every request, Ask again included, carries it (`DeviceAsk.Request.approver`, `approverDeviceId`).
+    - For this one request (`approvalTurnsOn`, never the string compared here) the code runs the other way.
+        - The phone that asks shows no code and no QR code at any state (`DeviceAsk.qr` is nil, `poll` says `opened`, never `code`; the panel says which device to pick up).
+        - The approval alone sends nothing (`DeviceSetup.approved(by:)`). The sheet then asks for "Code on <device>"; `DeviceSetup.confirm(typed:)` checks it against this phone's own code (`DeviceAsk.typed`, the core's `approvalCodeTyped`) and sends it with the confirmation (`deviceConfirmJson`'s `code`), where the server checks again (409 `device-code`, its words).
+        - One try: a code that is not it drops the request here (`DeviceSetup.WrongCode`), nothing is sent, and Ask again asks the same device.
+        - The phone that answers offers no scan and no field: the sheet opens the request as it comes up, Approve signs on the press once the reveal is in, and `approve` hands back the code, shown under "Code for your other device" until Done. `open(scanned:)` refuses such a request without opening it.
     - The confirmation: `confirming` is set before it is sent, the request is not cancelled with the screen's task, and the backup codes are kept in `DeviceSetup.codes` until Done. Cancel and swipe are off while `mayClose` is false. A setup that was closed confirms nothing.
     - A lost confirmation is `StepWords.lostDeviceOn`, and the settings behind are read again. `step-pending` changes nothing and is confirmed again.
     - "Remove my other devices" is offered, ticked, when this turns the step on. It runs behind the codes as the authenticator app's does, with `keep` naming the chosen device (`Devices.removeOthers(password:keep:)`).
 - The Files sign-in sheet still has no step screen.
 - Tests: `DeviceApprovalTests` (an in-memory server that can be made to lie; the web's fixture `web-device-approval.json`).
-- Not checked against a live server or on a device: the sign-in step screen, the settings row and the turn-on sheet's device list in place, the camera scan (the simulator has no camera), and the push.
+- Not checked against a live server or on a device: the sign-in step screen, the settings row and the turn-on sheet's device list and code field in place, the answer sheet's code and Done, the camera scan (the simulator has no camera), and the push.
 
 ### Sign-up
 

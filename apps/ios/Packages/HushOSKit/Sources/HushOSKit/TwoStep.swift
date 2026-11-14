@@ -250,6 +250,13 @@ public enum StepWords {
     /* Turning it on: the person says which of their devices is to approve. */
     public static let approverHeading = "Device that will approve"
     public static let chooseApprover = "Choose the device that will approve."
+    /* Once that device approved: its code is typed on the phone turning the method on. One try. */
+    public static func codeOn(_ device: String) -> String { "Code on \(device)" }
+    public static let turnOn = "Turn on"
+    public static let add = "Add"
+    public static let turnOnWrongCode = "That code didn’t match, so nothing was turned on."
+    /* On the device that approved such a request, under the code it then shows. */
+    public static let done = "Done"
     public static func approveOn(_ device: String) -> String { "Approve on \(device)" }
     /* Under "Remove my other devices" here: the device that approves stays signed in, because it is the method. */
     public static let othersButApprover = "All but this one and the one that approves. They’ll need to sign in again."

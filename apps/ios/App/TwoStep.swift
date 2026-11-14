@@ -219,7 +219,7 @@ final class StepUpModel {
         step.typed()
         asking.begin(
             .init(wire: wire, token: token, purpose: step.purpose.rawValue, key: key),
-            approved: { [weak self] answer in
+            approved: { [weak self] answer, _ in
                 if case .device(let requestId) = answer.proof { self?.step.approved(ApprovedRequest(token: token, requestId: requestId)) }
             },
             failed: { [weak self] error in
@@ -411,7 +411,7 @@ struct SignInStepView: View {
         step.asking()
         asking.begin(
             .init(wire: .signIn(origin: pending.origin), token: pending.challenge.token, purpose: "login", key: key.publicKey),
-            approved: { answer in
+            approved: { answer, _ in
                 busy = true
                 defer { busy = false }
                 try await model.answerStep(.ready(answer))
@@ -1330,12 +1330,18 @@ struct KeySheet: View {
 
 /*
  * Turning on Approve on another device: which of the account's devices is to approve, the password
- * (and the step, once it is on), then one real approval from that device, asked for as at a
- * sign-in. The account's first method turns the step on: its backup codes follow, and the other
- * devices are offered for removal, all but this one and the one that approved.
+ * (and the step, once it is on), then one real approval from that device and the code it then
+ * shows, typed here. The account's first method turns the step on: its backup codes follow, and
+ * the other devices are offered for removal, all but this one and the one that approved.
+ *
+ * The list alone proves nothing: a device's name and kind are its own words, and someone with the
+ * password can sign in as "Maya’s iPhone". So none is ever chosen for the person, this iPhone
+ * shows no code and no QR code for the request, and the approval is not enough: the device that
+ * approved shows a code, and it is typed here. A device they are not holding shows nothing to type.
  *
  * What may be sent when, and when the sheet may close, is HushOSKit's `DeviceSetup`: nothing goes
- * out with no device chosen, and nothing closes the sheet over a confirmation that is out.
+ * out with no device chosen, nothing on the approval alone, nothing with a code that is not the
+ * request's, and nothing closes the sheet over a confirmation that is out.
  */
 struct DeviceMethodSheet: View {
     let email: String
@@ -1348,6 +1354,10 @@ struct DeviceMethodSheet: View {
     @State private var pending = false
     @State private var error = ""
     @State private var asking = DeviceAskModel()
+    /* The code the approving device shows, as it is typed here. */
+    @State private var code = ""
+    /* The typed code is being checked, here and then by the server. */
+    @State private var checking = false
 
     /* `first`: the account has no method yet, so this turns the step on. `approvers`: the devices that could approve, as the settings listed them. */
     init(first: Bool, approvers: [TwoStepStatus.Approver], email: String, done: @escaping (String) -> Void) {
@@ -1374,8 +1384,18 @@ struct DeviceMethodSheet: View {
                         done("")
                         dismiss()
                     }
+                } else if asked, setup.awaitsCode || setup.confirming {
+                    // That device approved: it now shows the code, and it is typed here. Nothing was sent on the approval.
+                    ApprovalCodeField(label: StepWords.codeOn(setup.chosen?.shownName ?? ""), typed: $code, disabled: checking) { error = "" }
+                    FormProblem(text: error)
+                    primaryRow(checking ? "Checking" : setup.first ? StepWords.turnOn : StepWords.add, disabled: checking || approvalCodeNormalize(typed: code) == nil) { confirm() }
+                } else if asked, asking.idle {
+                    // The code typed was not that device's: its request was dropped here, and nothing was sent.
+                    FormProblem(text: error)
+                    primaryRow(StepWords.askAgain, disabled: false) { ask() }
                 } else if asked {
-                    Section { DeviceAskView(model: asking, inlineAgain: true, approver: setup.chosen?.shownName) { ask() }.alpineRow() }
+                    // No code and no QR code here, at any point: the code is the other device's to show.
+                    Section { DeviceAskView(model: asking, inlineAgain: true, approver: setup.chosen?.shownName ?? "") { ask() }.alpineRow() }
                     FormProblem(text: error)
                 } else {
                     approverChoice
@@ -1406,7 +1426,7 @@ struct DeviceMethodSheet: View {
         }
     }
 
-    /* The account's devices that could approve, as a single choice. One device is chosen already, and still shown. */
+    /* The account's devices that could approve, as a single choice. None is chosen for the person, even when there is one. */
     private var approverChoice: some View {
         Section {
             ForEach(setup.approvers) { device in
@@ -1457,43 +1477,82 @@ struct DeviceMethodSheet: View {
         }
     }
 
-    /* Asks the chosen device to approve the pending method, then confirms it with that approval. Ask again asks the same device. */
+    /* Asks the chosen device to approve the pending method. Its approval sends nothing: the code it then shows is asked for. Ask again asks the same device. */
     private func ask() {
         guard let wire = ApprovalWire.current, let key = DeviceApprovals.ownKey, let request = try? setup.request(wire: wire, key: key) else {
-            setup.failed()
-            error = ErrorWords.generic
+            back(ErrorWords.generic)
             return
         }
         error = ""
-        let typed = password
+        code = ""
         asking.begin(
             request,
-            approved: { answer in
-                guard case .device(let requestId) = answer.proof else { return }
-                // The confirmation is marked as out before it goes, and its answer is the setup's to keep: neither this
-                // closure nor the sheet holds the codes. The other devices go behind them, and a failure there is a notice.
-                let confirmed = try await setup.confirm(requestId: requestId, password: typed, removal: { removed in
-                    if removed { done("") } else { NoticeCenter.shared.show(StepWords.othersNotRemoved, important: true) }
-                })
-                switch confirmed {
-                case .turnedOn:
-                    password = ""
-                    done("")
-                case .added:
-                    done(StepWords.deviceOn)
-                    dismiss()
-                }
-            },
+            // Half of it: the setup keeps the request, and the field for that device's code comes up.
+            approved: { _, ask in setup.approved(by: ask) },
             failed: { error in
-                // The server would not ask the device (its own words, as for a request that named none), or the
-                // confirmation failed: back to the password with why. Any failure may hide a method that was turned on,
-                // and a lost reply says so, so the settings behind are read again.
-                setup.failed()
-                tried = false
-                done("")
-                if let words = ErrorWords.say(error) { self.error = words }
+                // The server would not ask the device (its own words, as for a request that named none): back to the password with why.
+                back(ErrorWords.say(error))
             }
         )
+    }
+
+    /* The setup is over without the method: back to the password with why. Any failure may hide a method that was turned on, so the settings behind are read again. */
+    private func back(_ words: String?) {
+        asking.stop()
+        setup.failed()
+        tried = false
+        code = ""
+        done("")
+        if let words { error = words }
+    }
+
+    /*
+     * Turn on, or Add: the code is checked against the one this iPhone worked out, and only then
+     * sent with the confirmation. The confirmation is marked as out before it goes, and its answer
+     * is the setup's to keep: neither this task nor the sheet holds the backup codes. The other
+     * devices go behind them, and a failure there is a notice.
+     */
+    private func confirm() {
+        guard !checking else { return }
+        checking = true
+        error = ""
+        let typed = code
+        let passwordTyped = password
+        Task {
+            defer { checking = false }
+            while true {
+                do {
+                    let confirmed = try await setup.confirm(typed: typed, password: passwordTyped, removal: { removed in
+                        if removed { done("") } else { NoticeCenter.shared.show(StepWords.othersNotRemoved, important: true) }
+                    })
+                    code = ""
+                    switch confirmed {
+                    case .turnedOn:
+                        password = ""
+                        done("")
+                    case .added:
+                        done(StepWords.deviceOn)
+                        dismiss()
+                    }
+                    return
+                } catch StepError.refused(.pending, _) {
+                    // The approval had not landed where the confirmation went: nothing changed, and the same one goes again.
+                    try? await Task.sleep(for: .seconds(2))
+                } catch let wrong as DeviceSetup.WrongCode {
+                    // One try. The request is dropped here; Ask again makes another to the same device.
+                    asking.stop()
+                    code = ""
+                    error = wrong.errorDescription ?? ErrorWords.generic
+                    return
+                } catch {
+                    // Let go meanwhile: nothing was confirmed, and there is nothing to say.
+                    if ErrorWords.isCancellation(error) { return }
+                    // The server's refusal (a code it did not agree with, in its words) or a lost reply, which says so.
+                    back(ErrorWords.say(error))
+                    return
+                }
+            }
+        }
     }
 }
 

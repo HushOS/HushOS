@@ -8,7 +8,11 @@ import VisionKit
  * Approve on another device (docs/two-step-design.md 12), on this iPhone's screens: the panel the
  * asking side shows (a QR code, then the code to type on the other device), and the answering
  * side's list, banner and sheet. The order of every request, and every check, is HushOSKit's
- * (`DeviceAsk`, `ApprovalAnswering`); nothing here decides what is revealed, approved or signed.
+ * (`DeviceAsk`, `ApprovalAnswering`, `ApprovalAnswer`); nothing here decides what is revealed,
+ * approved or signed, nor what holds the sheet.
+ *
+ * Turning the method on runs the code the other way: the asking panel shows no code and no QR
+ * code, and the answering sheet shows the code once it approved.
  */
 
 /* MARK: Asking */
@@ -24,9 +28,9 @@ final class DeviceAskModel {
         /* Nothing is out: the screen offers to ask. */
         case idle
         case starting
-        /* No device has opened the request: the QR code. */
-        case waiting(qr: String)
-        /* A device opened it: the code to type there. */
+        /* No device has opened the request: the QR code. None for a request that turns the method on, opened or not. */
+        case waiting(qr: String?)
+        /* A device opened it: the code to type there. Never for a request that turns the method on. */
         case code(String)
         case approved
         /* Over without an approval: why, with Ask again. */
@@ -36,7 +40,8 @@ final class DeviceAskModel {
     /* What a request is made from; turning the method on, it names the device the person chose (HushOSKit). */
     typealias Request = DeviceAsk.Request
 
-    typealias Approved = @MainActor @Sendable (StepAnswer) async throws -> Void
+    /* The answer, and the request itself: turning the method on, the approval answers nothing, and the request checks the code typed afterwards. */
+    typealias Approved = @MainActor @Sendable (StepAnswer, DeviceAsk) async throws -> Void
     typealias Failed = @MainActor @Sendable (Error) -> Void
 
     private(set) var phase = Phase.idle
@@ -93,7 +98,7 @@ final class DeviceAskModel {
     private func follow(_ ask: DeviceAsk, run this: Int, approved: @escaping Approved, failed: @escaping Failed) async {
         do {
             _ = try await ask.answered(shown: { [weak self] state in await self?.show(state, qr: ask.qr, run: this) }) { answer in
-                try await approved(answer)
+                try await approved(answer, ask)
                 return true
             }
         } catch {
@@ -103,10 +108,12 @@ final class DeviceAskModel {
         }
     }
 
-    private func show(_ state: DeviceAsk.State, qr: String, run this: Int) {
+    private func show(_ state: DeviceAsk.State, qr: String?, run this: Int) {
         guard run == this else { return }
         switch state {
         case .waiting: phase = .waiting(qr: qr)
+        // Turning the method on: opened or not, this screen says the same, and shows no code.
+        case .opened: phase = .waiting(qr: nil)
         case .code(let code): phase = .code(code)
         case .approved: phase = .approved
         case .ended(let why): phase = .ended(StepWords.ended(why))
@@ -124,14 +131,22 @@ final class DeviceAskModel {
     }
 }
 
-/* The asking side's panel: the QR code until a device opens the request, then the code, then how it ended. */
+/*
+ * The asking side's panel: the QR code until a device opens the request, then the code, then how it ended.
+ * Turning the method on (`approver`), it shows neither at any point: only which device to pick up.
+ */
 struct DeviceAskView: View {
     let model: DeviceAskModel
     /* A form has no button of its own for it: Ask again sits in the panel. The sign-in screen's own button asks again. */
     let inlineAgain: Bool
-    /* Turning the method on: the name of the one device that is asked, so the panel says which to pick up. */
+    /* Turning the method on: the name of the one device that is asked, so the panel says which to pick up. The code is that device's to show. */
     var approver: String?
     let again: () -> Void
+
+    private var pickUp: some View {
+        Text(StepWords.askOpen(on: approver)).font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity, minHeight: 44)
+    }
 
     var body: some View {
         Group {
@@ -141,11 +156,20 @@ struct DeviceAskView: View {
             case .starting:
                 ProgressView().frame(maxWidth: .infinity, minHeight: 44)
             case .waiting(let qr):
-                VStack(spacing: Alpine.Space.s4) {
-                    QRCode(text: qr).frame(width: 208, height: 208)
-                    Text(StepWords.askOpen(on: approver)).font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).multilineTextAlignment(.center)
+                if let qr, approver == nil {
+                    VStack(spacing: Alpine.Space.s4) {
+                        QRCode(text: qr).frame(width: 208, height: 208)
+                        Text(StepWords.askOpen(on: approver)).font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity)
+                } else {
+                    pickUp
                 }
-                .frame(maxWidth: .infinity)
+            case .code where approver != nil:
+                pickUp
+            case .approved where approver != nil:
+                // The approval is half of it: the sheet asks for the code that device now shows.
+                EmptyView()
             case .code(let code):
                 VStack(spacing: Alpine.Space.s2) {
                     Text(StepWords.askCode).font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.ink)
@@ -218,22 +242,15 @@ struct ApprovalRow: View {
 }
 
 /*
- * Answering a request. Scan the other screen's QR code, and this iPhone checks that it is this
- * very request before anything is asked; or type the code that screen shows. Only then Approve.
- * Deny and This wasn’t me end it at any point. Anything that does not match ends it and says so.
+ * Where a code from another device's screen is typed: two digits and a word, with the words the
+ * typed beginning could become offered beneath. The answer sheet's field, and the one the code is
+ * typed into where the method is turned on.
  */
-struct ApprovalSheet: View {
-    let flow: ApprovalAnswering
-    @Environment(\.dismiss) private var dismiss
-
-    private enum Phase { case choose, scanning, waiting, typing, confirm }
-    @State private var phase = Phase.choose
-    @State private var typed = ""
-    @State private var busy = false
-    @State private var error = ""
-    @State private var work: Task<Void, Never>?
-
-    private var canScan: Bool { DataScannerViewController.isSupported && DataScannerViewController.isAvailable }
+struct ApprovalCodeField: View {
+    let label: String
+    @Binding var typed: String
+    let disabled: Bool
+    var edited: () -> Void = {}
 
     /* The digits as typed, and the word begun after them. */
     private var digits: String { String(typed.prefix(while: StepDraft.digit)) }
@@ -242,6 +259,56 @@ struct ApprovalSheet: View {
     private var completions: [String] {
         let found = approvalWords(prefix: word, limit: 6)
         return found == [word] ? [] : found
+    }
+
+    var body: some View {
+        Section {
+            TextField("47 river", text: Binding(get: { typed }, set: { typed = String($0.prefix(24)); edited() }))
+                .font(.title3.monospaced()).foregroundStyle(Alpine.ink).keyboardType(.asciiCapable).textInputAutocapitalization(.never).autocorrectionDisabled()
+                .submitLabel(.done).disabled(disabled).accessibilityLabel(label).alpineRow()
+            if !completions.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: Alpine.Space.s2) {
+                        ForEach(completions, id: \.self) { completion in
+                            Button(completion) { typed = "\(digits) \(completion)"; edited() }
+                                .buttonStyle(.bordered).buttonBorderShape(.capsule).tint(Alpine.primary).disabled(disabled)
+                        }
+                    }
+                }
+                .alpineRow()
+            }
+        } header: {
+            FieldLabel(label)
+        }
+    }
+}
+
+/*
+ * Answering a request. Scan the other screen's QR code, and this iPhone checks that it is this
+ * very request before anything is asked; or type the code that screen shows. Only then Approve.
+ * Deny and This wasn’t me end it at any point. Anything that does not match ends it and says so.
+ *
+ * A request that turns the method on is the other way round: nothing is scanned or typed, this
+ * iPhone approves on a press once the other device revealed, and then shows the code for the
+ * person to type there, until Done.
+ *
+ * What is on screen, and what holds the sheet, is HushOSKit's `ApprovalAnswer`: waiting for the
+ * other device never does, only an approval or an ending that is out.
+ */
+struct ApprovalSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var answer: ApprovalAnswer
+    @State private var typed = ""
+
+    init(flow: ApprovalAnswering) {
+        _answer = State(initialValue: ApprovalAnswer(flow: flow, around: .init(say: { NoticeCenter.shared.show($0, important: $1) })))
+    }
+
+    private var flow: ApprovalAnswering { answer.flow }
+    private var canScan: Bool { DataScannerViewController.isSupported && DataScannerViewController.isAvailable }
+    private var shown: String? {
+        if case .shown(let code) = answer.phase { return code }
+        return nil
     }
 
     var body: some View {
@@ -259,17 +326,17 @@ struct ApprovalSheet: View {
                     }
                     .textCase(nil)
                 }
-                switch phase {
+                switch answer.phase {
                 case .choose:
                     Section {
                         if canScan {
-                            Button("Scan the code") { error = ""; phase = .scanning }.foregroundStyle(Alpine.primary).alpineRow()
+                            Button("Scan the code") { answer.scan() }.foregroundStyle(Alpine.primary).alpineRow()
                         }
-                        Button("Type the code") { type() }.foregroundStyle(Alpine.primary).alpineRow()
+                        Button("Type the code") { answer.type() }.foregroundStyle(Alpine.primary).alpineRow()
                     }
                 case .scanning:
                     Section {
-                        ApprovalScanner { scanned($0) }
+                        ApprovalScanner { answer.scanned($0) }
                             .frame(height: 320).listRowInsets(EdgeInsets()).listRowBackground(Color.black)
                     }
                 case .waiting:
@@ -280,134 +347,64 @@ struct ApprovalSheet: View {
                         }
                         .alpineRow()
                     }
+                    // Turning the method on: Approve is there from the start, and can be pressed once the other device revealed.
+                    if answer.turnsOn { approveRow(disabled: true) {} }
                 case .typing:
-                    Section {
-                        TextField("47 river", text: Binding(get: { typed }, set: { typed = String($0.prefix(24)); error = "" }))
-                            .font(.title3.monospaced()).foregroundStyle(Alpine.ink).keyboardType(.asciiCapable).textInputAutocapitalization(.never).autocorrectionDisabled()
-                            .submitLabel(.done).disabled(busy).accessibilityLabel(StepWords.approvalCodeField).alpineRow()
-                        if !completions.isEmpty {
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: Alpine.Space.s2) {
-                                    ForEach(completions, id: \.self) { completion in
-                                        Button(completion) { typed = "\(digits) \(completion)" }
-                                            .buttonStyle(.bordered).buttonBorderShape(.capsule).tint(Alpine.primary)
-                                    }
-                                }
-                            }
-                            .alpineRow()
-                        }
-                    } header: {
-                        FieldLabel(StepWords.approvalCodeField)
-                    }
-                    approveRow { approve(typed) }
+                    ApprovalCodeField(label: StepWords.approvalCodeField, typed: $typed, disabled: answer.sending) { answer.edited() }
+                    approveRow(disabled: answer.sending) { answer.approve(typed: typed) }
                 case .confirm:
-                    approveRow { approve(nil) }
+                    approveRow(disabled: answer.sending) { answer.approve() }
+                case .shown(let code):
+                    // Approved: the code is this iPhone's to show, and stays until Done.
+                    Section {
+                        VStack(spacing: Alpine.Space.s2) {
+                            Text(StepWords.askCode).font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.ink)
+                            Text(code).font(.system(.largeTitle, design: .monospaced).weight(.bold)).foregroundStyle(Alpine.ink)
+                                .lineLimit(1).minimumScaleFactor(0.6)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, Alpine.Space.s2)
+                        .accessibilityElement(children: .combine)
+                        .alpineRow()
+                    }
+                    Section {
+                        Button { answer.done() } label: { Text(StepWords.done).frame(maxWidth: .infinity) }
+                            .buttonStyle(PrimaryCapsuleStyle())
+                            .listRowBackground(Color.clear).listRowInsets(EdgeInsets())
+                    }
                 }
-                if !error.isEmpty { Section { Text(error).foregroundStyle(Alpine.danger).alpineRow() } }
-                Section {
-                    Button("Deny") { end(.denied) }.foregroundStyle(Alpine.primary).disabled(busy).alpineRow()
-                    Button("This wasn’t me", role: .destructive) { end(.notMe) }.foregroundStyle(Alpine.danger).disabled(busy).alpineRow()
+                if !answer.error.isEmpty { Section { Text(answer.error).foregroundStyle(Alpine.danger).alpineRow() } }
+                if shown == nil {
+                    Section {
+                        Button("Deny") { answer.end(.denied) }.foregroundStyle(Alpine.primary).disabled(answer.held).alpineRow()
+                        Button("This wasn’t me", role: .destructive) { answer.end(.notMe) }.foregroundStyle(Alpine.danger).disabled(answer.held).alpineRow()
+                    }
                 }
             }
             .alpineGrouped()
             .scrollDismissesKeyboard(.interactively)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(busy) } }
-            .interactiveDismissDisabled(busy)
-            // Closed without an answer: the request stays in the list until it is answered or over.
-            .onDisappear { work?.cancel() }
+            .toolbar {
+                // Under the code there is one button, Done.
+                if shown == nil {
+                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { answer.cancel() }.disabled(answer.held) }
+                }
+            }
+            // Only over an approval or an ending that is out: the wait for the other device holds nothing.
+            .interactiveDismissDisabled(answer.held)
+            .task { answer.appeared() }
+            .onChange(of: answer.closed) { _, closed in if closed { dismiss() } }
+            // Swiped away, or its session ended. While it waited the request is ended; anywhere else it stays in the list.
+            .onDisappear { answer.gone() }
         }
     }
 
-    private func approveRow(_ action: @escaping () -> Void) -> some View {
+    private func approveRow(disabled: Bool, _ action: @escaping () -> Void) -> some View {
         Section {
             Button(action: action) { Text("Approve").frame(maxWidth: .infinity) }
-                .buttonStyle(PrimaryCapsuleStyle()).disabled(busy)
+                .buttonStyle(PrimaryCapsuleStyle()).disabled(disabled)
                 .listRowBackground(Color.clear).listRowInsets(EdgeInsets())
         }
-    }
-
-    /* Type the code: the request is opened, and the field appears once the other device has revealed what it committed to. */
-    private func type() {
-        error = ""
-        phase = .waiting
-        work = Task {
-            do {
-                try await flow.open()
-                try await flow.awaitReveal()
-                phase = .typing
-            } catch {
-                failed(error)
-            }
-        }
-    }
-
-    /* What the camera read. Anything that is not an approval's code is passed over; this request's own opens it. */
-    private func scanned(_ text: String) {
-        // Another QR code in view is not looked at twice, and holds nothing up.
-        guard !busy, phase == .scanning, approvalQrRead(text: text) != nil else { return }
-        busy = true
-        work = Task {
-            defer { busy = false }
-            do {
-                guard try await flow.open(scanned: text) else { return }
-                phase = .waiting
-                try await flow.awaitReveal()
-                phase = .confirm
-            } catch {
-                failed(error)
-            }
-        }
-    }
-
-    private func approve(_ typed: String?) {
-        guard !busy else { return }
-        busy = true
-        error = ""
-        work = Task {
-            defer { busy = false }
-            do {
-                try await flow.approve(typed: typed)
-                close(StepWords.approved)
-            } catch {
-                failed(error)
-            }
-        }
-    }
-
-    private func end(_ why: ApprovalAnswering.Ending) {
-        guard !busy else { return }
-        busy = true
-        error = ""
-        work?.cancel()
-        work = Task {
-            defer { busy = false }
-            do {
-                try await flow.end(why)
-                close(StepWords.denied)
-            } catch {
-                failed(error)
-            }
-        }
-    }
-
-    private func close(_ said: String, important: Bool = false) {
-        NoticeCenter.shared.show(said, important: important)
-        ApprovalInbox.shared.finished(flow.id)
-        dismiss()
-    }
-
-    /* A request that is over, or that did not match, closes with why. Anything else stays, to be tried again. */
-    private func failed(_ error: Error) {
-        if ErrorWords.isCancellation(error) { return }
-        if let problem = error as? ApprovalProblem {
-            close(problem.errorDescription ?? ErrorWords.generic, important: true)
-            return
-        }
-        // An ended session is said by the app as everywhere; nothing of this account's is left to answer.
-        if endsSession(error) { dismiss(); return }
-        if phase == .waiting || phase == .scanning { phase = .choose }
-        self.error = ErrorWords.say(error) ?? ""
     }
 }
 
