@@ -269,6 +269,11 @@ const openedHere = new Map<string, OpenedApproval>();
  * device's screen: the server's copy must be that one, or the request is not the one on that
  * screen.
  *
+ * The value is remembered before it is posted, so every open of one request from this page
+ * sends the same one: a dialog that opens it twice at once (React mounts twice in development,
+ * and a slow reply invites a second press) or again after a reply was lost is not two values,
+ * of which the server could keep only one and the other would read as the server's own.
+ *
  * The server answers with the value the request was opened with. It must be the one this
  * device just made (or made before, for a request it opened earlier on this page): a server
  * that answers another has chosen the value itself, after seeing the commitment, and could
@@ -299,13 +304,13 @@ export async function openApproval(
         commitment: asked.commitment,
         approverKey: random32(),
     };
+    openedHere.set(asked.id, mine);
     const opened = await api.approvalOpen(asked.id, mine.approverKey);
     if (!record(opened) || !key32(opened.approverKey)) throw new Error('Please try again.');
     if (opened.approverKey !== mine.approverKey)
         throw await refuse(
             'The server changed this device’s part of the code, so nothing was approved. Ask again on the other device.',
         );
-    openedHere.set(asked.id, mine);
     return mine;
 }
 
