@@ -287,6 +287,8 @@ pub enum StepRefusal {
     DeviceBusy,
     /// `device-limited`: the other devices were asked too many times today. Another way.
     DeviceLimited,
+    /// `device-choice`: turning the method on did not say which device is to approve.
+    DeviceChoice,
     /// `device-mismatch`: what this device revealed is not what it committed to. The request ended.
     DeviceMismatch,
     /// `approval-over`: the request an approving device answered is over.
@@ -480,6 +482,7 @@ fn refusal_of(status: u16, body: &str) -> StepReply {
         (Some("device-unavailable"), _) => StepRefusal::DeviceUnavailable,
         (Some("device-busy"), _) => StepRefusal::DeviceBusy,
         (Some("device-limited"), _) => StepRefusal::DeviceLimited,
+        (Some("device-choice"), _) => StepRefusal::DeviceChoice,
         (Some("device-mismatch"), _) => StepRefusal::DeviceMismatch,
         (Some("approval-over"), _) => StepRefusal::ApprovalOver,
         (Some("approval-taken"), _) => StepRefusal::ApprovalTaken,
@@ -1108,16 +1111,30 @@ fn id_shaped(value: &str) -> bool {
 
 /// What the asking device sends to make a request: its commitment, and what it calls
 /// itself for a server that does not know it yet (`kind`: `ios` or `android`).
+/// `approver_device_id` is the device the person chose to approve, when the method is
+/// being turned on: only that device may answer, and the server refuses such a request
+/// without one (`StepRefusal::DeviceChoice`). A sign-in sends none.
 ///
 /// ```
 /// use hushos_core::*;
-/// let body = approval_start_json("tok".into(), "Y29tbWl0".into(), "ios".into(), "iPhone 16 Pro".into());
+/// let body = approval_start_json("tok".into(), "Y29tbWl0".into(), "ios".into(), "iPhone 16 Pro".into(), None);
 /// assert_eq!(body, r#"{"stepToken":"tok","commitment":"Y29tbWl0","kind":"ios","name":"iPhone 16 Pro"}"#);
+/// let chosen = approval_start_json("tok".into(), "Y29tbWl0".into(), "ios".into(), "iPhone".into(), Some("7C9E6679-7425-40DE-944B-E07FC1F90AE7".into()));
+/// assert!(chosen.ends_with(r#","approverDeviceId":"7c9e6679-7425-40de-944b-e07fc1f90ae7"}"#));
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
-pub fn approval_start_json(step_token: String, commitment: String, kind: String, name: String) -> String {
+pub fn approval_start_json(
+    step_token: String,
+    commitment: String,
+    kind: String,
+    name: String,
+    approver_device_id: Option<String>,
+) -> String {
+    let chosen = approver_device_id
+        .map(|id| format!(r#","approverDeviceId":{}"#, json!(id.to_lowercase())))
+        .unwrap_or_default();
     format!(
-        r#"{{"stepToken":{},"commitment":{},"kind":{},"name":{}}}"#,
+        r#"{{"stepToken":{},"commitment":{},"kind":{},"name":{}{chosen}}}"#,
         json!(step_token),
         json!(commitment),
         json!(kind),
@@ -1270,6 +1287,12 @@ pub struct ApprovalPrompt {
     /// Roughly where the asking device is, in the server's words ("near Lyon, France"), where
     /// the server was told. A line of words: one with a control or direction mark is dropped.
     pub location: Option<String>,
+    /// The name is the asking device's own words: the server does not know it as one of the
+    /// account's devices (a new sign-in). The prompt says so (`approval_asks`). Anything but
+    /// the server's plain `false` reads as true: an unmarked name is not vouched for.
+    pub self_named: bool,
+    /// The asking device chose this device to answer: no other device is shown the request.
+    pub chosen: bool,
     pub created_at: String,
     pub expires_at: String,
     /// What the code and the statement cover (base64url).
@@ -1331,6 +1354,8 @@ pub fn approvals_reply_read(status: u16, body: String) -> ApprovalsReply {
                 .map(str::to_string),
             device_name: device.and_then(|device| text(device, "name")).map(str::to_string),
             location: text(map, "location").filter(|place| place_shaped(place)).map(str::to_string),
+            self_named: map.get("selfNamed") != Some(&Value::Bool(false)),
+            chosen: map.get("chosen") == Some(&Value::Bool(true)),
             created_at: text(map, "createdAt").filter(|at| instant_shaped(at))?.to_string(),
             expires_at: text(map, "expiresAt").filter(|at| instant_shaped(at))?.to_string(),
             token_digest: text(map, "tokenDigest").filter(|key| key_shaped(key))?.to_string(),
@@ -1527,23 +1552,33 @@ pub fn device_confirmed_reply_read(status: u16, body: String) -> DeviceConfirmed
 }
 
 /// What an approving device's prompt says is asked, by which device and roughly from
-/// where: "Sign-in on Chrome on Windows, near Lyon, France", "Change your password on
-/// Maya’s iPhone". The web says the same (`apps/web/src/lib/approvals.ts`). A device that
-/// gave no name is "a new device"; a purpose from a later release is "A change to your
-/// account"; the place is there only where the server was told one (`ApprovalPrompt.location`).
+/// where: "Change your password on Maya’s iPhone", "Sign-in on a new device calling itself
+/// “Chrome on Windows”, near Lyon, France". The web says the same
+/// (`apps/web/src/lib/approvals.ts`).
+/// - `self_named` (`ApprovalPrompt.self_named`): the name is the asking device's own words,
+///   not the account's record of one of its devices. The prompt then says "a new device
+///   calling itself “…”", so nobody reads a stranger's chosen words as their own laptop.
+/// - A device that gave no name is "a new device".
+/// - A purpose from a later release is "A change to your account".
+/// - The place is there only where the server was told one (`ApprovalPrompt.location`).
 ///
 /// ```
 /// use hushos_core::approval_asks;
-/// assert_eq!(approval_asks("login".into(), Some("Chrome on Windows".into()), None), "Sign-in on Chrome on Windows");
+/// assert_eq!(approval_asks("password".into(), Some("Maya’s iPhone".into()), false, None), "Change your password on Maya’s iPhone");
 /// assert_eq!(
-///     approval_asks("login".into(), Some("Chrome on Windows".into()), Some("near Lyon, France".into())),
-///     "Sign-in on Chrome on Windows, near Lyon, France"
+///     approval_asks("login".into(), Some("Chrome on Windows".into()), true, Some("near Lyon, France".into())),
+///     "Sign-in on a new device calling itself “Chrome on Windows”, near Lyon, France"
 /// );
-/// assert_eq!(approval_asks("password".into(), None, Some("  ".into())), "Change your password on a new device");
-/// assert_eq!(approval_asks("later".into(), Some("Pixel 9".into()), None), "A change to your account on Pixel 9");
+/// assert_eq!(approval_asks("login".into(), None, true, Some("  ".into())), "Sign-in on a new device");
+/// assert_eq!(approval_asks("later".into(), Some("Pixel 9".into()), false, None), "A change to your account on Pixel 9");
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
-pub fn approval_asks(purpose: String, device_name: Option<String>, location: Option<String>) -> String {
+pub fn approval_asks(
+    purpose: String,
+    device_name: Option<String>,
+    self_named: bool,
+    location: Option<String>,
+) -> String {
     let what = match purpose.as_str() {
         "login" => "Sign-in",
         "password" => "Change your password",
@@ -1555,7 +1590,12 @@ pub fn approval_asks(purpose: String, device_name: Option<String>, location: Opt
         _ => "A change to your account",
     };
     let name = device_name.map(|name| name.trim().to_string()).filter(|name| !name.is_empty());
-    let asks = format!("{what} on {}", name.as_deref().unwrap_or("a new device"));
+    let device = match name {
+        Some(name) if self_named => format!("a new device calling itself “{name}”"),
+        Some(name) => name,
+        None => "a new device".to_string(),
+    };
+    let asks = format!("{what} on {device}");
     match location.map(|place| place.trim().to_string()).filter(|place| place_shaped(place)) {
         Some(place) => format!("{asks}, {place}"),
         None => asks,
@@ -1586,9 +1626,40 @@ mod device_tests {
         assert_eq!(listed("42"), None);
         // The request is still listed without its place, and the words say so by saying nothing.
         assert_eq!(
-            approval_asks("login".into(), Some("Chrome on Windows".into()), Some("near Lyon\u{202e}".into())),
+            approval_asks(
+                "login".into(),
+                Some("Chrome on Windows".into()),
+                false,
+                Some("near Lyon\u{202e}".into())
+            ),
             "Sign-in on Chrome on Windows"
         );
+    }
+
+    #[test]
+    fn a_name_the_server_does_not_vouch_for_is_shown_as_the_devices_own_words() {
+        let digest = "A".repeat(43);
+        let listed = |marks: &str| {
+            let body = format!(
+                r#"{{"userId":"u","approvals":[{{"id":"7c9e6679-7425-40de-944b-e07fc1f90ae7","purpose":"login","class":"unknown","device":{{"kind":"web","name":"Maya’s Laptop"}},{marks}"createdAt":"2026-11-14T10:00:00.000Z","expiresAt":"2026-11-14T10:05:00.000Z","tokenDigest":"{digest}","commitment":"{digest}"}}]}}"#
+            );
+            match approvals_reply_read(200, body) {
+                ApprovalsReply::Listed { approvals } => approvals[0].clone(),
+                other => panic!("expected a list, got {other:?}"),
+            }
+        };
+        let words = |prompt: &ApprovalPrompt| {
+            approval_asks(prompt.purpose.clone(), prompt.device_name.clone(), prompt.self_named, None)
+        };
+        // A stranger with the password calls their browser by the owner's laptop's name.
+        let stranger = listed(r#""selfNamed":true,"chosen":false,"#);
+        assert_eq!(words(&stranger), "Sign-in on a new device calling itself “Maya’s Laptop”");
+        // Only the server's plain word that it knows the device shows the bare name.
+        assert_eq!(words(&listed(r#""selfNamed":false,"chosen":true,"#)), "Sign-in on Maya’s Laptop");
+        assert!(listed(r#""selfNamed":false,"chosen":true,"#).chosen);
+        // A reply that does not say (an older server) is not read as a known device.
+        assert!(listed("").self_named && !listed("").chosen);
+        assert!(listed(r#""selfNamed":"false","#).self_named);
     }
 
     #[test]

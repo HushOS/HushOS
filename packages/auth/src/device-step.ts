@@ -88,6 +88,8 @@ export async function askAnotherDevice(
         purpose: string;
         deviceSigningKey: string;
         describe?: () => { kind: DeviceKind; name: string };
+        /* Turning the method on: the device the person chose, the only one that may answer. */
+        approverDeviceId?: string;
     },
 ): Promise<DeviceAsk> {
     const { approvalQr, deviceStepCode, deviceStepCommitment } = await crypto_();
@@ -105,6 +107,7 @@ export async function askAnotherDevice(
         stepToken: input.stepToken,
         commitment,
         ...input.describe?.(),
+        ...(input.approverDeviceId ? { approverDeviceId: input.approverDeviceId } : {}),
     });
     if (!record(started) || !uuid(started.requestId) || !uuid(started.userId))
         throw new Error('Please try again.');
@@ -175,6 +178,13 @@ export type ApprovalPrompt = {
     device: { kind: DeviceKind | null; name: string | null };
     /* Roughly where the asking device is, in the server's words ("near Lyon, France"), or null. */
     location: string | null;
+    /*
+     * The name is the asking device's own words: the server does not know it as one of the
+     * account's devices. Anything but the server's plain `false` reads as true.
+     */
+    selfNamed: boolean;
+    /* The asking device chose this device to answer. */
+    chosen: boolean;
     createdAt: string;
     expiresAt: string;
     tokenDigest: string;
@@ -214,6 +224,8 @@ function prompt(value: unknown): ApprovalPrompt | null {
             !/[\p{Cc}\p{Cf}]/u.test(value.location)
                 ? value.location
                 : null,
+        selfNamed: value.selfNamed !== false,
+        chosen: value.chosen === true,
         createdAt,
         expiresAt,
         tokenDigest: value.tokenDigest,
@@ -245,28 +257,56 @@ export type OpenedApproval = {
 };
 
 /*
- * Opens a request: this device posts 32 fresh bytes of its own, and remembers the commitment it
- * saw before it did. `scanned` is the commitment a camera read from the asking device's screen:
- * the server's copy must be that one, or the request is not the one on that screen.
+ * What this page opened, by request: the value it made and the commitment it saw before it
+ * posted it. Kept in memory only. The value is this device's half of the code: it must be one
+ * this device made after the commitment was fixed, never one the server hands it.
+ */
+const openedHere = new Map<string, OpenedApproval>();
+
+/*
+ * Opens a request: this device posts 32 fresh bytes of its own, and remembers them with the
+ * commitment it saw before it did. `scanned` is the commitment a camera read from the asking
+ * device's screen: the server's copy must be that one, or the request is not the one on that
+ * screen.
+ *
+ * The server answers with the value the request was opened with. It must be the one this
+ * device just made (or made before, for a request it opened earlier on this page): a server
+ * that answers another has chosen the value itself, after seeing the commitment, and could
+ * steer the code. So has one that says this device opened the request when this page holds no
+ * value for it (the page was reloaded since). Either ends the request, and nothing is typed.
  */
 export async function openApproval(
     api: AuthApi,
     asked: ApprovalPrompt,
     scanned?: string,
 ): Promise<OpenedApproval> {
-    if (scanned !== undefined && scanned !== asked.commitment) {
+    const before = openedHere.get(asked.id);
+    const refuse = async (message: string) => {
+        openedHere.delete(asked.id);
         await api.approvalDeny(asked.id, 'mismatch').catch(() => {});
-        throw new DeviceStepError('mismatch', 'That code is for another request. Start again.');
-    }
-    const opened = await api.approvalOpen(asked.id, asked.approverKey ?? random32());
-    if (!record(opened) || !key32(opened.approverKey)) throw new Error('Please try again.');
-    return {
+        return new DeviceStepError('mismatch', message);
+    };
+    if (scanned !== undefined && scanned !== (before ?? asked).commitment)
+        throw await refuse('That code is for another request. Start again.');
+    if (!before && asked.approverKey)
+        throw await refuse(
+            'This request was opened before this page was reloaded. Ask again on the other device.',
+        );
+    const mine: OpenedApproval = before ?? {
         id: asked.id,
         purpose: asked.purpose,
         tokenDigest: asked.tokenDigest,
         commitment: asked.commitment,
-        approverKey: opened.approverKey,
+        approverKey: random32(),
     };
+    const opened = await api.approvalOpen(asked.id, mine.approverKey);
+    if (!record(opened) || !key32(opened.approverKey)) throw new Error('Please try again.');
+    if (opened.approverKey !== mine.approverKey)
+        throw await refuse(
+            'The server changed this device’s part of the code, so nothing was approved. Ask again on the other device.',
+        );
+    openedHere.set(asked.id, mine);
+    return mine;
 }
 
 /*

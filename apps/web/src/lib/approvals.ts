@@ -20,13 +20,28 @@ const WHAT: Record<string, string> = {
 };
 
 /*
- * What is asked, by which device and roughly from where: "Sign-in on Chrome on Windows, near
- * Lyon, France". A device that gave no name is "a new device"; a purpose from a later release
- * is "A change to your account"; the place is there only where the server was told one.
+ * What is asked, by which device and roughly from where: "Change your password on Maya’s
+ * Laptop", "Sign-in on a new device calling itself “Chrome on Windows”, near Lyon, France".
+ * - `selfNamed`: the name is the asking device's own words, not the account's record of one
+ *   of its devices. The prompt says so, so nobody reads a stranger's words as their own laptop.
+ * - A device that gave no name is "a new device".
+ * - A purpose from a later release is "A change to your account".
+ * - The place is there only where the server was told one.
  */
-export function approvalAsks(purpose: string, deviceName: string | null, location?: string | null) {
-    const asks = `${WHAT[purpose] ?? 'A change to your account'} on ${deviceName?.trim() || 'a new device'}`;
-    return location?.trim() ? `${asks}, ${location.trim()}` : asks;
+export function approvalAsks(asked: {
+    purpose: string;
+    device: { name: string | null };
+    selfNamed: boolean;
+    location?: string | null;
+}) {
+    const name = asked.device.name?.trim();
+    const device = !name
+        ? 'a new device'
+        : asked.selfNamed
+          ? `a new device calling itself “${name}”`
+          : name;
+    const asks = `${WHAT[asked.purpose] ?? 'A change to your account'} on ${device}`;
+    return asked.location?.trim() ? `${asks}, ${asked.location.trim()}` : asks;
 }
 
 /*

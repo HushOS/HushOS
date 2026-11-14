@@ -57,11 +57,11 @@ let settling = false;
 function settleDeviceApprovals() {
     if (settling || performance.now() - settledAt < SETTLE_MS) return;
     settling = true;
+    // The minute starts when the sweep does, whatever becomes of it: one that fails is tried
+    // again a minute later, not at every readiness check until it stops failing.
+    settledAt = performance.now();
     void auth
         .settleDeviceApprovals()
-        .then(() => {
-            settledAt = performance.now();
-        })
         .catch((error: unknown) =>
             serverLog.error({
                 message: 'Requests to approve on another device could not be ended.',

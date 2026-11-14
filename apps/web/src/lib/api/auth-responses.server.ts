@@ -353,9 +353,21 @@ export const twoStepResponse = t.Object({
     backupCodesLeft: t.Integer(),
     totpFrozen: t.Boolean(),
     defaultKind: t.Optional(t.Nullable(defaultKind)),
-    // Whether this device could turn on Approve on another device now; only to a client that
-    // named the method in `?methods=`.
+    // Whether this device could turn on Approve on another device now, and the devices the
+    // person can choose from to approve it; only to a client that named the method in `?methods=`.
     otherDevice: t.Optional(t.Boolean()),
+    approvers: t.Optional(
+        t.Array(
+            t.Object({
+                id: t.String(),
+                kind: t.Nullable(
+                    t.Union([t.Literal('web'), t.Literal('ios'), t.Literal('android')]),
+                ),
+                name: t.Nullable(t.String()),
+                createdAt: t.String(),
+            }),
+        ),
+    ),
 });
 
 /*
@@ -401,6 +413,10 @@ export const approvalsResponse = t.Object({
                 name: t.Nullable(t.String()),
             }),
             location: t.Nullable(t.String()),
+            // The name is the asking device's own words: the server does not know the device.
+            selfNamed: t.Boolean(),
+            // The asking device chose this device to answer.
+            chosen: t.Boolean(),
             createdAt: t.String(),
             expiresAt: t.String(),
             tokenDigest: t.String(),

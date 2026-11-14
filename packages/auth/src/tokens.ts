@@ -34,6 +34,7 @@ export type TokenKind = 'session' | 'enrollment';
  * - `device-limited`, `device-busy`, `device-unavailable`: another device cannot be asked
  *   now (the day's requests are spent; another sign-in's request is being answered; no device
  *   could approve);
+ * - `device-choice`: turning the method on did not say which device is to approve;
  * - `device-mismatch`: what the asking device revealed is not what it committed to;
  * - `approval-over`, `approval-taken`, `approval-refused`: a request an approving device
  *   can no longer answer, one another device is answering, and a signature that did not verify.
@@ -57,6 +58,7 @@ export type AuthErrorCode =
     | 'device-limited'
     | 'device-busy'
     | 'device-unavailable'
+    | 'device-choice'
     | 'device-mismatch'
     | 'approval-over'
     | 'approval-taken'

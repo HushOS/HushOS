@@ -30,6 +30,7 @@ export function DeviceAsk({
     onApproved,
     auto = false,
     disabled = false,
+    approver,
 }: {
     /*
      * The step token the request runs from, and what the step is for. A new token is a new
@@ -43,6 +44,11 @@ export function DeviceAsk({
     /* The press that brought the person here already asked: start without another one. */
     auto?: boolean;
     disabled?: boolean;
+    /*
+     * Turning the method on: the device the person chose to approve. Only it is asked, and
+     * the screen says which one to pick up.
+     */
+    approver?: { id: string; name: string };
 }) {
     const [asked, setAsked] = useState<Asked | null>(null);
     const [held, setHeld] = useState<DeviceAskState | null>(null);
@@ -67,7 +73,7 @@ export function DeviceAsk({
             const asking =
                 !again && opening?.key === key
                     ? opening.made
-                    : authClient.askAnotherDevice({ token }, purpose);
+                    : authClient.askAnotherDevice({ token }, purpose, approver?.id);
             opening = { key, made: asking };
             const made = await asking;
             if (mine !== run.latest) return;
@@ -184,7 +190,11 @@ export function DeviceAsk({
                     </output>
                 </div>
             ) : (
-                <p className="text-sm">Open HushOS on another device and choose Answer.</p>
+                <p className="text-sm">
+                    {approver
+                        ? `Open HushOS on ${approver.name} and choose Answer.`
+                        : 'Open HushOS on another device and choose Answer.'}
+                </p>
             )}
             {/* Square modules at whole pixels: a phone's camera reads this off the screen. */}
             <div className="self-start rounded-md border border-rule bg-white p-2">

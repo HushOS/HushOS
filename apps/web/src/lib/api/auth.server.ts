@@ -558,6 +558,8 @@ export const authApi = new Elysia()
                     t.Union([t.Literal('web'), t.Literal('ios'), t.Literal('android')]),
                 ),
                 name: t.Optional(t.String({ minLength: 1, maxLength: 200 })),
+                // Turning the method on: the device the person chose to approve.
+                approverDeviceId: t.Optional(uuidSchema),
             }),
             response: { 200: approvalStartedResponse },
         },
@@ -830,7 +832,15 @@ export const authApi = new Elysia()
     // Static beside the parameter: Elysia prefers it, and the id's pattern refuses "others" anyway.
     .delete(
         '/auth/devices/others',
-        { body: deviceRemovalSchema, response: { 200: devicesRemovedResponse } },
+        {
+            // `keep`: one other device left signed in, the one that approves for this one.
+            body: t.Object({
+                attemptToken: tokenSchema,
+                finishLoginRequest: opaqueMessage,
+                keep: t.Optional(uuidSchema),
+            }),
+            response: { 200: devicesRemovedResponse },
+        },
         async ({ request, sessionToken, body, log }) => {
             guardAuthMutation(request);
             const { userId, removed } = await auth.removeOtherDevices(sessionToken, body);

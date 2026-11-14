@@ -144,7 +144,12 @@ async function requestFor(executor: Executor, attempt: StepAttempt) {
     });
     if (approvers.length === 0) return null;
     const requestClass: DeviceRequestClass = !signIn ? 'change' : device ? 'known' : 'unknown';
-    return { class: requestClass, device: requestClass === 'unknown' ? null : device, bootstrap };
+    return {
+        class: requestClass,
+        device: requestClass === 'unknown' ? null : device,
+        bootstrap,
+        approvers,
+    };
 }
 
 /* Whether another device can answer this token now: what `methods` lists `device` by. */
@@ -176,6 +181,37 @@ export async function canAddDeviceStep(input: { userId: string; sessionTokenHash
         bootstrap: (await confirmedFactors(db, input.userId)).length === 0,
     });
     return approvers.length > 0;
+}
+
+/*
+ * The devices that could approve turning the method on from this session, for the person to
+ * choose one: each with its name, its kind and when it was added (to the hour, as the device
+ * list shows it). Empty when this session's device has no key to ask with.
+ */
+export async function listDeviceStepApprovers(input: { userId: string; sessionTokenHash: Buffer }) {
+    const session = await approverSession(db, input.sessionTokenHash);
+    if (!session || session.userId !== input.userId) return [];
+    if (!(await askingDevice(db, input.userId, session.deviceId))) return [];
+    const ids = await approvingDevices(db, {
+        userId: input.userId,
+        purpose: 'device-approval',
+        exceptDeviceId: session.deviceId,
+        bootstrap: (await confirmedFactors(db, input.userId)).length === 0,
+    });
+    if (ids.length === 0) return [];
+    const rows = await db
+        .select({
+            id: accountDevices.id,
+            kind: accountDevices.kind,
+            name: accountDevices.name,
+            createdAt: sql<Date>`date_trunc('hour', ${accountDevices.createdAt})`.mapWith(
+                accountDevices.createdAt,
+            ),
+        })
+        .from(accountDevices)
+        .where(and(eq(accountDevices.userId, input.userId), inArray(accountDevices.id, ids)))
+        .orderBy(asc(accountDevices.createdAt), asc(accountDevices.id));
+    return rows;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -215,6 +251,7 @@ async function settleAccount(tx: Tx, userId: string): Promise<CountedRequest[]> 
             id: twoStepDeviceRequests.id,
             purpose: twoStepDeviceRequests.purpose,
             class: twoStepDeviceRequests.class,
+            state: twoStepDeviceRequests.state,
             tokenHash: twoStepDeviceRequests.tokenHash,
         })
         .from(twoStepDeviceRequests)
@@ -232,8 +269,30 @@ async function settleAccount(tx: Tx, userId: string): Promise<CountedRequest[]> 
         .orderBy(asc(twoStepDeviceRequests.createdAt))
         .for('update');
     const counted: CountedRequest[] = [];
-    // One sign-in left unanswered is one failed step, however many times it asked.
-    const tokens = new Set<string>();
+    /*
+     * One sign-in is one failed step at most, however many times it asked: a token that
+     * already has a counted request (one of its requests was denied, or met a wrong code) is
+     * not counted again for the requests it replaced or left behind. And a request a device
+     * approved was answered: left unused, it is not a failed step either.
+     */
+    const tokens = new Set(
+        over.length === 0
+            ? []
+            : (
+                  await tx
+                      .selectDistinct({ tokenHash: twoStepDeviceRequests.tokenHash })
+                      .from(twoStepDeviceRequests)
+                      .where(
+                          and(
+                              eq(twoStepDeviceRequests.userId, userId),
+                              or(
+                                  eq(twoStepDeviceRequests.counted, true),
+                                  eq(twoStepDeviceRequests.state, 'approved'),
+                              ),
+                          ),
+                      )
+              ).map((row) => row.tokenHash.toString('hex')),
+    );
     for (const request of over) {
         const token = request.tokenHash.toString('hex');
         const failed = request.class === 'unknown' && !tokens.has(token);
@@ -266,7 +325,11 @@ async function settleAccount(tx: Tx, userId: string): Promise<CountedRequest[]> 
  * Ends what is over, for one account or (the worker's sweep) for every account that has any:
  * what was counted as a failed step comes back, for the caller to log and tell the account.
  */
-export async function settleDeviceRequests(userId?: string): Promise<CountedRequest[]> {
+export async function settleDeviceRequests(
+    userId?: string,
+    /* The sweep's accounts that could not be settled this time, for the caller's log. */
+    onFailed?: (failed: { userId: string; error: unknown }[]) => void,
+): Promise<CountedRequest[]> {
     const now = new Date();
     // Asked on every look at an account's requests: with none still open, no lock is taken.
     if (userId) {
@@ -305,12 +368,21 @@ export async function settleDeviceRequests(userId?: string): Promise<CountedRequ
                   .limit(500)
           ).map((row) => row.userId);
     const counted: CountedRequest[] = [];
+    const failed: { userId: string; error: unknown }[] = [];
     for (const account of accounts)
-        counted.push(
-            ...(await db.transaction(async (tx) =>
-                (await lockAccount(tx, account)) ? settleAccount(tx, account) : [],
-            )),
-        );
+        try {
+            counted.push(
+                ...(await db.transaction(async (tx) =>
+                    (await lockAccount(tx, account)) ? settleAccount(tx, account) : [],
+                )),
+            );
+        } catch (error) {
+            // One account's trouble (a lock held, a row gone meanwhile) never keeps the sweep
+            // from the accounts after it: it is told of, and met again at the next sweep.
+            if (userId) throw error;
+            failed.push({ userId: account, error });
+        }
+    onFailed?.(failed);
     return counted;
 }
 
@@ -334,7 +406,10 @@ export type CreateRequestResult =
      * the day's budget for its class is spent. `busy`: another sign-in's request is open and a
      * device has it in hand.
      */
-    | { status: 'gone' | 'unavailable' | 'limit' | 'busy'; counted?: CountedRequest[] };
+    | {
+          status: 'gone' | 'unavailable' | 'limit' | 'busy' | 'choice';
+          counted?: CountedRequest[];
+      };
 
 /*
  * Makes a request for the token, with the asking device's commitment and nothing else of it.
@@ -355,6 +430,13 @@ export async function createDeviceRequest(input: {
     name?: string | null;
     /* Roughly where the asking device is, as the operator's proxy said it; kept while the request is open. */
     location?: string | null;
+    /*
+     * The one device that may approve, as the person chose it on the asking device. Only a
+     * signed-in session's request names one, and the request that turns the method on for an
+     * account with no method yet must (`choice` without it): until a first approval, nothing
+     * else tells the person's own device from one someone opened with their password.
+     */
+    approverDeviceId?: string | null;
 }): Promise<CreateRequestResult> {
     return db.transaction(async (tx): Promise<CreateRequestResult> => {
         const [seen] = await tx
@@ -369,6 +451,10 @@ export async function createDeviceRequest(input: {
         if (!asked) return { status: 'unavailable', counted };
         const { userId } = attempt;
         const deviceId = asked.device?.id ?? null;
+        // A sign-in has no session to have chosen from, so its word on who answers is not taken.
+        const chosen = attempt.purpose === 'login' ? null : (input.approverDeviceId ?? null);
+        if (asked.bootstrap && !chosen) return { status: 'choice', counted };
+        if (chosen && !asked.approvers.includes(chosen)) return { status: 'unavailable', counted };
         const scope = and(
             eq(twoStepDeviceRequests.userId, userId),
             eq(twoStepDeviceRequests.class, asked.class),
@@ -436,6 +522,7 @@ export async function createDeviceRequest(input: {
                 deviceKind: asked.device ? asked.device.kind : (input.kind ?? null),
                 deviceName: asked.device ? asked.device.name : (input.name ?? null),
                 location: input.location ?? null,
+                chosenDeviceId: chosen,
                 commitment: input.commitment,
                 expiresAt: attempt.expiresAt,
             })
@@ -572,13 +659,23 @@ async function approverSession(executor: Executor, sessionTokenHash: Buffer) {
 /* Whether `deviceId` may approve this request: by the rule of its purpose, and never its own. */
 async function mayApprove(
     executor: Executor,
-    request: { userId: string; purpose: TwoStepPurpose; deviceId: string | null },
+    request: {
+        userId: string;
+        purpose: TwoStepPurpose;
+        deviceId: string | null;
+        chosenDeviceId: string | null;
+    },
     deviceId: string,
 ) {
     if (request.deviceId === deviceId) return false;
+    // A request that named its approver is that device's alone.
+    if (request.chosenDeviceId && request.chosenDeviceId !== deviceId) return false;
     const bootstrap =
         request.purpose === 'device-approval' &&
         (await confirmedFactors(executor, request.userId)).length === 0;
+    // With no method yet, any signed-in device with a key would do, an intruder's among them:
+    // such a request is answered only by the device the person chose.
+    if (bootstrap && !request.chosenDeviceId) return false;
     const [approver] = await approvingDevices(executor, {
         userId: request.userId,
         purpose: request.purpose,
@@ -597,6 +694,10 @@ export type ApprovalPrompt = {
     device: { kind: DeviceKind | null; name: string | null };
     /* Roughly where the asking device is ("near Lyon, France"), where the server was told. */
     location: string | null;
+    /* The asking device's own words for itself: the server does not know it as one of the account's. */
+    selfNamed: boolean;
+    /* The asking device chose this device to answer. */
+    chosen: boolean;
     createdAt: Date;
     expiresAt: Date;
     /* The token's hash and the asking device's commitment: what the code and the statement cover. */
@@ -648,6 +749,8 @@ export async function listApprovalPrompts(sessionTokenHash: Buffer): Promise<App
             class: request.class,
             device: { kind: request.deviceKind, name: request.deviceName },
             location: request.location,
+            selfNamed: request.deviceId === null,
+            chosen: request.chosenDeviceId === session.deviceId,
             createdAt: request.createdAt,
             expiresAt: request.expiresAt,
             tokenDigest: request.tokenHash,

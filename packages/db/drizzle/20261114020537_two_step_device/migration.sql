@@ -30,6 +30,7 @@ CREATE TABLE "two_step_device_requests" (
 	"location" text,
 	"commitment" bytea NOT NULL,
 	"approver_device_id" uuid,
+	"chosen_device_id" uuid,
 	"approver_key" bytea,
 	"device_key" bytea,
 	"nonce" bytea,
@@ -40,6 +41,7 @@ CREATE TABLE "two_step_device_requests" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"expires_at" timestamp with time zone NOT NULL,
 	"ended_at" timestamp with time zone,
+	CONSTRAINT "two_step_device_requests_chosen_valid" CHECK ("chosen_device_id" is null or (("device_id" is null or "chosen_device_id" <> "device_id") and ("approver_device_id" is null or "approver_device_id" = "chosen_device_id"))),
 	CONSTRAINT "two_step_device_requests_purpose_valid" CHECK ("purpose" in ('login', 'password', 'master-key', 'recovery-key', 'delete', 'two-step', 'device-approval', 'child-reset')),
 	CONSTRAINT "two_step_device_requests_class_valid" CHECK (("class" = 'unknown' and "purpose" = 'login' and "device_id" is null) or ("class" = 'known' and "purpose" = 'login' and "device_id" is not null) or ("class" = 'change' and "purpose" <> 'login' and "device_id" is not null)),
 	CONSTRAINT "two_step_device_requests_device_valid" CHECK (("device_kind" is null or "device_kind" in ('web', 'ios', 'android')) and ("device_name" is null or char_length("device_name") between 1 and 40)),
@@ -54,10 +56,12 @@ CREATE INDEX "two_step_device_requests_token_idx" ON "two_step_device_requests" 
 CREATE INDEX "two_step_device_requests_created_idx" ON "two_step_device_requests" ("created_at");--> statement-breakpoint
 CREATE INDEX "two_step_device_requests_device_idx" ON "two_step_device_requests" ("device_id") WHERE "device_id" is not null;--> statement-breakpoint
 CREATE INDEX "two_step_device_requests_approver_idx" ON "two_step_device_requests" ("approver_device_id") WHERE "approver_device_id" is not null;--> statement-breakpoint
+CREATE INDEX "two_step_device_requests_chosen_idx" ON "two_step_device_requests" ("chosen_device_id") WHERE "chosen_device_id" is not null;--> statement-breakpoint
 CREATE UNIQUE INDEX "two_step_factors_one_device_idx" ON "two_step_factors" ("user_id") WHERE "kind" = 'device';--> statement-breakpoint
 ALTER TABLE "two_step_device_requests" ADD CONSTRAINT "two_step_device_requests_user_id_users_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "two_step_device_requests" ADD CONSTRAINT "two_step_device_requests_device_id_account_devices_id_fkey" FOREIGN KEY ("device_id") REFERENCES "account_devices"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "two_step_device_requests" ADD CONSTRAINT "two_step_device_requests_T2guW4DVYiIA_fkey" FOREIGN KEY ("approver_device_id") REFERENCES "account_devices"("id") ON DELETE CASCADE;--> statement-breakpoint
+ALTER TABLE "two_step_device_requests" ADD CONSTRAINT "two_step_device_requests_ykqlKgvP2V49_fkey" FOREIGN KEY ("chosen_device_id") REFERENCES "account_devices"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "two_step_factors" ADD CONSTRAINT "two_step_factors_device_valid" CHECK ("kind" <> 'device' or "name" is null);--> statement-breakpoint
 ALTER TABLE "notification_events" DROP CONSTRAINT "notification_events_kind_valid", ADD CONSTRAINT "notification_events_kind_valid" CHECK (kind in ('new-device', 'device-removed', 'devices-removed', 'password-attempts', 'two-step-on', 'two-step-off', 'two-step-app-added', 'two-step-app-removed', 'backup-codes-made', 'backup-code-used', 'phrase-used', 'phrase-replaced', 'password-reset', 'account-key-rotated', 'step-failed', 'change-step-failed', 'totp-frozen', 'two-step-key-added', 'two-step-key-removed', 'key-counter', 'two-step-device-added', 'two-step-device-removed', 'approval-request', 'shared', 'family-invitation', 'family-waiting'));--> statement-breakpoint
 ALTER TABLE "account_security_events" DROP CONSTRAINT "account_security_events_method_valid", ADD CONSTRAINT "account_security_events_method_valid" CHECK ("method" is null or "method" in ('totp', 'webauthn', 'device', 'backup', 'phrase'));--> statement-breakpoint

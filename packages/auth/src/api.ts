@@ -238,6 +238,8 @@ export type TwoStepStatus = {
     defaultKind?: TwoStepDefaultKind | null;
     /* Whether this device could turn on Approve on another device now: another one could approve it. */
     otherDevice?: boolean;
+    /* The devices that could approve turning it on: the person chooses one, and only it may answer. */
+    approvers?: { id: string; kind: DeviceKind | null; name: string | null; createdAt: string }[];
 };
 export type SecurityEvent = {
     id: string;
@@ -388,6 +390,8 @@ export interface AuthApi {
         commitment: string;
         kind?: DeviceKind;
         name?: string;
+        /* Turning the method on: the device the person chose to approve. */
+        approverDeviceId?: string;
     }): Promise<unknown>;
     approvalStatus(id: string, stepToken: string): Promise<unknown>;
     approvalReveal(
@@ -423,7 +427,8 @@ export interface AuthApi {
     devicesReauth(input: { startLoginRequest: string }): Promise<LoginChallenge>;
     /* 409 `current` for the device asking: sign out instead. 403 for a wrong password. */
     removeDevice(id: string, proof: DeviceRemovalProof): Promise<{ removed: number }>;
-    removeOtherDevices(proof: DeviceRemovalProof): Promise<{ removed: number }>;
+    /* `keep`: one other device left signed in, the one that approves for this one. */
+    removeOtherDevices(proof: DeviceRemovalProof & { keep?: string }): Promise<{ removed: number }>;
     logout(): Promise<unknown>;
     setup(): Promise<{ missing: AccountSetup | null }>;
     initialize(input: CryptoResults['initialize']): Promise<unknown>;

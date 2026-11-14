@@ -877,7 +877,7 @@ Off by default: `TWO_STEP_ENABLED=true` lets accounts turn it on. Only `true` an
 
 - **What it is.** After the password, an account that has the step on gets no session and no keys until it passes a second step: a passkey or security key, a code from an authenticator app, an approval from another of its devices, a backup code, or its recovery phrase. The account's usual way (its default) is offered first, and the others are one press away. The same step is asked before a password change, a key rotation, deleting the account, and any change to the step itself.
 - **What it protects.** It is the server's rule. It stops someone who has a password from signing in to your server. It does not change how files are encrypted, and it does nothing against whoever controls the server, or holds a copy of its database with the OPAQUE setup.
-- **With the flag off,** nobody can turn the step on, and the routes that set it up or manage it answer 501. An account that already has the step is still asked for it: turning the flag off is never a way past someone's second step. Such an account also cannot remove its step until the flag is on again. The web app shows no requests to approve on another device while the flag is off, so a sign-in that would have been approved that way uses a backup code or the recovery phrase.
+- **With the flag off,** nobody can turn the step on, and the routes that set it up or manage it answer 501. An account that already has the step is still asked for it: turning the flag off is never a way past someone's second step. Such an account also cannot remove its step until the flag is on again. Requests to approve on another device are still shown and answered while the flag is off, as every other method is still asked for.
 - **Clients.** A client that cannot answer the step is told to update (409 `update-required`) when it signs in to an account that has it. The web app and the iPhone and Android apps from version 1.6 offer the settings and answer the step. An older phone app is told to update when it signs in to an account that has the step on.
     - **A client says what it can answer.** From the release with passkeys, a client names the methods it can use beyond a code and the phrase (`twoStepMethods`), and the server lists only those. A 1.6 app names none, so it is never shown a passkey: on an account with a passkey and an app it is asked for the app's code; on one with only passkeys it is asked for a backup code or the recovery phrase, which every account with the step has.
     - The server says it reads that field in every `login/start` reply, for any address, and a client sends it only to a server that says so. A 1.6 server ignores the field if it ever arrives.
@@ -2549,7 +2549,7 @@ To roll back to the previous release:
 - The schema can stay: the previous release writes none of the new kinds, the wider check refuses nothing it writes, and it never looks at `two_step_key_readers`. This release's worker exits without the migration, and the previous worker does not look for it.
 - Keep `TWO_STEP_KEY` and `TWO_STEP_PREVIOUS_KEY` as they are. Secrets the worker moved to the current key stay readable, since the previous release reads under the same keys. It does not read the `_FILE` forms: put the keys in the variables before rolling back, or it seals under the derived key and cannot open what is under yours.
 
-#### Approve on another device release (`20261114015359_two_step_device`)
+#### Approve on another device release (`20261114020537_two_step_device`)
 
 This release adds approving on another device as a second step ([Two-step sign-in](#two-step-sign-in)). Nothing changes for an account until it turns the method on. No new setting is needed.
 
@@ -2579,14 +2579,14 @@ Containers of the previous release beside the new ones:
 To roll back to the previous release, run the undo script that ships beside the migration, as the role that migrates:
 
 ```bash
-psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f packages/db/drizzle/20261114015359_two_step_device/undo.sql
+psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f packages/db/drizzle/20261114020537_two_step_device/undo.sql
 ```
 
 - It is one transaction. It deletes every account's `device` method, every request, the notification events of the three new kinds, and the method named on log lines that name `device` (the lines stay). An account whose default was another device is offered another kind it has first.
 - **An account whose only method was another device has no method left afterwards:** its step is off, and its backup codes are deleted with it, as when the last method is removed in the app. So while any such account exists the script stops, changing nothing, until the session says it is meant, as the tables' undo does:
 
     ```bash
-    PGOPTIONS="-c hushos.delete_two_step=yes" psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f packages/db/drizzle/20261114015359_two_step_device/undo.sql
+    PGOPTIONS="-c hushos.delete_two_step=yes" psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f packages/db/drizzle/20261114020537_two_step_device/undo.sql
     ```
 
     Tell those people first: after it, their password alone signs them in until they turn a method on again.
