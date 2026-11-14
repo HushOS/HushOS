@@ -1,5 +1,5 @@
 import { createFileRoute, getRouteApi, Link, useRouter } from '@tanstack/react-router';
-import { ChevronDownIcon, LockKeyholeIcon, LockKeyholeOpenIcon } from 'lucide-react';
+import { LockKeyholeIcon, LockKeyholeOpenIcon } from 'lucide-react';
 import { useState, useSyncExternalStore } from 'react';
 import {
     ChangePasswordDialog,
@@ -14,7 +14,13 @@ import { AccountTwoStep } from '@/components/account-two-step';
 import { CopyValue } from '@/components/copy-value';
 import { openDeviceDialog } from '@/components/device-control';
 import { PageHeader } from '@/components/page-header';
-import { Segmented, Setting, SettingsGroup, SettingsPage } from '@/components/settings';
+import {
+    Segmented,
+    Setting,
+    SettingsDisclosure,
+    SettingsGroup,
+    SettingsPage,
+} from '@/components/settings';
 import { useTheme } from '@/components/theme-provider';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -56,7 +62,6 @@ function AccountPage() {
     const [dialog, setDialog] = useState<
         'password' | 'recovery-key' | 'master-key' | 'identity' | 'delete' | null
     >(null);
-    const [advanced, setAdvanced] = useState(false);
     const close = (open: boolean) => !open && setDialog(null);
     return (
         <SettingsPage className="pb-10">
@@ -112,24 +117,8 @@ function AccountPage() {
 
                 <BrowserSettings />
 
-                <SettingsGroup
-                    title="Advanced"
-                    action={
-                        <Button
-                            variant="outline"
-                            aria-expanded={advanced}
-                            aria-controls="advanced-settings"
-                            onClick={() => setAdvanced((value) => !value)}
-                        >
-                            {advanced ? 'Hide' : 'Show'}
-                            <ChevronDownIcon
-                                className={`transition-transform ${advanced ? 'rotate-180' : ''}`}
-                                aria-hidden="true"
-                            />
-                        </Button>
-                    }
-                >
-                    <div id="advanced-settings" hidden={!advanced}>
+                <SettingsDisclosure title="Advanced">
+                    <>
                         <Setting
                             label="Sharing keys"
                             action={
@@ -171,8 +160,8 @@ function AccountPage() {
                                 </Button>
                             }
                         />
-                    </div>
-                </SettingsGroup>
+                    </>
+                </SettingsDisclosure>
             </div>
 
             <AboutLine />

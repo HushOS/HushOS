@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, Navigate, useNavigate, useRouteContext } from '@tanstack/react-router';
-import { ChevronDownIcon, RotateCcwIcon } from 'lucide-react';
+import { RotateCcwIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { EmptyState, SkeletonRows } from '@/components/drive/file-list';
 import { useDrive } from '@/components/drive/drive-shell';
@@ -18,7 +18,7 @@ import {
 import { ServerKnowsLine } from '@/components/families/server-knows';
 import { PendingLabel } from '@/components/motion';
 import { PageHeader } from '@/components/page-header';
-import { Setting, SettingsGroup, SettingsPage } from '@/components/settings';
+import { Setting, SettingsDisclosure, SettingsPage } from '@/components/settings';
 import { StoreLinks } from '@/components/store-links';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
@@ -165,7 +165,6 @@ export function FamilyPage({
     });
     const [inviting, setInviting] = useState(false);
     const [leaving, setLeaving] = useState(false);
-    const [technical, setTechnical] = useState(false);
     const [renaming, setRenaming] = useState(false);
     // Inviting waits for a plan where plans are sold: nobody could be let in without one.
     const plan = useFamilyPlanGate(userId, groupId, summary?.state === 'active');
@@ -444,30 +443,8 @@ export function FamilyPage({
                 <FamilyStorage userId={userId} groupId={groupId} family={family} />
 
                 {/* Rarely needed, so folded away as Account's Advanced is. */}
-                <SettingsGroup
-                    title="Technical details and leaving"
-                    action={
-                        <button
-                            type="button"
-                            aria-expanded={technical}
-                            aria-controls="family-technical"
-                            aria-label={
-                                technical
-                                    ? 'Hide technical details and leaving'
-                                    : 'Show technical details and leaving'
-                            }
-                            onClick={() => setTechnical((value) => !value)}
-                            className="flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-3 text-sm font-semibold text-primary outline-hidden hover:bg-muted focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring pointer-coarse:h-11"
-                        >
-                            {technical ? 'Hide' : 'Show'}
-                            <ChevronDownIcon
-                                aria-hidden="true"
-                                className={`size-4 transition-transform ${technical ? 'rotate-180' : ''}`}
-                            />
-                        </button>
-                    }
-                >
-                    <div id="family-technical" hidden={!technical} className="flex flex-col">
+                <SettingsDisclosure title="Technical details and leaving">
+                    <>
                         {view ? (
                             <>
                                 <Setting label="Member list version">
@@ -538,8 +515,8 @@ export function FamilyPage({
                                     'You’ll lose the family folders. Your own files stay yours.'}
                             </span>
                         </Setting>
-                    </div>
-                </SettingsGroup>
+                    </>
+                </SettingsDisclosure>
             </div>
             <ServerKnowsLine className="mt-auto" />
 
