@@ -1,5 +1,6 @@
 import Foundation
 import HushOSCore
+import Observation
 
 /*
  * Approve on another device, as the second step (docs/two-step-design.md 12): the phone that asks
@@ -10,7 +11,10 @@ import HushOSCore
  *   its own value, and only once; it answers the step only with a request that was approved;
  * - the answering phone keeps the commitment as it stood before it opened the request, refuses a
  *   reveal that is not that commitment, and signs only after the code on the other screen was
- *   typed exactly, or its QR code scanned and found to be this very request.
+ *   typed exactly, or its QR code scanned and found to be this very request;
+ * - the answering phone's half of the code is its own: made here after it saw the commitment, kept
+ *   here, and never taken from the server (`ApprovalMemory`);
+ * - turning the method on asks the one device the person chose, and no other (`DeviceSetup`).
  *
  * The screens are the app's (`App/DeviceApproval.swift`); nothing here draws anything, so all of
  * it is tested without one (`DeviceApprovalTests`).
@@ -172,15 +176,19 @@ public actor DeviceAsk {
      * Makes the request for `stepToken`. `purpose` is what the token is for (`login`, a change's own
      * purpose, or `device-approval` when the method is being turned on); `deviceSigningKey` this
      * phone's device key, base64url. `name` is what the phone calls itself, used only by a server
-     * that does not know it yet. A refusal is thrown in the server's words (`StepError.refused`).
+     * that does not know it yet. `approver` is the device the person chose to approve, when the
+     * method is being turned on: only it is shown the request, and the server refuses such a request
+     * without one (`device-choice`). A sign-in or a change names none. A refusal is thrown in the
+     * server's words (`StepError.refused`).
      */
     public static func start(
-        wire: ApprovalWire, stepToken: String, purpose: String, deviceSigningKey: String, name: String, kind: String = "ios"
+        wire: ApprovalWire, stepToken: String, purpose: String, deviceSigningKey: String, name: String, kind: String = "ios", approver: String? = nil
     ) async throws -> DeviceAsk {
         let digest = stepTokenDigest(stepToken: stepToken)
         let nonce = base64urlEncode(bytes: try randomBytes(length: 32))
         let commitment = try deviceStepCommitment(purpose: purpose, tokenDigest: digest, deviceSigningKey: deviceSigningKey, nonce: nonce)
-        let reply = try await wire.send("POST", "/api/auth/approvals", approvalStartJson(stepToken: stepToken, commitment: commitment, kind: kind, name: name), nil)
+        let body = approvalStartJson(stepToken: stepToken, commitment: commitment, kind: kind, name: name, approverDeviceId: approver)
+        let reply = try await wire.send("POST", "/api/auth/approvals", body, nil)
         switch approvalStartReplyRead(status: reply.code, body: reply.text) {
         case .started(let requestId, let userId, _):
             let step = DeviceStep(userId: userId, requestId: requestId, purpose: purpose, tokenDigest: digest, deviceSigningKey: deviceSigningKey)
@@ -301,6 +309,33 @@ public actor DeviceAsk {
     }
 }
 
+public extension DeviceAsk {
+    /* What a request is made from: every Ask again makes another from the same one, the chosen device included. */
+    struct Request: Sendable {
+        public let wire: ApprovalWire
+        public let token: String
+        /* `login`, a change's purpose, or `device-approval`. */
+        public let purpose: String
+        /* This phone's device key, base64url. */
+        public let key: String
+        /* Turning the method on: the device the person chose to approve. Nil for a sign-in or a change. */
+        public let approver: String?
+
+        public init(wire: ApprovalWire, token: String, purpose: String, key: String, approver: String? = nil) {
+            self.wire = wire
+            self.token = token
+            self.purpose = purpose
+            self.key = key
+            self.approver = approver
+        }
+
+        /* `name`: what this phone calls itself. */
+        public func start(name: String) async throws -> DeviceAsk {
+            try await DeviceAsk.start(wire: wire, stepToken: token, purpose: purpose, deviceSigningKey: key, name: name, approver: approver)
+        }
+    }
+}
+
 /* MARK: The phone that answers */
 
 /*
@@ -382,14 +417,45 @@ public enum ApprovalProblem: Error, WordedError, Equatable, Sendable {
     case wrongCode
     /* The request is over, or another device has it: the server's words. */
     case over(String)
+    /* The server answered this phone's open with another value than this phone made: ended, nothing signed. */
+    case changed
+    /* The list says this phone opened the request, and this run of the app holds no value for it: ended, nothing signed. */
+    case restarted
 
     public var errorDescription: String? {
         switch self {
         case .mismatch: StepWords.approvalMismatch
         case .wrongCode: StepWords.approvalWrongCode
         case .over(let message): message
+        case .changed: StepWords.approvalChanged
+        case .restarted: StepWords.approvalRestarted
         }
     }
+}
+
+/*
+ * What this run of the app opened, by request: the 32 bytes it made, and the request as it stood
+ * before it posted them. In memory only, and the account's: the inbox drops it with the session.
+ *
+ * The value is this phone's half of the code. It has to be one this phone made after the
+ * commitment was fixed: a value the server chose, after seeing the commitment, could be chosen to
+ * steer the code. So nothing here is ever filled from a reply.
+ */
+public final class ApprovalMemory: @unchecked Sendable {
+    struct Opened: Equatable {
+        let value: String
+        /* The request as it was listed before this phone opened it: its purpose, token digest and commitment. */
+        let prompt: ApprovalPrompt
+    }
+
+    private let lock = NSLock()
+    private var opened: [String: Opened] = [:]
+
+    public init() {}
+
+    func held(_ id: String) -> Opened? { lock.withLock { opened[id] } }
+    func keep(_ made: Opened, for id: String) { lock.withLock { opened[id] = made } }
+    func forget(_ id: String) { lock.withLock { opened[id] = nil } }
 }
 
 /*
@@ -406,25 +472,42 @@ public actor ApprovalAnswering {
     public nonisolated let id: String
     /* "Sign-in on Chrome on Windows, near Lyon, France": what is asked, by which device, and roughly from where when the server was told. */
     public nonisolated let asks: String
+    /* "The other device asked for this device to approve.", when it named this one; nil otherwise. */
+    public nonisolated let chosenLine: String?
+    /* The request as it stood before this phone opened it: as remembered, if this run opened it before. */
     private let asked: ApprovalPrompt
+    /* The list said a device had opened it already when this was made. */
+    private let listedOpened: Bool
     private let wire: ApprovalWire
     private let userId: String
     private let seed: Data
-    /* This phone's own value, once it opened the request: the first one, if it opened it before. */
+    private let memory: ApprovalMemory
+    /* This phone's own value, once it opened the request: the one it made, never one a reply carried. */
     private var approverKey: String?
+    /* Ended from here because something did not match: nothing more is opened, looked for or signed. */
+    private var refused: ApprovalProblem?
     /* The code this phone expects, and what it signs, once the other device revealed what it committed to. */
     private var ready: (code: String, step: DeviceStep)?
     /* The other screen's QR code was read, and it was this request: the commitment was the check, and no code is typed. */
     public private(set) var scanned = false
 
-    /* `prompt`: the request as listed before this phone opened it. `userId` and `seed`: this phone's own account id and device key. */
-    public init(prompt: ApprovalPrompt, wire: ApprovalWire, userId: String, seed: Data) {
+    /*
+     * `prompt`: the request as listed. `userId` and `seed`: this phone's own account id and device
+     * key. `memory`: what this run of the app opened; a request it opened before is answered as it
+     * stood then, whatever is listed now.
+     */
+    public init(prompt: ApprovalPrompt, wire: ApprovalWire, userId: String, seed: Data, memory: ApprovalMemory) {
+        let before = memory.held(prompt.id)?.prompt ?? prompt
         id = prompt.id
-        asks = approvalAsks(purpose: prompt.purpose, deviceName: prompt.deviceName, location: prompt.location)
-        asked = prompt
+        // A name the server does not vouch for is said as the asking device's own words.
+        asks = approvalAsks(purpose: before.purpose, deviceName: before.deviceName, selfNamed: before.selfNamed, location: before.location)
+        chosenLine = before.chosen ? StepWords.approvalChosen : nil
+        asked = before
+        listedOpened = prompt.approverKey != nil
         self.wire = wire
         self.userId = userId
         self.seed = seed
+        self.memory = memory
     }
 
     private func post(_ action: String, _ body: String) async throws -> ApprovalAckReply {
@@ -446,21 +529,43 @@ public actor ApprovalAnswering {
      */
     public func open(scanned text: String) async throws -> Bool {
         guard let read = approvalQrRead(text: text) else { return false }
-        guard read.requestId == asked.id, read.commitment == asked.commitment else {
-            try? await end(.mismatch)
-            throw ApprovalProblem.mismatch
-        }
+        if let refused { throw refused }
+        guard read.requestId == asked.id, read.commitment == asked.commitment else { throw await refuse(.mismatch) }
         try await open()
         scanned = true
         return true
     }
 
-    /* Opens the request: this phone's own 32 fresh bytes go in, and only then does the other device reveal. */
+    /* Ends the request because something did not match (`mismatch`, not a failed step), and keeps it ended here. */
+    private func refuse(_ problem: ApprovalProblem) async -> ApprovalProblem {
+        refused = problem
+        memory.forget(id)
+        _ = try? await post("deny", approvalDenyJson(reason: Ending.mismatch.rawValue))
+        return problem
+    }
+
+    /*
+     * Opens the request: this phone's own 32 fresh bytes go in, and only then does the other device
+     * reveal. The bytes are made here and remembered before they go, with the request as it stood;
+     * opening again in the same run sends the same ones.
+     *
+     * The server's reply echoes the value the request was opened with. Anything but the one this
+     * phone sent means the server chose it, after seeing the commitment: the request is ended and
+     * nothing is typed or signed. So is a request the list says was already opened when this run of
+     * the app holds no value for it (the app was restarted since): nothing is opened again, and no
+     * value is taken from the list.
+     */
     public func open() async throws {
+        if let refused { throw refused }
         guard approverKey == nil else { return }
-        let own = try asked.approverKey ?? base64urlEncode(bytes: randomBytes(length: 32))
-        guard case .done(let key?) = try await post("open", approvalOpenJson(ephemeralKey: own)) else { throw Unanswered() }
-        approverKey = key
+        let before = memory.held(id)
+        if before == nil, listedOpened { throw await refuse(.restarted) }
+        let mine = try before?.value ?? base64urlEncode(bytes: randomBytes(length: 32))
+        // Before it goes: a reply that never arrives leaves this phone holding what it sent, to send again.
+        memory.keep(ApprovalMemory.Opened(value: mine, prompt: asked), for: id)
+        guard case .done(let echoed?) = try await post("open", approvalOpenJson(ephemeralKey: mine)) else { throw Unanswered() }
+        guard echoed == mine else { throw await refuse(.changed) }
+        approverKey = mine
     }
 
     /*
@@ -470,6 +575,7 @@ public actor ApprovalAnswering {
      * and nothing is ever signed for it. A request that left the list is over.
      */
     public func revealed() async throws -> Bool {
+        if let refused { throw refused }
         if ready != nil { return true }
         guard let approverKey else { return false }
         guard let now = try await DeviceApprovals.listed(wire: wire).first(where: { $0.id == id }) else { throw ApprovalProblem.over(StepWords.approvalOver) }
@@ -479,8 +585,7 @@ public actor ApprovalAnswering {
             ready = (try approvalCodeExpected(step: step, commitment: asked.commitment, approverKey: approverKey, nonce: nonce), step)
             return true
         } catch {
-            try? await end(.mismatch)
-            throw ApprovalProblem.mismatch
+            throw await refuse(.mismatch)
         }
     }
 
@@ -512,6 +617,7 @@ public actor ApprovalAnswering {
      * names this phone's own account, the request, its purpose, its token and the asking device.
      */
     public func approve(typed: String?) async throws {
+        if let refused { throw refused }
         guard let ready else { throw Unanswered() }
         if !(scanned && typed == nil) {
             guard let typed, approvalCodeNormalize(typed: typed) == ready.code else {
@@ -526,6 +632,114 @@ public actor ApprovalAnswering {
     /* Deny, or This wasn’t me: the request ends, and is counted as a failed step. */
     public func end(_ why: Ending) async throws {
         guard case .done = try await post("deny", approvalDenyJson(reason: why.rawValue)) else { throw StepError.lost(StepWords.lostChange) }
+    }
+}
+
+/*
+ * The requests this phone may answer now, after its own limit of five a day for each class
+ * (`PromptLimit`). The app reads it when it comes to the front, every five seconds while Account is
+ * on screen, and when a push arrives; Home's banner and Devices' rows show `prompts`.
+ *
+ * - It asks only the approvals routes. Whether the server lets accounts turn two-step sign-in on
+ *   (the settings route's 501) is nothing to it: an account that already has the step is still
+ *   asked for it, so its requests are still listed and answered.
+ * - Everything it holds is one session's: the prompts, the request being answered, each request as
+ *   first listed, and what this run opened. All of it goes the moment another session is seen,
+ *   before anything else is decided, so nothing of the last account is ever shown under the next.
+ */
+@Observable
+@MainActor
+public final class ApprovalInbox {
+    public static let shared = ApprovalInbox()
+
+    /* A request being answered: the app shows its sheet. */
+    public struct Answering: Identifiable, Sendable {
+        public let id: String
+        public let flow: ApprovalAnswering
+    }
+
+    /* Where the inbox reads the session, this phone's device key for it, and the server. Tests put their own here. */
+    public struct Source: Sendable {
+        let session: @Sendable () -> SharedKeychain.Session?
+        let identity: @Sendable (SharedKeychain.Session) -> SharedKeychain.DeviceIdentity?
+        let wire: @Sendable (SharedKeychain.Session) -> ApprovalWire
+        let limit: PromptLimit
+
+        public static let stored = Source(session: { SharedKeychain.session }, identity: { DeviceApprovals.identity(for: $0) }, wire: { .signedIn($0) }, limit: .stored)
+    }
+
+    public private(set) var prompts: [ApprovalPrompt] = []
+    public var answering: Answering?
+    @ObservationIgnored private let source: Source
+    /* The session a look is out for, by its tag: one look at a time for each. */
+    @ObservationIgnored private var loading: String?
+    /* The session everything here is for. */
+    @ObservationIgnored private var owner: String?
+    /* Each request as it was first listed, before this phone opened it: what its reveal is checked against. */
+    @ObservationIgnored private var first: [String: ApprovalPrompt] = [:]
+    @ObservationIgnored private var flows: [String: ApprovalAnswering] = [:]
+    /* What this run opened, for the session in `owner`. */
+    @ObservationIgnored private var memory = ApprovalMemory()
+
+    public init(source: Source = .stored) { self.source = source }
+
+    /* The session the phone holds now, having dropped everything held for any other. Nil with nobody signed in, or with no device key for the account: such a phone approves nothing, and asks nothing. */
+    private func current() -> SharedKeychain.Session? {
+        guard let session = source.session(), source.identity(session) != nil else {
+            clear()
+            return nil
+        }
+        if owner != session.tag {
+            clear()
+            owner = session.tag
+        }
+        return session
+    }
+
+    public func load() async {
+        // First, and whatever else is going on: a look still out for the last session must not keep its prompts on screen.
+        guard let session = current() else { return }
+        guard loading != session.tag else { return }
+        loading = session.tag
+        defer { if loading == session.tag { loading = nil } }
+        // Kept as it was when the server can't be asked: the next look asks again.
+        guard let listed = try? await DeviceApprovals.listed(wire: source.wire(session)) else { return }
+        // The answer is for the session it was asked under. Another one since: it is shown nowhere and counted nowhere.
+        guard owner == session.tag, source.session()?.tag == session.tag else { return }
+        let shown = source.limit.shown(listed)
+        for asked in shown where first[asked.id] == nil { first[asked.id] = asked }
+        let live = Set(shown.map(\.id)).union(answering.map { [$0.id] } ?? [])
+        first = first.filter { live.contains($0.key) }
+        flows = flows.filter { live.contains($0.key) }
+        prompts = shown
+    }
+
+    /* Answer: the request's sheet, over whatever is on screen. Only for a request listed under the session the phone holds now. */
+    public func answer(_ asked: ApprovalPrompt) {
+        guard let session = current(), prompts.contains(where: { $0.id == asked.id }), let identity = source.identity(session),
+              let seed = try? base64urlDecode(value: identity.seed) else { return }
+        let flow = flows[asked.id] ?? ApprovalAnswering(prompt: first[asked.id] ?? asked, wire: source.wire(session), userId: identity.userId, seed: seed, memory: memory)
+        flows[asked.id] = flow
+        answering = Answering(id: asked.id, flow: flow)
+    }
+
+    /* Approved, denied or over: it leaves the list at once, without waiting for the next look. */
+    public func finished(_ id: String) {
+        prompts.removeAll { $0.id == id }
+        first[id] = nil
+        flows[id] = nil
+        memory.forget(id)
+    }
+
+    private func clear() {
+        // Not written when already empty: every look of a signed-out phone would redraw whatever shows the list.
+        if !prompts.isEmpty { prompts = [] }
+        if answering != nil { answering = nil }
+        first = [:]
+        flows = [:]
+        owner = nil
+        // A new one, never the old one emptied: a request of the last session still in flight keeps writing to its own.
+        memory = ApprovalMemory()
     }
 }
 
@@ -582,5 +796,167 @@ public extension TwoStep {
     enum DeviceConfirmed: Sendable, Equatable {
         case turnedOn([String])
         case added
+    }
+}
+
+/*
+ * Turning on Approve on another device, as its sheet follows it (docs/two-step-design.md 12,
+ * "Turning it on first"). What is here is what must not go wrong on that screen:
+ *
+ * - The person says which of their devices is to approve. With no method yet every signed-in
+ *   device looks alike to the server, one someone else opened with the password among them, so a
+ *   request any of them could answer would let that one answer first. Nothing is sent, not the
+ *   pending method and not a request, until a device is chosen; every request names it.
+ * - The confirmation is marked as out before it goes, and what it answers is kept here, not in a
+ *   view: the backup codes are shown once, and a sheet closed over a confirmation the server took
+ *   would turn the step on with nobody ever seeing them. The sheet does not close while it is out,
+ *   nor while the codes are up, except by their own Done.
+ * - Turning the step on offers to remove the other devices, ticked. The codes come first; the
+ *   removal runs behind them and never costs them. The device that approved stays: it is the method.
+ */
+@Observable
+@MainActor
+public final class DeviceSetup {
+    public enum Removing: Sendable, Equatable { case no, running, failed }
+
+    /* The confirm button was pressed with no device chosen: nothing went out. */
+    public struct Unchosen: Error, WordedError, Equatable {
+        public var errorDescription: String? { StepWords.chooseApprover }
+    }
+
+    /* What the confirmation did. */
+    public enum Confirmed: Sendable, Equatable {
+        /* The step is on: `codes` holds the backup codes until Done. */
+        case turnedOn
+        /* Added beside the account's other methods. */
+        case added
+    }
+
+    public typealias Start = @Sendable (_ password: String, _ twoStep: StepAnswer?) async throws -> DeviceEnrolment
+    public typealias Confirm = @Sendable (_ started: DeviceEnrolment, _ requestId: String) async throws -> TwoStep.DeviceConfirmed
+    public typealias Remove = @Sendable (_ password: String, _ keep: String) async throws -> Void
+
+    /* The account has no method yet: this turns the step on. */
+    public let first: Bool
+    /* The devices that could approve, as the settings listed them. */
+    public let approvers: [TwoStepStatus.Approver]
+    public private(set) var chosenId: String?
+    /* "Remove my other devices": offered, ticked, when this turns the step on. */
+    public var removeOthers = true
+    /* The pending method, and the step token its one approval runs from: good for ten minutes. */
+    public private(set) var started: DeviceEnrolment?
+    /* The confirmation is out: nothing closes the sheet until it is answered. */
+    public private(set) var confirming = false
+    /* The backup codes, shown once: held until Done. */
+    public private(set) var codes: [String]?
+    public private(set) var removing = Removing.no
+
+    public init(first: Bool, approvers: [TwoStepStatus.Approver]) {
+        self.first = first
+        self.approvers = approvers
+        // With one device to choose from it is chosen, and still named.
+        chosenId = approvers.count == 1 ? approvers[0].id : nil
+    }
+
+    public var chosen: TwoStepStatus.Approver? { approvers.first { $0.id == chosenId } }
+
+    /* The choice is made before anything is sent, and stands for everything sent after. */
+    public func choose(_ id: String) {
+        guard started == nil, !confirming, codes == nil, approvers.contains(where: { $0.id == id }) else { return }
+        chosenId = id
+    }
+
+    /* Whether Cancel, a swipe or Back may close the sheet: not over a confirmation that is out, and not over codes that were not yet put away. */
+    public var mayClose: Bool { !confirming && codes == nil }
+
+    /*
+     * Cancel, a swipe, or the sheet going away. False when refused: everything stays as it is. True
+     * lets the setup go: a request another device approves afterwards confirms nothing.
+     */
+    @discardableResult
+    public func close() -> Bool {
+        guard mayClose else { return false }
+        started = nil
+        return true
+    }
+
+    /* Done, under the codes. */
+    public func done() { codes = nil }
+
+    /* The password (and the step, once it is on) was given: the pending method. Nothing is sent with no device chosen. */
+    public func begin(password: String, twoStep: StepAnswer?, start: Start = { try await TwoStep.startDevice(password: $0, twoStep: $1) }) async throws {
+        guard chosen != nil else { throw Unchosen() }
+        started = try await start(password, twoStep)
+    }
+
+    /* The request to the chosen device, for the first ask and for every Ask again. Nothing to ask with no device chosen, or no pending method. */
+    public func request(wire: ApprovalWire, key: String) throws -> DeviceAsk.Request {
+        guard let chosen else { throw Unchosen() }
+        guard let started else { throw CancellationError() }
+        return DeviceAsk.Request(wire: wire, token: started.token, purpose: DeviceEnrolment.purpose, key: key, approver: chosen.id)
+    }
+
+    /* The asking failed, or the confirmation did: back to the password. */
+    public func failed() {
+        guard !confirming else { return }
+        started = nil
+    }
+
+    /*
+     * Another device approved `requestId`: confirms the method with it.
+     *
+     * - `confirming` is set before the request goes, and stays until its answer is kept.
+     * - The request is not cancelled with whoever waits for it: once sent, its answer is taken.
+     * - `step-pending` (the approval had not landed where this went) changed nothing: thrown, and the
+     *   same setup is confirmed again.
+     * - Turning the step on always comes back with the codes. Without them the reply is not the
+     *   server's answer to that (`StepError.lost`): nothing is claimed.
+     * - `removal` hears how the removal of the other devices ended (true: removed), after the codes.
+     */
+    public func confirm(
+        requestId: String, password: String,
+        send: @escaping Confirm = { try await TwoStep.confirmDevice($0, requestId: $1) },
+        remove: @escaping Remove = { _ = try await Devices.removeOthers(password: $0, keep: $1) },
+        removal: @escaping @MainActor @Sendable (Bool) -> Void = { _ in }
+    ) async throws -> Confirmed {
+        // Let go meanwhile (Cancel was pressed before the approval was heard of): nothing is confirmed.
+        guard let started, let chosen, !confirming, codes == nil else { throw CancellationError() }
+        confirming = true
+        let answer: TwoStep.DeviceConfirmed
+        do {
+            answer = try await Task { try await send(started, requestId) }.value
+        } catch {
+            confirming = false
+            if case StepError.refused(.pending, _) = error { throw error }
+            // Anything else may hide a method that was turned on: this setup is over either way.
+            self.started = nil
+            throw error
+        }
+        switch answer {
+        case .turnedOn(let made):
+            // The codes first: they are shown once, and nothing that follows may cost them.
+            codes = made
+            confirming = false
+            self.started = nil
+            if first && removeOthers {
+                removing = .running
+                Task {
+                    do {
+                        try await remove(password, chosen.id)
+                        self.removing = .no
+                        removal(true)
+                    } catch {
+                        self.removing = .failed
+                        removal(false)
+                    }
+                }
+            }
+            return .turnedOn
+        case .added:
+            confirming = false
+            self.started = nil
+            if first { throw StepError.lost(StepWords.lostTurnedOn) }
+            return .added
+        }
     }
 }

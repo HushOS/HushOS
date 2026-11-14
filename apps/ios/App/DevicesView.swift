@@ -26,7 +26,7 @@ struct DevicesView: View {
             if !ApprovalInbox.shared.prompts.isEmpty {
                 Section {
                     ForEach(ApprovalInbox.shared.prompts, id: \.id) { asked in
-                        ApprovalRow(text: approvalAsks(purpose: asked.purpose, deviceName: asked.deviceName, location: asked.location)) { ApprovalInbox.shared.answer(asked) }
+                        ApprovalRow(text: approvalAsks(purpose: asked.purpose, deviceName: asked.deviceName, selfNamed: asked.selfNamed, location: asked.location)) { ApprovalInbox.shared.answer(asked) }
                     }
                 }
             }

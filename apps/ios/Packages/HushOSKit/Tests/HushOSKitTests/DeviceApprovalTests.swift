@@ -13,7 +13,12 @@ import Testing
  * - the answering phone refuses a reveal that is not the commitment it saw before opening, and a
  *   scanned code for another request or commitment, signs only on the exact code, and ends the
  *   request (`wrong-code`) on anything else;
+ * - its half of the code is its own: an open the server answers with another value, and a request
+ *   already opened that this run holds no value for, are ended with nothing opened or signed;
  * - it shows at most five prompts a day for each class, whatever the server lists;
+ * - its list does not follow the settings route's 501, and holds nothing of a session that is gone;
+ * - turning the method on asks only the device the person chose, sends nothing before one is, does
+ *   not close over a confirmation that is out, and removes every other device but that one;
  * - `twoStepMethods` names `device`, the settings ask for it, and the settings' row says what is true.
  *
  * The server here is a small one in memory that does what the real one does with each route, and
@@ -61,6 +66,12 @@ private final class ApprovalServer: @unchecked Sendable {
     var staysOpened = false
     /* Other requests in the list, as `(id, class)`. */
     var others: [(String, String)] = []
+    /* Whether the server knows the asking device (`false`), or the name is its own words; nil leaves the field out, as an older server does. */
+    var selfNamed: Bool? = false
+    /* The asking device named this phone to answer; nil leaves the field out. */
+    var chosen: Bool? = false
+    /* A server that answers an open with a value of its own choosing. */
+    var echo: String?
 
     var calls: [Call] { lock.withLock { all } }
     func calls(_ suffix: String) -> [Call] { calls.filter { $0.path.hasSuffix(suffix) } }
@@ -92,6 +103,8 @@ private final class ApprovalServer: @unchecked Sendable {
             "createdAt": "2026-11-14T10:00:00.000Z", "expiresAt": "2026-11-14T10:05:00.000Z",
             "tokenDigest": tokenDigest ?? random32(), "commitment": (id == requestId ? listedCommitment ?? commitment : nil) ?? random32(),
         ]
+        if let selfNamed { entry["selfNamed"] = selfNamed }
+        if let chosen { entry["chosen"] = chosen }
         guard id == requestId else { return entry }
         if let approverKey { entry["approverKey"] = approverKey }
         if let shown = listedReveal ?? reveal { entry["reveal"] = ["deviceSigningKey": shown.key, "nonce": shown.nonce] }
@@ -134,7 +147,7 @@ private final class ApprovalServer: @unchecked Sendable {
             guard state == "waiting" || state == "opened" || state == "revealed" else { return (404, json(["message": "This request is over.", "code": "approval-over"])) }
             approverKey = approverKey ?? body["ephemeralKey"] as? String
             if state == "waiting" { state = "opened" }
-            return (200, json(["approverKey": approverKey ?? ""]))
+            return (200, json(["approverKey": echo ?? approverKey ?? ""]))
         case ("POST", own + "/approve"):
             signature = body["signature"] as? String
             state = "approved"
@@ -203,6 +216,19 @@ private final class Seen<Value: Sendable>: @unchecked Sendable {
         #expect(server.calls("/reveal").count == 1)
         // The QR code names this request and its commitment.
         #expect(approvalQrRead(text: ask.qr) == ApprovalQr(requestId: server.requestId, commitment: try #require(made.body["commitment"] as? String)))
+    }
+
+    @Test func aRequestThatNamesNoDeviceToTurnTheMethodOnIsRefusedInTheServersWords() async throws {
+        // 409 `device-choice`: what the server says is what the sheet shows, and nothing else is taken away.
+        let wire = ApprovalWire(session: "tag") { _, _, _, _ in
+            ApprovalWire.Reply(status: 409, text: json(["message": "Choose which of your devices will approve.", "code": "device-choice"]))
+        }
+        var thrown: Error?
+        do { _ = try await DeviceAsk.start(wire: wire, stepToken: token, purpose: DeviceEnrolment.purpose, deviceSigningKey: random32(), name: "iPhone") } catch { thrown = error }
+        #expect(thrown as? StepError == .refused(.deviceChoice, "Choose which of your devices will approve."))
+        #expect(ErrorWords.say(try #require(thrown)) == "Choose which of your devices will approve.")
+        // Not the session's end, and not a reason to withdraw any way of answering a step.
+        #expect(StepOutcome.left([.device, .totp], after: .deviceChoice, tried: .device) == [.device, .totp])
     }
 
     @Test func aRevealWhoseReplyWasLostIsNotSentAgainOnceTheServerSaysItHasIt() async throws {
@@ -418,11 +444,12 @@ private func step(_ methods: [StepMethod]) -> StepChallenge {
         let flow: ApprovalAnswering
     }
 
-    private func answering(_ server: ApprovalServer) async throws -> Phone {
-        let key = try deviceSigningCreate()
+    /* `memory`: what this run of the app opened. A new one is an app that opened nothing yet. */
+    private func answering(_ server: ApprovalServer, memory: ApprovalMemory = ApprovalMemory(), key: DeviceSigningKey? = nil) async throws -> Phone {
+        let key = try key ?? deviceSigningCreate()
         let listed = try await DeviceApprovals.listed(wire: server.wire())
         let prompt = try #require(listed.first { $0.id == server.requestId })
-        return Phone(key: key, flow: ApprovalAnswering(prompt: prompt, wire: server.wire(), userId: account, seed: key.seed))
+        return Phone(key: key, flow: ApprovalAnswering(prompt: prompt, wire: server.wire(), userId: account, seed: key.seed, memory: memory))
     }
 
     /* The asking device reveals, as the real server records it. */
@@ -479,6 +506,123 @@ private func step(_ methods: [StepMethod]) -> StepChallenge {
         #expect(try await phone.flow.revealed() == false)
         reveal(server, asked)
         #expect(try await phone.flow.revealed())
+    }
+
+    @Test func anOpenTheServerAnswersWithAnotherValueEndsTheRequestAndNothingIsSigned() async throws {
+        // The reply to `open` echoes the value the request was opened with. A server that answers another chose this
+        // phone's half of the code itself, after it had seen the commitment, and could have chosen it to steer the code.
+        let server = ApprovalServer()
+        let asked = server.asked()
+        let memory = ApprovalMemory()
+        let phone = try await answering(server, memory: memory)
+        let forced = random32()
+        server.echo = forced
+        await #expect(throws: ApprovalProblem.changed) { try await phone.flow.open() }
+        #expect(server.deniedFor == "mismatch")
+        // The value was this phone's own, and the server's was never taken in its place.
+        let sent = try #require(server.calls("/open").first?.body["ephemeralKey"] as? String)
+        #expect(sent != forced)
+        #expect(memory.held(server.requestId) == nil)
+        // The other device reveals honestly; this request is over here all the same: nothing is looked for or signed.
+        reveal(server, asked)
+        await #expect(throws: ApprovalProblem.changed) { _ = try await phone.flow.revealed() }
+        let code = try deviceStepCode(step: signedStep(server, asked), approverKey: forced, nonce: asked.nonce)
+        await #expect(throws: ApprovalProblem.changed) { try await phone.flow.approve(typed: code) }
+        #expect(server.calls("/approve").isEmpty)
+        #expect(server.signature == nil)
+        #expect(ApprovalProblem.changed.errorDescription == "The server changed this device’s part of the code, so nothing was approved. Ask again on the other device.")
+    }
+
+    @Test func aRequestAlreadyOpenedThatThisRunHoldsNoValueForIsEndedWithoutOpeningIt() async throws {
+        // The list says this phone opened the request, with a value. The app was restarted since, or the server made
+        // the value up: either way it is not one this run made, and it is not adopted.
+        for scanned in [false, true] {
+            let server = ApprovalServer()
+            let asked = server.asked()
+            let listedValue = random32()
+            server.open(with: listedValue)
+            let phone = try await answering(server)
+            if scanned {
+                let code = try approvalQr(requestId: server.requestId, commitment: try #require(server.commitment))
+                await #expect(throws: ApprovalProblem.restarted) { _ = try await phone.flow.open(scanned: code) }
+            } else {
+                await #expect(throws: ApprovalProblem.restarted) { try await phone.flow.open() }
+            }
+            #expect(server.calls("/open").isEmpty, "scanned: \(scanned)")
+            #expect(server.deniedFor == "mismatch", "scanned: \(scanned)")
+            // Even with the right code for the listed value, nothing is signed.
+            server.listedReveal = asked
+            let code = try deviceStepCode(step: signedStep(server, asked), approverKey: listedValue, nonce: asked.nonce)
+            await #expect(throws: ApprovalProblem.restarted) { try await phone.flow.approve(typed: code) }
+            #expect(server.calls("/approve").isEmpty, "scanned: \(scanned)")
+        }
+        #expect(ApprovalProblem.restarted.errorDescription == "This request was opened before HushOS was restarted. Ask again on the other device.")
+    }
+
+    @Test func openingAgainInTheSameRunSendsTheSameValueAndKeepsTheCommitmentSeenBeforeTheFirst() async throws {
+        let server = ApprovalServer()
+        let asked = server.asked()
+        let memory = ApprovalMemory()
+        let key = try deviceSigningCreate()
+        let first = try await answering(server, memory: memory, key: key)
+        try await first.flow.open()
+        let own = try #require(server.calls("/open").first?.body["ephemeralKey"] as? String)
+        // The sheet was closed and the request is answered afresh from the list as it reads now: opened, by this
+        // phone. The same run holds its value, and sends that one again.
+        let again = try await answering(server, memory: memory, key: key)
+        try await again.flow.open()
+        #expect(server.calls("/open").count == 2)
+        #expect(server.calls("/open").last?.body["ephemeralKey"] as? String == own)
+        // The honest reveal is checked against the commitment seen before the first open, and the code is this phone's own value's.
+        reveal(server, asked)
+        #expect(try await again.flow.revealed())
+        try await again.flow.approve(typed: try deviceStepCode(step: signedStep(server, asked), approverKey: own, nonce: asked.nonce))
+        #expect(deviceStepVerify(publicKey: key.publicKey, step: signedStep(server, asked), signature: try base64urlDecode(value: try #require(server.signature))))
+
+        // A server that swaps the request once this phone has opened it: another commitment in the list, and a reveal
+        // that matches it. A phone that took the listed commitment on reopening would find nothing wrong.
+        let lying = ApprovalServer()
+        _ = lying.asked()
+        let kept = ApprovalMemory()
+        let before = try await answering(lying, memory: kept)
+        try await before.flow.open()
+        let mine = try #require(lying.calls("/open").first?.body["ephemeralKey"] as? String)
+        let swapped = (key: random32(), nonce: random32())
+        lying.listedCommitment = try deviceStepCommitment(purpose: "login", tokenDigest: try #require(lying.tokenDigest), deviceSigningKey: swapped.key, nonce: swapped.nonce)
+        lying.listedReveal = swapped
+        let after = try await answering(lying, memory: kept)
+        try await after.flow.open()
+        #expect(lying.calls("/open").last?.body["ephemeralKey"] as? String == mine)
+        await #expect(throws: ApprovalProblem.mismatch) { _ = try await after.flow.revealed() }
+        #expect(lying.deniedFor == "mismatch")
+        #expect(lying.calls("/approve").isEmpty)
+    }
+
+    @Test func aNameTheServerDoesNotVouchForIsSaidAsTheAskingDevicesOwnWords() async throws {
+        // A stranger with the password can call their browser anything, the owner's laptop included.
+        func asks(selfNamed: Bool?) async throws -> String {
+            let server = ApprovalServer()
+            server.deviceName = "Maya’s Laptop"
+            server.selfNamed = selfNamed
+            _ = server.asked()
+            return try await answering(server).flow.asks
+        }
+        #expect(try await asks(selfNamed: true) == "Sign-in on a new device calling itself “Maya’s Laptop”")
+        // Only the server's plain word that it knows the device shows the bare name; a reply that does not say is not one.
+        #expect(try await asks(selfNamed: false) == "Sign-in on Maya’s Laptop")
+        #expect(try await asks(selfNamed: nil) == "Sign-in on a new device calling itself “Maya’s Laptop”")
+    }
+
+    @Test func aRequestThatNamedThisPhoneSaysSoUnderItsTitle() async throws {
+        func line(chosen: Bool?) async throws -> String? {
+            let server = ApprovalServer()
+            server.chosen = chosen
+            _ = server.asked(purpose: "device-approval")
+            return try await answering(server).flow.chosenLine
+        }
+        #expect(try await line(chosen: true) == "The other device asked for this device to approve.")
+        #expect(try await line(chosen: false) == nil)
+        #expect(try await line(chosen: nil) == nil)
     }
 
     @Test func aScannedCodeForAnotherRequestOrAnotherCommitmentEndsThisOneUnopened() async throws {
@@ -620,11 +764,17 @@ private func step(_ methods: [StepMethod]) -> StepChallenge {
             let key = try deviceSigningCreate()
             let prompt = ApprovalPrompt(
                 id: try text("requestId"), purpose: purpose, class: "unknown", deviceKind: "web", deviceName: "Chrome on Windows", location: "near Lyon, France",
+                selfNamed: false, chosen: false,
                 createdAt: "2026-11-14T10:00:00.000Z", expiresAt: "2026-11-14T10:05:00.000Z", tokenDigest: try text("tokenDigest"), commitment: try text("commitment"),
                 approverKey: nil, revealKey: nil, revealNonce: nil
             )
             let signed = Seen<String>()
+            // The fixture's approving value stands for the one this phone made: this run holds it, as if it had opened
+            // the request with it. It is never taken from the server's reply.
             let approver = try text("approverKey")
+            let memory = ApprovalMemory()
+            memory.keep(ApprovalMemory.Opened(value: approver, prompt: prompt), for: prompt.id)
+            let opened = Seen<String>()
             let entry: [String: Any] = [
                 "id": prompt.id, "purpose": purpose, "class": "unknown", "device": ["kind": "web", "name": "Chrome on Windows"],
                 "createdAt": prompt.createdAt, "expiresAt": prompt.expiresAt, "tokenDigest": prompt.tokenDigest, "commitment": prompt.commitment,
@@ -633,21 +783,25 @@ private func step(_ methods: [StepMethod]) -> StepChallenge {
             let listed = json(["userId": "u", "approvals": [entry]])
             let wire = ApprovalWire(session: "tag") { method, path, body, _ in
                 if method == "GET" { return ApprovalWire.Reply(status: 200, text: listed) }
-                if path.hasSuffix("/open") { return ApprovalWire.Reply(status: 200, text: json(["approverKey": approver])) }
+                if path.hasSuffix("/open"), let body, let sent = (try? JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: Any])?["ephemeralKey"] as? String {
+                    opened.add(sent)
+                    return ApprovalWire.Reply(status: 200, text: json(["approverKey": sent]))
+                }
                 if path.hasSuffix("/approve"), let body, let sent = (try? JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: Any])?["signature"] as? String {
                     signed.add(sent)
                     return ApprovalWire.Reply(status: 200, text: json(["approved": true]))
                 }
                 return ApprovalWire.Reply(status: 200, text: json(["ended": true]))
             }
-            let flow = ApprovalAnswering(prompt: prompt, wire: wire, userId: try text("userId"), seed: key.seed)
+            let flow = ApprovalAnswering(prompt: prompt, wire: wire, userId: try text("userId"), seed: key.seed, memory: memory)
             // The sheet says what is asked, by which device, and the place the server gave for it.
             #expect(flow.asks.hasSuffix(" on Chrome on Windows, near Lyon, France"), "\(purpose)")
             // The browser's QR code is this request's.
             #expect(try await flow.open(scanned: try text("qr")), "\(purpose)")
+            #expect(opened.values == [approver], "\(purpose)")
             #expect(try await flow.revealed(), "\(purpose)")
             // The browser's code is the code; one that is not it would have ended the request instead.
-            let other = ApprovalAnswering(prompt: prompt, wire: wire, userId: try text("userId"), seed: key.seed)
+            let other = ApprovalAnswering(prompt: prompt, wire: wire, userId: try text("userId"), seed: key.seed, memory: memory)
             try await other.open()
             #expect(try await other.revealed())
             try await other.approve(typed: try text("code"))
@@ -712,12 +866,297 @@ private func step(_ methods: [StepMethod]) -> StepChallenge {
     }
 }
 
+/* What a test holds a request at, until it lets it through. */
+private actor Gate {
+    private var closed = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    func close() { closed = true }
+    func open() {
+        closed = false
+        waiting.forEach { $0.resume() }
+        waiting = []
+    }
+
+    func pass() async {
+        guard closed else { return }
+        await withCheckedContinuation { waiting.append($0) }
+    }
+
+    /* Returns once something is held here. */
+    func reached() async throws {
+        while waiting.isEmpty { try await Task.sleep(for: .milliseconds(2)) }
+    }
+}
+
+/* What the phone keeps between looks: here, a box. */
+private final class LimitBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var kept = ""
+    var limit: PromptLimit { PromptLimit(load: { self.lock.withLock { self.kept } }, save: { next in self.lock.withLock { self.kept = next } }) }
+}
+
+@MainActor @Suite struct ApprovalInboxTests {
+    /* The session the phone holds, which a test changes under the inbox. */
+    private final class Held: @unchecked Sendable {
+        private let lock = NSLock()
+        private var session: SharedKeychain.Session?
+        init(_ session: SharedKeychain.Session?) { self.session = session }
+        var current: SharedKeychain.Session? {
+            get { lock.withLock { session } }
+            set { lock.withLock { session = newValue } }
+        }
+    }
+
+    private let maya = SharedKeychain.Session(origin: "https://step.test", token: "maya-session", userId: account)
+    private let sam = SharedKeychain.Session(origin: "https://step.test", token: "sam-session", userId: "7c9e6679-7425-40de-944b-e07fc1f90ae8")
+
+    /* An inbox over `wire`, on a phone that holds a device key for whoever is signed in. */
+    private func makeInbox(_ held: Held, wire: @escaping @Sendable (SharedKeychain.Session) -> ApprovalWire) throws -> ApprovalInbox {
+        let seed = base64urlEncode(bytes: try deviceSigningCreate().seed)
+        return ApprovalInbox(source: ApprovalInbox.Source(
+            session: { held.current },
+            identity: { SharedKeychain.DeviceIdentity(userId: $0.userId, emailHash: "h", deviceId: "d", seed: seed) },
+            wire: wire, limit: LimitBox().limit
+        ))
+    }
+
+    @Test func aRequestIsListedAndAnsweredOnAServerThatHasTwoStepSetupOff() async throws {
+        // TWO_STEP_ENABLED off: the settings route answers 501, and an account that already has the step is still
+        // asked for it. The list is the approvals routes' alone.
+        let server = ApprovalServer()
+        _ = server.asked()
+        let settings = Seen<String>()
+        let wire = ApprovalWire(session: maya.tag) { method, path, body, stepToken in
+            if path.hasPrefix("/api/auth/two-step") {
+                settings.add(path)
+                return ApprovalWire.Reply(status: 501, text: json(["message": "Two-step sign-in is not available on this server.", "code": "off"]))
+            }
+            return try await server.wire().send(method, path, body, stepToken)
+        }
+        let inbox = try makeInbox(Held(maya)) { _ in wire }
+        await inbox.load()
+        #expect(inbox.prompts.map(\.id) == [server.requestId])
+        let asked = try #require(inbox.prompts.first)
+        inbox.answer(asked)
+        let flow = try #require(inbox.answering?.flow)
+        try await flow.open()
+        #expect(server.current == "opened")
+        // Nothing asked the settings whether it may.
+        #expect(settings.values.isEmpty)
+    }
+
+    @Test func aListReplyForTheLastSessionThatArrivesAfterTheSwitchShowsNothing() async throws {
+        let mayas = ApprovalServer()
+        _ = mayas.asked()
+        let sams = ApprovalServer()
+        let gate = Gate()
+        let held = Held(maya)
+        let mayaSession = maya
+        let inbox = try makeInbox(held) { session in
+            guard session == mayaSession else { return sams.wire(session: session.tag) }
+            return ApprovalWire(session: session.tag) { method, path, body, stepToken in
+                if method == "GET" { await gate.pass() }
+                return try await mayas.wire(session: session.tag).send(method, path, body, stepToken)
+            }
+        }
+        await inbox.load()
+        let asked = try #require(inbox.prompts.first)
+        #expect(asked.id == mayas.requestId)
+        inbox.answer(asked)
+        // Maya opens it: this run now holds her value for it.
+        try await #require(inbox.answering?.flow).open()
+        // A look for Maya's session is out, unanswered, when someone else signs in on the phone.
+        await gate.close()
+        let late = Task { await inbox.load() }
+        try await gate.reached()
+        held.current = sam
+        await inbox.load()
+        // At once, before the look that was out comes back: nothing of Maya's on Sam's screens.
+        #expect(inbox.prompts.isEmpty)
+        #expect(inbox.answering == nil)
+        // The reply for Maya's session arrives now, listing her request. It is shown nowhere.
+        await gate.open()
+        await late.value
+        #expect(inbox.prompts.isEmpty)
+        #expect(inbox.answering == nil)
+        // And a row still on screen from before answers nothing under Sam's session.
+        inbox.answer(asked)
+        #expect(inbox.answering == nil)
+        #expect(sams.calls.allSatisfy { $0.method == "GET" })
+        // Maya signs back in. Her request is listed again, but what the run held for her went with her session: the
+        // value it opened with is not sent again, and the request is ended.
+        held.current = maya
+        await inbox.load()
+        let again = try #require(inbox.prompts.first)
+        inbox.answer(again)
+        let opens = mayas.calls("/open").count
+        let flow = try #require(inbox.answering?.flow)
+        await #expect(throws: ApprovalProblem.restarted) { try await flow.open() }
+        #expect(mayas.calls("/open").count == opens)
+    }
+
+    @Test func aPhoneWithNoDeviceKeyForTheAccountAsksAndShowsNothing() async throws {
+        let server = ApprovalServer()
+        _ = server.asked()
+        let session = maya
+        let inbox = ApprovalInbox(source: ApprovalInbox.Source(session: { session }, identity: { _ in nil }, wire: { _ in server.wire() }, limit: LimitBox().limit))
+        await inbox.load()
+        #expect(inbox.prompts.isEmpty)
+        #expect(server.calls.isEmpty)
+    }
+}
+
+/* Two of the account's devices that could approve, a pending method, and the request one of them approved. */
+private let laptop = TwoStepStatus.Approver(id: "5b1c0d9e-8f7a-4c3b-9a2d-1e0f2a3b4c5d", kind: "web", name: "Maya’s Laptop", createdAt: nil)
+private let tablet = TwoStepStatus.Approver(id: "9a2d1e0f-2a3b-4c5d-8f7a-5b1c0d9e4c3b", kind: "android", name: nil, createdAt: nil)
+private let enrolment = DeviceEnrolment(id: "0f2a3b4c-5d5b-4c0d-9e8f-7a4c3b9a2d1e", token: token)
+private let request = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+private let codes = ["7KQ2M-9XD4P", "AAAAA-BBBBB"]
+
+@MainActor @Suite struct DeviceSetupTests {
+
+    @Test func nothingIsSentUntilADeviceIsChosenAndEveryRequestNamesIt() async throws {
+        // Two devices could approve, one of them perhaps opened by someone else with the password: the person says which.
+        let setup = DeviceSetup(first: true, approvers: [laptop, tablet])
+        #expect(setup.chosen == nil)
+        let server = ApprovalServer()
+        let started = Seen<String>()
+        let start: DeviceSetup.Start = { password, _ in
+            started.add(password)
+            return enrolment
+        }
+        // The confirm button, with none chosen: the words, and nothing out. Not the pending method, not a request.
+        var thrown: Error?
+        do { try await setup.begin(password: "a password", twoStep: nil, start: start) } catch { thrown = error }
+        #expect(thrown is DeviceSetup.Unchosen)
+        #expect(ErrorWords.say(try #require(thrown)) == "Choose the device that will approve.")
+        #expect(started.values.isEmpty && setup.started == nil)
+        var asked = true
+        do { _ = try setup.request(wire: server.wire(), key: random32()) } catch is DeviceSetup.Unchosen { asked = false }
+        #expect(!asked)
+        #expect(server.calls.isEmpty)
+        // A device the settings did not list cannot be chosen.
+        setup.choose("7c9e6679-7425-40de-944b-e07fc1f90ae7")
+        #expect(setup.chosen == nil)
+        setup.choose(tablet.id)
+        #expect(setup.chosen == tablet)
+        try await setup.begin(password: "a password", twoStep: nil, start: start)
+        #expect(started.values == ["a password"])
+        // The request carries the chosen id, and so does every Ask again.
+        for _ in 0 ..< 2 {
+            let ask = try await setup.request(wire: server.wire(), key: random32()).start(name: "iPhone 16 Pro")
+            #expect(ask.token == token)
+        }
+        let made = server.calls.filter { $0.method == "POST" && $0.path == "/api/auth/approvals" }
+        #expect(made.count == 2)
+        #expect(made.allSatisfy { $0.body["approverDeviceId"] as? String == tablet.id })
+        #expect(made.allSatisfy { $0.body["stepToken"] as? String == token })
+        // Once the pending method is out, the choice stands: the device that is asked is the one on screen.
+        setup.choose(laptop.id)
+        #expect(setup.chosen == tablet)
+        // The panel and the title name it: an unnamed device as the list of devices calls one.
+        #expect(StepWords.askOpen(on: setup.chosen?.shownName) == "Open HushOS on Unknown device and choose Answer.")
+        #expect(StepWords.approveOn(laptop.shownName) == "Approve on Maya’s Laptop")
+        #expect(StepWords.askOpen(on: nil) == "Open HushOS on another device and choose Answer.")
+        #expect(StepWords.approverHeading == "Device that will approve")
+    }
+
+    @Test func oneDeviceIsChosenAlreadyAndASignInOrAChangeNamesNone() async throws {
+        let setup = DeviceSetup(first: false, approvers: [laptop])
+        #expect(setup.chosen == laptop)
+        // Only turning the method on names a device: a sign-in's request, and a change's, are for any device that may answer.
+        let server = ApprovalServer()
+        _ = try await DeviceAsk.Request(wire: server.wire(session: nil), token: token, purpose: "login", key: random32()).start(name: "iPhone")
+        #expect(server.calls.first?.body["approverDeviceId"] == nil)
+    }
+
+    @Test func theSheetDoesNotCloseOverAConfirmationThatIsOutAndTheCodesOutliveAnAttemptToCloseIt() async throws {
+        let setup = DeviceSetup(first: true, approvers: [laptop])
+        setup.removeOthers = false
+        try await setup.begin(password: "a password", twoStep: nil) { _, _ in enrolment }
+        #expect(setup.mayClose)
+        let gate = Gate()
+        await gate.close()
+        let pendingWhenSent = Seen<Bool>()
+        let confirming = Task {
+            try await setup.confirm(requestId: request, password: "a password", send: { _, _ in
+                // The state is set before the request goes, not when its answer comes.
+                pendingWhenSent.add(await setup.confirming)
+                await gate.pass()
+                return .turnedOn(codes)
+            })
+        }
+        try await gate.reached()
+        #expect(pendingWhenSent.values == [true])
+        // The server has the confirmation and has not answered. Cancel, a swipe and the sheet going away are all refused.
+        #expect(setup.confirming && !setup.mayClose)
+        #expect(setup.close() == false)
+        #expect(setup.started != nil)
+        // Whoever was waiting for the answer is cancelled (the screen's own task): the answer is taken all the same.
+        confirming.cancel()
+        await gate.open()
+        #expect(try await confirming.value == .turnedOn)
+        #expect(setup.codes == codes)
+        #expect(!setup.confirming)
+        // The codes are up: still nothing but their own Done closes the sheet, and an attempt costs nothing.
+        #expect(!setup.mayClose)
+        #expect(setup.close() == false)
+        #expect(setup.codes == codes)
+        setup.done()
+        #expect(setup.codes == nil && setup.mayClose)
+    }
+
+    @Test func aConfirmationSentBeforeTheApprovalLandedChangesNothingAndALostOneSaysSo() async throws {
+        let setup = DeviceSetup(first: true, approvers: [laptop])
+        try await setup.begin(password: "a password", twoStep: nil) { _, _ in enrolment }
+        // 409 `step-pending`: nothing changed, the same setup stands and may be closed while it waits.
+        let pending = StepError.refused(.pending, "Waiting for your other device.")
+        await #expect(throws: pending) { _ = try await setup.confirm(requestId: request, password: "a password", send: { _, _ in throw pending }) }
+        #expect(setup.started == enrolment && !setup.confirming && setup.mayClose && setup.codes == nil)
+        // The reply never arrived: HushOS can't tell whether it was turned on, says so, and this setup is over.
+        let lost = StepError.lost(StepWords.lostDeviceOn)
+        await #expect(throws: lost) { _ = try await setup.confirm(requestId: request, password: "a password", send: { _, _ in throw lost }) }
+        #expect(lost.errorDescription == "The server’s answer didn’t arrive, so HushOS can’t tell whether approving on another device was turned on. Check before you try again.")
+        #expect(setup.started == nil && !setup.confirming && setup.codes == nil)
+        // Turning the step on always comes back with the codes: an answer without them claims nothing.
+        try await setup.begin(password: "a password", twoStep: nil) { _, _ in enrolment }
+        await #expect(throws: StepError.lost(StepWords.lostTurnedOn)) { _ = try await setup.confirm(requestId: request, password: "a password", send: { _, _ in .added }) }
+        #expect(setup.codes == nil)
+        // Beside other methods, `added` is the answer.
+        let beside = DeviceSetup(first: false, approvers: [laptop])
+        try await beside.begin(password: "a password", twoStep: nil) { _, _ in enrolment }
+        #expect(try await beside.confirm(requestId: request, password: "a password", send: { _, _ in .added }) == .added)
+    }
+
+    @Test func aSetupThatWasClosedConfirmsNothing() async throws {
+        // Cancel was pressed just as the other device approved: the approval is heard of after the sheet let go.
+        let setup = DeviceSetup(first: true, approvers: [laptop])
+        try await setup.begin(password: "a password", twoStep: nil) { _, _ in enrolment }
+        #expect(setup.close())
+        let sent = Seen<String>()
+        await #expect(throws: CancellationError.self) {
+            _ = try await setup.confirm(requestId: request, password: "a password", send: { _, id in
+                sent.add(id)
+                return .turnedOn(codes)
+            })
+        }
+        #expect(sent.values.isEmpty)
+        #expect(setup.codes == nil)
+    }
+}
+
 @Suite struct DeviceMethodSettingsTests {
-    private func status(_ methods: [[String: Any]], on: Bool = true, defaultKind: String? = nil, otherDevice: Any? = nil) throws -> TwoStepStatus {
+    private func status(
+        _ methods: [[String: Any]], on: Bool = true, defaultKind: String? = nil, otherDevice: Any? = nil, approvers: [[String: Any]]? = nil
+    ) throws -> TwoStepStatus {
         var body: [String: Any] = ["on": on, "methods": methods, "backupCodesLeft": 10, "totpFrozen": false, "defaultKind": defaultKind as Any? ?? NSNull()]
         if let otherDevice { body["otherDevice"] = otherDevice }
+        if let approvers { body["approvers"] = approvers }
         return try #require(TwoStepStatus(body))
     }
+
+    private let laptopRow: [String: Any] = ["id": "5b1c0d9e-8f7a-4c3b-9a2d-1e0f2a3b4c5d", "kind": "web", "name": "Maya’s Laptop", "createdAt": "2026-11-02T09:00:00.000Z"]
 
     private let app: [String: Any] = ["id": "a", "kind": "totp"]
     private let device: [String: Any] = ["id": "d", "kind": "device"]
@@ -726,10 +1165,12 @@ private func step(_ methods: [StepMethod]) -> StepChallenge {
         // A server that does not know the method says nothing of it: no row at all.
         #expect(try !status([app]).showsDevice)
         // Off, with another device that could approve: Turn on, on a phone with a key of its own to ask with.
-        let off = try status([app], otherDevice: true)
+        let off = try status([app], otherDevice: true, approvers: [laptopRow])
         #expect(off.showsDevice && off.deviceValue == "Off")
         #expect(off.canTurnOnDevice(ownKey: true))
         #expect(!off.canTurnOnDevice(ownKey: false))
+        // A server that names no device to choose: there is nothing the sheet could ask, so it is not offered.
+        #expect(try !status([app], otherDevice: true).canTurnOnDevice(ownKey: true))
         // No other device signed in: said, and nothing to press.
         let alone = try status([], on: false, otherDevice: false)
         #expect(alone.showsDevice && alone.deviceValue == "Needs another device")
@@ -740,6 +1181,25 @@ private func step(_ methods: [StepMethod]) -> StepChallenge {
         let on = try status([app, device], defaultKind: "totp", otherDevice: true)
         #expect(on.deviceValue == "On" && on.device?.id == "d")
         #expect(!on.canTurnOnDevice(ownKey: true))
+    }
+
+    @Test func theDevicesThatCouldApproveAreListedAsThePersonKnowsThem() throws {
+        let read = try status([], on: false, otherDevice: true, approvers: [
+            laptopRow,
+            ["id": "9a2d1e0f-2a3b-4c5d-8f7a-5b1c0d9e4c3b", "kind": "android", "name": NSNull(), "createdAt": "2026-10-30T18:00:00.000Z"],
+            ["id": "0f2a3b4c-5d5b-4c0d-9e8f-7a4c3b9a2d1e", "kind": NSNull(), "name": "   ", "createdAt": "never"],
+            // No id: nothing could be asked of it.
+            ["kind": "ios", "name": "iPhone", "createdAt": "2026-11-02T09:00:00.000Z"],
+        ])
+        #expect(read.approvers.map(\.id) == ["5b1c0d9e-8f7a-4c3b-9a2d-1e0f2a3b4c5d", "9a2d1e0f-2a3b-4c5d-8f7a-5b1c0d9e4c3b", "0f2a3b4c-5d5b-4c0d-9e8f-7a4c3b9a2d1e"])
+        #expect(read.approvers.map(\.shownName) == ["Maya’s Laptop", "Unknown device", "Unknown device"])
+        // Its kind in the Devices list's words, and when it was added.
+        let day: (Date) -> String = { _ in "2 Nov" }
+        #expect(read.approvers[0].line(day: day) == "A web browser · Added 2 Nov")
+        #expect(read.approvers[1].line(day: day) == "Android phone · Added 2 Nov")
+        #expect(read.approvers[2].line(day: day) == "")
+        // A server that lists none (an older one): none.
+        #expect(try status([], on: false, otherDevice: true).approvers.isEmpty)
     }
 
     @Test func theDefaultIsOfferedAmongWhateverKindsTheAccountHas() throws {
@@ -840,13 +1300,64 @@ extension OnFakeDrive {
         @Test func theSettingsAskForAnotherDeviceAndReadWhetherItCanBeTurnedOn() async throws {
             serve(StepServer(200, json: [
                 "on": true, "backupCodesLeft": 9, "totpFrozen": false, "defaultKind": "device", "otherDevice": true,
+                "approvers": [["id": "5b1c0d9e-8f7a-4c3b-9a2d-1e0f2a3b4c5d", "kind": "web", "name": "Maya’s Laptop", "createdAt": "2026-11-02T09:00:00.000Z"]],
                 "methods": [["id": "d", "kind": "device", "name": NSNull(), "createdAt": "2026-11-14T09:30:00.000Z", "lastUsedAt": NSNull()], ["id": "a", "kind": "totp"]],
             ]))
             defer { done() }
             let read = try #require(try await TwoStep.status())
             #expect(StepServer.current?.requests.first?.query == "methods=webauthn,device")
             #expect(read.device?.id == "d" && read.otherDevice == true)
+            #expect(read.approvers.map(\.shownName) == ["Maya’s Laptop"])
             #expect(read.isDefault(.device))
+        }
+
+        @MainActor @Test func turningTheStepOnRemovesEveryOtherDeviceButTheOneThatApproved() async throws {
+            // The password proof is an OPAQUE exchange with a real server; here it is given, and the request it goes in is the app's own.
+            let remove: DeviceSetup.Remove = { password, keep in
+                try await Devices.removeOthers(password: password, keep: keep, proof: { _ in ["attemptToken": "attempt", "finishLoginRequest": "finish"] })
+            }
+            func turnOn(first: Bool, ticked: Bool) async throws -> (StepServer, DeviceSetup, [Bool]) {
+                let server = StepServer(200, json: ["removed": 2])
+                server.script = { body in body["requestId"] == nil ? nil : (200, json(first ? ["backupCodes": codes] : ["added": true])) }
+                serve(server)
+                let setup = DeviceSetup(first: first, approvers: [laptop, tablet])
+                setup.choose(tablet.id)
+                setup.removeOthers = ticked
+                try await setup.begin(password: "a password", twoStep: nil) { _, _ in enrolment }
+                let ended = Seen<Bool>()
+                _ = try await setup.confirm(requestId: request, password: "a password", remove: remove, removal: { ended.add($0) })
+                // The codes are there before the removal has answered: it runs behind them.
+                if first { #expect(setup.codes == codes) }
+                for _ in 0 ..< 500 where setup.removing == .running { try await Task.sleep(for: .milliseconds(2)) }
+                return (server, setup, ended.values)
+            }
+            defer { done() }
+            let (server, setup, ended) = try await turnOn(first: true, ticked: true)
+            let sent = try #require(server.requests.last)
+            #expect(sent.method == "DELETE" && sent.path == "/api/auth/devices/others")
+            // Every other device but the chosen one: it approved, and it is the method.
+            #expect(sent.body["keep"] as? String == tablet.id)
+            #expect(sent.body["attemptToken"] as? String == "attempt" && sent.body["finishLoginRequest"] as? String == "finish")
+            #expect(sent.headers["Cookie"] == "__Host-hushos-session=session-token")
+            #expect(ended == [true] && setup.removing == .no)
+            // Unticked, nothing is removed; and a method added beside others never removes a device, whatever the box said.
+            let (unticked, _, _) = try await turnOn(first: true, ticked: false)
+            #expect(unticked.requests.allSatisfy { $0.method != "DELETE" })
+            let (beside, _, _) = try await turnOn(first: false, ticked: true)
+            #expect(beside.requests.allSatisfy { $0.method != "DELETE" })
+            // A removal that fails is a notice, and never costs the codes.
+            let failing = DeviceSetup(first: true, approvers: [laptop])
+            try await failing.begin(password: "a password", twoStep: nil) { _, _ in enrolment }
+            let failed = Seen<Bool>()
+            _ = try await failing.confirm(requestId: request, password: "a password", send: { _, _ in .turnedOn(codes) }, remove: { _, _ in throw AuthError.message("no") }, removal: { failed.add($0) })
+            for _ in 0 ..< 500 where failing.removing == .running { try await Task.sleep(for: .milliseconds(2)) }
+            #expect(failed.values == [false] && failing.removing == .failed && failing.codes == codes)
+            // Without a device to keep, the plain removal carries none.
+            let plain = StepServer(200, json: ["removed": 1])
+            serve(plain)
+            _ = try await Devices.removeOthers(password: "a password", keep: nil, proof: { _ in ["attemptToken": "attempt", "finishLoginRequest": "finish"] })
+            #expect(plain.requests.last?.body["keep"] == nil)
+            #expect(StepWords.othersButApprover == "All but this one and the one that approves. They’ll need to sign in again.")
         }
 
         @Test func turningItOnIsConfirmedOnlyByTheServersOwnTwoAnswers() async throws {
