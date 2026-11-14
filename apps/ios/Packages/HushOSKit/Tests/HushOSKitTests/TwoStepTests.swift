@@ -779,7 +779,7 @@ private func challenge(_ methods: [StepMethod] = [.totp, .backup, .phrase], phra
         // The default moving is its own line, by the kind it moved to; a kind this build does not know is still said.
         #expect(words("default-changed", "webauthn") == "Default changed to passkey or security key")
         #expect(words("default-changed", "totp") == "Default changed to authenticator app")
-        #expect(words("default-changed", "device") == "Default changed")
+        #expect(words("default-changed", "later") == "Default changed")
         #expect(words("default-changed") == "Default changed")
         #expect(words("key-counter", "webauthn") == "A security key was refused: it may have been copied")
         #expect(words("something-new") == "Security change")

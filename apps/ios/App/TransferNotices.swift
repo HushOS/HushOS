@@ -187,6 +187,8 @@ final class TransferNotices: NSObject, UNUserNotificationCenterDelegate {
         -> UNNotificationPresentationOptions {
         let content = notification.request.content
         guard content.categoryIdentifier == Self.pushCategory || content.userInfo["aps"] != nil else { return [] }
+        // A push that arrived with the app in front may be another device asking this one to confirm it's you: looked for now.
+        Task { @MainActor in await ApprovalInbox.shared.load() }
         return content.sound == nil ? [.banner, .list] : [.banner, .list, .sound]
     }
 }

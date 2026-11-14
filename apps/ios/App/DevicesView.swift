@@ -22,6 +22,14 @@ struct DevicesView: View {
 
     var body: some View {
         List {
+            // Another device asking this one to confirm a sign-in or a change: each with what is asked, and Answer.
+            if !ApprovalInbox.shared.prompts.isEmpty {
+                Section {
+                    ForEach(ApprovalInbox.shared.prompts, id: \.id) { asked in
+                        ApprovalRow(text: approvalAsks(purpose: asked.purpose, deviceName: asked.deviceName)) { ApprovalInbox.shared.answer(asked) }
+                    }
+                }
+            }
             if let problem {
                 Section {
                     Text(problem).foregroundStyle(Alpine.danger)
@@ -64,8 +72,13 @@ struct DevicesView: View {
         .alpineGrouped()
         .navigationTitle("Devices")
         .screenChrome(title: "Devices")
-        .refreshable { await load() }
+        .refreshable {
+            await ApprovalInbox.shared.load()
+            await load()
+        }
         .task { await load() }
+        // Opened from a notice, or by hand: what is waiting is read at once (Account goes on looking while it is up).
+        .task { await ApprovalInbox.shared.load() }
         .alert(removing.map { "Remove \($0.label)?" } ?? "", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } })) {
             SecureField("Your password", text: $password).textContentType(.password)
             Button("Cancel", role: .cancel) { password = "" }

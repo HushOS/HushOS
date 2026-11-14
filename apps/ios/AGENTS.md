@@ -381,6 +381,22 @@ Markdown files (`text/markdown`, or `.md`, `.markdown`, `.mdx`) up to 2 MB open 
 - Adding a key (`KeySheet`): `TwoStep.startKey`, the sheet on the press of Add, `TwoStep.addKey`. A server refusal (`KeyRefused`) or a lost reply goes back to the password; a closed sheet keeps the setup.
 - Not checked on a device: the system's sheet itself, for a passkey or a security key over NFC or USB. A simulator cannot run it against localhost. What a real iPhone signed in to hushos.com must show: both ceremonies complete, the server takes the answer, and a closed sheet leaves the step.
 
+#### Approve on another device
+
+`docs/two-step-design.md` 12 ("What was built (item 2)"). `DeviceApproval.swift` in HushOSKit holds the order of the requests and every check; `App/DeviceApproval.swift` the panel, the list and the sheet. The cryptography and every reply's reading are the core's.
+
+- Asking (`DeviceAsk`): the commitment goes first; the key and nonce are revealed only on `opened`, once; the step is answered only with an approved request (`answered`). `step-pending` keeps waiting and is never an error or a wrong answer.
+    - Nothing is asked without a press: the step's button (Use another device) or choosing it under Use another way. Opening a form never sends a prompt. The form's own button then sends the change with the approved request (`StepDraft.approved`, good for its own token only).
+    - The key: `StepDeviceKey`. A sign-in that sent its device proof asks with that key; one that sent none makes a key before it has a session and registers with it (`Auth.registerDevice(made:)`). A change asks with the stored key (`DeviceApprovals.ownKey`), and names `device` only when there is one.
+    - `twoStepMethods` always names `device` at sign-in (`Auth.namedAtSignIn`).
+- Answering (`ApprovalAnswering`): holds the request as first listed, before this phone opened it. A reveal that is not that commitment, or a scanned code for another request or commitment, ends it (`mismatch`) with nothing signed. Only the exact typed code is signed; anything else ends it (`wrong-code`). The account id signed over is the phone's own, never the list reply's.
+    - `ApprovalInbox` reads the list when the app comes to the front, every five seconds while Account is on screen, and when a push is shown in the foreground. Home's first row and Devices' rows open `ApprovalSheet` (MainView's sheet).
+    - `PromptLimit`: five prompts a day for each class, counted by the core, kept in `state/approval-prompts.json` (wiped with the account).
+- Settings: `TwoStepStatus.showsDevice`, `deviceValue`, `canTurnOnDevice`; Turn on is `DeviceMethodSheet` (no offer to remove other devices), Turn off is `RemoveMethodSheet`.
+- The Files sign-in sheet still has no step screen.
+- Tests: `DeviceApprovalTests` (an in-memory server that can be made to lie; the web's fixture `web-device-approval.json`).
+- Not checked against a live server or on a device: the sign-in step screen and the settings row in place, the camera scan (the simulator has no camera), and the push.
+
 ### Sign-up
 
 - "Create an account" on the sign-in screen opens `SignupView` (`App/SignupView.swift`, a full-screen cover like `RecoveryView`). Steps:
