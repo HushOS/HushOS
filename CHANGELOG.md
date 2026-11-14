@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.8.0](https://github.com/HushOS/HushOS/compare/v1.7.0...v1.8.0) (2026-11-14)
+
+
+### Features
+
+* **apps:** drop dialog descriptions that restate, instruct or reassure ([#438](https://github.com/HushOS/HushOS/issues/438)) ([efa3a64](https://github.com/HushOS/HushOS/commit/efa3a64f381ed4c42a2745d30f2fac0791fb411a))
+* **web:** cut the family page to what a person needs to choose and act ([#436](https://github.com/HushOS/HushOS/issues/436)) ([6de83d5](https://github.com/HushOS/HushOS/commit/6de83d578dbbbd9014a9451ddd9abd53bff4f0aa))
+* **web:** drop the small grey group labels from the command palette ([#439](https://github.com/HushOS/HushOS/issues/439)) ([1f0ee04](https://github.com/HushOS/HushOS/commit/1f0ee04473519f060d19c08d72789303dc439b22))
+* **web:** fold Advanced and a family's technical details away as accordions ([#429](https://github.com/HushOS/HushOS/issues/429)) ([1c8e1f4](https://github.com/HushOS/HushOS/commit/1c8e1f4e727414a848c455486b401ccef96b0732))
+* **web:** give someone in no family a centred empty state ([#430](https://github.com/HushOS/HushOS/issues/430)) ([020055b](https://github.com/HushOS/HushOS/commit/020055bcfeddecb663b1e5a759bd1ec5c971da99))
+* **web:** give the settings pages the full width of the pane ([#427](https://github.com/HushOS/HushOS/issues/427)) ([996a2ac](https://github.com/HushOS/HushOS/commit/996a2accc0c8c3d3df2bf1a2c1405ffe03018093))
+* **web:** move the account menu to a full-width row at the foot of the sidebar ([#432](https://github.com/HushOS/HushOS/issues/432)) ([3f3004a](https://github.com/HushOS/HushOS/commit/3f3004a5e72bf91d358c7d55d43ad27e687c8fd2))
+* **web:** remove the card of shortcuts shown while the command key is held ([#433](https://github.com/HushOS/HushOS/issues/433)) ([19d44eb](https://github.com/HushOS/HushOS/commit/19d44eba566475ea56569f619cfa3244c1888105))
+
+
+### Bug fixes
+
+* **web:** let the admin count grid draw its own lines ([#431](https://github.com/HushOS/HushOS/issues/431)) ([fd75912](https://github.com/HushOS/HushOS/commit/fd7591298dc0d330c007bb8f60f70d55332fd658))
+* **web:** mark a highlighted item with a fill, and make hover show on every surface ([#437](https://github.com/HushOS/HushOS/issues/437)) ([3d5b8f2](https://github.com/HushOS/HushOS/commit/3d5b8f2176e9fd650e7a8ca854b4ec74a006432c))
+
 ## [1.7.0](https://github.com/HushOS/HushOS/compare/v1.6.0...v1.7.0) (2026-11-13)
 
 
