@@ -121,9 +121,16 @@ describe('two-step notices on the account’s devices', () => {
     test('turning the step on pings every device of the account with an event id alone, though every toggle is off', async () => {
         const who = await edge.account();
         const laptop = await device(who);
-        const phone = await device(who);
-        // The second sign-in was itself a notice to the first device: let it land, then start clean.
-        expect(await pinged(1)).toMatchObject([{ handle: laptop.handle }]);
+        // The second sign-in is itself a notice to the devices registered when it is sent, and it
+        // is sent after the reply, unawaited. Registered at once, the phone would sometimes be on
+        // that list and sometimes not. So it signs in, the notice lands on the one device there
+        // is, and only then does the phone register: what is checked below starts clean either way.
+        const signedIn = (await edge.signIn(who)).session!;
+        expect(await pinged(1)).toEqual([expect.objectContaining({ handle: laptop.handle })]);
+        // Nothing more is on its way: the laptop was the only device to tell.
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(pings).toHaveLength(1);
+        const phone = await device(who, signedIn);
         pings.length = 0;
         // Another account's device, registered with the same relay: it must hear nothing.
         const stranger = await edge.account();
