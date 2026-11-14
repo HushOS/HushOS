@@ -505,16 +505,3 @@ export function TechnicalSection({ className }: { className?: string }) {
 /* What the server learns from a family, at the foot of the families pages, in the app's words. */
 export const SERVER_KNOWS =
     'HushOS’s server knows the family’s name, who is in it and what each person can do, who invited and let in whom, and how many family folders there are and roughly how big. It can’t open family folders.';
-
-export function ServerKnows({ className }: { className?: string }) {
-    return (
-        <span
-            className={cn(
-                'mt-auto block px-6 pt-5 pb-5 text-[13px] leading-snug text-muted-foreground',
-                className,
-            )}
-        >
-            {SERVER_KNOWS}
-        </span>
-    );
-}

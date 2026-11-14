@@ -5,18 +5,7 @@ import { FolderMark } from '@/components/folder-mark';
 import { SheetMark } from '@/components/sheet-mark';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import {
-    AppWindow,
-    Checked,
-    FAMILY,
-    JONAS,
-    MAYA,
-    PersonRow,
-    SAM,
-    Section,
-    ServerKnows,
-    Sidebar,
-} from './faux';
+import { AppWindow, Checked, FAMILY, JONAS, MAYA, PersonRow, SAM, Section, Sidebar } from './faux';
 import { DEMO_START, foldersDemo, NAME_MAX, type DemoFolder } from './folders-demo-state';
 
 /*
@@ -332,7 +321,6 @@ export function FamilyFoldersDemo() {
                 {/* While the dialog is open, the page behind it is out of reach, as in the app. */}
                 <div inert={open} className="flex flex-1 flex-col">
                     {body}
-                    <ServerKnows className="max-sm:px-5" />
                 </div>
             </AppWindow>
             <p className="mt-2 text-[13px] text-muted-foreground">

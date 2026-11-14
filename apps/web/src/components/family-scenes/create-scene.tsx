@@ -1,4 +1,5 @@
 import { cn } from 'cn';
+import { UsersIcon } from 'lucide-react';
 import { Spinner } from '@/components/motion';
 import type { Act } from '@/components/stageshow/act';
 import { segmentOn, segmentTrack } from '@/components/ui/segment';
@@ -11,7 +12,6 @@ import {
     MAYA,
     PersonRow,
     Section,
-    ServerKnows,
     TechnicalSection,
     Title,
     Toast,
@@ -72,7 +72,7 @@ function ChoosePlan({ compact }: { compact: boolean }) {
     return (
         <Section
             title="Choose a plan"
-            description={`Choose a plan before you invite anyone to ${FAMILY} or make family folders. Until then, only you are in it.`}
+            description="Choose a plan to invite people and make family folders."
         >
             <span className={cn('mt-3 flex w-fit gap-1 rounded-md p-1 text-[13px]', segmentTrack)}>
                 <span className={cn('rounded-sm px-3 py-1.5 font-bold', segmentOn)}>Monthly</span>
@@ -125,7 +125,7 @@ function ChoosePlan({ compact }: { compact: boolean }) {
                 )}
             </span>
             <span className="mt-3 text-[13px] text-muted-foreground">
-                Plus tax where it applies; Polar adds it at checkout. Payments are handled by Polar.
+                Plus tax where it applies. Payments by Polar.
             </span>
         </Section>
     );
@@ -152,7 +152,6 @@ export function CreateFamilyScene() {
                                 <Dialog
                                     open={s.dialog}
                                     title="Create a family"
-                                    description="You’ll be its organizer. Then choose a plan and invite people by email."
                                     className={
                                         compact
                                             ? 'inset-x-3 top-16'
@@ -195,33 +194,23 @@ export function CreateFamilyScene() {
                                 s.created && 'opacity-0',
                             )}
                         >
-                            <Title
-                                actions={
-                                    !compact && (
-                                        <FauxButton target={compact ? undefined : 'create'}>
-                                            Create a family
-                                        </FauxButton>
-                                    )
-                                }
-                                description="A family shares one plan’s storage, for everyone’s own files and the family folders. You can be in one family."
-                            >
-                                Family
-                            </Title>
-                            {compact && (
-                                <span className="px-6">
+                            <Title>Family</Title>
+                            {/* The page is its empty state, centred: the place's icon, a title, one line, the button. */}
+                            <span className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
+                                <UsersIcon
+                                    aria-hidden="true"
+                                    className="mb-2 size-8 text-muted-foreground"
+                                />
+                                <span className="text-xl font-bold tracking-[-0.01em]">
+                                    No family yet
+                                </span>
+                                <span className="text-[15px] text-muted-foreground">
+                                    Create one, or join from the link in an invitation email.
+                                </span>
+                                <span className="mt-3">
                                     <FauxButton target="create">Create a family</FauxButton>
                                 </span>
-                            )}
-                            <Section
-                                title="Invitations"
-                                description="Someone in a family invites you by email, and you join from the link in it."
-                                className="mt-4"
-                            >
-                                <span className="py-3 text-sm text-muted-foreground">
-                                    No invitations right now.
-                                </span>
-                            </Section>
-                            <ServerKnows />
+                            </span>
                         </span>
 
                         {/* The family's page: the plan first, then, once it's on, its members. */}
@@ -287,12 +276,6 @@ export function CreateFamilyScene() {
                                     <TechnicalSection className="-mt-5" />
                                 </span>
                             </span>
-                            <ServerKnows
-                                className={cn(
-                                    'transition-opacity duration-300',
-                                    !s.paid && 'opacity-0',
-                                )}
-                            />
                         </span>
                     </AppWindow>
                 );

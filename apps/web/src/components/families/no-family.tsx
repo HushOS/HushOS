@@ -6,7 +6,6 @@ import { EmptyState } from '@/components/drive/file-list';
 import { CreateFamilyDialog } from '@/components/families/create-family-dialog';
 import { DeclineInvitation } from '@/components/families/decline-invitation';
 import { NoticeList } from '@/components/families/family-alerts';
-import { ServerKnowsLine } from '@/components/families/server-knows';
 import { PageHeader } from '@/components/page-header';
 import { Setting, SettingsGroup, SettingsPage } from '@/components/settings';
 import { Button, buttonVariants } from '@/components/ui/button';
@@ -161,8 +160,6 @@ export function NoFamily({
                     )}
                 </div>
             )}
-            {/* What the server knows of a family is said once there is one to speak of. */}
-            {!empty && <ServerKnowsLine className="mt-auto" />}
             <CreateFamilyDialog
                 userId={userId}
                 open={open}

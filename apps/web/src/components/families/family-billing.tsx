@@ -61,7 +61,6 @@ import {
     seatNoteFor,
     removeRange,
     renewalAmount,
-    TAX_LINE,
     TAX_ON_CHARGES,
     tierMoves,
     upgradeStanding,
@@ -654,21 +653,11 @@ function PortalButton({ groupId, label }: { groupId: string; label: string }) {
 }
 
 /* The plans, monthly or yearly, in the visitor's currency as the pricing page picks it. */
-function ChoosePlan({
-    userId,
-    groupId,
-    family,
-    summary,
-    members,
-    renewing,
-}: Inner & { renewing?: boolean }) {
-    // Only you in it so far (a new family): said. Others already in it (a plan that never
-    // started, members kept from before): the sentence would be false, so it goes.
-    const alone = !members?.some((member) => member.state === 'active' && member.userId !== userId);
+function ChoosePlan({ userId, groupId, summary, renewing }: Inner & { renewing?: boolean }) {
     // A personal plan the person pays for ends when the family's plan starts, with the unused
     // days refunded (docs/families-shared-pool.md 3.3): said before they pay.
     const personal = useQuery(billingQueryOptions).data?.subscription;
-    const ownPlan = personalPlanEnding(personal, 'the family’s plan starts');
+    const ownPlan = personalPlanEnding(personal, 'the family plan starts');
     const hint = useQuery(localeHintQueryOptions);
     const plans = summary.plans;
     const currencies = familyCurrencies(plans);
@@ -745,13 +734,12 @@ function ChoosePlan({
                 </h2>
                 {!renewing && (
                     <p className="max-w-[43em] text-sm text-muted-foreground">
-                        Choose a plan before you invite anyone to {family} or make family folders.
-                        {alone && ' Until then, only you are in it.'}
+                        Choose a plan to invite people and make family folders.
                     </p>
                 )}
                 {ownPlan && (
                     <p className="max-w-[43em] text-sm" data-personal-plan-ends>
-                        {ownPlan} From then on your files use the family’s storage.
+                        {ownPlan}
                     </p>
                 )}
             </div>
@@ -787,13 +775,10 @@ function ChoosePlan({
                                         {formatMoney(price.base, price.currency)}{' '}
                                         {per[plan.interval]}
                                     </span>
-                                    <span>
-                                        For up to {plan.includedMembers} members, sharing{' '}
-                                        {formatQuota(plan.quotaBytes)}.
-                                    </span>
-                                    <span>
-                                        Then {extra} {per[plan.interval]} for each member after
-                                        that, up to {plan.maxMembers}.
+                                    {/* One line at a desk's card width: who is included, what each one more costs and over what period, and the most it takes. */}
+                                    <span className="text-pretty">
+                                        {plan.includedMembers} members, then {extra}{' '}
+                                        {per[plan.interval]} each, up to {plan.maxMembers}
                                     </span>
                                 </span>
                                 <Button
@@ -819,7 +804,7 @@ function ChoosePlan({
                 </p>
             )}
             <p className="text-[13px] text-muted-foreground">
-                {TAX_LINE} Payments are handled by Polar.
+                Plus tax where it applies. Payments by Polar.
             </p>
             <Dialog
                 open={confirming !== null}
