@@ -1,0 +1,29 @@
+apps/web/src/components/families/family-page.tsx
+  s_566b8e0c4467a4::t_5090cc98704200 2,498,505-510
+  s_566b8e0c4467a4::t_a445c3bce6635a 496
+e2e/families.spec.ts
+  s_566b8e0c4467a4::t_e0c627c125f696 1779,1787-1790
+apps/web/src/components/families/family-billing.tsx
+  s_566b8e0c4467a4::t_fa5a60851ee072 656,737,742,807
+  s_566b8e0c4467a4::t_3d1e28c0335a08 779
+apps/web/src/components/account-family.tsx
+  s_566b8e0c4467a4::t_b5e49084535caf 26,28-46,58
+apps/web/src/components/settings.tsx
+  s_566b8e0c4467a4::t_0d0e0fddbca655 83-86,104,108
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7f20eeaebadf159d31e5003798c2fb359d836cb9",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}

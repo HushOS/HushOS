@@ -1,0 +1,25 @@
+apps/web/src/components/drive/command-palette.tsx
+  s_566b8e0c4467a4::t_dbd69f8a7fd130 38
+apps/web/src/components/drive/kbd.tsx
+  s_566b8e0c4467a4::t_f41b3ae4692d73 1
+apps/web/src/components/drive/shortcuts.ts
+  s_566b8e0c4467a4::t_c3953639390f3c 2-3
+apps/web/src/components/search-button.tsx
+  s_566b8e0c4467a4::t_f6fa13e68ed6b8 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "521765088ecba38071c11d0f0936c914f077498d",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
