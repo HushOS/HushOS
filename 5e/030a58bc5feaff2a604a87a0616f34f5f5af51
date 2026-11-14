@@ -1,0 +1,14 @@
+apps/web/src/content/blog/family-plans.mdx
+  h_f7ba60a6997566 28,123,125,127
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5e030a58bc5feaff2a604a87a0616f34f5f5af51",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
