@@ -7,6 +7,7 @@ import {
     useState,
     useSyncExternalStore,
     type ComponentProps,
+    type ComponentType,
     type CSSProperties,
     type ReactNode,
     type MouseEvent,
@@ -717,15 +718,19 @@ export function SortButton({
 }
 
 /*
- * A centred empty, error or waiting state: a short title, one line, actions. No mark above
- * it (DESIGN.md: no icon tiles), as on iOS and Android.
+ * A centred empty, error or waiting state: a short title, one line, actions. A list's
+ * empty state has no mark above it. A page that is nothing but its empty state (Family,
+ * for someone in none) may carry one plain icon, the place's own: a glyph, never a tile
+ * (DESIGN.md), as the phones' empty screens do.
  */
 export function EmptyState({
+    icon: Icon,
     title,
     body,
     children,
     className,
 }: {
+    icon?: ComponentType<{ className?: string; 'aria-hidden'?: boolean | 'true' }>;
     title: string;
     body?: ReactNode;
     children?: ReactNode;
@@ -738,6 +743,7 @@ export function EmptyState({
                 className,
             )}
         >
+            {Icon && <Icon aria-hidden="true" className="mb-2 size-8 text-muted-foreground" />}
             <h2 className="text-xl font-bold tracking-[-0.01em] text-balance">{title}</h2>
             {body && (
                 <p className="max-w-[25.2em] text-[15px] leading-snug text-muted-foreground">
