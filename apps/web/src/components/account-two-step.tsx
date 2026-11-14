@@ -13,6 +13,7 @@ import { devicesQueryOptions } from '@/components/account-devices';
 import { CopyCheckIcon } from '@/components/copy-button';
 import { SECRET_FIELD } from '@/components/password-input';
 import { QrCode } from '@/components/qr-code';
+import { DeviceAsk } from '@/components/device-ask';
 import { DialogField, Setting, SettingsGroup } from '@/components/settings';
 import { StepUpFields } from '@/components/two-step-answer';
 import { Badge } from '@/components/ui/badge';
@@ -47,8 +48,9 @@ import {
 
 /*
  * Two-step sign-in in Account (docs/two-step-design.md 2, 3, 4, 7, 12): passkeys and security
- * keys (add, name, remove, up to ten), the authenticator app, which of the two is offered
- * first, the backup codes shown once, and the account's recent security activity. Every
+ * keys (add, name, remove, up to ten), the authenticator app, approving on another device,
+ * which of them is offered first, the backup codes shown once, and the account's recent
+ * security activity. Every
  * change asks for the password again and, once the step is on, for the step; choosing the
  * default changes only an order and asks for neither. Nothing shows on a server that has
  * two-step off.
@@ -63,6 +65,7 @@ import {
 type Open =
     | { kind: 'app'; mode: 'on' | 'add' | 'replace' }
     | { kind: 'key' }
+    | { kind: 'device' }
     | { kind: 'rename'; method: TwoStepMethod }
     | { kind: 'remove'; method: TwoStepMethod }
     | { kind: 'codes' }
@@ -74,7 +77,9 @@ const CODES_LOW = 2;
 const kindWords = {
     webauthn: 'Passkey or security key',
     totp: 'Authenticator app',
+    device: 'Approve on another device',
 } as const;
+type Kind = keyof typeof kindWords;
 
 export function AccountTwoStep({ user }: { user: SessionUser }) {
     const enabled = useTwoStepEnabled();
@@ -103,10 +108,11 @@ export function AccountTwoStep({ user }: { user: SessionUser }) {
     const methods = status.data?.methods ?? [];
     const app = methods.find((method) => method.kind === 'totp');
     const keys = methods.filter((method) => method.kind === 'webauthn');
+    const device = methods.find((method) => method.kind === 'device');
     const on = status.data?.on === true;
     const defaultKind = status.data?.defaultKind ?? null;
     // Which kind is offered first changes only an order: no password, no step.
-    async function makeDefault(kind: 'webauthn' | 'totp') {
+    async function makeDefault(kind: Kind) {
         setProblem('');
         setMoving(true);
         try {
@@ -126,11 +132,15 @@ export function AccountTwoStep({ user }: { user: SessionUser }) {
      * neither with one kind. The default is a kind, not a key: the badge is on the kind's
      * row, after how many keys there are, and never on one key among several.
      */
-    const choosing = on && Boolean(app) && keys.length > 0;
-    const isDefault = (kind: 'webauthn' | 'totp') =>
+    const kinds = Number(Boolean(app)) + Number(keys.length > 0) + Number(Boolean(device));
+    const choosing = on && kinds > 1;
+    const isDefault = (kind: Kind) =>
         choosing && defaultKind === kind ? <Badge>Default</Badge> : null;
-    const makeIt = (kind: 'webauthn' | 'totp') =>
-        choosing && defaultKind !== kind ? (
+    // Only under a kind the account has: the server refuses any other.
+    const has = (kind: Kind) =>
+        kind === 'webauthn' ? keys.length > 0 : kind === 'totp' ? Boolean(app) : Boolean(device);
+    const makeIt = (kind: Kind) =>
+        choosing && has(kind) && defaultKind !== kind ? (
             <Button
                 variant="outline"
                 disabled={moving}
@@ -280,6 +290,50 @@ export function AccountTwoStep({ user }: { user: SessionUser }) {
                                 <span className="text-muted-foreground">Not added</span>
                             )}
                         </Setting>
+                        {/* Only where the server knows the method: a row for it, On or Off. */}
+                        {(device || status.data.otherDevice !== undefined) && (
+                            <Setting
+                                label={kindWords.device}
+                                data={{ 'data-two-step-device': device ? 'on' : 'off' }}
+                                action={
+                                    device ? (
+                                        <>
+                                            {makeIt('device')}
+                                            <Button
+                                                variant="destructive-outline"
+                                                aria-label="Turn off Approve on another device"
+                                                onClick={() =>
+                                                    begin({ kind: 'remove', method: device })
+                                                }
+                                            >
+                                                Turn off
+                                            </Button>
+                                        </>
+                                    ) : (
+                                        status.data.otherDevice && (
+                                            <Button
+                                                variant="outline"
+                                                aria-label="Turn on Approve on another device"
+                                                onClick={() => begin({ kind: 'device' })}
+                                            >
+                                                Turn on
+                                            </Button>
+                                        )
+                                    )
+                                }
+                            >
+                                <span className="flex min-w-0 flex-wrap items-center gap-2">
+                                    <span className="whitespace-nowrap text-muted-foreground">
+                                        {device
+                                            ? 'On'
+                                            : status.data.otherDevice
+                                              ? 'Off'
+                                              : 'Needs another device'}
+                                    </span>
+                                    {isDefault('device')}
+                                </span>
+                            </Setting>
+                        )}
                         {on && (
                             <Setting
                                 label="Backup codes"
@@ -322,6 +376,14 @@ export function AccountTwoStep({ user }: { user: SessionUser }) {
                 user={user}
                 first={!on}
                 open={open?.kind === 'key'}
+                onClose={close}
+                onDone={finish}
+            />
+            <DeviceDialog
+                key={`device-${open?.kind === 'device'}`}
+                user={user}
+                first={!on}
+                open={open?.kind === 'device'}
                 onClose={close}
                 onDone={finish}
             />
@@ -430,6 +492,7 @@ const withMethod: Record<NonNullable<SecurityEvent['method']>, string> = {
     backup: 'a backup code',
     phrase: 'your recovery phrase',
     webauthn: 'a passkey or security key',
+    device: 'another device',
 };
 const deviceWords = { web: 'Browser', ios: 'iPhone or iPad', android: 'Android' } as const;
 
@@ -460,19 +523,25 @@ function eventWords(event: SecurityEvent) {
                 ? 'Passkey or security key added'
                 : event.method === 'totp'
                   ? 'Authenticator app added'
-                  : 'Second-step method added';
+                  : event.method === 'device'
+                    ? 'Approve on another device turned on'
+                    : 'Second-step method added';
         case 'method-removed':
             return event.method === 'webauthn'
                 ? 'Passkey or security key removed'
                 : event.method === 'totp'
                   ? 'Authenticator app removed'
-                  : 'Second-step method removed';
+                  : event.method === 'device'
+                    ? 'Approve on another device turned off'
+                    : 'Second-step method removed';
         case 'default-changed':
             return event.method === 'webauthn'
                 ? 'Default changed to passkey or security key'
                 : event.method === 'totp'
                   ? 'Default changed to authenticator app'
-                  : 'Default changed';
+                  : event.method === 'device'
+                    ? 'Default changed to another device'
+                    : 'Default changed';
         case 'key-counter':
             return 'A security key was refused: it may have been copied';
         case 'backup-codes-made':
@@ -1322,6 +1391,183 @@ function KeyDialog({
     );
 }
 
+/*
+ * Turning on Approve on another device (docs/two-step-design.md 12): the password (and the
+ * step, once it is on), then one real approval from another device, asked from here the way a
+ * sign-in asks. The account's first method turns the step on, and its backup codes follow.
+ * The other devices are not offered for removal: the other device is the method.
+ */
+function DeviceDialog({
+    user,
+    first,
+    open,
+    onClose,
+    onDone,
+}: {
+    user: SessionUser;
+    /* The account has no method yet: this turns the step on. */
+    first: boolean;
+    open: boolean;
+    onClose: () => void;
+    onDone: (said: string) => void;
+}) {
+    const step = useStepUp('two-step');
+    const [password, setPassword] = useState('');
+    const [tried, setTried] = useState(false);
+    const [pending, setPending] = useState(false);
+    const [error, setError] = useState('');
+    const [started, setStarted] = useState<{ id: string; token: string } | null>(null);
+    const [approved, setApproved] = useState('');
+    const [codes, setCodes] = useState<string[] | null>(null);
+    const era = useForgottenOnLock(open, () => {
+        setStarted(null);
+        setCodes(null);
+        setPassword('');
+        onClose();
+    });
+    const { ask } = step;
+    useEffect(() => {
+        if (open && !first) void ask().catch(() => {});
+        // Only when the dialog opens.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [open, first]);
+
+    async function start() {
+        setTried(true);
+        if (!password) return;
+        setPending(true);
+        setError('');
+        try {
+            if (await step.ask()) return;
+            const twoStep = await step.prove();
+            if (twoStep === null) return;
+            const at = era.current;
+            const next = await authClient.startDeviceMethod(password, twoStep);
+            if (at !== era.current) return;
+            setStarted(next);
+            setTried(false);
+        } catch (cause) {
+            cue('error');
+            if (!(await step.failed(cause))) setError(authError(cause));
+        } finally {
+            setPending(false);
+        }
+    }
+    async function confirm(requestId: string) {
+        if (!started) return;
+        setApproved(requestId);
+        setPending(true);
+        setError('');
+        try {
+            const at = era.current;
+            const confirmed = await authClient.confirmDeviceMethod(started, requestId);
+            if (at !== era.current) return;
+            cue('success');
+            if ('backupCodes' in confirmed) {
+                // The codes first: they are shown once, and nothing that follows may cost them.
+                setCodes(confirmed.backupCodes);
+                onDone('');
+                return;
+            }
+            // Turning the step on always comes back with the codes: without them this is not
+            // the server's answer to that, and the section behind is read again.
+            if (first)
+                throw new LostReply(
+                    'The server’s answer didn’t arrive, so HushOS can’t tell whether two-step sign-in was turned on. Check before you try again.',
+                );
+            onDone('Approve on another device is on');
+            onClose();
+        } catch (cause) {
+            cue('error');
+            // The approval is used up or over either way: the setup starts again, and the
+            // section behind is read again in case it went through.
+            setStarted(null);
+            setApproved('');
+            onDone('');
+            setError(authError(cause));
+        } finally {
+            setPending(false);
+        }
+    }
+    const cancel = (
+        <Button type="button" variant="outline" disabled={pending} onClick={onClose}>
+            Cancel
+        </Button>
+    );
+    if (codes)
+        return (
+            <Shell
+                open={open}
+                locked
+                pending={false}
+                title="Save your backup codes"
+                description="Two-step sign-in is on."
+                onClose={onClose}
+                onSubmit={() => {
+                    onDone('');
+                    onClose();
+                }}
+                footer={<Button type="submit">Done</Button>}
+            >
+                <BackupCodes codes={codes} email={user.email} />
+            </Shell>
+        );
+    if (started)
+        return (
+            <Shell
+                open={open}
+                pending={pending}
+                title="Approve on your other device"
+                onClose={onClose}
+                onSubmit={() => {}}
+                footer={cancel}
+            >
+                {/* The press of Continue asked for it: the request goes out as this opens. */}
+                <DeviceAsk
+                    key={started.token}
+                    token={started.token}
+                    purpose="device-approval"
+                    approved={approved}
+                    auto
+                    disabled={pending}
+                    onApproved={(requestId) => void confirm(requestId)}
+                />
+                <Problem>{error}</Problem>
+            </Shell>
+        );
+    return (
+        <Shell
+            open={open}
+            pending={pending}
+            title={first ? 'Turn on two-step sign-in?' : 'Turn on Approve on another device?'}
+            description={
+                first
+                    ? 'After your password, HushOS will ask another of your devices to confirm it’s you.'
+                    : undefined
+            }
+            onClose={onClose}
+            onSubmit={() => void start()}
+            footer={
+                <>
+                    {cancel}
+                    <Button type="submit" disabled={pending}>
+                        {pending ? 'Checking' : 'Continue'}
+                    </Button>
+                </>
+            }
+        >
+            <PasswordField
+                value={password}
+                onChange={setPassword}
+                disabled={pending}
+                tried={tried}
+            />
+            <StepUpFields step={step} disabled={pending} />
+            <Problem>{error}</Problem>
+        </Shell>
+    );
+}
+
 /* A key's name: a label for this list, by the device-name rules, and not encrypted. */
 function RenameKeyDialog({
     method,
@@ -1426,6 +1672,7 @@ function RemoveDialog({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [open]);
     const app = method?.kind === 'totp';
+    const another = method?.kind === 'device';
     async function submit() {
         setTried(true);
         if (!password || !method) return;
@@ -1442,7 +1689,9 @@ function RemoveDialog({
                     ? 'Two-step sign-in is off'
                     : app
                       ? 'Authenticator app removed'
-                      : 'Passkey or security key removed',
+                      : another
+                        ? 'Approve on another device is off'
+                        : 'Passkey or security key removed',
             );
             onClose();
         } catch (cause) {
@@ -1464,7 +1713,9 @@ function RemoveDialog({
                     ? 'Turn off two-step sign-in?'
                     : app
                       ? 'Remove your authenticator app?'
-                      : 'Remove this passkey or security key?'
+                      : another
+                        ? 'Turn off Approve on another device?'
+                        : 'Remove this passkey or security key?'
             }
             description={
                 last

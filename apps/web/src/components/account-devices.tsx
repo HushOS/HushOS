@@ -1,6 +1,7 @@
 import type { AccountDevice, DeviceApproval, DeviceKind } from '@hushos/auth/protocol';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import { ApprovalRows } from '@/components/device-approvals';
 import { DialogField, Setting, SettingsGroup } from '@/components/settings';
 import {
     AlertDialog,
@@ -121,6 +122,8 @@ export function AccountDevices() {
                     </Setting>
                 ) : (
                     <>
+                        {/* Another device waiting for an answer comes first: it is what needs doing. */}
+                        <ApprovalRows />
                         <ul aria-label="Your devices" className="m-0 list-none p-0">
                             {list.map((device) => (
                                 <li key={device.id} data-device-id={device.id}>

@@ -1,0 +1,59 @@
+import type { ApprovalPrompt } from '@hushos/auth/client';
+import { approvalPromptsAllowed, type PromptRecord } from '@hushos/crypto/approval-prompts';
+import { queryOptions } from '@tanstack/react-query';
+import { authClient } from '@/lib/auth-client';
+
+/*
+ * Approving on another device, in the web app (docs/two-step-design.md 12): the requests this
+ * browser may answer, and the words its prompt says. The phones say the same words
+ * (`approval_asks` in crates/hushos-core/src/two_step.rs).
+ */
+
+const WHAT: Record<string, string> = {
+    login: 'Sign-in',
+    password: 'Change your password',
+    'master-key': 'Rotate your account key',
+    'recovery-key': 'Make a new recovery phrase',
+    delete: 'Delete your account',
+    'two-step': 'Change two-step sign-in',
+    'device-approval': 'Turn on Approve on another device',
+};
+
+/*
+ * What is asked, and by which device: "Sign-in on Chrome on Windows". A device that gave no
+ * name is "a new device"; a purpose from a later release is "A change to your account".
+ */
+export function approvalAsks(purpose: string, deviceName: string | null) {
+    return `${WHAT[purpose] ?? 'A change to your account'} on ${deviceName?.trim() || 'a new device'}`;
+}
+
+/*
+ * This browser's own count of the prompts it has shown today, by class: at most five a day for
+ * each, whatever the server lists, so requests from sign-ins nobody knows can never use up the
+ * room for the owner's own. Kept per browser; storage that cannot be read counts as empty.
+ */
+const PROMPTS_KEY = 'hushos-approval-prompts';
+function withinBudget(listed: ApprovalPrompt[]) {
+    let record: PromptRecord | null = null;
+    try {
+        record = JSON.parse(localStorage.getItem(PROMPTS_KEY) ?? 'null') as PromptRecord | null;
+    } catch {
+        // Unreadable: start the day again rather than show nothing.
+    }
+    const allowed = approvalPromptsAllowed(record, listed);
+    try {
+        localStorage.setItem(PROMPTS_KEY, JSON.stringify(allowed.record));
+    } catch {
+        // A private window: the count lasts as long as the page.
+    }
+    const shown = new Set(allowed.shown);
+    return listed.filter((prompt) => shown.has(prompt.id));
+}
+
+/* The requests this browser may answer now, within its own daily limit. */
+export const approvalsQueryOptions = queryOptions({
+    queryKey: ['account', 'approvals'],
+    queryFn: async () => withinBudget(await authClient.approvals()),
+    staleTime: 0,
+    retry: false,
+});

@@ -43,19 +43,29 @@ export const securityEventsQueryOptions = queryOptions({
 
 /*
  * What a person has typed for a step: one field for each method, so switching loses nothing.
- * A passkey or security key has no field: its answer is made when the step is sent.
+ * A passkey or security key has no field: its answer is made when the step is sent. Another
+ * device has none either: `device` is the request it approved, once it has.
  */
-export type StepDraft = { method: StepMethod; totp: string; backup: string; phrase: string };
+export type StepDraft = {
+    method: StepMethod;
+    totp: string;
+    backup: string;
+    phrase: string;
+    device: string;
+};
 export const emptyDraft = (methods: readonly StepMethod[]): StepDraft => ({
     method: methods[0] ?? 'totp',
     totp: '',
     backup: '',
     phrase: '',
+    device: '',
 });
 export const phraseWords = (text: string) => text.trim().toLowerCase().split(/\s+/).filter(Boolean);
 /* Why the draft cannot be sent yet, in the field's own words; empty when it can. */
 export function draftError(draft: StepDraft) {
     if (draft.method === 'webauthn') return '';
+    if (draft.method === 'device')
+        return draft.device ? '' : 'Your other device hasn’t approved this yet.';
     if (draft.method === 'totp')
         return /^\d{6}$/.test(draft.totp.replace(/\s/g, ''))
             ? ''
@@ -69,6 +79,7 @@ export function draftError(draft: StepDraft) {
 }
 export function draftAnswer(draft: StepDraft): StepAnswer {
     if (draft.method === 'webauthn') return { kind: 'webauthn' };
+    if (draft.method === 'device') return { kind: 'device', requestId: draft.device };
     if (draft.method === 'totp') return { kind: 'totp', code: draft.totp.replace(/\s/g, '') };
     if (draft.method === 'backup') return { kind: 'backup', code: draft.backup.trim() };
     return { kind: 'phrase', phrase: phraseWords(draft.phrase).join(' ') };
@@ -104,8 +115,19 @@ export function methodsAfter(
     if (reason === 'frozen') return methods.filter((method) => method !== 'totp');
     if (reason === 'unavailable') return methods.filter((method) => method !== tried);
     if (reason === 'limited')
-        return methods.filter((method) => method === 'phrase' || method === 'webauthn');
+        return methods.filter(
+            (method) => method === 'phrase' || method === 'webauthn' || method === 'device',
+        );
     return [...methods];
+}
+
+/*
+ * After a refusal: an approval that did not pass the step is not offered to it again. The
+ * other device is asked afresh, or another way is used. `pending` is the one refusal that
+ * leaves it: the other device has simply not answered yet.
+ */
+export function afterRefusal(draft: StepDraft, reason: string): StepDraft {
+    return draft.method === 'device' && reason !== 'pending' ? { ...draft, device: '' } : draft;
 }
 
 /*
@@ -148,8 +170,11 @@ export function useStepUp(purpose: StepPurpose) {
             setMethods(next?.methods ?? []);
             setTried(false);
             if (next)
+                // What another device approved was for the step before this one.
                 setDraft((typed) =>
-                    keep ? draftFor(typed, next.methods) : emptyDraft(next.methods),
+                    keep
+                        ? { ...draftFor(typed, next.methods), device: '' }
+                        : emptyDraft(next.methods),
                 );
             return next;
         },
@@ -157,6 +182,8 @@ export function useStepUp(purpose: StepPurpose) {
     );
     return {
         challenge,
+        /* What the step is for, as the server names it: another device is asked for this and nothing else. */
+        purpose,
         methods,
         draft,
         error,
@@ -203,7 +230,7 @@ export function useStepUp(purpose: StepPurpose) {
                 // What is offered and what the draft is for change together.
                 const left = methodsAfter(methods, failure.reason, draft.method);
                 setMethods(left);
-                setDraft((typed) => draftFor(typed, left));
+                setDraft((typed) => draftFor(afterRefusal(typed, failure.reason), left));
             }
             setRefocus((count) => count + 1);
             return true;
