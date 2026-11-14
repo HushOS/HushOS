@@ -19,6 +19,8 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -40,6 +42,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -62,6 +65,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentType
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -587,7 +591,7 @@ fun TwoStepScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) 
         TwoStepPage.REPLACE -> { AuthenticatorScreen(model, AppSetup.REPLACE, onBack = ::leave); return }
         TwoStepPage.ADD_APP -> { AuthenticatorScreen(model, AppSetup.ADD, onBack = ::leave); return }
         TwoStepPage.KEY -> { KeyScreen(model, first = keyFirst, onBack = ::leave); return }
-        TwoStepPage.DEVICE -> { DeviceMethodScreen(model, first = deviceFirst, onBack = ::leave); return }
+        TwoStepPage.DEVICE -> { DeviceMethodScreen(model, first = deviceFirst, status = status, onBack = ::leave); return }
         TwoStepPage.REMOVE -> removing?.let { (method, last) -> RemoveScreen(model, method, last, onBack = ::leave); return }
         TwoStepPage.CODES -> { NewCodesScreen(model, onBack = ::leave); return }
         TwoStepPage.MAIN -> {}
@@ -779,13 +783,16 @@ private fun BackupCodes(model: DriveViewModel, codes: List<String>, email: Strin
     }
 }
 
-/* "Remove my other devices", offered (ticked) whenever a method turns the step on: those devices signed in without it. */
+/*
+ * "Remove my other devices", offered (ticked) whenever a method turns the step on: those devices signed in without it.
+ * `line`: what ticking it does; another device that is the method itself stays, and the line says so.
+ */
 @Composable
-private fun OthersOffer(checked: Boolean, onChange: (Boolean) -> Unit, others: Int?, enabled: Boolean) {
+private fun OthersOffer(checked: Boolean, onChange: (Boolean) -> Unit, others: Int?, enabled: Boolean, line: String = TotpEnrolment.othersLine(others)) {
     Row(Modifier.fillMaxWidth().toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = onChange), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text("Remove my other devices", style = MaterialTheme.typography.bodyLarge)
-            Text(TotpEnrolment.othersLine(others), style = MaterialTheme.typography.bodyMedium, color = Alpine.colors.inkMuted)
+            Text(line, style = MaterialTheme.typography.bodyMedium, color = Alpine.colors.inkMuted)
         }
         Switch(checked = checked, onCheckedChange = null, modifier = Modifier.padding(start = AlpineSpace.S3))
     }
@@ -995,15 +1002,23 @@ private fun KeyScreen(model: DriveViewModel, first: Boolean, onBack: () -> Unit)
 }
 
 /*
- * Turning on Approve on another device: the password (and the step, once it is on), then one real
- * approval from another of the account's devices, asked for as at a sign-in. The account's first
- * method (`first`) turns the step on, and its backup codes follow (`CodesScreen`, from the view
- * model). The other devices are not offered for removal here: the other device is the method. The
- * requests run in the view model, which keeps the pending method and follows the request
- * (DriveViewModel.startDevice, askDeviceSetup): this page only shows them.
+ * Turning on Approve on another device: the device that is to approve, the password (and the step,
+ * once it is on), then one real approval from that device, asked for as at a sign-in. The account's
+ * first method (`first`) turns the step on, and its backup codes follow (`CodesScreen`, from the
+ * view model).
+ *
+ * The person says which of their devices approves (`status.approvers`), and only that one is asked:
+ * with no method yet every signed-in device looks alike to the server, one that someone else opened
+ * with the password among them. One device is chosen already, and still shown; with several none
+ * is, and Continue only says to choose one.
+ *
+ * Turning the step on offers to remove the other devices, ticked, as the authenticator app does:
+ * all but this phone and the one that approves, which is the method. The requests run in the view
+ * model, which keeps the pending method and the chosen device and follows the request
+ * (DriveViewModel.startDevice, askDeviceSetup; DeviceSetupModel): this page only shows them.
  */
 @Composable
-private fun DeviceMethodScreen(model: DriveViewModel, first: Boolean, onBack: () -> Unit) {
+private fun DeviceMethodScreen(model: DriveViewModel, first: Boolean, status: TwoStepStatus?, onBack: () -> Unit) {
     val alpine = Alpine.colors
     val holder = retain { StepUpHolder(model, StepPurpose.TWO_STEP) }
     val sheet = rememberKeySheet()
@@ -1013,32 +1028,67 @@ private fun DeviceMethodScreen(model: DriveViewModel, first: Boolean, onBack: ()
     // Passwords stay in memory, never in saved state (which outlives the process on disk).
     var password by retain { mutableStateOf("") }
     var tried by remember { mutableStateOf(false) }
+    val approvers = status?.approvers.orEmpty()
+    // The person's pick, by id. Until there is one, the only device there is counts as chosen.
+    var picked by rememberSaveable { mutableStateOf<String?>(null) }
+    val chosen = status?.approver(picked ?: status.soleApprover)
+    var signOutOthers by rememberSaveable { mutableStateOf(true) }
 
     // Once the step is on it is needed from the start: its fields are there when the page opens.
     LaunchedEffect(Unit) { if (!first) holder.prepare() }
     // Back is held while a request is out, not let through to the page behind: the confirmation may make the backup codes.
     BackHandler { if (!pending) onBack() }
-    AccountPage("Turn on ${TwoStepStatus.kindWords(TwoStepStatus.DEVICE)}?", onBack = if (pending) null else onBack) {
+    val asked = flow.approver?.takeIf { flow.device != null }
+    AccountPage(asked?.let { StepWords.approveOn(it.shownName) } ?: "Turn on ${TwoStepStatus.kindWords(TwoStepStatus.DEVICE)}?", onBack = if (pending) null else onBack) {
         FormBody {
-            if (flow.device != null) {
-                // The other device's QR code, then the code to type there; how it ended, with Ask again.
-                DeviceAskPanel(model.setupAsk.phase, inlineAgain = true, enabled = !pending) { model.askDeviceSetup(first) }
+            if (asked != null) {
+                // The chosen device's QR code, then the code to type there; how it ended, with Ask again (the same device).
+                DeviceAskPanel(model.setupAsk.phase, inlineAgain = true, enabled = !pending, open = StepWords.askOpen(asked.shownName)) { model.askDeviceSetup() }
                 flow.error?.let { Text(it, color = alpine.danger, style = MaterialTheme.typography.bodyMedium) }
             } else {
+                ApproverChoice(approvers, chosen, enabled = !pending, missing = tried && chosen == null) { picked = it.id }
                 ConfirmPassword(password, { password = it }, tried, enabled = !pending)
                 StepUpFields(holder, enabled = !pending)
+                if (first) OthersOffer(signOutOthers, { signOutOthers = it }, others = null, enabled = !pending, line = StepWords.OTHERS_BUT_APPROVER)
                 flow.error?.let { Text(it, color = alpine.danger, style = MaterialTheme.typography.bodyMedium) }
                 Button(enabled = !pending, onClick = {
                     tried = true
-                    if (password.isEmpty()) return@Button
-                    // A passkey or security key, when it is the step's way, is asked by this press; so is the other device, once the server has the pending method.
+                    // Without a device chosen to approve the press only says to choose one.
+                    if (chosen == null || password.isEmpty()) return@Button
+                    // A passkey or security key, when it is the step's way, is asked by this press; so is the chosen device, once the server has the pending method.
                     scope.withStep(holder, sheet) { twoStep ->
                         tried = false
-                        model.startDevice(password, twoStep, first, holder::failed)
+                        model.startDevice(password, twoStep, first, chosen, signOutOthers, holder::failed)
                     }
                 }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(if (flow.pending) "Checking" else "Continue") }
             }
         }
+    }
+}
+
+/*
+ * "Device that will approve": the account's devices that could, as one choice. Each with its name, and its kind and
+ * the day it was added as Devices words them. `missing`: Continue was pressed with none chosen.
+ */
+@Composable
+private fun ApproverChoice(approvers: List<TwoStepStatus.Approver>, chosen: TwoStepStatus.Approver?, enabled: Boolean, missing: Boolean, onChoose: (TwoStepStatus.Approver) -> Unit) {
+    val alpine = Alpine.colors
+    Column(Modifier.fillMaxWidth().selectableGroup()) {
+        Text(StepWords.APPROVER_HEADING, style = MaterialTheme.typography.titleSmall, color = alpine.ink, modifier = Modifier.padding(bottom = AlpineSpace.S1).semantics { heading() })
+        for (device in approvers) {
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 56.dp).selectable(selected = device.id == chosen?.id, enabled = enabled, role = Role.RadioButton) { onChoose(device) },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RadioButton(selected = device.id == chosen?.id, onClick = null, enabled = enabled)
+                Column(Modifier.weight(1f).padding(start = AlpineSpace.S3)) {
+                    Text(device.shownName, style = MaterialTheme.typography.bodyLarge, color = alpine.ink)
+                    val detail = device.detail(::day)
+                    if (detail.isNotEmpty()) Text(detail, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
+                }
+            }
+        }
+        if (missing) Text(StepWords.APPROVER_CHOOSE, color = alpine.danger, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
     }
 }
 

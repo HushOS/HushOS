@@ -730,13 +730,13 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     private fun endTwoStepFlow() {
         twoStepSession++
         twoStepFlow = com.hushos.app.data.TwoStepFlow()
-        setupAsk.stop()
+        deviceSetup.end()
     }
 
     /* A page of it was opened or left: nothing of the last one is carried over. Not while a request is out: its answer still has to land. */
     fun twoStepReset() {
         // The request to another device goes with its page. Not while its confirmation is out: that may make the backup codes.
-        if (!twoStepFlow.pending) setupAsk.stop()
+        deviceSetup.left()
         twoStepFlow = twoStepFlow.cleared()
     }
 
@@ -792,10 +792,10 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
      * its wire purpose. Read at once, on the press (the session and the key are in memory by now), so the request
      * is out before a second press could make another.
      */
-    internal fun changeAsk(token: String, purpose: String): DeviceAskModel.Request? {
+    internal fun changeAsk(token: String, purpose: String, approverDeviceId: String? = null): DeviceAskModel.Request? {
         val session = Shared.session(context) ?: return null
         val key = com.hushos.app.data.DeviceApprovals.ownKey(session, Shared.deviceIdentity(context)) ?: return null
-        return DeviceAskModel.Request(com.hushos.app.data.ApprovalWire.signedIn(session), token, purpose, key)
+        return DeviceAskModel.Request(com.hushos.app.data.ApprovalWire.signedIn(session), token, purpose, key, approverDeviceId)
     }
 
     /* A request under a session answered that the session is over: sign-in says so, if that session is still the one here. */
@@ -810,60 +810,31 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     internal val setupAsk = deviceAsk()
 
     /*
-     * Starts turning on Approve on another device: the password and, once the step is on, the step. Continue was
-     * the press, so another device is asked as soon as the pending method is there. `first`: the account has no
-     * method yet, so the approval turns the step on.
+     * Turning on Approve on another device (ui/DeviceApprovalUi.kt, DeviceSetupModel): what it sends goes out under
+     * this session, in this scope, and what it made is `twoStepFlow`.
      */
-    fun startDevice(password: String, twoStep: com.hushos.app.data.StepAnswer?, first: Boolean, failed: suspend (Throwable) -> String?) {
-        if (twoStepFlow.pending) return
-        twoStepFlow = twoStepFlow.started()
-        val session = twoStepSession
-        viewModelScope.launch {
-            val answer = twoStep { com.hushos.app.data.TwoStep.startDevice(it, password, twoStep) }
-            val words = answer.exceptionOrNull()?.let { if (it is NotAuthenticated) null else failed(it) }
-            if (session != twoStepSession) return@launch
-            answer.fold(
-                { started -> twoStepFlow = twoStepFlow.deviceStarted(started); askDeviceSetup(first) },
-                { failure -> twoStepFlow = twoStepFlow.failed(failure, words) },
-            )
-        }
-    }
+    internal val deviceSetup = DeviceSetupModel(
+        viewModelScope, setupAsk, { twoStepFlow }, { twoStepFlow = it }, { twoStepSession },
+        start = { password, step -> twoStep { com.hushos.app.data.TwoStep.startDevice(it, password, step) } },
+        request = { token, approver -> changeAsk(token, com.hushos.app.data.DeviceEnrolment.PURPOSE, approver) },
+        confirm = { started, requestId -> twoStep { com.hushos.app.data.TwoStep.confirmDevice(it, started, requestId) } },
+        removeOthers = { password, keep, done -> removeOtherDevices(password, keep, done) },
+        sessionEnded = ::sessionEnded,
+    )
 
     /*
-     * Asks another device to approve the pending method, then confirms it with that approval. From a press only
-     * (Continue, or Ask again). The confirmation is the request that may make the backup codes, so the flow is
-     * pending while it is out (Back is held, and leaving the page does not let it go); `step-pending` from it
-     * keeps waiting. A failure goes back to the password with why.
+     * Starts turning on Approve on another device: the password and, once the step is on, the step. Continue was
+     * the press, so the device the person chose (`approver`) is asked as soon as the pending method is there, and
+     * nothing is sent without one. `first`: the account has no method yet, so the approval turns the step on, and
+     * with `signOutOthers` the other devices but that one are then removed, behind the backup codes.
      */
-    fun askDeviceSetup(first: Boolean) {
-        val started = twoStepFlow.device ?: return
-        // One request at a time: asked when nothing is out, or again once the last one ended.
-        if (twoStepFlow.pending || !(setupAsk.phase is com.hushos.app.data.AskPhase.Idle || setupAsk.phase is com.hushos.app.data.AskPhase.Ended)) return
-        val session = twoStepSession
-        val request = changeAsk(started.token, com.hushos.app.data.DeviceEnrolment.PURPOSE)
-            ?: run { twoStepFlow = twoStepFlow.deviceFailed(com.hushos.app.data.AuthFailure(com.hushos.app.data.Problems.SERVER)); return }
-        setupAsk.begin(
-            request,
-            approved = { answer ->
-                val requestId = (answer.proof as? com.hushos.core.StepProof.Device)?.requestId
-                if (requestId != null && session == twoStepSession) {
-                    twoStepFlow = twoStepFlow.started()
-                    // In this scope, not the request's: one let go meanwhile still keeps the codes the confirmation made.
-                    val confirmed = viewModelScope.async { twoStep { com.hushos.app.data.TwoStep.confirmDevice(it, started, requestId) } }.await()
-                    if (session == twoStepSession) {
-                        confirmed.fold(
-                            { made -> twoStepFlow = twoStepFlow.deviceConfirmed(made, first) },
-                            { failure -> twoStepFlow = twoStepFlow.copy(pending = false); throw failure },
-                        )
-                    }
-                }
-            },
-            failed = { failure ->
-                if (failure is NotAuthenticated) sessionEnded(request.wire.session)
-                if (session == twoStepSession) twoStepFlow = twoStepFlow.deviceFailed(failure)
-            },
-        )
-    }
+    fun startDevice(
+        password: String, twoStep: com.hushos.app.data.StepAnswer?, first: Boolean, approver: com.hushos.app.data.TwoStepStatus.Approver?, signOutOthers: Boolean,
+        failed: suspend (Throwable) -> String?,
+    ) = deviceSetup.begin(password, twoStep, first, approver, signOutOthers, failed)
+
+    /* Ask again: the same device, for the same pending method. From a press only. */
+    fun askDeviceSetup() = deviceSetup.askAgain()
 
     /* Starts adding a passkey or security key: the password and, once the step is on, the step. What the phone's sheet is asked waits in the flow. */
     fun startKey(password: String, twoStep: com.hushos.app.data.StepAnswer?, failed: suspend (Throwable) -> String?) =
@@ -947,12 +918,13 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
      * Removes the other devices after the step was turned on with the box ticked. In the view model's
      * scope, not the screen's: it runs behind the backup codes and never holds them, Done closes that
      * screen meanwhile, and a removal that fails later is said in a notice wherever the person is by then.
-     * `done` says how it ended, for the screen if it is still there.
+     * `done` says how it ended, for the screen if it is still there. `keep`: the device that approves for this one,
+     * when that is the method that was turned on; it stays signed in.
      */
-    fun removeOtherDevices(password: String, done: (Boolean) -> Unit) {
+    fun removeOtherDevices(password: String, keep: String? = null, done: (Boolean) -> Unit) {
         val asked = Shared.session(context)
         viewModelScope.launch {
-            val removed = change { Auth.removeOtherDevices(context, password) }
+            val removed = change { Auth.removeOtherDevices(context, password, keep) }
             // A session that ended under it is said as everywhere, but only if it is still the one stored: a sign-in
             // since (after a password change made meanwhile) must not be taken down by the old session's answer.
             if (removed.exceptionOrNull() is NotAuthenticated && asked != null && com.hushos.app.data.Auth.stillSignedIn(Shared.session(context), asked)) { sessionLost(); return@launch }
