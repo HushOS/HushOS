@@ -133,6 +133,7 @@ export {
     endRequestsOfToken,
     getDeviceRequest,
     listApprovalPrompts,
+    listDeviceStepApprovers,
     openDeviceRequest,
     revealDeviceRequest,
     settleDeviceRequests,

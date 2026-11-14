@@ -1524,8 +1524,11 @@ export function createAuthClient(
         renameDevice: (id: string, name: string) => api.renameDevice(id, name),
         removeDevice: (id: string, password: string) =>
             withPassword(password, (proof) => api.removeDevice(id, proof)),
-        removeOtherDevices: (password: string) =>
-            withPassword(password, (proof) => api.removeOtherDevices(proof)),
+        /* `keep`: one other device left signed in, the one that approves for this one. */
+        removeOtherDevices: (password: string, keep?: string) =>
+            withPassword(password, (proof) =>
+                api.removeOtherDevices({ ...proof, ...(keep ? { keep } : {}) }),
+            ),
         updateProfile: (name: string) => api.updateProfile(name),
         /*
          * Signs in. For an account that asks for a second step it throws TwoStepRequired with
@@ -1674,7 +1677,12 @@ export function createAuthClient(
          * a change (its purpose), or to turn the method on (`device-approval`). A device the
          * account knows asks with its own key; a new one makes the key it will register with.
          */
-        async askAnotherDevice(challenge: { token: string }, purpose: string) {
+        async askAnotherDevice(
+            challenge: { token: string },
+            purpose: string,
+            /* Turning the method on: the device the person chose, the only one that may answer. */
+            approverDeviceId?: string,
+        ) {
             const signingIn = pendingStep?.challenge.token === challenge.token ? pendingStep : null;
             let deviceSigningKey = signingIn?.deviceKey ?? null;
             if (!deviceSigningKey && signingIn) {
@@ -1694,6 +1702,7 @@ export function createAuthClient(
                 purpose,
                 deviceSigningKey,
                 describe: describeDevice,
+                approverDeviceId,
             });
         },
         /* The requests this device may answer now: empty for one that holds no device key. */

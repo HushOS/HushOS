@@ -1058,16 +1058,30 @@ export async function getTwoStep(sessionToken: string | null, names?: ClientMeth
             .filter((method) => EVERY_CLIENT.has(method.kind) || named.has(method.kind))
             .map(encodeMethod),
         ...(names ? { defaultKind } : {}),
-        // Whether this device could turn on Approve on another device now: it holds a device
-        // key and another device could approve it. Only said to a client that knows the method.
-        ...(named.has('device')
-            ? {
-                  otherDevice: await twoStepRepository.canAddDeviceStep({
-                      userId: user.id,
-                      sessionTokenHash: hash(token),
-                  }),
-              }
-            : {}),
+        // Only said to a client that knows the method.
+        ...(named.has('device') ? await deviceApprovers(user.id, token) : {}),
+    };
+}
+
+/*
+ * The devices that could approve turning on Approve on another device from this session: the
+ * person picks one, and only that one may answer (docs/two-step-design.md 12). `otherDevice`
+ * says whether there is any. A device shows as the list of devices shows it: its name, its
+ * kind and when it was added, to the hour.
+ */
+async function deviceApprovers(userId: string, sessionToken: string) {
+    const approvers = await twoStepRepository.listDeviceStepApprovers({
+        userId,
+        sessionTokenHash: hash(sessionToken),
+    });
+    return {
+        otherDevice: approvers.length > 0,
+        approvers: approvers.map((device) => ({
+            id: device.id,
+            kind: device.kind,
+            name: device.name,
+            createdAt: device.createdAt.toISOString(),
+        })),
     };
 }
 
@@ -1660,7 +1674,20 @@ async function afterCounted(counted: twoStepRepository.CountedRequest) {
  * the account they are about to read, so a count never waits for the sweep.
  */
 export async function settleDeviceApprovals(userId?: string) {
-    const counted = await twoStepRepository.settleDeviceRequests(userId);
+    const counted = await twoStepRepository.settleDeviceRequests(userId, (failed) => {
+        // Counts and the kind of failure only: the next sweep meets these accounts again.
+        if (failed.length > 0)
+            serverLog.error({
+                message: 'Some accounts’ requests to approve on another device could not be ended.',
+                twoStep: {
+                    accounts: failed.length,
+                    failure:
+                        failed[0]!.error instanceof Error
+                            ? failed[0]!.error.name
+                            : typeof failed[0]!.error,
+                },
+            });
+    });
     for (const request of counted) await afterCounted(request);
     return counted.length;
 }
@@ -1677,7 +1704,14 @@ export async function settleDeviceApprovals(userId?: string) {
  */
 export async function startDeviceApproval(
     sessionToken: string | null,
-    input: { stepToken: string; commitment: string; kind?: DeviceKind; name?: string },
+    input: {
+        stepToken: string;
+        commitment: string;
+        kind?: DeviceKind;
+        name?: string;
+        /* The device the person chose to approve, when turning the method on. */
+        approverDeviceId?: string;
+    },
     headers?: Headers,
 ) {
     const signedIn = sessionToken !== null;
@@ -1696,6 +1730,7 @@ export async function startDeviceApproval(
         kind: input.kind ?? null,
         name,
         location: headers ? requestLocation(headers, authEnv) : null,
+        approverDeviceId: input.approverDeviceId ?? null,
     });
     for (const counted of made.counted ?? []) await afterCounted(counted);
     switch (made.status) {
@@ -1709,6 +1744,10 @@ export async function startDeviceApproval(
                 429,
                 { code: 'device-limited' },
             );
+        case 'choice':
+            throw new AuthError('Choose which of your devices will approve.', 409, {
+                code: 'device-choice',
+            });
         case 'busy':
             throw new AuthError(
                 'Another sign-in is waiting on your other device. Use another way, or try again in a few minutes.',
@@ -1827,6 +1866,8 @@ export async function listDeviceApprovals(sessionToken: string | null) {
             class: prompt.class,
             device: prompt.device,
             location: prompt.location,
+            selfNamed: prompt.selfNamed,
+            chosen: prompt.chosen,
             createdAt: prompt.createdAt.toISOString(),
             expiresAt: prompt.expiresAt.toISOString(),
             tokenDigest: prompt.tokenDigest.toString('base64url'),

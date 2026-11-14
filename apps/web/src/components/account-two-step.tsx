@@ -80,6 +80,9 @@ const kindWords = {
     device: 'Approve on another device',
 } as const;
 type Kind = keyof typeof kindWords;
+type Approver = NonNullable<TwoStepStatus['approvers']>[number];
+/* A device as the person knows it: its name, or what an unnamed one is called in the list. */
+const approverName = (device: Approver) => device.name?.trim() || 'Unknown device';
 
 export function AccountTwoStep({ user }: { user: SessionUser }) {
     const enabled = useTwoStepEnabled();
@@ -383,6 +386,7 @@ export function AccountTwoStep({ user }: { user: SessionUser }) {
                 key={`device-${open?.kind === 'device'}`}
                 user={user}
                 first={!on}
+                approvers={status.data?.approvers ?? []}
                 open={open?.kind === 'device'}
                 onClose={close}
                 onDone={finish}
@@ -1123,12 +1127,15 @@ function RemoveOthersOffer({
     onChange,
     disabled,
     others,
+    keeps = false,
 }: {
     checked: boolean;
     onChange: (checked: boolean) => void;
     disabled: boolean;
     /* How many other devices the list shows, when it could be read: it only words the offer. */
     others: number | null;
+    /* The device that approves stays signed in: it is the method. */
+    keeps?: boolean;
 }) {
     const id = useId();
     return (
@@ -1143,9 +1150,11 @@ function RemoveOthersOffer({
             <label htmlFor={id} className="flex flex-col gap-0.5 text-sm">
                 <span className="font-semibold">Remove my other devices</span>
                 <span className="text-[13px] text-muted-foreground">
-                    {others
-                        ? `${others === 1 ? 'One other device' : `${others} other devices`} will need to sign in again.`
-                        : 'They’ll need to sign in again.'}
+                    {keeps
+                        ? 'All but this one and the one that approves. They’ll need to sign in again.'
+                        : others
+                          ? `${others === 1 ? 'One other device' : `${others} other devices`} will need to sign in again.`
+                          : 'They’ll need to sign in again.'}
                 </span>
             </label>
         </div>
@@ -1395,11 +1404,19 @@ function KeyDialog({
  * Turning on Approve on another device (docs/two-step-design.md 12): the password (and the
  * step, once it is on), then one real approval from another device, asked from here the way a
  * sign-in asks. The account's first method turns the step on, and its backup codes follow.
- * The other devices are not offered for removal: the other device is the method.
+ *
+ * The person says which of their devices is to approve, and only that one is asked. With no
+ * method yet, every signed-in device looks the same to the server, one someone else opened
+ * with the password among them: a request any of them could answer would let that one answer
+ * first, and count as the person's own from then on.
+ *
+ * Turning the step on offers to remove the other devices, ticked, as the authenticator app
+ * does: every device but this one and the one that approved, which is the method.
  */
 function DeviceDialog({
     user,
     first,
+    approvers,
     open,
     onClose,
     onDone,
@@ -1407,10 +1424,13 @@ function DeviceDialog({
     user: SessionUser;
     /* The account has no method yet: this turns the step on. */
     first: boolean;
+    /* The devices that could approve, for the person to choose one. */
+    approvers: Approver[];
     open: boolean;
     onClose: () => void;
     onDone: (said: string) => void;
 }) {
+    const group = useId();
     const step = useStepUp('two-step');
     const [password, setPassword] = useState('');
     const [tried, setTried] = useState(false);
@@ -1419,6 +1439,11 @@ function DeviceDialog({
     const [started, setStarted] = useState<{ id: string; token: string } | null>(null);
     const [approved, setApproved] = useState('');
     const [codes, setCodes] = useState<string[] | null>(null);
+    // With one device to choose from it is chosen, and still named.
+    const [chosenId, setChosenId] = useState(approvers.length === 1 ? approvers[0]!.id : '');
+    const chosen = approvers.find((device) => device.id === chosenId);
+    const [signOutOthers, setSignOutOthers] = useState(true);
+    const [removing, setRemoving] = useState<'no' | 'running' | 'failed'>('no');
     const era = useForgottenOnLock(open, () => {
         setStarted(null);
         setCodes(null);
@@ -1434,7 +1459,7 @@ function DeviceDialog({
 
     async function start() {
         setTried(true);
-        if (!password) return;
+        if (!password || !chosen) return;
         setPending(true);
         setError('');
         try {
@@ -1467,6 +1492,24 @@ function DeviceDialog({
                 // The codes first: they are shown once, and nothing that follows may cost them.
                 setCodes(confirmed.backupCodes);
                 onDone('');
+                if (first && signOutOthers && chosen) {
+                    setRemoving('running');
+                    // Every other device but the one that approved: it is the method.
+                    void authClient.removeOtherDevices(password, chosen.id).then(
+                        () => {
+                            setRemoving('no');
+                            onDone('');
+                        },
+                        () => {
+                            setRemoving('failed');
+                            toast.add({
+                                type: 'error',
+                                title: 'Your other devices weren’t removed',
+                                description: 'You can remove them under Your devices.',
+                            });
+                        },
+                    );
+                }
                 return;
             }
             // Turning the step on always comes back with the codes: without them this is not
@@ -1510,14 +1553,24 @@ function DeviceDialog({
                 footer={<Button type="submit">Done</Button>}
             >
                 <BackupCodes codes={codes} email={user.email} />
+                {removing === 'running' && (
+                    <output className="text-[13px] text-muted-foreground">
+                        Removing your other devices
+                    </output>
+                )}
+                {removing === 'failed' && (
+                    <p role="alert" className="text-[13px] text-destructive">
+                        Your other devices weren’t removed. You can remove them under Your devices.
+                    </p>
+                )}
             </Shell>
         );
-    if (started)
+    if (started && chosen)
         return (
             <Shell
                 open={open}
                 pending={pending}
-                title="Approve on your other device"
+                title={`Approve on ${approverName(chosen)}`}
                 onClose={onClose}
                 onSubmit={() => {}}
                 footer={cancel}
@@ -1530,6 +1583,7 @@ function DeviceDialog({
                     approved={approved}
                     auto
                     disabled={pending}
+                    approver={{ id: chosen.id, name: approverName(chosen) }}
                     onApproved={(requestId) => void confirm(requestId)}
                 />
                 <Problem>{error}</Problem>
@@ -1556,6 +1610,46 @@ function DeviceDialog({
                 </>
             }
         >
+            <fieldset className="m-0 flex min-w-0 flex-col gap-1.5 border-0 p-0" data-approvers>
+                <legend className="mb-1.5 p-0 text-[13px] font-semibold">
+                    Device that will approve
+                </legend>
+                {approvers.map((device) => (
+                    <div key={device.id} className="flex items-start gap-3 text-sm">
+                        <input
+                            id={`${group}-${device.id}`}
+                            type="radio"
+                            name={group}
+                            value={device.id}
+                            checked={chosenId === device.id}
+                            disabled={pending}
+                            onChange={() => setChosenId(device.id)}
+                            aria-describedby={`${group}-${device.id}-about`}
+                            className="mt-1 size-4 accent-primary"
+                        />
+                        <span className="flex min-w-0 flex-col">
+                            <label
+                                htmlFor={`${group}-${device.id}`}
+                                className="font-semibold wrap-break-word"
+                            >
+                                {approverName(device)}
+                            </label>
+                            <span
+                                id={`${group}-${device.id}-about`}
+                                className="text-[13px] text-muted-foreground"
+                            >
+                                {deviceWords[device.kind ?? 'web']} · Added{' '}
+                                {formatDay(device.createdAt)}
+                            </span>
+                        </span>
+                    </div>
+                ))}
+                {tried && !chosen && (
+                    <p role="alert" className="text-[13px] text-destructive">
+                        Choose the device that will approve.
+                    </p>
+                )}
+            </fieldset>
             <PasswordField
                 value={password}
                 onChange={setPassword}
@@ -1563,6 +1657,15 @@ function DeviceDialog({
                 tried={tried}
             />
             <StepUpFields step={step} disabled={pending} />
+            {first && (
+                <RemoveOthersOffer
+                    checked={signOutOthers}
+                    onChange={setSignOutOthers}
+                    disabled={pending}
+                    others={null}
+                    keeps
+                />
+            )}
             <Problem>{error}</Problem>
         </Shell>
     );

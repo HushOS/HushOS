@@ -45,6 +45,8 @@ async function deviceKey() {
 
 /* A server that keeps one request and relays what each side posts. `calls` is what it was sent. */
 function relay() {
+    // A request of its own each time: what a page remembers of one it opened is kept by its id.
+    const id = crypto.randomUUID();
     const calls: [string, unknown][] = [];
     const held: {
         commitment?: string;
@@ -66,7 +68,7 @@ function relay() {
                     ),
                 ),
             );
-            return { requestId: REQUEST, userId: USER, expiresAt: '2026-11-14T10:05:00.000Z' };
+            return { requestId: id, userId: USER, expiresAt: '2026-11-14T10:05:00.000Z' };
         },
         approvalStatus: async () => {
             calls.push(['status', null]);
@@ -98,11 +100,13 @@ function relay() {
         },
     } as unknown as AuthApi;
     const prompt = (purpose = 'login'): ApprovalPrompt => ({
-        id: REQUEST,
+        id,
         purpose,
         class: 'unknown',
         device: { kind: 'web', name: 'Chrome on Windows' },
         location: null,
+        selfNamed: true,
+        chosen: false,
         createdAt: '2026-11-14T10:00:00.000Z',
         expiresAt: '2026-11-14T10:05:00.000Z',
         tokenDigest: held.tokenDigest!,
@@ -111,7 +115,7 @@ function relay() {
         reveal: null,
     });
     const sent = (what: string) => calls.filter(([call]) => call === what).map(([, body]) => body);
-    return { api, calls, held, prompt, sent };
+    return { api, calls, held, prompt, sent, id };
 }
 
 describe('the device that asks', () => {
@@ -214,7 +218,7 @@ describe('the device that approves', () => {
         const [signature] = server.sent('approve') as string[];
         const statement = deviceStepStatement({
             userId: USER,
-            requestId: REQUEST,
+            requestId: server.id,
             purpose: 'password',
             tokenDigest: server.held.tokenDigest!,
             deviceSigningKey: reveal.deviceSigningKey,
@@ -232,7 +236,7 @@ describe('the device that approves', () => {
             await verifies(
                 deviceStepStatement({
                     userId: USER,
-                    requestId: REQUEST,
+                    requestId: server.id,
                     purpose: 'login',
                     tokenDigest: server.held.tokenDigest!,
                     deviceSigningKey: reveal.deviceSigningKey,
@@ -283,13 +287,19 @@ describe('the device that approves', () => {
     });
 
     test('a commitment made for another purpose does not match the purpose the prompt shows', async () => {
-        const { server, reveal } = await revealedRequest('login');
-        // The server shows the request as a sign-in's while relaying one committed for a sign-in
-        // under a prompt that says "password": the approving device computes from what it is shown.
-        const lied = await openApproval(server.api, { ...server.prompt('password') });
-        await expect(approvalCode(server.api, lied, reveal, USER)).rejects.toMatchObject({
-            reason: 'mismatch',
+        const server = relay();
+        const asked = await askAnotherDevice(server.api, {
+            stepToken: TOKEN,
+            purpose: 'login',
+            deviceSigningKey: (await deviceKey()).publicKey,
         });
+        // The server shows a sign-in's request as a password change: the approving device
+        // computes from what it is shown, and the commitment was made for something else.
+        const lied = await openApproval(server.api, server.prompt('password'));
+        await asked.poll();
+        await expect(
+            approvalCode(server.api, lied, server.held.reveal!, USER),
+        ).rejects.toMatchObject({ reason: 'mismatch' });
     });
 
     test('a scanned code for another request’s commitment opens nothing', async () => {
@@ -306,20 +316,53 @@ describe('the device that approves', () => {
         expect(server.sent('deny')).toEqual(['mismatch']);
     });
 
-    test('opening again keeps the value the request was first opened with', async () => {
+    async function asked() {
         const server = relay();
         await askAnotherDevice(server.api, {
             stepToken: TOKEN,
             purpose: 'login',
             deviceSigningKey: (await deviceKey()).publicKey,
         });
+        return server;
+    }
+
+    test('opening again sends this device’s own value again, and keeps the commitment it first saw', async () => {
+        const server = await asked();
         const first = await openApproval(server.api, server.prompt());
+        // The server now lists the request with another commitment, as if the asking device
+        // had made it: what this page saw before it opened is what the reveal is held to.
         const again = await openApproval(server.api, {
             ...server.prompt(),
             approverKey: first.approverKey,
+            commitment: random(),
         });
-        expect(again.approverKey).toBe(first.approverKey);
+        expect(again).toEqual(first);
         expect(server.sent('open')).toEqual([first.approverKey, first.approverKey]);
+        expect(server.sent('deny')).toEqual([]);
+    });
+
+    test('a value the server chose for this device is refused, and the request ended', async () => {
+        const server = await asked();
+        // The server answers the open with a value of its own, picked after it saw the commitment.
+        const chosen = random();
+        (server.api as unknown as { approvalOpen: () => Promise<unknown> }).approvalOpen =
+            async () => ({ approverKey: chosen });
+        await expect(openApproval(server.api, server.prompt())).rejects.toMatchObject({
+            reason: 'mismatch',
+        });
+        expect(server.sent('deny')).toEqual(['mismatch']);
+        expect(server.sent('approve')).toEqual([]);
+    });
+
+    test('a request the server says this device opened, when this page opened none, is not taken up', async () => {
+        const server = await asked();
+        // After a reload this page holds no value of its own for the request: the one the
+        // server lists is the server's word, and the code would rest on it.
+        await expect(
+            openApproval(server.api, { ...server.prompt(), approverKey: random() }),
+        ).rejects.toMatchObject({ reason: 'mismatch' });
+        expect(server.sent('open')).toEqual([]);
+        expect(server.sent('deny')).toEqual(['mismatch']);
     });
 });
 

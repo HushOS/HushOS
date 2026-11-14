@@ -1575,12 +1575,19 @@ export async function removeDevice(
 }
 
 /* Removes every device of the account but the one asking. */
-export async function removeOtherDevices(sessionToken: string | null, proof: DeviceRemovalProof) {
+export async function removeOtherDevices(
+    sessionToken: string | null,
+    proof: DeviceRemovalProof & {
+        /* One other device to leave signed in: the one that approves for this one. */
+        keep?: string;
+    },
+) {
     const { user, token } = await requireDeviceSession(sessionToken);
     await checkDeviceRemoval(user, token, proof);
     const result = await authRepository.revokeOtherDevices({
         userId: user.id,
         sessionTokenHash: hash(token),
+        keepDeviceId: proof.keep ?? null,
     });
     if (result.status !== 'ok') throw new AuthError('Sign in to see your devices.', 401);
     return { userId: user.id, removed: result.removed };

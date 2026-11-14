@@ -341,6 +341,10 @@ const quoted = (values: readonly string[]) => values.map((value) => `'${value}'`
  *   know yet they are the device's own words.
  * - `counted`: this request was counted as a failed step (denied, a wrong code, or left
  *   unanswered from a sign-in that proved no device), once.
+ * - `chosen_device_id`: the one device that may approve, when the asking device named it.
+ *   The request that turns the method on always names one: with no method yet, every signed-in
+ *   device looks alike to the server, so the person says which of theirs is to answer, and a
+ *   session someone else opened with the password cannot answer in its place.
  * - `location`: roughly where the asking device is ("near Lyon, France"), as the operator's
  *   proxy said it in the headers the server is told to trust; null where none is configured.
  *   It is for the approving device's prompt and nothing else, and goes when the request ends:
@@ -365,6 +369,9 @@ export const twoStepDeviceRequests = pgTable(
         approverDeviceId: uuid('approver_device_id').references(() => accountDevices.id, {
             onDelete: 'cascade',
         }),
+        chosenDeviceId: uuid('chosen_device_id').references(() => accountDevices.id, {
+            onDelete: 'cascade',
+        }),
         approverKey: bytea('approver_key'),
         deviceKey: bytea('device_key'),
         nonce: bytea(),
@@ -387,6 +394,14 @@ export const twoStepDeviceRequests = pgTable(
         index('two_step_device_requests_approver_idx')
             .on(table.approverDeviceId)
             .where(sql`${table.approverDeviceId} is not null`),
+        index('two_step_device_requests_chosen_idx')
+            .on(table.chosenDeviceId)
+            .where(sql`${table.chosenDeviceId} is not null`),
+        // A device is never asked to approve itself, and only the chosen one opens a request that chose.
+        check(
+            'two_step_device_requests_chosen_valid',
+            sql`${table.chosenDeviceId} is null or ((${table.deviceId} is null or ${table.chosenDeviceId} <> ${table.deviceId}) and (${table.approverDeviceId} is null or ${table.approverDeviceId} = ${table.chosenDeviceId}))`,
+        ),
         check(
             'two_step_device_requests_purpose_valid',
             sql`${table.purpose} in (${sql.raw(quoted(TWO_STEP_PURPOSES.filter((purpose) => purpose !== 'enrol')))})`,

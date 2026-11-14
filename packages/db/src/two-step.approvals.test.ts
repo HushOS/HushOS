@@ -152,12 +152,14 @@ const commitmentOf = (tokenHash: Buffer, from: Asking) =>
         nonce: from.nonce,
     });
 
-async function request(tokenHash: Buffer, from: Asking) {
+/* `chosen`: the device the person picked to answer, as the screen that turns the method on sends it. */
+async function request(tokenHash: Buffer, from: Asking, chosen?: string) {
     return twoStep.createDeviceRequest({
         tokenHash,
         commitment: commitmentOf(tokenHash, from),
         kind: 'web',
         name: 'Chrome on Windows',
+        approverDeviceId: chosen,
     });
 }
 
@@ -176,7 +178,12 @@ const signedBy = (approver: Device, userId: string, id: string, tokenHash: Buffe
 
 /* The whole exchange: the request, the approving device's key, the reveal, the signature. */
 async function approved(userId: string, tokenHash: Buffer, from: Asking, approver: Device) {
-    const made = await request(tokenHash, from);
+    // Turning the method on names the device that is to approve; nothing else does here.
+    const made = await request(
+        tokenHash,
+        from,
+        from.purpose === 'device-approval' ? approver.deviceId : undefined,
+    );
     if (made.status !== 'ok') throw new Error(`Request ${made.status}.`);
     const opened = await twoStep.openDeviceRequest({
         sessionTokenHash: approver.token,
@@ -299,7 +306,7 @@ describe('turning the method on', () => {
         expect((await twoStep.getTwoStep(user.id)).methods).toEqual([]);
 
         const from = asking('device-approval', laptop.publicKey);
-        const made = await request(tokenHash, from);
+        const made = await request(tokenHash, from, phone.deviceId);
         if (made.status !== 'ok') throw new Error(made.status);
         const confirm = (requestId: string) =>
             twoStep.confirmDeviceFactor({
@@ -1253,5 +1260,211 @@ describe('where the asking device is', () => {
             step: { sessionTokenHash: laptop.token, tokenHash: stepToken, spend: PHRASE },
         });
         expect(await requestRow(made.id)).toMatchObject({ endedReason: 'off', location: null });
+    });
+});
+
+describe('the approval that turns the method on is the chosen device’s alone', () => {
+    async function starting() {
+        const { user } = await registered();
+        const laptop = await passwordDevice(user.id, 'Laptop');
+        const phone = await passwordDevice(user.id, 'Phone');
+        // Someone else, with the password: signed in, with a device key, like the other two.
+        const intruder = await passwordDevice(user.id, 'Chrome on Windows');
+        const tokenHash = sha256(randomUUID());
+        const started = await twoStep.startDeviceFactor({
+            userId: user.id,
+            sessionTokenHash: laptop.token,
+            credentialVersion: 1,
+            tokenHash,
+            expiresAt: new Date(Date.now() + 5 * MINUTE),
+        });
+        if (started.status !== 'ok') throw new Error(started.status);
+        return { userId: user.id, laptop, phone, intruder, tokenHash, factorId: started.id };
+    }
+
+    test('a third signed-in device cannot see, open, approve or end it, and gains nothing from it', async () => {
+        const { userId, laptop, phone, intruder, tokenHash, factorId } = await starting();
+        const from = asking('device-approval', laptop.publicKey);
+        const made = await request(tokenHash, from, phone.deviceId);
+        if (made.status !== 'ok') throw new Error(made.status);
+
+        expect(await twoStep.listApprovalPrompts(intruder.token)).toEqual([]);
+        expect(
+            await twoStep.openDeviceRequest({
+                sessionTokenHash: intruder.token,
+                requestId: made.id,
+                approverKey: randomBytes(32),
+            }),
+        ).toEqual({ status: 'gone' });
+        expect(
+            await twoStep.denyDeviceRequest({
+                sessionTokenHash: intruder.token,
+                requestId: made.id,
+                reason: 'denied',
+            }),
+        ).toEqual({ status: 'gone' });
+        // The phone was chosen: it is told so, opens it, and the reveal follows.
+        const [prompt] = await twoStep.listApprovalPrompts(phone.token);
+        expect(prompt).toMatchObject({ id: made.id, chosen: true, selfNamed: false });
+        await twoStep.openDeviceRequest({
+            sessionTokenHash: phone.token,
+            requestId: made.id,
+            approverKey: randomBytes(32),
+        });
+        await twoStep.revealDeviceRequest({
+            tokenHash,
+            requestId: made.id,
+            deviceKey: from.deviceKey,
+            nonce: from.nonce,
+        });
+        // Even with a signature of its own over the right statement, the third device approves nothing.
+        expect(
+            await twoStep.approveDeviceRequest({
+                sessionTokenHash: intruder.token,
+                requestId: made.id,
+                signature: signedBy(intruder, userId, made.id, tokenHash, from),
+            }),
+        ).toEqual({ status: 'gone' });
+        expect((await requestRow(made.id)).state).toBe('revealed');
+
+        await twoStep.approveDeviceRequest({
+            sessionTokenHash: phone.token,
+            requestId: made.id,
+            signature: signedBy(phone, userId, made.id, tokenHash, from),
+        });
+        expect(
+            await twoStep.confirmDeviceFactor({
+                userId,
+                factorId,
+                sessionTokenHash: laptop.token,
+                credentialVersion: 1,
+                tokenHash,
+                requestId: made.id,
+                backupCodes: codeSet('first'),
+            }),
+        ).toMatchObject({ status: 'ok', turnedOn: true, approverDeviceId: phone.deviceId });
+        // The step is on, and only the two devices that took part passed it: the third one's
+        // session has no stamp, so it approves no sign-in, its own included.
+        const stamps = await db
+            .select({ deviceId: sessions.deviceId, twoStepAt: sessions.twoStepAt })
+            .from(sessions)
+            .where(eq(sessions.userId, userId));
+        expect(stamps.find((row) => row.deviceId === intruder.deviceId)!.twoStepAt).toBeNull();
+        expect(stamps.filter((row) => row.twoStepAt !== null)).toHaveLength(2);
+        const signIn = await request(await loginToken(userId), asking('login'));
+        if (signIn.status !== 'ok') throw new Error(signIn.status);
+        expect(await twoStep.listApprovalPrompts(intruder.token)).toEqual([]);
+        expect(
+            await twoStep.openDeviceRequest({
+                sessionTokenHash: intruder.token,
+                requestId: signIn.id,
+                approverKey: randomBytes(32),
+            }),
+        ).toEqual({ status: 'gone' });
+    });
+
+    test('it is refused without a choice, and with a choice that is not another device of the account', async () => {
+        const { laptop, phone, tokenHash } = await starting();
+        const from = asking('device-approval', laptop.publicKey);
+        expect((await request(tokenHash, from)).status).toBe('choice');
+        // The asking device itself, a device that does not exist, and another account's device.
+        expect((await request(tokenHash, from, laptop.deviceId)).status).toBe('unavailable');
+        expect((await request(tokenHash, from, randomUUID())).status).toBe('unavailable');
+        const other = await registered();
+        const theirs = await passwordDevice(other.user.id, 'Elsewhere');
+        expect((await request(tokenHash, from, theirs.deviceId)).status).toBe('unavailable');
+        expect(await db.select().from(twoStepDeviceRequests)).toEqual([]);
+        expect((await request(tokenHash, from, phone.deviceId)).status).toBe('ok');
+    });
+
+    test('a sign-in cannot name who answers it: any device that may approve still can', async () => {
+        const { userId, laptop, phone } = await withDeviceStep();
+        const tokenHash = await loginToken(userId);
+        // Whoever holds only the password asks for the laptop alone to answer.
+        const made = await request(tokenHash, asking('login'), laptop.deviceId);
+        if (made.status !== 'ok') throw new Error(made.status);
+        expect((await requestRow(made.id)).chosenDeviceId).toBeNull();
+        expect((await twoStep.listApprovalPrompts(phone.token)).map((prompt) => prompt.id)).toEqual(
+            [made.id],
+        );
+        // And what it calls itself is marked as its own words, for the prompt to say so.
+        expect((await twoStep.listApprovalPrompts(phone.token))[0]).toMatchObject({
+            selfNamed: true,
+            chosen: false,
+        });
+    });
+});
+
+describe('one sign-in is one failed step at most', () => {
+    test('a replaced request whose successor was denied is not counted again when the token runs out', async () => {
+        const { userId, phone } = await withDeviceStep();
+        const tokenHash = await loginToken(userId);
+        const first = await request(tokenHash, asking('login'));
+        const second = await request(tokenHash, asking('login'));
+        if (first.status !== 'ok' || second.status !== 'ok') throw new Error('request');
+        await twoStep.denyDeviceRequest({
+            sessionTokenHash: phone.token,
+            requestId: second.id,
+            reason: 'denied',
+        });
+        expect(await accountFailures(userId)).toBe(1);
+        await expire(tokenHash);
+        expect(await twoStep.settleDeviceRequests(userId)).toEqual([]);
+        expect(await accountFailures(userId)).toBe(1);
+        expect(await requestRow(first.id)).toMatchObject({ state: 'ended', counted: false });
+    });
+
+    test('a request a device approved was answered: left unused, it is not a failed step', async () => {
+        const { userId, phone } = await withDeviceStep();
+        const tokenHash = await loginToken(userId);
+        // The person asked twice; the second was approved, and then they closed the page.
+        const replaced = await request(tokenHash, asking('login'));
+        const requestId = await approved(userId, tokenHash, asking('login'), phone);
+        if (replaced.status !== 'ok') throw new Error(replaced.status);
+        await expire(tokenHash);
+        expect(await twoStep.settleDeviceRequests(userId)).toEqual([]);
+        expect(await accountFailures(userId)).toBe(0);
+        expect(await requestRow(requestId)).toMatchObject({
+            state: 'ended',
+            endedReason: 'expired',
+            counted: false,
+        });
+    });
+});
+
+describe('the sweep', () => {
+    test('one account that cannot be settled does not keep the accounts after it waiting', async () => {
+        const stuck = await withDeviceStep();
+        const fine = await withDeviceStep();
+        for (const account of [stuck, fine]) {
+            const tokenHash = await loginToken(account.userId);
+            expect((await request(tokenHash, asking('login'))).status).toBe('ok');
+            await lapse(tokenHash);
+        }
+        // A fault in one account's rows: every write to its requests fails.
+        await db.execute(
+            sql`create function approvals_test_fault() returns trigger language plpgsql as $$ begin raise exception 'fault'; end $$`,
+        );
+        await db.execute(
+            sql.raw(
+                `create trigger approvals_test_fault before update on two_step_device_requests for each row when (old.user_id = '${stuck.userId}') execute function approvals_test_fault()`,
+            ),
+        );
+        try {
+            const failed: string[] = [];
+            const counted = await twoStep.settleDeviceRequests(undefined, (accounts) =>
+                failed.push(...accounts.map((account) => account.userId)),
+            );
+            expect(failed).toEqual([stuck.userId]);
+            expect(counted.map((request) => request.userId)).toEqual([fine.userId]);
+            expect(await accountFailures(fine.userId)).toBe(1);
+            expect(await accountFailures(stuck.userId)).toBe(0);
+        } finally {
+            await db.execute(sql`drop trigger approvals_test_fault on two_step_device_requests`);
+            await db.execute(sql`drop function approvals_test_fault()`);
+        }
+        // The fault gone, the next sweep settles what the last one could not.
+        const later = await twoStep.settleDeviceRequests();
+        expect(later.map((request) => request.userId)).toEqual([stuck.userId]);
     });
 });

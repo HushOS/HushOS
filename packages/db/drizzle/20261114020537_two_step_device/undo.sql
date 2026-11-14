@@ -1,4 +1,4 @@
--- Takes back 20261114015359_two_step_device: "two_step_device_requests", the kind 'device' of a
+-- Takes back 20261114020537_two_step_device: "two_step_device_requests", the kind 'device' of a
 -- second-step method, of a security log line's method and of an account's default, and the three
 -- notification kinds. Run it as the role that migrates, and stop at the first error:
 --     psql -v ON_ERROR_STOP=1 -f undo.sql
@@ -55,5 +55,5 @@ ALTER TABLE "two_step_factors" DROP CONSTRAINT "two_step_factors_device_valid";
 ALTER TABLE "two_step_factors" DROP CONSTRAINT "two_step_factors_kind_valid", ADD CONSTRAINT "two_step_factors_kind_valid" CHECK ("kind" in ('totp', 'webauthn'));
 DROP INDEX "two_step_factors_one_device_idx";
 DROP TABLE "two_step_device_requests";
-DELETE FROM "drizzle"."__drizzle_migrations" WHERE "name" = '20261114015359_two_step_device';
+DELETE FROM "drizzle"."__drizzle_migrations" WHERE "name" = '20261114020537_two_step_device';
 COMMIT;

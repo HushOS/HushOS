@@ -759,6 +759,7 @@ async function useDeviceApproval(tx: Tx, attempt: StepAttempt, requestId: string
             id: twoStepDeviceRequests.id,
             approverDeviceId: twoStepDeviceRequests.approverDeviceId,
             deviceId: twoStepDeviceRequests.deviceId,
+            chosenDeviceId: twoStepDeviceRequests.chosenDeviceId,
         })
         .from(twoStepDeviceRequests)
         .where(
@@ -776,6 +777,8 @@ async function useDeviceApproval(tx: Tx, attempt: StepAttempt, requestId: string
     const asking = attempt.pool.kind === 'device' ? attempt.pool.deviceId : null;
     // The device the token names now must be the one the request was made for, and never the approver.
     if (request.deviceId !== asking || request.approverDeviceId === asking) return null;
+    // A request that named its approver passes only by that device's answer.
+    if (request.chosenDeviceId && request.chosenDeviceId !== request.approverDeviceId) return null;
     const [approver] = await approvingDevices(tx, {
         userId: attempt.userId,
         purpose: attempt.purpose,

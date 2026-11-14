@@ -17,7 +17,6 @@ import { approvalAsks, approvalsQueryOptions } from '@/lib/approvals';
 import { authClient } from '@/lib/auth-client';
 import { authError } from '@/lib/form';
 import { cue } from '@/lib/sounds';
-import { useTwoStepEnabled } from '@/lib/two-step';
 
 /*
  * Answering another device's request to confirm it's you (docs/two-step-design.md 12): a line in
@@ -30,12 +29,14 @@ import { useTwoStepEnabled } from '@/lib/two-step';
 const WAITING_MS = 30_000;
 const ANSWERING_MS = 2_000;
 
-/* The requests this browser may answer, asked for again every so often while the page is seen. */
+/*
+ * The requests this browser may answer, asked for again every so often while the page is seen.
+ * Not only where TWO_STEP_ENABLED is on: that setting decides who can turn the step on, and an
+ * account that already has it is still asked for it, so its requests are still answered.
+ */
 function useApprovals(every: number) {
-    const enabled = useTwoStepEnabled();
     return useQuery({
         ...approvalsQueryOptions,
-        enabled,
         refetchInterval: every,
         refetchOnWindowFocus: true,
     });
@@ -169,12 +170,13 @@ function AnswerDialog({ asked, onClose }: { asked: ApprovalPrompt | null; onClos
                     }}
                 >
                     <DialogHeader>
-                        <DialogTitle>
-                            {asked
-                                ? approvalAsks(asked.purpose, asked.device.name, asked.location)
-                                : ''}
-                        </DialogTitle>
+                        <DialogTitle>{asked ? approvalAsks(asked) : ''}</DialogTitle>
                     </DialogHeader>
+                    {asked?.chosen && !over && (
+                        <p className="text-sm" data-approval-chosen>
+                            The other device asked for this device to approve.
+                        </p>
+                    )}
                     {over ? (
                         <p role="alert" className="text-sm">
                             This request is over.
@@ -316,9 +318,7 @@ export function ApprovalRows() {
                         </Button>
                     }
                 >
-                    <span className="font-semibold">
-                        {approvalAsks(asked.purpose, asked.device.name, asked.location)}
-                    </span>
+                    <span className="font-semibold">{approvalAsks(asked)}</span>
                 </Setting>
             ))}
             <AnswerDialog
