@@ -37,7 +37,7 @@ function record() {
     const tick = () => {
         frames.push({
             t: performance.now(),
-            app: document.querySelector('button[aria-label="Account menu"]') !== null,
+            app: document.querySelector('button[aria-label$="account menu"]') !== null,
             email: document.querySelector<HTMLInputElement>('#email')?.value ?? null,
             rows: [...document.querySelectorAll('[data-node-id]')].filter(shown).length,
             locked: document.body.innerText.includes('HushOS is locked here'),

@@ -468,9 +468,10 @@ export function AppSidebar({
     return (
         <Sidebar collapsible="icon" className="group-data-[side=left]:border-r-0">
             {/*
-             * The brand's line: on a desk the page has no top bar, so search and the account menu
-             * sit here, at the right; collapsed they stack under the logo as 40px squares. Below a
-             * desk the page's compact top bar holds them (app/route.tsx), so they are not here.
+             * The brand's line: on a desk the page has no top bar, so search sits here, at the
+             * right; collapsed it stacks under the logo as a 40px square. Below a desk the page's
+             * compact top bar holds it (app/route.tsx), so it is not here. The account menu is the
+             * sidebar's last row, under the storage meter, at every width.
              */}
             <SidebarHeader className="flex-row items-center gap-1 px-4 pt-4 pb-0 rail:flex-col rail:gap-2 rail:px-2">
                 {/*
@@ -485,12 +486,6 @@ export function AppSidebar({
                 />
                 <SearchButton
                     side={rail ? 'right' : 'bottom'}
-                    className="max-lg:hidden rail:size-10"
-                />
-                <UserMenu
-                    user={user}
-                    side={rail ? 'right' : 'bottom'}
-                    align="start"
                     className="max-lg:hidden rail:size-10"
                 />
             </SidebarHeader>
@@ -523,6 +518,13 @@ export function AppSidebar({
             <SidebarFooter className="gap-4 px-4 pt-2 pb-4 rail:px-2">
                 <CatalogueStatus />
                 <StorageMeter userId={user.id} />
+                {/* Its tint hangs 12px outside the column, as the places' rows do, so the avatar starts on their icons' edge. */}
+                <UserMenu
+                    user={user}
+                    side={rail ? 'right' : 'top'}
+                    align={rail ? 'end' : 'start'}
+                    className="-mx-3 w-auto rail:mx-0"
+                />
             </SidebarFooter>
             <SidebarRail />
         </Sidebar>
