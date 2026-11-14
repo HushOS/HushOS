@@ -143,7 +143,7 @@ export function FamilyFoldersDemo() {
                             <button
                                 type="button"
                                 onClick={() => dispatch({ type: 'back' })}
-                                className="-mx-1.5 cursor-pointer rounded-sm px-1.5 py-1 font-semibold text-primary outline-none hover:bg-muted focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring"
+                                className="-mx-1.5 cursor-pointer rounded-sm px-1.5 py-1 font-semibold text-primary outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring"
                             >
                                 {FAMILY}
                             </button>
@@ -207,7 +207,7 @@ export function FamilyFoldersDemo() {
                             <button
                                 type="button"
                                 onClick={() => dispatch({ type: 'open', id: at.id })}
-                                className={`${row} cursor-pointer outline-none hover:bg-muted focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-solid focus-visible:outline-ring`}
+                                className={`${row} cursor-pointer outline-none hover:bg-hover focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-solid focus-visible:outline-ring`}
                             >
                                 <FolderMark box={36} />
                                 <span className="flex min-w-0 flex-1 flex-col gap-0.5">

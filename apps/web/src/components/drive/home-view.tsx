@@ -528,7 +528,7 @@ export function HomeView() {
                                                             ROW_FOCUS_WITHIN,
                                                             isSelected
                                                                 ? 'bg-accent'
-                                                                : 'hover:bg-muted',
+                                                                : 'hover:bg-hover',
                                                             focusShown(node.id) && ROW_FOCUS,
                                                         )}
                                                     >
@@ -798,7 +798,7 @@ function TagPill({ tag, selected, onClick }: { tag: Tag; selected: boolean; onCl
                 'flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border px-2.5 text-[13px] font-semibold transition-colors outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring pointer-coarse:h-10',
                 selected
                     ? 'border-primary bg-accent text-accent-foreground'
-                    : 'border-rule bg-panel text-foreground hover:bg-muted',
+                    : 'border-rule bg-panel text-foreground hover:bg-hover',
             )}
         >
             {selected ? (

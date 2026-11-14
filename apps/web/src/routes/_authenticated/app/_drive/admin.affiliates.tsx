@@ -218,7 +218,7 @@ function AffiliateRow({
     const [deleting, setDeleting] = useState(false);
     return (
         <>
-            <tr data-affiliate={affiliate.slug} className="hover:bg-muted">
+            <tr data-affiliate={affiliate.slug} className="hover:bg-hover">
                 <td className={cn(td, 'max-w-[260px]')}>
                     <span className="block truncate pt-1 font-semibold">{affiliate.name}</span>
                     <span className="block truncate pb-1 text-xs text-muted-foreground">

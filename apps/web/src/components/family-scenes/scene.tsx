@@ -84,7 +84,7 @@ export function Scene<S extends object>({
                             setTake((value) => value + 1);
                         }
                     }}
-                    className="flex h-9 w-fit cursor-pointer items-center gap-1.5 self-end rounded-md px-3 text-sm font-semibold text-primary outline-none hover:bg-muted focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring pointer-coarse:h-11"
+                    className="flex h-9 w-fit cursor-pointer items-center gap-1.5 self-end rounded-md px-3 text-sm font-semibold text-primary outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring pointer-coarse:h-11"
                 >
                     {moving ? (
                         <SquareIcon className="size-3.5" aria-hidden="true" />

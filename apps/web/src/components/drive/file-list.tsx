@@ -857,7 +857,7 @@ export function HiddenSortToggle({
             type="button"
             onClick={onClick}
             aria-label={`By ${label}, ${order}. Reverse the order`}
-            className="-my-2 inline-flex h-9 shrink-0 cursor-pointer items-center gap-1 rounded-md px-2 text-xs font-semibold text-foreground transition-colors outline-none hover:bg-muted focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring pointer-coarse:h-11"
+            className="-my-2 inline-flex h-9 shrink-0 cursor-pointer items-center gap-1 rounded-md px-2 text-xs font-semibold text-foreground transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring pointer-coarse:h-11"
         >
             By {label}
             <Arrow className="size-3.5" aria-hidden="true" />

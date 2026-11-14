@@ -311,7 +311,7 @@ export function FamilyTrashView({ tabs }: { tabs: ReactNode }) {
                                 <tr
                                     key={row.node.id}
                                     data-node-id={row.node.id}
-                                    className="group/row h-14 border-b border-rule hover:bg-muted"
+                                    className="group/row h-14 border-b border-rule hover:bg-hover"
                                 >
                                     {/* The name heads its row, for a screen reader reading across. */}
                                     {/* oxlint-disable-next-line jsx-a11y/control-has-associated-label -- its text is the name, two spans down, past the rule's depth */}

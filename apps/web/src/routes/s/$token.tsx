@@ -610,7 +610,7 @@ function LinkContents({ opened }: { opened: Opened }) {
                                             data-node-id={node.id}
                                             className={cn(
                                                 LINK_ROW,
-                                                'group h-14 border-b border-rule last:border-0 hover:bg-muted',
+                                                'group h-14 border-b border-rule last:border-0 hover:bg-hover',
                                             )}
                                         >
                                             <button

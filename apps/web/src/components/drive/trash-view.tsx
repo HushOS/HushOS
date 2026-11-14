@@ -623,7 +623,7 @@ export function TrashView({
                                         }
                                         className={cn(
                                             'group/row h-14 cursor-default border-b border-rule select-none',
-                                            isSelected ? 'bg-accent' : 'hover:bg-muted',
+                                            isSelected ? 'bg-accent' : 'hover:bg-hover',
                                             focusShown(item.node.id) && ROW_FOCUS,
                                         )}
                                     >

@@ -67,7 +67,7 @@ export function SessionLinks() {
                     to="/login"
                     search={{ redirect: signIn.redirect }}
                     onClick={signIn.remember}
-                    className="flex h-9 items-center rounded-md px-3 text-[15px] font-semibold whitespace-nowrap hover:bg-muted"
+                    className="flex h-9 items-center rounded-md px-3 text-[15px] font-semibold whitespace-nowrap hover:bg-hover"
                 >
                     Sign in
                 </Link>
@@ -94,7 +94,7 @@ export function SiteHeader() {
                                 to={page.to}
                                 aria-current={here ? 'page' : undefined}
                                 className={cn(
-                                    'flex h-9 items-center rounded-md px-3 text-[15px] whitespace-nowrap hover:bg-muted',
+                                    'flex h-9 items-center rounded-md px-3 text-[15px] whitespace-nowrap hover:bg-hover',
                                     here ? 'font-bold text-foreground' : 'text-muted-foreground',
                                 )}
                             >
@@ -143,7 +143,7 @@ function PhoneMenu({ shown, pathname }: { shown: Page[]; pathname: string }) {
                 aria-label="Menu"
                 aria-expanded={open}
                 onClick={() => setOpen(true)}
-                className="-mr-2 ml-1 flex size-10 cursor-pointer items-center justify-center rounded-md hover:bg-muted lg:hidden"
+                className="-mr-2 ml-1 flex size-10 cursor-pointer items-center justify-center rounded-md hover:bg-hover lg:hidden"
             >
                 <MenuIcon className="size-[22px]" strokeWidth={2} aria-hidden="true" />
             </button>

@@ -254,7 +254,7 @@ function TagForm({
                                 type="button"
                                 disabled={busy}
                                 onClick={() => void create()}
-                                className="flex h-10 cursor-pointer items-center rounded-md px-2 text-left text-sm font-semibold text-primary hover:bg-muted"
+                                className="flex h-10 cursor-pointer items-center rounded-md px-2 text-left text-sm font-semibold text-primary hover:bg-hover"
                             >
                                 Add “{typed}”
                             </button>
@@ -265,7 +265,7 @@ function TagForm({
                                 <label
                                     key={tag.id}
                                     // The checkbox carries the state; the row stays plain.
-                                    className="flex h-10 shrink-0 cursor-pointer items-center gap-3 rounded-md px-2 hover:bg-muted"
+                                    className="flex h-10 shrink-0 cursor-pointer items-center gap-3 rounded-md px-2 hover:bg-hover"
                                 >
                                     <Checkbox
                                         checked={mark === 'all'}

@@ -118,6 +118,9 @@
     --color-secondary: var(--secondary);
     --color-secondary-foreground: var(--secondary-foreground);
     --color-muted: var(--muted);
+    --color-hover: var(--hover);
+    --color-hover-solid: var(--hover-solid);
+    --color-highlight: var(--highlight);
     --color-muted-foreground: var(--muted-foreground);
     --color-accent: var(--accent);
     --color-accent-foreground: var(--accent-foreground);
@@ -205,7 +208,32 @@
 
     --border: var(--rule);
     --input: var(--field);
-    --ring: var(--primary);
+    /*
+     * The focus ring: the accent at two thirds, so it is found without shouting. It still stands
+     * 3:1 against the ground, the surface and the dark panel (lib/states.test.ts). High contrast
+     * draws it whole, below.
+     */
+    --ring: color-mix(in oklab, var(--primary) 65%, transparent);
+    /*
+     * Under the pointer, and the item a menu, a list or the palette has highlighted. Ink laid over
+     * whatever is beneath, not one grey: so it shows on the ground (the sidebar), on a card, in a
+     * menu and in a dialog alike, in both themes. `muted` stays the quiet solid fill for things that
+     * are not states (a code block, a key cap, a disabled field).
+     */
+    --hover: color-mix(in oklab, var(--ink) 6%, transparent);
+    --highlight: color-mix(in oklab, var(--ink) 9%, transparent);
+    /*
+     * Where a hover sits on something other than its own ground (the admin tiles, a pixel apart on
+     * the rule's colour), laying ink over what is beneath would show the rule through: the same
+     * step, mixed into the panel and opaque.
+     */
+    --hover-solid: color-mix(in oklab, var(--ink) 8%, var(--panel));
+    /*
+     * The mark the keyboard's highlight carries besides its fill: a 2px bar on the item's leading
+     * edge, in the accent whole. The fill alone is about 1.3:1; a state found only by keyboard
+     * needs 3:1 (WCAG 1.4.11), and the bar has it against the fill and the surface.
+     */
+    --cue: var(--primary);
 
     --sidebar: var(--ground);
     --sidebar-foreground: var(--ink);
@@ -385,11 +413,35 @@
     :root:not(.light) {
         --panel: var(--ground);
         --muted: color-mix(in oklab, var(--ink) 7%, var(--surface));
+        --hover: color-mix(in oklab, var(--ink) 8%, transparent);
+        --highlight: color-mix(in oklab, var(--ink) 12%, transparent);
     }
 }
 :root.dark {
     --panel: var(--ground);
     --muted: color-mix(in oklab, var(--ink) 7%, var(--surface));
+    --hover: color-mix(in oklab, var(--ink) 8%, transparent);
+    --highlight: color-mix(in oklab, var(--ink) 12%, transparent);
+}
+
+/*
+ * High contrast, asked for here or by the computer: the ring whole and the fills stronger. This
+ * is where a thick, full-strength outline belongs, and menus and the palette draw one on their
+ * highlighted item here as well as the fill (`hc:` in components/ui).
+ */
+:root.hc,
+:root.hc.dark {
+    --ring: var(--primary);
+    --hover: color-mix(in oklab, var(--ink) 12%, transparent);
+    --highlight: color-mix(in oklab, var(--ink) 20%, transparent);
+}
+@media (prefers-contrast: more) {
+    :root:root,
+    :root:root.dark {
+        --ring: var(--primary);
+        --hover: color-mix(in oklab, var(--ink) 12%, transparent);
+        --highlight: color-mix(in oklab, var(--ink) 20%, transparent);
+    }
 }
 
 :root.light {
@@ -442,11 +494,15 @@
     ::selection {
         @apply bg-primary text-primary-foreground;
     }
+    /* Keyboard focus on a control that stands alone: never on a click (`:focus-visible`). */
     a,
     button,
-    summary,
-    [role='menuitem'] {
+    summary {
         @apply focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring;
+    }
+    /* A menu's item is marked by its fill as the highlight moves; the ring joins it in high contrast. */
+    [role='menuitem'] {
+        @apply hc:focus-visible:outline-2 hc:focus-visible:outline-solid hc:focus-visible:-outline-offset-2 hc:focus-visible:outline-ring;
     }
     strong {
         @apply font-bold text-foreground;
