@@ -35,7 +35,7 @@ import { useState } from 'react';
 import { operator, workspace } from '@/components/app-sidebar';
 import { openDeviceDialog } from '@/components/device-control';
 import { Highlight } from '@/components/drive/highlight';
-import { Kbd } from '@/components/drive/hotkey-hints';
+import { Kbd } from '@/components/drive/kbd';
 import { keyLabel, shortcuts } from '@/components/drive/shortcuts';
 import { useTheme } from '@/components/theme-provider';
 import { searchHash } from '@/lib/search';
