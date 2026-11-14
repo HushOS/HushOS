@@ -6,7 +6,6 @@ import { FINISHING_KEY_CHANGE } from '@/components/drive/family-area';
 import { useFamilyPlanGate } from '@/components/families/family-billing';
 import { DeleteFamilyFolderDialog } from '@/components/families/delete-folder-dialog';
 import { NewFamilyFolderDialog } from '@/components/families/new-folder-dialog';
-import { ServerKnowsLine } from '@/components/families/server-knows';
 import { FolderMark } from '@/components/folder-mark';
 import { PageHeader } from '@/components/page-header';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -177,7 +176,6 @@ function FamilySpacePage() {
                     })}
                 </ul>
             )}
-            <ServerKnowsLine className="mt-auto" />
             {canCreate && (
                 <NewFamilyFolderDialog
                     userId={space.userId}

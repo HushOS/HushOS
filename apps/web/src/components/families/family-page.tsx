@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, Navigate, useNavigate, useRouteContext } from '@tanstack/react-router';
+import { Link, Navigate, useNavigate } from '@tanstack/react-router';
 import { RotateCcwIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { EmptyState, SkeletonRows } from '@/components/drive/file-list';
@@ -15,11 +15,9 @@ import {
     MemberList,
     PendingList,
 } from '@/components/families/members';
-import { ServerKnowsLine } from '@/components/families/server-knows';
 import { PendingLabel } from '@/components/motion';
 import { PageHeader } from '@/components/page-header';
 import { Setting, SettingsDisclosure, SettingsPage } from '@/components/settings';
-import { StoreLinks } from '@/components/store-links';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
     AlertDialog,
@@ -422,7 +420,6 @@ export function FamilyPage({
                         }
                     />
                 )}
-                {detail.data && <FamilyApps />}
                 {manager && invitations.data && (
                     <InvitationList
                         userId={userId}
@@ -496,29 +493,25 @@ export function FamilyPage({
                             label="Leaving"
                             action={
                                 <Button
-                                    variant="destructive-ghost"
-                                    className="-mr-3.5 pointer-coarse:-mr-4"
+                                    variant="destructive-outline"
                                     disabled={!detail.data || cantLeave !== null}
-                                    aria-describedby={cantLeave ? 'leave-blocked' : 'leave-what'}
+                                    aria-describedby={cantLeave ? 'leave-blocked' : undefined}
                                     onClick={() => setLeaving(true)}
                                 >
                                     Leave family
                                 </Button>
                             }
                         >
-                            {/* Read on the way to the button: a disabled button can't take focus. */}
-                            <span
-                                id={cantLeave ? 'leave-blocked' : 'leave-what'}
-                                className="text-muted-foreground"
-                            >
-                                {cantLeave ??
-                                    'You’ll lose the family folders. Your own files stay yours.'}
-                            </span>
+                            {/* Why it can't be pressed, read on the way to it: a disabled button can't take focus. What leaving costs is the confirmation's to say. */}
+                            {cantLeave && (
+                                <span id="leave-blocked" className="text-muted-foreground">
+                                    {cantLeave}
+                                </span>
+                            )}
                         </Setting>
                     </>
                 </SettingsDisclosure>
             </div>
-            <ServerKnowsLine className="mt-auto" />
 
             {manager && renaming && (
                 <RenameFamilyDialog
@@ -673,22 +666,5 @@ function LeaveDialog({
                 </AlertDialogFooter>
             </AlertDialogContent>
         </AlertDialog>
-    );
-}
-
-/*
- * Under Members, where it helps them: the family can use the phone apps (StoreLinks), shown only
- * where this server names their store listings. One quiet line, tucked under the list it follows.
- */
-function FamilyApps() {
-    const { playStoreUrl, appStoreUrl } = useRouteContext({ from: '__root__' });
-    if (!playStoreUrl && !appStoreUrl) return null;
-    const phones =
-        playStoreUrl && appStoreUrl ? 'iPhone and Android' : appStoreUrl ? 'iPhone' : 'Android';
-    return (
-        <div className="-mt-5 flex flex-col gap-7">
-            <p className="text-sm text-muted-foreground">Your family can use HushOS on {phones}.</p>
-            <StoreLinks />
-        </div>
     );
 }
