@@ -1,0 +1,55 @@
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ContactsUi.kt
+  s_566b8e0c4467a4::t_078e969900e54b 182
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DevicesScreen.kt
+  s_566b8e0c4467a4::t_edaac339687b43 111,123
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Families.kt
+  s_566b8e0c4467a4::t_fb651f8647de1a 458,519,531
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HomeScreen.kt
+  s_566b8e0c4467a4::t_d08fa0da0db8f5 397,406
+apps/android/app/src/main/kotlin/com/hushos/app/ui/LinksUi.kt
+  s_566b8e0c4467a4::t_e2f9910547efd2 553,850
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Screens.kt
+  s_566b8e0c4467a4::t_5ce24211ed1a42 200
+apps/ios/App/Contacts.swift
+  s_566b8e0c4467a4::t_63daefd7a5c8e6 81
+apps/ios/App/DevicesView.swift
+  s_566b8e0c4467a4::t_fb01447d48406f 79,91
+apps/ios/App/FamilyManaging.swift
+  s_566b8e0c4467a4::t_86bee5d41c60f5 554,596,604
+apps/ios/App/RecentsView.swift
+  s_566b8e0c4467a4::t_5f5d901871efdd 540
+apps/ios/App/Sharing.swift
+  s_566b8e0c4467a4::t_a961d0119958bf 751,1089
+apps/web/src/components/device-control.tsx
+  s_566b8e0c4467a4::t_9b539953844c53 13
+apps/web/src/components/drive/contact-flow.tsx
+  s_566b8e0c4467a4::t_6346c6222efade 66-67
+apps/web/src/components/drive/share-dialog.tsx
+  s_566b8e0c4467a4::t_576023b2f9feb4 447
+apps/web/src/components/families/invite-dialog.tsx
+  s_566b8e0c4467a4::t_4e726d1208b904 94
+apps/web/src/components/families/members.tsx
+  s_566b8e0c4467a4::t_c48b835c8069d3 594,1497
+apps/web/src/components/own-words-dialog.tsx
+  s_566b8e0c4467a4::t_9bf3e7f3048f6f 51
+apps/web/src/routes/_authenticated/app/_drive/shared.tsx
+  s_566b8e0c4467a4::t_2fe8d0cbc6c5c0 715
+docs/optional-verification.md
+  s_566b8e0c4467a4::t_e5d3afebf1d1c3 393
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fa636338201e107f5732401439436df93d1225a0",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
