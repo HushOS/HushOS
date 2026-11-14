@@ -790,6 +790,7 @@ This is authentication, so AGENTS.md's rule for keys applies: repository tests i
     - turn the step on with the QR secret read from the page, and sign in with a computed code;
     - sign in with a backup code, and with the phrase;
     - add and use a security key through Chromium's virtual authenticator;
+    - two browsers on one account (`e2e/two-step-device.spec.ts`): one turns Approve on another device on with the other, chosen, approving; a sign-in asks nothing until a press, a wrong code and Deny end the request with nobody signed in and are counted, the right code signs in; a change on devices newer than seven days is not offered the method;
     - an old client is told to update.
 
 ### Implementation plan
@@ -954,7 +955,7 @@ Approve on another device is a method of the step on the server, the web, the iP
 
 **Which rules apply to which purpose.** A sign-in (`login`) is approved by any other device with a key and a live session that passed the step. A step-up (`password`, `master-key`, `recovery-key`, `delete`, `two-step`) only between two devices approved at least seven days ago. The approval that turns the method on (`device-approval`) is not held to the seven days: with the step on, adding a method already needed the step, and with it off there is nothing to protect yet.
 
-**The approving device's own value.** The 32 bytes an approving device opens a request with are made on that device, after it has seen the commitment, and kept by it. The server's reply to `open` echoes them; a client that gets back another value, or is told it opened a request it holds no value for (its page was reloaded, its app restarted), ends the request (`mismatch`) and asks for nothing: a value the server chose could be chosen to steer the code.
+**The approving device's own value.** The 32 bytes an approving device opens a request with are made on that device, after it has seen the commitment, and kept by it. The server's reply to `open` echoes them; a client that gets back another value, or is told it opened a request it holds no value for (its page was reloaded, its app restarted), ends the request (`mismatch`) and asks for nothing: a value the server chose could be chosen to steer the code. The value is remembered before it is posted, so an open sent twice (a lost reply, a second press) carries the same one.
 
 **Budgets.** The rows of the last 24 hours are the count, so the classes cannot spend each other's: `unknown` (a sign-in that proved no device) five a day for the account and one open at a time; `known` (a sign-in that proved its device's key) five a day for that device; `change` (a step-up, and the request that turns the method on) five a day for that device and ten for the account. A newer request replaces an open one, except one from another sign-in that a device has already opened (409 `device-busy`). The approving device keeps its own count per class and shows at most five prompts a day for each, whatever the server sends (`approvalPromptsAllowed`, `approval_prompts_allowed`).
 
