@@ -73,7 +73,7 @@ function Header() {
                         aria-current={pathname === page.href ? 'page' : undefined}
                         onClick={(event) => go(event, page.href)}
                         className={cn(
-                            'flex h-8 items-center rounded-md px-3 text-sm font-semibold outline-none hover:bg-muted focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring',
+                            'flex h-8 items-center rounded-md px-3 text-sm font-semibold outline-none hover:bg-hover focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring',
                             pathname === page.href && 'bg-accent text-accent-foreground',
                         )}
                     >

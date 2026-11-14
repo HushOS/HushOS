@@ -1835,7 +1835,7 @@ function ChangePlanDialog({
                                         ? 'cursor-default'
                                         : selected
                                           ? 'cursor-pointer bg-accent'
-                                          : 'cursor-pointer hover:bg-muted',
+                                          : 'cursor-pointer hover:bg-hover',
                                 )}
                             >
                                 <RadioGroupItem

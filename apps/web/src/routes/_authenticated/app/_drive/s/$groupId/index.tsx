@@ -121,7 +121,7 @@ function FamilySpacePage() {
                                 key={area.workspaceId}
                                 data-area={name}
                                 data-area-write={area.write}
-                                className="flex items-center border-b border-rule hover:bg-muted"
+                                className="flex items-center border-b border-rule hover:bg-hover"
                             >
                                 {root && area.opened ? (
                                     <Link

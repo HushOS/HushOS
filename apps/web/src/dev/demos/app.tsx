@@ -157,7 +157,7 @@ export function FileRowsDemo() {
                                         data-force={index === 2 ? 'hover' : undefined}
                                         className={cn(
                                             'group/row h-14 cursor-default border-b border-rule select-none last:border-0',
-                                            isSelected ? 'bg-accent' : 'hover:bg-muted',
+                                            isSelected ? 'bg-accent' : 'hover:bg-hover',
                                             index === 3 && 'ring-1 ring-ring ring-inset',
                                         )}
                                     >

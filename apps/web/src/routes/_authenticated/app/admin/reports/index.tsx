@@ -183,7 +183,7 @@ function ReportsPage() {
                                             <tr
                                                 key={report.id}
                                                 data-report-id={report.id}
-                                                className="border-b border-rule last:border-b-0 hover:bg-muted"
+                                                className="border-b border-rule last:border-b-0 hover:bg-hover"
                                             >
                                                 <td className={cell}>
                                                     <Link

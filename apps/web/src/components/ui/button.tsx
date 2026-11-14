@@ -19,12 +19,12 @@ const buttonVariants = cva(
                 // In the dark the fill is see-through, so on the black panel an outline button is an outline, not a grey tile;
                 // in dialogs and cards it shows their surface, as before. Light keeps the white fill.
                 outline:
-                    'border-input bg-card text-foreground hover:bg-muted focus-visible:outline-ring aria-expanded:bg-muted dark:bg-transparent dark:hover:bg-muted dark:aria-expanded:bg-muted',
+                    'border-input bg-card text-foreground hover:bg-hover focus-visible:outline-ring aria-expanded:bg-highlight dark:bg-transparent dark:hover:bg-hover dark:aria-expanded:bg-highlight',
                 // Quiet filled: a choice beside the one blue button where an outline would box it in.
                 // No edge on its fill, except in high contrast, where the tint alone is too faint to find.
                 tint: 'border-transparent bg-tint text-on-tint hover:bg-[color-mix(in_oklch,var(--tint),var(--on-tint)_12%)] focus-visible:outline-ring aria-expanded:bg-[color-mix(in_oklch,var(--tint),var(--on-tint)_12%)] hc:border-edge',
-                ghost: 'border-transparent bg-transparent text-foreground hover:bg-muted focus-visible:outline-ring aria-expanded:bg-muted',
-                row: 'w-full justify-between border-transparent bg-transparent text-foreground hover:bg-muted focus-visible:outline-ring aria-expanded:bg-muted [&>svg]:text-primary',
+                ghost: 'border-transparent bg-transparent text-foreground hover:bg-hover focus-visible:outline-ring aria-expanded:bg-highlight',
+                row: 'w-full justify-between border-transparent bg-transparent text-foreground hover:bg-hover focus-visible:outline-ring aria-expanded:bg-highlight [&>svg]:text-primary',
                 destructive:
                     'border-destructive bg-destructive text-destructive-foreground hover:bg-[color-mix(in_oklch,var(--destructive),var(--ink)_10%)] focus-visible:outline-destructive-foreground',
                 'destructive-outline':

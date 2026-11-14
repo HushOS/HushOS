@@ -188,7 +188,7 @@ function RecoverForm({ enrollment }: { enrollment: { email: string } }) {
                                     'flex cursor-pointer flex-col items-center gap-2 rounded-xl border-2 border-dashed px-6 py-8 text-center transition-colors has-focus-visible:outline-2 has-focus-visible:outline-solid has-focus-visible:outline-ring',
                                     over
                                         ? 'border-primary bg-accent'
-                                        : 'border-field hover:bg-muted',
+                                        : 'border-field hover:bg-hover',
                                 )}
                             >
                                 <FileTextIcon

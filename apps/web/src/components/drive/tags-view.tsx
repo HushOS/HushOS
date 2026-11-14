@@ -187,7 +187,7 @@ export function TagsView() {
                             <tr
                                 key={tag.id}
                                 data-tag-id={tag.id}
-                                className="h-14 border-b border-rule hover:bg-muted"
+                                className="h-14 border-b border-rule hover:bg-hover"
                             >
                                 <td className="min-w-0 pl-5 sm:pl-8">
                                     <Link

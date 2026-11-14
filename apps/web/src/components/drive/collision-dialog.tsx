@@ -99,7 +99,7 @@ function CollisionForm({ prompt }: { prompt: CollisionPrompt }) {
                         htmlFor={`${id}-${entry.value}`}
                         className={cn(
                             'flex cursor-pointer items-start gap-3 rounded-md px-3 py-2.5',
-                            choice === entry.value ? 'bg-accent' : 'hover:bg-muted',
+                            choice === entry.value ? 'bg-accent' : 'hover:bg-hover',
                         )}
                     >
                         <RadioGroupItem

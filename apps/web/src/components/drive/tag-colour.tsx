@@ -364,7 +364,7 @@ export function TagColourButton({
                 aria-label="Colour for the new tag"
                 title="Colour"
                 disabled={disabled}
-                className="flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-input bg-card px-2.5 outline-none hover:bg-muted focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring disabled:cursor-default disabled:opacity-60 pointer-coarse:h-11"
+                className="flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-input bg-card px-2.5 outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring disabled:cursor-default disabled:opacity-60 pointer-coarse:h-11"
             >
                 <Swatch colour={value} className="size-[18px] rounded-full" />
                 <ChevronDownIcon className="size-4 text-muted-foreground" aria-hidden="true" />

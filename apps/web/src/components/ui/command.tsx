@@ -12,14 +12,35 @@ import {
 } from '@/components/ui/dialog';
 
 /* The command palette: the same faces and row height as the menus. */
-function Command({ className, ...props }: React.ComponentProps<typeof CommandPrimitive>) {
+/*
+ * The highlighted item is a fill, which is enough to follow a pointer and too faint (about
+ * 1.3:1) to find by keyboard alone. Focus stays in the field here, so `:focus-visible` can't
+ * tell the two apart: the root remembers what moved the highlight last (`data-moved`), and by
+ * keyboard the item also carries a 2px accent bar on its leading edge (`--cue`, 3:1 and more).
+ * It opens by keyboard, with the first item highlighted, so that is where it starts.
+ */
+function Command({
+    className,
+    onKeyDown,
+    onPointerMove,
+    ...props
+}: React.ComponentProps<typeof CommandPrimitive>) {
     return (
         <CommandPrimitive
             data-slot="command"
+            data-moved="keyboard"
             className={cn(
-                'flex size-full flex-col overflow-hidden rounded-xl bg-popover text-popover-foreground',
+                'group/command flex size-full flex-col overflow-hidden rounded-xl bg-popover text-popover-foreground',
                 className,
             )}
+            onKeyDown={(event) => {
+                event.currentTarget.dataset.moved = 'keyboard';
+                onKeyDown?.(event);
+            }}
+            onPointerMove={(event) => {
+                event.currentTarget.dataset.moved = 'pointer';
+                onPointerMove?.(event);
+            }}
             {...props}
         />
     );
@@ -152,7 +173,7 @@ function CommandItem({ className, ...props }: React.ComponentProps<typeof Comman
         <CommandPrimitive.Item
             data-slot="command-item"
             className={cn(
-                "group/command-item relative flex cursor-default items-center gap-2 rounded-md px-2 py-2 font-sans text-sm outline-none data-[selected=true]:outline-2 data-[selected=true]:outline-solid data-[selected=true]:-outline-offset-2 data-[selected=true]:outline-ring select-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-[selected=true]:bg-muted [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+                "group/command-item relative flex cursor-default items-center gap-2 rounded-md px-2 py-2 font-sans text-sm outline-none hc:data-[selected=true]:outline-2 hc:data-[selected=true]:outline-solid hc:data-[selected=true]:-outline-offset-2 hc:data-[selected=true]:outline-ring select-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-[selected=true]:bg-highlight group-data-[moved=keyboard]/command:data-[selected=true]:shadow-[inset_2px_0_0_var(--cue)] [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
                 className,
             )}
             {...props}

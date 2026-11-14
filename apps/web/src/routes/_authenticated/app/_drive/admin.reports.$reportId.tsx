@@ -372,7 +372,7 @@ function Contents({ report, events }: { report: ReportView; events: ReportEventV
                                 <li
                                     key={node.id}
                                     data-node-id={node.id}
-                                    className="flex items-center hover:bg-muted"
+                                    className="flex items-center hover:bg-hover"
                                 >
                                     <button
                                         type="button"
@@ -878,7 +878,7 @@ function ActionRow({
             type="button"
             aria-pressed={active}
             onClick={onClick}
-            className={`flex min-h-11 cursor-pointer items-center px-4 py-2 text-left text-sm font-medium transition-colors ${active ? 'bg-accent text-accent-foreground' : 'hover:bg-muted'} ${tone === 'destructive' ? (active ? '' : 'text-destructive hover:bg-destructive-soft') : ''}`}
+            className={`flex min-h-11 cursor-pointer items-center px-4 py-2 text-left text-sm font-medium transition-colors ${active ? 'bg-accent text-accent-foreground' : 'hover:bg-hover'} ${tone === 'destructive' ? (active ? '' : 'text-destructive hover:bg-destructive-soft') : ''}`}
         >
             {children}
         </button>

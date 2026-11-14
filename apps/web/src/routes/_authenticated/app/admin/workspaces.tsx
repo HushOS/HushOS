@@ -86,7 +86,7 @@ function WorkspacesPage() {
                             </thead>
                             <tbody>
                                 {data.workspaces.map((workspace) => (
-                                    <tr key={workspace.id} className="hover:bg-muted">
+                                    <tr key={workspace.id} className="hover:bg-hover">
                                         <td className={cn(td, 'font-mono text-xs')}>
                                             {workspace.id}
                                         </td>

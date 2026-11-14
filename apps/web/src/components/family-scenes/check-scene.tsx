@@ -226,7 +226,7 @@ export function CheckScene() {
                                 <span
                                     data-target="more"
                                     data-open={s.menu || undefined}
-                                    className="relative grid size-8 place-items-center rounded-md text-foreground data-hover:bg-muted data-open:bg-muted"
+                                    className="relative grid size-8 place-items-center rounded-md text-foreground data-hover:bg-highlight data-open:bg-highlight"
                                 >
                                     <EllipsisIcon className="size-4" aria-hidden="true" />
                                     {/* The row's menu, under its button, as the app opens it. */}
@@ -238,7 +238,7 @@ export function CheckScene() {
                                     >
                                         <span
                                             data-target="check"
-                                            className="flex h-9 items-center rounded-md px-2.5 data-hover:bg-muted"
+                                            className="flex h-9 items-center rounded-md px-2.5 data-hover:bg-highlight"
                                         >
                                             Check it’s Sam
                                         </span>

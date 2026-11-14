@@ -1281,7 +1281,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                                                             ? 'bg-accent ring-2 ring-primary ring-inset'
                                                             : isSelected
                                                               ? 'bg-accent'
-                                                              : 'hover:bg-muted',
+                                                              : 'hover:bg-hover',
                                                         focusShown(node.id) && ROW_FOCUS,
                                                     )}
                                                 >
@@ -1408,7 +1408,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                                                     TILE_FOCUS_WITHIN,
                                                     dropOver === node.id || isSelected
                                                         ? 'bg-accent ring-2 ring-primary ring-inset'
-                                                        : 'hover:bg-muted',
+                                                        : 'hover:bg-hover',
                                                     focusShown(node.id) && TILE_FOCUS,
                                                 )}
                                             >
@@ -1734,7 +1734,7 @@ function FolderPath({
     const draggableCrumb = (crumb: DriveNode, index: number) =>
         index > 0 && crumb.workspaceId === workspaceId ? crumb.id : undefined;
     const crumbClass =
-        '-mx-1.5 min-w-0 truncate rounded-md px-1.5 py-0.5 text-lg font-semibold tracking-[-0.02em] text-foreground transition-colors hover:bg-muted sm:text-2xl';
+        '-mx-1.5 min-w-0 truncate rounded-md px-1.5 py-0.5 text-lg font-semibold tracking-[-0.02em] text-foreground transition-colors hover:bg-hover sm:text-2xl';
     // The "…" menus: a 44px target on touch, as every control there.
     const foldClass =
         'inline-flex shrink-0 cursor-pointer items-center justify-center pointer-coarse:min-h-11 pointer-coarse:min-w-11';
