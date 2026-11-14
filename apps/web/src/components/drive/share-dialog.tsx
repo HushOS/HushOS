@@ -398,8 +398,7 @@ function ShareForm({
                 <DialogHeader>
                     <DialogTitle>Turn off this link?</DialogTitle>
                     <DialogDescription>
-                        Anyone who has it can’t open “{node.name}” any more. Other links keep
-                        working.
+                        Anyone who has it can’t open “{node.name}” any more.
                     </DialogDescription>
                 </DialogHeader>
                 <DialogFooter>
@@ -443,8 +442,8 @@ function ShareForm({
                         Stop sharing with {firstName(over.share.grantee.name)}?
                     </DialogTitle>
                     <DialogDescription>
-                        They can’t open “{node.name}” in HushOS any more. Copies they already
-                        downloaded stay with them. You can share it again later.
+                        They can’t open “{node.name}” in HushOS any more, but copies they downloaded
+                        stay with them.
                     </DialogDescription>
                 </DialogHeader>
                 <DialogFooter>

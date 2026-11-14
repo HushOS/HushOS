@@ -698,7 +698,6 @@ function AccountUnlink({
                         <AlertDialogTitle>Unlink their account?</AlertDialogTitle>
                         <AlertDialogDescription>
                             {affiliate.name} stops seeing their code and earnings in their Drive.
-                            You can link an account again by its email.
                         </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>

@@ -287,6 +287,8 @@ export function ReplaceSharingKeysDialog({
             }}
             pending={pending}
             title="Replace sharing keys?"
+            // The one thing to know before pressing: the words people checked you by change.
+            description="Your twelve words change."
             onSubmit={() => void submit()}
             footer={
                 <>
@@ -304,20 +306,6 @@ export function ReplaceSharingKeysDialog({
                 </>
             }
         >
-            <div className="flex flex-col gap-2 text-[15px]">
-                <p>
-                    Use this if you think your sharing keys were exposed, for example on a device
-                    someone else used while it was unlocked.
-                </p>
-                <ul className="flex list-disc flex-col gap-1.5 pl-5 text-sm text-muted-foreground">
-                    <li>
-                        Your current keys sign the new ones, so the people you share with follow the
-                        change without comparing words again.
-                    </li>
-                    <li>Everything you share is sealed again to the new keys.</li>
-                    <li>Your twelve words change. Your password and recovery phrase don’t.</li>
-                </ul>
-            </div>
             {error && (
                 <p role="alert" className="text-[13px] text-destructive">
                     {error}
@@ -433,8 +421,8 @@ export function NewKeyDialog({
             title={keys ? 'Rotate account key?' : 'Make a new recovery phrase?'}
             description={
                 keys
-                    ? undefined
-                    : 'Your current phrase and any kit you saved stop working. You’ll save the new one straight away.'
+                    ? 'Your recovery phrase is replaced, and your other devices are signed out.'
+                    : 'Your current phrase and any kit you saved stop working.'
             }
             onSubmit={() => void submit()}
             footer={
@@ -459,19 +447,6 @@ export function NewKeyDialog({
                 </>
             }
         >
-            {keys && (
-                <div className="flex flex-col gap-2 text-[15px]">
-                    <p>
-                        A new master key for your account. Use this if you think someone saw your
-                        password or recovery phrase.
-                    </p>
-                    <ul className="flex list-disc flex-col gap-1.5 pl-5 text-sm text-muted-foreground">
-                        <li>You get a new recovery phrase. The old one stops working.</li>
-                        <li>Your other devices are signed out.</li>
-                        <li>Your files, sharing keys and links stay as they are.</li>
-                    </ul>
-                </div>
-            )}
             <DialogField
                 label="Password"
                 type="password"
@@ -547,7 +522,7 @@ export function DeleteAccountDialog({
             }}
             pending={pending}
             title="Delete your account?"
-            description="Deleting removes every file, every earlier version, every share and link, and the account itself. It can’t be undone."
+            description="Every file, earlier version, share and link is deleted with the account, and can’t be recovered."
             onSubmit={() => void submit()}
             footer={
                 <>

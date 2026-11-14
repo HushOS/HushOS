@@ -176,9 +176,7 @@ test('a key change with no chain is one calm notice; Continue seals the share ag
 
     await samRow.getByRole('button', { name: 'Review' }).click();
     const notice = maya.getByRole('dialog', { name: 'Sam’s account changed' });
-    await expect(notice).toContainText(
-        'This happens when someone starts their HushOS account over',
-    );
+    await expect(notice).toBeVisible();
     await expect(notice).toContainText('You can keep sharing with Sam as before.', {
         timeout: 60_000,
     });

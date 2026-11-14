@@ -76,7 +76,7 @@ struct DevicesView: View {
             }
             .disabled(password.isEmpty)
         } message: {
-            Text("It’s signed out at once and needs your password to sign in again. Anything already on it, such as files kept there, may stay there. If it was lost or stolen, change your password too. Enter your password to remove it.")
+            Text("It’s signed out at once, but files already on it may stay there. If it was lost or stolen, change your password too.")
         }
         .alert("Remove all other devices?", isPresented: $removingOthers) {
             SecureField("Your password", text: $password).textContentType(.password)
@@ -88,7 +88,7 @@ struct DevicesView: View {
             }
             .disabled(password.isEmpty)
         } message: {
-            Text("They’re signed out at once and need your password to sign in again. Anything already on them, such as files kept there, may stay there. If one was lost or stolen, change your password too. Enter your password to remove them.")
+            Text("They’re signed out at once, but files already on them may stay there. If one was lost or stolen, change your password too.")
         }
     }
 
@@ -141,7 +141,7 @@ struct DevicesView: View {
 
     private func rename(_ device: AccountDevice) {
         TextPrompt.present(
-            title: "Rename device", message: "Shown in your list of devices. Device names aren’t encrypted.", text: device.name ?? "",
+            title: "Rename device", message: nil, text: device.name ?? "",
             placeholder: "Name", action: "Save", selectStem: false,
             validate: { value in
                 let name = value.trimmingCharacters(in: .whitespaces)

@@ -197,10 +197,7 @@ fun TagManagerSheet(model: DriveViewModel, state: DriveState, dismiss: () -> Uni
             onDismissRequest = { renaming = null },
             title = { Text("Rename tag") },
             text = {
-                Column {
-                    Text("The new name shows everywhere at once.", modifier = Modifier.padding(bottom = 12.dp))
-                    OutlinedTextField(value = renameDraft, onValueChange = { renameDraft = it }, singleLine = true, label = { Text("Name") })
-                }
+                OutlinedTextField(value = renameDraft, onValueChange = { renameDraft = it }, singleLine = true, label = { Text("Name") })
             },
             confirmButton = { TextButton(enabled = renameDraft.isNotBlank(), onClick = { val name = renameDraft; renaming = null; model.editTags { it.rename(tag.id, name) } }) { Text("Save") } },
             dismissButton = { TextButton(onClick = { renaming = null }) { Text("Cancel") } },

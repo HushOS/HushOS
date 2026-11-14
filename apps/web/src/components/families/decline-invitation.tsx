@@ -5,7 +5,6 @@ import {
     AlertDialog,
     AlertDialogCancel,
     AlertDialogContent,
-    AlertDialogDescription,
     AlertDialogFooter,
     AlertDialogHeader,
     AlertDialogTitle,
@@ -92,7 +91,6 @@ export function DeclineInvitation({
                 <AlertDialogContent>
                     <AlertDialogHeader>
                         <AlertDialogTitle>Decline the invitation to {family}?</AlertDialogTitle>
-                        <AlertDialogDescription>You can be invited again.</AlertDialogDescription>
                     </AlertDialogHeader>
                     {error && (
                         <p role="alert" className="text-sm text-destructive">

@@ -638,7 +638,6 @@ private struct TurnedOnCodes: View {
     let done: () -> Void
 
     var body: some View {
-        SheetIntro(text: "Two-step sign-in is on.")
         BackupCodesList(codes: codes, email: email)
         if removing == .running {
             Section {} footer: { Text("Removing your other devices") }
@@ -765,11 +764,11 @@ struct AuthenticatorSheet: View {
             Form {
                 if let codes {
                     TurnedOnCodes(codes: codes, email: email, removing: removing) {
-                        done("")
+                        // The codes' sheet no longer says it: closing it does, once.
+                        done("Two-step sign-in is on.")
                         dismiss()
                     }
                 } else if let app {
-                    SheetIntro(text: "Add HushOS to your authenticator app, then enter the code it shows.")
                     Section {
                         if let link = app.link {
                             Button("Open in authenticator app") {
@@ -812,7 +811,6 @@ struct AuthenticatorSheet: View {
                     FormProblem(text: error)
                     primaryRow(pending ? "Checking" : mode == .replace ? "Replace app" : mode == .on ? "Turn on" : "Add app", disabled: pending) { confirm() }
                 } else {
-                    SheetIntro(text: intro)
                     ConfirmPassword(password: $password, tried: tried)
                     StepUpSections(step: step, disabled: pending)
                     FormProblem(text: error)
@@ -837,14 +835,6 @@ struct AuthenticatorSheet: View {
         case .on: return "Turn on two-step sign-in?"
         case .add: return "Add an authenticator app?"
         case .replace: return "Replace your authenticator app?"
-        }
-    }
-
-    private var intro: String {
-        switch mode {
-        case .on: "After your password, HushOS will ask for a code from an authenticator app."
-        case .add: ""
-        case .replace: "The new app takes over once you confirm it."
         }
     }
 
@@ -1051,18 +1041,18 @@ struct KeySheet: View {
             Form {
                 if let codes {
                     TurnedOnCodes(codes: codes, email: email, removing: removing) {
-                        done("")
+                        // The codes' sheet no longer says it: closing it does, once.
+                        done("Two-step sign-in is on.")
                         dismiss()
                     }
                 } else if started != nil {
-                    SheetIntro(text: "Your phone will ask for it.")
                     Section {
                         TextField("Security key", text: Binding(get: { name }, set: { name = Self.fitted($0); error = "" }))
                             .autocorrectionDisabled().disabled(pending).alpineRow()
                     } header: {
                         FieldLabel("Name")
                     } footer: {
-                        Text("Optional. Names aren’t encrypted.")
+                        Text("Optional.")
                     }
                     // Offered whenever the step is being turned on, whatever the device list said or didn't.
                     if first { RemoveOthersOffer(ticked: $signOutOthers, others: others, disabled: pending) }
@@ -1070,7 +1060,6 @@ struct KeySheet: View {
                     // The system's sheet opens on this press, and only on it.
                     primaryRow(pending ? "Waiting for your key" : first ? "Add and turn on" : "Add", disabled: pending) { add() }
                 } else {
-                    SheetIntro(text: first ? "After your password, HushOS will ask for your passkey or security key." : "")
                     ConfirmPassword(password: $password, tried: tried)
                     StepUpSections(step: step, disabled: pending)
                     FormProblem(text: error)
@@ -1185,7 +1174,6 @@ struct RenameKeySheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                SheetIntro(text: "Names aren’t encrypted.")
                 Section {
                     TextField("Security key", text: Binding(get: { name }, set: { name = $0; error = "" }))
                         .autocorrectionDisabled().disabled(pending).submitLabel(.done).onSubmit { save() }.alpineRow()
@@ -1241,14 +1229,13 @@ struct NewCodesSheet: View {
         NavigationStack {
             Form {
                 if let codes {
-                    SheetIntro(text: "Your earlier codes no longer work.")
                     BackupCodesList(codes: codes, email: email)
                     primaryRow("Done", disabled: false) {
                         done("")
                         dismiss()
                     }
                 } else {
-                    SheetIntro(text: "You get ten new codes, and the ones you have now stop working.")
+                    SheetIntro(text: "The codes you have now stop working.")
                     ConfirmPassword(password: $password, tried: tried)
                     StepUpSections(step: step, disabled: pending)
                     FormProblem(text: error)

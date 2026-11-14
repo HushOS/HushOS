@@ -76,12 +76,7 @@ struct AddSomeoneView: View {
                 }
                 .alpineRow()
             } header: {
-                // The section's header, not a bare row: as a row the list laid it out wider than the card and clipped its first letters.
-                if writer != nil {
-                    Text("Enter the email they use for HushOS. Once they’re in your contacts, what they add and change shows as theirs.")
-                        .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).textCase(nil)
-                        .listRowInsets(EdgeInsets(top: 0, leading: Alpine.Space.s1, bottom: Alpine.Space.s3, trailing: Alpine.Space.s1))
-                }
+                EmptyView()
             } footer: {
                 Text(hint?.text ?? "The email they use for HushOS.").foregroundStyle(hint?.error == true ? Alpine.danger : Alpine.inkMuted)
             }

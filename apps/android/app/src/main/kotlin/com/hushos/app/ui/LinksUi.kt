@@ -550,7 +550,7 @@ private fun PersonSheet(model: DriveViewModel, item: Opened, share: OwnedShare, 
     if (stopping) AlertDialog(
         onDismissRequest = { stopping = false },
         title = { Text("Stop sharing with $first?") },
-        text = { Text("They can’t open “${item.name}” in HushOS any more. Copies they already downloaded stay with them. You can share it again later.") },
+        text = { Text("They can’t open “${item.name}” in HushOS any more, but copies they downloaded stay with them.") },
         confirmButton = { TextButton(onClick = {
             stopping = false; busy = true
             scope.launch {
@@ -668,7 +668,7 @@ private fun LinkCard(model: DriveViewModel, item: Opened, link: LinkView, url: S
     if (confirmOff) AlertDialog(
         onDismissRequest = { confirmOff = false },
         title = { Text("Turn off this link?") },
-        text = { Text("Anyone who has it can’t open “${item.name}” any more. Other links keep working.") },
+        text = { Text("Anyone who has it can’t open “${item.name}” any more.") },
         confirmButton = { TextButton(onClick = {
             confirmOff = false; busy = true
             scope.launch {
@@ -847,8 +847,6 @@ fun OwnWordsSheet(model: DriveViewModel, state: DriveState, dismiss: () -> Unit)
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = AlpineSpace.S6).padding(bottom = AlpineSpace.S6),
             verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3)) {
             Text("Your twelve words", style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
-            Text("When someone checks it’s you, read these to them. They’re the same on all your devices.",
-                style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
             val shown = words
             when {
                 shown != null -> FingerprintWords(shown)

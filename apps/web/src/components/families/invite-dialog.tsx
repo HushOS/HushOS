@@ -3,13 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useId, useState, type FormEvent } from 'react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
-import {
-    Dialog,
-    DialogContent,
-    DialogDescription,
-    DialogHeader,
-    DialogTitle,
-} from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/toast';
 import { familyKeys } from '@/lib/families';
@@ -91,9 +85,6 @@ export function InviteDialog({
             <DialogContent className="sm:max-w-[440px]">
                 <DialogHeader>
                     <DialogTitle>Invite someone</DialogTitle>
-                    <DialogDescription>
-                        We’ll email them a link. Once they accept, you let them in.
-                    </DialogDescription>
                 </DialogHeader>
                 <form
                     noValidate

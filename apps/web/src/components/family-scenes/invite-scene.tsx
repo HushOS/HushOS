@@ -88,7 +88,6 @@ export function InviteScene() {
                                 <Dialog
                                     open={s.dialog}
                                     title="Invite someone"
-                                    description="We’ll email them a link. Once they accept, you let them in."
                                     className={
                                         compact
                                             ? 'inset-x-3 top-16'

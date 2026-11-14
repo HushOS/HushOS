@@ -89,7 +89,6 @@ fun DevicesScreen(model: DriveViewModel, onBack: () -> Unit) {
             title = { Text("Rename device") },
             text = {
                 Column {
-                    Text("Shown in your list of devices. Device names aren’t encrypted.", modifier = Modifier.padding(bottom = AlpineSpace.S3))
                     OutlinedTextField(value = name, onValueChange = { name = it.take(40); error = null }, singleLine = true, label = { Text("Name") },
                         isError = error != null, supportingText = error?.let { { Text(it) } })
                 }
@@ -108,7 +107,7 @@ fun DevicesScreen(model: DriveViewModel, onBack: () -> Unit) {
     removing?.let { device ->
         RemoveDialog(
             title = "Remove ${device.label}?",
-            text = "It’s signed out at once and needs your password to sign in again. Anything already on it, such as files kept there, may stay there. If it was lost or stolen, change your password too.",
+            text = "It’s signed out at once, but files already on it may stay there. If it was lost or stolen, change your password too.",
             verb = "Remove",
             onDismiss = { removing = null },
         ) { password, failed ->
@@ -120,7 +119,7 @@ fun DevicesScreen(model: DriveViewModel, onBack: () -> Unit) {
 
     if (removingOthers) RemoveDialog(
         title = "Remove all other devices?",
-        text = "They’re signed out at once and need your password to sign in again. Anything already on them, such as files kept there, may stay there. If one was lost or stolen, change your password too.",
+        text = "They’re signed out at once, but files already on them may stay there. If one was lost or stolen, change your password too.",
         verb = "Remove all other devices",
         onDismiss = { removingOthers = false },
     ) { password, failed ->

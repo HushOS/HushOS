@@ -6,7 +6,6 @@ import { Checkbox } from '@/components/ui/checkbox';
 import {
     Dialog,
     DialogContent,
-    DialogDescription,
     DialogFooter,
     DialogHeader,
     DialogTitle,
@@ -62,7 +61,6 @@ function CollisionForm({ prompt }: { prompt: CollisionPrompt }) {
             ? `“${trimmed}” is already here too. Try another name.`
             : '';
     })();
-    const folder = prompt.folderName === 'Drive' ? 'My files' : prompt.folderName;
 
     function answer() {
         if (choice === 'keep') {
@@ -82,10 +80,6 @@ function CollisionForm({ prompt }: { prompt: CollisionPrompt }) {
         >
             <DialogHeader>
                 <DialogTitle>“{prompt.fileName}” is already here</DialogTitle>
-                <DialogDescription>
-                    “{folder}” already has a file with this name. What should happen to the one
-                    you’re adding?
-                </DialogDescription>
             </DialogHeader>
             <RadioGroup
                 value={choice}

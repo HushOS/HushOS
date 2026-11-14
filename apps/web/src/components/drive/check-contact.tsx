@@ -158,7 +158,7 @@ export function CheckContactStep({
                 <DialogDescription>
                     {mismatch
                         ? mismatchWords(name)
-                        : `Ask ${name} to open Contacts in HushOS and choose Your twelve words. If theirs match these, it’s really them. Do it in person or on a call.`}
+                        : `Ask ${name} for Your twelve words, from Contacts in HushOS, in person or on a call: if they match these, it’s really them.`}
                 </DialogDescription>
             </DialogHeader>
             {found.isPending && (

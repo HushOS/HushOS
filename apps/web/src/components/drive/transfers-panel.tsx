@@ -594,8 +594,7 @@ export function TransfersPanel() {
                                 : `Cancel ${unsettled.length} transfers?`}
                         </AlertDialogTitle>
                         <AlertDialogDescription>
-                            What is still on its way stops and isn’t kept. What already finished
-                            stays where it is.
+                            What is still on its way stops and isn’t kept.
                         </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>

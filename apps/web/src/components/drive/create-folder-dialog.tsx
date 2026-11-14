@@ -7,13 +7,12 @@ import { Button } from '@/components/ui/button';
 import {
     Dialog,
     DialogContent,
-    DialogDescription,
     DialogFooter,
     DialogHeader,
     DialogTitle,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
-import { clientFor, displayName, driveError, invalidateFolders, refuseWrite } from '@/lib/drive';
+import { clientFor, driveError, invalidateFolders, refuseWrite } from '@/lib/drive';
 import { cue } from '@/lib/sounds';
 
 /*
@@ -95,7 +94,6 @@ function CreateFolderForm({
         >
             <DialogHeader>
                 <DialogTitle>New folder</DialogTitle>
-                <DialogDescription>In “{displayName(parent)}”.</DialogDescription>
             </DialogHeader>
             <div className="flex flex-col gap-1.5">
                 <label htmlFor={id} className="text-[13px] font-semibold">
