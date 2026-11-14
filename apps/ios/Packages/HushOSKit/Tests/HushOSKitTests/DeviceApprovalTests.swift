@@ -745,6 +745,8 @@ private func step(_ methods: [StepMethod]) -> StepChallenge {
         #expect(both.choosing)
         #expect(both.isDefault(.totp) && !both.isDefault(.device))
         #expect(both.canMakeDefault(.device) && !both.canMakeDefault(.totp))
+        // A kind the account has no method of cannot be made the default: the server refuses it.
+        #expect(!both.canMakeDefault(.webauthn))
         #expect(StepKind.device.rawValue == "device")
         // The only method: nothing to choose, and turning it off is turning the step off.
         let only = try status([device], defaultKind: "device", otherDevice: true)

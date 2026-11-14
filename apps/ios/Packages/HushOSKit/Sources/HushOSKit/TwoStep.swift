@@ -777,8 +777,16 @@ public struct TwoStepStatus: Sendable, Equatable {
     public func canTurnOnDevice(ownKey: Bool) -> Bool { device == nil && otherDevice == true && ownKey }
     /* Whether `kind` carries the Default badge. */
     public func isDefault(_ kind: StepKind) -> Bool { choosing && defaultKind == kind.rawValue }
-    /* Whether `kind` offers Make default. */
-    public func canMakeDefault(_ kind: StepKind) -> Bool { choosing && defaultKind != kind.rawValue }
+    /* Whether the account has a method of `kind`. */
+    private func has(_ kind: StepKind) -> Bool {
+        switch kind {
+        case .webauthn: !keys.isEmpty
+        case .totp: app != nil
+        case .device: device != nil
+        }
+    }
+    /* Whether `kind` offers Make default: a kind the account has, and is not offered first already. */
+    public func canMakeDefault(_ kind: StepKind) -> Bool { choosing && has(kind) && defaultKind != kind.rawValue }
 
     /* The last method is not removed: turning it off is turning the step off. */
     public var removeWords: String { methods.count == 1 ? "Turn off" : "Remove" }
