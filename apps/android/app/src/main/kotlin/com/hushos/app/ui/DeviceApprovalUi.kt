@@ -495,12 +495,15 @@ internal fun ShownCode(code: String, modifier: Modifier = Modifier) {
 @Composable
 internal fun CodeField(label: String, typed: String, completions: List<String>, enabled: Boolean, onType: (String) -> Unit, onComplete: (String) -> Unit, onDone: () -> Unit) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
-        OutlinedTextField(
-            value = typed, onValueChange = onType, label = { Text(label) }, placeholder = { Text("47 river") },
-            singleLine = true, enabled = enabled, textStyle = MaterialTheme.typography.titleLarge.copy(fontFamily = FontFamily.Monospace),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, imeAction = ImeAction.Done),
-            keyboardActions = KeyboardActions(onDone = { onDone() }), modifier = Modifier.fillMaxWidth(),
-        )
+        // A code that passes a second step: the keyboard must not learn it, as for every other answer to the step.
+        NoKeyboardLearning {
+            OutlinedTextField(
+                value = typed, onValueChange = onType, label = { Text(label) }, placeholder = { Text("47 river") },
+                singleLine = true, enabled = enabled, textStyle = MaterialTheme.typography.titleLarge.copy(fontFamily = FontFamily.Monospace),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { onDone() }), modifier = Modifier.fillMaxWidth(),
+            )
+        }
         if (completions.isNotEmpty()) Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
             for (completion in completions) SuggestionChip(onClick = { onComplete(completion) }, enabled = enabled, label = { Text(completion) })
         }
