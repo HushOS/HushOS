@@ -341,6 +341,38 @@ describe('the device that approves', () => {
         expect(server.sent('deny')).toEqual([]);
     });
 
+    test('a request opened twice at once is opened with one value, and not ended', async () => {
+        const server = await asked();
+        // The dialog's two mounts in development, or a second press before the first reply.
+        const [one, two] = await Promise.all([
+            openApproval(server.api, server.prompt()),
+            openApproval(server.api, server.prompt()),
+        ]);
+        expect(two).toEqual(one);
+        expect(server.sent('open')).toEqual([one.approverKey, one.approverKey]);
+        expect(server.sent('deny')).toEqual([]);
+    });
+
+    test('a request whose open got no reply is opened again with the same value', async () => {
+        const server = await asked();
+        const open = (server.api as unknown as { approvalOpen: AuthApi['approvalOpen'] })
+            .approvalOpen;
+        // The server takes the value, and its reply is lost on the way back.
+        (server.api as unknown as { approvalOpen: unknown }).approvalOpen = async (
+            ...sent: Parameters<AuthApi['approvalOpen']>
+        ) => {
+            await open(...sent);
+            throw new Error('offline');
+        };
+        await expect(openApproval(server.api, server.prompt())).rejects.toThrow('offline');
+        (server.api as unknown as { approvalOpen: unknown }).approvalOpen = open;
+        // The list now says this device opened it: it did, and it still holds the value.
+        const [first] = server.sent('open') as string[];
+        const again = await openApproval(server.api, { ...server.prompt(), approverKey: first! });
+        expect(again.approverKey).toBe(first);
+        expect(server.sent('deny')).toEqual([]);
+    });
+
     test('a value the server chose for this device is refused, and the request ended', async () => {
         const server = await asked();
         // The server answers the open with a value of its own, picked after it saw the commitment.
