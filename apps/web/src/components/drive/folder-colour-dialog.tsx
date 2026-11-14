@@ -16,7 +16,6 @@ import { Button } from '@/components/ui/button';
 import {
     Dialog,
     DialogContent,
-    DialogDescription,
     DialogFooter,
     DialogHeader,
     DialogTitle,
@@ -125,10 +124,6 @@ function ColourForm({
         >
             <DialogHeader>
                 <DialogTitle>Colour for {what}</DialogTitle>
-                <DialogDescription>
-                    People who can open {nodes.length === 1 ? 'this folder' : 'these folders'} see
-                    the colour too.
-                </DialogDescription>
             </DialogHeader>
             <fieldset
                 aria-label="Colour"

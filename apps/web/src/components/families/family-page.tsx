@@ -639,8 +639,8 @@ function LeaveDialog({
                     <AlertDialogTitle>Leave {family}?</AlertDialogTitle>
                     <AlertDialogDescription>
                         {alone
-                            ? `You’re the only one in ${family}, so leaving ends it. You’ll lose the family folders. Your own files stay yours.`
-                            : 'You’ll lose the family folders. Your own files stay yours.'}
+                            ? `You’re the only one in ${family}, so leaving ends it and you lose the family folders.`
+                            : 'You’ll lose the family folders.'}
                     </AlertDialogDescription>
                 </AlertDialogHeader>
                 {ownLine && (

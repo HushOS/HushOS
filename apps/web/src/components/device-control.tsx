@@ -5,18 +5,11 @@ import {
     AlertDialogAction,
     AlertDialogCancel,
     AlertDialogContent,
-    AlertDialogDescription,
     AlertDialogFooter,
     AlertDialogHeader,
     AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import {
-    Dialog,
-    DialogContent,
-    DialogDescription,
-    DialogHeader,
-    DialogTitle,
-} from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/toast';
 import { UnlockDevice } from '@/components/unlock-device';
 import { authClient } from '@/lib/auth-client';
@@ -84,10 +77,6 @@ export function DeviceControl({
                 <AlertDialogContent>
                     <AlertDialogHeader>
                         <AlertDialogTitle>Lock HushOS on this browser?</AlertDialogTitle>
-                        <AlertDialogDescription>
-                            You’ll need your password to open your files here again. Uploads in
-                            progress pause until you unlock.
-                        </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                         <AlertDialogCancel disabled={locking}>Cancel</AlertDialogCancel>
@@ -104,9 +93,6 @@ export function DeviceControl({
             <DialogContent className="sm:max-w-[440px]">
                 <DialogHeader>
                     <DialogTitle>Unlock HushOS</DialogTitle>
-                    <DialogDescription>
-                        Enter your password to open your files on this browser.
-                    </DialogDescription>
                 </DialogHeader>
                 <UnlockDevice
                     user={user}

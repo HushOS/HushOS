@@ -127,10 +127,8 @@ export function FamilyCheckDialog({
                         <DialogHeader>
                             <DialogTitle>Help {who} finish joining</DialogTitle>
                             <DialogDescription>
-                                {who} is using an older version of HushOS. Read these twelve words
-                                to {who} so their phone can finish joining. This doesn’t check {who}{' '}
-                                on your side; to do that, ask {who} to update HushOS, or compare{' '}
-                                {who}’s own twelve words in Contacts.
+                                Read these twelve words to {who} so their phone can finish joining;
+                                this doesn’t check {who} on your side.
                             </DialogDescription>
                         </DialogHeader>
                         {older.isPending ? (

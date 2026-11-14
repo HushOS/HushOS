@@ -16,7 +16,6 @@ import { Button } from '@/components/ui/button';
 import {
     Dialog,
     DialogContent,
-    DialogDescription,
     DialogFooter,
     DialogHeader,
     DialogTitle,
@@ -266,7 +265,6 @@ function RenameDialog({
                 >
                     <DialogHeader>
                         <DialogTitle>Rename device</DialogTitle>
-                        <DialogDescription>Device names aren’t encrypted.</DialogDescription>
                     </DialogHeader>
                     <DialogField
                         label="Name"

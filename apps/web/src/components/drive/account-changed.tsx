@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { firstName } from '@/components/drive/add-someone';
 import { Spinner } from '@/components/motion';
 import { Button } from '@/components/ui/button';
-import { DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/toast';
 import { continueWith, lookupContact, TrustMovedError, type AccountChange } from '@/lib/contacts';
 import { driveClient, driveError, driveKeys } from '@/lib/drive';
@@ -103,10 +103,6 @@ export function AccountChangedStep({
         <>
             <DialogHeader>
                 <DialogTitle>{name}’s account changed</DialogTitle>
-                <DialogDescription>
-                    This happens when someone starts their HushOS account over, for example after
-                    losing their phone.
-                </DialogDescription>
             </DialogHeader>
             {found.isPending && (
                 <output className="flex min-h-11 items-center gap-2 text-sm text-muted-foreground">

@@ -542,7 +542,7 @@ export function CommandCenter({ user }: { user: { id: string; role: string } }) 
                     <AlertDialogHeader>
                         <AlertDialogTitle>Empty the Trash?</AlertDialogTitle>
                         <AlertDialogDescription>
-                            Everything in it is deleted for good. This can’t be undone.
+                            Everything in it is deleted for good.
                         </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>

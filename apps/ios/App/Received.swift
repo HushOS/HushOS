@@ -358,9 +358,9 @@ struct SharedView: View {
 
     private var stopMessage: String {
         guard let stopping else { return "" }
-        if stopping.link != nil { return "Anyone who has it can’t open “\(stopping.item?.name ?? "")” any more. Other links keep working." }
+        if stopping.link != nil { return "Anyone who has it can’t open “\(stopping.item?.name ?? "")” any more." }
         let who = stopping.share.map { $0.grantee.name.isEmpty ? $0.grantee.email : $0.grantee.name } ?? ""
-        return "\(who) can’t open it any more. You can share it again later."
+        return "\(who) can’t open it in HushOS any more, but copies they downloaded stay with them."
     }
 
     private func stop() {

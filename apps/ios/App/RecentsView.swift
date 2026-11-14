@@ -537,7 +537,7 @@ struct TagManagerSheet: View {
 
     private func rename(_ tag: Tag) {
         let others = store.tags.tags.filter { $0.id != tag.id }.map(\.name)
-        TextPrompt.present(title: "Rename tag", message: "The new name shows everywhere at once.", text: tag.name, placeholder: "Name", action: "Rename", selectStem: false,
+        TextPrompt.present(title: "Rename tag", message: nil, text: tag.name, placeholder: "Name", action: "Rename", selectStem: false,
                            validate: { name in
                                let clean = name.trimmingCharacters(in: .whitespaces)
                                if clean.isEmpty { return "Enter a name." }

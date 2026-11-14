@@ -5,7 +5,6 @@ import { Checkbox } from '@/components/ui/checkbox';
 import {
     Dialog,
     DialogContent,
-    DialogDescription,
     DialogFooter,
     DialogHeader,
     DialogTitle,
@@ -190,9 +189,6 @@ function TagForm({
         >
             <DialogHeader>
                 <DialogTitle>Tags for {what}</DialogTitle>
-                <DialogDescription>
-                    Only you see your tags; people you share with don’t.
-                </DialogDescription>
             </DialogHeader>
             <div className="flex flex-col gap-3">
                 <div className="flex items-center gap-2">

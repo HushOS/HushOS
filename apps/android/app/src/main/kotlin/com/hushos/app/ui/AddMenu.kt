@@ -220,7 +220,6 @@ fun addInto(model: DriveViewModel, state: DriveState, folderId: String?, folderN
             title = { Text("New folder") },
             text = {
                 Column {
-                    Text("In “$folderName”", color = alpine.inkMuted, modifier = Modifier.padding(bottom = 12.dp))
                     val clash = draft.trim().lowercase() in taken
                     OutlinedTextField(value = draft, onValueChange = { newFolder = it }, singleLine = true, label = { Text("Name") }, isError = clash,
                         supportingText = if (clash) ({ Text("“${draft.trim()}” is already in this folder. Try another name.") }) else null)

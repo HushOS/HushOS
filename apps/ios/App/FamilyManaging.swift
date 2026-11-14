@@ -551,7 +551,6 @@ struct InviteSheet: View {
         let busy = ask?.busy == true
         VStack(alignment: .leading, spacing: Alpine.Space.s3) {
             Text("Invite someone").font(Theme.Text.headline).foregroundStyle(Alpine.ink)
-            Text("We’ll email them a link. Once they accept, you let them in.").font(Theme.Text.callout).foregroundStyle(Alpine.ink)
             VStack(alignment: .leading, spacing: Alpine.Space.s1) {
                 TextField("them@example.com", text: Binding(get: { store.inviting?.email ?? "" }, set: { store.typeInvite($0) }))
                     .textContentType(.emailAddress).keyboardType(.emailAddress).textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -593,7 +592,7 @@ struct FamilyManageDialogs: ViewModifier {
                 Button("Turn down", role: .destructive) { store.turnDown(ask) }
                 Button("Cancel", role: .cancel) {}
             } message: { ask in
-                Text("They’ll need a new invitation to join \(ask.family). To decide later, close this instead: nothing is lost.")
+                Text("They’ll need a new invitation to join \(ask.family).")
             }
             .alert(store.cancellingInvitation.map { $0.invitation.email.isEmpty ? "Cancel this invitation?" : "Cancel the invitation to \($0.invitation.email)?" } ?? "",
                    isPresented: Binding(get: { store.cancellingInvitation?.groupId == groupId }, set: { if !$0 { store.cancellingInvitation = nil } }),
@@ -601,7 +600,7 @@ struct FamilyManageDialogs: ViewModifier {
                 Button("Cancel invitation", role: .destructive) { store.cancelInvitation(ask) }
                 Button("Keep invitation", role: .cancel) {}
             } message: { _ in
-                Text("The link in their email stops working. You can invite them again.")
+                Text("The link in their email stops working.")
             }
             .sheet(item: Binding(get: { store.manageChange }, set: { store.manageChange = $0 })) { ask in
                 NavigationStack {
@@ -649,7 +648,7 @@ struct FamilyRoleDialogs: ViewModifier {
         switch ask.kind {
         case .manage: return "\(who) can invite people, let them in and change who manages \(family)."
         case .stop: return "\(who) stays in \(family) and keeps the family folders, but can’t change who’s in it any more."
-        case .organizer, .finish: return "\(who) takes over the family’s billing. You keep managing the family."
+        case .organizer, .finish: return "\(who) takes over the family’s billing."
         }
     }
 
@@ -677,7 +676,7 @@ struct FamilyRoleDialogs: ViewModifier {
                 Button("Check it’s \(firstName(ask.member.name))") { store.checkFirstAsk = nil; check(ask.member) }
                 Button("Cancel", role: .cancel) {}
             } message: { ask in
-                Text("Managers can let people in and change the family, so check it’s \(firstName(ask.member.name)) before they manage it. It takes a minute on a call or in person.")
+                Text("Managers can let people in and change the family, so check it’s \(firstName(ask.member.name)) first.")
             }
     }
 }

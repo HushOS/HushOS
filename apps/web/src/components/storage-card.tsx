@@ -209,9 +209,8 @@ export function StorageCard({ userId }: { userId: string }) {
                     <AlertDialogHeader>
                         <AlertDialogTitle>Remove earlier versions?</AlertDialogTitle>
                         <AlertDialogDescription>
-                            Every file keeps its current version. The{' '}
-                            {formatBytes(parts?.versions ?? 0)} of earlier versions is deleted and
-                            can’t be restored.
+                            The {formatBytes(parts?.versions ?? 0)} of earlier versions is deleted
+                            and can’t be restored.
                         </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>

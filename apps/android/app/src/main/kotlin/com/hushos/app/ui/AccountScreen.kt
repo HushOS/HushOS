@@ -420,7 +420,7 @@ private fun PlanScreen(model: DriveViewModel, state: DriveState, onBack: () -> U
     if (removing) AlertDialog(
         onDismissRequest = { removing = false },
         title = { Text("Remove earlier versions?") },
-        text = { Text("Every file keeps its current version. The ${formatSpace(state.storage?.supersededBytes ?: 0)} of earlier versions is deleted and can’t be restored.") },
+        text = { Text("The ${formatSpace(state.storage?.supersededBytes ?: 0)} of earlier versions is deleted and can’t be restored.") },
         confirmButton = { TextButton(onClick = {
             removing = false; busy = true
             val freed = state.storage?.supersededBytes ?: 0
@@ -770,7 +770,7 @@ private fun AdvancedRows(model: DriveViewModel, state: DriveState, onReset: () -
             title = { Text("Delete account") },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3)) {
-                    Text("Every file, every earlier version and the account. It can’t be undone.")
+                    Text("Every file, earlier version, share and link is deleted with the account, and can’t be recovered.")
                     PasswordField(password, { password = it; error = null }, "Password", error = error, enabled = !pending)
                     OutlinedTextField(value = typed, onValueChange = { typed = it }, singleLine = true, label = { Text("Type DELETE to confirm") }, enabled = !pending, modifier = Modifier.fillMaxWidth())
                     StepUpFields(step, enabled = !pending)
@@ -815,9 +815,7 @@ private fun ResetKeysScreen(model: DriveViewModel, onBack: () -> Unit) {
     }
     AccountPage("Rotate account key", onBack = if (pending) null else onBack) {
         Column(Modifier.padding(horizontal = AlpineSpace.S4), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3)) {
-            Text("A new master key for your account. Your files, sharing keys and links stay as they are.", style = MaterialTheme.typography.bodyLarge)
-            for (line in listOf("Use it if you think someone saw your password or recovery phrase.", "You get a new recovery phrase. The old one stops working.", "Your other devices are signed out."))
-                Row { Text("•", modifier = Modifier.padding(end = AlpineSpace.S2)); Text(line, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted) }
+            Text("Your recovery phrase is replaced, and your other devices are signed out.", style = MaterialTheme.typography.bodyLarge)
             PasswordField(password, { password = it; error = null }, "Password", error = error, enabled = !pending)
             StepUpFields(step, enabled = !pending)
             Button(enabled = !pending && !step.asking && password.isNotEmpty(), onClick = {
@@ -896,9 +894,7 @@ private fun ReplaceKeysScreen(model: DriveViewModel, state: DriveState, onBack: 
     var error by remember { mutableStateOf<String?>(null) }
     AccountPage("Replace sharing keys", onBack = if (pending) null else onBack) {
         Column(Modifier.padding(horizontal = AlpineSpace.S4), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3)) {
-            Text("New keys for sharing, signed by your old ones, so people you share with don’t need to compare words from scratch.", style = MaterialTheme.typography.bodyLarge)
-            for (line in listOf("Your twelve words change. People who checked them see that you replaced your keys.", "What you shared is sealed again under the new keys.", "Your password, recovery phrase and files stay as they are."))
-                Row { Text("•", modifier = Modifier.padding(end = AlpineSpace.S2)); Text(line, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted) }
+            Text("Your twelve words change.", style = MaterialTheme.typography.bodyLarge)
             error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = alpine.danger) }
             Button(enabled = !pending && state.resealing == null, onClick = {
                 pending = true; error = null

@@ -27,7 +27,6 @@ import { Button } from '@/components/ui/button';
 import {
     Dialog,
     DialogContent,
-    DialogDescription,
     DialogFooter,
     DialogHeader,
     DialogTitle,
@@ -181,9 +180,6 @@ function VersionList({
         <>
             <DialogHeader>
                 <DialogTitle>Versions of “{node.name}”</DialogTitle>
-                <DialogDescription>
-                    When you replace a file, the version it replaced stays here for 30 days.
-                </DialogDescription>
             </DialogHeader>
             <div className="flex flex-col rounded-xl border border-rule">
                 {versions.isPending && (
@@ -329,10 +325,7 @@ function VersionList({
                 <AlertDialogContent>
                     <AlertDialogHeader>
                         <AlertDialogTitle>Delete the earlier version?</AlertDialogTitle>
-                        <AlertDialogDescription>
-                            It’s deleted for good and its space is freed. The current version isn’t
-                            touched.
-                        </AlertDialogDescription>
+                        <AlertDialogDescription>It’s deleted for good.</AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                         <AlertDialogCancel>Cancel</AlertDialogCancel>

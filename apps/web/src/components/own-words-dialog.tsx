@@ -2,13 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { FingerprintWords } from '@/components/fingerprint-words';
 import { Spinner } from '@/components/motion';
-import {
-    Dialog,
-    DialogContent,
-    DialogDescription,
-    DialogHeader,
-    DialogTitle,
-} from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useAuthView } from '@/lib/auth-view';
 import { ownFingerprintQueryOptions } from '@/lib/contacts';
 
@@ -47,10 +41,6 @@ export function OwnWordsDialog({
             <DialogContent className="sm:max-w-[560px]">
                 <DialogHeader>
                     <DialogTitle>Your twelve words</DialogTitle>
-                    <DialogDescription>
-                        When someone checks it’s you, read these to them. They’re the same on all
-                        your devices.
-                    </DialogDescription>
                 </DialogHeader>
                 <div className="min-h-36">
                     {own.isFetching || own.isPending ? (

@@ -369,7 +369,7 @@ struct TransfersSheet: View {
                     Task { await cancel(targets) }
                 }
             } message: {
-                Text("What is still on its way stops and isn’t kept. What already finished stays where it is.")
+                Text("What is still on its way stops and isn’t kept.")
             }
         }
         .presentationDetents([.medium, .large])

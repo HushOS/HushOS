@@ -1,13 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useId, useState, type FormEvent } from 'react';
 import { Button } from '@/components/ui/button';
-import {
-    Dialog,
-    DialogContent,
-    DialogDescription,
-    DialogHeader,
-    DialogTitle,
-} from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/toast';
 import { afterFamilyChange } from '@/lib/families';
@@ -66,9 +60,6 @@ export function RenameFamilyDialog({
             <DialogContent className="sm:max-w-[440px]">
                 <DialogHeader>
                     <DialogTitle>Rename family</DialogTitle>
-                    <DialogDescription>
-                        Everyone in the family sees the new name, and so does the server.
-                    </DialogDescription>
                 </DialogHeader>
                 <form
                     noValidate

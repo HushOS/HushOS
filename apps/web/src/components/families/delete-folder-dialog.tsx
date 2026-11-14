@@ -90,10 +90,8 @@ export function DeleteFamilyFolderDialog({
                 <AlertDialogHeader>
                     <AlertDialogTitle>Delete “{folder?.name}”?</AlertDialogTitle>
                     <AlertDialogDescription>
-                        It disappears for everyone in {family} now. Its files are deleted from the
-                        server, normally after 30 days, and their space is freed when they are.
-                        Anyone who kept copies or keys keeps them, as after someone is removed. The
-                        folder can’t be restored.
+                        It disappears for everyone in {family} now and can’t be restored; anyone who
+                        kept copies or keys keeps them.
                     </AlertDialogDescription>
                 </AlertDialogHeader>
                 {error && (

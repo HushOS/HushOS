@@ -6,7 +6,6 @@ import { Button } from '@/components/ui/button';
 import {
     Dialog,
     DialogContent,
-    DialogDescription,
     DialogFooter,
     DialogHeader,
     DialogTitle,
@@ -96,9 +95,6 @@ function RenameForm({
         >
             <DialogHeader>
                 <DialogTitle>Rename</DialogTitle>
-                <DialogDescription className="sr-only">
-                    A new name for “{node.name}”.
-                </DialogDescription>
             </DialogHeader>
             <div className="flex flex-col gap-1.5">
                 <label htmlFor={id} className="sr-only">

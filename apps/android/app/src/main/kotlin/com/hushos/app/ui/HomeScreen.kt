@@ -394,7 +394,7 @@ fun OnThisPhoneScreen(model: DriveViewModel, state: DriveState, onBack: () -> Un
         AlertDialog(
             onDismissRequest = { removingFolder = null },
             title = { Text("Remove from this phone?") },
-            text = { Text("“${kept.name}” and everything in it stay in HushOS. You can keep it on this phone again any time.") },
+            text = { Text("“${kept.name}” and everything in it stay in HushOS.") },
             confirmButton = { TextButton(onClick = { model.forgetKeptFolder(kept.id); removingFolder = null; model.notify("Removed “${kept.name}” from this phone. It’s still in HushOS.") }) { Text("Remove") } },
             dismissButton = { TextButton(onClick = { removingFolder = null }) { Text("Cancel") } },
         )
@@ -403,7 +403,7 @@ fun OnThisPhoneScreen(model: DriveViewModel, state: DriveState, onBack: () -> Un
         AlertDialog(
             onDismissRequest = { removing = null },
             title = { Text("Remove from this phone?") },
-            text = { Text("“${entry.name}” stays in HushOS. You can keep it on this phone again any time.") },
+            text = { Text("“${entry.name}” stays in HushOS.") },
             confirmButton = { TextButton(onClick = { model.forgetOffline(entry.id); removing = null; model.notify("Removed from this phone. It’s still in HushOS.") }) { Text("Remove") } },
             dismissButton = { TextButton(onClick = { removing = null }) { Text("Cancel") } },
         )
