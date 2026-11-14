@@ -1,0 +1,14 @@
+apps/web/src/content/blog/post-quantum-sharing.mdx
+  h_f7ba60a6997566 2-3,13,31-34,50
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b402e68e5b9b4c941b9fb5b970ccb13dd3d5d62a",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
