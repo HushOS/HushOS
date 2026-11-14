@@ -1,6 +1,6 @@
 ---
-title: HushOS on iPhone and Android
-description: The HushOS apps are on the App Store and Google Play. What they do, what they don't do yet, how to get them, and what they keep to themselves.
+title: 'HushOS for iPhone and Android: your encrypted drive on your phone'
+description: The HushOS apps are on the App Store and Google Play. Browse, upload, share and scan, keep files on the phone for when there is no connection, and get notifications. Every file is locked on the phone before it uploads.
 # Set to the day the App Store link goes live at hushos.com, when this is merged.
 date: 2026-11-07
 author: HushOS
@@ -12,7 +12,7 @@ import { Cta } from '../../components/mdx';
 import { Phones } from '../../components/screenshot';
 import { StoreLinks } from '../../components/store-links';
 
-HushOS is on the App Store and Google Play from today. Your files, your folders and your family come with you to your phone, and every file is still locked on the phone before it uploads, as on the web.
+HushOS is on the App Store and Google Play. Your files, your folders and your family come with you to your phone, and every file is still locked on the phone before it uploads, as on the web.
 
 <StoreLinks className="mt-5" />
 
@@ -32,8 +32,9 @@ The apps are HushOS, not a viewer for it. They open the same account as the web,
 - **Files kept on the phone**: keep a file or a folder, and it opens without a connection.
 - **The phone's own Files app**: HushOS shows up there as a location, so other apps can open and save into it.
 - **Save to HushOS**: share a file from another app straight into a folder.
-- **Take photo and Scan document**: the + button takes a photo, or scans paper into one PDF, edges found and pages straightened.
-- **Make your account**: confirm your email, choose a password and save your recovery kit, all in the app. That arrived in version 1.2.
+- **Take photo and Scan document**: the + button takes a photo, or [scans paper into one PDF](/blog/scan-documents), edges found and pages straightened.
+- **Notifications**: a new sign-in, something shared with you or an invitation to a family, [without Apple or Google learning what happened](/blog/notifications).
+- **Make your account**: confirm your email, choose a password and save your recovery kit, all in the app.
 
 Each app looks like it belongs on its phone: system menus, sheets and search, on iPhone and on Android, with HushOS's own folders, marks and colours.
 
@@ -43,19 +44,13 @@ Each app looks like it belongs on its phone: system menus, sheets and search, on
     className="mt-6 flex items-end justify-center gap-4 sm:gap-6"
 />
 
-## What they don't do yet
-
-- **Choose or change a plan.** That happens on the web.
-- **Edit documents.** Files open in the phone's own viewers. [Editing in the browser](/roadmap#editing) is on the roadmap.
-- **iPad.** The iPhone app is for iPhone only, for now.
-
-## What they keep to themselves
+## Private on the phone too
 
 The apps carry no analytics, advertising or tracking.
 
 Your files are decrypted only on the phone, into the app's private storage. Signing out removes everything of yours from the phone, and the apps keep your files and lists out of the phone's backups.
 
-One thing is worth saying plainly. On Android, Scan document opens Google's document scanner, which Google Play services runs on the phone. The pages come back to HushOS as a PDF and are locked before they leave the phone. The scanner's code in the app would report usage to Google, and we switch that off, so the app sends Google nothing. Google Play services itself is Google's software and works under Google's privacy policy. On iPhone, scanning is Apple's own document camera, on the phone.
+Scanning runs on the phone: Apple's own document camera on iPhone, and Google's document scanner on Android, with the usage reports its code would send to Google switched off. The pages are locked before they leave the phone.
 
 ## Getting them
 
