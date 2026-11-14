@@ -1,6 +1,6 @@
 ---
-title: Family plans
-description: Up to 20 people share one plan's storage, for their own files and the folders they share, end-to-end encrypted. How joining and checking each other work, what happens to a plan you already pay for, what happens when someone leaves, what it costs, and what is not built yet.
+title: 'Family plans: one encrypted storage plan for up to 20 people'
+description: A HushOS family plan gives up to 20 people one plan's storage, from 800 GB for $10 a month, for their own private files and the family folders they share. End-to-end encrypted, on the web, iPhone and Android. How joining, checking each other and leaving work.
 # Set to the day families are switched on at hushos.com, when this is merged.
 date: 2026-11-05
 author: HushOS
@@ -19,13 +19,13 @@ import {
 } from '../../components/family-scenes';
 import { StoreLinks } from '../../components/store-links';
 
-HushOS has family plans from today. Up to 20 people share one plan's storage, and it covers both their own files and the family folders they share, end-to-end encrypted. Everyone's own files stay private to them. Families are on the web and in the [iPhone and Android apps](/blog/phone-apps).
+HushOS has family plans. Up to 20 people share one plan's storage, and it covers both their own files and the family folders they share, end-to-end encrypted. Everyone's own files stay private to them. Families are on the web and in the [iPhone and Android apps](/blog/phone-apps).
 
 <StoreLinks className="mt-5" />
 
 ## What a family is
 
-A family is a group of HushOS accounts with folders they share. Every member can open the family folders, and nobody else can, us included. Their keys are made and sealed on members' own devices, the same way your own files are.
+A family is a group of HushOS accounts with folders they share. Every member can open the family folders. Their keys are made and sealed on members' own devices, the same way your own files are.
 
 Each member keeps their own files. My files stays private from the rest of the family, exactly as it is private from us. The family folders sit beside it, under the family's name. An account can be in one family at a time.
 
@@ -39,61 +39,11 @@ A family's storage covers everyone's own files and the family folders together. 
 
 <FamilyStorageView />
 
-Moving files between My files and a family folder uses no extra storage, because both sides are the same plan. Your device does the move: it downloads each file, locks it again under the keys of where it is going, uploads it, and the original is deleted as the copy lands. Only the current version moves, and the move dialog says what else is lost before it starts.
+Moving files between My files and a family folder uses no extra storage, because both sides are the same plan. Your device does the move: it downloads each file, locks it again under the keys of where it is going, uploads it, and the original is deleted as the copy lands.
 
 The people who manage the family see how much space each person's own files take, rounded up to the whole gigabyte. They never see the files' names, how many there are, or what is in them. Everyone in the family sees how much the family stores in all, counted the same way, so nobody can work out exactly how much someone else stores.
 
 On a phone, your own files work as before, and the storage the app shows is the family's.
-
-## Joining
-
-Whoever starts a family names it, then chooses its plan before inviting anyone.
-
-<CreateFamilyScene />
-
-You invite someone by email, and the invitation is open for seven days. They sign in, or make an account, and accept. Someone already in another family has to leave it first. Then someone who manages the family lets them in, with one click on the family's page. Nobody reads anything out, on either side.
-
-<InviteScene />
-
-When they are let in, the manager's device writes the keys HushOS gives it for the newcomer into the family's signed member list, and the newcomer's device takes the family as HushOS first shows it. From then on it holds on to that: every later member list has to follow on from it, signed by someone who manages the family, and anything else is noticed and paused, never used.
-
-A newcomer's own files join the family's storage when they are let in, so they have to fit in the family's free space. If they don't, the person letting them in is asked to free up space or move to a bigger plan first.
-
-<Cta title="Start your family">
-    Make an account, then open Family to create one and choose its plan.
-</Cta>
-
-## Checking each other
-
-Any two members can check each other whenever they like. Each opens the family, chooses Check it's Maya beside the other's name, and the two of you compare twelve words, in person or on a call. Not in a message sent through HushOS.
-
-<CheckScene />
-
-**What a check adds.** A new member's device learns who is in the family and which keys are whose from a member list the server stores and hands out. Until someone checks, a dishonest server could have handed the person letting a newcomer in keys of its own for them, or shown the newcomer a family it made up, and read what goes into those family folders. The twelve words are worked out from the member list that let the later of you in, and from both your accounts, so matching words mean you both see the same family and each of you has the other's real keys. If they do not match, nothing is saved, and the screen says what to do next.
-
-A check is best made with the person who made the family: two newcomers who check only each other learn that they see the same family, not that it is the real one.
-
-**Who is checked first.** Managers can let people in and change the family, so nobody is made a manager, or the organizer, until whoever gives them the role has checked it's them. Someone invited to manage the family joins as a member and gets the role once they are checked.
-
-Checking protects a family from the server. It does not protect a family from the people who manage it: they decide who is in it.
-
-## When someone leaves
-
-Someone who manages the family chooses Remove from family. The person removed loses the family folders straight away, and the device of whoever removed them replaces the keys of every family folder, which can take a few minutes. Someone who leaves on their own loses the folders straight away too, and their keys are replaced the next time a manager opens the family. Either way, their own files stay theirs.
-
-Their own files go back to their own storage: Free, unless they choose a plan. If the files take more than that, they can still open, download and delete everything, but can't upload until they make room. Nothing is deleted.
-
-Once their keys are replaced, nothing they kept opens anything new. Until then (for someone who leaves on their own, until a manager next opens the family), files added to the family folders are still locked under keys they had. Files from before they left stay sealed under the keys they had, so anything they could open then stays readable to them if they ever got a copy of the server's data.
-
-Files keep their authors through all of that. Every file in a family folder carries a signature from whoever wrote it. Replacing keys means sealing every file's keys again, and the easy way would sign each file as the work of whoever replaced the keys. HushOS keeps the writer's original signature instead, and the person replacing the keys signs only that they sealed it again. Info on the file shows both: Written by Sam, Keys replaced by Maya. Your device opens the original and the copy sealed again and compares them itself, so nobody can attach Sam's signature to something Sam did not write.
-
-A file written by someone who has since been removed reads "Written by Sam, who has left Lindqvist family." That mark is on purpose. Someone who has left may still hold the keys they had, and a signature carries no date anyone can trust, so HushOS cannot tell an old file of theirs from one made to look old. It says what it knows instead of vouching for them.
-
-## When a plan or a family ends
-
-Whoever pays can cancel the plan from the family's page. It stays until the end of the time paid for. When it ends, everyone's own files go back to their own storage, as when someone leaves, and until someone chooses a plan again nobody can upload to the family folders or be let in. Nothing is deleted.
-
-A family ends when its last member leaves it or deletes their account. If its plan is still renewing, whoever pays cancels it first; it then runs to the end of the time paid for, with no refund, and HushOS keeps it set to end. 30 days after a family ends, its folders and everything in them are deleted from our servers, and then, once its plan has ended, its member lists, key changes, memberships and invitations. The family's billing records are kept for accounting, and the [privacy policy](/privacy) has the exceptions.
 
 ## Plans
 
@@ -128,23 +78,53 @@ Polar, which takes the payment, is told it is a HushOS family, who pays and how 
 
 If you run HushOS on your own server, families are in the same code and on by default. Without billing there is no shared plan: each family folder has the space you set, and members' own files keep their own.
 
-## What the server knows
+## Joining
 
-To let the right people in, HushOS's server knows the family's name, who is in it and what each person can do, who invited and let in whom, the email addresses invitations went to, and how many family folders there are, with their sizes padded as every file's is. It already knew how much each person stores; what is new is that the people who manage a family see that figure, rounded up to the whole gigabyte. It cannot open family folders: not a file name, not a byte of what is inside.
+Whoever starts a family names it, then chooses its plan before inviting anyone.
 
-The family's name is not encrypted because it appears in invitation emails. If you would rather it said nothing, choose a neutral one.
+<CreateFamilyScene />
 
-The [security page](/security) lists what the server learns about everything else, and the [privacy policy](/privacy) says how long each of these is kept.
+You invite someone by email, and the invitation is open for seven days. They sign in, or make an account, and accept. Then someone who manages the family lets them in, with one click on the family's page. Nobody reads anything out, on either side.
 
-## What is not done yet
+<InviteScene />
 
-- **Families on iPhone.** The iPhone app isn't in the App Store yet. Until it is, on an iPhone you use a family in a browser.
-- **Making a family on a phone.** In the Android app you join a family, use its folders, invite people and let them in, but you create a family and choose its plan on the web.
-- **Sharing from a family folder.** You cannot share a file or make a link from inside a family folder yet. When keys are replaced, HushOS has to tell which shares were made by someone allowed to make them, and that needs shares signed at family level, which we have not built.
-- **Limits for each person.** One member's own files can fill the family's storage for everyone, and then uploads stop for the whole family until there is room. A manager can see whose files take the space, but can't set a limit yet.
-- **Handing over the bill.** While a plan is running, whoever pays for it can't hand it to another member, so they can't leave the family without cancelling it.
-- **Large moves.** A move between My files and a family folder goes down to your device and back up, and a file over 256 MB can't be moved that way yet: download it, then upload it where it should go.
-- **What someone already has.** A member who is removed keeps anything they already downloaded or kept on a device. New keys protect what is written after the keys are replaced; they cannot reach into copies someone already made.
+When they are let in, the manager's device writes the keys HushOS gives it for the newcomer into the family's signed member list. From then on the newcomer's device holds on to the family it was shown: every later member list has to follow on from it, signed by someone who manages the family, and anything else is noticed and paused, never used.
+
+A newcomer's own files join the family's storage when they are let in, so they have to fit in the family's free space. If they don't, the person letting them in is asked to free up space or move to a bigger plan first.
+
+<Cta title="Start your family">
+    Make an account, then open Family to create one and choose its plan.
+</Cta>
+
+## Checking each other
+
+Any two members can check each other whenever they like. Each opens the family, chooses Check it's Maya beside the other's name, and the two of you compare twelve words, in person or on a call.
+
+<CheckScene />
+
+**What a check gives you.** The twelve words are worked out from the member list that let the later of you in, and from both your accounts. Matching words mean you both see the same family and each of you has the other's real keys. If they do not match, nothing is saved, and the screen says what to do next. A check is best made with the person who made the family.
+
+**Who is checked first.** Managers can let people in and change the family, so nobody is made a manager, or the organizer, until whoever gives them the role has checked it's them. Someone invited to manage the family joins as a member and gets the role once they are checked.
+
+## When someone leaves
+
+Someone who manages the family chooses Remove from family. The person removed loses the family folders straight away, and the device of whoever removed them replaces the keys of every family folder, which can take a few minutes. Someone who leaves on their own loses the folders straight away too, and their keys are replaced the next time a manager opens the family. Either way, their own files stay theirs, and once the keys are replaced, nothing they kept opens anything new.
+
+Their own files go back to their own storage: Free, unless they choose a plan. If the files take more than that, they can still open, download and delete everything, but can't upload until they make room. Nothing is deleted.
+
+Files keep their authors through all of that. Every file in a family folder carries a signature from whoever wrote it. Replacing keys means sealing every file's keys again, and the easy way would sign each file as the work of whoever replaced the keys. HushOS keeps the writer's original signature instead, and the person replacing the keys signs only that they sealed it again. Info on the file shows both: Written by Sam, Keys replaced by Maya. Your device opens the original and the copy sealed again and compares them itself, so nobody can attach Sam's signature to something Sam did not write.
+
+A file written by someone who has since been removed reads "Written by Sam, who has left Lindqvist family." So you can tell which files came from someone who is no longer in the family.
+
+## When a plan or a family ends
+
+Whoever pays can cancel the plan from the family's page. It stays until the end of the time paid for. When it ends, everyone's own files go back to their own storage, as when someone leaves. Nothing is deleted, and uploading to the family folders starts again when someone chooses a plan.
+
+A family ends when its last member leaves it or deletes their account. 30 days later, its folders and everything in them are deleted from our servers, unless something in them has been reported and is under review. The [privacy policy](/privacy) says how long everything else is kept.
+
+## Encrypted end to end
+
+Family folders are end-to-end encrypted: their keys are made and sealed on members' devices, and our servers store only locked copies. Members can check each other with twelve words, which confirms that nobody, the server included, has slipped in keys of its own. To let the right people in, the server knows the family's name, who is in it and what each person can do. [How HushOS protects your files](/security#sees) lists everything the server knows about a family, and what checking each other rules out.
 
 ## Questions people ask
 
@@ -165,7 +145,7 @@ The [security page](/security) lists what the server learns about everything els
         },
         {
             q: 'Can we use it on our phones?',
-            a: 'In the Android app you join a family, use its folders, invite people and let them in; you create a family and choose its plan on the web. The iPhone app isn’t in the App Store yet. Until it is, on an iPhone you use a family in a browser.',
+            a: 'Yes. In the iPhone and Android apps you join a family, use its folders, invite people, let them in and check each other. You create the family and choose its plan on the web.',
         },
     ]}
 />
