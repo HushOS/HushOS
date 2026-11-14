@@ -107,6 +107,10 @@ struct MainView: View {
                 }
                 .sheet(isPresented: $makingRoom) { StorageFullSheet(rows: rows(store)).environment(store).environment(model) }
                 .sheet(item: $invitation) { link in InvitationSheet(link: link).environment(store).environment(model) }
+                // Answering another device's request, from Home's banner or Devices' row.
+                .sheet(item: Binding(get: { ApprovalInbox.shared.answering }, set: { ApprovalInbox.shared.answering = $0 })) { asked in
+                    ApprovalSheet(flow: asked.flow)
+                }
                 // A mark's check, for every mark not inside Info or the viewer (rows, lists, search).
                 .contactHost(.root, store: store)
                 .fileViewer(Binding(get: { store.deepFile }, set: { store.deepFile = $0 }), among: store.deepSiblings, store: store)
@@ -116,6 +120,8 @@ struct MainView: View {
                 .task(id: scenePhase) {
                     // Back from Settings: the Account lines read the settings again.
                     if scenePhase == .active { BackgroundAccess.shared.version += 1; await BackgroundAccess.shared.readNotifications() }
+                    // Another device may be asking this one to confirm it's you: looked for whenever the app comes to the front.
+                    if scenePhase == .active { await ApprovalInbox.shared.load() }
                     if scenePhase == .active { await store.liveSync() }
                 }
                 // A family opened from the invitation sheet is pushed in Account, where its row is.
@@ -225,6 +231,8 @@ struct MainView: View {
         .task(id: model.vault.map(ObjectIdentifier.init)) {
             guard let vault = model.vault else { return }
             if let store { await store.adopt(vault) } else { store = DriveStore(vault: vault) }
+            // Another session: what the last one was asked to approve is not this one's.
+            Task { await ApprovalInbox.shared.load() }
             // The session's ends (sign-out, deletion, a lost session) reset its families from the model, never from a view's lifecycle.
             model.driveStore = store
         }

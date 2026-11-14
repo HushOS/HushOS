@@ -836,7 +836,7 @@ extension OnFakeDrive {
             let sent = StepServer.current?.requests.first
             #expect(sent?.method == "GET")
             #expect(sent?.path == "/api/auth/two-step")
-            #expect(sent?.query == "methods=webauthn")
+            #expect(sent?.query == "methods=webauthn,device")
             #expect(read?.keys.first?.name == "Desk key")
             #expect(read?.keys.first?.synced == true)
             #expect(read?.defaultKind == "webauthn")
