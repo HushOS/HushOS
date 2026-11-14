@@ -428,11 +428,12 @@ jobs:
                   TURBO_LOG_ORDER: stream
             # GROUPS_ENABLED reaches the spec from .env too: with it on, a server that says
             # families are off fails the run instead of skipping it. TWO_STEP_ENABLED the same,
-            # for two-step.spec.ts and two-step-passkeys.spec.ts: this is the job whose server has
-            # two-step sign-in on. The passkey spec registers and uses a key through the built
-            # server, which is the only place a server dependency the bundler mis-orders shows.
+            # for two-step.spec.ts, two-step-passkeys.spec.ts and two-step-device.spec.ts: this is
+            # the job whose server has two-step sign-in on. The passkey spec registers and uses a
+            # key through the built server, which is the only place a server dependency the bundler
+            # mis-orders shows. The device spec has two browsers approve each other through it.
             - name: Run the families and two-step suites against the production build
-              run: bun run e2e -- --project=chromium e2e/families.spec.ts e2e/two-step.spec.ts e2e/two-step-passkeys.spec.ts
+              run: bun run e2e -- --project=chromium e2e/families.spec.ts e2e/two-step.spec.ts e2e/two-step-passkeys.spec.ts e2e/two-step-device.spec.ts
             - name: Show the end of the server log
               if: failure()
               run: tail -n 60 scratchpad/e2e-server.log || true
