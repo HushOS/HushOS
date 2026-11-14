@@ -36,10 +36,26 @@ type Stat = {
     anchor?: string;
 };
 
+/*
+ * The counts, as tiles. The grid draws every line: the tiles sit a pixel apart on a ground of
+ * the rule's colour inside one bordered, clipped box, so no tile has a border of its own to
+ * miss or double. One column on a phone, two on a tablet, four on a desk; the last tile
+ * stretches over whatever its row has left, so the box is always whole, whatever the count.
+ */
+const lastSpan: Record<number, string> = {
+    2: 'lg:col-span-2',
+    3: 'lg:col-span-3',
+    4: 'lg:col-span-4',
+};
+function lastTileSpan(count: number) {
+    const wide = count % 4 === 0 ? '' : lastSpan[4 - (count % 4) + 1];
+    return cn(count % 2 === 1 && 'sm:max-lg:col-span-2', wide);
+}
+
 function StatGrid({ stats }: { stats: Stat[] }) {
     return (
-        <dl className="grid shrink-0 grid-cols-2 overflow-hidden rounded-xl border border-rule sm:grid-cols-3 lg:grid-cols-5">
-            {stats.map((stat) => {
+        <dl className="grid shrink-0 grid-cols-1 gap-px overflow-hidden rounded-xl border border-rule bg-rule sm:grid-cols-2 lg:grid-cols-4">
+            {stats.map((stat, index) => {
                 const body = (
                     <>
                         <dt className="text-xs text-muted-foreground">{stat.label}</dt>
@@ -53,8 +69,10 @@ function StatGrid({ stats }: { stats: Stat[] }) {
                         </dd>
                     </>
                 );
-                const box =
-                    '-mt-px -ml-px flex flex-col gap-1 border-t border-l border-rule px-3 py-2.5';
+                const box = cn(
+                    'flex min-w-0 flex-col gap-1 bg-panel px-3 py-2.5',
+                    index === stats.length - 1 && lastTileSpan(stats.length),
+                );
                 if (stat.to)
                     return (
                         <Link
@@ -124,7 +142,6 @@ function AdminPage() {
     return (
         <OperatorPage
             title="Management"
-            description="Counts for this instance, refreshed when you open the page. Choose a count to see what is behind it."
             actions={
                 <>
                     <Link
