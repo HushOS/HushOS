@@ -6,6 +6,8 @@ Revised on 15 October after the independent review in `docs/archive/pq-devices-c
 
 **Revised on 13 November 2026:** Approve new devices is now one way to confirm a sign-in, beside passkeys and the authenticator app, not a level asked after them (`docs/two-step-design.md` 12). It runs from the step token, binds the purpose and the token in what it signs, and has its own budgets; `docs/two-step-design.md` 12 overrides sections 2, 4, 6, 8 and 9 here where they disagree. Its 72-hour email wait is dropped. Keys need a device (section 3) is unchanged.
 
+**Built on 14 November 2026,** as a method of the second step, on the server, the web, the iPhone and Android (`docs/two-step-design.md` 12, "What was built (item 2)"). Two things in section 2 are not as written here: there are no transfer keys and nothing is sealed (the approval releases only the step), and the prompt names no location, because this repository has no local database to look an address up in and no outside service is ever asked.
+
 Decisions settled with the owner (2026-10-15):
 
 - **Approval is off by default**, at two levels anyone can turn on: **Approve new devices**, which the server checks, and **Keys need a device**, which the cryptography enforces.

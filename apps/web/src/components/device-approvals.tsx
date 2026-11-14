@@ -108,7 +108,9 @@ function AnswerDialog({ asked, onClose }: { asked: ApprovalPrompt | null; onClos
     // Gone from the list: it timed out, was answered another way, or another device has it.
     const over = open && listed.isSuccess && !listed.isFetching && now === null && !pending;
     const done = () => {
-        void queryClient.invalidateQueries({ queryKey: approvalsQueryOptions.queryKey });
+        // An approval can turn the step on for this browser too, or add a device to the list:
+        // everything Account shows of the account is read again.
+        void queryClient.invalidateQueries({ queryKey: ['account'] });
         onClose();
     };
 

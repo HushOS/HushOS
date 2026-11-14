@@ -74,6 +74,26 @@ export const sections: RoadmapSection[] = [
                 ],
             },
             {
+                id: 'security-keys-and-device-approval',
+                status: 'shipped',
+                month: 'November 2026',
+                area: 'Platform',
+                title: 'Approving a sign-in on another device',
+                body: 'A device you’re already signed in on can confirm a new sign-in: the new screen shows two digits and a word, and you type them on the other device, or scan the screen with your phone. It sits beside a passkey and the authenticator app as a second step, and you choose which one HushOS asks for first. On the web now, and in the iPhone and Android apps from the next version. Turn it on in Account → Two-step sign-in.',
+                links: [
+                    {
+                        kind: 'blog',
+                        slug: 'two-step-sign-in',
+                        label: 'What it protects, and what it doesn’t',
+                    },
+                    {
+                        kind: 'docs',
+                        path: 'docs/two-step-design.md',
+                        label: 'Read the two-step design',
+                    },
+                ],
+            },
+            {
                 id: 'phone-notifications',
                 status: 'shipped',
                 month: 'November 2026',
@@ -255,25 +275,6 @@ export const sections: RoadmapSection[] = [
                 title: 'HushOS for companies',
                 body: 'Folders that belong to the company, admins who add and remove people, with policies and an audit log, your own domain and single sign-on, and a choice of where files are kept, including your own storage bucket. Admins of a company plan will be able to open the company’s folders, through a key the company holds.',
                 links: [{ kind: 'page', to: '/teams', label: 'HushOS for teams today' }],
-            },
-            {
-                id: 'security-keys-and-device-approval',
-                status: 'now',
-                area: 'Platform',
-                title: 'Approving a sign-in from another device',
-                body: 'Confirm a new sign-in by approving it on a device you already use, beside a passkey and the authenticator app. You choose which one HushOS asks for first.',
-                links: [
-                    {
-                        kind: 'docs',
-                        path: 'docs/two-step-design.md',
-                        label: 'Read the two-step design',
-                    },
-                    {
-                        kind: 'docs',
-                        path: 'docs/devices-design.md',
-                        label: 'Read the devices design',
-                    },
-                ],
             },
             {
                 id: 'passkeys',
