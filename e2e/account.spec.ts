@@ -28,7 +28,7 @@ test('deleting the account asks for the password and DELETE, and the account is 
     const page = await newPage(browser);
     const { email } = await registerAccount(page);
     await page.goto('/app/account', { waitUntil: 'networkidle' });
-    await page.getByRole('button', { name: 'Show' }).click();
+    await page.getByRole('button', { name: 'Advanced', exact: true }).click();
     await page.getByRole('button', { name: 'Delete account' }).click();
     const confirm = dialog(page).getByRole('button', { name: 'Delete forever' });
     await expect(confirm).toBeDisabled();

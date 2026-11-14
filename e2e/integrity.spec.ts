@@ -44,10 +44,10 @@ async function showAdvanced(p: Page) {
     // Unlocked again from this browser's saved access: a device restore still running
     // when a security change starts would wipe the change's state in the worker.
     await expect(p.getByText(/ of .+ used$/)).toBeVisible({ timeout: 60_000 });
-    const show = p.getByRole('button', { name: 'Show' });
+    const show = p.getByRole('button', { name: 'Advanced', exact: true });
     await hydrated(show);
     await show.click();
-    await expect(p.getByRole('button', { name: 'Hide' })).toBeVisible();
+    await expect(show).toHaveAttribute('aria-expanded', 'true');
 }
 
 test.beforeAll(async ({ browser }) => {

@@ -88,9 +88,7 @@ type Person = { page: Page; email: string; name: string };
 
 /* Opens "Technical details and leaving" on the family page, if it isn't open already. */
 async function openTechnical(page: Page) {
-    const toggle = page.getByRole('button', {
-        name: /^(Show|Hide) technical details and leaving$/,
-    });
+    const toggle = page.getByRole('button', { name: 'Technical details and leaving' });
     await expect(toggle).toBeVisible({ timeout: 60_000 });
     if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
 }
@@ -365,7 +363,7 @@ test.describe.serial('two people', () => {
         await expect(maya.page.locator('#leave-blocked')).toHaveText(
             'Make someone else the organizer first.',
         );
-        await maya.page.getByRole('button', { name: 'Hide technical details and leaving' }).click();
+        await maya.page.getByRole('button', { name: 'Technical details and leaving' }).click();
         await expect(
             sam.page.getByRole('link', { name: family, exact: true }).first(),
         ).toBeVisible();
@@ -608,7 +606,7 @@ test.describe.serial('two people', () => {
         // Every one must be rewrapped as the family's, or the rotation is refused outright.
         await sam.page.goto('/app/account', { waitUntil: 'networkidle' });
         await expect(sam.page.getByText(/ of .+ used$/)).toBeVisible({ timeout: 60_000 });
-        const show = sam.page.getByRole('button', { name: 'Show' });
+        const show = sam.page.getByRole('button', { name: 'Advanced', exact: true });
         await hydrated(show);
         await show.click();
         await sam.page.getByRole('button', { name: 'Rotate account key' }).click();

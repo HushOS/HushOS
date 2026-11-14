@@ -23,6 +23,11 @@ struct AccountView: View {
     @State private var showingPhrase = false
     @State private var showingPeople = false
     @State private var showingWords = false
+    /* Advanced, folded away until its row is pressed, and the sheets its rows open. */
+    @State private var advancedOpen = false
+    @State private var resetting = false
+    @State private var replacing = false
+    @State private var deleting = false
     @State private var signingOut = false
     @State private var showingTrash = false
     @State private var showingDevices = false
@@ -99,12 +104,22 @@ struct AccountView: View {
                 } header: {
                     SectionTitle("Sign-in and recovery")
                 }
+                // Folded away, as on the web: the row opens the rest in place, and its chevron turns. Closed until pressed.
                 Section {
-                    NavigationLink { AdvancedView().environment(store).environment(model) } label: {
-                        row("gearshape.2", "Advanced", "Keys, server, delete account", muted: true)
+                    Button { withAnimation { advancedOpen.toggle() } } label: {
+                        HStack(spacing: Alpine.Space.s3) {
+                            SettingsGlyph(symbol: "gearshape.2", muted: true)
+                            Text("Advanced").foregroundStyle(Alpine.ink)
+                            Spacer(minLength: 0)
+                            Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(Alpine.inkMuted)
+                                .rotationEffect(.degrees(advancedOpen ? 90 : 0))
+                        }
+                        .contentShape(Rectangle())
                     }
                     .alpineRow()
+                    .accessibilityValue(advancedOpen ? "Expanded" : "Collapsed")
                 }
+                if advancedOpen { AdvancedSections(resetting: $resetting, replacing: $replacing, deleting: $deleting) }
                 Section {
                     Button { open(Auth.privacyURL(origin: model.origin)) } label: { row("hand.raised", "Privacy policy", nil, external: true) }.alpineRow()
                     Button { open(Auth.termsURL(origin: model.origin)) } label: { row("doc.text", "Terms", nil, external: true) }.alpineRow()
@@ -141,6 +156,9 @@ struct AccountView: View {
             .task { if DebugStart.people { showingPeople = true } }
             #endif
             .sheet(isPresented: $showingWords) { OwnWordsSheet().environment(store) }
+            .sheet(isPresented: $resetting) { ResetKeysSheet().environment(store).environment(model) }
+            .sheet(isPresented: $replacing) { ReplaceKeysSheet().environment(store).environment(model) }
+            .sheet(isPresented: $deleting) { DeleteAccountSheet().environment(store).environment(model) }
             .alert("Sign out of HushOS?", isPresented: $signingOut) {
                 Button("Cancel", role: .cancel) {}
                 Button("Sign out", role: .destructive) { Task { await model.signOut() } }
@@ -563,16 +581,16 @@ struct StorageFullSheet: View {
 /* MARK: Advanced */
 
 /* The rare, heavy things: replacing sharing keys, rotating the account key, the account ID support may ask for, the server, and deleting the account. */
-struct AdvancedView: View {
+/* Advanced's rows, shown in Account's list under its row while that is open. The sheets they open are Account's. */
+struct AdvancedSections: View {
     @Environment(AppModel.self) private var model
     @Environment(DriveStore.self) private var store
-    @Environment(\.dismiss) private var dismiss
-    @State private var resetting = false
-    @State private var replacing = false
-    @State private var deleting = false
+    @Binding var resetting: Bool
+    @Binding var replacing: Bool
+    @Binding var deleting: Bool
 
     var body: some View {
-        List {
+        Group {
             Section {
                 Button { replacing = true } label: {
                     HStack(spacing: Alpine.Space.s3) {
@@ -634,13 +652,6 @@ struct AdvancedView: View {
                 Button("Delete account", role: .destructive) { deleting = true }.foregroundStyle(Alpine.danger).alpineRow()
             }
         }
-        .listStyle(.insetGrouped)
-        .alpineGrouped()
-        .navigationTitle("Advanced")
-        .screenChrome(title: "Advanced")
-        .sheet(isPresented: $resetting) { ResetKeysSheet().environment(store) }
-        .sheet(isPresented: $replacing) { ReplaceKeysSheet().environment(store) }
-        .sheet(isPresented: $deleting) { DeleteAccountSheet() }
     }
 }
 

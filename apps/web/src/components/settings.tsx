@@ -1,4 +1,6 @@
+import { Accordion as AccordionPrimitive } from '@base-ui/react/accordion';
 import { cn } from 'cn';
+import { ChevronDownIcon } from 'lucide-react';
 import { useId, useState, type ComponentProps, type ReactNode } from 'react';
 import { Input } from '@/components/ui/input';
 import { SECRET_FIELD } from '@/components/password-input';
@@ -72,6 +74,47 @@ export function SettingsGroup({
             </div>
             {children}
         </section>
+    );
+}
+
+/*
+ * A group folded away under its title (Advanced, a family's technical details): the whole
+ * heading row is the button, with a chevron at the action column's edge that turns when
+ * it opens. Closed until pressed, and nothing remembers it. The title starts where the
+ * other titles do and the chevron ends where the actions do. Open, the row looks as it
+ * did closed: no fill. Under the pointer its words and chevron take the accent, and the
+ * ring is for the keyboard only.
+ */
+export function SettingsDisclosure({
+    title,
+    children,
+    data,
+}: {
+    title: string;
+    children: ReactNode;
+    /* `data-*` attributes for the group, which tests and verification find it by. */
+    data?: Record<`data-${string}`, string | boolean>;
+}) {
+    return (
+        <AccordionPrimitive.Root className="flex flex-col">
+            {/* The panel is the region, named by its trigger (Base UI): no section of our own around it. */}
+            <AccordionPrimitive.Item value="open" className="flex flex-col" {...data}>
+                {/* oxlint-disable-next-line jsx-a11y/heading-has-content -- the trigger below is its content */}
+                <AccordionPrimitive.Header render={<h2 />} className="flex">
+                    <AccordionPrimitive.Trigger className="group/disclosure flex min-h-11 flex-1 cursor-pointer items-center justify-between gap-4 rounded-md text-left text-lg font-bold tracking-[-0.01em] outline-none hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-solid focus-visible:outline-ring">
+                        {title}
+                        <ChevronDownIcon
+                            aria-hidden="true"
+                            className="size-4 shrink-0 text-muted-foreground transition-transform group-hover/disclosure:text-primary group-aria-expanded/disclosure:rotate-180 motion-reduce:transition-none"
+                        />
+                    </AccordionPrimitive.Trigger>
+                </AccordionPrimitive.Header>
+                {/* Kept mounted while folded: a row in it may be mid-work (a family folder's keys being replaced), and unmounting would drop what it is doing. */}
+                <AccordionPrimitive.Panel keepMounted className="flex flex-col">
+                    {children}
+                </AccordionPrimitive.Panel>
+            </AccordionPrimitive.Item>
+        </AccordionPrimitive.Root>
     );
 }
 

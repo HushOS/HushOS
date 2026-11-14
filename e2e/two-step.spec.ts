@@ -385,7 +385,7 @@ test('new backup codes replace the old ones, and turning it off needs the step a
     await fresh.getByRole('button', { name: 'Done' }).click();
 
     // Deleting the account asks for the step too, and deletes nothing without it.
-    await page.getByRole('button', { name: 'Show' }).click();
+    await page.getByRole('button', { name: 'Advanced', exact: true }).click();
     await page.getByRole('button', { name: 'Delete account' }).click();
     const gone = dialog(page);
     await gone.getByLabel('Password', { exact: true }).fill(PASSWORD);
