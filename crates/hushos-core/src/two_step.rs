@@ -1090,6 +1090,14 @@ fn key_shaped(value: &str) -> bool {
     value.len() == 43 && webauthn_bytes(value)
 }
 
+/* A place as a prompt may show it: a short line with nothing that controls or reorders text. */
+fn place_shaped(value: &str) -> bool {
+    let reorders = |c: char| matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2069}' | '\u{feff}');
+    !value.trim().is_empty()
+        && value.chars().count() <= 200
+        && !value.chars().any(|c| c.is_control() || reorders(c))
+}
+
 fn id_shaped(value: &str) -> bool {
     value.len() == 36
         && value.char_indices().all(|(index, character)| match index {
@@ -1259,6 +1267,9 @@ pub struct ApprovalPrompt {
     /// The asking device's name: the server's record of it, or its own words for one the
     /// server does not know yet. Shown in the app only, never in a notification.
     pub device_name: Option<String>,
+    /// Roughly where the asking device is, in the server's words ("near Lyon, France"), where
+    /// the server was told. A line of words: one with a control or direction mark is dropped.
+    pub location: Option<String>,
     pub created_at: String,
     pub expires_at: String,
     /// What the code and the statement cover (base64url).
@@ -1290,6 +1301,7 @@ pub enum ApprovalsReply {
 /// let ApprovalsReply::Listed { approvals } = approvals_reply_read(200, body) else { panic!("a list") };
 /// assert_eq!(approvals.len(), 1);
 /// assert_eq!(approvals[0].device_name.as_deref(), Some("Chrome on Windows"));
+/// assert_eq!(approvals[0].location, None);
 /// assert_eq!(approvals_reply_read(200, "[]".into()), ApprovalsReply::Lost);
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
@@ -1318,6 +1330,7 @@ pub fn approvals_reply_read(status: u16, body: String) -> ApprovalsReply {
                 .filter(|kind| matches!(*kind, "web" | "ios" | "android"))
                 .map(str::to_string),
             device_name: device.and_then(|device| text(device, "name")).map(str::to_string),
+            location: text(map, "location").filter(|place| place_shaped(place)).map(str::to_string),
             created_at: text(map, "createdAt").filter(|at| instant_shaped(at))?.to_string(),
             expires_at: text(map, "expiresAt").filter(|at| instant_shaped(at))?.to_string(),
             token_digest: text(map, "tokenDigest").filter(|key| key_shaped(key))?.to_string(),
@@ -1513,19 +1526,24 @@ pub fn device_confirmed_reply_read(status: u16, body: String) -> DeviceConfirmed
     read().unwrap_or(DeviceConfirmedReply::Lost)
 }
 
-/// What an approving device's prompt says is asked, and by which device: "Sign-in on
-/// Chrome on Windows", "Change your password on Maya’s iPhone". The web says the same
-/// (`apps/web/src/lib/approvals.ts`). A device that gave no name is "a new device"; a
-/// purpose from a later release is "A change to your account".
+/// What an approving device's prompt says is asked, by which device and roughly from
+/// where: "Sign-in on Chrome on Windows, near Lyon, France", "Change your password on
+/// Maya’s iPhone". The web says the same (`apps/web/src/lib/approvals.ts`). A device that
+/// gave no name is "a new device"; a purpose from a later release is "A change to your
+/// account"; the place is there only where the server was told one (`ApprovalPrompt.location`).
 ///
 /// ```
 /// use hushos_core::approval_asks;
-/// assert_eq!(approval_asks("login".into(), Some("Chrome on Windows".into())), "Sign-in on Chrome on Windows");
-/// assert_eq!(approval_asks("password".into(), None), "Change your password on a new device");
-/// assert_eq!(approval_asks("later".into(), Some("Pixel 9".into())), "A change to your account on Pixel 9");
+/// assert_eq!(approval_asks("login".into(), Some("Chrome on Windows".into()), None), "Sign-in on Chrome on Windows");
+/// assert_eq!(
+///     approval_asks("login".into(), Some("Chrome on Windows".into()), Some("near Lyon, France".into())),
+///     "Sign-in on Chrome on Windows, near Lyon, France"
+/// );
+/// assert_eq!(approval_asks("password".into(), None, Some("  ".into())), "Change your password on a new device");
+/// assert_eq!(approval_asks("later".into(), Some("Pixel 9".into()), None), "A change to your account on Pixel 9");
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
-pub fn approval_asks(purpose: String, device_name: Option<String>) -> String {
+pub fn approval_asks(purpose: String, device_name: Option<String>, location: Option<String>) -> String {
     let what = match purpose.as_str() {
         "login" => "Sign-in",
         "password" => "Change your password",
@@ -1537,12 +1555,41 @@ pub fn approval_asks(purpose: String, device_name: Option<String>) -> String {
         _ => "A change to your account",
     };
     let name = device_name.map(|name| name.trim().to_string()).filter(|name| !name.is_empty());
-    format!("{what} on {}", name.as_deref().unwrap_or("a new device"))
+    let asks = format!("{what} on {}", name.as_deref().unwrap_or("a new device"));
+    match location.map(|place| place.trim().to_string()).filter(|place| place_shaped(place)) {
+        Some(place) => format!("{asks}, {place}"),
+        None => asks,
+    }
 }
 
 #[cfg(test)]
 mod device_tests {
     use super::*;
+
+    #[test]
+    fn a_prompt_shows_a_place_only_when_it_is_a_plain_line_of_words() {
+        let digest = "A".repeat(43);
+        let listed = |location: &str| {
+            let body = format!(
+                r#"{{"userId":"u","approvals":[{{"id":"7c9e6679-7425-40de-944b-e07fc1f90ae7","purpose":"login","class":"unknown","device":{{"kind":"web","name":"Chrome on Windows"}},"location":{location},"createdAt":"2026-11-14T10:00:00.000Z","expiresAt":"2026-11-14T10:05:00.000Z","tokenDigest":"{digest}","commitment":"{digest}"}}]}}"#
+            );
+            match approvals_reply_read(200, body) {
+                ApprovalsReply::Listed { approvals } => approvals[0].location.clone(),
+                other => panic!("expected a list, got {other:?}"),
+            }
+        };
+        assert_eq!(listed(r#""near São Paulo, Brazil""#).as_deref(), Some("near São Paulo, Brazil"));
+        assert_eq!(listed("null"), None);
+        // A direction mark or a line break would let a header rewrite the prompt.
+        assert_eq!(listed(r#""near Lyon\u202e, France""#), None);
+        assert_eq!(listed(r#""near Lyon\nApprove now""#), None);
+        assert_eq!(listed("42"), None);
+        // The request is still listed without its place, and the words say so by saying nothing.
+        assert_eq!(
+            approval_asks("login".into(), Some("Chrome on Windows".into()), Some("near Lyon\u{202e}".into())),
+            "Sign-in on Chrome on Windows"
+        );
+    }
 
     #[test]
     fn a_device_answer_names_its_request_and_a_pending_one_is_not_a_wrong_answer() {

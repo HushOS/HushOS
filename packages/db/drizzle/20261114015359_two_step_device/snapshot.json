@@ -2,7 +2,7 @@
     "type": "diff",
     "version": "9",
     "dialect": "postgres",
-    "id": "d9f71f59-9040-447f-9684-f2fa8aec84e7",
+    "id": "80c0f752-cdb1-41ba-a10a-d59928407fac",
     "prevIds": ["a2714d3c-def7-46bd-8566-487da546bf63"],
     "footprints": [
         {
@@ -377,6 +377,22 @@
                 "schema": "public",
                 "table": "two_step_device_requests",
                 "name": "device_name",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "location",
                 "type": "text",
                 "typeSchema": null,
                 "notNull": false,
@@ -836,6 +852,16 @@
                 "table": "two_step_device_requests",
                 "name": "two_step_device_requests_state_valid",
                 "value": "\"state\" in ('waiting', 'opened', 'revealed', 'approved', 'ended') and (\"state\" <> 'waiting' or (\"approver_device_id\" is null and \"approver_key\" is null)) and (\"state\" not in ('opened', 'revealed', 'approved') or (\"approver_device_id\" is not null and \"approver_key\" is not null)) and (\"state\" not in ('waiting', 'opened') or (\"device_key\" is null and \"nonce\" is null and \"signature\" is null)) and (\"state\" not in ('revealed', 'approved') or (\"device_key\" is not null and \"nonce\" is not null)) and ((\"device_key\" is null) = (\"nonce\" is null)) and (\"state\" <> 'revealed' or \"signature\" is null) and (\"state\" <> 'approved' or \"signature\" is not null)",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "two_step_device_requests_location_valid",
+                "value": "\"location\" is null or (\"state\" <> 'ended' and char_length(\"location\") between 1 and 200)",
                 "entityType": "checks"
             }
         },

@@ -563,7 +563,8 @@ export const authApi = new Elysia()
         },
         ({ request, sessionToken, body }) => {
             guardAuthMutation(request);
-            return auth.startDeviceApproval(sessionToken, body);
+            // The request's own headers: a rough place, where the operator's proxy names one.
+            return auth.startDeviceApproval(sessionToken, body, request.headers);
         },
     )
     .get('/auth/approvals', { response: { 200: approvalsResponse } }, ({ sessionToken, set }) => {

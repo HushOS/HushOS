@@ -383,7 +383,9 @@ export const approvalStatusResponse = t.Object({
 export const approvalRevealedResponse = t.Object({ revealed: t.Literal(true) });
 /*
  * GET /auth/approvals: what this device may answer. `device` is the asking device as the
- * server knows it, or in its own words for one it does not know yet; never a location.
+ * server knows it, or in its own words for one it does not know yet. `location` is roughly
+ * where it is ("near Lyon, France"), as the operator's proxy said it; null where the server
+ * was told nothing.
  */
 export const approvalsResponse = t.Object({
     userId: t.String(),
@@ -398,6 +400,7 @@ export const approvalsResponse = t.Object({
                 ),
                 name: t.Nullable(t.String()),
             }),
+            location: t.Nullable(t.String()),
             createdAt: t.String(),
             expiresAt: t.String(),
             tokenDigest: t.String(),

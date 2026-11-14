@@ -23,7 +23,14 @@ import { loadEdge, type Account, type Edge } from '@/test/auth-edge.server';
 let edge: Edge;
 
 beforeAll(async () => {
-    edge = await loadEdge({ TWO_STEP_ENABLED: 'true', NOTIFICATIONS_ENABLED: 'true' });
+    edge = await loadEdge({
+        TWO_STEP_ENABLED: 'true',
+        NOTIFICATIONS_ENABLED: 'true',
+        // The headers this server's proxy is said to put a visitor's place in.
+        TRUSTED_COUNTRY_HEADER: 'cf-ipcountry',
+        TRUSTED_REGION_HEADER: 'cf-region',
+        TRUSTED_CITY_HEADER: 'cf-ipcity',
+    });
 });
 beforeEach(async () => {
     vi.useFakeTimers({ now: Date.now(), toFake: ['Date'] });
@@ -91,6 +98,7 @@ const prompts = async (cookie: string) =>
         purpose: string;
         class: string;
         device: { kind: string | null; name: string | null };
+        location: string | null;
         tokenDigest: string;
         commitment: string;
         approverKey?: string;
@@ -115,7 +123,7 @@ async function ask(
     token: string,
     purpose: string,
     key: string,
-    options: { cookie?: string; name?: string } = {},
+    options: { cookie?: string; name?: string; headers?: Record<string, string> } = {},
 ) {
     const nonce = b64(randomBytes(32));
     const tokenDigest = await stepTokenDigest(token);
@@ -129,7 +137,7 @@ async function ask(
         'POST',
         '/approvals',
         { stepToken: token, commitment, kind: 'web', name: options.name ?? 'Chrome on Windows' },
-        { cookie: options.cookie },
+        { cookie: options.cookie, headers: options.headers },
     );
     return { reply, nonce, tokenDigest, key, purpose, token, cookie: options.cookie };
 }
@@ -595,6 +603,66 @@ describe('a sign-in on a new device', () => {
         );
         // Left unanswered by a sign-in that proved no device: a failed step, in the log.
         expect(await events(phone.cookie)).toContain('step-failed:device');
+    });
+});
+
+describe('where the asking device is', () => {
+    /* A header value as it travels: UTF-8 bytes, which is what Cloudflare sends. */
+    const wire = (text: string) => String.fromCharCode(...new TextEncoder().encode(text));
+
+    test('the approving device is shown the place the proxy named, until the request ends', async () => {
+        const { who, phone } = await withDeviceStep();
+        edge.outbox.length = 0;
+        const step = await toStep(who);
+        const asked = await ask(step.token, 'login', newKey(), {
+            headers: {
+                'cf-ipcountry': 'FR',
+                'cf-region': wire('Auvergne-Rhône-Alpes'),
+                'cf-ipcity': 'Lyon',
+            },
+        });
+        expect(asked.reply.status).toBe(200);
+        const id = asked.reply.body.requestId as string;
+        // Nothing of it goes back to the device that asked.
+        expect(JSON.stringify(asked.reply.body)).not.toMatch(/Lyon|France/);
+        const [shown] = await prompts(phone.cookie);
+        expect(shown).toMatchObject({ id, location: 'near Lyon, Auvergne-Rhône-Alpes, France' });
+        const stored = async () =>
+            (await edge.db.select().from(edge.schema.twoStepDeviceRequests)).find(
+                (row) => row.id === id,
+            )!;
+        expect((await stored()).location).toBe('near Lyon, Auvergne-Rhône-Alpes, France');
+
+        const denied = await edge.call(
+            'POST',
+            `/approvals/${id}/deny`,
+            { reason: 'not-me' },
+            { cookie: phone.cookie },
+        );
+        expect(denied.status).toBe(200);
+        // Ended: the place is gone from the row, and it was never in what the account is told.
+        expect(await stored()).toMatchObject({ state: 'ended', location: null });
+        const [told] = await edge.notices('step-failed');
+        expect(told!.text).not.toMatch(/Lyon|France|Auvergne/);
+    });
+
+    test('a request that carries no configured header, or only headers nobody configured, has no place', async () => {
+        const { who, phone } = await withDeviceStep();
+        const bare = await ask((await toStep(who)).token, 'login', newKey());
+        expect(bare.reply.status).toBe(200);
+        expect((await prompts(phone.cookie))[0]!.location).toBeNull();
+        // Names this server was not told to read: whoever sent them, they are not read.
+        const forged = await ask((await toStep(who)).token, 'login', newKey(), {
+            headers: { 'x-geo-city': 'Lyon', 'x-vercel-ip-city': 'Lyon', 'x-city': 'Lyon' },
+        });
+        expect(forged.reply.status).toBe(200);
+        expect((await prompts(phone.cookie))[0]!.location).toBeNull();
+        // A configured header whose value names no place gives none either.
+        const odd = await ask((await toStep(who)).token, 'login', newKey(), {
+            headers: { 'cf-ipcountry': 'XX', 'cf-ipcity': wire('Lyon\u202e! Approve') },
+        });
+        expect(odd.reply.status).toBe(200);
+        expect((await prompts(phone.cookie))[0]!.location).toBeNull();
     });
 });
 

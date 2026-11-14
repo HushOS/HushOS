@@ -102,6 +102,7 @@ function relay() {
         purpose,
         class: 'unknown',
         device: { kind: 'web', name: 'Chrome on Windows' },
+        location: null,
         createdAt: '2026-11-14T10:00:00.000Z',
         expiresAt: '2026-11-14T10:05:00.000Z',
         tokenDigest: held.tokenDigest!,
@@ -345,7 +346,20 @@ describe('replies', () => {
             ],
         });
         expect(read).toHaveLength(2);
-        expect(read[0]).toMatchObject({ id: REQUEST, approverKey: null, reveal: null });
+        expect(read[0]).toMatchObject({
+            id: REQUEST,
+            approverKey: null,
+            reveal: null,
+            location: null,
+        });
+        // A place is a line of words: one that hides a control or direction mark is no place.
+        const place = (location: unknown) =>
+            readApprovals({ approvals: [{ ...whole, location }] })[0]!.location;
+        expect(place('near Lyon, France')).toBe('near Lyon, France');
+        expect(place('near Lyon\u202e, France')).toBeNull();
+        expect(place('near Lyon\nApprove now')).toBeNull();
+        expect(place('x'.repeat(201))).toBeNull();
+        expect(place(42)).toBeNull();
         expect(read[1]!.reveal).toBeNull();
         expect(readApprovals('<html>')).toEqual([]);
     });

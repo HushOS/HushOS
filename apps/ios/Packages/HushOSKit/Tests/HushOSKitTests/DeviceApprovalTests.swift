@@ -619,7 +619,7 @@ private func step(_ methods: [StepMethod]) -> StepChallenge {
             let purpose = try text("purpose")
             let key = try deviceSigningCreate()
             let prompt = ApprovalPrompt(
-                id: try text("requestId"), purpose: purpose, class: "unknown", deviceKind: "web", deviceName: "Chrome on Windows",
+                id: try text("requestId"), purpose: purpose, class: "unknown", deviceKind: "web", deviceName: "Chrome on Windows", location: "near Lyon, France",
                 createdAt: "2026-11-14T10:00:00.000Z", expiresAt: "2026-11-14T10:05:00.000Z", tokenDigest: try text("tokenDigest"), commitment: try text("commitment"),
                 approverKey: nil, revealKey: nil, revealNonce: nil
             )
@@ -641,6 +641,8 @@ private func step(_ methods: [StepMethod]) -> StepChallenge {
                 return ApprovalWire.Reply(status: 200, text: json(["ended": true]))
             }
             let flow = ApprovalAnswering(prompt: prompt, wire: wire, userId: try text("userId"), seed: key.seed)
+            // The sheet says what is asked, by which device, and the place the server gave for it.
+            #expect(flow.asks.hasSuffix(" on Chrome on Windows, near Lyon, France"), "\(purpose)")
             // The browser's QR code is this request's.
             #expect(try await flow.open(scanned: try text("qr")), "\(purpose)")
             #expect(try await flow.revealed(), "\(purpose)")

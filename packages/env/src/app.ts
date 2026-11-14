@@ -119,6 +119,19 @@ export const appEnv = createEnv({
             .string()
             .regex(/^[a-z0-9-]{1,64}$/)
             .optional(),
+        // The same proxy's headers for the visitor's region and city (`cf-region` and
+        // `cf-ipcity` on Cloudflare, with "Add visitor location headers" on). With the country
+        // header they give the rough place a device asking another one to confirm it is shown
+        // with ("near Lyon, France"). Unset: not read. With no country and no city header set,
+        // no place is ever shown.
+        TRUSTED_REGION_HEADER: z
+            .string()
+            .regex(/^[a-z0-9-]{1,64}$/)
+            .optional(),
+        TRUSTED_CITY_HEADER: z
+            .string()
+            .regex(/^[a-z0-9-]{1,64}$/)
+            .optional(),
         // Origins the browser may talk to besides the app and the object store, for the
         // page's Content Security Policy: the evidence bucket, for one. Space or comma separated.
         CSP_CONNECT_SRC: z.string().max(2000).optional(),

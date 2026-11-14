@@ -404,7 +404,7 @@ public actor ApprovalAnswering {
     }
 
     public nonisolated let id: String
-    /* "Sign-in on Chrome on Windows": what is asked, and by which device. */
+    /* "Sign-in on Chrome on Windows, near Lyon, France": what is asked, by which device, and roughly from where when the server was told. */
     public nonisolated let asks: String
     private let asked: ApprovalPrompt
     private let wire: ApprovalWire
@@ -420,7 +420,7 @@ public actor ApprovalAnswering {
     /* `prompt`: the request as listed before this phone opened it. `userId` and `seed`: this phone's own account id and device key. */
     public init(prompt: ApprovalPrompt, wire: ApprovalWire, userId: String, seed: Data) {
         id = prompt.id
-        asks = approvalAsks(purpose: prompt.purpose, deviceName: prompt.deviceName)
+        asks = approvalAsks(purpose: prompt.purpose, deviceName: prompt.deviceName, location: prompt.location)
         asked = prompt
         self.wire = wire
         self.userId = userId

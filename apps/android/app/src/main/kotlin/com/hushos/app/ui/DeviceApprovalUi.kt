@@ -457,7 +457,7 @@ internal fun ApprovalRow(text: String, modifier: Modifier = Modifier, onAnswer: 
 /* Devices' rows: each request with what is asked and by which device. Nothing while none is waiting. */
 @Composable
 internal fun ApprovalRows(inbox: ApprovalInbox) {
-    for (asked in inbox.prompts) ApprovalRow(approvalAsks(asked.purpose, asked.deviceName)) { inbox.answer(asked) }
+    for (asked in inbox.prompts) ApprovalRow(approvalAsks(asked.purpose, asked.deviceName, asked.location)) { inbox.answer(asked) }
 }
 
 /* Home's banner while a request is waiting: said first, with the way to answer. */

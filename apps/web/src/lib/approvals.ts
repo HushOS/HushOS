@@ -20,11 +20,13 @@ const WHAT: Record<string, string> = {
 };
 
 /*
- * What is asked, and by which device: "Sign-in on Chrome on Windows". A device that gave no
- * name is "a new device"; a purpose from a later release is "A change to your account".
+ * What is asked, by which device and roughly from where: "Sign-in on Chrome on Windows, near
+ * Lyon, France". A device that gave no name is "a new device"; a purpose from a later release
+ * is "A change to your account"; the place is there only where the server was told one.
  */
-export function approvalAsks(purpose: string, deviceName: string | null) {
-    return `${WHAT[purpose] ?? 'A change to your account'} on ${deviceName?.trim() || 'a new device'}`;
+export function approvalAsks(purpose: string, deviceName: string | null, location?: string | null) {
+    const asks = `${WHAT[purpose] ?? 'A change to your account'} on ${deviceName?.trim() || 'a new device'}`;
+    return location?.trim() ? `${asks}, ${location.trim()}` : asks;
 }
 
 /*

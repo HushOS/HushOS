@@ -1133,3 +1133,125 @@ describe('budgets', () => {
         ).toEqual({ status: 'ok', approverKey: key });
     });
 });
+
+describe('where the asking device is', () => {
+    const PLACE = 'near Lyon, France';
+    const located = (tokenHash: Buffer, from: Asking) =>
+        twoStep.createDeviceRequest({
+            tokenHash,
+            commitment: commitmentOf(tokenHash, from),
+            kind: 'web',
+            name: 'Chrome on Windows',
+            location: PLACE,
+        });
+    const placeOf = async (id: string) => (await requestRow(id)).location;
+
+    test('is shown to the approving device while the request is open, and to it alone', async () => {
+        const { userId, phone } = await withDeviceStep();
+        const made = await located(await loginToken(userId), asking('login'));
+        if (made.status !== 'ok') throw new Error(made.status);
+        const [prompt] = await twoStep.listApprovalPrompts(phone.token);
+        expect(prompt).toMatchObject({ id: made.id, location: PLACE });
+        // A request made where the server was told nothing has no place, not an empty one.
+        const bare = await request(await loginToken(userId), asking('login'));
+        if (bare.status !== 'ok') throw new Error(bare.status);
+        expect(await placeOf(bare.id)).toBeNull();
+    });
+
+    test('is deleted however the request ends', async () => {
+        const { userId, phone } = await withDeviceStep();
+        const open = async () => {
+            const tokenHash = await loginToken(userId);
+            const from = asking('login');
+            const made = await located(tokenHash, from);
+            if (made.status !== 'ok') throw new Error(made.status);
+            expect(await placeOf(made.id)).toBe(PLACE);
+            return { tokenHash, from, id: made.id };
+        };
+
+        // Denied.
+        const denied = await open();
+        await twoStep.denyDeviceRequest({
+            sessionTokenHash: phone.token,
+            requestId: denied.id,
+            reason: 'denied',
+        });
+        expect(await requestRow(denied.id)).toMatchObject({ state: 'ended', location: null });
+
+        // Replaced by a newer request.
+        const replaced = await open();
+        const newer = await open();
+        expect(await requestRow(replaced.id)).toMatchObject({
+            endedReason: 'replaced',
+            location: null,
+        });
+
+        // The step passed another way.
+        expect((await answerLogin(newer.tokenHash, PHRASE)).status).toBe('ok');
+        expect(await requestRow(newer.id)).toMatchObject({ endedReason: 'passed', location: null });
+
+        // Approved and used: the place went with the request, not with the sign-in.
+        const used = await open();
+        await twoStep.openDeviceRequest({
+            sessionTokenHash: phone.token,
+            requestId: used.id,
+            approverKey: randomBytes(32),
+        });
+        await twoStep.revealDeviceRequest({
+            tokenHash: used.tokenHash,
+            requestId: used.id,
+            deviceKey: used.from.deviceKey,
+            nonce: used.from.nonce,
+        });
+        await twoStep.approveDeviceRequest({
+            sessionTokenHash: phone.token,
+            requestId: used.id,
+            signature: signedBy(phone, userId, used.id, used.tokenHash, used.from),
+        });
+        // Still open while approved and unused: the approving device may be looking at it.
+        expect(await placeOf(used.id)).toBe(PLACE);
+        expect(
+            (await answerLogin(used.tokenHash, { method: 'device', requestId: used.id })).status,
+        ).toBe('ok');
+        expect(await requestRow(used.id)).toMatchObject({ endedReason: 'used', location: null });
+
+        // Left unanswered until its token ran out.
+        const left = await open();
+        await expire(left.tokenHash);
+        await twoStep.settleDeviceRequests(userId);
+        expect(await requestRow(left.id)).toMatchObject({ endedReason: 'expired', location: null });
+
+        // Whatever the code above it does, the table keeps no place on a request that ended.
+        expect(await db.select().from(twoStepDeviceRequests)).toSatisfy(
+            (rows: { location: string | null }[]) => rows.every((row) => row.location === null),
+        );
+        await expect(
+            db
+                .update(twoStepDeviceRequests)
+                .set({ location: PLACE })
+                .where(eq(twoStepDeviceRequests.id, denied.id)),
+        ).rejects.toMatchObject({
+            cause: { constraint: 'two_step_device_requests_location_valid' },
+        });
+    });
+
+    test('goes when the method is turned off with a request still open', async () => {
+        const { userId, laptop } = await withDeviceStep();
+        const made = await located(await loginToken(userId), asking('login'));
+        if (made.status !== 'ok') throw new Error(made.status);
+        const [factor] = await db.select().from(twoStepFactors);
+        const stepToken = await changeToken(userId, laptop);
+        await twoStep.takeStepAnswer({
+            tokenHash: stepToken,
+            method: 'phrase',
+            purpose: 'two-step',
+            sessionTokenHash: laptop.token,
+        });
+        await twoStep.removeFactor({
+            userId,
+            factorId: factor!.id,
+            step: { sessionTokenHash: laptop.token, tokenHash: stepToken, spend: PHRASE },
+        });
+        expect(await requestRow(made.id)).toMatchObject({ endedReason: 'off', location: null });
+    });
+});

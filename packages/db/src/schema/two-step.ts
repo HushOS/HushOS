@@ -341,7 +341,11 @@ const quoted = (values: readonly string[]) => values.map((value) => `'${value}'`
  *   know yet they are the device's own words.
  * - `counted`: this request was counted as a failed step (denied, a wrong code, or left
  *   unanswered from a sign-in that proved no device), once.
- * No secret is kept here, and no location: this server has no local lookup for one.
+ * - `location`: roughly where the asking device is ("near Lyon, France"), as the operator's
+ *   proxy said it in the headers the server is told to trust; null where none is configured.
+ *   It is for the approving device's prompt and nothing else, and goes when the request ends:
+ *   the table's check refuses an ended request that still has one.
+ * No secret is kept here.
  */
 export const twoStepDeviceRequests = pgTable(
     'two_step_device_requests',
@@ -356,6 +360,7 @@ export const twoStepDeviceRequests = pgTable(
         deviceId: uuid('device_id').references(() => accountDevices.id, { onDelete: 'cascade' }),
         deviceKind: text('device_kind').$type<DeviceKind>(),
         deviceName: text('device_name'),
+        location: text(),
         commitment: bytea().notNull(),
         approverDeviceId: uuid('approver_device_id').references(() => accountDevices.id, {
             onDelete: 'cascade',
@@ -404,6 +409,11 @@ export const twoStepDeviceRequests = pgTable(
         check(
             'two_step_device_requests_state_valid',
             sql`${table.state} in (${sql.raw(quoted(DEVICE_REQUEST_STATES))}) and (${table.state} <> 'waiting' or (${table.approverDeviceId} is null and ${table.approverKey} is null)) and (${table.state} not in ('opened', 'revealed', 'approved') or (${table.approverDeviceId} is not null and ${table.approverKey} is not null)) and (${table.state} not in ('waiting', 'opened') or (${table.deviceKey} is null and ${table.nonce} is null and ${table.signature} is null)) and (${table.state} not in ('revealed', 'approved') or (${table.deviceKey} is not null and ${table.nonce} is not null)) and ((${table.deviceKey} is null) = (${table.nonce} is null)) and (${table.state} <> 'revealed' or ${table.signature} is null) and (${table.state} <> 'approved' or ${table.signature} is not null)`,
+        ),
+        // A place is kept only while the request can still be answered.
+        check(
+            'two_step_device_requests_location_valid',
+            sql`${table.location} is null or (${table.state} <> 'ended' and char_length(${table.location}) between 1 and 200)`,
         ),
         check(
             'two_step_device_requests_end_valid',
