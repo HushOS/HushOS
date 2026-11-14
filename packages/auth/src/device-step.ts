@@ -282,7 +282,7 @@ export async function approvalCode(
         await api.approvalDeny(opened.id, 'mismatch').catch(() => {});
         throw new DeviceStepError(
             'mismatch',
-            'The other device didn’t match its request, so nothing was approved. Start again there.',
+            'The other device didn’t match its request, so nothing was approved.',
         );
     }
     return deviceStepCode({
@@ -316,10 +316,7 @@ export async function approve(
     const expected = await approvalCode(api, input.opened, input.reveal, input.userId);
     if (input.typed !== undefined && normalizeApprovalCode(input.typed) !== expected) {
         await api.approvalDeny(input.opened.id, 'wrong-code').catch(() => {});
-        throw new DeviceStepError(
-            'wrong',
-            'That code didn’t match, so nothing was approved. Start again on the other device.',
-        );
+        throw new DeviceStepError('wrong', 'That code didn’t match, so nothing was approved.');
     }
     const signature = await signDeviceStep(input.privateKey, {
         userId: input.userId,

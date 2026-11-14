@@ -27,15 +27,34 @@ beforeAll(async () => {
 });
 beforeEach(async () => {
     vi.useFakeTimers({ now: Date.now(), toFake: ['Date'] });
-    await edge.resetDatabase();
+    await reset();
     edge.outbox.length = 0;
     edge.emitted.length = 0;
     edge.state.address = '203.0.113.1';
 });
-afterEach(() => {
+afterEach(async () => {
     vi.useRealTimers();
+    // Notices and pings go out after the reply and are not awaited: let the last ones land.
+    await edge.quiet();
 });
 afterAll(() => edge.closeDatabase());
+
+/*
+ * Every request here ends by pinging the account's devices or sending a notice, after its
+ * reply. One still writing when the next test truncates the tables can deadlock with it;
+ * Postgres then ends one of the two, and the truncate is simply run again.
+ */
+async function reset() {
+    for (let attempt = 1; ; attempt++) {
+        try {
+            return await edge.resetDatabase();
+        } catch (error) {
+            const code = (error as { cause?: { code?: unknown } } | null)?.cause?.code;
+            if (code !== '40P01' || attempt >= 4) throw error;
+            await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+    }
+}
 
 const ALL = ['webauthn', 'device'];
 type Signed = { cookie: string; deviceId: string; seed: Buffer; key: string };
