@@ -33,14 +33,8 @@ final class DeviceAskModel {
         case ended(String)
     }
 
-    struct Request {
-        let wire: ApprovalWire
-        let token: String
-        /* `login`, a change's purpose, or `device-approval`. */
-        let purpose: String
-        /* This iPhone's device key, base64url. */
-        let key: String
-    }
+    /* What a request is made from; turning the method on, it names the device the person chose (HushOSKit). */
+    typealias Request = DeviceAsk.Request
 
     typealias Approved = @MainActor @Sendable (StepAnswer) async throws -> Void
     typealias Failed = @MainActor @Sendable (Error) -> Void
@@ -74,9 +68,7 @@ final class DeviceAskModel {
         phase = .starting
         task = Task { [weak self] in
             do {
-                let ask = try await DeviceAsk.start(
-                    wire: request.wire, stepToken: request.token, purpose: request.purpose, deviceSigningKey: request.key, name: await Auth.deviceName()
-                )
+                let ask = try await request.start(name: await Auth.deviceName())
                 guard let self, self.run == this, !Task.isCancelled else { return }
                 self.answer = ask.answer
                 self.current = (ask, approved, failed)
@@ -137,6 +129,8 @@ struct DeviceAskView: View {
     let model: DeviceAskModel
     /* A form has no button of its own for it: Ask again sits in the panel. The sign-in screen's own button asks again. */
     let inlineAgain: Bool
+    /* Turning the method on: the name of the one device that is asked, so the panel says which to pick up. */
+    var approver: String?
     let again: () -> Void
 
     var body: some View {
@@ -149,7 +143,7 @@ struct DeviceAskView: View {
             case .waiting(let qr):
                 VStack(spacing: Alpine.Space.s4) {
                     QRCode(text: qr).frame(width: 208, height: 208)
-                    Text(StepWords.askOpen).font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).multilineTextAlignment(.center)
+                    Text(StepWords.askOpen(on: approver)).font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity)
             case .code(let code):
@@ -202,73 +196,10 @@ struct QRCode: View {
 /* MARK: Answering */
 
 /*
- * The requests this iPhone may answer now, after its own limit of five a day for each class
- * (HushOSKit's `PromptLimit`). Read when the app comes to the front, every five seconds while
- * Account is on screen, and when a push arrives; Home's banner and Devices' rows show them.
+ * The list itself is HushOSKit's `ApprovalInbox`: read when the app comes to the front, every five
+ * seconds while Account is on screen, and when a push arrives. Home's banner and Devices' rows show
+ * it, on any server: whether two-step sign-in can be turned on there is nothing to it.
  */
-@Observable
-@MainActor
-final class ApprovalInbox {
-    static let shared = ApprovalInbox()
-
-    /* A request being answered: its sheet is MainView's. */
-    struct Answering: Identifiable {
-        let id: String
-        let flow: ApprovalAnswering
-    }
-
-    private(set) var prompts: [ApprovalPrompt] = []
-    var answering: Answering?
-    @ObservationIgnored private var loading = false
-    /* The session the list is for: another account's requests are never shown under this one. */
-    @ObservationIgnored private var owner: String?
-    /* Each request as it was first listed, before this iPhone opened it: what its reveal is checked against. */
-    @ObservationIgnored private var first: [String: ApprovalPrompt] = [:]
-    @ObservationIgnored private var flows: [String: ApprovalAnswering] = [:]
-
-    func load() async {
-        guard !loading else { return }
-        loading = true
-        defer { loading = false }
-        // A phone with no device key for this account can approve nothing, and asks nothing.
-        guard let session = SharedKeychain.session, DeviceApprovals.identity(for: session) != nil else { clear(); return }
-        if owner != session.tag {
-            clear()
-            owner = session.tag
-        }
-        // Kept as it was when the server can't be asked: the next look asks again.
-        guard let listed = try? await DeviceApprovals.list(wire: .signedIn(session)), SharedKeychain.session?.tag == session.tag else { return }
-        for asked in listed where first[asked.id] == nil { first[asked.id] = asked }
-        let live = Set(listed.map(\.id)).union(answering.map { [$0.id] } ?? [])
-        first = first.filter { live.contains($0.key) }
-        flows = flows.filter { live.contains($0.key) }
-        prompts = listed
-    }
-
-    /* Answer: the request's sheet, over whatever is on screen. */
-    func answer(_ asked: ApprovalPrompt) {
-        guard let session = SharedKeychain.session, let identity = DeviceApprovals.identity(for: session),
-              let seed = try? base64urlDecode(value: identity.seed) else { return }
-        let flow = flows[asked.id] ?? ApprovalAnswering(prompt: first[asked.id] ?? asked, wire: .signedIn(session), userId: identity.userId, seed: seed)
-        flows[asked.id] = flow
-        answering = Answering(id: asked.id, flow: flow)
-    }
-
-    /* Approved, denied or over: it leaves the list at once, without waiting for the next look. */
-    func finished(_ id: String) {
-        prompts.removeAll { $0.id == id }
-        first[id] = nil
-        flows[id] = nil
-    }
-
-    private func clear() {
-        prompts = []
-        answering = nil
-        first = [:]
-        flows = [:]
-        owner = nil
-    }
-}
 
 /* One waiting request as a row: what is asked and by which device, and Answer. */
 struct ApprovalRow: View {
@@ -318,8 +249,15 @@ struct ApprovalSheet: View {
             Form {
                 // What is asked, and by which device, whole: a bar's title would cut a long device name short.
                 Section {} header: {
-                    Text(flow.asks).font(Theme.Text.title).foregroundStyle(Alpine.ink).textCase(nil)
-                        .fixedSize(horizontal: false, vertical: true).accessibilityAddTraits(.isHeader)
+                    VStack(alignment: .leading, spacing: Alpine.Space.s2) {
+                        Text(flow.asks).font(Theme.Text.title).foregroundStyle(Alpine.ink)
+                            .fixedSize(horizontal: false, vertical: true).accessibilityAddTraits(.isHeader)
+                        // The asking device named this one: no other device was shown the request.
+                        if let chosen = flow.chosenLine {
+                            Text(chosen).font(Theme.Text.callout).foregroundStyle(Alpine.ink).fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .textCase(nil)
                 }
                 switch phase {
                 case .choose:

@@ -212,6 +212,8 @@ public enum StepWords {
      * request ended without an approval. Never who ended it.
      */
     public static let askOpen = "Open HushOS on another device and choose Answer."
+    /* Turning the method on: the one device the person chose is asked, and the panel says which to pick up. */
+    public static func askOpen(on device: String?) -> String { device.map { "Open HushOS on \($0) and choose Answer." } ?? askOpen }
     public static let askCode = "Code for your other device"
     public static let askWaiting = "Waiting for your other device"
     public static let askAgain = "Ask again"
@@ -235,10 +237,22 @@ public enum StepWords {
     public static let approvalWrongCode = "That code didn’t match, so nothing was approved."
     /* A request that left this phone's list while it was being answered: the server's own words for one that is over. */
     public static let approvalOver = "This request is over."
+    /* The server answered an open with another value than this phone made: it chose this phone's half of the code itself. */
+    public static let approvalChanged = "The server changed this device’s part of the code, so nothing was approved. Ask again on the other device."
+    /* The list says this phone opened the request, and this run of the app holds no value for it. */
+    public static let approvalRestarted = "This request was opened before HushOS was restarted. Ask again on the other device."
+    /* Under the sheet's title, when the asking device named this one to answer. */
+    public static let approvalChosen = "The other device asked for this device to approve."
     /* Settings. */
     public static let deviceOn = "Approve on another device is on"
     public static let deviceOff = "Approve on another device is off"
     public static let lostDeviceOn = lost(whether: "approving on another device was turned on")
+    /* Turning it on: the person says which of their devices is to approve. */
+    public static let approverHeading = "Device that will approve"
+    public static let chooseApprover = "Choose the device that will approve."
+    public static func approveOn(_ device: String) -> String { "Approve on \(device)" }
+    /* Under "Remove my other devices" here: the device that approves stays signed in, because it is the method. */
+    public static let othersButApprover = "All but this one and the one that approves. They’ll need to sign in again."
 }
 
 /* A step that did not pass: the server's refusal in its own words, or a reply that was not the server's answer. */
@@ -260,7 +274,7 @@ public enum StepError: Error, LocalizedError, Sendable, Equatable {
         switch refusal {
         case .wrong, .expired, .frozen, .limited, .unavailable, .required, .setupRequired, .updateRequired: true
         // Approving on another device: each is the step's own, whichever route said it.
-        case .pending, .deviceUnavailable, .deviceBusy, .deviceLimited, .deviceMismatch, .approvalOver, .approvalTaken, .approvalRefused: true
+        case .pending, .deviceUnavailable, .deviceBusy, .deviceLimited, .deviceChoice, .deviceMismatch, .approvalOver, .approvalTaken, .approvalRefused: true
         case .busy, .other: false
         }
     }
@@ -323,8 +337,9 @@ public enum StepOutcome: Sendable, Equatable {
             case .pending:
                 // The other device has not approved yet: nothing was counted, nothing failed, and nothing is said.
                 return .again(message: "", field: false, methods: methods)
-            case .deviceMismatch, .approvalOver, .approvalTaken, .approvalRefused:
-                // A request to another device ended. The step's token is as it was, and every way is still there.
+            case .deviceChoice, .deviceMismatch, .approvalOver, .approvalTaken, .approvalRefused:
+                // A request to another device ended, or (turning the method on) named no device to ask. The step's
+                // token is as it was, and every way is still there.
                 return .again(message: message, field: false, methods: methods)
             case .expired, .required, .setupRequired, .updateRequired, .other:
                 return .over(message: message.isEmpty ? StepWords.over : message)
@@ -722,6 +737,36 @@ public struct TwoStepStatus: Sendable, Equatable {
         }
     }
 
+    /*
+     * A device that could approve turning on Approve on another device: one of the account's own,
+     * signed in and holding a device key. The person chooses one, and only it is asked.
+     */
+    public struct Approver: Sendable, Equatable, Identifiable {
+        public let id: String
+        /* "web", "ios" or "android"; nil for a device that never described itself. */
+        public let kind: String?
+        public let name: String?
+        public let createdAt: Date?
+
+        public init(id: String, kind: String?, name: String?, createdAt: Date?) {
+            self.id = id
+            self.kind = kind
+            self.name = name
+            self.createdAt = createdAt
+        }
+
+        /* The device as the person knows it: its name, or what an unnamed one is called. */
+        public var shownName: String {
+            let name = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return name.isEmpty ? "Unknown device" : name
+        }
+
+        /* The line under it: what it is, in the Devices list's words, and when it was added. `day` words a date ("14 Nov"). */
+        public func line(day: (Date) -> String) -> String {
+            [AccountDevice.kindWords(kind), createdAt.map { "Added \(day($0))" }].compactMap { $0 }.joined(separator: " · ")
+        }
+    }
+
     public let on: Bool
     public let methods: [Method]
     public let backupCodesLeft: Int
@@ -734,6 +779,8 @@ public struct TwoStepStatus: Sendable, Equatable {
      * not shown at all.
      */
     public let otherDevice: Bool?
+    /* The devices that could approve turning it on, in the server's order. Empty from a server that lists none. */
+    public let approvers: [Approver]
 
     /* The authenticator app, if one is confirmed: an account has at most one. */
     public var app: Method? { methods.first { $0.kind == "totp" } }
@@ -758,6 +805,11 @@ public struct TwoStepStatus: Sendable, Equatable {
         // The JSON booleans themselves: a 1 is not a yes.
         let other = json["otherDevice"] as AnyObject
         otherDevice = other === kCFBooleanTrue ? true : other === kCFBooleanFalse ? false : nil
+        // A row without an id names no device: nothing could be asked of it.
+        approvers = (json["approvers"] as? [[String: Any]] ?? []).compactMap { row in
+            guard let id = row["id"] as? String, !id.isEmpty else { return nil }
+            return Approver(id: id, kind: row["kind"] as? String, name: row["name"] as? String, createdAt: TwoStep.date(row["createdAt"]))
+        }
     }
 
     /* The kinds of method the account has now. */
@@ -773,8 +825,8 @@ public struct TwoStepStatus: Sendable, Equatable {
         if device != nil { return "On" }
         return otherDevice == false ? "Needs another device" : "Off"
     }
-    /* Turn on is offered only while another device could approve it, on a phone with a device key of its own to ask with. */
-    public func canTurnOnDevice(ownKey: Bool) -> Bool { device == nil && otherDevice == true && ownKey }
+    /* Turn on is offered only while there is a device to choose to approve it, on a phone with a device key of its own to ask with. */
+    public func canTurnOnDevice(ownKey: Bool) -> Bool { device == nil && otherDevice == true && !approvers.isEmpty && ownKey }
     /* Whether `kind` carries the Default badge. */
     public func isDefault(_ kind: StepKind) -> Bool { choosing && defaultKind == kind.rawValue }
     /* Whether the account has a method of `kind`. */
@@ -1330,8 +1382,8 @@ public struct StepUp: Sendable, Equatable {
             tried = false
             draft.approved = nil
             return .again
-        case .deviceMismatch, .approvalOver, .approvalTaken, .approvalRefused:
-            // The request to the other device ended; the step itself still stands, and can be asked again.
+        case .deviceChoice, .deviceMismatch, .approvalOver, .approvalTaken, .approvalRefused:
+            // The request to the other device ended, or was not made; the step itself still stands, and can be asked again.
             error = message
             tried = false
             draft.approved = nil
