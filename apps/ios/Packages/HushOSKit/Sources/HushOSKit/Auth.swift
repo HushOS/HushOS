@@ -237,13 +237,14 @@ public enum Auth {
             throw AuthError.wrongPassword
         }
         // The device key's proof, only for the account it was made for: the same device comes back.
-        let proof = deviceProof(identity: SharedKeychain.deviceIdentity, email: email, attemptToken: attemptToken)
+        let identity = SharedKeychain.deviceIdentity
+        let proof = deviceProof(identity: identity, email: email, attemptToken: attemptToken)
         // The methods this phone can answer with, named only to a server that said it reads them. A rolling update can
         // answer `login/start` from a release that reads the field and `login/finish` from one whose schema refuses
         // it: refused there, nothing was looked at and the attempt is still good, so the same request goes once
         // more without the field.
         let reply = try await StepMethodsField.send(
-            advert: advertised ? .advertised : .notAdvertised, named: stepMethodsNamed(passkeys: passkeysUsable(serverOrigin: origin, linkHost: linkHost)),
+            advert: advertised ? .advertised : .notAdvertised, named: namedAtSignIn(origin: origin, linkHost: linkHost),
             body: finishBody(attemptToken: attemptToken, finishRequest: finish.request, device: proof), status: \.status
         ) { body in
             try await send(origin, "/api/auth/login/finish", body)
@@ -255,13 +256,25 @@ public enum Auth {
             guard reply.cookie != nil else { throw StepError.lost(StepWords.lostSignIn) }
             return .session(reply, exportKey: finish.exportKey, advertised: advertised)
         case .step(let challenge):
-            return .step(PendingSignIn(origin: origin, email: email, challenge: challenge, exportKey: finish.exportKey, advertised: advertised))
+            // What this sign-in would ask another device with: the key whose proof just went, or one made now.
+            let deviceKey = challenge.methods.contains(.device) ? StepDeviceKey.forSignIn(proved: proof == nil ? nil : identity) : nil
+            return .step(PendingSignIn(origin: origin, email: email, challenge: challenge, exportKey: finish.exportKey, advertised: advertised, deviceKey: deviceKey))
         case .refused(let refusal, let message):
             // A wrong password and the limiter's 429 are a sign-in's own refusals, in the server's words as before.
             throw refusal == .other || refusal == .busy ? AuthError.message(message) : StepError.refused(refusal, message)
         case .lost:
             throw StepError.lost(StepWords.lostSignIn)
         }
+    }
+
+    /*
+     * What a sign-in says it can answer beyond codes and the phrase (`twoStepMethods`): a passkey or
+     * security key where this build can use one for the server, and always another device. A phone
+     * the account knows asks it with its device key; one that has none yet makes it to ask with
+     * (`StepDeviceKey`), so there is always a key to commit to.
+     */
+    static func namedAtSignIn(origin: String, linkHost: String?) -> [String] {
+        stepMethodsNamed(passkeys: passkeysUsable(serverOrigin: origin, linkHost: linkHost), device: true)
     }
 
     /*
@@ -287,7 +300,9 @@ public enum Auth {
         switch signInReplyRead(status: UInt16(clamping: reply.status), body: reply.text) {
         case .done:
             guard reply.cookie != nil else { throw StepError.lost(StepWords.lostStep) }
-            return try await openSession(origin: pending.origin, email: pending.email, exportKey: pending.exportKey, reply: reply, advertised: pending.advertised)
+            return try await openSession(
+                origin: pending.origin, email: pending.email, exportKey: pending.exportKey, reply: reply, advertised: pending.advertised, made: pending.deviceKey?.made
+            )
         case .refused(let refusal, let message):
             throw StepError.refused(refusal, message)
         case .step, .lost:
@@ -312,7 +327,10 @@ public enum Auth {
 
     /* The session's reply, whole (the core checked): the session and the device memory are stored, and the account returned. */
     /* `advertised`: what this sign-in's `login/start` said of `twoStepMethods`, kept for the session's changes once it is stored. */
-    static func openSession(origin: String, email: String, exportKey: Data, reply: RawReply, advertised: Bool? = nil, adverts: StepAdverts = .stored) async throws -> SessionUser {
+    /* `made`: the device key this sign-in made to ask another device with, which the phone then registers (`registerDevice`). */
+    static func openSession(
+        origin: String, email: String, exportKey: Data, reply: RawReply, advertised: Bool? = nil, adverts: StepAdverts = .stored, made: DeviceSigningKey? = nil
+    ) async throws -> SessionUser {
         guard let userJson = reply.body["user"] as? [String: Any] else { throw AuthError.message("Signed in, but HushOS returned no account.") }
         let user = try JSONDecoder().decode(SessionUser.self, from: JSONSerialization.data(withJSONObject: userJson))
         guard let envelopeJson = reply.body["envelope"] as? [String: Any] else { throw AuthError.message("Signed in, but HushOS returned no account key.") }
@@ -338,7 +356,7 @@ public enum Auth {
         if let advertised { adverts.remember(advertised, for: origin) }
         // A device the proof did not bring back describes itself and gets a key; a failure waits for the next launch.
         if let device = SessionDevice(json: reply.body["device"] as? [String: Any]) {
-            try? await registerDevice(if: device, userId: user.id, email: user.email.isEmpty ? email : user.email)
+            try? await registerDevice(if: device, userId: user.id, email: user.email.isEmpty ? email : user.email, made: made)
         }
         // A remembered device for this user and credential is kept; otherwise make one now.
         if let existing = try? SharedKeychain.device?.open(),
@@ -369,7 +387,7 @@ public enum Auth {
     }
 
     /* The model's name ("iPhone 16 Pro", see DeviceModel), never the name its owner gave it. */
-    static func deviceName() async -> String {
+    public static func deviceName() async -> String {
         #if canImport(UIKit)
         let pad = await MainActor.run { UIDevice.current.userInterfaceIdiom == .pad }
         #else
@@ -378,14 +396,28 @@ public enum Auth {
         return DeviceModel.name(identifier: DeviceModel.identifier(), pad: pad)
     }
 
-    /* Registers the session's device with a new key when it has not described itself yet, and keeps the key. */
-    public static func registerDevice(if device: SessionDevice, userId: String, email: String) async throws {
+    /*
+     * Registers the session's device with a key when it has not described itself yet, and keeps the
+     * key. `made` is the key this phone made before it had a session, to ask another device with
+     * (docs/two-step-design.md 12): that one is registered, so the key that was approved is the key
+     * the phone has. Without one, a new key.
+     */
+    public static func registerDevice(if device: SessionDevice, userId: String, email: String, made: DeviceSigningKey? = nil) async throws {
+        try await registerDevice(
+            if: device, userId: userId, email: email, made: made, name: await deviceName(),
+            register: { name, key in try await Devices.register(kind: "ios", name: name, signingPublicKey: key).id },
+            store: { try SharedKeychain.write(SharedKeychain.deviceIdentityAccount, $0) }
+        )
+    }
+
+    static func registerDevice(
+        if device: SessionDevice, userId: String, email: String, made: DeviceSigningKey?, name: String,
+        register: (_ name: String, _ signingPublicKey: String) async throws -> String, store: (SharedKeychain.DeviceIdentity) throws -> Void
+    ) async throws {
         guard !device.registered else { return }
-        let key = try deviceSigningCreate()
-        let registered = try await Devices.register(kind: "ios", name: await deviceName(), signingPublicKey: base64urlEncode(bytes: key.publicKey))
-        try SharedKeychain.write(SharedKeychain.deviceIdentityAccount, SharedKeychain.DeviceIdentity(
-            userId: userId, emailHash: deviceEmailHash(email: email), deviceId: registered.id, seed: base64urlEncode(bytes: key.seed)
-        ))
+        let key = try made ?? deviceSigningCreate()
+        let id = try await register(name, base64urlEncode(bytes: key.publicKey))
+        try store(SharedKeychain.DeviceIdentity(userId: userId, emailHash: deviceEmailHash(email: email), deviceId: id, seed: base64urlEncode(bytes: key.seed)))
     }
 
     /* What the server says about the stored session: whose it is and its device, gone, or gone because its device was removed. */

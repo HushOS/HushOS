@@ -51,6 +51,18 @@ import {
     type DeviceKeyStore,
     type StoredDeviceIdentity,
 } from './device-storage';
+import {
+    DeviceStepError,
+    approve,
+    TURNING_ON,
+    askAnotherDevice,
+    openApproval,
+    readApprovals,
+    readDeviceConfirmed,
+    readDeviceEnrolment,
+    type ApprovalPrompt,
+    type OpenedApproval,
+} from './device-step';
 import type { RestoreStep } from './store';
 import type { AuthUser, DeviceKind, SessionDevice, SessionUser, SignupIntent } from './protocol';
 import type { WorkerRequests, WorkerResults } from './worker';
@@ -62,6 +74,9 @@ import type { WorkerRequests, WorkerResults } from './worker';
  * says this device was removed, after the auth client cleared its own storage,
  * for the app to clear the rest (Drive's mirror and stashes).
  */
+export { DeviceStepError, TURNING_ON } from './device-step';
+export type { ApprovalPrompt, DeviceAsk, DeviceAskState, OpenedApproval } from './device-step';
+
 export type AuthClientOptions = {
     identities?: DeviceIdentityStore;
     describeDevice?: () => { kind: DeviceKind; name: string };
@@ -194,13 +209,17 @@ export type StepAnswer =
     | { kind: 'backup'; code: string }
     | { kind: 'phrase'; phrase: string }
     /* A passkey or security key: its sheet opens when this is sent, never before. */
-    | { kind: 'webauthn' };
+    | { kind: 'webauthn' }
+    /* The request another device approved (`askAnotherDevice`). */
+    | { kind: 'device'; requestId: string };
 /*
  * Why a step's answer did not pass, for the page to act on rather than read:
  * - `wrong`: the answer was wrong, and the step can be answered again;
  * - `frozen`: the authenticator app is paused here; a backup code or the phrase still works;
  * - `limited`: too many wrong codes for now; the phrase still works;
  * - `unavailable`: the server cannot check this method right now; the phrase still works;
+ * - `pending`: the other device has not approved yet; nothing was counted, and the same answer
+ *   goes again once it has;
  * - `offline`: no answer came back at all; the same answer can be sent again;
  * - `busy`: too many requests from this address just now; the same answer can be sent again
  *   in a moment;
@@ -214,6 +233,7 @@ export type StepFailureReason =
     | 'frozen'
     | 'limited'
     | 'unavailable'
+    | 'pending'
     | 'offline'
     | 'busy'
     | 'over'
@@ -241,6 +261,7 @@ const STEP_CODES: Record<string, StepFailureReason> = {
     'step-frozen': 'frozen',
     'step-limited': 'limited',
     'step-unavailable': 'unavailable',
+    'step-pending': 'pending',
     'step-expired': 'over',
 };
 /*
@@ -289,6 +310,7 @@ const STEP_REFUSALS = new Set([
     'step-frozen',
     'step-limited',
     'step-unavailable',
+    'step-pending',
 ]);
 export function stepRefused(error: unknown) {
     const code = (error as { code?: unknown } | null)?.code;
@@ -348,9 +370,21 @@ export function createAuthClient(
     api: AuthApi,
     { identities, describeDevice, onRemoved, passkeys }: AuthClientOptions = {},
 ) {
-    /* What this device can answer a step with beyond a code and the phrase, as it tells the server. */
+    /*
+     * What this device can answer a step with beyond a code and the phrase, as it tells the
+     * server: a passkey where it can use one, and another device where it keeps a device key of
+     * its own to ask with.
+     */
     const namedMethods = () =>
-        NAMED_STEP_METHODS.filter((method) => method !== 'webauthn' || passkeys?.supported());
+        NAMED_STEP_METHODS.filter((method) =>
+            method === 'webauthn' ? passkeys?.supported() : identities !== undefined,
+        );
+    /*
+     * The device key a new device made to ask another device with, before it had a session
+     * (docs/two-step-design.md 12): the one it registers with once it is signed in, so the key
+     * that was approved is the key the device has. Dropped with the sign-in it was made for.
+     */
+    let askedWith: { privateKey: CryptoKey; publicKey: string } | undefined;
     let transport: CryptoTransport | undefined;
     let epoch = 0;
     const { store, canPersist } = createAuthStore();
@@ -361,7 +395,14 @@ export function createAuthClient(
      * the answer brings the envelope. Like a running sign-in, it owns the worker (`owned`).
      */
     let pendingStep:
-        | { challenge: StepChallenge; epoch: number; until: number; owner: object | undefined }
+        | {
+              challenge: StepChallenge;
+              epoch: number;
+              until: number;
+              owner: object | undefined;
+              /* The key this sign-in proved, when it came back as a device the account knows. */
+              deviceKey: string | null;
+          }
         | undefined;
     /*
      * The sign-in a page is waiting on, by number; 0 when the page that asked has gone
@@ -383,6 +424,7 @@ export function createAuthClient(
     function lock() {
         epoch += 1;
         pendingStep = undefined;
+        askedWith = undefined;
         const active = transport;
         transport = undefined;
         active?.lock();
@@ -632,7 +674,9 @@ export function createAuthClient(
             // Read again under the lock: another tab may have registered meanwhile.
             const device = (await readSession()).device;
             if (!device || device.registered) return;
-            const key = await createDeviceSigningKey();
+            // The key another device approved this one by, when it asked before it signed in.
+            const key = askedWith ?? (await createDeviceSigningKey());
+            askedWith = undefined;
             const { device: registered } = await api.registerDevice({
                 ...describeDevice(),
                 ...(key ? { signingPublicKey: key.publicKey } : {}),
@@ -813,7 +857,9 @@ export function createAuthClient(
                 epoch: loginEpoch,
                 until: performance.now() + STEP_HELD_MS,
                 owner: options.owner,
+                deviceKey: device && stored ? stored.publicKey : null,
             };
+            askedWith = undefined;
             pendingStep = held;
             // A step left unanswered lets go of what the worker holds when its time is up, even
             // with nothing else happening: the form can sit idle, and nothing else would look.
@@ -899,6 +945,11 @@ export function createAuthClient(
             });
             return { token: challenge.token, proof: { kind: 'webauthn', response } };
         }
+        if (answer.kind === 'device')
+            return {
+                token: challenge.token,
+                proof: { kind: 'device', requestId: answer.requestId },
+            };
         if (answer.kind !== 'phrase')
             return {
                 token: challenge.token,
@@ -1474,8 +1525,11 @@ export function createAuthClient(
         renameDevice: (id: string, name: string) => api.renameDevice(id, name),
         removeDevice: (id: string, password: string) =>
             withPassword(password, (proof) => api.removeDevice(id, proof)),
-        removeOtherDevices: (password: string) =>
-            withPassword(password, (proof) => api.removeOtherDevices(proof)),
+        /* `keep`: one other device left signed in, the one that approves for this one. */
+        removeOtherDevices: (password: string, keep?: string) =>
+            withPassword(password, (proof) =>
+                api.removeOtherDevices({ ...proof, ...(keep ? { keep } : {}) }),
+            ),
         updateProfile: (name: string) => api.updateProfile(name),
         /*
          * Signs in. For an account that asks for a second step it throws TwoStepRequired with
@@ -1616,8 +1670,122 @@ export function createAuthClient(
             return added;
         },
         renameTwoStepMethod: (id: string, name: string) => api.twoStepRenameMethod(id, name),
-        setTwoStepDefault: (kind: Exclude<TwoStepDefaultKind, 'device'>) =>
-            api.twoStepSetDefault(kind),
+        setTwoStepDefault: (kind: TwoStepDefaultKind) => api.twoStepSetDefault(kind),
+        /*
+         * Approve on another device (docs/two-step-design.md 12).
+         *
+         * Asks another device to approve the step `challenge` is: at a sign-in (`login`), before
+         * a change (its purpose), or to turn the method on (`device-approval`). A device the
+         * account knows asks with its own key; a new one makes the key it will register with.
+         */
+        async askAnotherDevice(
+            challenge: { token: string },
+            purpose: string,
+            /* Turning the method on: the device the person chose, the only one that may answer. */
+            approverDeviceId?: string,
+        ) {
+            const signingIn = pendingStep?.challenge.token === challenge.token ? pendingStep : null;
+            let deviceSigningKey = signingIn?.deviceKey ?? null;
+            if (!deviceSigningKey && signingIn) {
+                askedWith ??= (await createDeviceSigningKey()) ?? undefined;
+                deviceSigningKey = askedWith?.publicKey ?? null;
+            }
+            // Signed in: the key this session's device registered with, and no other.
+            if (!deviceSigningKey && !signingIn)
+                deviceSigningKey = (await identities?.load().catch(() => null))?.publicKey ?? null;
+            if (!deviceSigningKey)
+                throw new DeviceStepError(
+                    'unsupported',
+                    'This browser can’t ask another device. Use another way.',
+                );
+            return askAnotherDevice(api, {
+                stepToken: challenge.token,
+                purpose,
+                deviceSigningKey,
+                describe: describeDevice,
+                approverDeviceId,
+            });
+        },
+        /* The requests this device may answer now: empty for one that holds no device key. */
+        async approvals() {
+            if (!identities) return [];
+            const reply = await api.approvals();
+            // Whose device this is now, not when it asked: the account may have changed since.
+            const identity = await identities.load().catch(() => null);
+            return readApprovals(reply, identity?.userId ?? null);
+        },
+        /* Opens a request: this device's own fresh value goes in, and the code can then be computed. */
+        openApproval: (asked: ApprovalPrompt) => openApproval(api, asked),
+        /*
+         * Approves a request this device opened, with what the person typed from the other
+         * screen. Only an exact match is signed, with this device's own key; anything else
+         * ends the request.
+         *
+         * A request that turns the method on is the other way round: nothing is typed here,
+         * and what comes back is the code to show, for the person to type on the other device.
+         * Only that request may come without `typed`.
+         */
+        async approveRequest(
+            opened: OpenedApproval,
+            reveal: { deviceSigningKey: string; nonce: string },
+            typed?: string,
+        ) {
+            if (typed === undefined && opened.purpose !== TURNING_ON)
+                throw new DeviceStepError('unsupported', 'Type the code on the other device.');
+            const identity = await identities?.load().catch(() => null);
+            if (!identity)
+                throw new DeviceStepError(
+                    'unsupported',
+                    'This browser can’t approve for another device.',
+                );
+            return approve(api, {
+                opened,
+                reveal,
+                userId: identity.userId,
+                privateKey: identity.privateKey,
+                typed,
+            });
+        },
+        /* Deny, or This wasn't me: the request ends and is counted as a failed step. */
+        denyApproval: async (id: string, reason: 'denied' | 'not-me') => {
+            await api.approvalDeny(id, reason);
+        },
+        /*
+         * Starts turning the method on: the password again and, once the step is on, the step.
+         * Answers the pending method and the step token another device then approves.
+         */
+        startDeviceMethod: (password: string, twoStep?: StepInput) =>
+            withPassword(
+                password,
+                async (proof) => {
+                    const started = readDeviceEnrolment(
+                        await api.twoStepStartDevice({ ...proof, ...(twoStep ? { twoStep } : {}) }),
+                    );
+                    if (!started) throw new Error('Please try again.');
+                    return started;
+                },
+                (input) => api.twoStepReauth(input),
+            ),
+        /*
+         * Confirms it with the approval another device gave and the code that device shows,
+         * as the person typed it here (`DeviceAsk.matches` checked it first; the server checks
+         * it again). Only the server's own answer says it is on.
+         */
+        async confirmDeviceMethod(
+            started: { id: string; token: string },
+            requestId: string,
+            code: string,
+        ) {
+            const confirmed = readDeviceConfirmed(
+                await api.twoStepConfirmDevice(started.id, {
+                    token: started.token,
+                    requestId,
+                    code,
+                }),
+            );
+            if (!confirmed) throw lostChange('approving on another device was turned on');
+            return confirmed;
+        },
         newBackupCodes: (password: string, twoStep: StepInput) =>
             withPassword(
                 password,

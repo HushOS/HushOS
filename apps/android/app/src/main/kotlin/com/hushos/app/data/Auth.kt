@@ -70,12 +70,7 @@ data class AccountDevice(
     val createdAt: String, val lastSeenAt: String, val current: Boolean, val signedIn: Boolean,
 ) {
     /* What the list calls it: its name, else what it is, else an unknown device. */
-    val label: String get() = name?.ifEmpty { null } ?: when (kind) {
-        "android" -> "Android phone"
-        "ios" -> "iPhone"
-        "web" -> "A web browser"
-        else -> "Unknown device"
-    }
+    val label: String get() = name?.ifEmpty { null } ?: kindWords(kind) ?: "Unknown device"
 
     /* How it got in, in the words the web uses. */
     val approval: String? get() = when (approvedBy) {
@@ -90,6 +85,14 @@ data class AccountDevice(
     }
 
     companion object {
+        /* What a device is, in the list's words; null for a kind this build does not know, or none. */
+        fun kindWords(kind: String?): String? = when (kind) {
+            "android" -> "Android phone"
+            "ios" -> "iPhone"
+            "web" -> "A web browser"
+            else -> null
+        }
+
         fun from(json: JSONObject): AccountDevice {
             fun JSONObject.text(key: String): String? = if (!has(key) || isNull(key)) null else optString(key).ifEmpty { null }
             return AccountDevice(
@@ -594,15 +597,29 @@ object Auth {
         val loginResponse = started.optString("loginResponse").ifEmpty { throw AuthFailure("HushOS didn’t answer as expected. Try again in a moment.") }
         val finish = opaqueFinishLogin(password, start.state, loginResponse) ?: throw WrongPassword()
         // The device key's proof, only for the account it was made for: the same device comes back.
-        val device = deviceProof(Shared.deviceIdentity(context), email, attemptToken)
+        val identity = Shared.deviceIdentity(context)
+        val device = deviceProof(identity, email, attemptToken)
         val passkeys = Passkeys.usable(origin)
         val reply = finishNamed(StepAdverts.stored(context), origin, heard.text, passkeys, { methods -> finishBody(attemptToken, finish.request, device, methods) }) {
             send(origin, "/api/auth/login/finish", it)
         }
         return when (val read = signInReply(reply, StepWords.LOST_SIGN_IN)) {
             null -> Met.Session(reply, finish.exportKey)
-            else -> Met.Step(PendingSignIn(origin, email, read.offered(passkeys), finish.exportKey))
+            else -> Met.Step(pending(origin, email, read, finish.exportKey, passkeys, identity.takeIf { device != null }))
         }
+    }
+
+    /*
+     * The step a sign-in stopped at, as this phone holds it. When it lists another device, the key this sign-in
+     * would ask it with is settled now: the stored key whose proof just went (`proved`), or one made here, before
+     * there is a session (StepDeviceKey). With no key to be had, another device is not offered.
+     */
+    internal fun pending(
+        origin: String, email: String, challenge: com.hushos.core.StepChallenge, exportKey: ByteArray, passkeys: Boolean, proved: Shared.DeviceIdentity?,
+        key: (Shared.DeviceIdentity?) -> StepDeviceKey? = StepDeviceKey::forSignIn,
+    ): PendingSignIn {
+        val deviceKey = if (com.hushos.core.StepMethod.DEVICE in challenge.methods) key(proved) else null
+        return PendingSignIn(origin, email, challenge.offered(passkeys, device = deviceKey != null), exportKey, deviceKey = deviceKey)
     }
 
     /*
@@ -616,7 +633,8 @@ object Auth {
     internal fun finishNamed(adverts: StepAdverts, origin: String, startText: String, passkeys: Boolean, body: (List<String>?) -> JSONObject, send: (JSONObject) -> RawReply): RawReply {
         val advertised = com.hushos.core.stepMethodsAdvertised(startText)
         adverts.write(origin, advertised)
-        return StepNames.atSignIn(advertised, { it.status }) { named -> send(body(if (named) com.hushos.core.stepMethodsNamed(passkeys) else null)) }
+        // Another device is always named: a phone the account knows asks with its device key, and one that has none yet makes it to ask with.
+        return StepNames.atSignIn(advertised, { it.status }) { named -> send(body(if (named) com.hushos.core.stepMethodsNamed(passkeys, true) else null)) }
     }
 
     /*
@@ -672,7 +690,7 @@ object Auth {
      */
     fun answerStep(context: Context, pending: PendingSignIn, proof: com.hushos.core.StepProof): SessionUser = SessionGuard.signingIn {
         val reply = answerStepAt(pending.origin, pending.challenge.token, proof)
-        openSession(context, pending.origin, pending.email, pending.exportKey, reply)
+        openSession(context, pending.origin, pending.email, pending.exportKey, reply, made = pending.deviceKey?.made)
     }
 
     /* The request itself: the reply when it is the session's, a throw for anything else. */
@@ -683,7 +701,8 @@ object Auth {
     }
 
     /* The session's reply, whole (the core checked): the session and the device memory are stored, and the account returned. */
-    private fun openSession(context: Context, origin: String, email: String, exportKey: ByteArray, finished: RawReply): SessionUser {
+    /* `made`: the device key this sign-in made to ask another device with, which the phone then registers (`registerDevice`). */
+    private fun openSession(context: Context, origin: String, email: String, exportKey: ByteArray, finished: RawReply, made: com.hushos.core.DeviceSigningKey? = null): SessionUser {
         val user = finished.body.optJSONObject("user")?.let(SessionUser::from) ?: throw AuthFailure("Signed in, but the session was not returned.")
         val envelopeJson = finished.body.optJSONObject("envelope") ?: throw AuthFailure("Signed in, but the session was not returned.")
         val token = finished.cookie ?: throw AuthFailure("Signed in, but the session was not returned.")
@@ -695,7 +714,8 @@ object Auth {
         Shared.writeSession(context, Shared.Session(origin, token, user.id, user.email))
         // A device the proof did not bring back describes itself and gets a key; a failure waits for the next launch.
         SessionDevice.from(finished.body.optJSONObject("device"))?.let { device ->
-            runCatching { registerDevice(context, device, user.id, user.email.ifEmpty { email }) }
+            // A key made for this sign-in that could not be registered is dropped with this call: the next launch registers a fresh one.
+            runCatching { registerDevice(context, device, user.id, user.email.ifEmpty { email }, made) }
         }
         val envelope = AccountKeyEnvelope(
             envelopeJson.getInt("envelopeVersion").toUInt(), envelopeJson.getLong("keyVersion").toULong(), envelopeJson.getLong("credentialVersion").toULong(),
@@ -726,13 +746,31 @@ object Auth {
     /* The name a new device record gets: maker and model ("Pixel 9", "Samsung SM-S931B"), see DeviceName. The person can rename it. */
     fun deviceName(context: Context): String = DeviceName.of(android.os.Build.MANUFACTURER, android.os.Build.MODEL, isTablet(context))
 
-    /* Registers the session's device with a new key when it has not described itself yet, and keeps the key. */
-    fun registerDevice(context: Context, device: SessionDevice, userId: String, email: String) {
+    /*
+     * Registers the session's device with a key when it has not described itself yet, and keeps the
+     * key. `made` is the key this phone made before it had a session, to ask another device with
+     * (docs/two-step-design.md 12): that one is registered, so the key that was approved is the key
+     * the phone has. Without one, a new key.
+     */
+    fun registerDevice(context: Context, device: SessionDevice, userId: String, email: String, made: com.hushos.core.DeviceSigningKey? = null) =
+        registerDevice(
+            device, userId, email, made,
+            register = { signingPublicKey ->
+                call(context, "/api/auth/devices", JSONObject().put("kind", "android").put("name", deviceName(context)).put("signingPublicKey", signingPublicKey))
+                    .getJSONObject("device").getString("id")
+            },
+            store = { Shared.writeDeviceIdentity(context, it) },
+        )
+
+    /* `register` sends the public key and answers the device's id; `store` keeps the identity. Nothing is kept unless the server took the key. */
+    internal fun registerDevice(
+        device: SessionDevice, userId: String, email: String, made: com.hushos.core.DeviceSigningKey?,
+        register: (signingPublicKey: String) -> String, store: (Shared.DeviceIdentity) -> Unit,
+    ) {
         if (device.registered) return
-        val key = deviceSigningCreate()
-        val registered = call(context, "/api/auth/devices", JSONObject().put("kind", "android").put("name", deviceName(context))
-            .put("signingPublicKey", com.hushos.core.base64urlEncode(key.publicKey))).getJSONObject("device")
-        Shared.writeDeviceIdentity(context, Shared.DeviceIdentity(userId, deviceEmailHash(email), registered.getString("id"), key.seed))
+        val key = made ?: deviceSigningCreate()
+        val id = register(com.hushos.core.base64urlEncode(key.publicKey))
+        store(Shared.DeviceIdentity(userId, deviceEmailHash(email), id, key.seed))
     }
 
     /* The account's devices, this one first. */
@@ -823,11 +861,15 @@ object Auth {
         passwordTurn { callAt(session, "/api/auth/devices/$id", passwordProof(session, password), "DELETE") }
     }
 
-    fun removeOtherDevices(context: Context, password: String): Int = removeOtherDevicesAt(sessionOf(context), password)
+    /* `keep`: one other device left signed in, the one that approves for this one (Approve on another device): it is the method. */
+    fun removeOtherDevices(context: Context, password: String, keep: String? = null): Int = removeOtherDevicesAt(sessionOf(context), password, keep)
 
-    /* Under the session named, in its turn: the whole exchange, so nothing of it goes out while another password change is under way. */
-    internal fun removeOtherDevicesAt(session: Shared.Session, password: String): Int =
-        passwordTurn { callAt(session, "/api/auth/devices/others", passwordProof(session, password), "DELETE").optInt("removed") }
+    /*
+     * Under the session named, in its turn: the whole exchange, so nothing of it goes out while another password change is under way.
+     * `proof` is the password's (a test has no server to make one with).
+     */
+    internal fun removeOtherDevicesAt(session: Shared.Session, password: String, keep: String? = null, proof: (Shared.Session, String) -> JSONObject = ::passwordProof): Int =
+        passwordTurn { callAt(session, "/api/auth/devices/others", proof(session, password).apply { keep?.let { put("keep", it.lowercase()) } }, "DELETE").optInt("removed") }
 
     /*
      * Whether a late "removed" answer about `ended` may still clear the phone: only while nobody has
@@ -873,6 +915,34 @@ object Auth {
 
     /* A reply under a session, as it arrived. */
     internal class SessionReply(val status: Int, val text: String, val body: JSONObject)
+
+    /*
+     * An approval's request (ApprovalWire): the body as the core wrote it, under `session` when there is one (a
+     * sign-in's has none), with the step token as `x-step-token` where a read carries it. Whatever came back, any
+     * status; throws only when nothing did.
+     */
+    internal fun plain(origin: String, session: Shared.Session?, method: String, path: String, body: String?, stepToken: String?): ApprovalWire.Reply {
+        val connection = URL(origin + path).openConnection() as HttpURLConnection
+        connection.requestMethod = method
+        if (session != null) connection.setRequestProperty("Cookie", cookie(session))
+        connection.setRequestProperty("Origin", origin)
+        connection.setRequestProperty("HushOS-Client", CLIENT_HEADER)
+        if (stepToken != null) connection.setRequestProperty("x-step-token", stepToken)
+        connection.connectTimeout = 30_000
+        connection.readTimeout = 30_000
+        try {
+            if (body != null) {
+                connection.doOutput = true
+                connection.setRequestProperty("Content-Type", "application/json")
+                connection.outputStream.use { it.write(body.toByteArray()) }
+            }
+            val status = connection.responseCode
+            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+            return ApprovalWire.Reply(status, stream?.bufferedReader()?.use { it.readText() } ?: "")
+        } catch (error: java.io.IOException) {
+            throw AuthUnreachable()
+        }
+    }
 
     /* Sends under `session` and returns whatever came back, any status; throws only when nothing did. */
     internal fun requestAt(session: Shared.Session, path: String, body: JSONObject? = null, method: String? = null): SessionReply {

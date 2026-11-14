@@ -151,8 +151,8 @@ pub fn backup_code_normalize(typed: String) -> Option<String> {
     .then_some(code)
 }
 
-/// One way to answer a step. A method this build does not know (another device, later) is
-/// one it cannot answer, and is left out of a challenge's list.
+/// One way to answer a step. A method this build does not know is one it cannot answer,
+/// and is left out of a challenge's list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum StepMethod {
@@ -164,6 +164,9 @@ pub enum StepMethod {
     Phrase,
     /// A passkey or security key, asked by the platform's own sheet.
     Webauthn,
+    /// Another of the account's devices approves (`device_approval.rs`): this device shows a
+    /// code, and the person types or scans it there.
+    Device,
 }
 
 /// One of the account's keys, as a step or a registration names it: the credential id
@@ -232,10 +235,22 @@ pub struct KeyAssertion {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum StepProof {
-    Totp { code: String },
-    Backup { code: String },
-    Phrase { signature: String },
-    Webauthn { assertion: KeyAssertion },
+    Totp {
+        code: String,
+    },
+    Backup {
+        code: String,
+    },
+    Phrase {
+        signature: String,
+    },
+    Webauthn {
+        assertion: KeyAssertion,
+    },
+    /// The request another device approved (`docs/two-step-design.md` 12).
+    Device {
+        request_id: String,
+    },
 }
 
 /// Why the server refused, for the app to act on (`docs/two-step-design.md` 4). The words
@@ -252,6 +267,9 @@ pub enum StepRefusal {
     /// `step-limited`: the shared budget for codes is spent for now. It covers the
     /// authenticator app and the backup codes together; the phrase, or waiting.
     Limited,
+    /// `step-pending`: the other device has not approved yet. Nothing was counted; the
+    /// same answer is sent again once it has.
+    Pending,
     /// `two-step`: the action needs the step and came without it. A challenge, then the step.
     Required,
     /// `setup-required`: the account has no recovery key yet.
@@ -263,6 +281,22 @@ pub enum StepRefusal {
     /// under different server keys), and the reply names none: the app withdraws only the
     /// one it sent, and keeps the others offered.
     Unavailable,
+    /// `device-unavailable`: no other device could approve this now. Another way.
+    DeviceUnavailable,
+    /// `device-busy`: another sign-in's request is being answered on the other device.
+    DeviceBusy,
+    /// `device-limited`: the other devices were asked too many times today. Another way.
+    DeviceLimited,
+    /// `device-choice`: turning the method on did not say which device is to approve.
+    DeviceChoice,
+    /// `device-mismatch`: what this device revealed is not what it committed to. The request ended.
+    DeviceMismatch,
+    /// `approval-over`: the request an approving device answered is over.
+    ApprovalOver,
+    /// `approval-taken`: another of the account's devices is answering the request.
+    ApprovalTaken,
+    /// `approval-refused`: the approving device's signature did not verify. The request ended.
+    ApprovalRefused,
     /// A 429 without a code: the address's own limit, not the step's. Nothing about the
     /// step was looked at, and it is still there when the limit lets a request through.
     Busy,
@@ -380,6 +414,7 @@ fn challenge_of(value: &Value) -> Option<StepChallenge> {
             Some("backup") => StepMethod::Backup,
             Some("phrase") if phrase.is_some() => StepMethod::Phrase,
             Some("webauthn") if key_request.is_some() => StepMethod::Webauthn,
+            Some("device") => StepMethod::Device,
             _ => continue,
         };
         if !methods.contains(&method) {
@@ -394,6 +429,7 @@ fn challenge_of(value: &Value) -> Option<StepChallenge> {
             StepMethod::Backup => "backup",
             StepMethod::Phrase => "phrase",
             StepMethod::Webauthn => "webauthn",
+            StepMethod::Device => "device",
         });
         first.as_str() != kept
     });
@@ -442,6 +478,15 @@ fn refusal_of(status: u16, body: &str) -> StepReply {
         (Some("step-frozen"), _) => StepRefusal::Frozen,
         (Some("step-limited"), _) => StepRefusal::Limited,
         (Some("step-unavailable"), _) => StepRefusal::Unavailable,
+        (Some("step-pending"), _) => StepRefusal::Pending,
+        (Some("device-unavailable"), _) => StepRefusal::DeviceUnavailable,
+        (Some("device-busy"), _) => StepRefusal::DeviceBusy,
+        (Some("device-limited"), _) => StepRefusal::DeviceLimited,
+        (Some("device-choice"), _) => StepRefusal::DeviceChoice,
+        (Some("device-mismatch"), _) => StepRefusal::DeviceMismatch,
+        (Some("approval-over"), _) => StepRefusal::ApprovalOver,
+        (Some("approval-taken"), _) => StepRefusal::ApprovalTaken,
+        (Some("approval-refused"), _) => StepRefusal::ApprovalRefused,
         (Some("two-step"), _) => StepRefusal::Required,
         (Some("setup-required"), _) => StepRefusal::SetupRequired,
         (Some("update-required"), _) => StepRefusal::UpdateRequired,
@@ -565,6 +610,9 @@ pub fn step_answer_json(token: String, proof: StepProof) -> String {
         StepProof::Phrase { signature } => format!(r#"{{"kind":"phrase","signature":{}}}"#, json!(signature)),
         StepProof::Webauthn { assertion } => {
             format!(r#"{{"kind":"webauthn","response":{}}}"#, assertion_value(&assertion))
+        }
+        StepProof::Device { request_id } => {
+            format!(r#"{{"kind":"device","requestId":{}}}"#, json!(request_id.to_lowercase()))
         }
     };
     format!(r#"{{"token":{},"proof":{proof}}}"#, json!(token))
@@ -944,20 +992,25 @@ pub fn key_added_reply_read(status: u16, body: String) -> KeyAddedReply {
 /// The kinds of method this build names to the server beyond the ones every client answers
 /// (the app's code, a backup code, the phrase), for `twoStepMethods` at sign-in and at a
 /// change (`docs/two-step-design.md` 12). `passkeys`: whether this device can use a passkey or
-/// security key for this server. One that cannot names none, and is never shown one.
+/// security key for this server. `device`: whether it can ask another device, which needs a
+/// device key of its own to commit to. One that cannot names neither, and is never shown one.
 ///
 /// ```
 /// use hushos_core::step_methods_named;
-/// assert_eq!(step_methods_named(true), vec!["webauthn"]);
-/// assert!(step_methods_named(false).is_empty());
+/// assert_eq!(step_methods_named(true, true), vec!["webauthn", "device"]);
+/// assert_eq!(step_methods_named(false, true), vec!["device"]);
+/// assert!(step_methods_named(false, false).is_empty());
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
-pub fn step_methods_named(passkeys: bool) -> Vec<String> {
+pub fn step_methods_named(passkeys: bool, device: bool) -> Vec<String> {
+    let mut named = Vec::new();
     if passkeys {
-        vec!["webauthn".to_string()]
-    } else {
-        Vec::new()
+        named.push("webauthn".to_string());
     }
+    if device {
+        named.push("device".to_string());
+    }
+    named
 }
 
 /// The kinds of method this build can list in settings (`?methods=`), whether or not this
@@ -965,11 +1018,11 @@ pub fn step_methods_named(passkeys: bool) -> Vec<String> {
 ///
 /// ```
 /// use hushos_core::step_methods_shown;
-/// assert_eq!(step_methods_shown(), vec!["webauthn"]);
+/// assert_eq!(step_methods_shown(), vec!["webauthn", "device"]);
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn step_methods_shown() -> Vec<String> {
-    vec!["webauthn".to_string()]
+    vec!["webauthn".to_string(), "device".to_string()]
 }
 
 /// Whether `login/start`'s reply says the server reads `twoStepMethods`. It is sent only to
@@ -1002,6 +1055,660 @@ pub fn step_methods_advertised(login_start_body: String) -> bool {
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn step_methods_refused(status: u16) -> bool {
     status == 422 || status == 400
+}
+
+/* ------------------------------------------------------------------------- */
+/* Approving on another device: the replies                                   */
+/* ------------------------------------------------------------------------- */
+
+/// Where a request to approve stands, as its routes say it (`docs/two-step-design.md` 12).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum ApprovalState {
+    /// Made; no device has opened it yet, so there is no code to show.
+    Waiting,
+    /// One approving device posted its own value: the asking device reveals now.
+    Opened,
+    /// The asking device revealed: both show the code.
+    Revealed,
+    /// Approved: the step can be answered with this request.
+    Approved,
+    /// Over without an approval.
+    Ended,
+}
+
+/// Why a request ended, as the device that made it is told: never who ended it, or how.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum ApprovalEnded {
+    /// A newer request took its place.
+    Replaced,
+    /// Its time ran out.
+    Over,
+    /// The other device did not approve it.
+    Refused,
+}
+
+fn key_shaped(value: &str) -> bool {
+    value.len() == 43 && webauthn_bytes(value)
+}
+
+/* A place as a prompt may show it: a short line with nothing that controls or reorders text. */
+fn place_shaped(value: &str) -> bool {
+    let reorders = |c: char| matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2069}' | '\u{feff}');
+    !value.trim().is_empty()
+        && value.chars().count() <= 200
+        && !value.chars().any(|c| c.is_control() || reorders(c))
+}
+
+fn id_shaped(value: &str) -> bool {
+    value.len() == 36
+        && value.char_indices().all(|(index, character)| match index {
+            8 | 13 | 18 | 23 => character == '-',
+            _ => character.is_ascii_digit() || ('a'..='f').contains(&character),
+        })
+}
+
+/// What the asking device sends to make a request: its commitment, and what it calls
+/// itself for a server that does not know it yet (`kind`: `ios` or `android`).
+/// `approver_device_id` is the device the person chose to approve, when the method is
+/// being turned on: only that device may answer, and the server refuses such a request
+/// without one (`StepRefusal::DeviceChoice`). A sign-in sends none.
+///
+/// ```
+/// use hushos_core::*;
+/// let body = approval_start_json("tok".into(), "Y29tbWl0".into(), "ios".into(), "iPhone 16 Pro".into(), None);
+/// assert_eq!(body, r#"{"stepToken":"tok","commitment":"Y29tbWl0","kind":"ios","name":"iPhone 16 Pro"}"#);
+/// let chosen = approval_start_json("tok".into(), "Y29tbWl0".into(), "ios".into(), "iPhone".into(), Some("7C9E6679-7425-40DE-944B-E07FC1F90AE7".into()));
+/// assert!(chosen.ends_with(r#","approverDeviceId":"7c9e6679-7425-40de-944b-e07fc1f90ae7"}"#));
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn approval_start_json(
+    step_token: String,
+    commitment: String,
+    kind: String,
+    name: String,
+    approver_device_id: Option<String>,
+) -> String {
+    let chosen = approver_device_id
+        .map(|id| format!(r#","approverDeviceId":{}"#, json!(id.to_lowercase())))
+        .unwrap_or_default();
+    format!(
+        r#"{{"stepToken":{},"commitment":{},"kind":{},"name":{}{chosen}}}"#,
+        json!(step_token),
+        json!(commitment),
+        json!(kind),
+        json!(name)
+    )
+}
+
+/// What `POST /api/auth/approvals` answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum ApprovalStartReply {
+    /// The request, the account it is for (a sign-in has not been told it yet, and the
+    /// code covers it) and when it ends with its token.
+    Started {
+        request_id: String,
+        user_id: String,
+        expires_at: String,
+    },
+    Refused {
+        refusal: StepRefusal,
+        message: String,
+    },
+    Lost,
+}
+
+/// Reads `POST /api/auth/approvals`.
+///
+/// ```
+/// use hushos_core::*;
+/// let body = r#"{"requestId":"7c9e6679-7425-40de-944b-e07fc1f90ae7","userId":"0f8fad5b-d9cb-469f-a165-70867728950e","expiresAt":"2026-11-14T10:00:00.000Z"}"#;
+/// assert!(matches!(approval_start_reply_read(200, body.into()), ApprovalStartReply::Started { .. }));
+/// assert_eq!(approval_start_reply_read(200, "{}".into()), ApprovalStartReply::Lost);
+/// assert_eq!(
+///     approval_start_reply_read(429, r#"{"message":"Too many.","code":"device-limited"}"#.into()),
+///     ApprovalStartReply::Refused { refusal: StepRefusal::DeviceLimited, message: "Too many.".into() },
+/// );
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn approval_start_reply_read(status: u16, body: String) -> ApprovalStartReply {
+    if status != 200 {
+        return match refusal_of(status, &body) {
+            StepReply::Refused { refusal, message } => ApprovalStartReply::Refused { refusal, message },
+            _ => ApprovalStartReply::Lost,
+        };
+    }
+    let read = || {
+        let parsed: Value = serde_json::from_str(&body).ok()?;
+        let map = object(&parsed)?;
+        Some(ApprovalStartReply::Started {
+            request_id: text(map, "requestId").filter(|id| id_shaped(id))?.to_string(),
+            user_id: text(map, "userId").filter(|id| id_shaped(id))?.to_string(),
+            expires_at: text(map, "expiresAt").filter(|at| instant_shaped(at))?.to_string(),
+        })
+    };
+    read().unwrap_or(ApprovalStartReply::Lost)
+}
+
+/// What `GET /api/auth/approvals/:id` answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum ApprovalStatusReply {
+    Status {
+        state: ApprovalState,
+        /// The approving device's own value, once one opened the request (base64url).
+        approver_key: Option<String>,
+        /// Why it ended, when `state` is `Ended`.
+        ended: Option<ApprovalEnded>,
+    },
+    Refused {
+        refusal: StepRefusal,
+        message: String,
+    },
+    Lost,
+}
+
+/// Reads `GET /api/auth/approvals/:id`. A state past `Waiting` without the approving
+/// device's value is not the server's answer: the code could not be computed from it.
+///
+/// ```
+/// use hushos_core::*;
+/// let key = "A".repeat(43);
+/// assert_eq!(
+///     approval_status_reply_read(200, format!(r#"{{"state":"opened","approverKey":"{key}"}}"#)),
+///     ApprovalStatusReply::Status { state: ApprovalState::Opened, approver_key: Some(key), ended: None },
+/// );
+/// assert_eq!(
+///     approval_status_reply_read(200, r#"{"state":"ended","ended":"replaced"}"#.into()),
+///     ApprovalStatusReply::Status { state: ApprovalState::Ended, approver_key: None, ended: Some(ApprovalEnded::Replaced) },
+/// );
+/// assert_eq!(approval_status_reply_read(200, r#"{"state":"opened"}"#.into()), ApprovalStatusReply::Lost);
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn approval_status_reply_read(status: u16, body: String) -> ApprovalStatusReply {
+    if status != 200 {
+        return match refusal_of(status, &body) {
+            StepReply::Refused { refusal, message } => ApprovalStatusReply::Refused { refusal, message },
+            _ => ApprovalStatusReply::Lost,
+        };
+    }
+    let read = || {
+        let parsed: Value = serde_json::from_str(&body).ok()?;
+        let map = object(&parsed)?;
+        let state = match text(map, "state")? {
+            "waiting" => ApprovalState::Waiting,
+            "opened" => ApprovalState::Opened,
+            "revealed" => ApprovalState::Revealed,
+            "approved" => ApprovalState::Approved,
+            "ended" => ApprovalState::Ended,
+            _ => return None,
+        };
+        let approver_key = text(map, "approverKey").filter(|key| key_shaped(key)).map(str::to_string);
+        let ended = (state == ApprovalState::Ended).then(|| match text(map, "ended") {
+            Some("replaced") => ApprovalEnded::Replaced,
+            Some("over") => ApprovalEnded::Over,
+            _ => ApprovalEnded::Refused,
+        });
+        let needs_key =
+            matches!(state, ApprovalState::Opened | ApprovalState::Revealed | ApprovalState::Approved);
+        (!needs_key || approver_key.is_some()).then_some(())?;
+        Some(ApprovalStatusReply::Status { state, approver_key: approver_key.filter(|_| needs_key), ended })
+    };
+    read().unwrap_or(ApprovalStatusReply::Lost)
+}
+
+/// What the asking device reveals, once an approving device opened its request.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn approval_reveal_json(step_token: String, device_signing_key: String, nonce: String) -> String {
+    format!(
+        r#"{{"stepToken":{},"deviceSigningKey":{},"nonce":{}}}"#,
+        json!(step_token),
+        json!(device_signing_key),
+        json!(nonce)
+    )
+}
+
+/// A request this device may answer, as its prompt shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ApprovalPrompt {
+    pub id: String,
+    /// `login` for a sign-in, else what the other device is about to change.
+    pub purpose: String,
+    /// `unknown`, `known` or `change`: the budget this device counts the prompt in.
+    pub class: String,
+    /// `web`, `ios` or `android`, when the asking device said.
+    pub device_kind: Option<String>,
+    /// The asking device's name: the server's record of it, or its own words for one the
+    /// server does not know yet. Shown in the app only, never in a notification.
+    pub device_name: Option<String>,
+    /// Roughly where the asking device is, in the server's words ("near Lyon, France"), where
+    /// the server was told. A line of words: one with a control or direction mark is dropped.
+    pub location: Option<String>,
+    /// The name is the asking device's own words: the server does not know it as one of the
+    /// account's devices (a new sign-in). The prompt says so (`approval_asks`). Anything but
+    /// the server's plain `false` reads as true: an unmarked name is not vouched for.
+    pub self_named: bool,
+    /// The asking device chose this device to answer: no other device is shown the request.
+    pub chosen: bool,
+    pub created_at: String,
+    pub expires_at: String,
+    /// What the code and the statement cover (base64url).
+    pub token_digest: String,
+    pub commitment: String,
+    /// This device opened the request, with this value of its own.
+    pub approver_key: Option<String>,
+    /// What the asking device revealed after that: its signing key and its nonce.
+    pub reveal_key: Option<String>,
+    pub reveal_nonce: Option<String>,
+}
+
+/// What `GET /api/auth/approvals` answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum ApprovalsReply {
+    Listed { approvals: Vec<ApprovalPrompt> },
+    Refused { refusal: StepRefusal, message: String },
+    Lost,
+}
+
+/// Reads `GET /api/auth/approvals`: the requests this device may answer. An entry that
+/// is not whole is left out by itself; a reveal with only one of its two values is none.
+///
+/// ```
+/// use hushos_core::*;
+/// let digest = "A".repeat(43);
+/// let body = format!(r#"{{"userId":"u","approvals":[{{"id":"7c9e6679-7425-40de-944b-e07fc1f90ae7","purpose":"login","class":"unknown","device":{{"kind":"web","name":"Chrome on Windows"}},"createdAt":"2026-11-14T10:00:00.000Z","expiresAt":"2026-11-14T10:05:00.000Z","tokenDigest":"{digest}","commitment":"{digest}"}},{{"id":"odd"}}]}}"#);
+/// let ApprovalsReply::Listed { approvals } = approvals_reply_read(200, body) else { panic!("a list") };
+/// assert_eq!(approvals.len(), 1);
+/// assert_eq!(approvals[0].device_name.as_deref(), Some("Chrome on Windows"));
+/// assert_eq!(approvals[0].location, None);
+/// assert_eq!(approvals_reply_read(200, "[]".into()), ApprovalsReply::Lost);
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn approvals_reply_read(status: u16, body: String) -> ApprovalsReply {
+    if status != 200 {
+        return match refusal_of(status, &body) {
+            StepReply::Refused { refusal, message } => ApprovalsReply::Refused { refusal, message },
+            _ => ApprovalsReply::Lost,
+        };
+    }
+    let prompt = |entry: &Value| {
+        let map = object(entry)?;
+        let class = text(map, "class").filter(|class| matches!(*class, "unknown" | "known" | "change"))?;
+        let device = map.get("device").and_then(object);
+        let reveal = map.get("reveal").and_then(object);
+        let reveal_key =
+            reveal.and_then(|reveal| text(reveal, "deviceSigningKey")).filter(|key| key_shaped(key));
+        let reveal_nonce = reveal.and_then(|reveal| text(reveal, "nonce")).filter(|key| key_shaped(key));
+        let revealed = reveal_key.is_some() && reveal_nonce.is_some();
+        Some(ApprovalPrompt {
+            id: text(map, "id").filter(|id| id_shaped(id))?.to_string(),
+            purpose: text(map, "purpose")?.to_string(),
+            class: class.to_string(),
+            device_kind: device
+                .and_then(|device| text(device, "kind"))
+                .filter(|kind| matches!(*kind, "web" | "ios" | "android"))
+                .map(str::to_string),
+            device_name: device.and_then(|device| text(device, "name")).map(str::to_string),
+            location: text(map, "location").filter(|place| place_shaped(place)).map(str::to_string),
+            self_named: map.get("selfNamed") != Some(&Value::Bool(false)),
+            chosen: map.get("chosen") == Some(&Value::Bool(true)),
+            created_at: text(map, "createdAt").filter(|at| instant_shaped(at))?.to_string(),
+            expires_at: text(map, "expiresAt").filter(|at| instant_shaped(at))?.to_string(),
+            token_digest: text(map, "tokenDigest").filter(|key| key_shaped(key))?.to_string(),
+            commitment: text(map, "commitment").filter(|key| key_shaped(key))?.to_string(),
+            approver_key: text(map, "approverKey").filter(|key| key_shaped(key)).map(str::to_string),
+            reveal_key: reveal_key.filter(|_| revealed).map(str::to_string),
+            reveal_nonce: reveal_nonce.filter(|_| revealed).map(str::to_string),
+        })
+    };
+    let read = || {
+        let parsed: Value = serde_json::from_str(&body).ok()?;
+        let listed = object(&parsed)?.get("approvals")?.as_array()?;
+        Some(ApprovalsReply::Listed { approvals: listed.iter().filter_map(prompt).collect() })
+    };
+    read().unwrap_or(ApprovalsReply::Lost)
+}
+
+/// What an approving device's own request (`open`, `approve`, `deny`) or the asking
+/// device's `reveal` answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum ApprovalAckReply {
+    /// Done. `approver_key` after `open`: the value this device opened the request with,
+    /// which is its first one if it opened it before.
+    Done {
+        approver_key: Option<String>,
+    },
+    Refused {
+        refusal: StepRefusal,
+        message: String,
+    },
+    Lost,
+}
+
+/// Reads the reply to `open` (`{ approverKey }`), `reveal` (`{ revealed: true }`),
+/// `approve` (`{ approved: true }`) and `deny` (`{ ended: true }`). Anything else with a
+/// 200 is not the server's answer.
+///
+/// ```
+/// use hushos_core::*;
+/// assert_eq!(approval_ack_reply_read(200, r#"{"approved":true}"#.into()), ApprovalAckReply::Done { approver_key: None });
+/// assert_eq!(approval_ack_reply_read(200, r#"{"approved":false}"#.into()), ApprovalAckReply::Lost);
+/// assert_eq!(approval_ack_reply_read(200, "{}".into()), ApprovalAckReply::Lost);
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn approval_ack_reply_read(status: u16, body: String) -> ApprovalAckReply {
+    if status != 200 {
+        return match refusal_of(status, &body) {
+            StepReply::Refused { refusal, message } => ApprovalAckReply::Refused { refusal, message },
+            _ => ApprovalAckReply::Lost,
+        };
+    }
+    let read = || {
+        let parsed: Value = serde_json::from_str(&body).ok()?;
+        let map = object(&parsed)?;
+        if let Some(key) = text(map, "approverKey").filter(|key| key_shaped(key)) {
+            return Some(ApprovalAckReply::Done { approver_key: Some(key.to_string()) });
+        }
+        ["revealed", "approved", "ended"]
+            .iter()
+            .any(|field| map.get(*field) == Some(&Value::Bool(true)))
+            .then_some(ApprovalAckReply::Done { approver_key: None })
+    };
+    read().unwrap_or(ApprovalAckReply::Lost)
+}
+
+/// What an approving device posts: its own fresh value to open, its signature to
+/// approve, or why it ends the request (`denied`, `wrong-code`, `not-me`, `mismatch`).
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn approval_open_json(ephemeral_key: String) -> String {
+    format!(r#"{{"ephemeralKey":{}}}"#, json!(ephemeral_key))
+}
+
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn approval_approve_json(signature: String) -> String {
+    format!(r#"{{"signature":{}}}"#, json!(signature))
+}
+
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn approval_deny_json(reason: String) -> String {
+    format!(r#"{{"reason":{}}}"#, json!(reason))
+}
+
+/// What turning the method on answered (`POST /api/auth/two-step/device`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum DeviceEnrolmentReply {
+    /// The pending method and the step token its one approval runs from.
+    Started {
+        id: String,
+        token: String,
+        expires_at: String,
+    },
+    Refused {
+        refusal: StepRefusal,
+        message: String,
+    },
+    Lost,
+}
+
+/// Reads `POST /api/auth/two-step/device`.
+///
+/// ```
+/// use hushos_core::*;
+/// let token = "t".repeat(43);
+/// let body = format!(r#"{{"id":"7c9e6679-7425-40de-944b-e07fc1f90ae7","token":"{token}","expiresAt":"2026-11-14T10:00:00.000Z"}}"#);
+/// assert!(matches!(device_enrolment_reply_read(200, body), DeviceEnrolmentReply::Started { .. }));
+/// assert_eq!(device_enrolment_reply_read(200, r#"{"id":"x"}"#.into()), DeviceEnrolmentReply::Lost);
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn device_enrolment_reply_read(status: u16, body: String) -> DeviceEnrolmentReply {
+    if status != 200 {
+        return match refusal_of(status, &body) {
+            StepReply::Refused { refusal, message } => DeviceEnrolmentReply::Refused { refusal, message },
+            _ => DeviceEnrolmentReply::Lost,
+        };
+    }
+    let read = || {
+        let parsed: Value = serde_json::from_str(&body).ok()?;
+        let map = object(&parsed)?;
+        Some(DeviceEnrolmentReply::Started {
+            id: text(map, "id").filter(|id| id_shaped(id))?.to_string(),
+            token: text(map, "token").filter(|token| token_shaped(token))?.to_string(),
+            expires_at: text(map, "expiresAt").filter(|at| instant_shaped(at))?.to_string(),
+        })
+    };
+    read().unwrap_or(DeviceEnrolmentReply::Lost)
+}
+
+/// What the asking device sends to confirm the method, once another device approved: the
+/// request, and the code that device shows, as the person typed it here and
+/// `approval_code_typed` wrote it. The server works the code out again and compares.
+///
+/// ```
+/// use hushos_core::device_confirm_json;
+/// assert_eq!(
+///     device_confirm_json("tok".into(), "7C9E6679-7425-40DE-944B-E07FC1F90AE7".into(), "07 river".into()),
+///     r#"{"token":"tok","requestId":"7c9e6679-7425-40de-944b-e07fc1f90ae7","code":"07 river"}"#
+/// );
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn device_confirm_json(token: String, request_id: String, code: String) -> String {
+    format!(
+        r#"{{"token":{},"requestId":{},"code":{}}}"#,
+        json!(token),
+        json!(request_id.to_lowercase()),
+        json!(code)
+    )
+}
+
+/// What confirming the method answered (`POST /api/auth/two-step/device/:id/confirm`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum DeviceConfirmedReply {
+    /// This turned the step on: the backup codes, shown once.
+    TurnedOn {
+        backup_codes: Vec<String>,
+    },
+    /// The method was added beside the account's others.
+    Added,
+    /// `StepRefusal::Pending` until another device approved: nothing changed.
+    Refused {
+        refusal: StepRefusal,
+        message: String,
+    },
+    Lost,
+}
+
+/// Reads `POST /api/auth/two-step/device/:id/confirm`: exactly `{ backupCodes }` or
+/// `{ added: true }`, and nothing else with a 200 is a confirmation.
+///
+/// ```
+/// use hushos_core::*;
+/// assert_eq!(device_confirmed_reply_read(200, r#"{"added":true}"#.into()), DeviceConfirmedReply::Added);
+/// assert_eq!(
+///     device_confirmed_reply_read(200, r#"{"backupCodes":["7KQ2M-9XD4P"]}"#.into()),
+///     DeviceConfirmedReply::TurnedOn { backup_codes: vec!["7KQ2M-9XD4P".into()] },
+/// );
+/// assert_eq!(device_confirmed_reply_read(200, r#"{"error":"proxy"}"#.into()), DeviceConfirmedReply::Lost);
+/// assert_eq!(
+///     device_confirmed_reply_read(409, r#"{"message":"Waiting for your other device.","code":"step-pending"}"#.into()),
+///     DeviceConfirmedReply::Refused { refusal: StepRefusal::Pending, message: "Waiting for your other device.".into() },
+/// );
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn device_confirmed_reply_read(status: u16, body: String) -> DeviceConfirmedReply {
+    if status != 200 {
+        return match refusal_of(status, &body) {
+            StepReply::Refused { refusal, message } => DeviceConfirmedReply::Refused { refusal, message },
+            _ => DeviceConfirmedReply::Lost,
+        };
+    }
+    let read = || {
+        let parsed: Value = serde_json::from_str(&body).ok()?;
+        let map = object(&parsed)?;
+        (map.len() == 1).then_some(())?;
+        if map.get("added") == Some(&Value::Bool(true)) {
+            return Some(DeviceConfirmedReply::Added);
+        }
+        let codes: Vec<String> = map
+            .get("backupCodes")?
+            .as_array()?
+            .iter()
+            .map(|code| code.as_str().filter(|code| !code.is_empty()).map(str::to_string))
+            .collect::<Option<_>>()?;
+        (!codes.is_empty()).then_some(DeviceConfirmedReply::TurnedOn { backup_codes: codes })
+    };
+    read().unwrap_or(DeviceConfirmedReply::Lost)
+}
+
+/// What an approving device's prompt says is asked, by which device and roughly from
+/// where: "Change your password on Maya’s iPhone", "Sign-in on a new device calling itself
+/// “Chrome on Windows”, near Lyon, France". The web says the same
+/// (`apps/web/src/lib/approvals.ts`).
+/// - `self_named` (`ApprovalPrompt.self_named`): the name is the asking device's own words,
+///   not the account's record of one of its devices. The prompt then says "a new device
+///   calling itself “…”", so nobody reads a stranger's chosen words as their own laptop.
+/// - A device that gave no name is "a new device".
+/// - A purpose from a later release is "A change to your account".
+/// - The place is there only where the server was told one (`ApprovalPrompt.location`).
+///
+/// ```
+/// use hushos_core::approval_asks;
+/// assert_eq!(approval_asks("password".into(), Some("Maya’s iPhone".into()), false, None), "Change your password on Maya’s iPhone");
+/// assert_eq!(
+///     approval_asks("login".into(), Some("Chrome on Windows".into()), true, Some("near Lyon, France".into())),
+///     "Sign-in on a new device calling itself “Chrome on Windows”, near Lyon, France"
+/// );
+/// assert_eq!(approval_asks("login".into(), None, true, Some("  ".into())), "Sign-in on a new device");
+/// assert_eq!(approval_asks("later".into(), Some("Pixel 9".into()), false, None), "A change to your account on Pixel 9");
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn approval_asks(
+    purpose: String,
+    device_name: Option<String>,
+    self_named: bool,
+    location: Option<String>,
+) -> String {
+    let what = match purpose.as_str() {
+        "login" => "Sign-in",
+        "password" => "Change your password",
+        "master-key" => "Rotate your account key",
+        "recovery-key" => "Make a new recovery phrase",
+        "delete" => "Delete your account",
+        "two-step" => "Change two-step sign-in",
+        "device-approval" => "Turn on Approve on another device",
+        _ => "A change to your account",
+    };
+    let name = device_name.map(|name| name.trim().to_string()).filter(|name| !name.is_empty());
+    let device = match name {
+        Some(name) if self_named => format!("a new device calling itself “{name}”"),
+        Some(name) => name,
+        None => "a new device".to_string(),
+    };
+    let asks = format!("{what} on {device}");
+    match location.map(|place| place.trim().to_string()).filter(|place| place_shaped(place)) {
+        Some(place) => format!("{asks}, {place}"),
+        None => asks,
+    }
+}
+
+#[cfg(test)]
+mod device_tests {
+    use super::*;
+
+    #[test]
+    fn a_prompt_shows_a_place_only_when_it_is_a_plain_line_of_words() {
+        let digest = "A".repeat(43);
+        let listed = |location: &str| {
+            let body = format!(
+                r#"{{"userId":"u","approvals":[{{"id":"7c9e6679-7425-40de-944b-e07fc1f90ae7","purpose":"login","class":"unknown","device":{{"kind":"web","name":"Chrome on Windows"}},"location":{location},"createdAt":"2026-11-14T10:00:00.000Z","expiresAt":"2026-11-14T10:05:00.000Z","tokenDigest":"{digest}","commitment":"{digest}"}}]}}"#
+            );
+            match approvals_reply_read(200, body) {
+                ApprovalsReply::Listed { approvals } => approvals[0].location.clone(),
+                other => panic!("expected a list, got {other:?}"),
+            }
+        };
+        assert_eq!(listed(r#""near São Paulo, Brazil""#).as_deref(), Some("near São Paulo, Brazil"));
+        assert_eq!(listed("null"), None);
+        // A direction mark or a line break would let a header rewrite the prompt.
+        assert_eq!(listed(r#""near Lyon\u202e, France""#), None);
+        assert_eq!(listed(r#""near Lyon\nApprove now""#), None);
+        assert_eq!(listed("42"), None);
+        // The request is still listed without its place, and the words say so by saying nothing.
+        assert_eq!(
+            approval_asks(
+                "login".into(),
+                Some("Chrome on Windows".into()),
+                false,
+                Some("near Lyon\u{202e}".into())
+            ),
+            "Sign-in on Chrome on Windows"
+        );
+    }
+
+    #[test]
+    fn a_name_the_server_does_not_vouch_for_is_shown_as_the_devices_own_words() {
+        let digest = "A".repeat(43);
+        let listed = |marks: &str| {
+            let body = format!(
+                r#"{{"userId":"u","approvals":[{{"id":"7c9e6679-7425-40de-944b-e07fc1f90ae7","purpose":"login","class":"unknown","device":{{"kind":"web","name":"Maya’s Laptop"}},{marks}"createdAt":"2026-11-14T10:00:00.000Z","expiresAt":"2026-11-14T10:05:00.000Z","tokenDigest":"{digest}","commitment":"{digest}"}}]}}"#
+            );
+            match approvals_reply_read(200, body) {
+                ApprovalsReply::Listed { approvals } => approvals[0].clone(),
+                other => panic!("expected a list, got {other:?}"),
+            }
+        };
+        let words = |prompt: &ApprovalPrompt| {
+            approval_asks(prompt.purpose.clone(), prompt.device_name.clone(), prompt.self_named, None)
+        };
+        // A stranger with the password calls their browser by the owner's laptop's name.
+        let stranger = listed(r#""selfNamed":true,"chosen":false,"#);
+        assert_eq!(words(&stranger), "Sign-in on a new device calling itself “Maya’s Laptop”");
+        // Only the server's plain word that it knows the device shows the bare name.
+        assert_eq!(words(&listed(r#""selfNamed":false,"chosen":true,"#)), "Sign-in on Maya’s Laptop");
+        assert!(listed(r#""selfNamed":false,"chosen":true,"#).chosen);
+        // A reply that does not say (an older server) is not read as a known device.
+        assert!(listed("").self_named && !listed("").chosen);
+        assert!(listed(r#""selfNamed":"false","#).self_named);
+    }
+
+    #[test]
+    fn a_device_answer_names_its_request_and_a_pending_one_is_not_a_wrong_answer() {
+        assert_eq!(
+            step_answer_json(
+                "tok".into(),
+                StepProof::Device { request_id: "7C9E6679-7425-40DE-944B-E07FC1F90AE7".into() }
+            ),
+            r#"{"token":"tok","proof":{"kind":"device","requestId":"7c9e6679-7425-40de-944b-e07fc1f90ae7"}}"#
+        );
+        // The other device has not answered yet: the app waits and sends the same answer again.
+        assert_eq!(
+            sign_in_reply_read(
+                409,
+                r#"{"message":"Waiting for your other device.","code":"step-pending"}"#.into()
+            ),
+            StepReply::Refused {
+                refusal: StepRefusal::Pending,
+                message: "Waiting for your other device.".into()
+            },
+        );
+        // A 409 without that code is not a reason to keep waiting.
+        assert_eq!(
+            sign_in_reply_read(
+                409,
+                r#"{"message":"Update HushOS to sign in.","code":"update-required"}"#.into()
+            ),
+            StepReply::Refused {
+                refusal: StepRefusal::UpdateRequired,
+                message: "Update HushOS to sign in.".into()
+            },
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1179,9 +1886,15 @@ mod tests {
             whole.phrase,
             Some(StepPhrase { user_id: USER.into(), recovery_version: 3, wrapping_salt: "c2FsdA".into() })
         );
-        // Another device (later) is skipped, and the server's order is kept for the rest.
+        // Another device answers with nothing the reply carries, and keeps the server's order.
+        let mut device = step_body();
+        device["methods"] = json!(["device", "phrase", "totp"]);
+        let device = read(device);
+        assert_eq!(device.methods, vec![StepMethod::Device, StepMethod::Phrase, StepMethod::Totp]);
+        assert!(!device.default_unavailable);
+        // A way this build does not know is skipped, and the server's order is kept for the rest.
         let mut later = step_body();
-        later["methods"] = json!(["device", "phrase", "totp"]);
+        later["methods"] = json!(["a-way-from-later", "phrase", "totp"]);
         let later = read(later);
         assert_eq!(later.methods, vec![StepMethod::Phrase, StepMethod::Totp]);
         // What the server put first is not on offer here: the app says its one line.
@@ -1197,7 +1910,7 @@ mod tests {
         }
         // Nothing this build can answer with is still the server's step: the app says to update.
         let mut keys_only = step_body();
-        keys_only["methods"] = json!(["device"]);
+        keys_only["methods"] = json!(["a-way-from-later"]);
         assert!(read(keys_only).methods.is_empty());
     }
 

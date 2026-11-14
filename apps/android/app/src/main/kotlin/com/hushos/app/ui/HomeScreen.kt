@@ -156,6 +156,8 @@ fun HomeScreen(model: DriveViewModel, state: DriveState, screen: String, go: (St
             }
             // Above the list, not in it: an item added over the first row would land out of view.
             if (state.unreachable) OfflineCapsule()
+            // Another device is asking this one to confirm it's you: said first, with the way to answer.
+            ApprovalBanner(model.approvals)
             PullToRefreshBox(isRefreshing = loading && state.recents.isNotEmpty(), onRefresh = { model.refreshRecents(pulled = true); model.refreshAccess() }, modifier = Modifier.weight(1f)) {
                 LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 88.dp + LocalFootBars.current)) {
                     if (firstRun) {

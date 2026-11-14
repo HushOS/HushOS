@@ -21,6 +21,7 @@ private extension StepMethod {
         case .backup: "Backup code"
         case .phrase: "Recovery phrase"
         case .webauthn: "Passkey or security key"
+        case .device: "Another device"
         }
     }
 
@@ -30,6 +31,7 @@ private extension StepMethod {
         case .backup: "Use a backup code"
         case .phrase: "Use your recovery phrase"
         case .webauthn: "Use your passkey or security key"
+        case .device: "Use another device"
         }
     }
 
@@ -39,6 +41,8 @@ private extension StepMethod {
         case .backup: "One of the ten codes you saved. Each works once."
         case .phrase: "All 24 words, in order. They stay on this device."
         case .webauthn: "Your phone asks for it when you continue."
+        // Nothing is typed: the request's own panel says what to do (DeviceAskView).
+        case .device: ""
         }
     }
 }
@@ -86,8 +90,8 @@ struct StepField: View {
                 // The field the recovery screens type the phrase in (PhraseEntry): no predictions, spelling, smart
                 // punctuation or Writing Tools, so the keyboard neither learns the words nor offers them elsewhere.
                 PhraseEntry(text: $draft.phrase).frame(minHeight: 112)
-            case .webauthn:
-                // Nothing to type: the step's own button asks the key.
+            case .webauthn, .device:
+                // Nothing to type: the step's own button asks the key, or the other device.
                 EmptyView()
             }
         }
@@ -134,11 +138,18 @@ struct StepUpSections: View {
                     if method == .webauthn {
                         // No field: the form's own button asks the key when it is pressed.
                         StepNote(method: method, draft: step.step.draft, problem: step.step.problem).alpineRow()
+                    } else if method == .device {
+                        // No field either: the other device is asked on a press, and the form's own button sends the change once it approved.
+                        if step.asking.idle && !step.step.deviceApproved {
+                            Button(method.other) { step.askDevice() }.foregroundStyle(Alpine.primary).disabled(disabled).alpineRow()
+                        } else {
+                            DeviceAskView(model: step.asking, inlineAgain: true) { step.askDevice() }.disabled(disabled).alpineRow()
+                        }
                     } else {
                         StepField(method: method, draft: Binding(get: { step.step.draft }, set: { step.step.draft = $0; step.step.typed() }))
                             .disabled(disabled).alpineRow()
                     }
-                    OtherWays(others: step.step.others) { step.step.choose($0) }
+                    OtherWays(others: step.step.others) { step.choose($0) }
                         .disabled(disabled).alpineRow()
                 } header: {
                     VStack(alignment: .leading, spacing: Alpine.Space.s2) {
@@ -152,7 +163,12 @@ struct StepUpSections: View {
                     }
                     .padding(.top, Alpine.Space.s2)
                 } footer: {
-                    if method != .webauthn { StepNote(method: method, draft: step.step.draft, problem: step.step.problem) }
+                    if method == .device {
+                        // Only what the server said of the request, or why it could not be made.
+                        if !step.step.problem.isEmpty { Text(step.step.problem).foregroundStyle(Alpine.danger) }
+                    } else if method != .webauthn {
+                        StepNote(method: method, draft: step.step.draft, problem: step.step.problem)
+                    }
                 }
             } else {
                 Section { Text(step.step.nothingLeft).foregroundStyle(Alpine.danger).alpineRow() }
@@ -169,17 +185,65 @@ struct StepUpSections: View {
 @MainActor
 final class StepUpModel {
     var step: StepUp
+    /* The request to another device, when that is how this step is answered (DeviceApproval.swift). */
+    let asking = DeviceAskModel()
 
     init(_ purpose: StepPurpose) { step = StepUp(purpose: purpose) }
 
     /* The form opened: an account with the step sees its fields from the start. Quiet when that can't be told; the change's own refusal asks then. */
     func prepare() async {
         guard !step.asked, let status = try? await TwoStep.status(), status.on else { return }
-        if let challenge = try? await TwoStep.challenge(step.purpose) { step.take(challenge, passkeys: Passkeys.usableNow) }
+        if let challenge = try? await TwoStep.challenge(step.purpose) { take(challenge) }
     }
 
-    /* What the change is about to carry, decided on the press; a passkey or security key is not asked yet. */
-    func prove() throws -> StepSending? { try step.prove() }
+    /* A step to answer: a request made for the one before it is let go, and another device is offered only with a key to ask it with. */
+    private func take(_ challenge: StepChallenge?, keep: Bool = false) {
+        asking.stop()
+        step.take(challenge, keep: keep, passkeys: Passkeys.usableNow, device: DeviceApprovals.ownKey != nil)
+    }
+
+    /* Use another way. Choosing another device is the press that asks it; choosing anything else lets a request go. */
+    func choose(_ method: StepMethod) {
+        step.choose(method)
+        if method == .device { askDevice() } else { asking.stop() }
+    }
+
+    /*
+     * Asks another device to approve this step, with this iPhone's own device key. Only from a
+     * press: opening a form never sends a prompt. Once it approved, the form's own button sends
+     * the change with that request.
+     */
+    func askDevice() {
+        guard let challenge = step.challenge, step.shown == .device, let wire = ApprovalWire.current, let key = DeviceApprovals.ownKey else { return }
+        let token = challenge.token
+        step.typed()
+        asking.begin(
+            .init(wire: wire, token: token, purpose: step.purpose.rawValue, key: key),
+            approved: { [weak self] answer, _ in
+                if case .device(let requestId) = answer.proof { self?.step.approved(ApprovedRequest(token: token, requestId: requestId)) }
+            },
+            failed: { [weak self] error in
+                Task { @MainActor in
+                    // Could not be asked: the server's words beside the step, with the other ways still there.
+                    guard let self, let words = await self.failed(error) else { return }
+                    self.step.say(words)
+                }
+            }
+        )
+    }
+
+    /*
+     * What the change is about to carry, decided on the press; a passkey or security key is not
+     * asked yet. With another device as the way, there is nothing to carry until it approved: the
+     * press asks it, if nothing has yet, and the change waits.
+     */
+    func prove() throws -> StepSending? {
+        if step.asked, step.shown == .device, !step.deviceApproved {
+            if asking.idle { askDevice() }
+            throw StepUp.Unready()
+        }
+        return try step.prove()
+    }
 
     /*
      * The step's answer, as the change goes out. A passkey or security key is asked here, by the
@@ -196,10 +260,15 @@ final class StepUpModel {
         case .notStep:
             return ErrorWords.say(error)
         case .again:
+            // The request the change carried is no longer its answer. `step-pending`: the approval had not landed, and
+            // the wait goes on. Anything else ended the request: it can be asked again.
+            if asking.phase == .approved, !step.deviceApproved {
+                if case StepError.refused(.pending, _) = error { asking.resume() } else { asking.stop() }
+            }
             return nil
         case .renew:
             do {
-                step.take(try await TwoStep.challenge(step.purpose), keep: true, passkeys: Passkeys.usableNow)
+                take(try await TwoStep.challenge(step.purpose), keep: true)
                 return nil
             } catch {
                 return ErrorWords.say(error)
@@ -223,10 +292,12 @@ struct SignInStepView: View {
     let pending: PendingSignIn
     @State private var step: SignInStep
     @State private var busy = false
+    /* The request to another device, while that is the way on screen. */
+    @State private var asking = DeviceAskModel()
 
     init(pending: PendingSignIn) {
         self.pending = pending
-        _step = State(initialValue: SignInStep(challenge: pending.challenge, passkeys: Passkeys.usable(for: pending.origin)))
+        _step = State(initialValue: SignInStep(challenge: pending.challenge, passkeys: Passkeys.usable(for: pending.origin), device: pending.deviceKey != nil))
     }
 
     var body: some View {
@@ -255,18 +326,27 @@ struct SignInStepView: View {
                     if let method = step.shown {
                         VStack(alignment: .leading, spacing: Alpine.Space.s2) {
                             FieldLabel(method.label).padding(.horizontal, Alpine.Space.s4)
-                            // A passkey or security key has no field: the button below asks it.
-                            if method != .webauthn {
-                                StepField(method: method, draft: $step.draft, submit: submit, focus: true)
-                                    .disabled(busy)
-                                    .padding(.horizontal, Alpine.Space.s4).padding(.vertical, Alpine.Space.s3)
-                                    .frame(minHeight: 52)
-                                    .background(Alpine.surface, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-                                    .alpineCardEdge(RoundedRectangle(cornerRadius: 26, style: .continuous))
+                            if method == .device {
+                                // Nothing is typed here: the other device's QR code, then the code to type there.
+                                DeviceAskView(model: asking, inlineAgain: false) { askDevice() }
+                                    .padding(.horizontal, Alpine.Space.s4).padding(.vertical, Alpine.Space.s2)
+                                if !step.fieldError.isEmpty {
+                                    Text(step.fieldError).font(Theme.Text.footnote).foregroundStyle(Alpine.danger).padding(.horizontal, Alpine.Space.s4)
+                                }
+                            } else {
+                                // A passkey or security key has no field: the button below asks it.
+                                if method != .webauthn {
+                                    StepField(method: method, draft: $step.draft, submit: submit, focus: true)
+                                        .disabled(busy)
+                                        .padding(.horizontal, Alpine.Space.s4).padding(.vertical, Alpine.Space.s3)
+                                        .frame(minHeight: 52)
+                                        .background(Alpine.surface, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+                                        .alpineCardEdge(RoundedRectangle(cornerRadius: 26, style: .continuous))
+                                }
+                                StepNote(method: method, draft: step.draft, problem: step.fieldError).padding(.horizontal, Alpine.Space.s4)
                             }
-                            StepNote(method: method, draft: step.draft, problem: step.fieldError).padding(.horizontal, Alpine.Space.s4)
                         }
-                        OtherWays(others: step.others) { step.choose($0) }
+                        OtherWays(others: step.others) { choose($0) }
                             .font(Theme.Text.callout.weight(.semibold))
                             .frame(minHeight: Theme.control).disabled(busy)
                             .padding(.horizontal, Alpine.Space.s4)
@@ -286,7 +366,7 @@ struct SignInStepView: View {
                         Text(action).font(.body.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 52)
                     }
                     .buttonStyle(PrimaryCapsuleStyle())
-                    .disabled(busy)
+                    .disabled(busy || (step.shown == .device && step.lost == nil && asking.out))
                 }
                 Button("Start again") { model.cancelStep() }
                     .font(.body.weight(.semibold)).foregroundStyle(Alpine.primary).frame(minHeight: Theme.control)
@@ -298,16 +378,59 @@ struct SignInStepView: View {
         .navigationTitle("One more step")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(busy)
+        // Left (answered, started again, timed out): nothing goes on asking behind a screen that is gone.
+        .onDisappear { asking.stop() }
     }
 
-    /* The one button: it sends what was typed, or asks the key. */
+    /* The one button: it sends what was typed, or asks the key or the other device. */
     private var action: String {
         if busy { return "Checking" }
         if step.lost != nil { return "Try again" }
-        return step.shown == .webauthn ? "Use your passkey" : "Continue"
+        switch step.shown {
+        case .webauthn: return "Use your passkey"
+        case .device:
+            if case .ended = asking.phase { return StepWords.askAgain }
+            return asking.idle ? StepMethod.device.other : StepWords.askWaiting
+        default: return "Continue"
+        }
+    }
+
+    /* Use another way. Choosing another device is the press that asks it; choosing anything else lets a request go. */
+    private func choose(_ method: StepMethod) {
+        step.choose(method)
+        if method == .device { askDevice() } else { asking.stop() }
+    }
+
+    /*
+     * Asks another device, with the key this sign-in holds for it (the phone's own, or the one made
+     * for this sign-in). Only from a press. Once approved the step is answered with the request,
+     * and the app is signed in; a request that ended stays on screen with Ask again.
+     */
+    private func askDevice() {
+        guard !busy, step.shown == .device, let key = pending.deviceKey else { return }
+        step.asking()
+        asking.begin(
+            .init(wire: .signIn(origin: pending.origin), token: pending.challenge.token, purpose: "login", key: key.publicKey),
+            approved: { answer, _ in
+                busy = true
+                defer { busy = false }
+                try await model.answerStep(.ready(answer))
+            },
+            failed: { error in
+                // Could not be asked (the server's words, and the other ways), or the answer's reply was lost (the same one goes again).
+                if let over = step.failed(error, tried: .device, answer: asking.answer) {
+                    model.cancelStep(over, token: pending.challenge.token)
+                }
+            }
+        )
     }
 
     private func submit() {
+        // Another device is asked, or asked again, from here; a lost reply to its answer goes the usual road below.
+        if step.shown == .device, step.lost == nil {
+            askDevice()
+            return
+        }
         // The press decides what goes. For a passkey or security key the system's sheet opens from here, and only from here.
         guard !busy, let sending = step.press() else { return }
         busy = true
@@ -341,10 +464,13 @@ struct TwoStepView: View {
     @State private var passkeys = false
     /* The default is being moved: one change at a time. */
     @State private var moving = false
+    /* Whether this iPhone holds the account's device key: it asks another device with it. */
+    @State private var ownKey = false
 
     enum Open: Identifiable {
         case app(AuthenticatorSheet.Mode)
         case key(first: Bool)
+        case device(first: Bool)
         case rename(TwoStepStatus.Method)
         case remove(TwoStepStatus.Method, last: Bool)
         case codes
@@ -353,6 +479,7 @@ struct TwoStepView: View {
             switch self {
             case .app(let mode): "app-\(mode.rawValue)"
             case .key: "key"
+            case .device: "device"
             case .rename(let method): "rename-\(method.id)"
             case .remove(let method, _): "remove-\(method.id)"
             case .codes: "codes"
@@ -379,6 +506,7 @@ struct TwoStepView: View {
                 }
                 keys(status)
                 app(status)
+                device(status)
                 if status.on {
                     Section {
                         Text(status.codesLeft).fontWeight(status.codesLow ? .semibold : .regular)
@@ -403,6 +531,8 @@ struct TwoStepView: View {
                 AuthenticatorSheet(mode: mode, email: model.user?.email ?? "") { said in finish(said) }
             case .key(let first):
                 KeySheet(first: first, email: model.user?.email ?? "") { said in finish(said) }
+            case .device(let first):
+                DeviceMethodSheet(first: first, approvers: status?.approvers ?? [], email: model.user?.email ?? "") { said in finish(said) }
             case .rename(let method):
                 RenameKeySheet(method: method) { said in finish(said) }
             case .remove(let method, let last):
@@ -501,6 +631,29 @@ struct TwoStepView: View {
         }
     }
 
+    /*
+     * Approve on another device: what it is now (On, Off, or that it needs a device this account
+     * has none of signed in), then Turn on or Turn off, and Make default. Only on a server that
+     * knows the method. Turning it off is removing it, as for any other method.
+     */
+    @ViewBuilder private func device(_ status: TwoStepStatus) -> some View {
+        if status.showsDevice {
+            Section {
+                Text(status.deviceValue).foregroundStyle(Alpine.inkMuted).alpineRow()
+                if let device = status.device {
+                    Button("Turn off", role: .destructive) { open = .remove(device, last: status.removesLast) }
+                        .foregroundStyle(Alpine.danger).alpineRow().accessibilityLabel("Turn off \(StepKind.device.words)")
+                } else if status.canTurnOnDevice(ownKey: ownKey) {
+                    Button("Turn on") { open = .device(first: !status.on) }
+                        .foregroundStyle(Alpine.primary).alpineRow().accessibilityLabel("Turn on \(StepKind.device.words)")
+                }
+                makeDefault(.device, status)
+            } header: {
+                kindTitle(.device, status)
+            }
+        }
+    }
+
     @ViewBuilder private var activity: some View {
         if !events.isEmpty {
             Section {
@@ -522,7 +675,7 @@ struct TwoStepView: View {
     }
 
     /* "13 Nov", and the minute as the emails carry it: "13 Nov, 14:08". */
-    private static func day(_ date: Date) -> String { date.formatted(Date.FormatStyle().day().month(.abbreviated).locale(.dayMonth)) }
+    fileprivate static func day(_ date: Date) -> String { date.formatted(Date.FormatStyle().day().month(.abbreviated).locale(.dayMonth)) }
     private static func when(_ date: Date) -> String { "\(day(date)), \(date.formatted(date: .omitted, time: .shortened))" }
 
     private func finish(_ said: String) {
@@ -551,6 +704,7 @@ struct TwoStepView: View {
         do {
             let next = try await TwoStep.status()
             passkeys = Passkeys.usableNow
+            ownKey = DeviceApprovals.ownKey != nil
             status = next
             problem = ""
             loaded = true
@@ -611,24 +765,26 @@ private extension View {
     }
 }
 
-/* The offer to remove the other devices when the step is turned on, as the authenticator app's and a key's setup both make it. */
+/* The offer to remove the other devices when the step is turned on, as every method's setup makes it. */
 private struct RemoveOthersOffer: View {
     @Binding var ticked: Bool
     /* How many other devices are signed in, for the words only: nil until the list answers, or when it doesn't. */
     let others: Int?
     let disabled: Bool
+    /* Approve on another device: the device that approves stays signed in, because it is the method. */
+    var keepsApprover = false
 
     var body: some View {
         Section {
             Toggle("Remove my other devices", isOn: $ticked).tint(Alpine.primary).disabled(disabled).alpineRow()
         } footer: {
-            Text(TotpEnrolment.othersLine(others))
+            Text(keepsApprover ? StepWords.othersButApprover : TotpEnrolment.othersLine(others))
         }
     }
 }
 
 /* The removal of other devices, which runs behind the backup codes and never holds them or their sheet. */
-private enum RemovingOthers { case no, running, failed }
+private typealias RemovingOthers = DeviceSetup.Removing
 
 /* The backup codes a first method came with: shown once, with how the removal of the other devices behind them is going. */
 private struct TurnedOnCodes: View {
@@ -944,20 +1100,25 @@ struct RemoveMethodSheet: View {
     @State private var error = ""
 
     private var app: Bool { method.kind == "totp" }
+    /* Approve on another device: turned off, never "removed", whether or not it is the last method. */
+    private var device: Bool { method.kind == "device" }
 
     private var title: String {
         if last { return "Turn off two-step sign-in?" }
+        if device { return "Turn off \(StepKind.device.words)?" }
         return app ? "Remove your authenticator app?" : "Remove this passkey or security key?"
     }
 
     private var intro: String {
         if last { return "Your password alone will sign you in, and your backup codes will stop working." }
+        // The title says it all.
+        if device { return "" }
         if app { return "Its codes will stop working for sign-in." }
         return "\(method.name.flatMap { $0.isEmpty ? nil : $0 } ?? "This key") will stop working for sign-in."
     }
 
     private var action: String {
-        if last { return pending ? "Turning off" : "Turn off" }
+        if last || device { return pending ? "Turning off" : "Turn off" }
         return pending ? "Removing" : "Remove"
     }
 
@@ -1163,6 +1324,234 @@ struct KeySheet: View {
                 if let words = ErrorWords.say(error) { self.error = words }
             }
             pending = false
+        }
+    }
+}
+
+/*
+ * Turning on Approve on another device: which of the account's devices is to approve, the password
+ * (and the step, once it is on), then one real approval from that device and the code it then
+ * shows, typed here. The account's first method turns the step on: its backup codes follow, and
+ * the other devices are offered for removal, all but this one and the one that approved.
+ *
+ * The list alone proves nothing: a device's name and kind are its own words, and someone with the
+ * password can sign in as "Maya’s iPhone". So none is ever chosen for the person, this iPhone
+ * shows no code and no QR code for the request, and the approval is not enough: the device that
+ * approved shows a code, and it is typed here. A device they are not holding shows nothing to type.
+ *
+ * What may be sent when, and when the sheet may close, is HushOSKit's `DeviceSetup`: nothing goes
+ * out with no device chosen, nothing on the approval alone, nothing with a code that is not the
+ * request's, and nothing closes the sheet over a confirmation that is out.
+ */
+struct DeviceMethodSheet: View {
+    let email: String
+    let done: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var step = StepUpModel(.twoStep)
+    @State private var setup: DeviceSetup
+    @State private var password = ""
+    @State private var tried = false
+    @State private var pending = false
+    @State private var error = ""
+    @State private var asking = DeviceAskModel()
+    /* The code the approving device shows, as it is typed here. */
+    @State private var code = ""
+    /* The typed code is being checked, here and then by the server. */
+    @State private var checking = false
+
+    /* `first`: the account has no method yet, so this turns the step on. `approvers`: the devices that could approve, as the settings listed them. */
+    init(first: Bool, approvers: [TwoStepStatus.Approver], email: String, done: @escaping (String) -> Void) {
+        self.email = email
+        self.done = done
+        _setup = State(initialValue: DeviceSetup(first: first, approvers: approvers))
+    }
+
+    /* The chosen device is being asked, or its approval confirmed. */
+    private var asked: Bool { setup.started != nil || setup.confirming }
+
+    private var title: String {
+        if setup.codes != nil { return "Save your backup codes" }
+        if asked, let chosen = setup.chosen { return StepWords.approveOn(chosen.shownName) }
+        return "Turn on \(StepKind.device.words)?"
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                if let codes = setup.codes {
+                    TurnedOnCodes(codes: codes, email: email, removing: setup.removing) {
+                        setup.done()
+                        done("")
+                        dismiss()
+                    }
+                } else if asked, setup.awaitsCode || setup.confirming {
+                    // That device approved: it now shows the code, and it is typed here. Nothing was sent on the approval.
+                    ApprovalCodeField(label: StepWords.codeOn(setup.chosen?.shownName ?? ""), typed: $code, disabled: checking) { error = "" }
+                    FormProblem(text: error)
+                    primaryRow(checking ? "Checking" : setup.first ? StepWords.turnOn : StepWords.add, disabled: checking || approvalCodeNormalize(typed: code) == nil) { confirm() }
+                } else if asked, asking.idle {
+                    // The code typed was not that device's: its request was dropped here, and nothing was sent.
+                    FormProblem(text: error)
+                    primaryRow(StepWords.askAgain, disabled: false) { ask() }
+                } else if asked {
+                    // No code and no QR code here, at any point: the code is the other device's to show.
+                    Section { DeviceAskView(model: asking, inlineAgain: true, approver: setup.chosen?.shownName ?? "") { ask() }.alpineRow() }
+                    FormProblem(text: error)
+                } else {
+                    approverChoice
+                    ConfirmPassword(password: $password, tried: tried)
+                    StepUpSections(step: step, disabled: pending)
+                    // Offered, ticked, whenever this turns the step on, as the authenticator app's setup offers it.
+                    if setup.first { RemoveOthersOffer(ticked: $setup.removeOthers, others: nil, disabled: pending, keepsApprover: true) }
+                    FormProblem(text: error)
+                    primaryRow(pending ? "Checking" : "Continue", disabled: pending) { start() }
+                }
+            }
+            .alpineGrouped()
+            .scrollDismissesKeyboard(.interactively)
+            .stepSheetTitle(title)
+            .toolbar {
+                if setup.codes == nil {
+                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { if setup.close() { dismiss() } }.disabled(pending || !setup.mayClose) }
+                }
+            }
+            // Never over a confirmation that is out, or codes not yet put away: the step could be on with nobody having seen them.
+            .interactiveDismissDisabled(pending || !setup.mayClose)
+            // Once the step is on it is needed from the start: its fields are there when the sheet opens.
+            .task { if !setup.first { await step.prepare() } }
+            .onDisappear {
+                asking.stop()
+                setup.close()
+            }
+        }
+    }
+
+    /* The account's devices that could approve, as a single choice. None is chosen for the person, even when there is one. */
+    private var approverChoice: some View {
+        Section {
+            ForEach(setup.approvers) { device in
+                let on = setup.chosenId == device.id
+                let line = device.line(day: TwoStepView.day)
+                Button { setup.choose(device.id) } label: {
+                    HStack(spacing: Alpine.Space.s3) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(device.shownName).foregroundStyle(Alpine.ink)
+                            if !line.isEmpty { Text(line).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted) }
+                        }
+                        Spacer(minLength: 0)
+                        if on { Image(systemName: "checkmark").fontWeight(.semibold).foregroundStyle(Alpine.primary) }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .disabled(pending)
+                .accessibilityAddTraits(on ? .isSelected : [])
+                .alpineRow()
+            }
+        } header: {
+            FieldLabel(StepWords.approverHeading)
+        } footer: {
+            if tried && setup.chosen == nil { Text(StepWords.chooseApprover).foregroundStyle(Alpine.danger) }
+        }
+    }
+
+    private func start() {
+        tried = true
+        // No device chosen: the press says so under the list, and does nothing else.
+        guard setup.chosen != nil, !password.isEmpty else { return }
+        let sending: StepSending?
+        do { sending = try step.prove() } catch { if !(error is StepUp.Unready) { self.error = ErrorWords.say(error) ?? "" }; return }
+        pending = true
+        error = ""
+        Task {
+            do {
+                // A passkey or security key is asked here, on this press.
+                let twoStep = try await step.answer(sending)
+                try await setup.begin(password: password, twoStep: twoStep)
+                tried = false
+                // Continue was the press: the chosen device is asked now.
+                ask()
+            } catch {
+                if let words = await step.failed(error) { self.error = words }
+            }
+            pending = false
+        }
+    }
+
+    /* Asks the chosen device to approve the pending method. Its approval sends nothing: the code it then shows is asked for. Ask again asks the same device. */
+    private func ask() {
+        guard let wire = ApprovalWire.current, let key = DeviceApprovals.ownKey, let request = try? setup.request(wire: wire, key: key) else {
+            back(ErrorWords.generic)
+            return
+        }
+        error = ""
+        code = ""
+        asking.begin(
+            request,
+            // Half of it: the setup keeps the request, and the field for that device's code comes up.
+            approved: { _, ask in setup.approved(by: ask) },
+            failed: { error in
+                // The server would not ask the device (its own words, as for a request that named none): back to the password with why.
+                back(ErrorWords.say(error))
+            }
+        )
+    }
+
+    /* The setup is over without the method: back to the password with why. Any failure may hide a method that was turned on, so the settings behind are read again. */
+    private func back(_ words: String?) {
+        asking.stop()
+        setup.failed()
+        tried = false
+        code = ""
+        done("")
+        if let words { error = words }
+    }
+
+    /*
+     * Turn on, or Add: the code is checked against the one this iPhone worked out, and only then
+     * sent with the confirmation. The confirmation is marked as out before it goes, and its answer
+     * is the setup's to keep: neither this task nor the sheet holds the backup codes. The other
+     * devices go behind them, and a failure there is a notice.
+     */
+    private func confirm() {
+        guard !checking else { return }
+        checking = true
+        error = ""
+        let typed = code
+        let passwordTyped = password
+        Task {
+            defer { checking = false }
+            while true {
+                do {
+                    let confirmed = try await setup.confirm(typed: typed, password: passwordTyped, removal: { removed in
+                        if removed { done("") } else { NoticeCenter.shared.show(StepWords.othersNotRemoved, important: true) }
+                    })
+                    code = ""
+                    switch confirmed {
+                    case .turnedOn:
+                        password = ""
+                        done("")
+                    case .added:
+                        done(StepWords.deviceOn)
+                        dismiss()
+                    }
+                    return
+                } catch StepError.refused(.pending, _) {
+                    // The approval had not landed where the confirmation went: nothing changed, and the same one goes again.
+                    try? await Task.sleep(for: .seconds(2))
+                } catch let wrong as DeviceSetup.WrongCode {
+                    // One try. The request is dropped here; Ask again makes another to the same device.
+                    asking.stop()
+                    code = ""
+                    error = wrong.errorDescription ?? ErrorWords.generic
+                    return
+                } catch {
+                    // Let go meanwhile: nothing was confirmed, and there is nothing to say.
+                    if ErrorWords.isCancellation(error) { return }
+                    // The server's refusal (a code it did not agree with, in its words) or a lost reply, which says so.
+                    back(ErrorWords.say(error))
+                    return
+                }
+            }
         }
     }
 }

@@ -116,6 +116,11 @@ pub enum PushEventKind {
     TwoStepKeyAdded,
     TwoStepKeyRemoved,
     KeyCounter,
+    /// Approving on another device (docs/two-step-design.md 12): the method's two notices, and
+    /// the prompt this phone is pinged for when another device asks.
+    TwoStepDeviceAdded,
+    TwoStepDeviceRemoved,
+    ApprovalRequest,
     Shared,
     FamilyInvitation,
     FamilyWaiting,
@@ -231,6 +236,9 @@ fn event_of(event: &Value) -> CoreResult<PushEvent> {
         Some("two-step-key-added") => read.kind = PushEventKind::TwoStepKeyAdded,
         Some("two-step-key-removed") => read.kind = PushEventKind::TwoStepKeyRemoved,
         Some("key-counter") => read.kind = PushEventKind::KeyCounter,
+        Some("two-step-device-added") => read.kind = PushEventKind::TwoStepDeviceAdded,
+        Some("two-step-device-removed") => read.kind = PushEventKind::TwoStepDeviceRemoved,
+        Some("approval-request") => read.kind = PushEventKind::ApprovalRequest,
         Some("shared") => {
             read.kind = PushEventKind::Shared;
             read.granter_user_id = Some(field_uuid(data, "granterUserId", "sharer")?);
@@ -420,6 +428,18 @@ pub fn push_notice(event: PushEvent, checked_sender: Option<String>) -> PushNoti
         PushEventKind::KeyCounter => {
             two_step("Security key", "One of your security keys may have been copied.")
         }
+        PushEventKind::TwoStepDeviceAdded => two_step("Two-step sign-in", "Approve on another device is on."),
+        PushEventKind::TwoStepDeviceRemoved => {
+            two_step("Two-step sign-in", "Approve on another device is off.")
+        }
+        // The prompt names no device and no place: the app shows those, from its own session,
+        // where the person answers (Account, Your devices).
+        PushEventKind::ApprovalRequest => notice(
+            "Confirm it’s you",
+            "Another device is asking to confirm it’s you. Open HushOS to answer.".to_owned(),
+            PushChannel::Security,
+            PushOpen::Devices,
+        ),
         PushEventKind::Shared => notice(
             "Shared with you",
             match checked_sender.as_deref().and_then(shown_name) {
@@ -605,7 +625,7 @@ mod tests {
 
     #[test]
     fn a_kind_this_build_does_not_know_gets_the_fallback() {
-        let read = push_event_read(event("approval-request", r#"{"anything":1}"#), ID.into()).unwrap();
+        let read = push_event_read(event("a-kind-from-later", r#"{"anything":1}"#), ID.into()).unwrap();
         assert_eq!(read.kind, PushEventKind::Other);
         assert_eq!(push_notice(read, Some("Maya".into())), push_notice_fallback());
     }
@@ -717,6 +737,8 @@ mod tests {
             ("two-step-key-added", "{}", "Two-step sign-in", "A passkey or security key was added."),
             ("two-step-key-removed", "{}", "Two-step sign-in", "A passkey or security key was removed."),
             ("key-counter", "{}", "Security key", "One of your security keys may have been copied."),
+            ("two-step-device-added", "{}", "Two-step sign-in", "Approve on another device is on."),
+            ("two-step-device-removed", "{}", "Two-step sign-in", "Approve on another device is off."),
         ] {
             let read = push_event_read(event(kind, data), ID.into()).unwrap();
             assert_ne!(read.kind, PushEventKind::Other, "{kind}");
@@ -742,6 +764,26 @@ mod tests {
             None,
         );
         assert_eq!(named.body, "An authenticator app was removed.");
+    }
+
+    // The prompt is the one notice here a stranger with the password can raise: it says the
+    // same thing whatever the event carries, and opens the list of devices, where it is answered.
+    #[test]
+    fn an_approval_prompt_names_nothing_and_opens_the_devices() {
+        for data in ["{}", r#"{"name":"HushOS Support, call 5550100","location":"Lyon"}"#] {
+            let read = push_event_read(event("approval-request", data), ID.into()).unwrap();
+            assert_eq!(read.kind, PushEventKind::ApprovalRequest);
+            let notice = push_notice(read, Some("Maya".into()));
+            assert_eq!(
+                (notice.title.as_str(), notice.body.as_str(), notice.channel, notice.open),
+                (
+                    "Confirm it’s you",
+                    "Another device is asking to confirm it’s you. Open HushOS to answer.",
+                    PushChannel::Security,
+                    PushOpen::Devices,
+                )
+            );
+        }
     }
 
     #[test]

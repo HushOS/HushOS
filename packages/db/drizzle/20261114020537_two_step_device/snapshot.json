@@ -1,0 +1,1015 @@
+{
+    "type": "diff",
+    "version": "9",
+    "dialect": "postgres",
+    "id": "2d29c72c-d745-4df7-b076-5755173dbf86",
+    "prevIds": ["a2714d3c-def7-46bd-8566-487da546bf63"],
+    "footprints": [
+        {
+            "statementType": "create_table",
+            "statementTarget": ["table", "public", "two_step_device_requests"],
+            "writes": [
+                "s|tbl|public.two_step_device_requests",
+                "n|tbl|public.two_step_device_requests",
+                "e|tbl|public.two_step_device_requests",
+                "n|rel|public.two_step_device_requests",
+                "n|type|public.two_step_device_requests",
+                "n|rel|public.two_step_device_requests_pkey"
+            ],
+            "reads": ["n|sch|public"]
+        },
+        {
+            "statementType": "create_index",
+            "statementTarget": [
+                "index",
+                "public",
+                "two_step_device_requests",
+                "two_step_device_requests_user_idx"
+            ],
+            "writes": [
+                "s|idx|public.two_step_device_requests_user_idx",
+                "n|idx|public.two_step_device_requests_user_idx",
+                "e|idx|public.two_step_device_requests_user_idx",
+                "n|rel|public.two_step_device_requests_user_idx"
+            ],
+            "reads": [
+                "n|tbl|public.two_step_device_requests",
+                "n|sch|public",
+                "n|col|public.two_step_device_requests.user_id",
+                "n|col|public.two_step_device_requests.created_at"
+            ]
+        },
+        {
+            "statementType": "create_index",
+            "statementTarget": [
+                "index",
+                "public",
+                "two_step_device_requests",
+                "two_step_device_requests_token_idx"
+            ],
+            "writes": [
+                "s|idx|public.two_step_device_requests_token_idx",
+                "n|idx|public.two_step_device_requests_token_idx",
+                "e|idx|public.two_step_device_requests_token_idx",
+                "n|rel|public.two_step_device_requests_token_idx"
+            ],
+            "reads": [
+                "n|tbl|public.two_step_device_requests",
+                "n|sch|public",
+                "n|col|public.two_step_device_requests.token_hash"
+            ]
+        },
+        {
+            "statementType": "create_index",
+            "statementTarget": [
+                "index",
+                "public",
+                "two_step_device_requests",
+                "two_step_device_requests_created_idx"
+            ],
+            "writes": [
+                "s|idx|public.two_step_device_requests_created_idx",
+                "n|idx|public.two_step_device_requests_created_idx",
+                "e|idx|public.two_step_device_requests_created_idx",
+                "n|rel|public.two_step_device_requests_created_idx"
+            ],
+            "reads": [
+                "n|tbl|public.two_step_device_requests",
+                "n|sch|public",
+                "n|col|public.two_step_device_requests.created_at"
+            ]
+        },
+        {
+            "statementType": "create_index",
+            "statementTarget": [
+                "index",
+                "public",
+                "two_step_device_requests",
+                "two_step_device_requests_device_idx"
+            ],
+            "writes": [
+                "s|idx|public.two_step_device_requests_device_idx",
+                "n|idx|public.two_step_device_requests_device_idx",
+                "e|idx|public.two_step_device_requests_device_idx",
+                "n|rel|public.two_step_device_requests_device_idx"
+            ],
+            "reads": [
+                "n|tbl|public.two_step_device_requests",
+                "n|sch|public",
+                "n|col|public.two_step_device_requests.device_id"
+            ]
+        },
+        {
+            "statementType": "create_index",
+            "statementTarget": [
+                "index",
+                "public",
+                "two_step_device_requests",
+                "two_step_device_requests_approver_idx"
+            ],
+            "writes": [
+                "s|idx|public.two_step_device_requests_approver_idx",
+                "n|idx|public.two_step_device_requests_approver_idx",
+                "e|idx|public.two_step_device_requests_approver_idx",
+                "n|rel|public.two_step_device_requests_approver_idx"
+            ],
+            "reads": [
+                "n|tbl|public.two_step_device_requests",
+                "n|sch|public",
+                "n|col|public.two_step_device_requests.approver_device_id"
+            ]
+        },
+        {
+            "statementType": "create_index",
+            "statementTarget": [
+                "index",
+                "public",
+                "two_step_device_requests",
+                "two_step_device_requests_chosen_idx"
+            ],
+            "writes": [
+                "s|idx|public.two_step_device_requests_chosen_idx",
+                "n|idx|public.two_step_device_requests_chosen_idx",
+                "e|idx|public.two_step_device_requests_chosen_idx",
+                "n|rel|public.two_step_device_requests_chosen_idx"
+            ],
+            "reads": [
+                "n|tbl|public.two_step_device_requests",
+                "n|sch|public",
+                "n|col|public.two_step_device_requests.chosen_device_id"
+            ]
+        },
+        {
+            "statementType": "create_index",
+            "statementTarget": [
+                "index",
+                "public",
+                "two_step_factors",
+                "two_step_factors_one_device_idx"
+            ],
+            "writes": [
+                "s|idx|public.two_step_factors_one_device_idx",
+                "n|idx|public.two_step_factors_one_device_idx",
+                "e|idx|public.two_step_factors_one_device_idx",
+                "n|rel|public.two_step_factors_one_device_idx"
+            ],
+            "reads": [
+                "n|tbl|public.two_step_factors",
+                "n|sch|public",
+                "n|col|public.two_step_factors.user_id"
+            ]
+        },
+        {
+            "statementType": "create_fk",
+            "statementTarget": ["table", "public", "two_step_device_requests"],
+            "writes": [
+                "s|fk|public.two_step_device_requests.two_step_device_requests_user_id_users_id_fkey",
+                "n|fk|public.two_step_device_requests.two_step_device_requests_user_id_users_id_fkey",
+                "e|fk|public.two_step_device_requests.two_step_device_requests_user_id_users_id_fkey",
+                "n|con|public.two_step_device_requests.two_step_device_requests_user_id_users_id_fkey"
+            ],
+            "reads": [
+                "n|tbl|public.two_step_device_requests",
+                "n|sch|public",
+                "n|tbl|public.users",
+                "n|sch|public",
+                "n|col|public.two_step_device_requests.user_id",
+                "n|col|public.users.id",
+                "e|uniqueness|public.users.id"
+            ]
+        },
+        {
+            "statementType": "create_fk",
+            "statementTarget": ["table", "public", "two_step_device_requests"],
+            "writes": [
+                "s|fk|public.two_step_device_requests.two_step_device_requests_device_id_account_devices_id_fkey",
+                "n|fk|public.two_step_device_requests.two_step_device_requests_device_id_account_devices_id_fkey",
+                "e|fk|public.two_step_device_requests.two_step_device_requests_device_id_account_devices_id_fkey",
+                "n|con|public.two_step_device_requests.two_step_device_requests_device_id_account_devices_id_fkey"
+            ],
+            "reads": [
+                "n|tbl|public.two_step_device_requests",
+                "n|sch|public",
+                "n|tbl|public.account_devices",
+                "n|sch|public",
+                "n|col|public.two_step_device_requests.device_id",
+                "n|col|public.account_devices.id",
+                "e|uniqueness|public.account_devices.id"
+            ]
+        },
+        {
+            "statementType": "create_fk",
+            "statementTarget": ["table", "public", "two_step_device_requests"],
+            "writes": [
+                "s|fk|public.two_step_device_requests.two_step_device_requests_T2guW4DVYiIA_fkey",
+                "n|fk|public.two_step_device_requests.two_step_device_requests_T2guW4DVYiIA_fkey",
+                "e|fk|public.two_step_device_requests.two_step_device_requests_T2guW4DVYiIA_fkey",
+                "n|con|public.two_step_device_requests.two_step_device_requests_T2guW4DVYiIA_fkey"
+            ],
+            "reads": [
+                "n|tbl|public.two_step_device_requests",
+                "n|sch|public",
+                "n|tbl|public.account_devices",
+                "n|sch|public",
+                "n|col|public.two_step_device_requests.approver_device_id",
+                "n|col|public.account_devices.id",
+                "e|uniqueness|public.account_devices.id"
+            ]
+        },
+        {
+            "statementType": "create_fk",
+            "statementTarget": ["table", "public", "two_step_device_requests"],
+            "writes": [
+                "s|fk|public.two_step_device_requests.two_step_device_requests_ykqlKgvP2V49_fkey",
+                "n|fk|public.two_step_device_requests.two_step_device_requests_ykqlKgvP2V49_fkey",
+                "e|fk|public.two_step_device_requests.two_step_device_requests_ykqlKgvP2V49_fkey",
+                "n|con|public.two_step_device_requests.two_step_device_requests_ykqlKgvP2V49_fkey"
+            ],
+            "reads": [
+                "n|tbl|public.two_step_device_requests",
+                "n|sch|public",
+                "n|tbl|public.account_devices",
+                "n|sch|public",
+                "n|col|public.two_step_device_requests.chosen_device_id",
+                "n|col|public.account_devices.id",
+                "e|uniqueness|public.account_devices.id"
+            ]
+        },
+        {
+            "statementType": "add_check",
+            "statementTarget": ["table", "public", "two_step_factors"],
+            "writes": [
+                "s|ck|public.two_step_factors.two_step_factors_device_valid",
+                "n|ck|public.two_step_factors.two_step_factors_device_valid",
+                "e|ck|public.two_step_factors.two_step_factors_device_valid",
+                "n|con|public.two_step_factors.two_step_factors_device_valid"
+            ],
+            "reads": [
+                "n|tbl|public.two_step_factors",
+                "n|sch|public",
+                "n|col|public.two_step_factors.kind",
+                "n|col|public.two_step_factors.name"
+            ]
+        },
+        {
+            "statementType": "alter_check",
+            "statementTarget": ["table", "public", "notification_events"],
+            "writes": ["s|ck|public.notification_events.notification_events_kind_valid"],
+            "reads": [
+                "n|tbl|public.notification_events",
+                "n|sch|public",
+                "n|col|public.notification_events.kind",
+                "e|col|public.notification_events.kind"
+            ],
+            "sqlHash": "7a8b783926de5dba"
+        },
+        {
+            "statementType": "alter_check",
+            "statementTarget": ["table", "public", "account_security_events"],
+            "writes": ["s|ck|public.account_security_events.account_security_events_method_valid"],
+            "reads": [
+                "n|tbl|public.account_security_events",
+                "n|sch|public",
+                "n|col|public.account_security_events.method",
+                "e|col|public.account_security_events.method"
+            ],
+            "sqlHash": "459697f9e7d78750"
+        },
+        {
+            "statementType": "alter_check",
+            "statementTarget": ["table", "public", "two_step_factors"],
+            "writes": ["s|ck|public.two_step_factors.two_step_factors_kind_valid"],
+            "reads": [
+                "n|tbl|public.two_step_factors",
+                "n|sch|public",
+                "n|col|public.two_step_factors.kind",
+                "e|col|public.two_step_factors.kind"
+            ],
+            "sqlHash": "652e4f8a7f8d5b66"
+        }
+    ],
+    "deltas": [
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "name": "two_step_device_requests",
+                "isRlsEnabled": false,
+                "entityType": "tables"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "gen_random_uuid()",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "user_id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "token_hash",
+                "type": "bytea",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "purpose",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "class",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "device_id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "device_kind",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "device_name",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "location",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "commitment",
+                "type": "bytea",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "approver_device_id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "chosen_device_id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "approver_key",
+                "type": "bytea",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "device_key",
+                "type": "bytea",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "nonce",
+                "type": "bytea",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "signature",
+                "type": "bytea",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "state",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "'waiting'",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "ended_reason",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "counted",
+                "type": "boolean",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "false",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "created_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "now()",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "expires_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "ended_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "two_step_device_requests_user_idx",
+                "nameExplicit": true,
+                "columns": [
+                    {
+                        "value": "user_id",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": false,
+                        "opclass": null
+                    },
+                    {
+                        "value": "created_at",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": false,
+                        "opclass": null
+                    }
+                ],
+                "isUnique": false,
+                "where": null,
+                "with": "",
+                "method": "btree",
+                "concurrently": false,
+                "entityType": "indexes"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "two_step_device_requests_token_idx",
+                "nameExplicit": true,
+                "columns": [
+                    {
+                        "value": "token_hash",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": false,
+                        "opclass": null
+                    }
+                ],
+                "isUnique": false,
+                "where": null,
+                "with": "",
+                "method": "btree",
+                "concurrently": false,
+                "entityType": "indexes"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "two_step_device_requests_created_idx",
+                "nameExplicit": true,
+                "columns": [
+                    {
+                        "value": "created_at",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": false,
+                        "opclass": null
+                    }
+                ],
+                "isUnique": false,
+                "where": null,
+                "with": "",
+                "method": "btree",
+                "concurrently": false,
+                "entityType": "indexes"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "two_step_device_requests_device_idx",
+                "nameExplicit": true,
+                "columns": [
+                    {
+                        "value": "device_id",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": false,
+                        "opclass": null
+                    }
+                ],
+                "isUnique": false,
+                "where": "\"device_id\" is not null",
+                "with": "",
+                "method": "btree",
+                "concurrently": false,
+                "entityType": "indexes"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "two_step_device_requests_approver_idx",
+                "nameExplicit": true,
+                "columns": [
+                    {
+                        "value": "approver_device_id",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": false,
+                        "opclass": null
+                    }
+                ],
+                "isUnique": false,
+                "where": "\"approver_device_id\" is not null",
+                "with": "",
+                "method": "btree",
+                "concurrently": false,
+                "entityType": "indexes"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "two_step_device_requests_chosen_idx",
+                "nameExplicit": true,
+                "columns": [
+                    {
+                        "value": "chosen_device_id",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": false,
+                        "opclass": null
+                    }
+                ],
+                "isUnique": false,
+                "where": "\"chosen_device_id\" is not null",
+                "with": "",
+                "method": "btree",
+                "concurrently": false,
+                "entityType": "indexes"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_factors",
+                "name": "two_step_factors_one_device_idx",
+                "nameExplicit": true,
+                "columns": [
+                    {
+                        "value": "user_id",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": false,
+                        "opclass": null
+                    }
+                ],
+                "isUnique": true,
+                "where": "\"kind\" = 'device'",
+                "with": "",
+                "method": "btree",
+                "concurrently": false,
+                "entityType": "indexes"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "two_step_device_requests_user_id_users_id_fkey",
+                "nameExplicit": false,
+                "columns": ["user_id"],
+                "schemaTo": "public",
+                "tableTo": "users",
+                "columnsTo": ["id"],
+                "onUpdate": "NO ACTION",
+                "onDelete": "CASCADE",
+                "entityType": "fks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "two_step_device_requests_device_id_account_devices_id_fkey",
+                "nameExplicit": false,
+                "columns": ["device_id"],
+                "schemaTo": "public",
+                "tableTo": "account_devices",
+                "columnsTo": ["id"],
+                "onUpdate": "NO ACTION",
+                "onDelete": "CASCADE",
+                "entityType": "fks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "two_step_device_requests_T2guW4DVYiIA_fkey",
+                "nameExplicit": false,
+                "columns": ["approver_device_id"],
+                "schemaTo": "public",
+                "tableTo": "account_devices",
+                "columnsTo": ["id"],
+                "onUpdate": "NO ACTION",
+                "onDelete": "CASCADE",
+                "entityType": "fks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "two_step_device_requests_ykqlKgvP2V49_fkey",
+                "nameExplicit": false,
+                "columns": ["chosen_device_id"],
+                "schemaTo": "public",
+                "tableTo": "account_devices",
+                "columnsTo": ["id"],
+                "onUpdate": "NO ACTION",
+                "onDelete": "CASCADE",
+                "entityType": "fks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "two_step_device_requests_pkey",
+                "columns": ["id"],
+                "nameExplicit": false,
+                "entityType": "pks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "two_step_device_requests_chosen_valid",
+                "value": "\"chosen_device_id\" is null or ((\"device_id\" is null or \"chosen_device_id\" <> \"device_id\") and (\"approver_device_id\" is null or \"approver_device_id\" = \"chosen_device_id\"))",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "two_step_device_requests_purpose_valid",
+                "value": "\"purpose\" in ('login', 'password', 'master-key', 'recovery-key', 'delete', 'two-step', 'device-approval', 'child-reset')",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "two_step_device_requests_class_valid",
+                "value": "(\"class\" = 'unknown' and \"purpose\" = 'login' and \"device_id\" is null) or (\"class\" = 'known' and \"purpose\" = 'login' and \"device_id\" is not null) or (\"class\" = 'change' and \"purpose\" <> 'login' and \"device_id\" is not null)",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "two_step_device_requests_device_valid",
+                "value": "(\"device_kind\" is null or \"device_kind\" in ('web', 'ios', 'android')) and (\"device_name\" is null or char_length(\"device_name\") between 1 and 40)",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "two_step_device_requests_lengths_valid",
+                "value": "octet_length(\"token_hash\") = 32 and octet_length(\"commitment\") = 32 and (\"approver_key\" is null or octet_length(\"approver_key\") = 32) and (\"device_key\" is null or octet_length(\"device_key\") = 32) and (\"nonce\" is null or octet_length(\"nonce\") = 32) and (\"signature\" is null or octet_length(\"signature\") = 64)",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "two_step_device_requests_state_valid",
+                "value": "\"state\" in ('waiting', 'opened', 'revealed', 'approved', 'ended') and (\"state\" <> 'waiting' or (\"approver_device_id\" is null and \"approver_key\" is null)) and (\"state\" not in ('opened', 'revealed', 'approved') or (\"approver_device_id\" is not null and \"approver_key\" is not null)) and (\"state\" not in ('waiting', 'opened') or (\"device_key\" is null and \"nonce\" is null and \"signature\" is null)) and (\"state\" not in ('revealed', 'approved') or (\"device_key\" is not null and \"nonce\" is not null)) and ((\"device_key\" is null) = (\"nonce\" is null)) and (\"state\" <> 'revealed' or \"signature\" is null) and (\"state\" <> 'approved' or \"signature\" is not null)",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "two_step_device_requests_location_valid",
+                "value": "\"location\" is null or (\"state\" <> 'ended' and char_length(\"location\") between 1 and 200)",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "two_step_device_requests_end_valid",
+                "value": "(\"state\" = 'ended') = (\"ended_reason\" is not null) and (\"state\" = 'ended') = (\"ended_at\" is not null) and (\"ended_reason\" is null or \"ended_reason\" in ('used', 'passed', 'denied', 'wrong-code', 'not-me', 'mismatch', 'replaced', 'expired', 'off')) and \"expires_at\" > \"created_at\"",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_factors",
+                "name": "two_step_factors_device_valid",
+                "value": "\"kind\" <> 'device' or \"name\" is null",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "alter",
+            "key": "checks\u0000[\"public\",\"notification_events\",\"notification_events_kind_valid\"]",
+            "set": {
+                "value": "kind in ('new-device', 'device-removed', 'devices-removed', 'password-attempts', 'two-step-on', 'two-step-off', 'two-step-app-added', 'two-step-app-removed', 'backup-codes-made', 'backup-code-used', 'phrase-used', 'phrase-replaced', 'password-reset', 'account-key-rotated', 'step-failed', 'change-step-failed', 'totp-frozen', 'two-step-key-added', 'two-step-key-removed', 'key-counter', 'two-step-device-added', 'two-step-device-removed', 'approval-request', 'shared', 'family-invitation', 'family-waiting')"
+            }
+        },
+        {
+            "op": "alter",
+            "key": "checks\u0000[\"public\",\"account_security_events\",\"account_security_events_method_valid\"]",
+            "set": {
+                "value": "\"method\" is null or \"method\" in ('totp', 'webauthn', 'device', 'backup', 'phrase')"
+            }
+        },
+        {
+            "op": "alter",
+            "key": "checks\u0000[\"public\",\"two_step_factors\",\"two_step_factors_kind_valid\"]",
+            "set": {
+                "value": "\"kind\" in ('totp', 'webauthn', 'device')"
+            }
+        }
+    ]
+}

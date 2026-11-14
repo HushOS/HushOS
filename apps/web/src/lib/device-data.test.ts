@@ -90,6 +90,7 @@ describe('signing out of this browser', () => {
         for (const key of [
             'hushos-device-unlock',
             'hushos.return',
+            'hushos-approval-prompts',
             'hushos-stash-written',
             'hushos.marks:Xq3v9b0aZ8kTn1r2Lw4p5A',
             `hushos.settings-seen:${ID}`,
@@ -326,6 +327,8 @@ const NOT_STORAGE = new Set([
     // The contact guard's Web Lock, per account (lib/contact-guard.ts withGuardLock).
     'hushos-contact-guard:',
     'hushos-recovery-kit.txt',
+    // What a request to approve on another device starts with in its QR code: a format.
+    'hushos-approve:',
     // The backup codes file a person saves when two-step sign-in is turned on: a download.
     'hushos-backup-codes.txt',
     'hushos-report-',

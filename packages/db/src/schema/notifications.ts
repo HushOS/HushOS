@@ -43,6 +43,11 @@ export const NOTIFICATION_KINDS = {
     'two-step-key-added': 'security',
     'two-step-key-removed': 'security',
     'key-counter': 'security',
+    // Approving on another device (docs/two-step-design.md 12): the method's own notices, and the
+    // prompt an approving device is pinged for.
+    'two-step-device-added': 'security',
+    'two-step-device-removed': 'security',
+    'approval-request': 'security',
     shared: 'other',
     'family-invitation': 'other',
     'family-waiting': 'other',
@@ -73,6 +78,10 @@ export type NotificationData = {
     'two-step-key-added': Record<string, never>;
     'two-step-key-removed': Record<string, never>;
     'key-counter': Record<string, never>;
+    'two-step-device-added': Record<string, never>;
+    'two-step-device-removed': Record<string, never>;
+    /* Nothing: the device asks for the requests it may answer over its own session. */
+    'approval-request': Record<string, never>;
     shared: { granterUserId: string; shareId: string; role: 'viewer' | 'editor' };
     'family-invitation': { groupId: string; invitationId: string };
     'family-waiting': { groupId: string };

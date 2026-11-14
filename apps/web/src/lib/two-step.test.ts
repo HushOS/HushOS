@@ -6,7 +6,8 @@ import { describe, expect, test, vi } from 'vitest';
  * pass is offered (a paused app is not; after too many wrong codes only the phrase is).
  */
 vi.mock('@/lib/auth-client', () => ({ authClient: {} }));
-const { draftAnswer, draftError, draftFor, emptyDraft, methodsAfter } = await import('./two-step');
+const { afterRefusal, draftAnswer, draftError, draftFor, emptyDraft, methodsAfter } =
+    await import('./two-step');
 
 const words = Array.from({ length: 24 }, (_, index) => `word${index + 1}`);
 
@@ -46,8 +47,40 @@ describe('what is typed for a second step', () => {
             totp: '123456',
             backup: '7KQ2M-9XD4P',
             phrase: words.join(' '),
+            device: 'a-request',
         };
         expect(draftAnswer(draft)).toEqual({ kind: 'backup', code: '7KQ2M-9XD4P' });
+    });
+});
+
+describe('another device as the answer', () => {
+    const offered = ['device', 'backup', 'phrase'] as const;
+    test('nothing is sent until the other device approved, and then its request is the answer', () => {
+        const draft = emptyDraft(offered);
+        expect(draft.method).toBe('device');
+        // Sent now, the server would only answer that it is still waiting.
+        expect(draftError(draft)).toMatch(/hasn’t approved/);
+        const approved = { ...draft, device: '7c9e6679-7425-40de-944b-e07fc1f90ae7' };
+        expect(draftError(approved)).toBe('');
+        expect(draftAnswer(approved)).toEqual({
+            kind: 'device',
+            requestId: '7c9e6679-7425-40de-944b-e07fc1f90ae7',
+        });
+    });
+    test('an approval the step refused is not offered to it again; one still waited for is kept', () => {
+        const approved = { ...emptyDraft(offered), device: 'a-request' };
+        // Refused or over: the other device is asked afresh, never the same request re-sent.
+        for (const reason of ['wrong', 'over', 'unavailable'])
+            expect(afterRefusal(approved, reason).device).toBe('');
+        expect(afterRefusal(approved, 'pending')).toBe(approved);
+        // Another method's refusal leaves an approval alone.
+        const typing = { ...approved, method: 'backup' as const };
+        expect(afterRefusal(typing, 'wrong')).toBe(typing);
+        // A spent code budget does not take another device away: it is not a code.
+        expect(methodsAfter(['totp', 'device', 'backup', 'phrase'], 'limited', 'totp')).toEqual([
+            'device',
+            'phrase',
+        ]);
     });
 });
 

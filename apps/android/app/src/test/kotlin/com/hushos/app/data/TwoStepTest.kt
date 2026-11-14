@@ -836,7 +836,7 @@ class TwoStepTest {
         // The default's line names the kind it moved to, which is the event's method.
         assertEquals("Default changed to passkey or security key", words("default-changed", "webauthn"))
         assertEquals("Default changed to authenticator app", words("default-changed", "totp"))
-        assertEquals("Default changed", words("default-changed", "device"))
+        assertEquals("Default changed", words("default-changed", "something-later"))
         assertEquals("Default changed", words("default-changed"))
         assertEquals("A security key was refused: it may have been copied", words("key-counter", "webauthn"))
         assertEquals("Second-step method removed", words("method-removed"))

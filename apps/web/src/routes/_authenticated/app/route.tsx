@@ -9,6 +9,7 @@ import { SearchButton } from '@/components/search-button';
 import { DeviceControl, openDeviceDialog } from '@/components/device-control';
 import { AccountDialogs } from '@/components/user-menu';
 import { NavigationBar } from '@/components/navigation-bar';
+import { ApprovalBanner } from '@/components/device-approvals';
 import { NotificationsAsk } from '@/components/notifications-ask';
 import { ReleaseNotice } from '@/components/release-notice';
 import { CollisionDialog } from '@/components/drive/collision-dialog';
@@ -226,6 +227,8 @@ function AppLayout() {
                     <ReleaseNotice />
                     {/* Keyed by account: another account signed in here starts from its own answer. */}
                     <NotificationsAsk key={user.id} userId={user.id} />
+                    {/* Another device asking this one to confirm a sign-in or a change (two-step design 12). */}
+                    <ApprovalBanner key={`approvals-${user.id}`} />
                     {(rememberError || setupError) && (
                         <div className="flex flex-col gap-3 border-b border-rule px-5 py-4 sm:px-6">
                             {/*

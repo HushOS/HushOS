@@ -281,6 +281,83 @@ export function deviceSessionStatement(input: {
 }
 
 /*
+ * Approving on another device, as the second step (docs/two-step-design.md 12). The step token
+ * is named by its stored hash, the SHA-256 of its UTF-8 bytes; ids are lowercase. The three are
+ * built identically in `packages/crypto/src/device-approval.ts` and
+ * `crates/hushos-core/src/device_approval.rs`, held together by the fixtures.
+ *
+ * - The commitment the asking device makes before it sees the approving device's key:
+ *   SHA-256("hushos/two-step/device/commit/v1" || purpose || sha256(stepToken) || deviceSigningKey || nonce).
+ * - The digest the code both devices show is read from:
+ *   SHA-256("hushos/two-step/device/v1" || userId || requestId || purpose || sha256(stepToken) || deviceSigningKey || approverEphemeralKey || nonce).
+ * - The statement the approving device signs with its device key:
+ *   ["hushos/two-step/device",1,userId,requestId,purpose,sha256(stepToken),deviceSigningKey].
+ * Purposes are ASCII from a fixed list and every other field has a fixed length, so the plain
+ * concatenation reads one way only.
+ */
+export type DeviceStepInput = {
+    userId: string;
+    requestId: string;
+    purpose: string;
+    tokenDigest: Uint8Array;
+    deviceSigningKey: Uint8Array;
+};
+const sized = (bytes: Uint8Array, what: string) => {
+    if (bytes.length !== 32) throw new Error(`A device approval's ${what} is 32 bytes.`);
+    return bytes;
+};
+export function deviceStepCommitment(input: {
+    purpose: string;
+    tokenDigest: Uint8Array;
+    deviceSigningKey: Uint8Array;
+    nonce: Uint8Array;
+}) {
+    return createHash('sha256')
+        .update('hushos/two-step/device/commit/v1', 'utf8')
+        .update(input.purpose, 'utf8')
+        .update(sized(input.tokenDigest, 'token digest'))
+        .update(sized(input.deviceSigningKey, 'device key'))
+        .update(sized(input.nonce, 'nonce'))
+        .digest();
+}
+export function deviceStepCodeDigest(
+    input: DeviceStepInput & { approverKey: Uint8Array; nonce: Uint8Array },
+) {
+    return createHash('sha256')
+        .update('hushos/two-step/device/v1', 'utf8')
+        .update(input.userId.toLowerCase(), 'utf8')
+        .update(input.requestId.toLowerCase(), 'utf8')
+        .update(input.purpose, 'utf8')
+        .update(sized(input.tokenDigest, 'token digest'))
+        .update(sized(input.deviceSigningKey, 'device key'))
+        .update(sized(input.approverKey, 'approver key'))
+        .update(sized(input.nonce, 'nonce'))
+        .digest();
+}
+/*
+ * The code as the two numbers it is read from: 0 to 99 from the first four bytes, and the
+ * word's place in the BIP-39 list from the next eleven bits. Both devices show them as
+ * "47 river"; the server, where the method is turned on, compares the numbers.
+ */
+export function deviceStepCodeParts(
+    input: DeviceStepInput & { approverKey: Uint8Array; nonce: Uint8Array },
+) {
+    const digest = deviceStepCodeDigest(input);
+    return { number: digest.readUInt32BE(0) % 100, word: (digest[4]! << 3) | (digest[5]! >> 5) };
+}
+export function deviceStepStatement(input: DeviceStepInput) {
+    return statement([
+        'hushos/two-step/device',
+        1,
+        input.userId.toLowerCase(),
+        input.requestId.toLowerCase(),
+        input.purpose,
+        Buffer.from(sized(input.tokenDigest, 'token digest')).toString('base64url'),
+        Buffer.from(sized(input.deviceSigningKey, 'device key')).toString('base64url'),
+    ]);
+}
+
+/*
  * Whether `signature` is both halves of a hybrid signature by `keys` over
  * `message`: Ed25519 under the signing key, then ML-DSA-65 under the
  * identity context. The caller knows from context that the statement is a

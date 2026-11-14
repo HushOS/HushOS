@@ -31,6 +31,22 @@ export const authApi: AuthApi = {
     twoStepAddKey: (input) => unwrap(api()['two-step'].keys.post(input)),
     twoStepRenameMethod: (id, name) => unwrap(api()['two-step'].methods({ id }).put({ name })),
     twoStepSetDefault: (kind) => unwrap(api()['two-step'].default.put({ kind })),
+    twoStepStartDevice: (input) => unwrap(api()['two-step'].device.post(input)),
+    twoStepConfirmDevice: (id, input) =>
+        unwrap(api()['two-step'].device({ id }).confirm.post(input)),
+    approvalStart: (input) => unwrap(api().approvals.post(input)),
+    // The step token only reads here, so it goes in a header: never in the address.
+    approvalStatus: (id, stepToken) =>
+        unwrap(
+            api()
+                .approvals({ id })
+                .get({ headers: { 'x-step-token': stepToken } }),
+        ),
+    approvalReveal: (id, input) => unwrap(api().approvals({ id }).reveal.post(input)),
+    approvals: () => unwrap(api().approvals.get()),
+    approvalOpen: (id, ephemeralKey) => unwrap(api().approvals({ id }).open.post({ ephemeralKey })),
+    approvalApprove: (id, signature) => unwrap(api().approvals({ id }).approve.post({ signature })),
+    approvalDeny: (id, reason) => unwrap(api().approvals({ id }).deny.post({ reason })),
     twoStepStartTotp: (input) => unwrap(api()['two-step'].totp.post(input)),
     twoStepConfirmTotp: (id, code) => unwrap(api()['two-step'].totp({ id }).confirm.post({ code })),
     twoStepRemoveMethod: (id, input) => unwrap(api()['two-step'].methods({ id }).delete(input)),

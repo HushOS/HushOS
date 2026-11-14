@@ -18,14 +18,20 @@ public struct PendingSignIn: Sendable {
     let received: ContinuousClock.Instant
     /* Whether this sign-in's `login/start` said the server reads `twoStepMethods`: remembered once the session is stored. */
     let advertised: Bool?
+    /* The device key this sign-in asks another device with (DeviceApproval.swift); nil when the step lists no other device, or no key could be had. */
+    public let deviceKey: StepDeviceKey?
 
-    public init(origin: String, email: String, challenge: StepChallenge, exportKey: Data, received: ContinuousClock.Instant = .now, advertised: Bool? = nil) {
+    public init(
+        origin: String, email: String, challenge: StepChallenge, exportKey: Data, received: ContinuousClock.Instant = .now, advertised: Bool? = nil,
+        deviceKey: StepDeviceKey? = nil
+    ) {
         self.origin = origin
         self.email = email
         self.challenge = challenge
         self.exportKey = exportKey
         self.received = received
         self.advertised = advertised
+        self.deviceKey = deviceKey
     }
 
     /* The server's five minutes and one more, as the web allows. */
@@ -123,6 +129,7 @@ public struct StepAnswer: Sendable, Equatable {
         case .backup: .backup
         case .phrase: .phrase
         case .webauthn: .webauthn
+        case .device: .device
         }
     }
 
@@ -199,6 +206,60 @@ public enum StepWords {
     public static let usualWayChange = "Your usual way isn’t available for this change."
     /* Settings, on a server this build cannot use a key for (self-hosted, localhost). */
     public static let keysInBrowser = "Passkeys and security keys are added in a browser on this server."
+    /*
+     * Approve on another device (docs/two-step-design.md 12), on the device that asks: what it says
+     * before a device opened its request, over the code once one has, while it waits, and when the
+     * request ended without an approval. Never who ended it.
+     */
+    public static let askOpen = "Open HushOS on another device and choose Answer."
+    /* Turning the method on: the one device the person chose is asked, and the panel says which to pick up. */
+    public static func askOpen(on device: String?) -> String { device.map { "Open HushOS on \($0) and choose Answer." } ?? askOpen }
+    public static let askCode = "Code for your other device"
+    public static let askWaiting = "Waiting for your other device"
+    public static let askAgain = "Ask again"
+    public static let askRefused = "Your other device didn’t approve this."
+    public static let askReplaced = "Another sign-in replaced this request."
+    public static let askOver = "This request timed out."
+    public static func ended(_ why: ApprovalEnded) -> String {
+        switch why {
+        case .replaced: askReplaced
+        case .over: askOver
+        case .refused: askRefused
+        }
+    }
+    /* On the device that answers. */
+    public static let approvalWaiting = "Another device is asking to confirm it’s you"
+    public static let approvalAnswer = "Answer"
+    public static let approvalCodeField = "Code on the other device"
+    public static let approved = "Approved"
+    public static let denied = "Denied"
+    public static let approvalMismatch = "The other device didn’t match its request, so nothing was approved."
+    public static let approvalWrongCode = "That code didn’t match, so nothing was approved."
+    /* A request that left this phone's list while it was being answered: the server's own words for one that is over. */
+    public static let approvalOver = "This request is over."
+    /* The server answered an open with another value than this phone made: it chose this phone's half of the code itself. */
+    public static let approvalChanged = "The server changed this device’s part of the code, so nothing was approved. Ask again on the other device."
+    /* The list says this phone opened the request, and this run of the app holds no value for it. */
+    public static let approvalRestarted = "This request was opened before HushOS was restarted. Ask again on the other device."
+    /* Under the sheet's title, when the asking device named this one to answer. */
+    public static let approvalChosen = "The other device asked for this device to approve."
+    /* Settings. */
+    public static let deviceOn = "Approve on another device is on"
+    public static let deviceOff = "Approve on another device is off"
+    public static let lostDeviceOn = lost(whether: "approving on another device was turned on")
+    /* Turning it on: the person says which of their devices is to approve. */
+    public static let approverHeading = "Device that will approve"
+    public static let chooseApprover = "Choose the device that will approve."
+    /* Once that device approved: its code is typed on the phone turning the method on. One try. */
+    public static func codeOn(_ device: String) -> String { "Code on \(device)" }
+    public static let turnOn = "Turn on"
+    public static let add = "Add"
+    public static let turnOnWrongCode = "That code didn’t match, so nothing was turned on."
+    /* On the device that approved such a request, under the code it then shows. */
+    public static let done = "Done"
+    public static func approveOn(_ device: String) -> String { "Approve on \(device)" }
+    /* Under "Remove my other devices" here: the device that approves stays signed in, because it is the method. */
+    public static let othersButApprover = "All but this one and the one that approves. They’ll need to sign in again."
 }
 
 /* A step that did not pass: the server's refusal in its own words, or a reply that was not the server's answer. */
@@ -219,6 +280,8 @@ public enum StepError: Error, LocalizedError, Sendable, Equatable {
     static func named(_ refusal: StepRefusal) -> Bool {
         switch refusal {
         case .wrong, .expired, .frozen, .limited, .unavailable, .required, .setupRequired, .updateRequired: true
+        // Approving on another device: each is the step's own, whichever route said it.
+        case .pending, .deviceUnavailable, .deviceBusy, .deviceLimited, .deviceChoice, .deviceMismatch, .approvalOver, .approvalTaken, .approvalRefused: true
         case .busy, .other: false
         }
     }
@@ -246,13 +309,15 @@ public enum StepOutcome: Sendable, Equatable {
      * - a spent budget: the budget is one for the app's codes and the backup codes, so both go together, and
      *   what it does not cover stays: a passkey or security key, and the phrase;
      * - a method the server cannot check: only that one, the one that was `tried`. The app's secret and
-     *   the backup codes can sit under different server keys, so one failing says nothing of the other.
+     *   the backup codes can sit under different server keys, so one failing says nothing of the other;
+     * - no other device to ask, one that is busy, or one asked too often today: only the other device.
      */
     public static func left(_ methods: [StepMethod], after refusal: StepRefusal, tried: StepMethod?) -> [StepMethod] {
         switch refusal {
         case .frozen: methods.filter { $0 != .totp }
         case .limited: methods.filter { $0 == .webauthn || $0 == .phrase }
         case .unavailable: methods.filter { $0 != tried }
+        case .deviceUnavailable, .deviceBusy, .deviceLimited: methods.filter { $0 != .device }
         default: methods
         }
     }
@@ -270,11 +335,18 @@ public enum StepOutcome: Sendable, Equatable {
             switch refusal {
             case .wrong:
                 return .again(message: message, field: true, methods: methods)
-            case .frozen, .limited, .unavailable:
+            case .frozen, .limited, .unavailable, .deviceUnavailable, .deviceBusy, .deviceLimited:
                 // Nothing changed; what the refusal was about is withdrawn, and the rest stays offered.
                 return .again(message: message, field: false, methods: left(methods, after: refusal, tried: tried))
             case .busy:
                 // The address's own limit: nothing about the step was looked at, and nothing is taken away.
+                return .again(message: message, field: false, methods: methods)
+            case .pending:
+                // The other device has not approved yet: nothing was counted, nothing failed, and nothing is said.
+                return .again(message: "", field: false, methods: methods)
+            case .deviceChoice, .deviceMismatch, .approvalOver, .approvalTaken, .approvalRefused:
+                // A request to another device ended, or (turning the method on) named no device to ask. The step's
+                // token is as it was, and every way is still there.
                 return .again(message: message, field: false, methods: methods)
             case .expired, .required, .setupRequired, .updateRequired, .other:
                 return .over(message: message.isEmpty ? StepWords.over : message)
@@ -299,10 +371,11 @@ public enum StepOffer {
     /*
      * The ways to answer, in the server's order: the first is what the screen opens on. A passkey or
      * security key is one of them only with what a key is asked (`keyRequest`), on a phone that can
-     * use one for this server (`passkeys`): never a button that could only fail.
+     * use one for this server (`passkeys`): never a button that could only fail. Another device is
+     * one of them only on a phone with a device key to ask it with (`device`).
      */
-    public static func methods(_ challenge: StepChallenge, passkeys: Bool) -> [StepMethod] {
-        challenge.methods.filter { $0 != .webauthn || (passkeys && challenge.keyRequest != nil) }
+    public static func methods(_ challenge: StepChallenge, passkeys: Bool, device: Bool = true) -> [StepMethod] {
+        challenge.methods.filter { ($0 != .webauthn || (passkeys && challenge.keyRequest != nil)) && ($0 != .device || device) }
     }
 
     /*
@@ -311,9 +384,9 @@ public enum StepOffer {
      * (the server said so, or a key was listed that this phone cannot ask): it can't be used, and
      * the line never says why. One or the other, never both.
      */
-    public static func note(_ challenge: StepChallenge, passkeys: Bool, flow: StepFlow) -> String {
+    public static func note(_ challenge: StepChallenge, passkeys: Bool, device: Bool = true, flow: StepFlow) -> String {
         if challenge.withheld && passkeys { return StepWords.updateForMore }
-        if challenge.defaultUnavailable || challenge.methods.first != methods(challenge, passkeys: passkeys).first {
+        if challenge.defaultUnavailable || challenge.methods.first != methods(challenge, passkeys: passkeys, device: device).first {
             return flow == .signIn ? StepWords.usualWaySignIn : StepWords.usualWayChange
         }
         return ""
@@ -358,12 +431,25 @@ public enum StepSending: Sendable, Equatable {
     }
 }
 
+/* A request another device approved, and the step token it was made for: it answers that token and no other. */
+public struct ApprovedRequest: Sendable, Equatable {
+    public let token: String
+    public let requestId: String
+
+    public init(token: String, requestId: String) {
+        self.token = token
+        self.requestId = requestId
+    }
+}
+
 /* What a person has typed for a step: one field for each method, so switching loses nothing. A passkey or security key has no field. */
 public struct StepDraft: Sendable, Equatable {
     public var method: StepMethod
     public var totp = ""
     public var backup = ""
     public var phrase = ""
+    /* Nothing is typed for another device: this is the request it approved, once it has. */
+    public var approved: ApprovedRequest?
 
     public init(methods: [StepMethod]) { method = methods.first ?? .totp }
 
@@ -391,6 +477,9 @@ public struct StepDraft: Sendable, Equatable {
         case .webauthn:
             // Nothing is typed: the key is asked when the step is sent.
             return nil
+        case .device:
+            // Nothing is typed here either: there is an answer once the other device approved.
+            return approved == nil ? StepWords.askWaiting : nil
         }
     }
 
@@ -410,6 +499,10 @@ public struct StepDraft: Sendable, Equatable {
         case .webauthn:
             // A key's answer is made when it is sent (`sending`), never from what was typed.
             throw AuthError.message(StepWords.cannotAnswer)
+        case .device:
+            // Only the request approved for this very token: one made for an earlier step answers nothing.
+            guard let approved, approved.token == challenge.token else { throw AuthError.message(StepWords.askWaiting) }
+            return StepAnswer(token: challenge.token, proof: .device(requestId: approved.requestId))
         }
     }
 
@@ -431,6 +524,8 @@ public struct SignInStep: Sendable, Equatable {
     public let challenge: StepChallenge
     /* Whether this phone can use a passkey or security key for the server being signed in to. */
     public let passkeys: Bool
+    /* Whether this phone has a device key to ask another device with. */
+    public let device: Bool
     /* What the step offered when it arrived: none means this build cannot answer it at all. */
     private let offered: [StepMethod]
     public private(set) var methods: [StepMethod]
@@ -448,10 +543,11 @@ public struct SignInStep: Sendable, Equatable {
     /* The last reply was lost: the same answer goes again. */
     public private(set) var lost: StepAnswer?
 
-    public init(challenge: StepChallenge, passkeys: Bool) {
+    public init(challenge: StepChallenge, passkeys: Bool, device: Bool = true) {
         self.challenge = challenge
         self.passkeys = passkeys
-        offered = StepOffer.methods(challenge, passkeys: passkeys)
+        self.device = device
+        offered = StepOffer.methods(challenge, passkeys: passkeys, device: device)
         methods = offered
         draft = StepDraft(methods: offered)
     }
@@ -460,13 +556,20 @@ public struct SignInStep: Sendable, Equatable {
     public var shown: StepMethod? { draft.shown(among: methods) }
     /* Behind Use another way, in the server's order. */
     public var others: [StepMethod] { methods.filter { $0 != shown } }
-    public var note: String { StepOffer.note(challenge, passkeys: passkeys, flow: .signIn) }
+    public var note: String { StepOffer.note(challenge, passkeys: passkeys, device: device, flow: .signIn) }
     /* Why nothing can answer: nothing this build knows was offered (update), or the ways ran out after refusals (updating would not help). */
     public var nothingLeft: String { offered.isEmpty ? StepWords.cannotAnswer : StepWords.noWayLeft }
 
     public mutating func choose(_ method: StepMethod) {
         guard methods.contains(method) else { return }
         draft.method = method
+    }
+
+    /* The press that asks another device: what the last answer came to is no longer said, as after any other press. */
+    public mutating func asking() {
+        fieldError = ""
+        notice = ""
+        lost = nil
     }
 
     /*
@@ -587,12 +690,13 @@ public enum StepPurpose: String, Sendable {
 
 /* A kind of method an account can make its default: what the step asks for first. */
 public enum StepKind: String, Sendable, Equatable {
-    case webauthn, totp
+    case webauthn, totp, device
 
     public var words: String {
         switch self {
         case .webauthn: "Passkey or security key"
         case .totp: "Authenticator app"
+        case .device: "Approve on another device"
         }
     }
 
@@ -608,7 +712,7 @@ public enum StepKind: String, Sendable, Equatable {
 public struct TwoStepStatus: Sendable, Equatable {
     public struct Method: Sendable, Equatable, Identifiable {
         public let id: String
-        /* "totp" or "webauthn". */
+        /* "totp", "webauthn" or "device". */
         public let kind: String
         public let name: String?
         public let createdAt: Date?
@@ -640,17 +744,57 @@ public struct TwoStepStatus: Sendable, Equatable {
         }
     }
 
+    /*
+     * A device that could approve turning on Approve on another device: one of the account's own,
+     * signed in and holding a device key. The person chooses one, and only it is asked.
+     */
+    public struct Approver: Sendable, Equatable, Identifiable {
+        public let id: String
+        /* "web", "ios" or "android"; nil for a device that never described itself. */
+        public let kind: String?
+        public let name: String?
+        public let createdAt: Date?
+
+        public init(id: String, kind: String?, name: String?, createdAt: Date?) {
+            self.id = id
+            self.kind = kind
+            self.name = name
+            self.createdAt = createdAt
+        }
+
+        /* The device as the person knows it: its name, or what an unnamed one is called. */
+        public var shownName: String {
+            let name = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return name.isEmpty ? "Unknown device" : name
+        }
+
+        /* The line under it: what it is, in the Devices list's words, and when it was added. `day` words a date ("14 Nov"). */
+        public func line(day: (Date) -> String) -> String {
+            [AccountDevice.kindWords(kind), createdAt.map { "Added \(day($0))" }].compactMap { $0 }.joined(separator: " · ")
+        }
+    }
+
     public let on: Bool
     public let methods: [Method]
     public let backupCodesLeft: Int
     public let totpFrozen: Bool
     /* "webauthn", "totp" or "device": the kind the step asks for first; nil when the server names none. */
     public let defaultKind: String?
+    /*
+     * Whether this phone could turn on Approve on another device now: another of the account's
+     * devices could approve it. Nil from a server that does not know the method, where its row is
+     * not shown at all.
+     */
+    public let otherDevice: Bool?
+    /* The devices that could approve turning it on, in the server's order. Empty from a server that lists none. */
+    public let approvers: [Approver]
 
     /* The authenticator app, if one is confirmed: an account has at most one. */
     public var app: Method? { methods.first { $0.kind == "totp" } }
     /* The account's passkeys and security keys, as the server lists them. */
     public var keys: [Method] { methods.filter { $0.kind == "webauthn" } }
+    /* Approve on another device, when it is on. */
+    public var device: Method? { methods.first { $0.kind == "device" } }
 
     init?(_ json: [String: Any]) {
         guard let on = json["on"] as? Bool, let rows = json["methods"] as? [[String: Any]] else { return nil }
@@ -665,14 +809,43 @@ public struct TwoStepStatus: Sendable, Equatable {
         backupCodesLeft = (json["backupCodesLeft"] as? NSNumber)?.intValue ?? 0
         totpFrozen = json["totpFrozen"] as? Bool ?? false
         defaultKind = json["defaultKind"] as? String
+        // The JSON booleans themselves: a 1 is not a yes.
+        let other = json["otherDevice"] as AnyObject
+        otherDevice = other === kCFBooleanTrue ? true : other === kCFBooleanFalse ? false : nil
+        // A row without an id names no device: nothing could be asked of it.
+        approvers = (json["approvers"] as? [[String: Any]] ?? []).compactMap { row in
+            guard let id = row["id"] as? String, !id.isEmpty else { return nil }
+            return Approver(id: id, kind: row["kind"] as? String, name: row["name"] as? String, createdAt: TwoStep.date(row["createdAt"]))
+        }
     }
 
-    /* The Default row is there only while the account has both kinds: with one, there is nothing to choose. */
-    public var choosing: Bool { on && app != nil && !keys.isEmpty }
+    /* The kinds of method the account has now. */
+    private var kinds: Int { (keys.isEmpty ? 0 : 1) + (app == nil ? 0 : 1) + (device == nil ? 0 : 1) }
+
+    /* The Default row is there only while the account has more than one kind: with one, there is nothing to choose. */
+    public var choosing: Bool { on && kinds > 1 }
+
+    /* Whether Approve on another device has a row here: where the server knows the method. */
+    public var showsDevice: Bool { device != nil || otherDevice != nil }
+    /* The row's value: On, Off, or that it needs a device this account does not have signed in. */
+    public var deviceValue: String {
+        if device != nil { return "On" }
+        return otherDevice == false ? "Needs another device" : "Off"
+    }
+    /* Turn on is offered only while there is a device to choose to approve it, on a phone with a device key of its own to ask with. */
+    public func canTurnOnDevice(ownKey: Bool) -> Bool { device == nil && otherDevice == true && !approvers.isEmpty && ownKey }
     /* Whether `kind` carries the Default badge. */
     public func isDefault(_ kind: StepKind) -> Bool { choosing && defaultKind == kind.rawValue }
-    /* Whether `kind` offers Make default. */
-    public func canMakeDefault(_ kind: StepKind) -> Bool { choosing && defaultKind != kind.rawValue }
+    /* Whether the account has a method of `kind`. */
+    private func has(_ kind: StepKind) -> Bool {
+        switch kind {
+        case .webauthn: !keys.isEmpty
+        case .totp: app != nil
+        case .device: device != nil
+        }
+    }
+    /* Whether `kind` offers Make default: a kind the account has, and is not offered first already. */
+    public func canMakeDefault(_ kind: StepKind) -> Bool { choosing && has(kind) && defaultKind != kind.rawValue }
 
     /* The last method is not removed: turning it off is turning the step off. */
     public var removeWords: String { methods.count == 1 ? "Turn off" : "Remove" }
@@ -762,6 +935,7 @@ public struct SecurityEvent: Sendable, Equatable, Identifiable {
         case "backup": "a backup code"
         case "phrase": "your recovery phrase"
         case "webauthn": "a passkey or security key"
+        case "device": "another device"
         default: nil
         }
         switch kind {
@@ -773,9 +947,15 @@ public struct SecurityEvent: Sendable, Equatable, Identifiable {
         case "two-step-on": return "Two-step sign-in turned on"
         case "two-step-off": return "Two-step sign-in turned off"
         // Said by the kind of method. An app is "added", never "replaced": beside a key it can be either.
-        case "method-added": return method == "webauthn" ? "Passkey or security key added" : method == "totp" ? "Authenticator app added" : "Second-step method added"
-        case "method-removed": return method == "webauthn" ? "Passkey or security key removed" : method == "totp" ? "Authenticator app removed" : "Second-step method removed"
-        case "default-changed": return method == "webauthn" ? "Default changed to passkey or security key" : method == "totp" ? "Default changed to authenticator app" : "Default changed"
+        case "method-added":
+            if method == "device" { return "Approve on another device turned on" }
+            return method == "webauthn" ? "Passkey or security key added" : method == "totp" ? "Authenticator app added" : "Second-step method added"
+        case "method-removed":
+            if method == "device" { return "Approve on another device turned off" }
+            return method == "webauthn" ? "Passkey or security key removed" : method == "totp" ? "Authenticator app removed" : "Second-step method removed"
+        case "default-changed":
+            if method == "device" { return "Default changed to another device" }
+            return method == "webauthn" ? "Default changed to passkey or security key" : method == "totp" ? "Default changed to authenticator app" : "Default changed"
         case "key-counter": return "A security key was refused: it may have been copied"
         case "backup-codes-made": return "New backup codes made"
         default: return "Security change"
@@ -830,13 +1010,17 @@ public enum TwoStep {
      * managing it answer 501 while that is off): an account that has the step is asked for it on
      * every server.
      */
-    public static func challenge(_ purpose: StepPurpose, adverts: StepAdverts = .stored, linkHost: String? = Passkeys.linkHost) async throws -> StepChallenge? {
+    public static func challenge(
+        _ purpose: StepPurpose, adverts: StepAdverts = .stored, linkHost: String? = Passkeys.linkHost, device: Bool? = nil
+    ) async throws -> StepChallenge? {
         // The session is read once: what this phone names, and what it remembers, are for that session's server.
         guard let session = Auth.currentSession else { throw AuthError.message("Sign in first.") }
+        // Another device is named only by a phone that holds this account's device key: it asks with that key.
+        let device = device ?? (DeviceApprovals.ownKey(for: session) != nil)
         // The methods are named to a server that said it reads them, and to one never heard either way (a session
         // from before this build). One that refuses the field is asked again without, and remembered.
         let sent = try await StepMethodsField.send(
-            advert: adverts.state(for: session.origin), named: stepMethodsNamed(passkeys: passkeysUsable(serverOrigin: session.origin, linkHost: linkHost)),
+            advert: adverts.state(for: session.origin), named: stepMethodsNamed(passkeys: passkeysUsable(serverOrigin: session.origin, linkHost: linkHost), device: device),
             body: ["purpose": purpose.rawValue], status: \.status
         ) { body in
             try await Auth.request("/api/auth/two-step/challenge", method: "POST", body: body, as: session)
@@ -865,7 +1049,7 @@ public enum TwoStep {
         return ["attemptToken": attemptToken, "finishLoginRequest": finish.request]
     }
 
-    private static func change(_ password: String, _ twoStep: StepAnswer?) async throws -> [String: Any] {
+    static func change(_ password: String, _ twoStep: StepAnswer?) async throws -> [String: Any] {
         var body = try await passwordProof(password)
         if let twoStep { body["twoStep"] = try twoStep.json() }
         return body
@@ -1046,6 +1230,7 @@ public enum TwoStep {
     /* What removing `method` is asked as, and says when done: the last one turns the step off. */
     public static func removedWords(kind: String, on: Bool) -> String {
         if !on { return "Two-step sign-in is off." }
+        if kind == "device" { return StepWords.deviceOff }
         return kind == "webauthn" ? "Passkey or security key removed." : "Authenticator app removed."
     }
 
@@ -1076,6 +1261,8 @@ public struct StepUp: Sendable, Equatable {
     public private(set) var challenge: StepChallenge?
     /* Whether this phone can use a passkey or security key for the server it is signed in to. */
     public private(set) var passkeys = false
+    /* Whether this phone holds the account's device key, to ask another device with. */
+    public private(set) var device = true
     public private(set) var methods: [StepMethod] = []
     public var draft = StepDraft(methods: [])
     /* What the server said about the last answer. */
@@ -1091,7 +1278,9 @@ public struct StepUp: Sendable, Equatable {
     /* Behind Use another way, in the server's order. */
     public var others: [StepMethod] { methods.filter { $0 != shown } }
     /* The one line above the fields, or none. */
-    public var note: String { challenge.map { StepOffer.note($0, passkeys: passkeys, flow: .change) } ?? "" }
+    public var note: String { challenge.map { StepOffer.note($0, passkeys: passkeys, device: device, flow: .change) } ?? "" }
+    /* Whether another device approved a request for the step as it stands now. */
+    public var deviceApproved: Bool { challenge != nil && draft.approved?.token == challenge?.token }
     /* What to show under the field: the field's own complaint once tried, else the server's words. */
     public var problem: String {
         if tried, let method = shown, let problem = draft.problem(for: method) { return problem }
@@ -1106,17 +1295,30 @@ public struct StepUp: Sendable, Equatable {
         error = ""
     }
 
-    public mutating func take(_ next: StepChallenge?, keep: Bool = false, passkeys: Bool = false) {
+    public mutating func take(_ next: StepChallenge?, keep: Bool = false, passkeys: Bool = false, device: Bool = true) {
         challenge = next
         self.passkeys = passkeys
-        methods = next.map { StepOffer.methods($0, passkeys: passkeys) } ?? []
+        self.device = device
+        methods = next.map { StepOffer.methods($0, passkeys: passkeys, device: device) } ?? []
         tried = false
         if !keep || next == nil { draft = StepDraft(methods: methods) }
+        // What was typed is kept for the new step; an approval is not: it was for the token before.
+        if draft.approved?.token != next?.token { draft.approved = nil }
     }
+
+    /* Another device approved `request`: taken only for the step as it stands, and the form's own button then sends it. */
+    public mutating func approved(_ request: ApprovedRequest) {
+        guard request.token == challenge?.token else { return }
+        draft.approved = request
+        error = ""
+    }
+
+    /* Something the step's own fields say that no refusal carried (the other device could not be asked at all). */
+    public mutating func say(_ words: String) { error = words }
 
     /* Why nothing can answer: nothing this build knows was offered (update), or the ways ran out after refusals (updating would not help). */
     public var nothingLeft: String {
-        challenge.map { StepOffer.methods($0, passkeys: passkeys).isEmpty } == true ? StepWords.cannotAnswer : StepWords.noWayLeft
+        challenge.map { StepOffer.methods($0, passkeys: passkeys, device: device).isEmpty } == true ? StepWords.cannotAnswer : StepWords.noWayLeft
     }
 
     /*
@@ -1124,7 +1326,9 @@ public struct StepUp: Sendable, Equatable {
      * cannot be sent yet (the field says why). A passkey or security key is not asked here: the
      * change's own press sends what this returns (`StepSending.answer`), and the key is asked then.
      */
-    public struct Unready: Error {}
+    public struct Unready: Error {
+        public init() {}
+    }
     public mutating func prove() throws -> StepSending? {
         guard let challenge else { return nil }
         tried = true
@@ -1173,11 +1377,23 @@ public struct StepUp: Sendable, Equatable {
             error = message
             tried = false
             return .again
-        case .frozen, .limited, .unavailable:
+        case .frozen, .limited, .unavailable, .deviceUnavailable, .deviceBusy, .deviceLimited:
             error = message
             tried = false
             // The method on screen is the one the refused change carried.
             methods = StepOutcome.left(methods, after: refusal, tried: shown)
+            return .again
+        case .pending:
+            // The approval had not landed where the change went: nothing was counted and nothing is said. The wait goes on.
+            error = ""
+            tried = false
+            draft.approved = nil
+            return .again
+        case .deviceChoice, .deviceMismatch, .approvalOver, .approvalTaken, .approvalRefused:
+            // The request to the other device ended, or was not made; the step itself still stands, and can be asked again.
+            error = message
+            tried = false
+            draft.approved = nil
             return .again
         case .setupRequired, .updateRequired, .busy, .other:
             return .notStep

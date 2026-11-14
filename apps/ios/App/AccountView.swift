@@ -173,6 +173,14 @@ struct AccountView: View {
             .onChange(of: PhonePush.shared.opening, initial: true) { _, target in openDevices(target) }
             // Notifications: read on appearing and whenever HushOS comes back (from Settings, the switch follows what iOS allows).
             .task(id: scenePhase) { if scenePhase == .active { await notifications.load() } }
+            // Requests from another device to confirm it's you: looked for every five seconds while Account (Devices
+            // included) is on screen and the app is in front. Nothing looks in the background.
+            .task(id: scenePhase) {
+                while scenePhase == .active, !Task.isCancelled {
+                    await ApprovalInbox.shared.load()
+                    try? await Task.sleep(for: .seconds(5))
+                }
+            }
             // The app's own ask turned notifications on: the switch reads again.
             .onChange(of: PhonePush.shared.changed) { _, _ in Task { await notifications.load() } }
             .onChange(of: store.familyToOpen, initial: true) { _, groupId in openFamily(groupId) }

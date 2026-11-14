@@ -20,6 +20,7 @@ const TABLES = '20261112160538_two_step';
 const GUARD = '20261112174853_two_step_session_guard';
 const READERS = '20261113181124_two_step_key_readers';
 const PASSKEYS = '20261113195154_two_step_passkeys';
+const DEVICE = '20261114020537_two_step_device';
 
 const migrationsFolder = fileURLToPath(new URL('../drizzle', import.meta.url));
 const undo = (migration: string) =>
@@ -456,6 +457,165 @@ describe('the two-step migrations and their undo scripts', () => {
         await run(undo(PASSKEYS));
         // Run twice, it fails whole (the column is gone) instead of half-applying.
         await expect(run(undo(PASSKEYS))).rejects.toMatchObject({ code: '42703' });
+        expect(await schemaOf(client)).toEqual(before);
+    }, 180_000);
+
+    test('the device migration takes another device as a method, and its undo asks before it turns anyone’s step off', async () => {
+        // Before: everything up to passkeys, an account with an app and one with nothing yet.
+        await migrate(upTo(PASSKEYS), scratch, { migrationsFolder });
+        const before = await schemaOf(client);
+        const account = async (email: string) => {
+            const id = randomUUID();
+            await client.query(
+                `insert into users (id, name, email, normalized_email, email_verified_at) values ($1, 'Someone', $2, $2, now())`,
+                [id, email],
+            );
+            await client.query(
+                `insert into two_step_state (user_id, webauthn_user_handle, backup_code_salt) values ($1, $2, $3)`,
+                [id, randomBytes(32), randomBytes(16)],
+            );
+            return id;
+        };
+        const both = await account('both@hushos.test');
+        await client.query(
+            `insert into two_step_factors (user_id, kind, confirmed_at, totp_key_id, totp_nonce, totp_secret, totp_last_step)
+             values ($1, 'totp', now(), $2, $3, $4, 1000)`,
+            [both, randomBytes(8), randomBytes(24), randomBytes(36)],
+        );
+        const only = await account('only@hushos.test');
+        const deviceFactor = `insert into two_step_factors (user_id, kind, confirmed_at) values ($1, 'device', now())`;
+        // Until the migration has run, the kind is refused everywhere it could be written.
+        await expect(client.query(deviceFactor, [only])).rejects.toMatchObject({
+            constraint: 'two_step_factors_kind_valid',
+        });
+        const event = `insert into notification_events (user_id, kind) values ($1, 'approval-request')`;
+        await expect(client.query(event, [only])).rejects.toMatchObject({
+            constraint: 'notification_events_kind_valid',
+        });
+
+        await migrate(upTo(DEVICE), scratch, { migrationsFolder });
+        const after = await schemaOf(client);
+        expect(after.ledger).toEqual([...before.ledger, DEVICE]);
+        for (const userId of [both, only]) {
+            await client.query(deviceFactor, [userId]);
+            await client.query(
+                `insert into two_step_backup_codes (user_id, code_hash, key_id) values ($1, $2, $3)`,
+                [userId, randomBytes(32), randomBytes(8)],
+            );
+        }
+        // One per account, pending or confirmed; and it carries no name.
+        await expect(
+            client.query(`insert into two_step_factors (user_id, kind) values ($1, 'device')`, [
+                only,
+            ]),
+        ).rejects.toMatchObject({ constraint: 'two_step_factors_one_device_idx' });
+        await expect(
+            client.query(`update two_step_factors set name = 'Phone' where kind = 'device'`),
+        ).rejects.toMatchObject({ constraint: 'two_step_factors_device_valid' });
+        await client.query(
+            `update two_step_state set default_kind = 'device' where user_id = any($1)`,
+            [[both, only]],
+        );
+        await client.query(event, [only]);
+        await client.query(
+            `insert into account_security_events (user_id, kind, method) values ($1, 'sign-in', 'device')`,
+            [only],
+        );
+        const laptop = await insertDevice(only);
+        await insertSession(only, laptop, true);
+        const base = `user_id, token_hash, purpose, class, commitment, expires_at, state`;
+        const values = `$1, $2, 'login', 'unknown', $3, now() + interval '5 minutes'`;
+        const row = () => [only, randomBytes(32), randomBytes(32)];
+        await client.query(
+            `insert into two_step_device_requests (${base}) values (${values}, 'waiting')`,
+            row(),
+        );
+        // Nothing is revealed before a device opened, and nothing approved without a signature.
+        await expect(
+            client.query(
+                `insert into two_step_device_requests (${base}, device_key, nonce) values (${values}, 'waiting', $4, $5)`,
+                [...row(), randomBytes(32), randomBytes(32)],
+            ),
+        ).rejects.toMatchObject({ constraint: 'two_step_device_requests_state_valid' });
+        await expect(
+            client.query(
+                `insert into two_step_device_requests (${base}, approver_device_id, approver_key, device_key, nonce) values (${values}, 'approved', $4, $5, $6, $7)`,
+                [...row(), laptop, randomBytes(32), randomBytes(32), randomBytes(32)],
+            ),
+        ).rejects.toMatchObject({ constraint: 'two_step_device_requests_state_valid' });
+
+        // One account has another device as its only method: the undo stops and changes nothing.
+        await expect(run(undo(DEVICE))).rejects.toMatchObject({
+            message: expect.stringContaining('1 account(s) have another device as their only'),
+        });
+        expect(await schemaOf(client)).toEqual(after);
+        expect(
+            (await client.query(`select 1 from two_step_factors where kind = 'device'`)).rowCount,
+        ).toBe(2);
+
+        const acknowledged = new Client({
+            connectionString: scratchUrl.toString(),
+            options: '-c hushos.delete_two_step=yes',
+        });
+        await acknowledged.connect();
+        try {
+            await run(undo(DEVICE), acknowledged);
+        } finally {
+            await acknowledged.end();
+        }
+        expect(await schemaOf(client)).toEqual(before);
+        // The app stays, and with it that account's step and its codes.
+        const mine = [both, only];
+        expect(
+            (
+                await client.query(
+                    `select user_id, kind from two_step_factors where user_id = any($1)`,
+                    [mine],
+                )
+            ).rows,
+        ).toEqual([{ user_id: both, kind: 'totp' }]);
+        expect(
+            (
+                await client.query(
+                    `select user_id from two_step_backup_codes where user_id = any($1)`,
+                    [mine],
+                )
+            ).rows,
+        ).toEqual([{ user_id: both }]);
+        expect(
+            (
+                await client.query(
+                    `select default_kind from two_step_state where user_id = any($1)`,
+                    [mine],
+                )
+            ).rows.map((state) => state.default_kind),
+        ).toEqual([null, null]);
+        // The account that had only another device has no step left: its session keeps no stamp,
+        // and the guard no longer refuses a password-only session for it.
+        expect(
+            (await client.query(`select two_step_at from sessions where user_id = $1`, [only]))
+                .rows,
+        ).toEqual([{ two_step_at: null }]);
+        await insertSession(only, await insertDevice(only), false);
+        // The log line stays, without a method an older release cannot serve.
+        expect(
+            (
+                await client.query(
+                    `select kind, method from account_security_events where user_id = $1`,
+                    [only],
+                )
+            ).rows,
+        ).toEqual([{ kind: 'sign-in', method: null }]);
+        expect(
+            (await client.query(`select 1 from notification_events where user_id = $1`, [only]))
+                .rowCount,
+        ).toBe(0);
+
+        // Undone, the same release migrates again to the same schema; run twice, the undo fails whole.
+        await migrate(upTo(DEVICE), scratch, { migrationsFolder });
+        expect(unnumbered(await schemaOf(client))).toEqual(unnumbered(after));
+        await run(undo(DEVICE));
+        await expect(run(undo(DEVICE))).rejects.toMatchObject({ code: '42704' });
         expect(await schemaOf(client)).toEqual(before);
     }, 180_000);
 });

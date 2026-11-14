@@ -282,6 +282,7 @@ export const loginResponse = t.Object({
 const stepMethod = t.Union([
     t.Literal('webauthn'),
     t.Literal('totp'),
+    t.Literal('device'),
     t.Literal('backup'),
     t.Literal('phrase'),
 ]);
@@ -332,7 +333,7 @@ export const stepChallengeResponse = stepChallenge;
 /* A method as the list shows it: a name only where one was given, and whether a key is synced. */
 const twoStepMethod = t.Object({
     id: t.String(),
-    kind: t.Union([t.Literal('totp'), t.Literal('webauthn')]),
+    kind: t.Union([t.Literal('totp'), t.Literal('webauthn'), t.Literal('device')]),
     name: t.Nullable(t.String()),
     createdAt: t.String(),
     lastUsedAt: t.Nullable(t.String()),
@@ -352,7 +353,93 @@ export const twoStepResponse = t.Object({
     backupCodesLeft: t.Integer(),
     totpFrozen: t.Boolean(),
     defaultKind: t.Optional(t.Nullable(defaultKind)),
+    // Whether this device could turn on Approve on another device now, and the devices the
+    // person can choose from to approve it; only to a client that named the method in `?methods=`.
+    otherDevice: t.Optional(t.Boolean()),
+    approvers: t.Optional(
+        t.Array(
+            t.Object({
+                id: t.String(),
+                kind: t.Nullable(
+                    t.Union([t.Literal('web'), t.Literal('ios'), t.Literal('android')]),
+                ),
+                name: t.Nullable(t.String()),
+                createdAt: t.String(),
+            }),
+        ),
+    ),
 });
+
+/*
+ * Approving on another device (docs/two-step-design.md 12).
+ * POST /auth/approvals: the request, the account it is for (a sign-in has not been told yet,
+ * and the code covers it), and when it ends with its token.
+ */
+export const approvalStartedResponse = t.Object({
+    requestId: t.String(),
+    userId: t.String(),
+    expiresAt: t.String(),
+});
+/* GET /auth/approvals/:id: where the request stands, for the device that made it. */
+export const approvalStatusResponse = t.Object({
+    state: t.Union([
+        t.Literal('waiting'),
+        t.Literal('opened'),
+        t.Literal('revealed'),
+        t.Literal('approved'),
+        t.Literal('ended'),
+    ]),
+    approverKey: t.Optional(t.String()),
+    ended: t.Optional(t.Union([t.Literal('replaced'), t.Literal('over'), t.Literal('refused')])),
+});
+export const approvalRevealedResponse = t.Object({ revealed: t.Literal(true) });
+/*
+ * GET /auth/approvals: what this device may answer. `device` is the asking device as the
+ * server knows it, or in its own words for one it does not know yet. `location` is roughly
+ * where it is ("near Lyon, France"), as the operator's proxy said it; null where the server
+ * was told nothing.
+ */
+export const approvalsResponse = t.Object({
+    userId: t.String(),
+    approvals: t.Array(
+        t.Object({
+            id: t.String(),
+            purpose: t.String(),
+            class: t.Union([t.Literal('unknown'), t.Literal('known'), t.Literal('change')]),
+            device: t.Object({
+                kind: t.Nullable(
+                    t.Union([t.Literal('web'), t.Literal('ios'), t.Literal('android')]),
+                ),
+                name: t.Nullable(t.String()),
+            }),
+            location: t.Nullable(t.String()),
+            // The name is the asking device's own words: the server does not know the device.
+            selfNamed: t.Boolean(),
+            // The asking device chose this device to answer.
+            chosen: t.Boolean(),
+            createdAt: t.String(),
+            expiresAt: t.String(),
+            tokenDigest: t.String(),
+            commitment: t.String(),
+            approverKey: t.Optional(t.String()),
+            reveal: t.Optional(t.Object({ deviceSigningKey: t.String(), nonce: t.String() })),
+        }),
+    ),
+});
+export const approvalOpenedResponse = t.Object({ approverKey: t.String() });
+export const approvalApprovedResponse = t.Object({ approved: t.Literal(true) });
+export const approvalEndedResponse = t.Object({ ended: t.Literal(true) });
+/* POST /auth/two-step/device: the pending method and the step token its one approval runs from. */
+export const deviceEnrolmentResponse = t.Object({
+    id: t.String(),
+    token: t.String(),
+    expiresAt: t.String(),
+});
+/* POST /auth/two-step/device/:id/confirm: the backup codes when this turned the step on, or `added`. */
+export const deviceConfirmedResponse = t.Union([
+    t.Object({ backupCodes: t.Array(t.String()) }),
+    t.Object({ added: t.Literal(true) }),
+]);
 
 /*
  * POST /auth/two-step/keys/options: what `navigator.credentials.create` is given
@@ -427,6 +514,7 @@ export const securityEventsResponse = t.Object({
                 t.Union([
                     t.Literal('totp'),
                     t.Literal('webauthn'),
+                    t.Literal('device'),
                     t.Literal('backup'),
                     t.Literal('phrase'),
                 ]),

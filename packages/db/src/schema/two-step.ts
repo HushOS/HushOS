@@ -22,13 +22,12 @@ import { accountDevices, bytea, users, type DeviceKind } from './auth';
  * there is no flag that could disagree with the factors.
  */
 
-export type TwoStepFactorKind = 'totp' | 'webauthn';
+export type TwoStepFactorKind = 'totp' | 'webauthn' | 'device';
 /* What can pass the step: a factor's kind, a backup code or the recovery phrase. */
 export type TwoStepMethod = TwoStepFactorKind | 'backup' | 'phrase';
 /*
  * What an account's default can be (docs/two-step-design.md 12): the kind of method the step
- * offers first. `device` (approving on another device) is named here before it is built, so the
- * column and the order need no second migration; no factor of that kind exists yet.
+ * offers first. Every kind of factor can be it.
  */
 export const TWO_STEP_DEFAULT_KINDS = ['webauthn', 'totp', 'device'] as const;
 export type TwoStepDefaultKind = (typeof TWO_STEP_DEFAULT_KINDS)[number];
@@ -58,10 +57,13 @@ const sessionPurposes = TWO_STEP_PURPOSES.filter(
     .join(', ');
 
 /*
- * A method: an authenticator app (TOTP) or a WebAuthn credential (a passkey or a security
- * key). A row is pending until `confirmed_at` is set; a pending row never satisfies the
- * step, and the worker deletes it ten minutes after it was made.
+ * A method: an authenticator app (TOTP), a WebAuthn credential (a passkey or a security
+ * key), or approving on another device. A row is pending until `confirmed_at` is set; a
+ * pending row never satisfies the step, and the worker deletes it ten minutes after it was made.
  *
+ * - Another device (`device`): the row says only that the account takes an approval from one of
+ *   its other devices as its second step (docs/two-step-design.md 12). It holds no secret and no
+ *   name; one per account, pending until one real approval from another device confirms it.
  * - TOTP: the shared secret sealed under the two-step key (XChaCha20-Poly1305, 20 bytes and the
  *   tag), the id of the key it is sealed under, and the last time step a code was accepted for.
  *   The server can open the secret while it runs; a copy of the database without the key cannot.
@@ -100,10 +102,18 @@ export const twoStepFactors = pgTable(
         uniqueIndex('two_step_factors_one_totp_idx')
             .on(table.userId)
             .where(sql`${table.kind} = 'totp' and ${table.confirmedAt} is not null`),
+        // One row of the kind per account, pending or confirmed: turning it on again replaces it.
+        uniqueIndex('two_step_factors_one_device_idx')
+            .on(table.userId)
+            .where(sql`${table.kind} = 'device'`),
         index('two_step_factors_pending_idx')
             .on(table.createdAt)
             .where(sql`${table.confirmedAt} is null`),
-        check('two_step_factors_kind_valid', sql`${table.kind} in ('totp', 'webauthn')`),
+        check('two_step_factors_kind_valid', sql`${table.kind} in ('totp', 'webauthn', 'device')`),
+        check(
+            'two_step_factors_device_valid',
+            sql`${table.kind} <> 'device' or ${table.name} is null`,
+        ),
         check(
             'two_step_factors_totp_valid',
             sql`(${table.kind} = 'totp' and ${table.name} is null and ${table.totpKeyId} is not null and ${table.totpNonce} is not null and ${table.totpSecret} is not null and ${table.totpLastStep} is not null and octet_length(${table.totpKeyId}) = 8 and octet_length(${table.totpNonce}) = 24 and octet_length(${table.totpSecret}) = 36 and ${table.totpLastStep} >= 0 and (${table.confirmedAt} is null or ${table.totpLastStep} > 0)) or (${table.kind} <> 'totp' and ${table.totpKeyId} is null and ${table.totpNonce} is null and ${table.totpSecret} is null and ${table.totpLastStep} is null)`,
@@ -273,6 +283,161 @@ export const twoStepKeyRegistrations = pgTable(
 );
 
 /*
+ * Whose budget a request to approve on another device is counted in (docs/two-step-design.md
+ * 12): `unknown` for a sign-in that proved no device (one budget for the account), `known` for a
+ * sign-in that proved its device's key (that device's own), `change` for a step-up from a
+ * signed-in session (that device's own, and one for the account). The classes never share room.
+ */
+export const DEVICE_REQUEST_CLASSES = ['unknown', 'known', 'change'] as const;
+export type DeviceRequestClass = (typeof DEVICE_REQUEST_CLASSES)[number];
+/*
+ * Where a request stands. `waiting`: made, with only the asking device's commitment. `opened`:
+ * one approving device posted its fresh key. `revealed`: the asking device showed what it
+ * committed to. `approved`: the approving device signed. `ended`: over, for `ended_reason`.
+ */
+export const DEVICE_REQUEST_STATES = [
+    'waiting',
+    'opened',
+    'revealed',
+    'approved',
+    'ended',
+] as const;
+export type DeviceRequestState = (typeof DEVICE_REQUEST_STATES)[number];
+/*
+ * Why a request ended: `used` (it passed the step), `passed` (the step was passed another way),
+ * `denied`, `wrong-code`, `not-me` and `mismatch` (the approving device refused it), `replaced`
+ * (a newer request took its place), `expired` (its token ran out or ended unused), `off` (the
+ * method was removed).
+ */
+export const DEVICE_REQUEST_ENDS = [
+    'used',
+    'passed',
+    'denied',
+    'wrong-code',
+    'not-me',
+    'mismatch',
+    'replaced',
+    'expired',
+    'off',
+] as const;
+export type DeviceRequestEnd = (typeof DEVICE_REQUEST_ENDS)[number];
+
+const quoted = (values: readonly string[]) => values.map((value) => `'${value}'`).join(', ');
+
+/*
+ * A request to approve on another device, run as the second step (docs/two-step-design.md 12,
+ * docs/devices-design.md 2). The step token is its bearer: the row names the token by its hash
+ * and its purpose, lasts no longer than the token, and passes only that token.
+ *
+ * - The asking device commits first (`commitment`), one approving device opens the request with
+ *   a fresh key (`approver_key`), and only then does the asking device reveal what it committed
+ *   to (`device_key`, its signing key, and `nonce`). The code both show is computed from all of
+ *   it, so the server cannot choose a value after seeing the other side's.
+ * - `signature` is the approving device's, by its device key, over the statement that names the
+ *   account, this request, the purpose, the token's hash and the asking device's key.
+ * - `device_id` is the device asking, when the server knows it: the one whose key the sign-in
+ *   proved, or the session's for a step-up. Null for a sign-in that proved none. `device_kind`
+ *   and `device_name` are what the approving device is shown; for a device the server does not
+ *   know yet they are the device's own words.
+ * - `counted`: this request was counted as a failed step (denied, a wrong code, or left
+ *   unanswered from a sign-in that proved no device), once.
+ * - `chosen_device_id`: the one device that may approve, when the asking device named it.
+ *   The request that turns the method on always names one: with no method yet, every signed-in
+ *   device looks alike to the server, so the person says which of theirs is to answer, and a
+ *   session someone else opened with the password cannot answer in its place.
+ * - `location`: roughly where the asking device is ("near Lyon, France"), as the operator's
+ *   proxy said it in the headers the server is told to trust; null where none is configured.
+ *   It is for the approving device's prompt and nothing else, and goes when the request ends:
+ *   the table's check refuses an ended request that still has one.
+ * No secret is kept here.
+ */
+export const twoStepDeviceRequests = pgTable(
+    'two_step_device_requests',
+    {
+        id: uuid().defaultRandom().primaryKey(),
+        userId: uuid('user_id')
+            .notNull()
+            .references(() => users.id, { onDelete: 'cascade' }),
+        tokenHash: bytea('token_hash').notNull(),
+        purpose: text().notNull().$type<TwoStepPurpose>(),
+        class: text().notNull().$type<DeviceRequestClass>(),
+        deviceId: uuid('device_id').references(() => accountDevices.id, { onDelete: 'cascade' }),
+        deviceKind: text('device_kind').$type<DeviceKind>(),
+        deviceName: text('device_name'),
+        location: text(),
+        commitment: bytea().notNull(),
+        approverDeviceId: uuid('approver_device_id').references(() => accountDevices.id, {
+            onDelete: 'cascade',
+        }),
+        chosenDeviceId: uuid('chosen_device_id').references(() => accountDevices.id, {
+            onDelete: 'cascade',
+        }),
+        approverKey: bytea('approver_key'),
+        deviceKey: bytea('device_key'),
+        nonce: bytea(),
+        signature: bytea(),
+        state: text().notNull().default('waiting').$type<DeviceRequestState>(),
+        endedReason: text('ended_reason').$type<DeviceRequestEnd>(),
+        counted: boolean().notNull().default(false),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+        endedAt: timestamp('ended_at', { withTimezone: true }),
+    },
+    (table) => [
+        index('two_step_device_requests_user_idx').on(table.userId, table.createdAt),
+        index('two_step_device_requests_token_idx').on(table.tokenHash),
+        index('two_step_device_requests_created_idx').on(table.createdAt),
+        // Behind the devices' on-delete-cascades, so a sweep's deletes don't scan the table.
+        index('two_step_device_requests_device_idx')
+            .on(table.deviceId)
+            .where(sql`${table.deviceId} is not null`),
+        index('two_step_device_requests_approver_idx')
+            .on(table.approverDeviceId)
+            .where(sql`${table.approverDeviceId} is not null`),
+        index('two_step_device_requests_chosen_idx')
+            .on(table.chosenDeviceId)
+            .where(sql`${table.chosenDeviceId} is not null`),
+        // A device is never asked to approve itself, and only the chosen one opens a request that chose.
+        check(
+            'two_step_device_requests_chosen_valid',
+            sql`${table.chosenDeviceId} is null or ((${table.deviceId} is null or ${table.chosenDeviceId} <> ${table.deviceId}) and (${table.approverDeviceId} is null or ${table.approverDeviceId} = ${table.chosenDeviceId}))`,
+        ),
+        check(
+            'two_step_device_requests_purpose_valid',
+            sql`${table.purpose} in (${sql.raw(quoted(TWO_STEP_PURPOSES.filter((purpose) => purpose !== 'enrol')))})`,
+        ),
+        // A sign-in is `unknown` or `known`, a step-up `change`; only `unknown` has no device.
+        check(
+            'two_step_device_requests_class_valid',
+            sql`(${table.class} = 'unknown' and ${table.purpose} = 'login' and ${table.deviceId} is null) or (${table.class} = 'known' and ${table.purpose} = 'login' and ${table.deviceId} is not null) or (${table.class} = 'change' and ${table.purpose} <> 'login' and ${table.deviceId} is not null)`,
+        ),
+        check(
+            'two_step_device_requests_device_valid',
+            sql`(${table.deviceKind} is null or ${table.deviceKind} in ('web', 'ios', 'android')) and (${table.deviceName} is null or char_length(${table.deviceName}) between 1 and 40)`,
+        ),
+        check(
+            'two_step_device_requests_lengths_valid',
+            sql`octet_length(${table.tokenHash}) = 32 and octet_length(${table.commitment}) = 32 and (${table.approverKey} is null or octet_length(${table.approverKey}) = 32) and (${table.deviceKey} is null or octet_length(${table.deviceKey}) = 32) and (${table.nonce} is null or octet_length(${table.nonce}) = 32) and (${table.signature} is null or octet_length(${table.signature}) = 64)`,
+        ),
+        // Each state has exactly what the states before it wrote: nothing is revealed before a
+        // device opened, and nothing is approved without what was revealed and a signature.
+        check(
+            'two_step_device_requests_state_valid',
+            sql`${table.state} in (${sql.raw(quoted(DEVICE_REQUEST_STATES))}) and (${table.state} <> 'waiting' or (${table.approverDeviceId} is null and ${table.approverKey} is null)) and (${table.state} not in ('opened', 'revealed', 'approved') or (${table.approverDeviceId} is not null and ${table.approverKey} is not null)) and (${table.state} not in ('waiting', 'opened') or (${table.deviceKey} is null and ${table.nonce} is null and ${table.signature} is null)) and (${table.state} not in ('revealed', 'approved') or (${table.deviceKey} is not null and ${table.nonce} is not null)) and ((${table.deviceKey} is null) = (${table.nonce} is null)) and (${table.state} <> 'revealed' or ${table.signature} is null) and (${table.state} <> 'approved' or ${table.signature} is not null)`,
+        ),
+        // A place is kept only while the request can still be answered.
+        check(
+            'two_step_device_requests_location_valid',
+            sql`${table.location} is null or (${table.state} <> 'ended' and char_length(${table.location}) between 1 and 200)`,
+        ),
+        check(
+            'two_step_device_requests_end_valid',
+            sql`(${table.state} = 'ended') = (${table.endedReason} is not null) and (${table.state} = 'ended') = (${table.endedAt} is not null) and (${table.endedReason} is null or ${table.endedReason} in (${sql.raw(quoted(DEVICE_REQUEST_ENDS))})) and ${table.expiresAt} > ${table.createdAt}`,
+        ),
+    ],
+);
+
+/*
  * The security log (docs/two-step-design.md 7): one line per sign-in, failed step, change to
  * the step and other security event, kept for 90 days. A line carries the kind of event, the
  * method that passed the step, the device's kind and the time; never a name, an address or a
@@ -302,7 +467,7 @@ export const accountSecurityEvents = pgTable(
         check('account_security_events_kind_valid', sql`${table.kind} ~ '^[a-z][a-z0-9-]{0,39}$'`),
         check(
             'account_security_events_method_valid',
-            sql`${table.method} is null or ${table.method} in ('totp', 'webauthn', 'backup', 'phrase')`,
+            sql`${table.method} is null or ${table.method} in ('totp', 'webauthn', 'device', 'backup', 'phrase')`,
         ),
         check(
             'account_security_events_device_kind_valid',
