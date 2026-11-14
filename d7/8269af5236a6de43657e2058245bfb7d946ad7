@@ -1,0 +1,33 @@
+DESIGN.md
+  s_566b8e0c4467a4::t_0e3d7ec0ccb6fd 304
+apps/web/src/components/ui/command.tsx
+  s_566b8e0c4467a4::t_66d4bb56c9c1bd 15-27,31,33,36-43,178
+apps/web/src/components/ui/context-menu.tsx
+  s_566b8e0c4467a4::t_01f6fe5f46de05 97,122,151,184
+apps/web/src/components/ui/dropdown-menu.tsx
+  s_566b8e0c4467a4::t_8092321b14cb88 91,116,165,207
+apps/web/src/components/ui/select.tsx
+  s_566b8e0c4467a4::t_9b6cd4dd2c4664 106
+apps/web/src/lib/states.test.ts
+  s_566b8e0c4467a4::t_00413c51511863 86-117
+apps/web/src/routes/_authenticated/app/admin/index.tsx
+  s_566b8e0c4467a4::t_b3307f6e9ebaee 82,93
+apps/web/src/styles.css
+  s_566b8e0c4467a4::t_c023d6b6fe4e66 122,225-236
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d78269af5236a6de43657e2058245bfb7d946ad7",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
