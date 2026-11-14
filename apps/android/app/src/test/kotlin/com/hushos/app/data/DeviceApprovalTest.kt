@@ -625,6 +625,28 @@ class DeviceApprovalTest {
     }
 
     @Test
+    fun anOpenWhoseReplyWasLostIsSentAgainWithTheSameValueAndTheRequestGoesOn() {
+        val server = ApprovalServer()
+        val asked = server.asked()
+        val phone = Phone(server)
+        // The server took this phone's value; its answer never arrived.
+        server.loseOpenReply = true
+        assertThrows(Unanswered::class.java) { phone.flow.open() }
+        val sent = server.calls("/open").single().body.getString("ephemeralKey")
+        assertEquals(sent, server.approverKey)
+        // Tried again: the same value, which is the one the server holds, so its echo is this phone's own.
+        server.loseOpenReply = false
+        phone.flow.open()
+        assertEquals(listOf(sent, sent), server.calls("/open").map { it.body.getString("ephemeralKey") })
+        assertNull(server.deniedFor)
+        server.reveal = asked
+        server.state = "revealed"
+        assertTrue(phone.flow.revealed())
+        phone.flow.approve(deviceStepCode(signedStep(server, asked), sent, asked.second))
+        assertNotNull(server.signature)
+    }
+
+    @Test
     fun aRequestOpenedAgainInTheSameProcessSendsTheSameValueAndKeepsTheCommitmentSeenFirst() {
         val server = ApprovalServer()
         val asked = server.asked()
