@@ -2552,6 +2552,7 @@ What the migration does:
 
 Locks:
 
+- With a split-role setup, the default privileges under [One role per process](#one-role-per-process) cover the new table.
 - The replaced checks take an exclusive lock on `two_step_factors`, `account_security_events` and `notification_events` and read each once; the new table's foreign keys lock `users` and `account_devices` against writes. All are held until drizzle's transaction commits: milliseconds. Each waits at most five seconds (`lock_timeout`); not had in time, the migration fails with nothing applied. Run it again.
 
 What runs where:
