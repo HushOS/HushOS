@@ -1,0 +1,154 @@
+apps/ios/App/FamilyManaging.swift
+  s_566b8e0c4467a4::t_86bee5d41c60f5 595,603
+  s_566b8e0c4467a4::t_95036f4f69ef8e 651,679
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HomeScreen.kt
+  s_566b8e0c4467a4::t_d08fa0da0db8f5 397,406
+apps/web/src/components/drive/tag-view.tsx
+  s_41ce2ed146c27c::t_cd90946671d485 324
+apps/android/app/src/main/kotlin/com/hushos/app/ui/SharedScreen.kt
+  s_41ce2ed146c27c::t_4a7487448f4505 313
+apps/web/src/routes/_authenticated/app/_drive/shared.tsx
+  s_41ce2ed146c27c::t_cdc4b163b35427 713
+  s_566b8e0c4467a4::t_2fe8d0cbc6c5c0 715
+apps/ios/App/AccountView.swift
+  s_41ce2ed146c27c::t_13b8428ad57c23 451,1147
+  s_75dbe24a0bc379::t_ec63909784d946 972,1081
+apps/web/src/components/account-dialogs.tsx
+  s_75dbe24a0bc379::t_f3f3d03343e975 307-308
+  s_41ce2ed146c27c::t_d450b9775d6700 423,449-451,528
+apps/web/src/components/drive/share-dialog.tsx
+  s_566b8e0c4467a4::t_576023b2f9feb4 445-446
+  s_566b8e0c4467a4::t_f9d878f683fa61 401
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AccountScreen.kt
+  s_75dbe24a0bc379::t_c6cc9734046c11 818
+  s_41ce2ed146c27c::t_434eba083970a4 423,773
+  s_75dbe24a0bc379::t_d2a2fe9cd93047 897
+apps/ios/App/RecentsView.swift
+  s_566b8e0c4467a4::t_5f5d901871efdd 540
+apps/ios/App/NodeActions.swift
+  s_41ce2ed146c27c::t_44af1a7db6a7c5 279
+apps/ios/App/ActionSheets.swift
+  s_41ce2ed146c27c::t_1094a9c4939f20 432
+apps/web/src/components/drive/command-palette.tsx
+  s_41ce2ed146c27c::t_ba494c2a690462 545
+apps/web/src/components/storage-card.tsx
+  s_41ce2ed146c27c::t_fd2b2fc79237d5 212-213
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ItemActions.kt
+  s_41ce2ed146c27c::t_e9b79f33cb8fa8 697
+docs/optional-verification.md
+  s_566b8e0c4467a4::t_e5d3afebf1d1c3 393
+apps/web/src/components/device-control.tsx
+  s_566b8e0c4467a4::t_9b539953844c53 12
+apps/web/src/components/families/members.tsx
+  s_566b8e0c4467a4::t_c48b835c8069d3 594,1141,1381,1493
+apps/web/src/components/drive/report-dialog.tsx
+  s_75dbe24a0bc379::t_52dcb458c16812 128
+apps/ios/App/Sharing.swift
+  s_41ce2ed146c27c::t_6a9a0c34fdacce 540
+  s_566b8e0c4467a4::t_a961d0119958bf 751
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Families.kt
+  s_566b8e0c4467a4::t_fb651f8647de1a 518,530
+  s_566b8e0c4467a4::t_59968784a58f52 487,505
+apps/ios/App/Received.swift
+  s_41ce2ed146c27c::t_08a447a7960203 361,363
+apps/ios/App/Transfers.swift
+  s_41ce2ed146c27c::t_3010b5f9b4d4ff 372
+apps/web/src/components/drive/transfers-panel.tsx
+  s_41ce2ed146c27c::t_319e583f7c08c1 597
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HushOSApp.kt
+  s_41ce2ed146c27c::t_fc6c456d89a629 771
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Screens.kt
+  s_566b8e0c4467a4::t_5ce24211ed1a42 200
+apps/web/src/components/own-words-dialog.tsx
+  s_c56e31c87cddde::t_02993a0ee43ddf 5
+apps/web/src/components/drive/tags-view.tsx
+  s_41ce2ed146c27c::t_54144d3bbf8932 285
+apps/android/app/src/main/kotlin/com/hushos/app/ui/LinksUi.kt
+  s_566b8e0c4467a4::t_e2f9910547efd2 553
+  s_41ce2ed146c27c::t_728f8ed18bbfe2 671
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DevicesScreen.kt
+  s_566b8e0c4467a4::t_edaac339687b43 110,122
+apps/ios/App/DevicesView.swift
+  s_566b8e0c4467a4::t_fb01447d48406f 79,91
+  s_c56e31c87cddde::t_7f86c627d771ac 144
+apps/web/src/components/drive/versions-dialog.tsx
+  s_41ce2ed146c27c::t_434efcee33aa53 328
+apps/android/app/src/main/kotlin/com/hushos/app/ui/TwoStepScreen.kt
+  s_566b8e0c4467a4::t_73069e9a051941 471,473,475,822,925
+apps/ios/App/Contacts.swift
+  s_566b8e0c4467a4::t_c0c15ff481c9d0 79
+apps/ios/App/TwoStep.swift
+  s_566b8e0c4467a4::t_2ce6d63959f1d5 767-768,844,846,1053-1054,1064,1247
+apps/web/src/components/account-devices.tsx
+  s_566b8e0c4467a4::t_650122a77cc165 367-368
+apps/web/src/components/account-two-step.tsx
+  s_566b8e0c4467a4::t_fdfaf7765dabfe 902,1222,1268,1566
+apps/web/src/components/drive/account-changed.tsx
+  s_566b8e0c4467a4::t_747639ea475afd 7
+apps/web/src/components/drive/check-contact.tsx
+  s_566b8e0c4467a4::t_4df60d0b66754b 161
+apps/web/src/components/drive/contact-flow.tsx
+  s_566b8e0c4467a4::t_de8fe6ecfc4bba 12
+apps/web/src/components/drive/create-folder-dialog.tsx
+  s_566b8e0c4467a4::t_a1a82e2f887566 15
+apps/web/src/components/families/create-family-dialog.tsx
+  s_566b8e0c4467a4::t_6c650ea473a4cb 20,211-219
+apps/web/src/components/families/delete-folder-dialog.tsx
+  s_566b8e0c4467a4::t_8908b7013a3851 93-94
+apps/web/src/components/families/family-check.tsx
+  s_566b8e0c4467a4::t_748edebedad7a5 130-131
+apps/web/src/components/families/family-page.tsx
+  s_566b8e0c4467a4::t_df164140eea118 642-643
+apps/web/src/components/families/invite-dialog.tsx
+  s_566b8e0c4467a4::t_e4044bc0153f2e 6
+apps/web/src/components/families/members.test.tsx
+  s_566b8e0c4467a4::t_25df0e0c664f0b 542
+apps/web/src/components/families/remove-dialog.tsx
+  s_566b8e0c4467a4::t_85a82d19e3d617 127,183
+apps/web/src/components/families/rename-dialog.tsx
+  s_566b8e0c4467a4::t_990e4ef9c3834a 4
+apps/web/src/routes/s/$token.tsx
+  s_566b8e0c4467a4::t_2278e737623a72 11
+e2e/families.spec.ts
+  s_566b8e0c4467a4::t_0211bd5202165d 942,1138
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "48bedcafa392790b00f44510ed58a5935548f283",
+  "prompts": {},
+  "sessions": {
+    "s_41ce2ed146c27c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d70584b3-e373-4645-9ed6-7b3c580163ce",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_75dbe24a0bc379": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff31c0c0-5155-4ba8-bd7c-40246f630b88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
