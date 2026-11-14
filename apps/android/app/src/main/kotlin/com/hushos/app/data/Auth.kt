@@ -70,12 +70,7 @@ data class AccountDevice(
     val createdAt: String, val lastSeenAt: String, val current: Boolean, val signedIn: Boolean,
 ) {
     /* What the list calls it: its name, else what it is, else an unknown device. */
-    val label: String get() = name?.ifEmpty { null } ?: when (kind) {
-        "android" -> "Android phone"
-        "ios" -> "iPhone"
-        "web" -> "A web browser"
-        else -> "Unknown device"
-    }
+    val label: String get() = name?.ifEmpty { null } ?: kindWords(kind) ?: "Unknown device"
 
     /* How it got in, in the words the web uses. */
     val approval: String? get() = when (approvedBy) {
@@ -90,6 +85,14 @@ data class AccountDevice(
     }
 
     companion object {
+        /* What a device is, in the list's words; null for a kind this build does not know, or none. */
+        fun kindWords(kind: String?): String? = when (kind) {
+            "android" -> "Android phone"
+            "ios" -> "iPhone"
+            "web" -> "A web browser"
+            else -> null
+        }
+
         fun from(json: JSONObject): AccountDevice {
             fun JSONObject.text(key: String): String? = if (!has(key) || isNull(key)) null else optString(key).ifEmpty { null }
             return AccountDevice(
@@ -858,11 +861,15 @@ object Auth {
         passwordTurn { callAt(session, "/api/auth/devices/$id", passwordProof(session, password), "DELETE") }
     }
 
-    fun removeOtherDevices(context: Context, password: String): Int = removeOtherDevicesAt(sessionOf(context), password)
+    /* `keep`: one other device left signed in, the one that approves for this one (Approve on another device): it is the method. */
+    fun removeOtherDevices(context: Context, password: String, keep: String? = null): Int = removeOtherDevicesAt(sessionOf(context), password, keep)
 
-    /* Under the session named, in its turn: the whole exchange, so nothing of it goes out while another password change is under way. */
-    internal fun removeOtherDevicesAt(session: Shared.Session, password: String): Int =
-        passwordTurn { callAt(session, "/api/auth/devices/others", passwordProof(session, password), "DELETE").optInt("removed") }
+    /*
+     * Under the session named, in its turn: the whole exchange, so nothing of it goes out while another password change is under way.
+     * `proof` is the password's (a test has no server to make one with).
+     */
+    internal fun removeOtherDevicesAt(session: Shared.Session, password: String, keep: String? = null, proof: (Shared.Session, String) -> JSONObject = ::passwordProof): Int =
+        passwordTurn { callAt(session, "/api/auth/devices/others", proof(session, password).apply { keep?.let { put("keep", it.lowercase()) } }, "DELETE").optInt("removed") }
 
     /*
      * Whether a late "removed" answer about `ended` may still clear the phone: only while nobody has

@@ -51,7 +51,8 @@ import kotlinx.coroutines.withContext
  *
  * - the asking phone commits first, reveals its key and nonce only once another device has fixed
  *   its own value, and only once; it answers the step only with a request that was approved;
- * - the answering phone keeps the commitment as it stood before it opened the request, refuses a
+ * - the answering phone keeps the commitment as it stood before it opened the request, and the
+ *   value it opened it with, which it made itself and never takes from the server; it refuses a
  *   reveal that is not that commitment, and signs only after the code on the other screen was
  *   typed exactly, or its QR code scanned and found to be this very request.
  *
@@ -277,13 +278,16 @@ class DeviceAsk private constructor(
          * Makes the request for `stepToken`. `purpose` is what the token is for (`login`, a change's own
          * purpose, or `device-approval` when the method is being turned on); `deviceSigningKey` this
          * phone's device key, base64url. `name` is what the phone calls itself, used only by a server
-         * that does not know it yet. A refusal is thrown in the server's words (`StepRefused`). Blocking.
+         * that does not know it yet. `approverDeviceId` is the device the person chose to approve, when
+         * the method is being turned on: only it may answer, and the server refuses such a request
+         * without one (`device-choice`). A sign-in and a change name none. A refusal is thrown in the
+         * server's words (`StepRefused`). Blocking.
          */
-        fun start(wire: ApprovalWire, stepToken: String, purpose: String, deviceSigningKey: String, name: String, kind: String = "android"): DeviceAsk {
+        fun start(wire: ApprovalWire, stepToken: String, purpose: String, deviceSigningKey: String, name: String, approverDeviceId: String? = null, kind: String = "android"): DeviceAsk {
             val digest = stepTokenDigest(stepToken)
             val nonce = base64urlEncode(randomBytes(32u))
             val commitment = deviceStepCommitment(purpose, digest, deviceSigningKey, nonce)
-            val reply = wire.send("POST", "/api/auth/approvals", approvalStartJson(stepToken, commitment, kind, name), null)
+            val reply = wire.send("POST", "/api/auth/approvals", approvalStartJson(stepToken, commitment, kind, name, approverDeviceId), null)
             return when (val read = approvalStartReplyRead(reply.code, reply.text)) {
                 is ApprovalStartReply.Started ->
                     DeviceAsk(wire, stepToken, approvalQr(read.requestId, commitment), DeviceStep(read.userId, read.requestId, purpose, digest, deviceSigningKey), nonce, uptime())
@@ -343,6 +347,13 @@ object DeviceApprovals {
     /* For the session this phone holds now. */
     fun ownKey(context: Context): String? = ownKey(Shared.session(context), Shared.deviceIdentity(context))
 
+    /*
+     * What a prompt says is asked, by which device and roughly from where (the core's words, the web's too):
+     * "Change your password on Maya’s Pixel", or for a device the account does not know, whose name is its own
+     * words, "Sign-in on a new device calling itself “Chrome on Windows”, near Lyon, France".
+     */
+    fun asks(asked: ApprovalPrompt): String = approvalAsks(asked.purpose, asked.deviceName, asked.selfNamed, asked.location)
+
     /* The requests this phone may answer now, after its own limit. Blocking. */
     fun list(wire: ApprovalWire, limit: PromptLimit, day: String = PromptLimit.day()): List<ApprovalPrompt> = limit.shown(listed(wire), day)
 
@@ -376,6 +387,31 @@ sealed class ApprovalProblem(message: String) : AuthFailure(message) {
     class WrongCode : ApprovalProblem(StepWords.APPROVAL_WRONG_CODE)
     /* The request is over, or another device has it: the server's words. */
     class Over(message: String) : ApprovalProblem(message)
+    /* This phone's own value for the request is not one it made and still holds: ended, nothing signed. */
+    class NotOwnValue(message: String) : ApprovalProblem(message)
+}
+
+/*
+ * What this phone opened, by request: the 32 bytes it made, and the commitment it saw before it
+ * posted them. In memory only, for as long as the process and the account last. The value is
+ * this phone's half of the code: it must be one this phone made after the commitment was fixed,
+ * never one the server hands it, which could be chosen to steer the code.
+ */
+class OpenedValues(private val fresh: () -> String = { base64urlEncode(randomBytes(32u)) }) {
+    class Opened(val value: String, val commitment: String)
+
+    private val held = mutableMapOf<String, Opened>()
+
+    @Synchronized fun of(id: String): Opened? = held[id]
+    /* A value for a request not opened yet: this phone's own, fresh. */
+    internal fun made(commitment: String) = Opened(fresh(), commitment)
+    @Synchronized internal fun keep(id: String, opened: Opened) { held[id] = opened }
+    @Synchronized fun forget(id: String) { held.remove(id) }
+    /* Only the requests still listed, or being answered, are remembered. */
+    @Synchronized fun retain(ids: Set<String>) { held.keys.retainAll(ids) }
+    /* The account went: so does everything opened under it. */
+    @Synchronized fun clear() { held.clear() }
+    val isEmpty: Boolean @Synchronized get() = held.isEmpty()
 }
 
 /*
@@ -390,6 +426,8 @@ class ApprovalAnswering(
     /* This phone's own account id and device key. */
     private val userId: String,
     private val seed: ByteArray,
+    /* What this phone opened in this process: a request opened again finds its value and its commitment here. */
+    private val opened: OpenedValues = OpenedValues(),
 ) {
     /* Why the request is ended from here. `mismatch` is not a failed step; the others are. */
     enum class Ending(val wire: String) { DENIED("denied"), WRONG_CODE("wrong-code"), NOT_ME("not-me"), MISMATCH("mismatch") }
@@ -397,10 +435,13 @@ class ApprovalAnswering(
     val id: String = asked.id
 
     /* "Sign-in on Chrome on Windows, near Lyon, France": what is asked, by which device, and roughly from where when the server was told. */
-    val asks: String = approvalAsks(asked.purpose, asked.deviceName, asked.location)
+    val asks: String = DeviceApprovals.asks(asked)
 
-    /* This phone's own value, once it opened the request: the first one, if it opened it before. */
-    private var approverKey: String? = null
+    /* The asking device chose this phone to answer: no other device is shown the request. */
+    val chosen: Boolean = asked.chosen
+
+    /* This phone's own value and the commitment it saw before it posted it, once it opened the request: the first ones, if it opened it before. */
+    private var mine: OpenedValues.Opened? = null
 
     /* The code this phone expects, and what it signs, once the other device revealed what it committed to. */
     private var ready: Pair<String, DeviceStep>? = null
@@ -430,7 +471,9 @@ class ApprovalAnswering(
     @Synchronized
     fun openScanned(text: String): Boolean {
         val read = approvalQrRead(text) ?: return false
-        if (read.requestId != asked.id || read.commitment != asked.commitment) {
+        // Against the commitment remembered from before this phone opened the request, when it did: never a later listing's.
+        if (read.requestId != asked.id || read.commitment != (opened.of(id)?.commitment ?: asked.commitment)) {
+            opened.forget(id)
             runCatching { end(Ending.MISMATCH) }
             throw ApprovalProblem.Mismatch()
         }
@@ -439,12 +482,34 @@ class ApprovalAnswering(
         return true
     }
 
-    /* Opens the request: this phone's own 32 fresh bytes go in, and only then does the other device reveal. */
+    /*
+     * Opens the request: this phone's own 32 fresh bytes go in, and only then does the other device
+     * reveal. The bytes are remembered with the commitment seen before they were posted; opening
+     * again in this process sends the same ones.
+     *
+     * The server answers with the value the request was opened with. It must be the one this phone
+     * sent: a server that answers another chose the value itself, after seeing the commitment, and
+     * could steer the code. So did one that lists the request as opened by this phone when this
+     * process holds no value for it (the app was restarted since). Either ends the request
+     * (`mismatch`), and nothing is ever signed for it. No value is ever taken from the server.
+     */
     @Synchronized
     fun open() {
-        if (approverKey != null) return
-        val own = asked.approverKey ?: base64urlEncode(randomBytes(32u))
-        approverKey = (post("open", approvalOpenJson(own)) as? ApprovalAckReply.Done)?.approverKey ?: throw Unanswered()
+        if (mine != null) return
+        val before = opened.of(id)
+        if (before == null && asked.approverKey != null) throw notOwn(StepWords.APPROVAL_RESTARTED)
+        val own = before ?: opened.made(asked.commitment)
+        val echoed = (post("open", approvalOpenJson(own.value)) as? ApprovalAckReply.Done)?.approverKey ?: throw Unanswered()
+        if (echoed != own.value) throw notOwn(StepWords.APPROVAL_STEERED)
+        opened.keep(id, own)
+        mine = own
+    }
+
+    /* The request is ended (`mismatch`: not a failed step) and forgotten; what is thrown says why. */
+    private fun notOwn(message: String): ApprovalProblem {
+        opened.forget(id)
+        runCatching { end(Ending.MISMATCH) }
+        return ApprovalProblem.NotOwnValue(message)
     }
 
     /*
@@ -456,14 +521,16 @@ class ApprovalAnswering(
     @Synchronized
     fun revealed(): Boolean {
         if (ready != null) return true
-        val approverKey = approverKey ?: return false
+        val mine = mine ?: return false
         val now = DeviceApprovals.listed(wire).firstOrNull { it.id == id } ?: throw ApprovalProblem.Over(StepWords.APPROVAL_OVER)
         val key = now.revealKey ?: return false
         val nonce = now.revealNonce ?: return false
         val step = DeviceStep(userId, id, asked.purpose, asked.tokenDigest, key)
         val code = try {
-            approvalCodeExpected(step, asked.commitment, approverKey, nonce)
+            // The commitment and the value this phone remembered, whatever the server lists now.
+            approvalCodeExpected(step, mine.commitment, mine.value, nonce)
         } catch (error: Exception) {
+            opened.forget(id)
             runCatching { end(Ending.MISMATCH) }
             throw ApprovalProblem.Mismatch()
         }
@@ -509,12 +576,14 @@ class ApprovalAnswering(
         }
         val signature = deviceStepSign(seed, step)
         if (post("approve", approvalApproveJson(signature)) !is ApprovalAckReply.Done) throw LostReply(StepWords.LOST_CHANGE)
+        opened.forget(id)
     }
 
     /* Deny, or This wasn’t me: the request ends, and is counted as a failed step. */
     @Synchronized
     fun end(why: Ending) {
         if (post("deny", approvalDenyJson(why.wire)) !is ApprovalAckReply.Done) throw LostReply(StepWords.LOST_CHANGE)
+        opened.forget(id)
     }
 }
 

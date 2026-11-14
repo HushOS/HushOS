@@ -32,6 +32,10 @@ internal class ApprovalServer {
     var purpose = "login"
     var klass = "unknown"
     var deviceName: String? = "Chrome on Windows"
+    /* What the list says of the name and of who was asked; null leaves the field out, as a server from before it does. */
+    var selfNamed: Boolean? = null
+    var chosen: Boolean? = null
+    var location: String? = null
     var stepToken: String? = null
     var tokenDigest: String? = null
     var commitment: String? = null
@@ -50,6 +54,10 @@ internal class ApprovalServer {
     var staysOpened = false
     /* Refuses to make a request, with this status and body. */
     var refusesStart: Pair<Int, String>? = null
+    /* A server that lies to the answering phone about its own value: what it answers an open with, whatever was posted. */
+    var echoes: String? = null
+    /* The list says a device opened the request with this, though nothing here posted it. */
+    var listedApproverKey: String? = null
     /* Other requests in the list, as (id, class). */
     var others: List<Pair<String, String>> = emptyList()
 
@@ -81,7 +89,10 @@ internal class ApprovalServer {
             .put("tokenDigest", tokenDigest ?: random32())
             .put("commitment", (if (id == requestId) listedCommitment ?: commitment else null) ?: random32())
         if (id != requestId) return entry
-        approverKey?.let { entry.put("approverKey", it) }
+        selfNamed?.let { entry.put("selfNamed", it) }
+        chosen?.let { entry.put("chosen", it) }
+        location?.let { entry.put("location", it) }
+        (listedApproverKey ?: approverKey)?.let { entry.put("approverKey", it) }
         (listedReveal ?: reveal)?.let { (key, nonce) -> entry.put("reveal", JSONObject().put("deviceSigningKey", key).put("nonce", nonce)) }
         return entry
     }
@@ -132,7 +143,7 @@ internal class ApprovalServer {
                 if (state !in listOf("waiting", "opened", "revealed")) return 404 to refusal("This request is over.", "approval-over")
                 approverKey = approverKey ?: body.optString("ephemeralKey")
                 if (state == "waiting") state = "opened"
-                200 to JSONObject().put("approverKey", approverKey).toString()
+                200 to JSONObject().put("approverKey", echoes ?: approverKey).toString()
             }
             method == "POST" && path == "$own/approve" -> {
                 signature = body.optString("signature")

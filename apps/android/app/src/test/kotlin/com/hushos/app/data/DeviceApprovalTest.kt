@@ -46,6 +46,11 @@ import org.junit.Test
  * - the answering phone refuses a reveal that is not the commitment it saw before opening, and a
  *   scanned code for another request or commitment, signs only on the exact code, and ends the
  *   request (`wrong-code`) on anything else;
+ * - it opens a request with a value of its own and keeps it: a value the server answers in its
+ *   place, or a request listed as opened that this process holds no value for, ends the request;
+ * - a name the server does not vouch for is said as the device's own words;
+ * - turning the method on asks only the device the person chose, and the removal of the other
+ *   devices keeps that one;
  * - it shows at most five prompts a day for each class, whatever the server lists;
  * - `twoStepMethods` names `device`, the settings ask for it, and the settings' row says what is true.
  *
@@ -372,7 +377,9 @@ class DeviceApprovalTest {
         val wire = server.wire()
         /* The request as this phone first saw it listed, before it opened it. */
         val prompt: ApprovalPrompt = DeviceApprovals.list(wire, limit).single { it.id == server.requestId }
-        val flow = ApprovalAnswering(prompt, wire, account, key.seed)
+        /* What this phone opened in this process. */
+        val opened = OpenedValues()
+        val flow = ApprovalAnswering(prompt, wire, account, key.seed, opened)
     }
 
     private fun signedStep(server: ApprovalServer, asked: Pair<String, String>, userId: String = account) =
@@ -567,6 +574,126 @@ class DeviceApprovalTest {
         assertThrows(LostReply::class.java) { ApprovalAnswering(phone.prompt, lost, account, phone.key.seed).end(ApprovalAnswering.Ending.DENIED) }
     }
 
+    // The answering phone's own value.
+
+    @Test
+    fun aValueTheServerAnswersInPlaceOfThisPhonesOwnEndsTheRequestAndNothingIsSigned() {
+        val server = ApprovalServer()
+        val asked = server.asked()
+        val phone = Phone(server)
+        // The server answers the open with a value of its own: it has seen the commitment by now, and could pick one to steer the code.
+        server.echoes = random32()
+        val refused = assertThrows(ApprovalProblem.NotOwnValue::class.java) { phone.flow.open() }
+        assertEquals("The server changed this device’s part of the code, so nothing was approved. Ask again on the other device.", refused.message)
+        // What went out was this phone's own; what came back was not, and the request is ended as a mismatch (not a failed step).
+        assertNotEquals(server.echoes, server.calls("/open").single().body.getString("ephemeralKey"))
+        assertEquals("mismatch", server.deniedFor)
+        // Nothing of it is kept, nothing is looked for, and nothing is ever signed, whatever is then revealed.
+        assertTrue(phone.opened.isEmpty)
+        server.reveal = asked
+        val lists = server.calls("/api/auth/approvals").size
+        assertFalse(phone.flow.revealed())
+        assertEquals(lists, server.calls("/api/auth/approvals").size)
+        assertThrows(Unanswered::class.java) { phone.flow.approve(null) }
+        assertTrue(server.calls("/approve").isEmpty())
+        assertNull(server.signature)
+    }
+
+    @Test
+    fun aRequestListedAsOpenedThatThisProcessHoldsNoValueForIsRefusedWithoutOpeningIt() {
+        // The list says this phone opened the request, and this process made no value for it: the app was restarted
+        // since, or the server made it up. The listed value is never adopted, and never sent back.
+        val server = ApprovalServer()
+        server.asked()
+        server.listedApproverKey = random32()
+        val phone = Phone(server)
+        assertEquals(server.listedApproverKey, phone.prompt.approverKey)
+        val refused = assertThrows(ApprovalProblem.NotOwnValue::class.java) { phone.flow.open() }
+        assertEquals("This request was opened before HushOS was restarted. Ask again on the other device.", refused.message)
+        assertTrue(server.calls("/open").isEmpty())
+        assertEquals("mismatch", server.deniedFor)
+        assertNull(server.signature)
+        // A scan of the right code does no better: the request is not opened, and does not count as scanned.
+        val second = ApprovalServer()
+        second.asked()
+        second.listedApproverKey = random32()
+        val scanning = Phone(second)
+        assertThrows(ApprovalProblem.NotOwnValue::class.java) { scanning.flow.openScanned(approvalQr(second.requestId, second.commitment!!)) }
+        assertTrue(second.calls("/open").isEmpty())
+        assertFalse(scanning.flow.scanned)
+        assertEquals("mismatch", second.deniedFor)
+    }
+
+    @Test
+    fun aRequestOpenedAgainInTheSameProcessSendsTheSameValueAndKeepsTheCommitmentSeenFirst() {
+        val server = ApprovalServer()
+        val asked = server.asked()
+        val phone = Phone(server)
+        phone.flow.open()
+        val sent = server.calls("/open").single().body.getString("ephemeralKey")
+        // The sheet was closed, and the request is answered again from a later listing. By now the list says it is
+        // opened; this server also lists another value for this phone, and another commitment.
+        val swapped = random32() to random32()
+        server.listedApproverKey = random32()
+        server.listedCommitment = deviceStepCommitment("login", server.tokenDigest!!, swapped.first, swapped.second)
+        val later = DeviceApprovals.listed(phone.wire).single()
+        assertNotEquals(phone.prompt.commitment, later.commitment)
+        assertNotEquals(sent, later.approverKey)
+        val again = ApprovalAnswering(later, phone.wire, account, phone.key.seed, phone.opened)
+        again.open()
+        // The value this phone made is sent again, never the listed one.
+        assertEquals(listOf(sent, sent), server.calls("/open").map { it.body.getString("ephemeralKey") })
+        // The honest reveal is held to the commitment seen first, and the code is worked out from this phone's own value.
+        server.reveal = asked
+        server.state = "revealed"
+        assertTrue(again.revealed())
+        again.approve(deviceStepCode(signedStep(server, asked), sent, asked.second))
+        assertNull(server.deniedFor)
+        assertNotNull(server.signature)
+
+        // A reveal that fits only the commitment listed later is not what this phone saw before it opened: refused.
+        val lying = ApprovalServer()
+        lying.asked()
+        val other = Phone(lying)
+        other.flow.open()
+        lying.listedCommitment = deviceStepCommitment("login", lying.tokenDigest!!, swapped.first, swapped.second)
+        lying.listedReveal = swapped
+        val reopened = ApprovalAnswering(DeviceApprovals.listed(other.wire).single(), other.wire, account, other.key.seed, other.opened)
+        reopened.open()
+        assertThrows(ApprovalProblem.Mismatch::class.java) { reopened.revealed() }
+        assertEquals("mismatch", lying.deniedFor)
+        assertNull(lying.signature)
+        assertTrue(other.opened.isEmpty)
+    }
+
+    @Test
+    fun aNameTheServerDoesNotVouchForIsSaidAsTheDevicesOwnWordsAndAChosenPhoneIsTold() {
+        // A stranger with the password names their browser as they like: the prompt says the words are the device's own.
+        val server = ApprovalServer()
+        server.asked()
+        server.deviceName = "Maya’s Laptop"
+        server.selfNamed = true
+        server.location = "near Lyon, France"
+        val stranger = Phone(server)
+        assertEquals("Sign-in on a new device calling itself “Maya’s Laptop”, near Lyon, France", stranger.flow.asks)
+        // The list's rows say what the sheet says.
+        assertEquals(stranger.flow.asks, DeviceApprovals.asks(stranger.prompt))
+        assertFalse(stranger.flow.chosen)
+        // A reply that does not say (an older server) is not read as one of the account's devices.
+        server.selfNamed = null
+        assertEquals("Sign-in on a new device calling itself “Maya’s Laptop”, near Lyon, France", Phone(server).flow.asks)
+        // One of the account's own devices, by the server's record of it, which chose this phone to approve.
+        val own = ApprovalServer()
+        own.asked(purpose = "device-approval")
+        own.deviceName = "Maya’s Laptop"
+        own.selfNamed = false
+        own.chosen = true
+        val known = Phone(own)
+        assertEquals("Turn on Approve on another device on Maya’s Laptop", known.flow.asks)
+        assertTrue(known.flow.chosen)
+        assertEquals("The other device asked for this device to approve.", StepWords.APPROVAL_CHOSEN)
+    }
+
     @Test
     fun theAskingAndTheAnsweringPhoneAgreeOnTheCodeAndTheServerCanCheckTheApproval(): Unit = runBlocking {
         // Both halves against one server: what the asking phone shows is what the answering phone expects, and what
@@ -594,7 +721,7 @@ class DeviceApprovalTest {
             val purpose = made.getString("purpose")
             val key = deviceSigningCreate()
             val prompt = ApprovalPrompt(
-                made.getString("requestId"), purpose, "unknown", "web", "Chrome on Windows", "near Lyon, France", "2026-11-14T10:00:00.000Z", "2026-11-14T10:05:00.000Z",
+                made.getString("requestId"), purpose, "unknown", "web", "Chrome on Windows", "near Lyon, France", false, false, "2026-11-14T10:00:00.000Z", "2026-11-14T10:05:00.000Z",
                 made.getString("tokenDigest"), made.getString("commitment"), null, null, null,
             )
             val signed = mutableListOf<String>()
@@ -612,14 +739,16 @@ class DeviceApprovalTest {
                     else -> { denied += JSONObject(body!!).getString("reason"); ApprovalWire.Reply(200, """{"ended":true}""") }
                 }
             }
+            // The value this phone opens with is its own; here it makes the one the fixture's code was worked out from.
+            val opened = OpenedValues { approver }
             // The browser's QR code is this request's.
-            val scanning = ApprovalAnswering(prompt, wire, made.getString("userId"), key.seed)
+            val scanning = ApprovalAnswering(prompt, wire, made.getString("userId"), key.seed, opened)
             // The sheet says what is asked, by which device, and the place the server gave for it.
             assertTrue(purpose, scanning.asks.endsWith(" on Chrome on Windows, near Lyon, France"))
             assertTrue(purpose, scanning.openScanned(made.getString("qr")))
             assertTrue(purpose, scanning.revealed())
             // The browser's code is the code; one that is not it would have ended the request instead.
-            val typing = ApprovalAnswering(prompt, wire, made.getString("userId"), key.seed)
+            val typing = ApprovalAnswering(prompt, wire, made.getString("userId"), key.seed, opened)
             typing.open()
             assertTrue(typing.revealed())
             typing.approve(made.getString("code"))
@@ -749,12 +878,16 @@ class DeviceApprovalTest {
         assertThrows(AuthUnreachable::class.java) { ApprovalWire.signedIn(session).send("GET", "/api/auth/approvals", null, null) }
     }
 
-    private fun status(methods: String, on: Boolean = true, default: String? = null, other: String? = null): TwoStepStatus = TwoStepStatus.from(
+    private fun status(methods: String, on: Boolean = true, default: String? = null, other: String? = null, approvers: String? = null): TwoStepStatus = TwoStepStatus.from(
         JSONObject("""{"on":$on,"methods":[$methods],"backupCodesLeft":10,"totpFrozen":false}""").apply {
             default?.let { put("defaultKind", it) }
             other?.let { put("otherDevice", JSONObject("""{"v":$it}""").get("v")) }
+            approvers?.let { put("approvers", JSONArray("[$it]")) }
         },
     )!!
+
+    private val laptop = """{"id":"7c9e6679-7425-40de-944b-e07fc1f90ae7","kind":"web","name":"Maya’s Laptop","createdAt":"2026-11-02T09:30:00.000Z"}"""
+    private val tablet = """{"id":"40206e32-e631-4237-8b49-066d096eb7ed","kind":"ios","name":null,"createdAt":"2026-10-20T18:00:00.000Z"}"""
 
     private val deviceRow = """{"id":"d","kind":"device","name":null,"createdAt":"2026-11-14T09:30:00.000Z","lastUsedAt":null}"""
     private val appRow = """{"id":"a","kind":"totp","name":null,"createdAt":"2026-11-14T09:30:00.000Z","lastUsedAt":null}"""
@@ -772,7 +905,7 @@ class DeviceApprovalTest {
         assertNull(older.otherDevice)
         assertFalse(older.showsDevice)
         // Off, and it can be turned on: only on a phone with a device key of its own to ask with.
-        val off = status("", on = false, other = "true")
+        val off = status("", on = false, other = "true", approvers = laptop)
         assertTrue(off.showsDevice)
         assertEquals("Off", off.deviceValue)
         assertTrue(off.canTurnOnDevice(ownKey = true))
@@ -784,7 +917,7 @@ class DeviceApprovalTest {
         // A 1 is not a yes.
         assertNull(status("", on = false, other = "1").otherDevice)
         // On: its only action is Turn off, whether or not it is the last method.
-        val on = status("$appRow,$deviceRow", default = "totp", other = "true")
+        val on = status("$appRow,$deviceRow", default = "totp", other = "true", approvers = laptop)
         assertEquals("On", on.deviceValue)
         assertFalse(on.canTurnOnDevice(ownKey = true))
         assertEquals("Turn off", on.removeWords(on.device!!))
@@ -857,8 +990,12 @@ class DeviceApprovalTest {
         assertEquals("The server’s answer didn’t arrive, so HushOS can’t tell whether approving on another device was turned on. Check before you try again.", StepWords.LOST_DEVICE_ON)
         assertTrue(confirming(401, """{"message":"Sign in again."}""").exceptionOrNull() is NotAuthenticated)
         // The flow: codes are kept before anything else; "added" for a step that was being turned on claims nothing.
-        val flow = TwoStepFlow().deviceStarted(started)
+        val approver = TwoStepStatus.Approver("40206e32-e631-4237-8b49-066d096eb7ed", "ios", "Maya’s iPad", "2026-11-02T09:30:00.000Z")
+        val flow = TwoStepFlow().deviceStarted(started, approver)
         assertEquals(started, flow.device)
+        // The chosen device is named for as long as it is being asked, and no longer.
+        assertEquals(approver, flow.approver)
+        assertNull(flow.deviceConfirmed(turnedOn, first = true).approver)
         assertEquals(listOf("7KQ2M-9XD4P", "AAAAA-BBBBB"), flow.deviceConfirmed(turnedOn, first = true).codes)
         assertNull(flow.deviceConfirmed(turnedOn, first = true).device)
         assertEquals("Approve on another device is on", flow.deviceConfirmed(TwoStep.DeviceConfirmed.Added, first = false).finished)
@@ -869,6 +1006,7 @@ class DeviceApprovalTest {
         // A request that could not be made, or a confirmation that failed, goes back to the password and reads the settings again.
         val failed = flow.deviceFailed(StepRefused(StepRefusal.DEVICE_UNAVAILABLE, "No other device can approve this right now.", 409))
         assertNull(failed.device)
+        assertNull(failed.approver)
         assertEquals("No other device can approve this right now.", failed.error)
         assertNotEquals(flow.reread, failed.reread)
         // The pending method itself: read whole, or lost.
@@ -876,5 +1014,79 @@ class DeviceApprovalTest {
         assertEquals(started, TwoStep.deviceEnrolment(reply(200, """{"id":"${started.id}","token":"$token","expiresAt":"2026-11-14T10:10:00.000Z"}""")))
         assertThrows(LostReply::class.java) { TwoStep.deviceEnrolment(reply(200, """{"id":"x"}""")) }
         assertEquals(StepRefusal.REQUIRED, assertThrows(StepRefused::class.java) { TwoStep.deviceEnrolment(reply(403, """{"message":"Your second step is needed.","code":"two-step"}""")) }.refusal)
+    }
+
+    // Turning it on: the device the person chose.
+
+    @Test
+    fun theDevicesThatCouldApproveAreListedToChooseFromAndOnlyOneAloneIsChosenAlready() {
+        // One: it is chosen, and still shown with what Devices says of it.
+        val one = status("", on = false, other = "true", approvers = laptop)
+        val first = TwoStepStatus.Approver("7c9e6679-7425-40de-944b-e07fc1f90ae7", "web", "Maya’s Laptop", "2026-11-02T09:30:00.000Z")
+        assertEquals(listOf(first), one.approvers)
+        assertEquals(first.id, one.soleApprover)
+        assertEquals(first, one.approver(one.soleApprover))
+        assertEquals("Maya’s Laptop", first.shownName)
+        assertEquals("A web browser · Added 2 Nov", first.detail { if (it == first.createdAt) "2 Nov" else null })
+        // Several: none is chosen until the person picks, and an id the server did not list chooses nothing.
+        val two = status("", on = false, other = "true", approvers = "$laptop,$tablet")
+        assertEquals(2, two.approvers.size)
+        assertNull(two.soleApprover)
+        assertNull(two.approver(two.soleApprover))
+        assertNull(two.approver("00000000-0000-4000-8000-000000000001"))
+        val unnamed = two.approver("40206e32-e631-4237-8b49-066d096eb7ed")!!
+        assertEquals("Unknown device", unnamed.shownName)
+        assertEquals("iPhone · Added 20 Oct", unnamed.detail { "20 Oct" })
+        assertEquals("Unknown device", TwoStepStatus.Approver("a", null, "  ", null).shownName)
+        assertEquals("", TwoStepStatus.Approver("a", null, null, null).detail { it })
+        // A row without an id is not one to choose; with nobody to choose there is no Turn on (the server refuses a request that names none).
+        assertEquals(listOf(first), status("", on = false, other = "true", approvers = """{"kind":"web","name":"No id"},7,$laptop""").approvers)
+        val none = status("", on = false, other = "true")
+        assertTrue(none.approvers.isEmpty())
+        assertFalse(none.canTurnOnDevice(ownKey = true))
+        assertTrue(one.canTurnOnDevice(ownKey = true))
+        // The words on the page.
+        assertEquals("Device that will approve", StepWords.APPROVER_HEADING)
+        assertEquals("Choose the device that will approve.", StepWords.APPROVER_CHOOSE)
+        assertEquals("Open HushOS on Maya’s Laptop and choose Answer.", StepWords.askOpen(first.shownName))
+        assertEquals("Approve on Unknown device", StepWords.approveOn(unnamed.shownName))
+        assertEquals("All but this one and the one that approves. They’ll need to sign in again.", StepWords.OTHERS_BUT_APPROVER)
+    }
+
+    @Test
+    fun aRequestToTurnItOnNamesTheChosenDeviceAndASignInNamesNone() {
+        val server = ApprovalServer()
+        DeviceAsk.start(server.wire(), token, DeviceEnrolment.PURPOSE, random32(), "Pixel 9", approverDeviceId = "7C9E6679-7425-40DE-944B-E07FC1F90AE7")
+        assertEquals("7c9e6679-7425-40de-944b-e07fc1f90ae7", server.calls("/api/auth/approvals").single().body.getString("approverDeviceId"))
+        val signIn = ApprovalServer()
+        begin(signIn)
+        assertFalse(signIn.calls("/api/auth/approvals").single().body.has("approverDeviceId"))
+        // A request to turn it on that named none is refused in the server's words, by its own code, and the page says them.
+        val refusing = ApprovalServer()
+        refusing.refusesStart = 409 to """{"message":"Choose which of your devices will approve.","code":"device-choice"}"""
+        val refused = assertThrows(StepRefused::class.java) { begin(refusing, purpose = DeviceEnrolment.PURPOSE) }
+        assertEquals(StepRefusal.DEVICE_CHOICE, refused.refusal)
+        val approver = TwoStepStatus.Approver("7c9e6679-7425-40de-944b-e07fc1f90ae7", "web", null, null)
+        assertEquals("Choose which of your devices will approve.", TwoStepFlow().deviceStarted(DeviceEnrolment("m", token), approver).deviceFailed(refused).error)
+        // At a step it takes no way of answering away, and is never a wrong answer.
+        val all = listOf(StepMethod.DEVICE, StepMethod.TOTP)
+        assertEquals(StepOutcome.Again("Choose which of your devices will approve.", false, all), StepOutcome.after(refused, all, StepMethod.DEVICE))
+    }
+
+    @Test
+    fun removingTheOtherDevicesKeepsTheOneThatApproves() {
+        val session = serving { _, _, _ -> 200 to """{"removed":2}""" }
+        // The password's proof needs the real server; what is held here is what goes with it.
+        val proof = { _: Shared.Session, _: String -> JSONObject().put("attemptToken", "attempt").put("finishLoginRequest", "ke3") }
+        assertEquals(2, Auth.removeOtherDevicesAt(session, "password here", keep = "7C9E6679-7425-40DE-944B-E07FC1F90AE7", proof = proof))
+        val (method, path, body) = asked.single()
+        assertEquals("DELETE", method)
+        assertEquals("/api/auth/devices/others", path)
+        assertEquals("7c9e6679-7425-40de-944b-e07fc1f90ae7", body.getString("keep"))
+        assertEquals("attempt", body.getString("attemptToken"))
+        assertEquals("ke3", body.getString("finishLoginRequest"))
+        // Removing them by any other road (the authenticator app's turn-on, Devices' own button) keeps none.
+        Auth.removeOtherDevicesAt(session, "password here", proof = proof)
+        assertFalse(asked.last().third.has("keep"))
     }
 }

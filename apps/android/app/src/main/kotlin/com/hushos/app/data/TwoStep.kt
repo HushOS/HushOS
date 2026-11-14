@@ -198,6 +198,8 @@ data class TwoStepFlow(
     val creation: KeyCreation? = null,
     /* The pending Approve on another device: its one approval is asked for from here, until it is confirmed or the request fails. */
     val device: DeviceEnrolment? = null,
+    /* The device the person chose to approve it: the only one asked, named on the page while it is. */
+    val approver: TwoStepStatus.Approver? = null,
     /* Backup codes, shown once: kept until the person has said they are done with them, whatever page they were on when the codes arrived. */
     val codes: List<String>? = null,
     /* The codes replace an earlier set (New codes), rather than come with turning the step on. */
@@ -265,7 +267,7 @@ data class TwoStepFlow(
         copy(pending = false, finished = TwoStepStatus.removedWords(if (device) TwoStepStatus.DEVICE else if (app) TwoStepStatus.TOTP else TwoStepStatus.WEBAUTHN, on))
 
     /* The pending Approve on another device: another device is asked from here (Continue was the press). */
-    fun deviceStarted(started: DeviceEnrolment) = copy(pending = false, device = started)
+    fun deviceStarted(started: DeviceEnrolment, approver: TwoStepStatus.Approver) = copy(pending = false, device = started, approver = approver)
 
     /*
      * What confirming it did, once another device approved. `first`: the account had no method, so this turns the
@@ -273,10 +275,10 @@ data class TwoStepFlow(
      * was being turned on is not the server's answer to that: nothing is claimed, and the settings are read again.
      */
     fun deviceConfirmed(confirmed: TwoStep.DeviceConfirmed, first: Boolean): TwoStepFlow = when (confirmed) {
-        is TwoStep.DeviceConfirmed.TurnedOn -> copy(pending = false, device = null, codes = confirmed.backupCodes)
+        is TwoStep.DeviceConfirmed.TurnedOn -> copy(pending = false, device = null, approver = null, codes = confirmed.backupCodes)
         TwoStep.DeviceConfirmed.Added ->
-            if (first) copy(pending = false, device = null, error = StepWords.LOST_TURNED_ON, reread = reread + 1)
-            else copy(pending = false, device = null, finished = StepWords.DEVICE_ON)
+            if (first) copy(pending = false, device = null, approver = null, error = StepWords.LOST_TURNED_ON, reread = reread + 1)
+            else copy(pending = false, device = null, approver = null, finished = StepWords.DEVICE_ON)
     }
 
     /*
@@ -285,8 +287,8 @@ data class TwoStepFlow(
      */
     fun deviceFailed(failure: Throwable): TwoStepFlow = when (failure) {
         // The session ended: sign-in is on screen, and says so.
-        is NotAuthenticated -> copy(pending = false, device = null)
-        else -> copy(pending = false, device = null, error = Problems.say(failure, Problems.SERVER), reread = reread + 1)
+        is NotAuthenticated -> copy(pending = false, device = null, approver = null)
+        else -> copy(pending = false, device = null, approver = null, error = Problems.say(failure, Problems.SERVER), reread = reread + 1)
     }
 
     /* The pending key: the phone's sheet is asked from here, on the press that adds it. */
@@ -420,6 +422,14 @@ object StepWords {
      * request ended without an approval. Never who ended it.
      */
     const val ASK_OPEN = "Open HushOS on another device and choose Answer."
+    /* Turning the method on: the one device the person chose is the only one asked, and is named. */
+    fun askOpen(device: String) = "Open HushOS on $device and choose Answer."
+    fun approveOn(device: String) = "Approve on $device"
+    const val APPROVER_HEADING = "Device that will approve"
+    const val APPROVER_UNKNOWN = "Unknown device"
+    const val APPROVER_CHOOSE = "Choose the device that will approve."
+    /* Under "Remove my other devices" when another device is the method: it stays signed in. */
+    const val OTHERS_BUT_APPROVER = "All but this one and the one that approves. They’ll need to sign in again."
     const val ASK_CODE = "Code for your other device"
     const val ASK_WAITING = "Waiting for your other device"
     const val ASK_AGAIN = "Ask again"
@@ -441,6 +451,12 @@ object StepWords {
     const val APPROVAL_WRONG_CODE = "That code didn’t match, so nothing was approved."
     /* A request that left this phone's list while it was being answered: the server's own words for one that is over. */
     const val APPROVAL_OVER = "This request is over."
+    /* The request names this phone as the one to answer: no other device is shown it. */
+    const val APPROVAL_CHOSEN = "The other device asked for this device to approve."
+    /* The server answered an open with a value this phone did not make: ended, nothing signed. */
+    const val APPROVAL_STEERED = "The server changed this device’s part of the code, so nothing was approved. Ask again on the other device."
+    /* The server says this phone opened the request, and this process holds no value for it: ended, nothing signed. */
+    const val APPROVAL_RESTARTED = "This request was opened before HushOS was restarted. Ask again on the other device."
     /* Settings. */
     const val DEVICE_ON = "Approve on another device is on"
     const val DEVICE_OFF = "Approve on another device is off"
@@ -504,7 +520,8 @@ sealed class StepOutcome {
                     // The other device has not approved yet: nothing was counted, nothing failed, and nothing is said.
                     StepRefusal.PENDING -> Again("", false, methods)
                     // A request to another device ended. The step's token is as it was, and every way is still there.
-                    StepRefusal.DEVICE_MISMATCH, StepRefusal.APPROVAL_OVER, StepRefusal.APPROVAL_TAKEN, StepRefusal.APPROVAL_REFUSED -> Again(message, false, methods)
+                    // So is a request that named no device to approve (only turning the method on asks for one): the server's words.
+                    StepRefusal.DEVICE_MISMATCH, StepRefusal.DEVICE_CHOICE, StepRefusal.APPROVAL_OVER, StepRefusal.APPROVAL_TAKEN, StepRefusal.APPROVAL_REFUSED -> Again(message, false, methods)
                     StepRefusal.EXPIRED, StepRefusal.REQUIRED, StepRefusal.SETUP_REQUIRED, StepRefusal.UPDATE_REQUIRED, StepRefusal.OTHER ->
                         Over(message.ifBlank { StepWords.OVER })
                 }
@@ -673,7 +690,7 @@ data class StepUp(
             // The approval had not landed where the change went: nothing was counted and nothing is said. The wait goes on.
             StepRefusal.PENDING -> Next.AGAIN to copy(error = "", tried = false, draft = draft.copy(approved = null))
             // The request to the other device ended; the step itself still stands, and can be asked again.
-            StepRefusal.DEVICE_MISMATCH, StepRefusal.APPROVAL_OVER, StepRefusal.APPROVAL_TAKEN, StepRefusal.APPROVAL_REFUSED ->
+            StepRefusal.DEVICE_MISMATCH, StepRefusal.DEVICE_CHOICE, StepRefusal.APPROVAL_OVER, StepRefusal.APPROVAL_TAKEN, StepRefusal.APPROVAL_REFUSED ->
                 Next.AGAIN to copy(error = message, tried = false, draft = draft.copy(approved = null))
             StepRefusal.SETUP_REQUIRED, StepRefusal.UPDATE_REQUIRED, StepRefusal.BUSY, StepRefusal.OTHER -> Next.NOT_STEP to this
         }
@@ -692,7 +709,27 @@ data class TwoStepStatus(
      * approve it. Null from a server that does not know the method, where its row is not shown at all.
      */
     val otherDevice: Boolean? = null,
+    /*
+     * The devices that could approve it, for the person to choose one (docs/two-step-design.md 12, "Turning it on
+     * first"): the request names the one chosen, and no other device is shown it or may answer it.
+     */
+    val approvers: List<Approver> = emptyList(),
 ) {
+    /* One of the account's devices that could approve: its id, and what the list of devices shows of it. */
+    data class Approver(val id: String, val kind: String?, val name: String?, val createdAt: String?) {
+        /* The device as the person knows it: its name, or what an unnamed one is called. */
+        val shownName: String get() = name?.trim()?.ifEmpty { null } ?: StepWords.APPROVER_UNKNOWN
+
+        /* "Android phone · Added 14 Nov": its kind as Devices words it, and the day it was added. `day` words a date. */
+        fun detail(day: (String?) -> String?): String = listOfNotNull(AccountDevice.kindWords(kind), day(createdAt)?.let { "Added $it" }).joinToString(" · ")
+    }
+
+    /* The device chosen to approve, by its id; null for an id the server did not list. */
+    fun approver(id: String?): Approver? = approvers.firstOrNull { it.id == id }
+
+    /* Which device is chosen when the page opens: the only one there is. With several, none until the person picks. */
+    val soleApprover: String? get() = approvers.singleOrNull()?.id
+
     /* `kind`: "totp", "webauthn" for a passkey or security key, or "device" for Approve on another device. `synced`: a passkey a password manager keeps. */
     data class Method(val id: String, val kind: String, val name: String?, val createdAt: String?, val lastUsedAt: String?, val synced: Boolean = false) {
         val isApp: Boolean get() = kind == TOTP
@@ -726,8 +763,11 @@ data class TwoStepStatus(
     val showsDevice: Boolean get() = device != null || otherDevice != null
     /* The row's value: On, Off, or that it needs a device this account does not have signed in. */
     val deviceValue: String get() = if (device != null) "On" else if (otherDevice == false) "Needs another device" else "Off"
-    /* Turn on is offered only while another device could approve it, on a phone with a device key of its own to ask with. */
-    fun canTurnOnDevice(ownKey: Boolean): Boolean = device == null && otherDevice == true && ownKey
+    /*
+     * Turn on is offered only while another device could approve it, on a phone with a device key of its own to ask
+     * with, and only with a device to choose: the server refuses a request to turn it on that names none.
+     */
+    fun canTurnOnDevice(ownKey: Boolean): Boolean = device == null && otherDevice == true && approvers.isNotEmpty() && ownKey
 
     /* Which kind is asked for first is a choice only with more than one kind. */
     private val choosing: Boolean get() = on && listOf(keys.isNotEmpty(), app != null, device != null).count { it } > 1
@@ -792,7 +832,20 @@ data class TwoStepStatus(
             val rows = json.optJSONArray("methods") ?: return null
             val methods = (0 until rows.length()).mapNotNull { index -> rows.optJSONObject(index)?.let(::method) }
             // The JSON booleans themselves: a 1 is not a yes.
-            return TwoStepStatus(json.getBoolean("on"), methods, json.optInt("backupCodesLeft"), json.optBoolean("totpFrozen"), json.opt("defaultKind") as? String, json.opt("otherDevice") as? Boolean)
+            return TwoStepStatus(
+                json.getBoolean("on"), methods, json.optInt("backupCodesLeft"), json.optBoolean("totpFrozen"), json.opt("defaultKind") as? String, json.opt("otherDevice") as? Boolean,
+                approvers(json.optJSONArray("approvers")),
+            )
+        }
+
+        /* The devices that could approve, in the server's order; a row without an id is not one to choose. */
+        private fun approvers(rows: org.json.JSONArray?): List<Approver> {
+            rows ?: return emptyList()
+            fun JSONObject.text(key: String): String? = (opt(key) as? String)?.ifEmpty { null }
+            return (0 until rows.length()).mapNotNull { index ->
+                val row = rows.optJSONObject(index) ?: return@mapNotNull null
+                Approver(row.text("id") ?: return@mapNotNull null, row.text("kind"), row.text("name"), row.text("createdAt"))
+            }
         }
     }
 }
