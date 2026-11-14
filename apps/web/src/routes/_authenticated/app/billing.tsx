@@ -443,7 +443,7 @@ function BillingPage() {
                 : null);
 
     return (
-        <SettingsPage width="wide" className="pb-10">
+        <SettingsPage className="pb-10">
             <PageHeader title={selling ? 'Plan and storage' : 'Storage'} />
             <div className="flex flex-col gap-9 px-5 sm:px-8">
                 {shown && (

@@ -5,31 +5,22 @@ import { SECRET_FIELD } from '@/components/password-input';
 import { segmentOn, segmentTrack } from '@/components/ui/segment';
 
 /*
- * The pieces Account, Plan and storage and Family are built from: the page's one
- * centred column, a group with its title and no rule beneath, rows with the label
+ * The pieces Account, Plan and storage and Family are built from: the page across the
+ * pane, a group with its title and no rule beneath, rows with the label
  * left and the actions right, a segmented choice, and a labelled field for the
  * dialogs that ask for a password.
  */
 
-const pageWidths = { narrow: 'max-w-2xl', column: 'max-w-3xl', wide: 'max-w-4xl' } as const;
-
 /*
- * A settings page: its header and its content in one column, centred in the pane. The
- * header sits inside the column, so the title starts where the rows do. Files and the
- * other lists fill the pane; a column of settings does not, and hugging one edge of a
- * wide pane it reads as a page that failed to load its other half.
+ * A settings page: its header and its content across the whole pane, inside the page's
+ * usual padding, as Files and the other lists are. The rows stretch with it: the label
+ * column, the value, and the actions at the pane's right padding edge, so every row's
+ * actions still end on one line. Only running text is held to a readable measure (a
+ * group's description, a page's), never the page.
  */
-export function SettingsPage({
-    width = 'column',
-    className,
-    children,
-    ...props
-}: ComponentProps<'div'> & { width?: keyof typeof pageWidths }) {
+export function SettingsPage({ className, children, ...props }: ComponentProps<'div'>) {
     return (
-        <div
-            className={cn('mx-auto flex w-full flex-col', pageWidths[width], className)}
-            {...props}
-        >
+        <div className={cn('flex w-full flex-col', className)} {...props}>
             {children}
         </div>
     );
@@ -71,7 +62,11 @@ export function SettingsGroup({
                             </span>
                         )}
                     </div>
-                    {description && <p className="text-sm text-muted-foreground">{description}</p>}
+                    {description && (
+                        <p className="max-w-[43.1em] text-sm text-muted-foreground">
+                            {description}
+                        </p>
+                    )}
                 </div>
                 {action}
             </div>
