@@ -31,6 +31,9 @@ import Testing
  *   day it was added;
  * - the answer sheet is held only by an approval or an ending that is out, never by its wait for
  *   the other device, and a cancel only closes it: the request stays open, whatever the sheet was doing;
+ * - an approval that turns the method on, sent and not answered, keeps its sheet and its code when
+ *   the request then leaves the list: the same approval goes again, and only the server's own
+ *   answer shows the code or ends the request;
  * - a list that came back for a session since left is not counted in the next account's limit;
  * - `twoStepMethods` names `device`, the settings ask for it, and the settings' row says what is true.
  *
@@ -1333,6 +1336,117 @@ private final class LimitBox: @unchecked Sendable {
         #expect(Set(server.calls("/open").compactMap { $0.body["ephemeralKey"] as? String }).count == 1)
     }
 
+    /* The sheet over the inbox's own request, as the app puts it up: what it is told to say, and the inbox it tells a request has left. */
+    private func sheet(_ inbox: ApprovalInbox, said: Seen<String>) throws -> ApprovalAnswer {
+        let flow = try #require(inbox.answering?.flow)
+        return ApprovalAnswer(flow: flow, around: .init(say: { words, _ in said.add(words) }, finished: { inbox.finished($0) }), every: .milliseconds(5))
+    }
+
+    @Test func anApprovalThatWasTakenAndNeverAnsweredKeepsItsSheetAndItsCodeOnceTheRequestLeavesTheList() async throws {
+        let server = ApprovalServer()
+        let asked = server.asked(purpose: DeviceEnrolment.purpose)
+        // The first approval reaches the server, and the connection drops before its answer: no reply at all.
+        let drops = Seen<Bool>()
+        let session = maya
+        let wire = ApprovalWire(session: session.tag) { method, path, body, stepToken in
+            let reply = try await server.wire(session: session.tag).send(method, path, body, stepToken)
+            if path.hasSuffix("/approve"), drops.values.isEmpty {
+                drops.add(true)
+                throw AuthError.message(AuthError.unreachable)
+            }
+            return reply
+        }
+        let inbox = try makeInbox(Held(maya)) { _ in wire }
+        await inbox.load()
+        inbox.answer(try #require(inbox.prompts.first))
+        let said = Seen<String>()
+        let answer = try sheet(inbox, said: said)
+        answer.appeared()
+        try await until("opened") { server.calls("/open").count == 1 }
+        server.reveal = asked
+        server.set("revealed")
+        try await until("the reveal") { answer.phase == .confirm }
+        #expect(!answer.unsure)
+        answer.approve()
+        try await until("the lost reply") { !answer.sending && !answer.error.isEmpty }
+        // The server approved, and holds the digest of a code nobody has seen.
+        #expect(server.current == "approved")
+        let first = try #require(server.codeDigest)
+        // The next looks no longer list the request. Nothing is over: the sheet is still on it, says the reply was
+        // lost (not that the server could not be reached: it was), and offers the press again.
+        await inbox.load()
+        await inbox.load()
+        #expect(inbox.prompts.isEmpty)
+        #expect(inbox.answering?.id == server.requestId && inbox.holds(server.requestId))
+        #expect(answer.phase == .confirm && !answer.closed && !answer.held)
+        #expect(answer.unsure)
+        #expect(answer.error == StepWords.lostChange)
+        #expect(said.values.isEmpty)
+        // Try again: the same approval, to the byte, and the list is not asked for a reveal it no longer carries.
+        let looks = server.calls.filter { $0.method == "GET" }.count
+        answer.approve()
+        try await until("the code") { if case .shown = answer.phase { true } else { false } }
+        guard case .shown(let code) = answer.phase else { return }
+        #expect(server.calls.filter { $0.method == "GET" }.count == looks)
+        let sent = server.calls("/approve")
+        #expect(sent.count == 2)
+        #expect(sent.allSatisfy { $0.body["codeDigest"] as? String == first })
+        #expect(sent[0].body["signature"] as? String == sent[1].body["signature"] as? String)
+        // The code on screen is the one whose digest the server took the first time.
+        #expect(first == (try turnOnCodeDigest(requestId: server.requestId, code: code)))
+        #expect(!answer.unsure && answer.error.isEmpty)
+        // With the code up the list still says nothing of the request, and nothing takes the code away.
+        await inbox.load()
+        #expect(answer.phase == .shown(code) && !answer.closed)
+        #expect(said.values.isEmpty)
+        #expect(server.calls("/deny").isEmpty)
+        answer.done()
+        #expect(answer.closed)
+        #expect(StepWords.tryAgain == "Try again")
+    }
+
+    @Test func anUnansweredApprovalIsEndedOnlyByTheServersOwnRefusal() async throws {
+        let server = ApprovalServer()
+        let asked = server.asked(purpose: DeviceEnrolment.purpose)
+        // The first approval never reaches the server. The request then runs out there, and the server says so to the second.
+        let tried = Seen<String>()
+        let session = maya
+        let wire = ApprovalWire(session: session.tag) { method, path, body, stepToken in
+            guard path.hasSuffix("/approve") else { return try await server.wire(session: session.tag).send(method, path, body, stepToken) }
+            tried.add((body.flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] })?["codeDigest"] as? String ?? "")
+            if tried.values.count == 1 { throw AuthError.message(AuthError.unreachable) }
+            return ApprovalWire.Reply(status: 404, text: json(["message": "This request is over.", "code": "approval-over"]))
+        }
+        let inbox = try makeInbox(Held(maya)) { _ in wire }
+        await inbox.load()
+        inbox.answer(try #require(inbox.prompts.first))
+        let said = Seen<String>()
+        let answer = try sheet(inbox, said: said)
+        answer.appeared()
+        try await until("opened") { server.calls("/open").count == 1 }
+        server.reveal = asked
+        server.set("revealed")
+        try await until("the reveal") { answer.phase == .confirm }
+        answer.approve()
+        try await until("the lost reply") { !answer.sending && !answer.error.isEmpty }
+        server.set("ended", ended: "expired")
+        await inbox.load()
+        // Gone from the list, and this phone cannot know why: the sheet does not decide it is over.
+        #expect(inbox.prompts.isEmpty)
+        #expect(answer.unsure && answer.phase == .confirm && !answer.closed)
+        #expect(answer.error == StepWords.lostChange)
+        #expect(said.values.isEmpty)
+        // The press sends the same approval, and the server's refusal settles it: said in its words, and the sheet goes.
+        answer.approve()
+        try await until("the refusal") { answer.closed }
+        #expect(tried.values.count == 2 && !tried.values[0].isEmpty && tried.values[0] == tried.values[1])
+        #expect(said.values == ["This request is over."])
+        #expect(!answer.unsure && !answer.sending)
+        if case .shown = answer.phase { Issue.record("a refused approval showed a code") }
+        // Nothing of it is kept: the inbox holds no flow for it.
+        #expect(!inbox.holds(server.requestId))
+    }
+
     @Test func aPhoneWithNoDeviceKeyForTheAccountAsksAndShowsNothing() async throws {
         let server = ApprovalServer()
         _ = server.asked()
@@ -1515,12 +1629,15 @@ private final class LimitBox: @unchecked Sendable {
         try await until("the lost reply") { !sheet.answer.sending && !sheet.answer.error.isEmpty }
         #expect(sheet.answer.phase == .confirm && !sheet.answer.closed)
         #expect(sheet.answer.error == StepWords.lostChange)
+        // A gateway's page says nothing of what the server did with it: Approve is now Try again.
+        #expect(sheet.answer.unsure)
         #expect(sheet.finished.values.isEmpty)
         let first = try #require(server.codeDigest)
         // Approve again: the same approval goes, and the code that comes up is the one the server holds the digest of.
         sheet.answer.approve()
         try await until("the code") { if case .shown = sheet.answer.phase { true } else { false } }
         guard case .shown(let code) = sheet.answer.phase else { return }
+        #expect(!sheet.answer.unsure)
         #expect(server.calls("/approve").count == 2)
         #expect(server.codeDigest == first)
         #expect(first == (try turnOnCodeDigest(requestId: server.requestId, code: code)))

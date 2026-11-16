@@ -723,6 +723,13 @@ public actor ApprovalAnswering {
      * password may be who asked. It is drawn here, at the press, from fresh randomness; its digest
      * is in the statement this phone signs and goes with the signature; the code itself is never
      * sent. One code for a request: a press after a reply that never arrived sends the same one.
+     *
+     * Such an approval that went out and was not answered may have been taken: the server then
+     * lists the request no more, and the code it holds the digest of has not been shown. So
+     * whatever is not the server's own answer is one thing here, `StepError.lost`: no reply at
+     * all, a reply from something in the way, a fault on the server's side. Only the server's
+     * refusal in its own words (`ApprovalProblem.over`) says the request is over. Nothing here
+     * needs the list again: what the other device revealed was checked once and is kept.
      */
     @discardableResult
     public func approve(typed: String?) async throws -> String? {
@@ -733,7 +740,11 @@ public actor ApprovalAnswering {
             let code = try memory.code(for: id) { try approvalCodeDraw() }
             let digest = try turnOnCodeDigest(requestId: id, code: code)
             let signature = try deviceTurnOnSign(seed: seed, step: ready.step, codeDigest: digest)
-            guard case .done = try await post("approve", approvalTurnOnJson(signature: signature, codeDigest: digest)) else { throw StepError.lost(StepWords.lostChange) }
+            do {
+                guard case .done = try await post("approve", approvalTurnOnJson(signature: signature, codeDigest: digest)) else { throw StepError.lost(StepWords.lostChange) }
+            } catch {
+                throw Self.unanswered(error)
+            }
             return code
         case .scanned where typed == nil:
             break
@@ -746,6 +757,17 @@ public actor ApprovalAnswering {
         let signature = try deviceStepSign(seed: seed, step: ready.step)
         guard case .done = try await post("approve", approvalApproveJson(signature: signature)) else { throw StepError.lost(StepWords.lostChange) }
         return nil
+    }
+
+    /*
+     * What an approval that went out is thrown as when it was not answered. The server's refusal,
+     * an ended session and a cancellation are what they are; anything else leaves it open whether
+     * the server took the approval, and says so in the words of a lost reply.
+     */
+    private static func unanswered(_ error: Error) -> Error {
+        if error is ApprovalProblem || ErrorWords.isCancellation(error) { return error }
+        if case AuthError.sessionEnded = error { return error }
+        return StepError.lost(StepWords.lostChange)
     }
 
     /*
@@ -854,6 +876,12 @@ public final class ApprovalInbox {
         guard owner == session.tag, source.session()?.tag == session.tag else { return }
         let shown = source.limit.shown(listed)
         for asked in shown where first[asked.id] == nil { first[asked.id] = asked }
+        /*
+         * The request being answered stays whatever the list says. One that turns the method on
+         * leaves the list the moment the server takes its approval, and its sheet may still be
+         * unsure of that, or showing the code: its flow and the code drawn for it are the only
+         * way that code is ever shown, or the same approval sent again.
+         */
         let live = Set(shown.map(\.id)).union(answering.map { [$0.id] } ?? [])
         // A request that left the list with nobody answering it: a code drawn for it goes with it.
         for id in first.keys where !live.contains(id) { memory.forgetCode(id) }
@@ -912,6 +940,12 @@ public final class ApprovalInbox {
  *   field, and is approved on a press once the other device revealed. The code this phone drew
  *   at that press is then shown here until Done: nothing closes the sheet meanwhile, and nothing
  *   says the request is over.
+ * - Such an approval that went out and was not answered is `unsure`: the server may have taken
+ *   it, and then no longer lists the request, while the code has not been shown. The sheet stays
+ *   on the request, says the reply was lost and offers the press again (Try again), which sends
+ *   the same approval. It never asks the list whether the request is still there. Only the
+ *   server's own answer ends it: its refusal closes the sheet with its words, its yes shows the
+ *   code. Cancel still closes the sheet, and gives the request up.
  */
 @Observable
 @MainActor
@@ -949,6 +983,11 @@ public final class ApprovalAnswer {
     public private(set) var phase: Phase
     /* An approval or an ending is out. This alone holds the sheet; waiting for the other device never does. */
     public private(set) var sending = false
+    /*
+     * An approval that turns the method on went out, and what came back was not the server's
+     * answer: it may have been taken. Approve reads Try again, and sends the same approval.
+     */
+    public private(set) var unsure = false
     public private(set) var error = ""
     /* Over: the sheet goes. */
     public private(set) var closed = false
@@ -1036,7 +1075,8 @@ public final class ApprovalAnswer {
     public func approve(typed: String = "") {
         guard !sending, phase == .typing || phase == .confirm else { return }
         let sent = phase == .typing ? typed : nil
-        send({ [flow] in try await flow.approve(typed: sent) }) { [self] code in
+        send({ [flow] in try await flow.approve(typed: sent) }, lost: { [self] in unsure = turnsOn }) { [self] code in
+            unsure = false
             guard let code else { return close(StepWords.approved) }
             // Approved: it leaves the list now, and the code stays here until Done.
             around.finished(flow.id)
@@ -1051,8 +1091,13 @@ public final class ApprovalAnswer {
         send({ [flow] in try await flow.end(why) }) { [self] in close(StepWords.denied) }
     }
 
-    /* A request that is out: whatever was waiting is let go, and the sheet is held until the answer is in and `then` has heard it. */
-    private func send<Got: Sendable>(_ request: @escaping @Sendable () async throws -> Got, then: @escaping @MainActor (Got) -> Void) {
+    /*
+     * A request that is out: whatever was waiting is let go, and the sheet is held until the answer is in and `then` has heard it.
+     * `lost` hears that what came back was not the server's answer, before it is said.
+     */
+    private func send<Got: Sendable>(
+        _ request: @escaping @Sendable () async throws -> Got, lost: @escaping @MainActor () -> Void = {}, then: @escaping @MainActor (Got) -> Void
+    ) {
         sending = true
         error = ""
         work?.cancel()
@@ -1065,6 +1110,7 @@ public final class ApprovalAnswer {
                 then(got)
             } catch {
                 guard turn == mine else { return }
+                if case StepError.lost = error { lost() }
                 failed(error)
             }
             sending = false
@@ -1111,6 +1157,8 @@ public final class ApprovalAnswer {
     private func failed(_ error: Error) {
         if ErrorWords.isCancellation(error) { return }
         if let problem = error as? ApprovalProblem {
+            // The server's own answer, or this phone's check: whatever was unsure is settled.
+            unsure = false
             close(problem.errorDescription ?? ErrorWords.generic, important: true)
             return
         }

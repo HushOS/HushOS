@@ -51,6 +51,32 @@ private func challenge(_ methods: [StepMethod] = [.totp, .backup, .phrase], phra
         #expect(StepOutcome.after(StepError.refused(.limited, limited), methods: [.totp, .backup], tried: .totp) == .again(message: limited, field: false, methods: []))
     }
 
+    @Test func aSpentCodeBudgetStillOffersAnotherDeviceWhereItStoodAmongWhatIsLeft() {
+        // `step-limited` is the budget of the app's codes and the backup codes. Approving on another device is not
+        // counted in it, as a passkey is not: withdrawn with the codes, someone locked out of them for fifteen
+        // minutes would be sent to their recovery phrase with their other device beside them.
+        let limited = "Too many wrong codes. Try again in 15 minutes, or use your recovery phrase."
+        let listed: [StepMethod] = [.totp, .backup, .webauthn, .device, .phrase]
+        #expect(StepOutcome.left(listed, after: .limited, tried: .totp) == [.webauthn, .device, .phrase])
+        #expect(StepOutcome.after(StepError.refused(.limited, limited), methods: listed, tried: .backup) == .again(message: limited, field: false, methods: [.webauthn, .device, .phrase]))
+        // In the order the server offered them, whatever that was: the screen opens on the first that is left.
+        #expect(StepOutcome.left([.device, .totp, .phrase, .backup, .webauthn], after: .limited, tried: .totp) == [.device, .phrase, .webauthn])
+        var screen = SignInStep(challenge: challenge([.totp, .backup, .device, .phrase]), passkeys: false, device: true)
+        #expect(screen.failed(StepError.refused(.limited, limited), tried: .totp, answer: nil) == nil)
+        #expect(screen.methods == [.device, .phrase])
+        #expect(screen.shown == .device)
+        // Inside a form too. A phone with no key to ask another device with was never offered one, and is not now.
+        var form = StepUp(purpose: .password)
+        form.take(challenge([.totp, .backup, .device, .phrase]))
+        #expect(form.failed(StepError.refused(.limited, limited)) == .again)
+        #expect(form.methods == [.device, .phrase])
+        form.take(challenge([.totp, .backup, .device, .phrase]), device: false)
+        #expect(form.failed(StepError.refused(.limited, limited)) == .again)
+        #expect(form.methods == [.phrase])
+        // Its own spent budget is another refusal, and takes only the other device.
+        #expect(StepOutcome.left(listed, after: .deviceLimited, tried: .device) == [.totp, .backup, .webauthn, .phrase])
+    }
+
     @Test func aMethodTheServerCannotCheckIsWithdrawnAloneAndTheOthersStayOffered() {
         // `step-unavailable` is per method: the app's secret and the backup codes can sit under different server keys.
         // Withdrawing both for one would send someone to their recovery phrase while a backup code still works.

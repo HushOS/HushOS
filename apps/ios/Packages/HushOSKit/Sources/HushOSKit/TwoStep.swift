@@ -232,6 +232,8 @@ public enum StepWords {
     public static let approvalAnswer = "Answer"
     public static let approvalCodeField = "Code on the other device"
     public static let approved = "Approved"
+    /* Approve, while an approval that went out has not been answered: the same one goes again. */
+    public static let tryAgain = "Try again"
     public static let denied = "Denied"
     public static let approvalMismatch = "The other device didn’t match its request, so nothing was approved."
     public static let approvalWrongCode = "That code didn’t match, so nothing was approved."
@@ -306,7 +308,8 @@ public enum StepOutcome: Sendable, Equatable {
      * What is still offered after a refusal that takes something away (shared with `StepUp`):
      * - a paused app: everything but the app;
      * - a spent budget: the budget is one for the app's codes and the backup codes, so both go together, and
-     *   what it does not cover stays: a passkey or security key, and the phrase;
+     *   what it does not cover stays, in the order it was offered: a passkey or security key, another device
+     *   (which has budgets of its own, and a refusal of its own when they are spent) and the phrase;
      * - a method the server cannot check: only that one, the one that was `tried`. The app's secret and
      *   the backup codes can sit under different server keys, so one failing says nothing of the other;
      * - no other device to ask, one that is busy, or one asked too often today: only the other device.
@@ -314,7 +317,7 @@ public enum StepOutcome: Sendable, Equatable {
     public static func left(_ methods: [StepMethod], after refusal: StepRefusal, tried: StepMethod?) -> [StepMethod] {
         switch refusal {
         case .frozen: methods.filter { $0 != .totp }
-        case .limited: methods.filter { $0 == .webauthn || $0 == .phrase }
+        case .limited: methods.filter { $0 == .webauthn || $0 == .device || $0 == .phrase }
         case .unavailable: methods.filter { $0 != tried }
         case .deviceUnavailable, .deviceBusy, .deviceLimited: methods.filter { $0 != .device }
         default: methods

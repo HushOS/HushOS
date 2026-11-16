@@ -367,7 +367,9 @@ private struct CodeEntry: UIViewRepresentable {
  * says the asking device's name is its own word, and the day it was added.
  *
  * What is on screen, and what holds the sheet, is HushOSKit's `ApprovalAnswer`: waiting for the
- * other device never does, only an approval or an ending that is out.
+ * other device never does, only an approval or an ending that is out. An approval of such a
+ * request that was not answered keeps the sheet on it (`unsure`): the reply is said to be lost,
+ * Approve reads Try again, and nothing here says the request is over until the server does.
  */
 struct ApprovalSheet: View {
     @Environment(\.dismiss) private var dismiss
@@ -475,7 +477,8 @@ struct ApprovalSheet: View {
 
     private func approveRow(disabled: Bool, _ action: @escaping () -> Void) -> some View {
         Section {
-            Button(action: action) { Text("Approve").frame(maxWidth: .infinity) }
+            // Try again while an approval that went out has not been answered: the same one is sent.
+            Button(action: action) { Text(answer.unsure ? StepWords.tryAgain : "Approve").frame(maxWidth: .infinity) }
                 .buttonStyle(PrimaryCapsuleStyle()).disabled(disabled)
                 .listRowBackground(Color.clear).listRowInsets(EdgeInsets())
         }
