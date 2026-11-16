@@ -1,0 +1,25 @@
+apps/web/src/components/sign-in-step.tsx
+  s_566b8e0c4467a4::t_74f242dc59e3da 161-182
+apps/web/src/components/unlock-device.test.tsx
+  s_566b8e0c4467a4::t_acefd3729c6fd6 21-23,48-49,356-408
+apps/web/src/lib/two-step.test.ts
+  s_566b8e0c4467a4::t_bccece66a66f00 76-81
+apps/web/src/lib/two-step.ts
+  s_566b8e0c4467a4::t_bb7ad7f7c7a4fd 126-132,134,136-138
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "684a5351e1a328f075d9b708ed81d3367442883b",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
