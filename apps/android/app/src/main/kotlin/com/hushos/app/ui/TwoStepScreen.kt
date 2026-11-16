@@ -138,6 +138,13 @@ private val StepMethod.hint: String get() = when (this) {
     StepMethod.DEVICE -> ""
 }
 
+/*
+ * The ways whose own part of the screen is a secret: the recovery phrase as it is typed, and the QR code and the code
+ * another device is shown, which pass the step for whoever reads them. Their window stays out of screenshots, screen
+ * recordings and the recents preview.
+ */
+internal val StepMethod.secret: Boolean get() = this == StepMethod.PHRASE || this == StepMethod.DEVICE
+
 private val mono @Composable get() = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Monospace)
 
 /*
@@ -160,8 +167,9 @@ internal fun StepFields(
     val method = draft.shown(methods)
     // Nothing this build knows was offered: update. The ways ran out after refusals: updating would not help.
     if (method == null) { Text(if (offered) StepWords.NO_WAY_LEFT else StepWords.CANNOT_ANSWER, color = alpine.danger, style = MaterialTheme.typography.bodyMedium); return }
-    // The phrase on screen opens the account: out of screenshots, recordings and the recents preview, as it is everywhere else it is typed or shown.
-    if (method == StepMethod.PHRASE) SecureWindow()
+    // The phrase on screen opens the account, and the code for another device passes this step: out of screenshots,
+    // recordings and the recents preview, as the phrase is everywhere else it is typed or shown.
+    if (method.secret) SecureWindow()
     val focusRequester = remember { FocusRequester() }
     if (focus && method != StepMethod.WEBAUTHN && method != StepMethod.DEVICE) LaunchedEffect(method) { runCatching { focusRequester.requestFocus() } }
     val go = KeyboardActions(onGo = { onGo?.invoke() })
@@ -1040,6 +1048,8 @@ private fun DeviceMethodScreen(model: DriveViewModel, first: Boolean, status: Tw
         FormBody {
             val setup = model.deviceSetup
             if (asked != null && setup.ready) {
+                // The code typed here turns the method on: out of screenshots, recordings and the recents preview while its field is up.
+                SecureWindow()
                 // That device approved and shows the code now: typed here, sent as typed, and checked by the server alone.
                 CodeField(StepWords.codeOn(asked.shownName), setup.code.typed, setup.code.completions, enabled = !pending, onType = setup.code::type, onComplete = setup.code::complete) { model.confirmDeviceSetup() }
                 flow.error?.let { Text(it, color = alpine.danger, style = MaterialTheme.typography.bodyMedium) }

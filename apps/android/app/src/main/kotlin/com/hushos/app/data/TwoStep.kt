@@ -493,7 +493,11 @@ sealed class StepOutcome {
     data class Again(val message: String, val field: Boolean, val methods: List<StepMethod>) : StepOutcome()
     /* Over: back to the password, with why. */
     data class Over(val message: String) : StepOutcome()
-    /* The reply was lost: say so, and offer to send the same answer again or start over. */
+    /*
+     * Nothing judged the answer: say so, and offer to send the same answer again or start over. A lost reply, for
+     * any way; and for a request another device approved, no reply at all or the address's own limit too
+     * (`keepsApproval`), since a typed answer is still in its field to send again and an approval is not.
+     */
     data class Retry(val message: String) : StepOutcome()
 
     companion object {
@@ -515,8 +519,30 @@ sealed class StepOutcome {
             else -> methods
         }
 
-        /* Null for a cancellation: nothing failed, and nothing is said. `tried` is the method the refused answer used. */
-        fun after(error: Throwable, methods: List<StepMethod>, tried: StepMethod? = null): StepOutcome? = when (error) {
+        /*
+         * Whether a request another device approved still answers its step after the answer made with it failed
+         * with `error`: only where the step never judged it (the web's `afterRefusal`).
+         * - Nothing came back at all (offline), or what came back was not the server's answer (`LostReply`: a
+         *   gateway's page, a 5xx without the step's code);
+         * - the address's own limit (a 429 without the step's code): nothing about the step was looked at;
+         * - `step-pending`: the approval had not landed where the answer went.
+         * The same answer goes again for those. Dropping the approval there would send the person back to their
+         * other device for a new one, and spend one of the day's five requests on a hiccup. Any refusal the step
+         * itself gave ends it, and so does anything that failed on this phone: the other device is asked afresh.
+         */
+        fun keepsApproval(error: Throwable): Boolean = when (error) {
+            is kotlinx.coroutines.CancellationException -> false
+            is LostReply -> true
+            is StepRefused -> error.refusal == StepRefusal.PENDING || error.refusal == StepRefusal.BUSY
+            else -> Problems.offline(error) || error is java.io.IOException
+        }
+
+        /*
+         * Null for a cancellation: nothing failed, and nothing is said. `tried` is the method the refused answer used.
+         * `approved`: the answer was a request another device approved, which is kept and offered again as it is
+         * (`Retry`) wherever `keepsApproval` says the step never judged it.
+         */
+        fun after(error: Throwable, methods: List<StepMethod>, tried: StepMethod? = null, approved: Boolean = false): StepOutcome? = when (error) {
             is kotlinx.coroutines.CancellationException -> null
             is LostReply -> Retry(error.message ?: StepWords.LOST_STEP)
             is StepRefused -> {
@@ -527,7 +553,7 @@ sealed class StepOutcome {
                     StepRefusal.FROZEN, StepRefusal.LIMITED, StepRefusal.UNAVAILABLE, StepRefusal.DEVICE_UNAVAILABLE, StepRefusal.DEVICE_BUSY, StepRefusal.DEVICE_LIMITED ->
                         Again(message, false, left(methods, error.refusal, tried))
                     // The address's own limit: nothing about the step was looked at, and nothing is taken away.
-                    StepRefusal.BUSY -> Again(message, false, methods)
+                    StepRefusal.BUSY -> if (approved) Retry(message) else Again(message, false, methods)
                     // The other device has not approved yet: nothing was counted, nothing failed, and nothing is said.
                     StepRefusal.PENDING -> Again("", false, methods)
                     // A request to another device ended. The step's token is as it was, and every way is still there.
@@ -543,7 +569,7 @@ sealed class StepOutcome {
             // The phone's sheet was closed, or no key answered: nothing was sent, and everything stays offered.
             is KeyUnused -> Again(error.message ?: StepWords.PASSKEY_UNUSED, true, methods)
             // Nothing came back at all, or something failed here: the same answer can be sent again.
-            else -> Again(Problems.say(error, Problems.SERVER), false, methods)
+            else -> Problems.say(error, Problems.SERVER).let { said -> if (approved && keepsApproval(error)) Retry(said) else Again(said, false, methods) }
         }
     }
 }
@@ -688,6 +714,17 @@ data class StepUp(
         RENEW,
     }
 
+    /*
+     * What was typed, once the step refused the change it went with. An approval that did not pass is not offered
+     * to it again (the web's `afterRefusal`): the other device is asked afresh, or another way is used. A refusal
+     * of another way's answer leaves an approval alone.
+     */
+    private fun refused(): StepDraft = if (shown == StepMethod.DEVICE) draft.copy(approved = null) else draft
+
+    /*
+     * A failure that is not the step's own (nothing came back, a lost reply, the address's limit, the form's own
+     * refusal) leaves the step as it is, an approved request with it: the form's button sends the same one again.
+     */
     fun failed(failure: Throwable): Pair<Next, StepUp> {
         if (failure !is StepRefused) return Next.NOT_STEP to this
         val message = failure.message.orEmpty()
@@ -695,10 +732,10 @@ data class StepUp(
             // Asked for the first time: the fields appear, and say nothing yet.
             StepRefusal.REQUIRED -> Next.RENEW to copy(error = if (challenge == null) "" else message)
             StepRefusal.EXPIRED -> Next.RENEW to copy(error = message)
-            StepRefusal.WRONG -> Next.AGAIN to copy(error = message, tried = false)
+            StepRefusal.WRONG -> Next.AGAIN to copy(error = message, tried = false, draft = refused())
             // The method on screen is the one the refused change carried.
             StepRefusal.FROZEN, StepRefusal.LIMITED, StepRefusal.UNAVAILABLE, StepRefusal.DEVICE_UNAVAILABLE, StepRefusal.DEVICE_BUSY, StepRefusal.DEVICE_LIMITED ->
-                Next.AGAIN to copy(error = message, tried = false, methods = StepOutcome.left(methods, failure.refusal, shown))
+                Next.AGAIN to copy(error = message, tried = false, methods = StepOutcome.left(methods, failure.refusal, shown), draft = refused())
             // The approval had not landed where the change went: nothing was counted and nothing is said. The wait goes on.
             StepRefusal.PENDING -> Next.AGAIN to copy(error = "", tried = false, draft = draft.copy(approved = null))
             // The request to the other device ended; the step itself still stands, and can be asked again.

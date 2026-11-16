@@ -771,9 +771,10 @@ private fun AdvancedRows(model: DriveViewModel, state: DriveState, onReset: () -
         AlertDialog(
             onDismissRequest = { if (!pending) deleting = false },
             // A dialog is a window of its own: the page's secure flag does not reach it. Whenever the step here can be
-            // answered with the recovery phrase, the dialog itself stays out of screenshots, recordings and recents.
+            // answered with the recovery phrase, or with another device (whose code is shown here), the dialog itself
+            // stays out of screenshots, recordings and recents.
             properties = androidx.compose.ui.window.DialogProperties(
-                securePolicy = if (com.hushos.core.StepMethod.PHRASE in step.step.methods) androidx.compose.ui.window.SecureFlagPolicy.SecureOn
+                securePolicy = if (step.step.methods.any { it.secret }) androidx.compose.ui.window.SecureFlagPolicy.SecureOn
                     else androidx.compose.ui.window.SecureFlagPolicy.Inherit,
             ),
             title = { Text("Delete account") },

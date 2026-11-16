@@ -73,12 +73,14 @@ import com.hushos.app.data.Problems
 import com.hushos.app.data.PromptLimit
 import com.hushos.app.data.Shared
 import com.hushos.app.data.StepAnswer
+import com.hushos.app.data.StepOutcome
 import com.hushos.app.data.StepRefused
 import com.hushos.app.data.StepWords
 import com.hushos.app.data.TwoStep
 import com.hushos.app.data.TwoStepFlow
 import com.hushos.app.data.TwoStepStatus
 import com.hushos.core.ApprovalPrompt
+import com.hushos.core.StepMethod
 import com.hushos.core.StepProof
 import com.hushos.core.StepRefusal
 import com.hushos.core.approvalCodeNormalize
@@ -133,6 +135,12 @@ internal class DeviceAskModel(private val scope: CoroutineScope, private val nam
     var answer: StepAnswer? = null
         private set
 
+    /*
+     * The answer of a request another device approved, while that approval stands: nothing has passed with it yet,
+     * and no refusal of the step's ended it. What Try again sends. Null with nothing approved to send.
+     */
+    val approved: StepAnswer? get() = answer?.takeIf { phase is AskPhase.Approved }
+
     private var job: Job? = null
     private var run = 0
     private var current: Following? = null
@@ -182,9 +190,31 @@ internal class DeviceAskModel(private val scope: CoroutineScope, private val nam
             throw cancelled
         } catch (error: Exception) {
             if (run != mine) return
-            phase = AskPhase.Idle
+            // The step's answer failed where the step never judged it: the approval stands, and the panel goes on saying so.
+            if (!(phase is AskPhase.Approved && StepOutcome.keepsApproval(error))) phase = AskPhase.Idle
             following.failed(error)
         }
+    }
+
+    /*
+     * The step's answer, made with this request, did not pass: heard through `failed`, or from the same answer sent
+     * again (Try again). Returns what the step's screen does with it (`StepOutcome.after`), and settles the approval:
+     * - where the step never judged it (`StepOutcome.keepsApproval`: no reply, a lost one, the address's own limit)
+     *   it stands. The panel still says Approved, the same answer is offered again, and no other request is made:
+     *   each one is one of the day's five;
+     * - `step-pending` waits on the same request again, and answers with it by itself;
+     * - anything else was the step's own word on it, or a fault here: the request is let go, and a press asks afresh.
+     * Before an approval (the request could not be made, or a look at it was refused) there is nothing to keep, and
+     * nothing is offered again: only what the screen says.
+     */
+    fun answerFailed(error: Throwable, methods: List<StepMethod>): StepOutcome? {
+        if (error is CancellationException) return null
+        val held = phase is AskPhase.Approved
+        if (held) when {
+            error is StepRefused && error.refusal == StepRefusal.PENDING -> resume()
+            !StepOutcome.keepsApproval(error) -> stop()
+        }
+        return StepOutcome.after(error, methods, tried = StepMethod.DEVICE, approved = held)
     }
 
     /* Before a device opened the request: its QR code, or for the one that turns the method on (which has none) only that it was asked. */
@@ -900,7 +930,9 @@ internal fun ApprovalSheet(inbox: ApprovalInbox, answer: ApprovalAnswer) {
     val context = LocalContext.current
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (granted) answer.scan() }
     val busy = answer.busy
-    Sheet(onDismissRequest = { if (!busy) inbox.dismiss() }) {
+    // The code typed here passes the other device's step, and the code shown here turns the method on: the sheet (a
+    // window of its own, which the page's secure flag does not reach) stays out of screenshots, recordings and recents.
+    Sheet(onDismissRequest = { if (!busy) inbox.dismiss() }, secure = true) {
         // The sheet itself rises over the keyboard: nothing here pays that inset again.
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = AlpineSpace.S4)) {
             // What is asked, and by which device, whole: never cut short.

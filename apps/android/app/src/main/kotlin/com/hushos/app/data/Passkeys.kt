@@ -205,7 +205,10 @@ data class SignInStep(
     val fieldError: String = "",
     /* What the server, or a lost reply, said: above the field. */
     val notice: String = "",
-    /* The last reply was lost: the same answer goes again. */
+    /*
+     * The last answer was judged by nothing (its reply was lost; or, for a request another device approved, none
+     * came or the address was asked to wait): the same answer goes again, the approval with it.
+     */
     val lost: StepAnswer? = null,
 ) {
     val shown: StepMethod? get() = draft.shown(methods)
@@ -231,7 +234,10 @@ data class SignInStep(
         else -> "Continue"
     }
 
-    /* Whether the one button can be pressed: not while an answer is out, and not while another device is being waited for. */
+    /*
+     * Whether the one button can be pressed: not while an answer is out, and not while another device is being waited
+     * for. An approval kept after an answer nothing judged (`lost`) is sent again by it, and asks nothing new.
+     */
     fun pressable(busy: Boolean, ask: AskPhase = AskPhase.Idle): Boolean = !busy && !(shown == StepMethod.DEVICE && lost == null && (ask.out || ask is AskPhase.Approved))
 
     /* What a press came to: an answer to send, or the step as it stays (with why, if there is a why). */

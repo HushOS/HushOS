@@ -574,8 +574,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
      * Asks another device to approve this sign-in, with the key the sign-in holds for it (the phone's own, or the
      * one made for this sign-in). Only from a press. Once approved the step is answered with the request and the
      * app is signed in; `step-pending` from that answer keeps waiting. `done` hears what the screen does when the
-     * request could not be made or its answer did not pass (StepOutcome), and the answer itself when its reply
-     * was lost, so the same one goes again. A request that ended stays on screen with Ask again.
+     * request could not be made or its answer did not pass (StepOutcome), and the answer itself when nothing judged
+     * it (no reply, a lost one, the address's limit): the approval is kept and the same one goes again
+     * (DeviceAskModel.answerFailed), with nothing new asked. A request that ended stays on screen with Ask again.
      */
     fun askStepDevice(methods: List<com.hushos.core.StepMethod>, done: (com.hushos.app.data.StepOutcome?, com.hushos.app.data.StepAnswer?) -> Unit) {
         val pending = pendingSignIn?.takeIf { it.dropIn() > 0 } ?: run { cancelStep(com.hushos.app.data.StepWords.OVER); return }
@@ -587,8 +588,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
             approved = { answer -> sendStep(pending, answer) },
             failed = { failure ->
                 if (pendingSignIn === pending) {
-                    val outcome = com.hushos.app.data.StepOutcome.after(failure, methods, tried = com.hushos.core.StepMethod.DEVICE)
-                    if (outcome is com.hushos.app.data.StepOutcome.Over) { cancelStep(outcome.message); done(null, null) } else done(outcome, stepAsk.answer)
+                    val outcome = stepAsk.answerFailed(failure, methods)
+                    if (outcome is com.hushos.app.data.StepOutcome.Over) { cancelStep(outcome.message); done(null, null) } else done(outcome, stepAsk.approved)
                 }
             },
         )
@@ -672,7 +673,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
             if (pendingSignIn !== pending) return@launch
             stepBusy = false
             result.onSuccess { user -> signedIn(user); done(null) }.onFailure { failure ->
-                val outcome = com.hushos.app.data.StepOutcome.after(failure, methods, tried = answer.method)
+                // An approved request sent again: whether the approval is kept, waited on or let go is the request's own to settle.
+                val outcome = if (answer.method == com.hushos.core.StepMethod.DEVICE) stepAsk.answerFailed(failure, methods)
+                    else com.hushos.app.data.StepOutcome.after(failure, methods, tried = answer.method)
                 if (outcome is com.hushos.app.data.StepOutcome.Over) { cancelStep(outcome.message); done(null) } else done(outcome)
             }
         }

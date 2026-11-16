@@ -4,14 +4,20 @@ import com.hushos.app.data.ApprovalAnswering
 import com.hushos.app.data.ApprovalServer
 import com.hushos.app.data.ApprovalWire
 import com.hushos.app.data.AskPhase
+import com.hushos.app.data.Auth
+import com.hushos.app.data.AuthUnreachable
 import com.hushos.app.data.DeviceApprovals
 import com.hushos.app.data.DeviceEnrolment
 import com.hushos.app.data.LostReply
 import com.hushos.app.data.Problems
+import com.hushos.app.data.SignInStep
 import com.hushos.app.data.StepAnswer
+import com.hushos.app.data.StepOutcome
 import com.hushos.app.data.StepRefused
 import com.hushos.app.data.StepWords
 import com.hushos.app.data.uptime
+import com.hushos.core.StepChallenge
+import com.hushos.core.StepMethod
 import com.hushos.core.StepProof
 import com.hushos.core.StepRefusal
 import com.hushos.core.approvalQr
@@ -32,7 +38,9 @@ import org.junit.Test
 /*
  * What a screen holds while a request to another device is out, and while one is being answered
  * (`DeviceAskModel`, `ApprovalAnswer`): nothing is asked until a press, a request let go is not
- * looked at again or answered with, a pending answer waits on the same request, a second press
+ * looked at again or answered with, a pending answer waits on the same request, an approval whose
+ * answer nothing judged (no reply, a lost one, the address's limit) is kept and sent again as the
+ * same request with nothing new asked, one the step refused is let go, a second press
  * sends nothing twice, and the sheet closes saying what happened. Waiting for the other device
  * holds nothing up: only a request of the sheet's own on its way does. The request that turns the
  * method on is opened by Answer, approved on a press with nothing scanned or typed, and the code
@@ -133,7 +141,15 @@ class DeviceApprovalUiTest {
         assertEquals(StepRefusal.DEVICE_LIMITED, (failures.single() as StepRefused).refusal)
         assertTrue(model.idle)
         assertNull(model.answer)
-        // Approved, and the step's answer got no reply: heard as that, with the same answer kept to send again.
+        // Asked too often from this address before anything was approved: there is no approval to keep, and nothing to send again.
+        refusing.refusesStart = 429 to """{"message":"Too many attempts. Please try again in 15 minutes."}"""
+        var unmade: StepOutcome? = null
+        model.begin(request(refusing), approved = { fail("approved") }, failed = { unmade = model.answerFailed(it, methods) })
+        waitFor("the limit") { unmade != null }
+        assertEquals(StepOutcome.Again("Too many attempts. Please try again in 15 minutes.", false, methods), unmade)
+        assertTrue(model.idle)
+        assertNull(model.approved)
+        // Approved, and the step's answer got no reply: heard as that, with the approval still standing and the same answer kept to send again.
         val server = ApprovalServer()
         failures.clear()
         model.begin(request(server), approved = { throw LostReply(StepWords.LOST_STEP) }, failed = { failures += it })
@@ -142,8 +158,151 @@ class DeviceApprovalUiTest {
         server.set("approved")
         waitFor("the lost reply") { failures.isNotEmpty() }
         assertTrue(failures.single() is LostReply)
-        assertTrue(model.idle)
+        assertEquals(AskPhase.Approved, model.phase)
         assertEquals(StepAnswer(ApprovalServer.TOKEN, StepProof.Device(server.requestId)), model.answer)
+        model.stop()
+    }
+
+    private val methods = listOf(StepMethod.DEVICE, StepMethod.TOTP, StepMethod.BACKUP)
+    private val challenge = StepChallenge(ApprovalServer.TOKEN, methods, "2026-11-14T10:05:00.000Z", null, null, false, false)
+
+    /* No key is offered in these steps: a sheet that is asked anyway fails the test. */
+    private val noSheet = object : com.hushos.app.data.KeySheet {
+        override suspend fun assertion(request: com.hushos.core.StepKeyRequest): com.hushos.core.KeyAssertion? = throw AssertionError("no key was offered")
+        override suspend fun registration(creation: com.hushos.core.KeyCreation): com.hushos.core.KeyRegistration? = throw AssertionError("no key was being added")
+    }
+
+    /* The step's own route (`login/two-step`) over HTTP, as `Auth.answerStepAt` reaches it: what it answers, and each body it was sent. */
+    private val stepBodies: MutableList<org.json.JSONObject> = java.util.Collections.synchronizedList(mutableListOf())
+    @Volatile private var stepReply: Pair<Int, String> = 500 to ""
+    private var stepServer: com.sun.net.httpserver.HttpServer? = null
+
+    private fun stepRoute(): String {
+        val made = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
+        made.createContext("/api/auth/login/two-step") { exchange ->
+            stepBodies += org.json.JSONObject(exchange.requestBody.readBytes().toString(Charsets.UTF_8))
+            val (code, text) = stepReply
+            val bytes = text.toByteArray()
+            exchange.sendResponseHeaders(code, if (bytes.isEmpty()) -1 else bytes.size.toLong())
+            if (bytes.isNotEmpty()) exchange.responseBody.use { it.write(bytes) }
+            exchange.close()
+        }
+        made.start()
+        stepServer = made
+        return "http://127.0.0.1:${made.address.port}"
+    }
+
+    @org.junit.After
+    fun stopStepRoute() { stepServer?.stop(0) }
+
+    private fun refusal(message: String, code: String? = null) = org.json.JSONObject().put("message", message).apply { code?.let { put("code", it) } }.toString()
+
+    @Test
+    fun anApprovalWhoseAnswerNothingJudgedIsKeptAndGoesAgainAsTheSameRequestWithNothingNewAsked(): Unit = runBlocking {
+        val live = stepRoute()
+        // A port nothing listens on: no reply at all.
+        val dead = java.net.ServerSocket(0).use { "http://127.0.0.1:${it.localPort}" }
+        val limit = "Too many attempts. Please try again in 15 minutes."
+        // Where the first answer went, what came back, and the words the screen already has for it.
+        val failures = listOf(
+            Triple(dead, 0 to "", Problems.OFFLINE),
+            Triple(live, 503 to refusal("Authentication is temporarily unavailable. Please try again."), StepWords.LOST_STEP),
+            Triple(live, 502 to "<html>Bad gateway</html>", StepWords.LOST_STEP),
+            Triple(live, 429 to refusal(limit), limit),
+        )
+        for ((origin, reply, words) in failures) {
+            val server = ApprovalServer()
+            val model = DeviceAskModel(this, { "Pixel 9" }, every = 5)
+            stepBodies.clear()
+            stepReply = reply
+            val outcomes = mutableListOf<StepOutcome?>()
+            // As the sign-in wires it: the approval answers the step by itself, and what a failure means is the request's to settle.
+            model.begin(request(server), approved = { answer -> Auth.answerStepAt(origin, answer.token, answer.proof) }, failed = { outcomes += model.answerFailed(it, methods) })
+            waitFor("the QR code") { model.phase is AskPhase.Waiting }
+            server.open()
+            server.set("approved")
+            waitFor("the answer's failure") { outcomes.isNotEmpty() }
+            val held = StepAnswer(ApprovalServer.TOKEN, StepProof.Device(server.requestId))
+            // Kept: still approved, the same request id, said in the failure's own words, with one press to send it again.
+            assertEquals(words, StepOutcome.Retry(words), outcomes.single())
+            assertEquals(words, AskPhase.Approved, model.phase)
+            assertEquals(words, held, model.approved)
+            var step = SignInStep(challenge).after(outcomes.single(), model.approved)
+            assertEquals(words, step.notice)
+            assertEquals("Try again", step.button(busy = false, ask = model.phase))
+            assertTrue(words, step.pressable(busy = false, ask = model.phase))
+            // The press sends that answer and no other. It fails the same way again: kept still.
+            val pressed = step.pressed(noSheet) as SignInStep.Pressed.Send
+            assertEquals(words, held, pressed.answer)
+            stepReply = 429 to refusal(limit)
+            val again = runCatching { Auth.answerStepAt(live, pressed.answer.token, pressed.answer.proof) }.exceptionOrNull()!!
+            step = pressed.step.after(model.answerFailed(again, methods), pressed.answer)
+            assertEquals(words, AskPhase.Approved, model.phase)
+            assertEquals(words, held, step.lost)
+            assertEquals(limit, step.notice)
+            assertEquals("Try again", step.button(busy = false, ask = model.phase))
+            // Now the step answers, and refuses it: the approval is gone, and only a press would ask the other device afresh.
+            val second = (step.pressed(noSheet) as SignInStep.Pressed.Send)
+            assertEquals(words, held, second.answer)
+            stepReply = 401 to refusal("That didn’t work. Ask your other device again.", "step-wrong")
+            val refused = runCatching { Auth.answerStepAt(live, second.answer.token, second.answer.proof) }.exceptionOrNull()!!
+            step = second.step.after(model.answerFailed(refused, methods), second.answer)
+            assertTrue(words, model.idle)
+            assertNull(words, model.approved)
+            assertNull(words, model.answer)
+            assertNull(words, step.lost)
+            assertEquals("That didn’t work. Ask your other device again.", step.fieldError)
+            assertEquals("Use another device", step.button(busy = false, ask = model.phase))
+            assertTrue(words, step.pressable(busy = false, ask = model.phase))
+            // One request to the other device through all of it, and every answer the step's route was sent carried its id.
+            delay(30)
+            assertEquals(words, 1, made(server))
+            assertTrue(words, stepBodies.size >= 2)
+            for (body in stepBodies) {
+                assertEquals(words, "device", body.getJSONObject("proof").getString("kind"))
+                assertEquals(words, server.requestId, body.getJSONObject("proof").getString("requestId"))
+                assertEquals(words, ApprovalServer.TOKEN, body.getString("token"))
+            }
+        }
+    }
+
+    @Test
+    fun aRefusalTheStepGaveEndsTheApprovalAndAPendingOneAfterTryAgainWaitsOnTheSameRequest(): Unit = runBlocking {
+        // The step refused the approved request outright: nothing is kept, and nothing is offered again.
+        val refusedBy = ApprovalServer()
+        val model = DeviceAskModel(this, { "Pixel 9" }, every = 5)
+        val outcomes = mutableListOf<StepOutcome?>()
+        model.begin(request(refusedBy), approved = { throw StepRefused(StepRefusal.WRONG, "That didn’t work.", 401) }, failed = { outcomes += model.answerFailed(it, methods) })
+        waitFor("the QR code") { model.phase is AskPhase.Waiting }
+        refusedBy.open()
+        refusedBy.set("approved")
+        waitFor("the refusal") { outcomes.isNotEmpty() }
+        assertEquals(StepOutcome.Again("That didn’t work.", true, methods), outcomes.single())
+        assertTrue(model.idle)
+        assertNull(model.approved)
+        assertNull(SignInStep(challenge).after(outcomes.single(), model.approved).lost)
+        // Kept after no reply; the same answer sent again finds the approval not landed yet (`step-pending`): nothing is
+        // said, nothing is asked of the other device, and the same request answers by itself once more.
+        val server = ApprovalServer()
+        val answers = mutableListOf<StepAnswer>()
+        outcomes.clear()
+        model.begin(request(server), failed = { outcomes += model.answerFailed(it, methods) }, approved = { answer ->
+            answers += answer
+            if (answers.size == 1) throw AuthUnreachable()
+        })
+        waitFor("the QR code") { model.phase is AskPhase.Waiting }
+        server.open()
+        server.set("approved")
+        waitFor("no reply") { outcomes.isNotEmpty() }
+        assertEquals(StepOutcome.Retry(Problems.OFFLINE), outcomes.single())
+        val pending = model.answerFailed(StepRefused(StepRefusal.PENDING, "Waiting for your other device.", 409), methods)
+        assertEquals(StepOutcome.Again("", false, methods), pending)
+        assertEquals(AskPhase.Approved, model.phase)
+        waitFor("the same answer again") { answers.size == 2 }
+        assertEquals(answers[0], answers[1])
+        assertEquals(StepAnswer(ApprovalServer.TOKEN, StepProof.Device(server.requestId)), answers[1])
+        assertEquals(1, made(server))
+        model.stop()
     }
 
     // Answering.

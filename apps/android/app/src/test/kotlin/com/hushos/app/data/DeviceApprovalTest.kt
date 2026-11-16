@@ -265,6 +265,92 @@ class DeviceApprovalTest {
     }
 
     @Test
+    fun anApprovalIsKeptOnlyWhereTheStepNeverJudgedTheAnswerMadeWithIt(): Unit = runBlocking {
+        val sheet = object : KeySheet {
+            override suspend fun assertion(request: com.hushos.core.StepKeyRequest): com.hushos.core.KeyAssertion? = null
+            override suspend fun registration(creation: com.hushos.core.KeyCreation): com.hushos.core.KeyRegistration? = null
+        }
+        val all = listOf(StepMethod.DEVICE, StepMethod.TOTP, StepMethod.BACKUP, StepMethod.PHRASE)
+        val busy = StepRefused(StepRefusal.BUSY, "Too many attempts. Please try again in 15 minutes.", 429)
+        // At a sign-in the approval answered the step by itself. No reply, a lost one and the address's own limit judged
+        // nothing: the same answer is offered again, in the words each already has, never a new request.
+        assertEquals(StepOutcome.Retry(Auth.UNREACHABLE), StepOutcome.after(AuthUnreachable(), all, tried = StepMethod.DEVICE, approved = true))
+        assertEquals(StepOutcome.Retry(Problems.OFFLINE), StepOutcome.after(java.net.SocketTimeoutException("timeout"), all, tried = StepMethod.DEVICE, approved = true))
+        assertEquals(StepOutcome.Retry(StepWords.LOST_STEP), StepOutcome.after(LostReply(StepWords.LOST_STEP), all, tried = StepMethod.DEVICE, approved = true))
+        assertEquals(StepOutcome.Retry("Too many attempts. Please try again in 15 minutes."), StepOutcome.after(busy, all, tried = StepMethod.DEVICE, approved = true))
+        // Without an approval behind it (the request could not even be made) the same failures offer nothing again.
+        assertEquals(StepOutcome.Again(Auth.UNREACHABLE, false, all), StepOutcome.after(AuthUnreachable(), all, tried = StepMethod.DEVICE))
+        assertEquals(StepOutcome.Again("Too many attempts. Please try again in 15 minutes.", false, all), StepOutcome.after(busy, all, tried = StepMethod.DEVICE))
+        // Whatever the step itself said of the answer ends the approval, and so does a fault on this phone.
+        val stepsOwn = listOf(
+            StepRefusal.WRONG, StepRefusal.EXPIRED, StepRefusal.FROZEN, StepRefusal.LIMITED, StepRefusal.UNAVAILABLE, StepRefusal.DEVICE_UNAVAILABLE, StepRefusal.DEVICE_BUSY,
+            StepRefusal.DEVICE_LIMITED, StepRefusal.DEVICE_MISMATCH, StepRefusal.APPROVAL_OVER, StepRefusal.APPROVAL_TAKEN, StepRefusal.APPROVAL_REFUSED, StepRefusal.OTHER,
+        )
+        for (refusal in stepsOwn) {
+            val refused = StepRefused(refusal, "The server’s words.", 401)
+            assertFalse("$refusal", StepOutcome.keepsApproval(refused))
+            assertFalse("$refusal", StepOutcome.after(refused, all, tried = StepMethod.DEVICE, approved = true) is StepOutcome.Retry)
+        }
+        for (fault in listOf(IllegalStateException("x"), AuthFailure("Signed in, but the session was not returned."), kotlinx.coroutines.CancellationException("left")))
+            assertFalse("$fault", StepOutcome.keepsApproval(fault))
+        for (kept in listOf(AuthUnreachable(), LostReply(StepWords.LOST_STEP), busy, StepRefused(StepRefusal.PENDING, "Waiting for your other device.", 409)))
+            assertTrue("$kept", StepOutcome.keepsApproval(kept))
+
+        // In a form the change carries the approved request. What was not the step's own answer leaves it there, and
+        // the form's button sends the very same request again.
+        val request = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+        val approved = StepUp(StepPurpose.PASSWORD).take(challenge(all)).approved(ApprovedRequest(token, request))
+        for (failure in listOf(AuthUnreachable(), LostReply(StepWords.LOST_CHANGE), AuthFailure("Too many tries. Wait a moment, then try again.", 429), busy)) {
+            val (next, step) = approved.failed(failure)
+            assertEquals("$failure", StepUp.Next.NOT_STEP, next)
+            assertTrue("$failure", step.deviceApproved)
+            assertEquals("$failure", StepAnswer(token, StepProof.Device(request)), (step.prove(sheet) as StepUp.Proof.Ready).answer)
+        }
+        // The step's own refusal of it takes the approval away: it is never sent to that step again.
+        for (refusal in listOf(StepRefusal.WRONG, StepRefusal.FROZEN, StepRefusal.LIMITED, StepRefusal.UNAVAILABLE, StepRefusal.DEVICE_UNAVAILABLE, StepRefusal.DEVICE_BUSY, StepRefusal.DEVICE_LIMITED)) {
+            val (next, step) = approved.failed(StepRefused(refusal, "The server’s words.", 403))
+            assertEquals("$refusal", StepUp.Next.AGAIN, next)
+            assertEquals("$refusal", "The server’s words.", step.error)
+            assertFalse("$refusal", step.deviceApproved)
+            assertNull("$refusal", step.draft.approved)
+            assertTrue("$refusal", step.prove(sheet) is StepUp.Proof.Unready)
+        }
+        // A refusal of another way's answer is not about an approval.
+        val typing = approved.copy(draft = approved.draft.copy(method = StepMethod.TOTP, totp = "123456"))
+        assertEquals(ApprovedRequest(token, request), typing.failed(StepRefused(StepRefusal.WRONG, "That code didn’t work.", 403)).second.draft.approved)
+    }
+
+    @Test
+    fun whatTheStepsRouteAnswersAnApprovedRequestWithSaysWhetherItIsKept() {
+        val proof = StepProof.Device("7c9e6679-7425-40de-944b-e07fc1f90ae7")
+        fun refusal(message: String, code: String? = null) = JSONObject().put("message", message).apply { code?.let { put("code", it) } }.toString()
+        fun thrown(status: Int, body: String): Throwable {
+            val session = serving { _, _, _ -> status to body }
+            return assertThrows(Exception::class.java) { Auth.answerStepAt(session.origin, token, proof) }
+        }
+        // A server error and a gateway's page are nobody's answer; the address's limit looked at nothing.
+        for ((status, body) in listOf(503 to refusal("Authentication is temporarily unavailable. Please try again."), 500 to refusal("Something broke."), 502 to "<html>Bad gateway</html>", 504 to "")) {
+            val lost = thrown(status, body)
+            assertTrue("$status", lost is LostReply)
+            assertTrue("$status", StepOutcome.keepsApproval(lost))
+        }
+        val limited = thrown(429, refusal("Too many attempts. Please try again in 15 minutes."))
+        assertEquals(StepRefusal.BUSY, (limited as StepRefused).refusal)
+        assertTrue(StepOutcome.keepsApproval(limited))
+        // Each of them went out as the request another device approved, by its id.
+        assertEquals("device", asked.single().third.getJSONObject("proof").getString("kind"))
+        assertEquals("7c9e6679-7425-40de-944b-e07fc1f90ae7", asked.single().third.getJSONObject("proof").getString("requestId"))
+        // The step's own answers end it: a request that is over or was never this token's, an ended step, a method the server cannot check.
+        for ((status, code) in listOf(401 to "step-wrong", 401 to "step-expired", 503 to "step-unavailable", 404 to "approval-over"))
+            assertFalse(code, StepOutcome.keepsApproval(thrown(status, refusal("The server’s words.", code))))
+        // Nothing came back at all.
+        val session = serving { _, _, _ -> 200 to "{}" }
+        server?.stop(0)
+        val offline = assertThrows(AuthUnreachable::class.java) { Auth.answerStepAt(session.origin, token, proof) }
+        assertTrue(StepOutcome.keepsApproval(offline))
+    }
+
+    @Test
     fun aChangeCarriesOnlyARequestApprovedForItsOwnStep(): Unit = runBlocking {
         val sheet = object : KeySheet {
             override suspend fun assertion(request: com.hushos.core.StepKeyRequest): com.hushos.core.KeyAssertion? = null
