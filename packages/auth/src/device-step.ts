@@ -60,6 +60,11 @@ export type DeviceAskState =
     | { state: 'waiting' }
     /* A device opened it: the code to read out or type there. */
     | { state: 'code'; code: string }
+    /*
+     * A device opened a request that turns the method on. This device has no code for it and
+     * shows none: the other one draws its own once the person approves there.
+     */
+    | { state: 'opened' }
     /* Approved: the step can be answered with this request. */
     | { state: 'approved'; code: string | null }
     /* Over without an approval: replaced by a newer request, timed out, or refused. */
@@ -72,20 +77,16 @@ export type DeviceAsk = {
     expiresAt: string;
     /* Asks the server where the request stands, revealing this device's keys once it may. */
     poll(): Promise<DeviceAskState>;
-    /*
-     * Turning the method on runs the code the other way: the approving device shows it, and
-     * the person types it here. This is that check: the code as it is written when `typed` is
-     * exactly the one this device worked out from its own nonce and the other's value, else
-     * null. Null too before another device has opened the request.
-     */
-    matches(typed: string): Promise<string | null>;
 };
 
 /*
- * The purpose of the request that turns the method on. Its code runs the other way: shown on
- * the device that approves, typed on the one that asked, and checked again by the server when
- * the method is confirmed. The person can only type what they can read, so the device that
- * approved is one they are holding, whatever name it gave itself.
+ * The purpose of the request that turns the method on. It is answered the other way round:
+ * the device that approves draws a code of its own, signs the request with the code's digest
+ * in it, and shows the code; the device that asked takes it typed and sends it with the
+ * confirmation. This device cannot check what is typed, and must not be able to: the code is
+ * in nothing it holds and nothing the server tells it, so only someone reading the approving
+ * device's screen can turn the method on. (A code both devices derive, as a sign-in's is,
+ * would be one whoever asked could work out alone.) The server compares, once.
  */
 export const TURNING_ON = 'device-approval';
 
@@ -134,6 +135,8 @@ export async function askAnotherDevice(
               ? started.expiresAt
               : new Date(Date.now() + 5 * 60_000).toISOString();
     let revealed = false;
+    // The request that turns the method on has no code here: none is worked out, none is shown.
+    const turningOn = input.purpose === TURNING_ON;
     let code: string | null = null;
     return {
         requestId,
@@ -153,7 +156,7 @@ export async function askAnotherDevice(
             if (status.state === 'waiting') return { state: 'waiting' };
             // The approving device's value is fixed now, and this device has not seen it
             // before: only here does it show what it committed to.
-            if (!code) {
+            if (!code && !turningOn) {
                 if (!key32(status.approverKey)) throw new Error('Please try again.');
                 code = await deviceStepCode({
                     userId,
@@ -165,6 +168,7 @@ export async function askAnotherDevice(
                     nonce,
                 });
             }
+            if (turningOn && !key32(status.approverKey)) throw new Error('Please try again.');
             if (!revealed && status.state === 'opened') {
                 await api.approvalReveal(requestId, {
                     stepToken: input.stepToken,
@@ -173,14 +177,8 @@ export async function askAnotherDevice(
                 });
                 revealed = true;
             }
-            return status.state === 'approved'
-                ? { state: 'approved', code }
-                : { state: 'code', code };
-        },
-        async matches(typed) {
-            const { normalizeApprovalCode } = await crypto_();
-            const written = normalizeApprovalCode(typed);
-            return code !== null && written === code ? code : null;
+            if (status.state === 'approved') return { state: 'approved', code };
+            return code ? { state: 'code', code } : { state: 'opened' };
         },
     };
 }
@@ -195,12 +193,14 @@ export type ApprovalPrompt = {
     /* `login` for a sign-in, else what the other device is about to change. */
     purpose: string;
     class: 'unknown' | 'known' | 'change';
-    device: { kind: DeviceKind | null; name: string | null };
+    /* `addedAt`: when the asking device was added to the account, where it is one of its devices. */
+    device: { kind: DeviceKind | null; name: string | null; addedAt: string | null };
     /* Roughly where the asking device is, in the server's words ("near Lyon, France"), or null. */
     location: string | null;
     /*
-     * The name is the asking device's own words: the server does not know it as one of the
-     * account's devices. Anything but the server's plain `false` reads as true.
+     * The name is the asking device's own word: the server does not know it as one of the
+     * account's devices, or the account has no second step yet, so a device of the account is
+     * whoever signed in with the password. Anything but the server's plain `false` reads as true.
      */
     selfNamed: boolean;
     /* The asking device chose this device to answer. */
@@ -236,6 +236,7 @@ function prompt(value: unknown): ApprovalPrompt | null {
         device: {
             kind: kind === 'web' || kind === 'ios' || kind === 'android' ? kind : null,
             name: text(device.name) ? device.name : null,
+            addedAt: time(device.addedAt),
         },
         // Words for a line of a prompt, and nothing longer or stranger than that.
         location:
@@ -389,10 +390,14 @@ export async function approvalCode(
  * a wrong answer to any step does. The signature is this device's own key's, over the
  * statement that names the account, the request, its purpose, its token and the asking device.
  *
- * A request that turns the method on (`TURNING_ON`) has nothing typed here: this device signs
- * on the person's press, and what comes back is the code for them to type on the other
- * device. For any other request nothing comes back.
+ * A request that turns the method on (`TURNING_ON`) has nothing typed here. On the person's
+ * press this device draws a code from fresh randomness, signs the request with the code's
+ * digest in the statement, and posts the signature and the digest; what comes back is the code,
+ * for the person to type on the other device. The code is kept for the request while this page
+ * lives, so an approval whose reply was lost is sent again as the same one. For any other
+ * request nothing comes back.
  */
+const drawnHere = new Map<string, string>();
 export async function approve(
     api: AuthApi,
     input: {
@@ -403,27 +408,40 @@ export async function approve(
         typed?: string;
     },
 ) {
-    const { normalizeApprovalCode, signDeviceStep } = await crypto_();
+    const {
+        drawApprovalCode,
+        normalizeApprovalCode,
+        signDeviceStep,
+        signDeviceTurnOn,
+        turnOnCodeDigest,
+    } = await crypto_();
+    // Whatever the purpose, what was revealed must be what was committed to (it ends the
+    // request otherwise), and the signature names the key that was revealed.
     const expected = await approvalCode(api, input.opened, input.reveal, input.userId);
-    const turningOn = input.opened.purpose === TURNING_ON;
-    if (
-        !turningOn &&
-        input.typed !== undefined &&
-        normalizeApprovalCode(input.typed) !== expected
-    ) {
-        await api.approvalDeny(input.opened.id, 'wrong-code').catch(() => {});
-        throw new DeviceStepError('wrong', 'That code didn’t match, so nothing was approved.');
-    }
-    const signature = await signDeviceStep(input.privateKey, {
+    const step = {
         userId: input.userId,
         requestId: input.opened.id,
         purpose: input.opened.purpose,
         tokenDigest: input.opened.tokenDigest,
         deviceSigningKey: input.reveal.deviceSigningKey,
-    });
+    };
+    if (input.opened.purpose === TURNING_ON) {
+        const code = drawnHere.get(step.requestId) ?? drawApprovalCode();
+        drawnHere.set(step.requestId, code);
+        const codeDigest = await turnOnCodeDigest({ requestId: step.requestId, code });
+        const signature = await signDeviceTurnOn(input.privateKey, { ...step, codeDigest });
+        const approved = await api.approvalApprove(step.requestId, signature, codeDigest);
+        if (!record(approved) || approved.approved !== true) throw new Error('Please try again.');
+        return code;
+    }
+    if (input.typed !== undefined && normalizeApprovalCode(input.typed) !== expected) {
+        await api.approvalDeny(input.opened.id, 'wrong-code').catch(() => {});
+        throw new DeviceStepError('wrong', 'That code didn’t match, so nothing was approved.');
+    }
+    const signature = await signDeviceStep(input.privateKey, step);
     const approved = await api.approvalApprove(input.opened.id, signature);
     if (!record(approved) || approved.approved !== true) throw new Error('Please try again.');
-    return turningOn ? expected : null;
+    return null;
 }
 
 /* ------------------------------------------------------------------------- */

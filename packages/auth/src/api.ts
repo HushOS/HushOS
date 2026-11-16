@@ -404,7 +404,8 @@ export interface AuthApi {
     /* The device that approves, from its own session. */
     approvals(): Promise<unknown>;
     approvalOpen(id: string, ephemeralKey: string): Promise<unknown>;
-    approvalApprove(id: string, signature: string): Promise<unknown>;
+    /* `codeDigest`: only with the approval that turns the method on. */
+    approvalApprove(id: string, signature: string, codeDigest?: string): Promise<unknown>;
     approvalDeny(
         id: string,
         reason: 'denied' | 'wrong-code' | 'not-me' | 'mismatch',

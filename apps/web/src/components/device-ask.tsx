@@ -12,10 +12,11 @@ import { authError } from '@/lib/form';
  * person to type there. Nothing is sent until a press asks for it: a form that merely opens on
  * this method must not spend the day's requests.
  *
- * Turning the method on (`approver`) runs the code the other way. This browser shows no code
- * and no QR code: the device that approves shows the code, and the person types it here. So
- * the approval says nothing by itself; `onApproved` hands over the check the typed code must
- * pass (`matches`), and the form that turns the method on asks for it.
+ * Turning the method on (`approver`) is answered the other way round. This browser shows no
+ * code and no QR code: the device that approves draws a code and shows it, and the person types
+ * it here. The approval alone turns nothing on, and this browser cannot check what is typed
+ * (the code is in nothing it holds): the form that turns the method on asks for it and sends
+ * it, and the server compares.
  */
 
 const POLL_MS = 2_000;
@@ -45,8 +46,7 @@ export function DeviceAsk({
     purpose: string;
     /* The request the other device approved, once it has: the step is then answered with it. */
     approved: string;
-    /* `matches`: what a code typed here must pass, where the method is being turned on. */
-    onApproved: (requestId: string, matches: Asked['matches']) => void;
+    onApproved: (requestId: string) => void;
     /* The press that brought the person here already asked: start without another one. */
     auto?: boolean;
     disabled?: boolean;
@@ -110,7 +110,8 @@ export function DeviceAsk({
 
     // An approval the step did not take after all (it refused it) is not shown as one: back to asking.
     const state = !approved && held?.state === 'approved' ? null : held;
-    const waiting = state?.state === 'waiting' || state?.state === 'code';
+    const waiting =
+        state?.state === 'waiting' || state?.state === 'code' || state?.state === 'opened';
     useEffect(() => {
         if (!asked || !waiting) return;
         const mine = run.latest;
@@ -122,8 +123,7 @@ export function DeviceAsk({
                 const next = await asked.poll();
                 if (mine !== run.latest) return;
                 setHeld(next);
-                if (next.state === 'approved')
-                    told.current(asked.requestId, (typed) => asked.matches(typed));
+                if (next.state === 'approved') told.current(asked.requestId);
             } catch (cause) {
                 // The token is over, or the request is: nothing more will come of asking.
                 const status = (cause as { status?: unknown } | null)?.status;

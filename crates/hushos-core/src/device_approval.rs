@@ -30,7 +30,7 @@
 //! of the step token's UTF-8 bytes; keys, nonce and digest are 32 bytes each. Nothing
 //! here talks to a server or decides who may approve: the server does.
 
-use crate::bytes::{decode, encode};
+use crate::bytes::{decode, encode, random_bytes};
 use crate::envelope::context;
 use crate::error::{input, CoreResult};
 use crate::recovery::wordlist;
@@ -42,6 +42,9 @@ use zeroize::Zeroizing;
 const COMMIT_DOMAIN: &str = "hushos/two-step/device/commit/v1";
 const CODE_DOMAIN: &str = "hushos/two-step/device/v1";
 const STATEMENT_DOMAIN: &str = "hushos/two-step/device";
+const TURN_ON_PURPOSE: &str = "device-approval";
+const TURN_ON_CODE_DOMAIN: &str = "hushos/two-step/device/turn-on/code/v1";
+const TURN_ON_STATEMENT_DOMAIN: &str = "hushos/two-step/device/turn-on";
 const QR_PREFIX: &str = "hushos-approve:";
 /// How many prompts a day an approving device shows for each class of request.
 const PROMPTS_A_DAY: usize = 5;
@@ -316,12 +319,19 @@ pub fn approval_code_normalize(typed: String) -> Option<String> {
 }
 
 /// Whether a request of this purpose is the one that turns Approve on another device on
-/// (`device-approval`). Its code runs the other way round from every other request's: the
-/// device that approves signs on the person's press and then shows the code, and the device
-/// that asked takes it typed (`approval_code_typed`) and sends it with the confirmation, where
-/// the server checks it again. A person can only type what they can read, so the device that
-/// approved is one they are holding, whatever name it gave itself. Such a request is never
-/// answered by a scan, and its asking device shows neither a code nor a QR code.
+/// (`device-approval`). It is answered the other way round from every other request:
+///
+/// - The device that approves, on the person's press, draws a code of its own from fresh
+///   randomness (`approval_code_draw`), signs the request with the code's digest in the
+///   statement (`device_turn_on_sign`), posts the signature and the digest
+///   (`approval_turn_on_json`), and then shows the code.
+/// - The device that asked shows no code and no QR code, takes the code typed, and sends it
+///   with the confirmation (`device_confirm_json`). It has nothing to check it against: the
+///   code is in nothing it holds and nothing the server tells it. The server compares, once.
+///
+/// So whoever turns the method on has read the screen of the device that approved, which a
+/// name in a list does not prove, and nobody who has not can work the code out. Such a request
+/// is never answered by a scan.
 ///
 /// ```
 /// use hushos_core::approval_turns_on;
@@ -331,26 +341,121 @@ pub fn approval_code_normalize(typed: String) -> Option<String> {
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn approval_turns_on(purpose: String) -> bool {
-    purpose == "device-approval"
+    purpose == TURN_ON_PURPOSE
 }
 
-/// On the device turning the method on: what the person typed, as it is written, when it is
-/// exactly `code` (what this device worked out with `device_step_code`), else `None`. One
-/// try: a device that gets `None` ends its request and asks again.
+/// A code the approving device draws for a request that turns the method on: two digits and
+/// a word of the list, each uniform, from the system's randomness. It comes from nothing
+/// either device or the server already holds.
 ///
 /// ```
-/// use hushos_core::approval_code_typed;
-/// assert_eq!(approval_code_typed("07 river".into(), " 07-River ".into()), Some("07 river".into()));
-/// assert_eq!(approval_code_typed("07 river".into(), "08 river".into()), None);
-/// assert_eq!(approval_code_typed("07 river".into(), "07 rival".into()), None);
-/// assert_eq!(approval_code_typed("07 river".into(), "".into()), None);
-/// // What is not a code matches nothing, itself included.
-/// assert_eq!(approval_code_typed("river".into(), "river".into()), None);
+/// use hushos_core::*;
+/// let code = approval_code_draw()?;
+/// assert_eq!(approval_code_normalize(code.clone()), Some(code.clone()));
+/// // 204,800 of them: a dozen draws are not one code.
+/// let drawn: std::collections::HashSet<String> = (0..12).map(|_| approval_code_draw().unwrap()).collect();
+/// assert!(drawn.len() > 1);
+/// # Ok::<(), hushos_core::CoreError>(())
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
-pub fn approval_code_typed(code: String, typed: String) -> Option<String> {
-    let typed = approval_code_normalize(typed)?;
-    (approval_code_normalize(code)? == typed).then_some(typed)
+pub fn approval_code_draw() -> CoreResult<String> {
+    // Whole ranges only, so neither part leans: a byte below 200 for the digits, 11 bits for the word.
+    let number = loop {
+        let byte = random_bytes(1)?[0];
+        if byte < 200 {
+            break byte % 100;
+        }
+    };
+    let bits = random_bytes(2)?;
+    let index = ((usize::from(bits[0]) << 8) | usize::from(bits[1])) & 0x7ff;
+    Ok(format!("{number:02} {}", wordlist()[index]))
+}
+
+/// The digest of a code drawn for one request, base64url: what the approving device signs and
+/// posts in place of the code, and what the server holds a typed code to. `code` is read as a
+/// person types it.
+///
+/// ```
+/// use hushos_core::*;
+/// let id = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
+/// let digest = turn_on_code_digest(id.into(), "07 river".into())?;
+/// assert_eq!(turn_on_code_digest(id.to_uppercase(), " 07-River ".into())?, digest);
+/// assert_ne!(turn_on_code_digest(id.into(), "08 river".into())?, digest);
+/// assert_ne!(turn_on_code_digest("7c9e6679-7425-40de-944b-e07fc1f90ae8".into(), "07 river".into())?, digest);
+/// assert!(turn_on_code_digest(id.into(), "07 rivr".into()).is_err());
+/// # Ok::<(), hushos_core::CoreError>(())
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn turn_on_code_digest(request_id: String, code: String) -> CoreResult<String> {
+    let code = approval_code_normalize(code).ok_or_else(|| input("Invalid device approval."))?;
+    let mut hash = Sha256::new();
+    hash.update(TURN_ON_CODE_DOMAIN.as_bytes());
+    hash.update(id_of(&request_id)?.as_bytes());
+    hash.update(code.as_bytes());
+    Ok(encode(&hash.finalize()))
+}
+
+/// The bytes the approving device signs for a request that turns the method on: what
+/// `device_step_statement` names, under a label of its own, and the digest of the code it
+/// drew. A request of any other purpose has no such statement.
+///
+/// ```
+/// use hushos_core::*;
+/// let step = DeviceStep {
+///     user_id: "0F8FAD5B-D9CB-469F-A165-70867728950E".into(),
+///     request_id: "7c9e6679-7425-40de-944b-e07fc1f90ae7".into(),
+///     purpose: "device-approval".into(),
+///     token_digest: step_token_digest("abc".into()),
+///     device_signing_key: base64url_encode(vec![0; 32]),
+/// };
+/// let statement = device_turn_on_statement(step.clone(), base64url_encode(vec![9; 32]))?;
+/// assert_eq!(
+///     String::from_utf8(statement)?,
+///     r#"["hushos/two-step/device/turn-on",1,"0f8fad5b-d9cb-469f-a165-70867728950e","7c9e6679-7425-40de-944b-e07fc1f90ae7","device-approval","ungWv48Bz-pBQUDeXa4iI7ADYaOWF3qctBD_YfIAFa0","AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk"]"#
+/// );
+/// assert!(device_turn_on_statement(DeviceStep { purpose: "login".into(), ..step }, base64url_encode(vec![9; 32])).is_err());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn device_turn_on_statement(step: DeviceStep, code_digest: String) -> CoreResult<Vec<u8>> {
+    if step.purpose != TURN_ON_PURPOSE {
+        return Err(input("Invalid device approval."));
+    }
+    Ok(context(&[
+        json!(TURN_ON_STATEMENT_DOMAIN),
+        json!(1),
+        json!(id_of(&step.user_id)?),
+        json!(id_of(&step.request_id)?),
+        json!(TURN_ON_PURPOSE),
+        json!(encode(&field("token digest", &step.token_digest)?)),
+        json!(encode(&field("device key", &step.device_signing_key)?)),
+        json!(encode(&field("code digest", &code_digest)?)),
+    ]))
+}
+
+/// The approving device's signature for a request that turns the method on, base64url (64
+/// bytes): over `device_turn_on_statement`. `seed` is the device key's seed.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn device_turn_on_sign(seed: Vec<u8>, step: DeviceStep, code_digest: String) -> CoreResult<String> {
+    let seed = Zeroizing::new(seed);
+    if seed.len() != 32 {
+        return Err(input("A device key seed is 32 bytes."));
+    }
+    Ok(encode(&sign(&seed, &device_turn_on_statement(step, code_digest)?)?))
+}
+
+/// Whether `signature` is the device key `public_key`'s approval of this request with this
+/// code's digest. The server checks the same; apps use it in tests.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn device_turn_on_verify(
+    public_key: Vec<u8>,
+    step: DeviceStep,
+    code_digest: String,
+    signature: Vec<u8>,
+) -> bool {
+    device_turn_on_statement(step, code_digest)
+        .map(|statement| verify(&public_key, &statement, &signature))
+        .unwrap_or(false)
 }
 
 /// The words a typed beginning could become, for completion: up to `limit`, in the

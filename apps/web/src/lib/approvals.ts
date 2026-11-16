@@ -9,6 +9,21 @@ import { authClient } from '@/lib/auth-client';
  * (`approval_asks` in crates/hushos-core/src/two_step.rs).
  */
 
+/*
+ * The day a device was added, worded as the Devices list words it (`formatDay` in lib/drive.ts:
+ * "14 Nov", with the year when it is another one). Its own few lines: this file is part of the
+ * app's shell, and the drive library is not something a prompt should load.
+ */
+function addedDay(iso: string | null | undefined) {
+    const date = iso ? new Date(iso) : null;
+    if (!date || Number.isNaN(date.getTime())) return '';
+    return new Intl.DateTimeFormat('en-GB', {
+        day: 'numeric',
+        month: 'short',
+        ...(date.getFullYear() === new Date().getFullYear() ? {} : { year: 'numeric' }),
+    }).format(date);
+}
+
 const WHAT: Record<string, string> = {
     login: 'Sign-in',
     password: 'Change your password',
@@ -24,22 +39,29 @@ const WHAT: Record<string, string> = {
  * Laptop", "Sign-in on a new device calling itself “Chrome on Windows”, near Lyon, France".
  * - `selfNamed`: the name is the asking device's own words, not the account's record of one
  *   of its devices. The prompt says so, so nobody reads a stranger's words as their own laptop.
+ * - `device.addedAt` beside a self-chosen name: the device is one of the account's, on an
+ *   account with no second step yet, so its name is still only its own word. The prompt says
+ *   when it was added: "a device calling itself “Maya’s Laptop”, added 14 Nov". One that
+ *   appeared an hour ago under a familiar name is then not taken for the familiar one.
  * - A device that gave no name is "a new device".
  * - A purpose from a later release is "A change to your account".
  * - The place is there only where the server was told one.
  */
 export function approvalAsks(asked: {
     purpose: string;
-    device: { name: string | null };
+    device: { name: string | null; addedAt?: string | null };
     selfNamed: boolean;
     location?: string | null;
 }) {
     const name = asked.device.name?.trim();
+    const added = addedDay(asked.device.addedAt);
     const device = !name
         ? 'a new device'
-        : asked.selfNamed
-          ? `a new device calling itself “${name}”`
-          : name;
+        : !asked.selfNamed
+          ? name
+          : added
+            ? `a device calling itself “${name}”, added ${added}`
+            : `a new device calling itself “${name}”`;
     const asks = `${WHAT[asked.purpose] ?? 'A change to your account'} on ${device}`;
     return asked.location?.trim() ? `${asks}, ${asked.location.trim()}` : asks;
 }

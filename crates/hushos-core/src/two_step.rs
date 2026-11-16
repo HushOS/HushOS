@@ -291,6 +291,10 @@ pub enum StepRefusal {
     DeviceChoice,
     /// `device-mismatch`: what this device revealed is not what it committed to. The request ended.
     DeviceMismatch,
+    /// `device-code`: the code typed to turn the method on is not the one the approving device
+    /// drew. That request is over (one try) and was counted as a failed step; the setup
+    /// stands, and the other device can be asked again for a new code.
+    DeviceCode,
     /// `approval-over`: the request an approving device answered is over.
     ApprovalOver,
     /// `approval-taken`: another of the account's devices is answering the request.
@@ -484,6 +488,7 @@ fn refusal_of(status: u16, body: &str) -> StepReply {
         (Some("device-limited"), _) => StepRefusal::DeviceLimited,
         (Some("device-choice"), _) => StepRefusal::DeviceChoice,
         (Some("device-mismatch"), _) => StepRefusal::DeviceMismatch,
+        (Some("device-code"), _) => StepRefusal::DeviceCode,
         (Some("approval-over"), _) => StepRefusal::ApprovalOver,
         (Some("approval-taken"), _) => StepRefusal::ApprovalTaken,
         (Some("approval-refused"), _) => StepRefusal::ApprovalRefused,
@@ -1284,12 +1289,18 @@ pub struct ApprovalPrompt {
     /// The asking device's name: the server's record of it, or its own words for one the
     /// server does not know yet. Shown in the app only, never in a notification.
     pub device_name: Option<String>,
+    /// When the asking device was added to the account, where it is one of the account's: an
+    /// instant, for the app to word as its Devices list does ("14 Nov"). The prompt says it
+    /// beside a name that is the device's own word (`approval_asks`).
+    pub device_added_at: Option<String>,
     /// Roughly where the asking device is, in the server's words ("near Lyon, France"), where
     /// the server was told. A line of words: one with a control or direction mark is dropped.
     pub location: Option<String>,
     /// The name is the asking device's own words: the server does not know it as one of the
-    /// account's devices (a new sign-in). The prompt says so (`approval_asks`). Anything but
-    /// the server's plain `false` reads as true: an unmarked name is not vouched for.
+    /// account's devices (a new sign-in), or the account has no second step yet, so a device
+    /// of the account is whoever signed in with the password (the request that first turns
+    /// the method on). The prompt says so (`approval_asks`). Anything but the server's plain
+    /// `false` reads as true: an unmarked name is not vouched for.
     pub self_named: bool,
     /// The asking device chose this device to answer: no other device is shown the request.
     pub chosen: bool,
@@ -1353,6 +1364,10 @@ pub fn approvals_reply_read(status: u16, body: String) -> ApprovalsReply {
                 .filter(|kind| matches!(*kind, "web" | "ios" | "android"))
                 .map(str::to_string),
             device_name: device.and_then(|device| text(device, "name")).map(str::to_string),
+            device_added_at: device
+                .and_then(|device| text(device, "addedAt"))
+                .filter(|at| instant_shaped(at))
+                .map(str::to_string),
             location: text(map, "location").filter(|place| place_shaped(place)).map(str::to_string),
             self_named: map.get("selfNamed") != Some(&Value::Bool(false)),
             chosen: map.get("chosen") == Some(&Value::Bool(true)),
@@ -1434,6 +1449,19 @@ pub fn approval_approve_json(signature: String) -> String {
     format!(r#"{{"signature":{}}}"#, json!(signature))
 }
 
+/// The approval of a request that turns the method on: the signature
+/// (`device_turn_on_sign`) and the digest of the code this device drew and is about to show
+/// (`turn_on_code_digest`). The code itself is not sent.
+///
+/// ```
+/// use hushos_core::approval_turn_on_json;
+/// assert_eq!(approval_turn_on_json("sig".into(), "dig".into()), r#"{"signature":"sig","codeDigest":"dig"}"#);
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn approval_turn_on_json(signature: String, code_digest: String) -> String {
+    format!(r#"{{"signature":{},"codeDigest":{}}}"#, json!(signature), json!(code_digest))
+}
+
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn approval_deny_json(reason: String) -> String {
     format!(r#"{{"reason":{}}}"#, json!(reason))
@@ -1487,7 +1515,8 @@ pub fn device_enrolment_reply_read(status: u16, body: String) -> DeviceEnrolment
 
 /// What the asking device sends to confirm the method, once another device approved: the
 /// request, and the code that device shows, as the person typed it here and
-/// `approval_code_typed` wrote it. The server works the code out again and compares.
+/// `approval_code_normalize` wrote it. This device cannot check it: only the approving
+/// device knows the code, and only the server holds its digest. A wrong one ends the request.
 ///
 /// ```
 /// use hushos_core::device_confirm_json;
@@ -1539,6 +1568,11 @@ pub enum DeviceConfirmedReply {
 ///     device_confirmed_reply_read(409, r#"{"message":"Waiting for your other device.","code":"step-pending"}"#.into()),
 ///     DeviceConfirmedReply::Refused { refusal: StepRefusal::Pending, message: "Waiting for your other device.".into() },
 /// );
+/// // The code typed was not the approving device's: that request is over, and the setup stands.
+/// assert_eq!(
+///     device_confirmed_reply_read(409, r#"{"message":"That code didn’t match, so nothing was turned on.","code":"device-code"}"#.into()),
+///     DeviceConfirmedReply::Refused { refusal: StepRefusal::DeviceCode, message: "That code didn’t match, so nothing was turned on.".into() },
+/// );
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn device_confirmed_reply_read(status: u16, body: String) -> DeviceConfirmedReply {
@@ -1573,25 +1607,35 @@ pub fn device_confirmed_reply_read(status: u16, body: String) -> DeviceConfirmed
 /// - `self_named` (`ApprovalPrompt.self_named`): the name is the asking device's own words,
 ///   not the account's record of one of its devices. The prompt then says "a new device
 ///   calling itself “…”", so nobody reads a stranger's chosen words as their own laptop.
+/// - `added`: the day the asking device was added to the account, as the app words a day
+///   (from `ApprovalPrompt.device_added_at`). With a self-chosen name the device is then one
+///   of the account's whose name is still only its own word (the account has no second step
+///   yet): "a device calling itself “…”, added 14 Nov". It is not said beside a name the
+///   server vouches for.
 /// - A device that gave no name is "a new device".
 /// - A purpose from a later release is "A change to your account".
 /// - The place is there only where the server was told one (`ApprovalPrompt.location`).
 ///
 /// ```
 /// use hushos_core::approval_asks;
-/// assert_eq!(approval_asks("password".into(), Some("Maya’s iPhone".into()), false, None), "Change your password on Maya’s iPhone");
+/// assert_eq!(approval_asks("password".into(), Some("Maya’s iPhone".into()), false, Some("3 Nov".into()), None), "Change your password on Maya’s iPhone");
 /// assert_eq!(
-///     approval_asks("login".into(), Some("Chrome on Windows".into()), true, Some("near Lyon, France".into())),
+///     approval_asks("login".into(), Some("Chrome on Windows".into()), true, None, Some("near Lyon, France".into())),
 ///     "Sign-in on a new device calling itself “Chrome on Windows”, near Lyon, France"
 /// );
-/// assert_eq!(approval_asks("login".into(), None, true, Some("  ".into())), "Sign-in on a new device");
-/// assert_eq!(approval_asks("later".into(), Some("Pixel 9".into()), false, None), "A change to your account on Pixel 9");
+/// assert_eq!(
+///     approval_asks("device-approval".into(), Some("Maya’s Laptop".into()), true, Some("14 Nov".into()), Some("in France".into())),
+///     "Turn on Approve on another device on a device calling itself “Maya’s Laptop”, added 14 Nov, in France"
+/// );
+/// assert_eq!(approval_asks("login".into(), None, true, None, Some("  ".into())), "Sign-in on a new device");
+/// assert_eq!(approval_asks("later".into(), Some("Pixel 9".into()), false, None, None), "A change to your account on Pixel 9");
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn approval_asks(
     purpose: String,
     device_name: Option<String>,
     self_named: bool,
+    added: Option<String>,
     location: Option<String>,
 ) -> String {
     let what = match purpose.as_str() {
@@ -1605,10 +1649,14 @@ pub fn approval_asks(
         _ => "A change to your account",
     };
     let name = device_name.map(|name| name.trim().to_string()).filter(|name| !name.is_empty());
-    let device = match name {
-        Some(name) if self_named => format!("a new device calling itself “{name}”"),
-        Some(name) => name,
-        None => "a new device".to_string(),
+    // A day is a few words: anything longer, or with a mark that hides or reorders, is not said.
+    let added =
+        added.map(|day| day.trim().to_string()).filter(|day| day.chars().count() <= 40 && place_shaped(day));
+    let device = match (name, added) {
+        (Some(name), Some(day)) if self_named => format!("a device calling itself “{name}”, added {day}"),
+        (Some(name), _) if self_named => format!("a new device calling itself “{name}”"),
+        (Some(name), _) => name,
+        (None, _) => "a new device".to_string(),
     };
     let asks = format!("{what} on {device}");
     match location.map(|place| place.trim().to_string()).filter(|place| place_shaped(place)) {
@@ -1645,6 +1693,7 @@ mod device_tests {
                 "login".into(),
                 Some("Chrome on Windows".into()),
                 false,
+                None,
                 Some("near Lyon\u{202e}".into())
             ),
             "Sign-in on Chrome on Windows"
@@ -1664,7 +1713,7 @@ mod device_tests {
             }
         };
         let words = |prompt: &ApprovalPrompt| {
-            approval_asks(prompt.purpose.clone(), prompt.device_name.clone(), prompt.self_named, None)
+            approval_asks(prompt.purpose.clone(), prompt.device_name.clone(), prompt.self_named, None, None)
         };
         // A stranger with the password calls their browser by the owner's laptop's name.
         let stranger = listed(r#""selfNamed":true,"chosen":false,"#);
@@ -1675,6 +1724,59 @@ mod device_tests {
         // A reply that does not say (an older server) is not read as a known device.
         assert!(listed("").self_named && !listed("").chosen);
         assert!(listed(r#""selfNamed":"false","#).self_named);
+    }
+
+    #[test]
+    fn a_device_of_an_account_with_no_second_step_is_said_in_its_own_words_with_the_day_it_was_added() {
+        let digest = "A".repeat(43);
+        let listed = |device: &str| {
+            let body = format!(
+                r#"{{"userId":"u","approvals":[{{"id":"7c9e6679-7425-40de-944b-e07fc1f90ae7","purpose":"device-approval","class":"change","device":{device},"selfNamed":true,"chosen":true,"createdAt":"2026-11-14T10:00:00.000Z","expiresAt":"2026-11-14T10:05:00.000Z","tokenDigest":"{digest}","commitment":"{digest}"}}]}}"#
+            );
+            match approvals_reply_read(200, body) {
+                ApprovalsReply::Listed { approvals } => approvals[0].clone(),
+                other => panic!("expected a list, got {other:?}"),
+            }
+        };
+        // Someone with the password, signed in under the name of the owner's laptop an hour ago.
+        let asked = listed(r#"{"kind":"web","name":"Maya’s Laptop","addedAt":"2026-11-14T09:00:00.000Z"}"#);
+        assert_eq!(asked.device_added_at.as_deref(), Some("2026-11-14T09:00:00.000Z"));
+        let words = |added: Option<&str>| {
+            approval_asks(
+                asked.purpose.clone(),
+                asked.device_name.clone(),
+                asked.self_named,
+                added.map(str::to_string),
+                None,
+            )
+        };
+        assert_eq!(
+            words(Some("14 Nov")),
+            "Turn on Approve on another device on a device calling itself “Maya’s Laptop”, added 14 Nov"
+        );
+        // With no day to say, or one that is no plain few words, it is a new device calling itself that.
+        let unsaid = "Turn on Approve on another device on a new device calling itself “Maya’s Laptop”";
+        assert_eq!(words(None), unsaid);
+        assert_eq!(words(Some("  ")), unsaid);
+        assert_eq!(words(Some("14 Nov\u{202e}")), unsaid);
+        assert_eq!(words(Some(&"x".repeat(41))), unsaid);
+        // What is not an instant is not a day the app can word.
+        assert_eq!(
+            listed(r#"{"kind":"web","name":"Maya’s Laptop","addedAt":"yesterday"}"#).device_added_at,
+            None
+        );
+        assert_eq!(listed(r#"{"kind":"web","name":"Maya’s Laptop"}"#).device_added_at, None);
+        // A name the server vouches for is never said with a date.
+        assert_eq!(
+            approval_asks(
+                "password".into(),
+                Some("Maya’s Laptop".into()),
+                false,
+                Some("14 Nov".into()),
+                None
+            ),
+            "Change your password on Maya’s Laptop"
+        );
     }
 
     #[test]

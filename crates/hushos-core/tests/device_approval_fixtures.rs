@@ -84,6 +84,39 @@ fn the_webs_approval_verifies_here_for_its_own_request_only() {
     }
 }
 
+/// The request that turns the method on: the code its approving device drew is bound into
+/// what that device signs. A browser's approval is checked by the same server a phone's
+/// confirmation goes to, so the core's digest and statement must be the web's.
+#[test]
+fn the_core_builds_the_webs_turn_on_digest_and_statement_and_its_approval_verifies_for_them_only() {
+    let fixture = fixture();
+    let cases = fixture["cases"].as_array().expect("cases");
+    let turning: Vec<&Value> = cases.iter().filter(|case| case.get("turnOn").is_some()).collect();
+    assert_eq!(turning.len(), 1);
+    for case in turning {
+        let made = &case["turnOn"];
+        assert_eq!(s(case, "purpose"), "device-approval");
+        let digest = turn_on_code_digest(s(case, "requestId"), s(made, "code")).unwrap();
+        assert_eq!(digest, s(made, "codeDigest"));
+        assert_eq!(
+            base64url_encode(device_turn_on_statement(step_of(case), digest.clone()).unwrap()),
+            s(made, "statement")
+        );
+        let key = base64url_decode(s(&case["approver"], "publicKey")).unwrap();
+        let signature = base64url_decode(s(made, "signature")).unwrap();
+        assert!(device_turn_on_verify(key.clone(), step_of(case), digest.clone(), signature.clone()));
+        // Not for another code, not for another request, and not as an ordinary approval.
+        let other = turn_on_code_digest(s(case, "requestId"), "08 river".into()).unwrap();
+        assert_ne!(other, digest);
+        assert!(!device_turn_on_verify(key.clone(), step_of(case), other, signature.clone()));
+        assert_ne!(turn_on_code_digest(s(&cases[0], "requestId"), s(made, "code")).unwrap(), digest);
+        assert!(!device_step_verify(key.clone(), step_of(case), signature));
+        // And the ordinary approval of the same request is no approval with a code.
+        let ordinary = base64url_decode(s(&case["approver"], "signature")).unwrap();
+        assert!(!device_turn_on_verify(key, step_of(case), digest, ordinary));
+    }
+}
+
 #[test]
 fn a_commitment_binds_the_purpose_the_token_the_key_and_the_nonce() {
     let fixture = fixture();

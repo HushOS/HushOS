@@ -1,9 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import {
-    deviceStepCodeParts,
+    deviceStepCodeDigest,
     deviceStepCommitment,
     deviceStepStatement,
+    deviceTurnOnCodeDigest,
+    deviceTurnOnStatement,
     verifySignature,
 } from './signatures';
 
@@ -27,6 +29,8 @@ type Case = {
     code: string;
     statement: string;
     approver: { publicKey: string; signature: string };
+    /* On the request that turns the method on: the code its approving device drew, and what carries it. */
+    turnOn?: { code: string; codeDigest: string; statement: string; signature: string };
 };
 const read = (path: string) =>
     (JSON.parse(readFileSync(new URL(path, import.meta.url), 'utf8')) as { cases: Case[] }).cases;
@@ -63,16 +67,54 @@ describe.each(Object.entries(sources))('requests the %s built', (_name, cases) =
                     nonce: b64(item.nonce),
                 }).toString('base64url'),
             ).toBe(item.commitment);
-            // The two numbers the server compares a typed code by are the clients' code.
-            const parts = deviceStepCodeParts({
+            const digest = deviceStepCodeDigest({
                 ...stepOf(item),
                 approverKey: b64(item.approverKey),
                 nonce: b64(item.nonce),
             });
-            expect(`${String(parts.number).padStart(2, '0')} ${wordlist[parts.word]}`).toBe(
-                item.code,
-            );
+            const number = String(digest.readUInt32BE(0) % 100).padStart(2, '0');
+            expect(`${number} ${wordlist[(digest[4]! << 3) | (digest[5]! >> 5)]}`).toBe(item.code);
             expect(deviceStepStatement(stepOf(item)).toString('base64url')).toBe(item.statement);
+        }
+    });
+
+    test('the approval that turns the method on carries its code’s digest, and verifies for that code only', () => {
+        const turning = cases.filter((item) => item.turnOn);
+        expect(turning).toHaveLength(1);
+        for (const item of turning) {
+            const made = item.turnOn!;
+            const codeDigest = deviceTurnOnCodeDigest(item.requestId, made.code);
+            expect(codeDigest.toString('base64url')).toBe(made.codeDigest);
+            // The id as the client wrote it, in capitals: the same digest.
+            expect(deviceTurnOnCodeDigest(item.requestId.toUpperCase(), made.code)).toEqual(
+                codeDigest,
+            );
+            const statement = deviceTurnOnStatement({ ...stepOf(item), codeDigest });
+            expect(statement.toString('base64url')).toBe(made.statement);
+            const key = b64(item.approver.publicKey);
+            expect(verifySignature(key, statement, b64(made.signature))).toBe(true);
+            // Another code's digest, another request's, and the ordinary statement: none of them.
+            const other = deviceTurnOnCodeDigest(item.requestId, '08 river');
+            expect(other.equals(codeDigest)).toBe(false);
+            expect(
+                verifySignature(
+                    key,
+                    deviceTurnOnStatement({ ...stepOf(item), codeDigest: other }),
+                    b64(made.signature),
+                ),
+            ).toBe(false);
+            expect(deviceTurnOnCodeDigest(cases[0]!.requestId, made.code).equals(codeDigest)).toBe(
+                false,
+            );
+            expect(
+                verifySignature(key, deviceStepStatement(stepOf(item)), b64(made.signature)),
+            ).toBe(false);
+            // An ordinary approval of the same request is not one with a code.
+            expect(verifySignature(key, statement, b64(item.approver.signature))).toBe(false);
+            // No other purpose has such a statement.
+            expect(() =>
+                deviceTurnOnStatement({ ...stepOf(item), purpose: 'login', codeDigest }),
+            ).toThrow();
         }
     });
 

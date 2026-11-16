@@ -125,7 +125,13 @@
                 "publicKey": "L1HTodrZbOpKWi4VRoUOdpfwWNikbGWC243vpCfywvo",
                 "signature": "7cqKI3RMc74ZINuUvN8JjfaPLGn3ODUSGymY3c28HpTSjbaGjxyIqpvTnecmtTAYcJkoJXBUS0tBrklMNWvRDw"
             },
-            "qr": "hushos-approve:Jj9ZnEtqSxSOBi3clV1qcyoyEy8o9XCvlq4HerVbgurcgUFAgLOcQz5zdmke5bLZ"
+            "qr": "hushos-approve:Jj9ZnEtqSxSOBi3clV1qcyoyEy8o9XCvlq4HerVbgurcgUFAgLOcQz5zdmke5bLZ",
+            "turnOn": {
+                "code": "07 river",
+                "codeDigest": "Xa95HaWEp3GqwbEn3oBCLV5spin9Csv73ucYJQYhL1U",
+                "statement": "WyJodXNob3MvdHdvLXN0ZXAvZGV2aWNlL3R1cm4tb24iLDEsIjI1ZDg0ZTA3LTM5NjItNDYyNi04NzU4LTBlYjY4ZDYxZDUyMSIsIjI2M2Y1OTljLTRiNmEtNGIxNC04ZTA2LTJkZGM5NTVkNmE3MyIsImRldmljZS1hcHByb3ZhbCIsIllZNUlLZkNGay1rX0p0VVFWWGlGU2hhYV80blVyXzNfMEl6bVJldGY5cWsiLCIxcWI3XzMzaHVJX3d0X0lUV08zbWoyR053NUVJT19qUXJSRHpwYUYtTl8wIiwiWGE5NUhhV0VwM0dxd2JFbjNvQkNMVjVzcGluOUNzdjczdWNZSlFZaEwxVSJd",
+                "signature": "viJuGLgcNj6HRU_eIc5cFf51SVd5P7wWTBdM0hk4RiyVtGAuEczei3MeP7pJK8gLW9ffeUgJsMe9Lx6JJiMkBg"
+            }
         }
     ]
 }

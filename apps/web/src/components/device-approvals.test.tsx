@@ -15,7 +15,7 @@ const asked = (over: Partial<ApprovalPrompt> = {}): ApprovalPrompt => ({
     id: '7c9e6679-7425-40de-944b-e07fc1f90ae7',
     purpose: 'login',
     class: 'unknown',
-    device: { kind: 'web', name: 'Maya’s Laptop' },
+    device: { kind: 'web', name: 'Maya’s Laptop', addedAt: null },
     location: null,
     selfNamed: true,
     chosen: false,

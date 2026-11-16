@@ -6,7 +6,8 @@
 -- earlier two-step migrations if those are being taken back too.
 --
 -- What it deletes: every account's "Approve on another device" method, every request to approve,
--- the notification events of the three kinds, and the method named on security log lines that
+-- the notification events of the three kinds and any event that was one device's alone (with the
+-- column that said so), and the method named on security log lines that
 -- name 'device' (the lines stay, without it). An account whose default was 'device' is offered
 -- another kind it has first.
 --
@@ -40,7 +41,9 @@ BEGIN
 	END IF;
 END
 $undo$;
-DELETE FROM "notification_events" WHERE "kind" IN ('two-step-device-added', 'two-step-device-removed', 'approval-request');
+DELETE FROM "notification_events" WHERE "kind" IN ('two-step-device-added', 'two-step-device-removed', 'approval-request') OR "device_id" IS NOT NULL;
+-- Its index and its foreign key go with the column.
+ALTER TABLE "notification_events" DROP COLUMN "device_id";
 ALTER TABLE "notification_events" DROP CONSTRAINT "notification_events_kind_valid", ADD CONSTRAINT "notification_events_kind_valid" CHECK (kind in ('new-device', 'device-removed', 'devices-removed', 'password-attempts', 'two-step-on', 'two-step-off', 'two-step-app-added', 'two-step-app-removed', 'backup-codes-made', 'backup-code-used', 'phrase-used', 'phrase-replaced', 'password-reset', 'account-key-rotated', 'step-failed', 'change-step-failed', 'totp-frozen', 'two-step-key-added', 'two-step-key-removed', 'key-counter', 'shared', 'family-invitation', 'family-waiting'));
 UPDATE "account_security_events" SET "method" = NULL WHERE "method" = 'device';
 ALTER TABLE "account_security_events" DROP CONSTRAINT "account_security_events_method_valid", ADD CONSTRAINT "account_security_events_method_valid" CHECK ("method" is null or "method" in ('totp', 'webauthn', 'backup', 'phrase'));

@@ -12,14 +12,14 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
 const KEY = 'hushos-approval-prompts';
 const listed = vi.fn<() => Promise<ApprovalPrompt[]>>();
 vi.mock('@/lib/auth-client', () => ({ authClient: { approvals: listed } }));
-const { approvalsQueryOptions } = await import('./approvals');
+const { approvalAsks, approvalsQueryOptions } = await import('./approvals');
 const look = () => approvalsQueryOptions.queryFn!({} as never) as Promise<ApprovalPrompt[]>;
 
 const asked = (id: string): ApprovalPrompt => ({
     id,
     purpose: 'login',
     class: 'unknown',
-    device: { kind: 'web', name: 'Chrome on Windows' },
+    device: { kind: 'web', name: 'Chrome on Windows', addedAt: null },
     location: null,
     selfNamed: true,
     chosen: false,
@@ -34,6 +34,63 @@ const asked = (id: string): ApprovalPrompt => ({
 beforeEach(() => {
     listed.mockReset();
     localStorage.clear();
+});
+
+describe('what a prompt says is asked', () => {
+    // Noon, so the day is the same wherever the test runs; this year, so no year is said.
+    const year = new Date().getFullYear();
+    const laptop = { name: 'Maya’s Laptop', addedAt: `${year}-03-14T12:00:00.000Z` };
+    const day = '14 Mar';
+
+    test('a name the server vouches for is said as it is, and never with a date', () => {
+        expect(approvalAsks({ purpose: 'password', device: laptop, selfNamed: false })).toBe(
+            'Change your password on Maya’s Laptop',
+        );
+    });
+
+    test('with no second step yet, a device of the account is said in its own words, with the day it was added', () => {
+        // Whoever has the password can sign in under this name: the prompt must not vouch for it.
+        expect(
+            approvalAsks({
+                purpose: 'device-approval',
+                device: laptop,
+                selfNamed: true,
+                location: 'in France',
+            }),
+        ).toBe(
+            `Turn on Approve on another device on a device calling itself “Maya’s Laptop”, added ${day}, in France`,
+        );
+    });
+
+    test('a sign-in the account does not know is a new device, in its own words', () => {
+        expect(
+            approvalAsks({
+                purpose: 'login',
+                device: { name: 'Chrome on Windows', addedAt: null },
+                selfNamed: true,
+            }),
+        ).toBe('Sign-in on a new device calling itself “Chrome on Windows”');
+        expect(approvalAsks({ purpose: 'login', device: { name: ' ' }, selfNamed: true })).toBe(
+            'Sign-in on a new device',
+        );
+        // A date that is none says nothing, and another year's says its year.
+        expect(
+            approvalAsks({
+                purpose: 'device-approval',
+                device: { name: 'Pixel 9', addedAt: 'yesterday' },
+                selfNamed: true,
+            }),
+        ).toBe('Turn on Approve on another device on a new device calling itself “Pixel 9”');
+        expect(
+            approvalAsks({
+                purpose: 'device-approval',
+                device: { name: 'Pixel 9', addedAt: `${year - 1}-03-14T12:00:00.000Z` },
+                selfNamed: true,
+            }),
+        ).toBe(
+            `Turn on Approve on another device on a device calling itself “Pixel 9”, added 14 Mar ${year - 1}`,
+        );
+    });
 });
 
 describe('the count of prompts shown today', () => {

@@ -334,17 +334,6 @@ export function deviceStepCodeDigest(
         .update(sized(input.nonce, 'nonce'))
         .digest();
 }
-/*
- * The code as the two numbers it is read from: 0 to 99 from the first four bytes, and the
- * word's place in the BIP-39 list from the next eleven bits. Both devices show them as
- * "47 river"; the server, where the method is turned on, compares the numbers.
- */
-export function deviceStepCodeParts(
-    input: DeviceStepInput & { approverKey: Uint8Array; nonce: Uint8Array },
-) {
-    const digest = deviceStepCodeDigest(input);
-    return { number: digest.readUInt32BE(0) % 100, word: (digest[4]! << 3) | (digest[5]! >> 5) };
-}
 export function deviceStepStatement(input: DeviceStepInput) {
     return statement([
         'hushos/two-step/device',
@@ -354,6 +343,36 @@ export function deviceStepStatement(input: DeviceStepInput) {
         input.purpose,
         Buffer.from(sized(input.tokenDigest, 'token digest')).toString('base64url'),
         Buffer.from(sized(input.deviceSigningKey, 'device key')).toString('base64url'),
+    ]);
+}
+
+/*
+ * The request that turns the method on (docs/two-step-design.md 12): the digest of the code the
+ * approving device drew, which is what the server keeps, and the statement that device signs
+ * with the digest in it. `code` is the code as written ("47 river"): the caller normalised it.
+ * The server never works such a code out: it has only this digest of it, from the approving
+ * device, and compares what the person typed on the other device against it.
+ */
+const TURN_ON_PURPOSE = 'device-approval';
+export function deviceTurnOnCodeDigest(requestId: string, code: string) {
+    return createHash('sha256')
+        .update('hushos/two-step/device/turn-on/code/v1', 'utf8')
+        .update(requestId.toLowerCase(), 'utf8')
+        .update(code, 'utf8')
+        .digest();
+}
+export function deviceTurnOnStatement(input: DeviceStepInput & { codeDigest: Uint8Array }) {
+    if (input.purpose !== TURN_ON_PURPOSE)
+        throw new Error('Not a request that turns the method on.');
+    return statement([
+        'hushos/two-step/device/turn-on',
+        1,
+        input.userId.toLowerCase(),
+        input.requestId.toLowerCase(),
+        TURN_ON_PURPOSE,
+        Buffer.from(sized(input.tokenDigest, 'token digest')).toString('base64url'),
+        Buffer.from(sized(input.deviceSigningKey, 'device key')).toString('base64url'),
+        Buffer.from(sized(input.codeDigest, 'code digest')).toString('base64url'),
     ]);
 }
 

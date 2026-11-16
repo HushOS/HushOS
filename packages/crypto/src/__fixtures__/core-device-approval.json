@@ -124,6 +124,12 @@
             "statement": "WyJodXNob3MvdHdvLXN0ZXAvZGV2aWNlIiwxLCI1NDY3ZjdjOS04ZDdmLTQ2OGYtODQzYy03YTYxMWRjZjJhZmQiLCJjNWM5NTY1Yy00NjQyLTRlNDUtOGY3OS03ZTYzYTY2MjdhMzIiLCJkZXZpY2UtYXBwcm92YWwiLCItT1didmhWbjJ5MlY3ZTRKaHVVcjhjRU04TGN1RU95OC1OaHl1WVJXaDJnIiwidTRwamNqa3FyS1lRUmthNl9FS0dZamgxR0E4U01xcXN0RFdhaXVzd1JqRSJd",
             "stepToken": "_LDDRGnanStYXcXuIHGCZbpWhv8loF6_w892z_WwaNo",
             "tokenDigest": "-OWbvhVn2y2V7e4JhuUr8cEM8LcuEOy8-NhyuYRWh2g",
+            "turnOn": {
+                "code": "42 zoo",
+                "codeDigest": "G9WO8IwjVwLfImLXcw9HAJpowbdOKvSrWic8VE1O5RI",
+                "signature": "fapBn2t6zp4qt4LCPggmxZmZ-jVIZHLnyvUaTJjf92WgTsIRrnUSf63fBdWfZDL3z9XiXNFiUUH6QKPZAFUXAg",
+                "statement": "WyJodXNob3MvdHdvLXN0ZXAvZGV2aWNlL3R1cm4tb24iLDEsIjU0NjdmN2M5LThkN2YtNDY4Zi04NDNjLTdhNjExZGNmMmFmZCIsImM1Yzk1NjVjLTQ2NDItNGU0NS04Zjc5LTdlNjNhNjYyN2EzMiIsImRldmljZS1hcHByb3ZhbCIsIi1PV2J2aFZuMnkyVjdlNEpodVVyOGNFTThMY3VFT3k4LU5oeXVZUldoMmciLCJ1NHBqY2prcXJLWVFSa2E2X0VLR1lqaDFHQThTTXFxc3REV2FpdXN3UmpFIiwiRzlXTzhJd2pWd0xmSW1MWGN3OUhBSnBvd2JkT0t2U3JXaWM4VkUxTzVSSSJd"
+            },
             "userId": "5467F7C9-8D7F-468F-843C-7A611DCF2AFD"
         }
     ],

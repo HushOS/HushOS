@@ -411,9 +411,12 @@ export const approvalsResponse = t.Object({
                     t.Union([t.Literal('web'), t.Literal('ios'), t.Literal('android')]),
                 ),
                 name: t.Nullable(t.String()),
+                // When the asking device was added to the account, where it is one of its devices.
+                addedAt: t.Optional(t.String()),
             }),
             location: t.Nullable(t.String()),
-            // The name is the asking device's own words: the server does not know the device.
+            // The name is the asking device's own word: the server does not know the device, or
+            // the account has no second step yet and any of its devices is a password's alone.
             selfNamed: t.Boolean(),
             // The asking device chose this device to answer.
             chosen: t.Boolean(),

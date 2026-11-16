@@ -4,6 +4,9 @@ import {
     deviceStepCode,
     deviceStepCommitment,
     deviceStepStatement,
+    deviceTurnOnStatement,
+    drawApprovalCode,
+    turnOnCodeDigest,
 } from '@hushos/crypto/device-approval';
 import { stepTokenDigest } from '@hushos/crypto/two-step';
 import { signingKeyFromSeed } from '../../../../../packages/db/test/helpers';
@@ -97,7 +100,7 @@ const prompts = async (cookie: string) =>
         id: string;
         purpose: string;
         class: string;
-        device: { kind: string | null; name: string | null };
+        device: { kind: string | null; name: string | null; addedAt?: string };
         location: string | null;
         selfNamed: boolean;
         chosen: boolean;
@@ -161,6 +164,11 @@ type Asked = Awaited<ReturnType<typeof ask>>;
  * The approving device's part, as its client does it: open with a fresh value, wait for the
  * reveal, check it against the commitment it saw first, and sign only if the codes agree.
  * Answers both codes, so a test can see they are the same one.
+ *
+ * The request that turns the method on is answered the other way round: the approving device
+ * draws a code of its own, signs its digest into the approval and posts the digest. `approving`
+ * is then that code, which only this device has; `asking` is still what the asking device could
+ * work out from what it holds, which is no longer the code.
  */
 async function approveFrom(approver: Signed, userId: string, asked: Asked) {
     const id = asked.reply.body.requestId as string;
@@ -209,17 +217,26 @@ async function approveFrom(approver: Signed, userId: string, asked: Asked) {
         approverKey,
         nonce: asked.nonce,
     });
+    const sign = (statement: Uint8Array) =>
+        signingKeyFromSeed(approver.seed).sign(Buffer.from(statement)).toString('base64url');
+    if (before.purpose === 'device-approval') {
+        const drawn = drawApprovalCode();
+        const codeDigest = await turnOnCodeDigest({ requestId: id, code: drawn });
+        const approved = await edge.call(
+            'POST',
+            `/approvals/${id}/approve`,
+            { signature: sign(deviceTurnOnStatement({ ...step, codeDigest })), codeDigest },
+            { cookie: approver.cookie },
+        );
+        return { approved, id, codes: { asking: ours, approving: drawn }, codeDigest };
+    }
     const approved = await edge.call(
         'POST',
         `/approvals/${id}/approve`,
-        {
-            signature: signingKeyFromSeed(approver.seed)
-                .sign(Buffer.from(deviceStepStatement(step)))
-                .toString('base64url'),
-        },
+        { signature: sign(deviceStepStatement(step)) },
         { cookie: approver.cookie },
     );
-    return { approved, id, codes: { asking: ours, approving: theirs } };
+    return { approved, id, codes: { asking: ours, approving: theirs }, codeDigest: null };
 }
 
 const settings = async (cookie: string, query = '?methods=webauthn,device') =>
@@ -326,17 +343,25 @@ describe('turning it on', () => {
             purpose: 'device-approval',
             class: 'change',
             device: { kind: 'web', name: 'Maya’s Laptop' },
-            // The server's own record of the laptop, and this phone is the one it asked for.
-            selfNamed: false,
+            // No second step yet: the laptop is whoever signed in with the password, and its
+            // name its own word. The phone is told so, and that it is the one asked for.
+            selfNamed: true,
             chosen: true,
         });
+        // And when that device joined the account, for the prompt to say.
+        expect(Date.parse(shown!.device.addedAt!)).toBeLessThanOrEqual(Date.now());
         expect(await prompts(laptop.cookie)).toEqual([]);
 
         const { approved, id, codes } = await approveFrom(phone, who.userId, asked);
         expect(approved.status).toBe(200);
-        // Both devices come to the same two digits and a word. Here the phone shows them.
-        expect(codes.asking).toBe(codes.approving);
-        expect(codes.asking).toMatch(/^\d{2} [a-z]+$/);
+        // The code is the phone's own: two digits and a word it drew when it approved. What the
+        // laptop could work out from its own values and the phone's is something else.
+        expect(codes.approving).toMatch(/^\d{2} [a-z]+$/);
+        // The ping for it went to the phone alone: its event is the phone's, not the account's.
+        const [pinged] = (await edge.db.select().from(edge.schema.notificationEvents)).filter(
+            (event) => event.kind === 'approval-request',
+        );
+        expect(pinged).toMatchObject({ userId: who.userId, deviceId: phone.deviceId, data: {} });
 
         // The approval alone turns nothing on: the code the phone shows must be typed here,
         // and the server will not take the request without one, or with something that is none.
@@ -486,6 +511,148 @@ describe('turning it on', () => {
         expect((await settings(laptop.cookie)).on).toBe(false);
     });
 
+    /*
+     * The other way round from the test above: the one who asks has only the password. They
+     * start turning the method on from their own session and name the owner's phone; the owner
+     * approves the prompt. Nothing the asking session is ever sent may give it the code.
+     */
+    test('someone with only the password asks the owner’s phone and the owner approves: the code is not theirs to work out, and nothing turns on', async () => {
+        const who = await edge.account();
+        const phone = await device(who, 'Maya’s iPhone');
+        const intruder = await device(who, 'Maya’s Laptop');
+        const started = await edge.call(
+            'POST',
+            '/two-step/device',
+            await password(intruder.cookie),
+            { cookie: intruder.cookie },
+        );
+        expect(started.status).toBe(200);
+        const asked = await ask(started.body.token, 'device-approval', intruder.key, {
+            cookie: intruder.cookie,
+            approver: phone,
+        });
+        expect(asked.reply.status).toBe(200);
+        const { approved, id, codes, codeDigest } = await approveFrom(phone, who.userId, asked);
+        expect(approved.status).toBe(200);
+        // Everything the asking session can read of its request, and of the account's requests,
+        // after the approval: neither the code nor its digest is in any of it.
+        const told = await status(id, started.body.token, intruder.cookie);
+        expect(told.body.state).toBe('approved');
+        const seen = JSON.stringify([
+            told.body,
+            (await edge.call('GET', '/approvals', undefined, { cookie: intruder.cookie })).body,
+            await settings(intruder.cookie),
+            approved.body,
+        ]);
+        expect(seen).not.toContain(codes.approving);
+        expect(seen).not.toContain(codeDigest!);
+        // What it can work out, from its own key and nonce and the phone's value it was told,
+        // is the code a sign-in would have had. One try: refused, the request over, a failed step.
+        expect(codes.asking).not.toBe(codes.approving);
+        const guessed = await edge.call(
+            'POST',
+            `/two-step/device/${started.body.id}/confirm`,
+            { token: started.body.token, requestId: id, code: codes.asking },
+            { cookie: intruder.cookie },
+        );
+        expect(guessed.status).toBe(409);
+        expect(guessed.body.code).toBe('device-code');
+        expect(guessed.body.message).toBe('That code didn’t match, so nothing was turned on.');
+        expect(guessed.body).not.toHaveProperty('backupCodes');
+        expect((await status(id, started.body.token, intruder.cookie)).body.state).toBe('ended');
+        expect(await events(phone.cookie)).toContain('step-failed:device');
+        expect(await settings(phone.cookie)).toMatchObject({ on: false, methods: [] });
+        expect((await edge.signIn(who)).status).toBe(200);
+    });
+
+    test('a second session cannot start turning it on while another is at it, and is told so', async () => {
+        const who = await edge.account();
+        const laptop = await device(who, 'Maya’s Laptop');
+        const phone = await device(who, 'Maya’s Phone');
+        const intruder = await device(who, 'Maya’s Phone');
+        const start = async (from: Signed) =>
+            edge.call('POST', '/two-step/device', await password(from.cookie), {
+                cookie: from.cookie,
+            });
+        const started = await start(laptop);
+        expect(started.status).toBe(200);
+        // Replacing it would end the laptop's setup unseen and put another request on the phone.
+        const second = await start(intruder);
+        expect(second.status).toBe(409);
+        expect(second.body.code).toBe('device-busy');
+        expect(second.body.message).toBe(
+            'Another of your devices is turning this on. Try again in a few minutes.',
+        );
+        // The laptop's setup stands: asked, approved, and its code turns the method on.
+        const asked = await ask(started.body.token, 'device-approval', laptop.key, {
+            cookie: laptop.cookie,
+            approver: phone,
+        });
+        const { id, codes } = await approveFrom(phone, who.userId, asked);
+        const confirmed = await edge.call(
+            'POST',
+            `/two-step/device/${started.body.id}/confirm`,
+            { token: started.body.token, requestId: id, code: codes.approving },
+            { cookie: laptop.cookie },
+        );
+        expect(confirmed.status).toBe(200);
+    });
+
+    test('an approval of the request that turns it on is none without its code’s digest, and a sign-in’s is none with one', async () => {
+        const who = await edge.account();
+        const laptop = await device(who, 'Maya’s Laptop');
+        const phone = await device(who, 'Maya’s Phone');
+        const started = await edge.call('POST', '/two-step/device', await password(laptop.cookie), {
+            cookie: laptop.cookie,
+        });
+        const asked = await ask(started.body.token, 'device-approval', laptop.key, {
+            cookie: laptop.cookie,
+            approver: phone,
+        });
+        const id = asked.reply.body.requestId as string;
+        await edge.call(
+            'POST',
+            `/approvals/${id}/open`,
+            { ephemeralKey: b64(randomBytes(32)) },
+            { cookie: phone.cookie },
+        );
+        await edge.call(
+            'POST',
+            `/approvals/${id}/reveal`,
+            { stepToken: asked.token, deviceSigningKey: asked.key, nonce: asked.nonce },
+            { cookie: laptop.cookie },
+        );
+        const step = {
+            userId: who.userId,
+            requestId: id,
+            purpose: 'device-approval',
+            tokenDigest: asked.tokenDigest,
+            deviceSigningKey: asked.key,
+        };
+        const sign = (statement: Uint8Array) =>
+            signingKeyFromSeed(phone.seed).sign(Buffer.from(statement)).toString('base64url');
+        // The approval as an older app would send it: a signature, and no code.
+        const bare = await edge.call(
+            'POST',
+            `/approvals/${id}/approve`,
+            { signature: sign(deviceStepStatement(step)) },
+            { cookie: phone.cookie },
+        );
+        expect(bare.status).toBe(400);
+        expect((await status(id, asked.token, laptop.cookie)).body.state).toBe('revealed');
+        // A digest posted beside a signature that does not carry it: refused, and the request ended.
+        const codeDigest = await turnOnCodeDigest({ requestId: id, code: '07 river' });
+        const unbound = await edge.call(
+            'POST',
+            `/approvals/${id}/approve`,
+            { signature: sign(deviceStepStatement(step)), codeDigest },
+            { cookie: phone.cookie },
+        );
+        expect(unbound.status).toBe(400);
+        expect(unbound.body.code).toBe('approval-refused');
+        expect((await status(id, asked.token, laptop.cookie)).body.state).toBe('ended');
+    });
+
     test('a client that does not name the method never sees it, in settings or at a step', async () => {
         const { who, laptop } = await withDeviceStep();
         const list = async (query: string) =>
@@ -577,9 +744,11 @@ describe('a sign-in on a new device', () => {
         const pinged = (await edge.db.select().from(edge.schema.notificationEvents)).filter(
             (event) => event.kind === 'approval-request',
         );
-        // One for the request that turned the method on, one for this sign-in: an id and nothing else.
+        // One for the request that turned the method on, one for this sign-in: an id and nothing
+        // else. The first was the chosen phone's alone; a sign-in's is for every device.
         expect(pinged).toHaveLength(2);
         for (const event of pinged) expect(event).toMatchObject({ userId: who.userId, data: {} });
+        expect(pinged.map((event) => event.deviceId)).toEqual([phone.deviceId, null]);
 
         const { approved, codes } = await approveFrom(phone, who.userId, asked);
         expect(approved.status).toBe(200);

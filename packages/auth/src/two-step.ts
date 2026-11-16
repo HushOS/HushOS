@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { approvalCodeParts } from '@hushos/crypto/device-approval';
+import { normalizeApprovalCode } from '@hushos/crypto/device-approval';
 import {
     formatBackupCode,
     normalizeBackupCode,
@@ -1762,7 +1762,9 @@ export async function startDeviceApproval(
                 { code: 'device-unavailable' },
             );
     }
-    void notify(made.userId, 'approval-request', {}).catch((error: unknown) =>
+    // A request that named its approving device is that device's alone: no other is pinged
+    // for it or handed its event, a device someone opened with the password least of all.
+    void notify(made.userId, 'approval-request', {}, made.onlyDeviceId).catch((error: unknown) =>
         serverLog.error({
             message: 'Approval prompt push failed.',
             notifications: {
@@ -1865,7 +1867,11 @@ export async function listDeviceApprovals(sessionToken: string | null) {
             id: prompt.id,
             purpose: prompt.purpose,
             class: prompt.class,
-            device: prompt.device,
+            device: {
+                kind: prompt.device.kind,
+                name: prompt.device.name,
+                ...(prompt.device.addedAt ? { addedAt: prompt.device.addedAt.toISOString() } : {}),
+            },
             location: prompt.location,
             selfNamed: prompt.selfNamed,
             chosen: prompt.chosen,
@@ -1911,11 +1917,17 @@ export async function openDeviceApproval(
     return { approverKey: opened.approverKey.toString('base64url') };
 }
 
-/* POST /api/auth/approvals/:id/approve: the approving device's signature over its statement. */
+/*
+ * POST /api/auth/approvals/:id/approve: the approving device's signature over its statement.
+ * For the request that turns the method on, also `codeDigest`: the digest of the code that
+ * device drew and will show, which its statement carries. The code itself is not sent here,
+ * and the digest is given back by no route: the device that asked learns it was approved, and
+ * nothing it could find the code from.
+ */
 export async function approveDeviceApproval(
     sessionToken: string | null,
     requestId: string,
-    input: { signature: string },
+    input: { signature: string; codeDigest?: string },
 ) {
     const { sessionTokenHash } = await requireApprover(sessionToken);
     if (!B64_64.test(input.signature)) throw new AuthError('That is not a signature.', 400);
@@ -1923,10 +1935,15 @@ export async function approveDeviceApproval(
         sessionTokenHash,
         requestId,
         signature: Buffer.from(input.signature, 'base64url'),
+        ...(input.codeDigest === undefined
+            ? {}
+            : { codeDigest: bytes32(input.codeDigest, 'a code’s digest') }),
     });
     switch (approved.status) {
         case 'ok':
             return { approved: true as const };
+        case 'shape':
+            throw new AuthError('Update HushOS on this device to approve that.', 400);
         case 'state':
             throw new AuthError('The other device hasn’t shown its code yet.', 409);
         case 'signature':
@@ -1998,6 +2015,14 @@ export async function startDeviceEnrolment(sessionToken: string | null, input: T
                 409,
                 { code: 'device-unavailable' },
             );
+        case 'busy':
+            // Refused, not replaced: the setup under way on the other device stands, and
+            // whoever is refused learns that another device is at it.
+            throw new AuthError(
+                'Another of your devices is turning this on. Try again in a few minutes.',
+                409,
+                { code: 'device-busy' },
+            );
         default:
             throw new AuthError('Sign in to change two-step sign-in.', 401);
     }
@@ -2006,10 +2031,12 @@ export async function startDeviceEnrolment(sessionToken: string | null, input: T
 
 /*
  * Confirms the pending method with the approval another device gave, and with the code that
- * device shows, typed here: the proof that the person turning this on is holding the device
- * that approved, whatever name it gave itself. The account's first method turns the step on:
- * its backup codes are made here and returned once. Before any device approved it answers
- * `step-pending`, and nothing changes. A wrong code ends the request (`device-code`).
+ * device drew and shows, typed here. The code is in nothing this session was ever sent, so
+ * typing it proves the person turning this on can read the device that approved: that device
+ * is theirs whatever name it gave itself, and they are no stranger to it. The account's first
+ * method turns the step on: its backup codes are made here and returned once. Before any
+ * device approved it answers `step-pending`, and nothing changes. A wrong code ends the
+ * request and is a failed step (`device-code`): one try for each approval.
  */
 export async function confirmDeviceEnrolment(
     sessionToken: string | null,
@@ -2024,7 +2051,7 @@ export async function confirmDeviceEnrolment(
     await limitApprovals(`confirm:${hash(token).toString('hex')}`, 120);
     await requireRecoveryKey(user.id);
     if (!TOKEN_PATTERN.test(input.token)) throw setupOver();
-    const code = approvalCodeParts(input.code);
+    const code = normalizeApprovalCode(input.code);
     if (!code) throw new AuthError('Enter the code your other device shows.', 400);
     const confirm = (backupCodes?: { keyId: Buffer; hashes: Buffer[] }) =>
         twoStepRepository.confirmDeviceFactor({

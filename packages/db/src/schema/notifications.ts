@@ -194,10 +194,20 @@ export const notificationEvents = pgTable(
             .references(() => users.id, { onDelete: 'cascade' }),
         kind: text().$type<NotificationKind>().notNull(),
         data: jsonb().$type<Record<string, unknown>>().notNull().default({}),
+        /*
+         * The one device this event is for, or null for every device of the account. A request
+         * that turns Approve on another device on is the chosen device's alone: no other is
+         * pinged for it, listed it or shown it.
+         */
+        deviceId: uuid('device_id').references(() => accountDevices.id, { onDelete: 'cascade' }),
         createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     },
     (table) => [
         index('notification_events_user_seq_idx').on(table.userId, table.seq),
+        // Behind the device's on-delete-cascade.
+        index('notification_events_device_idx')
+            .on(table.deviceId)
+            .where(sql`${table.deviceId} is not null`),
         index('notification_events_created_idx').on(table.createdAt),
         check('notification_events_kind_valid', sql.raw(`kind in (${kinds})`)),
     ],

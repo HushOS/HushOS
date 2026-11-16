@@ -8,10 +8,15 @@
 --   - 'device' among the methods a line of the security log may name.
 --   - three kinds among those a notification event may have: the method added, the method
 --     removed, and the prompt an approving device is pinged for.
+--   - "notification_events"."device_id", null on every row there is: an event that is one
+--     device's alone (the request that turns the method on is the chosen device's), with a
+--     partial index behind its foreign key.
 -- Hand-edited: the comments and lock_timeout.
 -- Locks: the CHECKs take an exclusive lock on "two_step_factors", "account_security_events" and
 -- "notification_events" and read each once (a row per method, 90 days of log lines, 30 days of
--- events); the new table's foreign keys lock "users" and "account_devices" against writes. All
+-- events); the new column is nullable with no default, so adding it rewrites nothing; the new
+-- table's and the new column's foreign keys lock "users" and "account_devices" against writes
+-- (the column's is checked against rows that are all null). All
 -- are held until the run commits: milliseconds. lock_timeout bounds each wait, so a long
 -- transaction ahead cannot queue every sign-in behind this migration: the migration fails and is
 -- retried instead.
@@ -35,6 +40,7 @@ CREATE TABLE "two_step_device_requests" (
 	"device_key" bytea,
 	"nonce" bytea,
 	"signature" bytea,
+	"code_hash" bytea,
 	"state" text DEFAULT 'waiting' NOT NULL,
 	"ended_reason" text,
 	"counted" boolean DEFAULT false NOT NULL,
@@ -47,10 +53,13 @@ CREATE TABLE "two_step_device_requests" (
 	CONSTRAINT "two_step_device_requests_device_valid" CHECK (("device_kind" is null or "device_kind" in ('web', 'ios', 'android')) and ("device_name" is null or char_length("device_name") between 1 and 40)),
 	CONSTRAINT "two_step_device_requests_lengths_valid" CHECK (octet_length("token_hash") = 32 and octet_length("commitment") = 32 and ("approver_key" is null or octet_length("approver_key") = 32) and ("device_key" is null or octet_length("device_key") = 32) and ("nonce" is null or octet_length("nonce") = 32) and ("signature" is null or octet_length("signature") = 64)),
 	CONSTRAINT "two_step_device_requests_state_valid" CHECK ("state" in ('waiting', 'opened', 'revealed', 'approved', 'ended') and ("state" <> 'waiting' or ("approver_device_id" is null and "approver_key" is null)) and ("state" not in ('opened', 'revealed', 'approved') or ("approver_device_id" is not null and "approver_key" is not null)) and ("state" not in ('waiting', 'opened') or ("device_key" is null and "nonce" is null and "signature" is null)) and ("state" not in ('revealed', 'approved') or ("device_key" is not null and "nonce" is not null)) and (("device_key" is null) = ("nonce" is null)) and ("state" <> 'revealed' or "signature" is null) and ("state" <> 'approved' or "signature" is not null)),
+	CONSTRAINT "two_step_device_requests_code_valid" CHECK (("code_hash" is null or (octet_length("code_hash") = 32 and "purpose" = 'device-approval' and "state" = 'approved')) and ("state" <> 'approved' or "purpose" <> 'device-approval' or "code_hash" is not null)),
 	CONSTRAINT "two_step_device_requests_location_valid" CHECK ("location" is null or ("state" <> 'ended' and char_length("location") between 1 and 200)),
 	CONSTRAINT "two_step_device_requests_end_valid" CHECK (("state" = 'ended') = ("ended_reason" is not null) and ("state" = 'ended') = ("ended_at" is not null) and ("ended_reason" is null or "ended_reason" in ('used', 'passed', 'denied', 'wrong-code', 'not-me', 'mismatch', 'replaced', 'expired', 'off')) and "expires_at" > "created_at")
 );
 --> statement-breakpoint
+ALTER TABLE "notification_events" ADD COLUMN "device_id" uuid;--> statement-breakpoint
+CREATE INDEX "notification_events_device_idx" ON "notification_events" ("device_id") WHERE "device_id" is not null;--> statement-breakpoint
 CREATE INDEX "two_step_device_requests_user_idx" ON "two_step_device_requests" ("user_id","created_at");--> statement-breakpoint
 CREATE INDEX "two_step_device_requests_token_idx" ON "two_step_device_requests" ("token_hash");--> statement-breakpoint
 CREATE INDEX "two_step_device_requests_created_idx" ON "two_step_device_requests" ("created_at");--> statement-breakpoint
@@ -58,6 +67,7 @@ CREATE INDEX "two_step_device_requests_device_idx" ON "two_step_device_requests"
 CREATE INDEX "two_step_device_requests_approver_idx" ON "two_step_device_requests" ("approver_device_id") WHERE "approver_device_id" is not null;--> statement-breakpoint
 CREATE INDEX "two_step_device_requests_chosen_idx" ON "two_step_device_requests" ("chosen_device_id") WHERE "chosen_device_id" is not null;--> statement-breakpoint
 CREATE UNIQUE INDEX "two_step_factors_one_device_idx" ON "two_step_factors" ("user_id") WHERE "kind" = 'device';--> statement-breakpoint
+ALTER TABLE "notification_events" ADD CONSTRAINT "notification_events_device_id_account_devices_id_fkey" FOREIGN KEY ("device_id") REFERENCES "account_devices"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "two_step_device_requests" ADD CONSTRAINT "two_step_device_requests_user_id_users_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "two_step_device_requests" ADD CONSTRAINT "two_step_device_requests_device_id_account_devices_id_fkey" FOREIGN KEY ("device_id") REFERENCES "account_devices"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "two_step_device_requests" ADD CONSTRAINT "two_step_device_requests_T2guW4DVYiIA_fkey" FOREIGN KEY ("approver_device_id") REFERENCES "account_devices"("id") ON DELETE CASCADE;--> statement-breakpoint

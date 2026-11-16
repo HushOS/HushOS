@@ -1,7 +1,9 @@
 import {
     deviceStepCommitment,
     deviceStepStatement,
+    deviceTurnOnStatement,
     normalizeApprovalCode,
+    turnOnCodeDigest,
 } from '@hushos/crypto/device-approval';
 import { describe, expect, test } from 'vitest';
 import type { AuthApi } from './api';
@@ -89,8 +91,8 @@ function relay() {
             held.approverKey ??= ephemeralKey;
             return { approverKey: held.approverKey };
         },
-        approvalApprove: async (_id: string, signature: string) => {
-            calls.push(['approve', signature]);
+        approvalApprove: async (_id: string, signature: string, codeDigest?: string) => {
+            calls.push(['approve', codeDigest ? { signature, codeDigest } : signature]);
             held.signature = signature;
             return { approved: true };
         },
@@ -104,7 +106,7 @@ function relay() {
         id,
         purpose,
         class: 'unknown',
-        device: { kind: 'web', name: 'Chrome on Windows' },
+        device: { kind: 'web', name: 'Chrome on Windows', addedAt: null },
         location: null,
         selfNamed: true,
         chosen: false,
@@ -201,29 +203,113 @@ describe('turning the method on', () => {
             purpose: TURNING_ON,
             deviceSigningKey: (await deviceKey()).publicKey,
         });
-        // Before another device opened the request there is no code, so nothing typed is it.
-        expect(await asked.matches('47 river')).toBeNull();
         const opened = await openApproval(server.api, server.prompt(TURNING_ON));
-        await asked.poll();
-        return { server, asked, opened, reveal: server.held.reveal! };
+        const seen = await asked.poll();
+        return { server, asked, opened, seen, reveal: server.held.reveal! };
     }
+    /* What the approving device posted with its approval: its signature and its code's digest. */
+    const posted = (server: ReturnType<typeof relay>) =>
+        server.calls
+            .filter(([call]) => call === 'approve')
+            .map(([, body]) => body as { signature: string; codeDigest?: string });
 
-    test('the approving device signs on a press and is handed the code to show; nothing is typed there', async () => {
+    test('the approving device draws the code itself, signs its digest into the approval, and is handed the code to show', async () => {
         const { server, opened, reveal } = await turningOn();
         const approver = await deviceKey();
-        const shown = await approve(server.api, {
+        const shown = (await approve(server.api, {
             opened,
             reveal,
             userId: USER,
             privateKey: approver.privateKey,
-        });
-        expect(shown).toMatch(/^\d{2} [a-z]+$/);
-        expect(shown).toBe(await approvalCode(server.api, opened, reveal, USER));
-        expect(server.sent('approve')).toHaveLength(1);
+        }))!;
+        expect(normalizeApprovalCode(shown)).toBe(shown);
         expect(server.sent('deny')).toEqual([]);
+        const [approval] = posted(server);
+        // The digest of that code for this request went with the approval; the code did not.
+        expect(approval!.codeDigest).toBe(
+            await turnOnCodeDigest({ requestId: server.id, code: shown }),
+        );
+        expect(JSON.stringify(server.calls)).not.toContain(shown);
+        // And the signature is over the statement that carries the digest, not the ordinary one.
+        const step = {
+            userId: USER,
+            requestId: server.id,
+            purpose: TURNING_ON,
+            tokenDigest: server.held.tokenDigest!,
+            deviceSigningKey: reveal.deviceSigningKey,
+        };
+        const verifies = (message: Uint8Array) =>
+            crypto.subtle.verify(
+                { name: 'Ed25519' },
+                approver.verifyKey,
+                Buffer.from(approval!.signature, 'base64url'),
+                message.slice(),
+            );
+        expect(
+            await verifies(deviceTurnOnStatement({ ...step, codeDigest: approval!.codeDigest! })),
+        ).toBe(true);
+        expect(await verifies(deviceStepStatement(step))).toBe(false);
     });
 
-    test('a sign-in’s approval hands no code back: there the asking device showed it', async () => {
+    test('the code is not the one both devices could work out from what they posted', async () => {
+        // The asking device holds its own key and nonce and is told the approving device's
+        // value: a code made of those is one whoever asked could type without seeing a screen.
+        const codes = new Set<string>();
+        let same = 0;
+        for (let round = 0; round < 12; round++) {
+            const { server, opened, reveal } = await turningOn();
+            const shown = (await approve(server.api, {
+                opened,
+                reveal,
+                userId: USER,
+                privateKey: (await deviceKey()).privateKey,
+            }))!;
+            codes.add(shown);
+            if (shown === (await approvalCode(server.api, opened, reveal, USER))) same++;
+        }
+        // One in 204,800 by chance each round: twice in twelve is the old construction.
+        expect(same).toBeLessThan(2);
+        expect(codes.size).toBeGreaterThan(6);
+    });
+
+    test('the device that asked is shown no code and works none out, opened or approved', async () => {
+        const { server, asked, opened, seen, reveal } = await turningOn();
+        expect(seen).toEqual({ state: 'opened' });
+        expect(server.sent('reveal')).toHaveLength(1);
+        await approve(server.api, {
+            opened,
+            reveal,
+            userId: USER,
+            privateKey: (await deviceKey()).privateKey,
+        });
+        expect(await asked.poll()).toEqual({ state: 'approved', code: null });
+        expect(asked).not.toHaveProperty('matches');
+    });
+
+    test('an approval whose reply was lost is sent again with the same code', async () => {
+        const { server, opened, reveal } = await turningOn();
+        const key = (await deviceKey()).privateKey;
+        const approveOnce = (
+            server.api as unknown as { approvalApprove: AuthApi['approvalApprove'] }
+        ).approvalApprove;
+        (server.api as unknown as { approvalApprove: unknown }).approvalApprove = async (
+            ...sent: Parameters<AuthApi['approvalApprove']>
+        ) => {
+            await approveOnce(...sent);
+            throw new Error('offline');
+        };
+        const input = { opened, reveal, userId: USER, privateKey: key };
+        await expect(approve(server.api, input)).rejects.toThrow('offline');
+        (server.api as unknown as { approvalApprove: unknown }).approvalApprove = approveOnce;
+        const shown = (await approve(server.api, input))!;
+        // One code, whatever the server has of it by now: the person is shown the one it holds.
+        const digests = posted(server).map((approval) => approval.codeDigest);
+        expect(digests).toHaveLength(2);
+        expect(digests[1]).toBe(digests[0]);
+        expect(digests[0]).toBe(await turnOnCodeDigest({ requestId: server.id, code: shown }));
+    });
+
+    test('a sign-in’s approval hands no code back and posts no digest: there the asking device showed it', async () => {
         const server = relay();
         const asked = await askAnotherDevice(server.api, {
             stepToken: TOKEN,
@@ -242,49 +328,21 @@ describe('turning the method on', () => {
                 typed: state.code,
             }),
         ).toBeNull();
+        expect(posted(server)[0]!.codeDigest).toBeUndefined();
     });
 
-    test('the device that asked takes only the exact code the other one shows', async () => {
-        const { server, asked, opened, reveal } = await turningOn();
-        const shown = (await approve(server.api, {
-            opened,
-            reveal,
-            userId: USER,
-            privateKey: (await deviceKey()).privateKey,
-        }))!;
-        const [digits, word] = shown.split(' ') as [string, string];
-        // As a person types it, and handed on as it is written.
-        expect(await asked.matches(` ${digits}-${word.toUpperCase()} `)).toBe(shown);
-        const other = String((Number(digits) + 1) % 100).padStart(2, '0');
-        for (const wrong of [
-            `${other} ${word}`,
-            `${digits} ${word === 'zoo' ? 'abandon' : 'zoo'}`,
-            digits,
-            '',
-        ])
-            expect(await asked.matches(wrong)).toBeNull();
-    });
-
-    test('a value the server swapped for the approving device’s gives a code that device never showed', async () => {
-        const server = relay();
-        const asked = await askAnotherDevice(server.api, {
-            stepToken: TOKEN,
-            purpose: TURNING_ON,
-            deviceSigningKey: (await deviceKey()).publicKey,
-        });
-        const opened = await openApproval(server.api, server.prompt(TURNING_ON));
-        // The server tells the asking device a value of its own in place of the one the
-        // approving device opened with.
-        server.held.approverKey = random();
-        await asked.poll();
-        const shown = (await approve(server.api, {
-            opened,
-            reveal: server.held.reveal!,
-            userId: USER,
-            privateKey: (await deviceKey()).privateKey,
-        }))!;
-        // What the person reads off the approving device is not what this device worked out.
-        expect(await asked.matches(shown)).toBeNull();
+    test('a reveal that is not what was committed to is still refused, and no code is drawn for it', async () => {
+        const { server, opened } = await turningOn();
+        await expect(
+            approve(server.api, {
+                opened,
+                reveal: { deviceSigningKey: random(), nonce: random() },
+                userId: USER,
+                privateKey: (await deviceKey()).privateKey,
+            }),
+        ).rejects.toMatchObject({ reason: 'mismatch' });
+        expect(server.sent('deny')).toEqual(['mismatch']);
+        expect(server.sent('approve')).toEqual([]);
     });
 });
 

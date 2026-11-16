@@ -7,7 +7,8 @@ import { landedOnHome, mailSubjects, newPage, PASSWORD, registerAccount } from '
  * proved here and nowhere else: the two pages really exchange the commitment, the code and
  * the signature through the server, each computing its half in the browser; the person
  * chooses the device that turns the method on, none is chosen for them, and the method turns
- * on only with the code that device shows typed on this one; a sign-in asks nothing of the
+ * on only with the code that device draws and shows, typed on this one and checked by the
+ * server (this browser is sent nothing to check it by); a sign-in asks nothing of the
  * other device until a press; a wrong code and Deny both end the request without signing anyone in, and
  * are counted; the right code signs the other browser in by itself; and a change is not
  * offered the method while the devices are newer than seven days.
@@ -137,7 +138,9 @@ test('another browser turns the step on, then answers a sign-in: a wrong code an
     // the method on runs the code the other way: nothing is typed on B. It approves on a
     // press, and then shows the code; A shows none, and no QR code, and waits for it typed.
     await openAccount(b);
-    const turnOn = /^Turn on Approve on another device on .+/;
+    // With no second step yet, A's name is only A's word for itself: the prompt says so, and when it was added.
+    const turnOn =
+        /^Turn on Approve on another device on a device calling itself “.+”, added \d{1,2} \w+/;
     const approveOn = async (page: Page) => {
         await openRequest(page, turnOn);
         await expect(
@@ -157,8 +160,8 @@ test('another browser turns the step on, then answers a sign-in: a wrong code an
     await expect(field).toBeVisible({ timeout: 30_000 });
     await expect(setup.locator('[data-device-code]')).toHaveCount(0);
     await expect(setup.getByRole('img', { name: 'QR code for your other device' })).toHaveCount(0);
-    // The approval alone turned nothing on, and a code that is not B's does not either: one
-    // try, and this request is over.
+    // The approval alone turned nothing on, and a code that is not B's does not either. Only
+    // the server can tell: one try, this request is over, and it is a failed step.
     const turnOnButton = setup.getByRole('button', { name: 'Turn on', exact: true });
     await expect(turnOnButton).toBeDisabled();
     await field.fill(another(first));
@@ -234,9 +237,10 @@ test('another browser turns the step on, then answers a sign-in: a wrong code an
     await expect(ask(b, 'ended')).toContainText(REFUSED, { timeout: 30_000 });
     await expect(b).toHaveURL(/\/login/);
     await expect(stepHeading(b)).toBeVisible();
-    // It is counted as a failed step, by the kind of method and never the device's name.
+    // It is counted as a failed step, by the kind of method and never the device's name: one
+    // for the wrong code typed while turning the method on, and one for this.
     await openAccount(a);
-    await expect(activity(a).getByText(WRONG, { exact: true })).toHaveCount(1);
+    await expect(activity(a).getByText(WRONG, { exact: true })).toHaveCount(2);
 
     // Asked again, and denied: over again, nobody signed in, counted again.
     await ask(b, 'ended').getByRole('button', { name: 'Ask again' }).click();
@@ -247,7 +251,7 @@ test('another browser turns the step on, then answers a sign-in: a wrong code an
     await expect(ask(b, 'ended')).toContainText(REFUSED, { timeout: 30_000 });
     await expect(b).toHaveURL(/\/login/);
     await openAccount(a);
-    await expect(activity(a).getByText(WRONG, { exact: true })).toHaveCount(2);
+    await expect(activity(a).getByText(WRONG, { exact: true })).toHaveCount(3);
 
     // Asked a third time: a new request has a new code, and the right one signs B in by itself.
     await ask(b, 'ended').getByRole('button', { name: 'Ask again' }).click();
@@ -259,7 +263,7 @@ test('another browser turns the step on, then answers a sign-in: a wrong code an
     await expect(b).toHaveURL(/\/app/, { timeout: 60_000 });
     await openAccount(a);
     await expect(activity(a)).toContainText('Signed in with your password and another device');
-    await expect(activity(a).getByText(WRONG, { exact: true })).toHaveCount(2);
+    await expect(activity(a).getByText(WRONG, { exact: true })).toHaveCount(3);
     await expect(waiting(a)).toHaveCount(0);
 
     // A change, on devices newer than seven days: another device is not a way to confirm it.
@@ -283,7 +287,7 @@ test('another browser turns the step on, then answers a sign-in: a wrong code an
     await step.getByLabel('Backup code').fill(codes[0]!);
     await off.getByRole('button', { name: 'Turn off' }).click();
     await expect(section(a).locator('[data-two-step=off]')).toBeVisible({ timeout: 60_000 });
-    await expect(activity(a).getByText(WRONG, { exact: true })).toHaveCount(2);
+    await expect(activity(a).getByText(WRONG, { exact: true })).toHaveCount(3);
 
     await a.context().close();
     await b.context().close();

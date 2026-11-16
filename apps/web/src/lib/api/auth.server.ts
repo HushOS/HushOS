@@ -619,11 +619,12 @@ export const authApi = new Elysia()
             return auth.openDeviceApproval(sessionToken, params.id, body);
         },
     )
+    // `codeDigest`: only with the approval that turns the method on (two-step design 12).
     .post(
         '/auth/approvals/:id/approve',
         {
             params: t.Object({ id: uuidSchema }),
-            body: t.Object({ signature: signatureSchema }),
+            body: t.Object({ signature: signatureSchema, codeDigest: t.Optional(bytes32Schema) }),
             response: { 200: approvalApprovedResponse },
         },
         ({ request, sessionToken, params, body }) => {

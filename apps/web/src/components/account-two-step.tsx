@@ -1397,8 +1397,11 @@ function KeyDialog({
  *
  * The list alone proves nothing: a device's name and kind are its own words, and someone with
  * the password can sign in as "Maya’s iPhone". So none is ever chosen for the person, and the
- * approval is not enough: the device that approved shows a code, and the person types it here
- * (the server checks it again). A device they are not holding shows them nothing to type.
+ * approval is not enough: the device that approved draws a code and shows it, and the person
+ * types it here. This browser has nothing to check it against (it is in nothing the server
+ * sends here), so it is sent as typed and the server compares, once: a wrong one ends the
+ * request, and the other device is asked again. A device the person is not holding shows them
+ * nothing to type; and someone who only asked, from anywhere, cannot work the code out.
  *
  * Turning the step on offers to remove the other devices, ticked, as the authenticator app
  * does: every device but this one and the one that approved, which is the method.
@@ -1427,11 +1430,8 @@ function DeviceDialog({
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
     const [started, setStarted] = useState<{ id: string; token: string } | null>(null);
-    // The request the chosen device approved, and the check its code must pass, typed here.
-    const [ready, setReady] = useState<{
-        requestId: string;
-        matches: (typed: string) => Promise<string | null>;
-    } | null>(null);
+    // The request the chosen device approved: its code, which that device shows, is typed here.
+    const [ready, setReady] = useState<{ requestId: string } | null>(null);
     const [typed, setTyped] = useState('');
     const words = useCodes(started !== null);
     const [codes, setCodes] = useState<string[] | null>(null);
@@ -1482,17 +1482,8 @@ function DeviceDialog({
         setError('');
         try {
             const at = era.current;
-            // Checked here first, against what this browser itself worked out; the server
-            // checks it again. One try: a wrong code is the end of this request.
-            const code = await ready.matches(typed);
-            if (at !== era.current) return;
-            if (!code) {
-                cue('error');
-                setReady(null);
-                setTyped('');
-                setError('That code didn’t match, so nothing was turned on.');
-                return;
-            }
+            const code = words?.normalizeApprovalCode(typed);
+            if (!code) return;
             const confirmed = await authClient.confirmDeviceMethod(started, ready.requestId, code);
             if (at !== era.current) return;
             cue('success');
@@ -1530,13 +1521,16 @@ function DeviceDialog({
             onClose();
         } catch (cause) {
             cue('error');
-            // The approval is used up or over either way: the setup starts again, and the
-            // section behind is read again in case it went through.
-            setStarted(null);
             setReady(null);
             setTyped('');
-            onDone('');
             setError(authError(cause));
+            // A code that was not the other device's: that request is over, one try, and the
+            // setup stands. The other device is asked again from here, for a new code.
+            if ((cause as { code?: unknown } | null)?.code === 'device-code') return;
+            // Anything else: the approval is used up or over either way. The setup starts
+            // again, and the section behind is read again in case it went through.
+            setStarted(null);
+            onDone('');
         } finally {
             setPending(false);
         }
@@ -1553,10 +1547,9 @@ function DeviceDialog({
                 locked
                 pending={false}
                 title="Save your backup codes"
-                description="Two-step sign-in is on."
                 onClose={onClose}
                 onSubmit={() => {
-                    onDone('');
+                    onDone('Two-step sign-in is on');
                     onClose();
                 }}
                 footer={<Button type="submit">Done</Button>}
@@ -1605,9 +1598,9 @@ function DeviceDialog({
                     auto
                     disabled={pending}
                     approver={{ id: chosen.id, name: approverName(chosen) }}
-                    onApproved={(requestId, matches) => {
+                    onApproved={(requestId) => {
                         setError('');
-                        setReady({ requestId, matches });
+                        setReady({ requestId });
                     }}
                 />
                 {/* That device approved: it now shows the code, and it is typed here. */}
@@ -1631,11 +1624,6 @@ function DeviceDialog({
             open={open}
             pending={pending}
             title={first ? 'Turn on two-step sign-in?' : 'Turn on Approve on another device?'}
-            description={
-                first
-                    ? 'After your password, HushOS will ask another of your devices to confirm it’s you.'
-                    : undefined
-            }
             onClose={onClose}
             onSubmit={() => void start()}
             footer={

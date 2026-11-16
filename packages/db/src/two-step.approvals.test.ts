@@ -1,4 +1,12 @@
-import { createHash, generateKeyPairSync, randomBytes, randomUUID, sign } from 'node:crypto';
+import {
+    createHash,
+    generateKeyPairSync,
+    randomBytes,
+    randomInt,
+    randomUUID,
+    sign,
+} from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import type { KeyObject } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
@@ -18,9 +26,11 @@ import {
 } from './schema';
 import {
     deviceSessionStatement,
-    deviceStepCodeParts,
+    deviceStepCodeDigest,
     deviceStepCommitment,
     deviceStepStatement,
+    deviceTurnOnCodeDigest,
+    deviceTurnOnStatement,
 } from './signatures';
 import * as twoStep from './two-step';
 
@@ -182,19 +192,64 @@ const signedBy = (approver: Device, userId: string, id: string, tokenHash: Buffe
     );
 
 /*
- * The code a request comes to, as its two numbers, worked out from what each device made
- * itself: the asking one its key and nonce, the approving one its 32 bytes. Where the method is
- * turned on the approving device shows it, and the person types it on the asking one.
+ * Turning the method on: the approving device draws a code of its own, signs the request with
+ * the code's digest in the statement, and posts the signature and the digest. It then shows
+ * the code, and the person types it on the device that asked.
  */
-type Code = { number: number; word: number };
-const codeOf = (
+type Code = string;
+const WORDS = readFileSync(
+    new URL('../../../crates/hushos-core/src/bip39-english.txt', import.meta.url),
+    'utf8',
+)
+    .split('\n')
+    .map((word) => word.trim())
+    .filter(Boolean);
+const written = (number: number, word: number): Code =>
+    `${String(number).padStart(2, '0')} ${WORDS[word]}`;
+const draw = (): Code => written(randomInt(100), randomInt(WORDS.length));
+/* Another code than `code`: the next number, or the next word. */
+const not = (code: Code, part: 'number' | 'word' = 'number'): Code =>
+    part === 'number'
+        ? written((Number(code.slice(0, 2)) + 1) % 100, WORDS.indexOf(code.slice(3)))
+        : written(Number(code.slice(0, 2)), (WORDS.indexOf(code.slice(3)) + 1) % WORDS.length);
+const turnedOnBy = (
+    approver: Device,
+    userId: string,
+    id: string,
+    tokenHash: Buffer,
+    from: Asking,
+    code: Code,
+) => {
+    const codeDigest = deviceTurnOnCodeDigest(id, code);
+    return {
+        codeDigest,
+        signature: sign(
+            null,
+            deviceTurnOnStatement({
+                userId,
+                requestId: id,
+                purpose: from.purpose,
+                tokenDigest: tokenHash,
+                deviceSigningKey: from.deviceKey,
+                codeDigest,
+            }),
+            approver.privateKey,
+        ),
+    };
+};
+/*
+ * The code a sign-in's request comes to, which both devices work out from what they posted.
+ * The device that asks holds every one of these values: for the request that turns the method
+ * on, this is what someone who only asked could compute.
+ */
+const derived = (
     userId: string,
     requestId: string,
     tokenHash: Buffer,
     from: Asking,
     approverKey: Buffer,
-): Code =>
-    deviceStepCodeParts({
+): Code => {
+    const digest = deviceStepCodeDigest({
         userId,
         requestId,
         purpose: from.purpose,
@@ -203,12 +258,9 @@ const codeOf = (
         approverKey,
         nonce: from.nonce,
     });
-/* Another code than `code`: off by one in its number, or in its word. */
-const not = (code: Code, part: keyof Code = 'number'): Code =>
-    part === 'number'
-        ? { ...code, number: (code.number + 1) % 100 }
-        : { ...code, word: (code.word + 1) % 2048 };
-/* What the approving device showed for each request `approved` ran. */
+    return written(digest.readUInt32BE(0) % 100, (digest[4]! << 3) | (digest[5]! >> 5));
+};
+/* What the approving device showed for each request `approved` turned the method on with. */
 const shown = new Map<string, Code>();
 
 /* The whole exchange: the request, the approving device's key, the reveal, the signature. */
@@ -220,12 +272,10 @@ async function approved(userId: string, tokenHash: Buffer, from: Asking, approve
         from.purpose === 'device-approval' ? approver.deviceId : undefined,
     );
     if (made.status !== 'ok') throw new Error(`Request ${made.status}.`);
-    const approverKey = randomBytes(32);
-    shown.set(made.id, codeOf(userId, made.id, tokenHash, from, approverKey));
     const opened = await twoStep.openDeviceRequest({
         sessionTokenHash: approver.token,
         requestId: made.id,
-        approverKey,
+        approverKey: randomBytes(32),
     });
     if (opened.status !== 'ok') throw new Error(`Open ${opened.status}.`);
     const revealed = await twoStep.revealDeviceRequest({
@@ -235,10 +285,15 @@ async function approved(userId: string, tokenHash: Buffer, from: Asking, approve
         nonce: from.nonce,
     });
     if (revealed.status !== 'ok') throw new Error(`Reveal ${revealed.status}.`);
+    // Turning the method on, the approving device draws the code it will show.
+    const code = from.purpose === 'device-approval' ? draw() : null;
+    if (code) shown.set(made.id, code);
     const done = await twoStep.approveDeviceRequest({
         sessionTokenHash: approver.token,
         requestId: made.id,
-        signature: signedBy(approver, userId, made.id, tokenHash, from),
+        ...(code
+            ? turnedOnBy(approver, userId, made.id, tokenHash, from, code)
+            : { signature: signedBy(approver, userId, made.id, tokenHash, from) }),
     });
     if (done.status !== 'ok') throw new Error(`Approve ${done.status}.`);
     return made.id;
@@ -346,8 +401,8 @@ describe('turning the method on', () => {
         const from = asking('device-approval', laptop.publicKey);
         const made = await request(tokenHash, from, phone.deviceId);
         if (made.status !== 'ok') throw new Error(made.status);
-        const approverKey = randomBytes(32);
-        const code = codeOf(user.id, made.id, tokenHash, from, approverKey);
+        // The code the phone will draw when it approves.
+        const code = draw();
         const confirm = (requestId: string) =>
             twoStep.confirmDeviceFactor({
                 userId: user.id,
@@ -374,7 +429,7 @@ describe('turning the method on', () => {
         await twoStep.openDeviceRequest({
             sessionTokenHash: phone.token,
             requestId: made.id,
-            approverKey,
+            approverKey: randomBytes(32),
         });
         await twoStep.revealDeviceRequest({
             tokenHash,
@@ -384,11 +439,43 @@ describe('turning the method on', () => {
         });
         // Opened and revealed is not approved: the right code confirms nothing yet.
         expect(await confirm(made.id)).toEqual({ status: 'pending' });
-        await twoStep.approveDeviceRequest({
-            sessionTokenHash: phone.token,
-            requestId: made.id,
-            signature: signedBy(phone, user.id, made.id, tokenHash, from),
-        });
+        const approval = turnedOnBy(phone, user.id, made.id, tokenHash, from, code);
+        // An approval of this request must carry its code's digest, and sign it: without one,
+        // or with the ordinary statement signed beside one, nothing is approved.
+        expect(
+            await twoStep.approveDeviceRequest({
+                sessionTokenHash: phone.token,
+                requestId: made.id,
+                signature: signedBy(phone, user.id, made.id, tokenHash, from),
+            }),
+        ).toEqual({ status: 'shape' });
+        expect((await requestRow(made.id)).state).toBe('revealed');
+        expect(
+            await twoStep.approveDeviceRequest({
+                sessionTokenHash: phone.token,
+                requestId: made.id,
+                ...approval,
+            }),
+        ).toEqual({ status: 'ok' });
+        // What the server keeps is the digest, never the code.
+        expect((await requestRow(made.id)).codeHash).toEqual(approval.codeDigest);
+        // The reply was lost and the phone sends the same approval again: the same approval.
+        // With another code it is refused, and the first code is still the one.
+        expect(
+            await twoStep.approveDeviceRequest({
+                sessionTokenHash: phone.token,
+                requestId: made.id,
+                ...approval,
+            }),
+        ).toEqual({ status: 'ok' });
+        expect(
+            await twoStep.approveDeviceRequest({
+                sessionTokenHash: phone.token,
+                requestId: made.id,
+                ...turnedOnBy(phone, user.id, made.id, tokenHash, from, not(code)),
+            }),
+        ).toEqual({ status: 'state' });
+        expect((await requestRow(made.id)).codeHash).toEqual(approval.codeDigest);
         expect(await confirm(made.id)).toEqual({
             status: 'ok',
             turnedOn: true,
@@ -407,9 +494,10 @@ describe('turning the method on', () => {
             .where(eq(sessions.userId, user.id));
         expect(stamped.every((session) => session.twoStepAt !== null)).toBe(true);
         expect(stamped).toHaveLength(2);
-        // The token and the approval are used up: neither confirms anything again.
+        // The token and the approval are used up: neither confirms anything again, and the
+        // code's digest went with the request.
         expect(await confirm(made.id)).toEqual({ status: 'missing' });
-        expect((await requestRow(made.id)).endedReason).toBe('used');
+        expect(await requestRow(made.id)).toMatchObject({ endedReason: 'used', codeHash: null });
     });
 
     test('it is refused on a device without a key and on an account with no other device, and stores nothing', async () => {
@@ -741,6 +829,16 @@ describe('a sign-in approved on another device', () => {
             deviceKey: from.deviceKey,
             nonce: from.nonce,
         });
+        // A sign-in's approval brings no code of the approving device's: one that does is no approval.
+        expect(
+            await twoStep.approveDeviceRequest({
+                sessionTokenHash: phone.token,
+                requestId: made.id,
+                signature: signedBy(phone, userId, made.id, tokenHash, from),
+                codeDigest: randomBytes(32),
+            }),
+        ).toEqual({ status: 'shape' });
+        expect(await requestRow(made.id)).toMatchObject({ state: 'revealed', codeHash: null });
         await twoStep.approveDeviceRequest({
             sessionTokenHash: phone.token,
             requestId: made.id,
@@ -1361,6 +1459,7 @@ describe('the approval that turns the method on is the chosen device’s alone',
             state: 'ended',
             endedReason: 'wrong-code',
             counted: true,
+            codeHash: null,
         });
         expect(await deviceFailures(laptop)).toBe(1);
         // Even the right code, after that.
@@ -1371,6 +1470,194 @@ describe('the approval that turns the method on is the chosen device’s alone',
             .from(sessions)
             .where(eq(sessions.userId, userId));
         expect(stamps.every((session) => session.twoStepAt === null)).toBe(true);
+    });
+
+    /*
+     * The other way round: the person who asks is the one who has only the password. They
+     * start turning the method on from their own session and name the owner's phone; the owner,
+     * shown a prompt, approves it. The code must then be something the asking device cannot
+     * come by: not in what the server tells it, and not in anything it can work out.
+     */
+    test('someone with only the password asks the owner’s phone, the owner approves, and the method is still not theirs to turn on', async () => {
+        const { user } = await registered();
+        const phone = await passwordDevice(user.id, 'Maya’s iPhone');
+        const intruder = await passwordDevice(user.id, 'Maya’s Laptop');
+        const tokenHash = sha256(randomUUID());
+        const started = await twoStep.startDeviceFactor({
+            userId: user.id,
+            sessionTokenHash: intruder.token,
+            credentialVersion: 1,
+            tokenHash,
+            expiresAt: new Date(Date.now() + 5 * MINUTE),
+        });
+        if (started.status !== 'ok') throw new Error(started.status);
+        const from = asking('device-approval', intruder.publicKey);
+        const made = await request(tokenHash, from, phone.deviceId);
+        if (made.status !== 'ok') throw new Error(made.status);
+        // The phone is told whose words the name is, and when that device joined the account.
+        const [prompt] = await twoStep.listApprovalPrompts(phone.token);
+        expect(prompt).toMatchObject({ id: made.id, selfNamed: true, chosen: true });
+        expect(prompt!.device.name).toBe('Maya’s Laptop');
+        expect(prompt!.device.addedAt).toBeInstanceOf(Date);
+        // The owner approves. The phone's own value is one the asking device is then told.
+        const approverKey = randomBytes(32);
+        await twoStep.openDeviceRequest({
+            sessionTokenHash: phone.token,
+            requestId: made.id,
+            approverKey,
+        });
+        await twoStep.revealDeviceRequest({
+            tokenHash,
+            requestId: made.id,
+            deviceKey: from.deviceKey,
+            nonce: from.nonce,
+        });
+        // Everything the asking device holds gives this code. The phone's is another, drawn there.
+        const computed = derived(user.id, made.id, tokenHash, from, approverKey);
+        const code = not(computed, 'word');
+        expect(
+            await twoStep.approveDeviceRequest({
+                sessionTokenHash: phone.token,
+                requestId: made.id,
+                ...turnedOnBy(phone, user.id, made.id, tokenHash, from, code),
+            }),
+        ).toEqual({ status: 'ok' });
+        // What the asking device is told of its request: that it was approved, and the phone's
+        // value. Neither the code nor its digest, here or in any list it can read.
+        const told = await twoStep.getDeviceRequest({ tokenHash, requestId: made.id });
+        expect(told).toMatchObject({ state: 'approved' });
+        const digest = deviceTurnOnCodeDigest(made.id, code);
+        for (const seen of [told, await twoStep.listApprovalPrompts(intruder.token)]) {
+            const all = JSON.stringify(seen, (_key, value: unknown) =>
+                value instanceof Uint8Array ? Buffer.from(value).toString('base64url') : value,
+            );
+            expect(all).not.toContain(code);
+            expect(all).not.toContain(digest.toString('base64url'));
+            expect(all).not.toContain(digest.toString('hex'));
+        }
+        expect(told).not.toHaveProperty('codeHash');
+        // The code it can work out is not the code: one try, the request is over, a failed step.
+        expect(
+            await twoStep.confirmDeviceFactor({
+                userId: user.id,
+                factorId: started.id,
+                sessionTokenHash: intruder.token,
+                credentialVersion: 1,
+                tokenHash,
+                requestId: made.id,
+                code: computed,
+                backupCodes: codeSet('first'),
+            }),
+        ).toMatchObject({ status: 'code', counted: { reason: 'wrong-code' } });
+        expect(await requestRow(made.id)).toMatchObject({
+            state: 'ended',
+            endedReason: 'wrong-code',
+            counted: true,
+        });
+        expect(await twoStep.hasTwoStep(user.id)).toBe(false);
+        expect(await deviceFailures(intruder)).toBe(1);
+        const stamps = await db
+            .select({ twoStepAt: sessions.twoStepAt })
+            .from(sessions)
+            .where(eq(sessions.userId, user.id));
+        expect(stamps.every((session) => session.twoStepAt === null)).toBe(true);
+    });
+
+    test('another session cannot start turning it on while one is at it, and the first one’s setup stands', async () => {
+        const { userId, laptop, phone, intruder, tokenHash, factorId } = await starting();
+        const start = (session: Device, token = sha256(randomUUID())) =>
+            twoStep.startDeviceFactor({
+                userId,
+                sessionTokenHash: session.token,
+                credentialVersion: 1,
+                tokenHash: token,
+                expiresAt: new Date(Date.now() + 5 * MINUTE),
+            });
+        // Someone else signed in with the password would end the laptop's setup and put a
+        // request of their own on the phone in its place.
+        expect(await start(intruder)).toEqual({ status: 'busy' });
+        expect(await start(phone)).toEqual({ status: 'busy' });
+        // The laptop's pending method and token are untouched, and still turn the method on.
+        const from = asking('device-approval', laptop.publicKey);
+        const requestId = await approved(userId, tokenHash, from, phone);
+        expect(
+            await twoStep.confirmDeviceFactor({
+                userId,
+                factorId,
+                sessionTokenHash: laptop.token,
+                credentialVersion: 1,
+                tokenHash,
+                requestId,
+                code: shown.get(requestId)!,
+                backupCodes: codeSet('first'),
+            }),
+        ).toMatchObject({ status: 'ok', turnedOn: true });
+    });
+
+    test('the session that started may start again, and another may once the first one’s token has run out', async () => {
+        const { laptop, intruder, tokenHash, userId } = await starting();
+        const start = (session: Device) =>
+            twoStep.startDeviceFactor({
+                userId,
+                sessionTokenHash: session.token,
+                credentialVersion: 1,
+                tokenHash: sha256(randomUUID()),
+                expiresAt: new Date(Date.now() + 5 * MINUTE),
+            });
+        // Its own earlier start is replaced, as before.
+        expect((await start(laptop)).status).toBe('ok');
+        expect(await db.select().from(twoStepAttempts)).toHaveLength(1);
+        expect((await db.select().from(twoStepAttempts))[0]!.tokenHash.equals(tokenHash)).toBe(
+            false,
+        );
+        // Five minutes on, nobody is at it any more.
+        await db.update(twoStepAttempts).set({
+            createdAt: new Date(Date.now() - 6 * MINUTE),
+            expiresAt: new Date(Date.now() - MINUTE),
+        });
+        expect((await start(intruder)).status).toBe('ok');
+    });
+
+    test('the right code ends this device’s run of failed steps', async () => {
+        const { userId, laptop, phone, tokenHash, factorId } = await starting();
+        const from = asking('device-approval', laptop.publicKey);
+        const confirm = (requestId: string, code: Code) =>
+            twoStep.confirmDeviceFactor({
+                userId,
+                factorId,
+                sessionTokenHash: laptop.token,
+                credentialVersion: 1,
+                tokenHash,
+                requestId,
+                code,
+                backupCodes: codeSet('first'),
+            });
+        const first = await approved(userId, tokenHash, from, phone);
+        expect((await confirm(first, not(shown.get(first)!))).status).toBe('code');
+        expect(await deviceFailures(laptop)).toBe(1);
+        const second = await approved(userId, tokenHash, from, phone);
+        expect((await confirm(second, shown.get(second)!)).status).toBe('ok');
+        expect(await deviceFailures(laptop)).toBe(0);
+    });
+
+    test('a request keeps a code’s digest only while it is approved', async () => {
+        const { userId, laptop, phone, tokenHash } = await starting();
+        const from = asking('device-approval', laptop.publicKey);
+        const requestId = await approved(userId, tokenHash, from, phone);
+        const row = await requestRow(requestId);
+        expect(row.codeHash).toHaveLength(32);
+        const set = (values: Partial<typeof row>) =>
+            db
+                .update(twoStepDeviceRequests)
+                .set(values)
+                .where(eq(twoStepDeviceRequests.id, requestId));
+        const refused = { cause: { constraint: 'two_step_device_requests_code_valid' } };
+        // Approved without one, ended with one still on the row, or of another length.
+        await expect(set({ codeHash: null })).rejects.toMatchObject(refused);
+        await expect(
+            set({ state: 'ended', endedReason: 'expired', endedAt: new Date() }),
+        ).rejects.toMatchObject(refused);
+        await expect(set({ codeHash: randomBytes(16) })).rejects.toMatchObject(refused);
     });
 
     test('the code is the whole code: the right number with another word, or the word with another number, is wrong', async () => {
@@ -1431,12 +1718,12 @@ describe('the approval that turns the method on is the chosen device’s alone',
         ).toEqual({ status: 'gone' });
         // The phone was chosen: it is told so, opens it, and the reveal follows.
         const [prompt] = await twoStep.listApprovalPrompts(phone.token);
-        expect(prompt).toMatchObject({ id: made.id, chosen: true, selfNamed: false });
-        const approverKey = randomBytes(32);
+        // No second step yet: the laptop's name is its own word, and the prompt is told so.
+        expect(prompt).toMatchObject({ id: made.id, chosen: true, selfNamed: true });
         await twoStep.openDeviceRequest({
             sessionTokenHash: phone.token,
             requestId: made.id,
-            approverKey,
+            approverKey: randomBytes(32),
         });
         await twoStep.revealDeviceRequest({
             tokenHash,
@@ -1444,20 +1731,22 @@ describe('the approval that turns the method on is the chosen device’s alone',
             deviceKey: from.deviceKey,
             nonce: from.nonce,
         });
-        // Even with a signature of its own over the right statement, the third device approves nothing.
+        // Even with a signature of its own over the right statement, and a code of its own,
+        // the third device approves nothing.
         expect(
             await twoStep.approveDeviceRequest({
                 sessionTokenHash: intruder.token,
                 requestId: made.id,
-                signature: signedBy(intruder, userId, made.id, tokenHash, from),
+                ...turnedOnBy(intruder, userId, made.id, tokenHash, from, draw()),
             }),
         ).toEqual({ status: 'gone' });
-        expect((await requestRow(made.id)).state).toBe('revealed');
+        expect(await requestRow(made.id)).toMatchObject({ state: 'revealed', codeHash: null });
 
+        const code = draw();
         await twoStep.approveDeviceRequest({
             sessionTokenHash: phone.token,
             requestId: made.id,
-            signature: signedBy(phone, userId, made.id, tokenHash, from),
+            ...turnedOnBy(phone, userId, made.id, tokenHash, from, code),
         });
         expect(
             await twoStep.confirmDeviceFactor({
@@ -1467,7 +1756,7 @@ describe('the approval that turns the method on is the chosen device’s alone',
                 credentialVersion: 1,
                 tokenHash,
                 requestId: made.id,
-                code: codeOf(userId, made.id, tokenHash, from, approverKey),
+                code,
                 backupCodes: codeSet('first'),
             }),
         ).toMatchObject({ status: 'ok', turnedOn: true, approverDeviceId: phone.deviceId });

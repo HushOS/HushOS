@@ -27,6 +27,19 @@ import { decode, encode } from './keys';
  * The purpose and the token are in all three, so an approval is good for one step and for what
  * the approving device was shown, and neither side could choose its value after the other's.
  *
+ * The request that turns the method on (purpose `device-approval`) is answered the other way
+ * round. The approving device, on the person's press, draws a code of its own from fresh
+ * randomness, of the same shape, and signs
+ *
+ *     ["hushos/two-step/device/turn-on",1,userId,requestId,"device-approval",sha256(stepToken),deviceSigningKey,codeDigest]
+ *     codeDigest = SHA-256("hushos/two-step/device/turn-on/code/v1" || requestId || code)
+ *
+ * It posts the signature and the digest, then shows the code, and the person types it on the
+ * device that asked, which sends it with the confirmation. The code is in nothing the asking
+ * device holds and nothing the server tells it, so only someone reading the approving device's
+ * screen can turn the method on. (A code derived from both devices' values, as a sign-in's
+ * is, would be one the asking device can work out for itself.)
+ *
  * Encodings: the labels and the purpose are ASCII; ids are lowercase UUIDs, 36 characters; the
  * token digest is the SHA-256 of the step token's UTF-8 bytes; keys, nonce and digest are 32
  * bytes each. Every field but the purpose has a fixed length, so plain concatenation reads one
@@ -37,6 +50,10 @@ import { decode, encode } from './keys';
 const COMMIT_DOMAIN = 'hushos/two-step/device/commit/v1';
 const CODE_DOMAIN = 'hushos/two-step/device/v1';
 const STATEMENT_DOMAIN = 'hushos/two-step/device';
+/* The purpose of the request that turns the method on, and what it alone signs and digests. */
+export const TURN_ON_PURPOSE = 'device-approval';
+const TURN_ON_CODE_DOMAIN = 'hushos/two-step/device/turn-on/code/v1';
+const TURN_ON_STATEMENT_DOMAIN = 'hushos/two-step/device/turn-on';
 /* What a scanned request starts with (docs/devices-design.md 2, "Scanning instead of typing"). */
 export const APPROVAL_QR_PREFIX = 'hushos-approve:';
 /* The purposes a step token can have, as the server names them. */
@@ -124,6 +141,59 @@ export function deviceStepStatement(input: DeviceStep) {
     );
 }
 
+/*
+ * A code the approving device draws for a request that turns the method on: two digits and a
+ * word of the list, each uniform, from the system's randomness.
+ */
+export function drawApprovalCode() {
+    // Whole ranges only, so neither part leans: a byte below 200, and 11 bits of two.
+    const byte = new Uint8Array(1);
+    do crypto.getRandomValues(byte);
+    while (byte[0]! >= 200);
+    const bits = crypto.getRandomValues(new Uint8Array(2));
+    const word = wordlist[((bits[0]! << 8) | bits[1]!) & 0x7ff]!;
+    return `${String(byte[0]! % 100).padStart(2, '0')} ${word}`;
+}
+
+/*
+ * The digest of a code drawn for one request, base64url: what the approving device signs and
+ * posts in place of the code, and what the server holds a typed code to. `code` is read as a
+ * person types it; what is not a code has no digest.
+ */
+export async function turnOnCodeDigest(input: { requestId: string; code: string }) {
+    const code = normalizeApprovalCode(input.code);
+    if (!code) throw new CryptoError('Invalid device approval.');
+    return encode(await sha256(utf8(TURN_ON_CODE_DOMAIN), utf8(idOf(input.requestId)), utf8(code)));
+}
+
+/* The bytes the approving device signs for a request that turns the method on. No other purpose has them. */
+export function deviceTurnOnStatement(input: DeviceStep & { codeDigest: string }) {
+    if (input.purpose !== TURN_ON_PURPOSE) throw new CryptoError('Invalid device approval.');
+    return utf8(
+        JSON.stringify([
+            TURN_ON_STATEMENT_DOMAIN,
+            1,
+            idOf(input.userId),
+            idOf(input.requestId),
+            TURN_ON_PURPOSE,
+            encode(decode(input.tokenDigest, 32)),
+            encode(decode(input.deviceSigningKey, 32)),
+            encode(decode(input.codeDigest, 32)),
+        ]),
+    );
+}
+
+/* The approving device's signature over that statement, base64url (64 bytes). */
+export async function signDeviceTurnOn(
+    privateKey: CryptoKey,
+    input: DeviceStep & { codeDigest: string },
+) {
+    const statement = deviceTurnOnStatement(input);
+    return encode(
+        new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, privateKey, statement)),
+    );
+}
+
 /* The approving device's signature over its statement, base64url (64 bytes). */
 export async function signDeviceStep(privateKey: CryptoKey, input: DeviceStep) {
     const statement = deviceStepStatement(input);
@@ -173,16 +243,6 @@ export function normalizeApprovalCode(typed: string) {
     if (!match) return null;
     const word = match[2]!.toLowerCase();
     return wordlist.includes(word) ? `${match[1]} ${word}` : null;
-}
-
-/*
- * A typed code as the two numbers it stands for, or null when it is not one: the digits, and
- * the word's place in the list. The server, which has no list of words, compares these.
- */
-export function approvalCodeParts(typed: string) {
-    const code = normalizeApprovalCode(typed);
-    if (!code) return null;
-    return { number: Number(code.slice(0, 2)), word: wordlist.indexOf(code.slice(3)) };
 }
 
 /* The words a typed beginning could become, for completion: a few, in the list's order. */

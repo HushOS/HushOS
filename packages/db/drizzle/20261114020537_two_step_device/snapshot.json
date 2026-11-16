@@ -2,7 +2,7 @@
     "type": "diff",
     "version": "9",
     "dialect": "postgres",
-    "id": "2d29c72c-d745-4df7-b076-5755173dbf86",
+    "id": "d3f5d9e1-0207-4b77-bbe0-a5e9a0c3aecd",
     "prevIds": ["a2714d3c-def7-46bd-8566-487da546bf63"],
     "footprints": [
         {
@@ -17,6 +17,36 @@
                 "n|rel|public.two_step_device_requests_pkey"
             ],
             "reads": ["n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "notification_events", "device_id"],
+            "writes": [
+                "s|col|public.notification_events.device_id",
+                "n|col|public.notification_events.device_id",
+                "e|col|public.notification_events.device_id"
+            ],
+            "reads": ["n|tbl|public.notification_events", "n|sch|public"]
+        },
+        {
+            "statementType": "create_index",
+            "statementTarget": [
+                "index",
+                "public",
+                "notification_events",
+                "notification_events_device_idx"
+            ],
+            "writes": [
+                "s|idx|public.notification_events_device_idx",
+                "n|idx|public.notification_events_device_idx",
+                "e|idx|public.notification_events_device_idx",
+                "n|rel|public.notification_events_device_idx"
+            ],
+            "reads": [
+                "n|tbl|public.notification_events",
+                "n|sch|public",
+                "n|col|public.notification_events.device_id"
+            ]
         },
         {
             "statementType": "create_index",
@@ -161,6 +191,25 @@
         },
         {
             "statementType": "create_fk",
+            "statementTarget": ["table", "public", "notification_events"],
+            "writes": [
+                "s|fk|public.notification_events.notification_events_device_id_account_devices_id_fkey",
+                "n|fk|public.notification_events.notification_events_device_id_account_devices_id_fkey",
+                "e|fk|public.notification_events.notification_events_device_id_account_devices_id_fkey",
+                "n|con|public.notification_events.notification_events_device_id_account_devices_id_fkey"
+            ],
+            "reads": [
+                "n|tbl|public.notification_events",
+                "n|sch|public",
+                "n|tbl|public.account_devices",
+                "n|sch|public",
+                "n|col|public.notification_events.device_id",
+                "n|col|public.account_devices.id",
+                "e|uniqueness|public.account_devices.id"
+            ]
+        },
+        {
+            "statementType": "create_fk",
             "statementTarget": ["table", "public", "two_step_device_requests"],
             "writes": [
                 "s|fk|public.two_step_device_requests.two_step_device_requests_user_id_users_id_fkey",
@@ -296,6 +345,22 @@
                 "name": "two_step_device_requests",
                 "isRlsEnabled": false,
                 "entityType": "tables"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_events",
+                "name": "device_id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
             }
         },
         {
@@ -559,6 +624,22 @@
             "row": {
                 "schema": "public",
                 "table": "two_step_device_requests",
+                "name": "code_hash",
+                "type": "bytea",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
                 "name": "state",
                 "type": "text",
                 "typeSchema": null,
@@ -648,6 +729,30 @@
                 "generated": null,
                 "identity": null,
                 "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "notification_events",
+                "name": "notification_events_device_idx",
+                "nameExplicit": true,
+                "columns": [
+                    {
+                        "value": "device_id",
+                        "isExpression": false,
+                        "asc": true,
+                        "nullsFirst": false,
+                        "opclass": null
+                    }
+                ],
+                "isUnique": false,
+                "where": "\"device_id\" is not null",
+                "with": "",
+                "method": "btree",
+                "concurrently": false,
+                "entityType": "indexes"
             }
         },
         {
@@ -829,6 +934,22 @@
             "op": "create",
             "row": {
                 "schema": "public",
+                "table": "notification_events",
+                "name": "notification_events_device_id_account_devices_id_fkey",
+                "nameExplicit": false,
+                "columns": ["device_id"],
+                "schemaTo": "public",
+                "tableTo": "account_devices",
+                "columnsTo": ["id"],
+                "onUpdate": "NO ACTION",
+                "onDelete": "CASCADE",
+                "entityType": "fks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
                 "table": "two_step_device_requests",
                 "name": "two_step_device_requests_user_id_users_id_fkey",
                 "nameExplicit": false,
@@ -957,6 +1078,16 @@
                 "table": "two_step_device_requests",
                 "name": "two_step_device_requests_state_valid",
                 "value": "\"state\" in ('waiting', 'opened', 'revealed', 'approved', 'ended') and (\"state\" <> 'waiting' or (\"approver_device_id\" is null and \"approver_key\" is null)) and (\"state\" not in ('opened', 'revealed', 'approved') or (\"approver_device_id\" is not null and \"approver_key\" is not null)) and (\"state\" not in ('waiting', 'opened') or (\"device_key\" is null and \"nonce\" is null and \"signature\" is null)) and (\"state\" not in ('revealed', 'approved') or (\"device_key\" is not null and \"nonce\" is not null)) and ((\"device_key\" is null) = (\"nonce\" is null)) and (\"state\" <> 'revealed' or \"signature\" is null) and (\"state\" <> 'approved' or \"signature\" is not null)",
+                "entityType": "checks"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "two_step_device_requests",
+                "name": "two_step_device_requests_code_valid",
+                "value": "(\"code_hash\" is null or (octet_length(\"code_hash\") = 32 and \"purpose\" = 'device-approval' and \"state\" = 'approved')) and (\"state\" <> 'approved' or \"purpose\" <> 'device-approval' or \"code_hash\" is not null)",
                 "entityType": "checks"
             }
         },

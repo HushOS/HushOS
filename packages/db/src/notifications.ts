@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, inArray, isNull, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { db } from './client';
 import {
     accountDevices,
@@ -128,6 +128,10 @@ function settingOf(kind: NotificationKind): 'shared' | 'family' | null {
     return kind === 'shared' ? 'shared' : 'family';
 }
 
+/* The events a device may be handed: the account's, and the ones that are its alone. */
+const forDevice = (deviceId: string) =>
+    or(isNull(notificationEvents.deviceId), eq(notificationEvents.deviceId, deviceId));
+
 /* A browser to push to, with its device so a subscription its push service dropped can go. */
 export type WebPushTarget = { deviceId: string; endpoint: string; p256dh: string; auth: string };
 
@@ -163,11 +167,15 @@ function targets(
  * `other` event skips a device that still has an unfetched `other` ping from the last minute: it
  * will fetch this one with the rest when it wakes. Those it pings are marked pinged in the same
  * transaction, so two events at once cannot both ping a device.
+ *
+ * `onlyDeviceId`: the event is that one device's. No other device is pinged for it, and no
+ * other is handed it by `listPending` or `getEvent`.
  */
 export async function recordEvent(input: {
     userId: string;
     kind: NotificationKind;
     data?: Record<string, unknown>;
+    onlyDeviceId?: string | null;
     now?: Date;
 }): Promise<{
     id: string;
@@ -192,6 +200,7 @@ export async function recordEvent(input: {
                 userId: input.userId,
                 kind: input.kind,
                 data: input.data ?? {},
+                deviceId: input.onlyDeviceId ?? null,
                 createdAt: now,
             })
             .returning({ id: notificationEvents.id });
@@ -207,7 +216,14 @@ export async function recordEvent(input: {
             })
             .from(notificationRegistrations)
             .innerJoin(accountDevices, liveDevice)
-            .where(eq(notificationRegistrations.userId, input.userId))
+            .where(
+                and(
+                    eq(notificationRegistrations.userId, input.userId),
+                    input.onlyDeviceId
+                        ? eq(notificationRegistrations.deviceId, input.onlyDeviceId)
+                        : undefined,
+                ),
+            )
             .for('update', { of: notificationRegistrations });
         if (eventClass === 'security')
             return { id: event!.id, class: eventClass, ...targets(registered) };
@@ -234,8 +250,9 @@ export async function recordEvent(input: {
  * One of the account's events by the id a push named, or null for any other id or an expired one.
  * It does not answer the device's open ping: only a list does, since a device that fetched just
  * this one has not seen what arrived while its ping was open (the apps list on every wake).
+ * An event that is one device's is null for every other.
  */
-export async function getEvent(userId: string, id: string) {
+export async function getEvent(userId: string, id: string, deviceId: string) {
     const [event] = await db
         .select(eventColumns)
         .from(notificationEvents)
@@ -243,6 +260,7 @@ export async function getEvent(userId: string, id: string) {
             and(
                 eq(notificationEvents.id, id),
                 eq(notificationEvents.userId, userId),
+                forDevice(deviceId),
                 gt(notificationEvents.createdAt, retentionStart()),
             ),
         );
@@ -271,6 +289,7 @@ export async function listPending(userId: string, deviceId: string) {
             .where(
                 and(
                     eq(notificationEvents.userId, userId),
+                    forDevice(deviceId),
                     gt(notificationEvents.seq, registration?.listSeq ?? 0),
                     gt(notificationEvents.createdAt, retentionStart()),
                 ),

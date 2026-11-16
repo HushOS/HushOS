@@ -5,6 +5,8 @@ import {
     deviceStepCode,
     deviceStepCommitment,
     deviceStepStatement,
+    deviceTurnOnStatement,
+    turnOnCodeDigest,
 } from '../src/device-approval';
 import { encode } from '../src/keys';
 import { stepTokenDigest } from '../src/two-step';
@@ -64,6 +66,20 @@ for (const purpose of purposes) {
     });
     const step = { userId, requestId, purpose, tokenDigest, deviceSigningKey };
     const statement = deviceStepStatement(step);
+    // The request that turns the method on: a code the approving device drew (here a fixed
+    // one), its digest for this request, and the statement and signature that carry the digest.
+    let turnOn;
+    if (purpose === 'device-approval') {
+        const code = '07 river';
+        const codeDigest = await turnOnCodeDigest({ requestId, code });
+        const turned = deviceTurnOnStatement({ ...step, codeDigest });
+        turnOn = {
+            code,
+            codeDigest,
+            statement: encode(turned),
+            signature: encode(sodium.crypto_sign_detached(turned, approver.privateKey)),
+        };
+    }
     cases.push({
         purpose,
         userId,
@@ -81,6 +97,7 @@ for (const purpose of purposes) {
             signature: encode(sodium.crypto_sign_detached(statement, approver.privateKey)),
         },
         qr: approvalQr({ requestId, commitment }),
+        ...(turnOn ? { turnOn } : {}),
     });
 }
 

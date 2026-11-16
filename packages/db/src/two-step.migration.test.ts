@@ -544,6 +544,24 @@ describe('the two-step migrations and their undo scripts', () => {
             ),
         ).rejects.toMatchObject({ constraint: 'two_step_device_requests_state_valid' });
 
+        // A code's digest is on an approved request that turns the method on, and on no other.
+        await expect(
+            client.query(
+                `insert into two_step_device_requests (${base}, code_hash) values (${values}, 'waiting', $4)`,
+                [...row(), randomBytes(32)],
+            ),
+        ).rejects.toMatchObject({ constraint: 'two_step_device_requests_code_valid' });
+        // An event that is one device's alone: an older release would hand it to every device,
+        // so the undo deletes it whatever its kind, and the account's own event of that kind stays.
+        await client.query(
+            `insert into notification_events (user_id, kind, device_id) values ($1, 'new-device', $2)`,
+            [only, laptop],
+        );
+        await client.query(
+            `insert into notification_events (user_id, kind) values ($1, 'new-device')`,
+            [only],
+        );
+
         // One account has another device as its only method: the undo stops and changes nothing.
         await expect(run(undo(DEVICE))).rejects.toMatchObject({
             message: expect.stringContaining('1 account(s) have another device as their only'),
@@ -590,6 +608,10 @@ describe('the two-step migrations and their undo scripts', () => {
                 )
             ).rows.map((state) => state.default_kind),
         ).toEqual([null, null]);
+        expect(
+            (await client.query(`select kind from notification_events where user_id = $1`, [only]))
+                .rows,
+        ).toEqual([{ kind: 'new-device' }]);
         // The account that had only another device has no step left: its session keeps no stamp,
         // and the guard no longer refuses a password-only session for it.
         expect(

@@ -16,6 +16,7 @@ import {
     DialogHeader,
     DialogTitle,
 } from '@/components/ui/dialog';
+import { SECRET_FIELD } from '@/components/password-input';
 import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/toast';
 import { approvalAsks, approvalsQueryOptions } from '@/lib/approvals';
@@ -30,9 +31,12 @@ import { cue } from '@/lib/sounds';
  * with this browser's device key. A browser has no camera to count on, so it types; the phones
  * scan too.
  *
- * A request to turn the method on is the other way round: this browser approves on a press and
- * then shows the code, and the person types it on the device that asked. Whoever turns the
- * method on has then read this screen, so the device they chose is one they are holding.
+ * A request to turn the method on is the other way round: on the press of Approve this browser
+ * draws a code of its own, signs it into its approval and shows it, and the person types it on
+ * the device that asked. Nothing that device holds gives the code, so whoever turns the method
+ * on has read this screen: the device they chose is one they are holding, and they are someone
+ * who can see it. The prompt says the asking device's name is its own word, and when it was
+ * added: with no second step yet, any device of the account is whoever has the password.
  */
 
 const WAITING_MS = 30_000;
@@ -110,8 +114,9 @@ export function CodeField({
                 // oxlint-disable-next-line jsx-a11y/no-autofocus -- the one field the dialog asks for
                 autoFocus
                 autoComplete="off"
-                autoCapitalize="none"
-                spellCheck={false}
+                // No spellcheck, autocorrect or capitals: a browser's cloud spellcheck would
+                // send the code to its maker.
+                {...SECRET_FIELD}
                 placeholder="47 river"
                 maxLength={16}
                 value={value}

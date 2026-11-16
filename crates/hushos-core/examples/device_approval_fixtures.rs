@@ -55,7 +55,19 @@ fn main() {
             token_digest: token_digest.clone(),
             device_signing_key: device_signing_key.clone(),
         };
-        cases.push(json!({
+        // The request that turns the method on: a code the approving device drew (here a
+        // fixed one), its digest for this request, and the statement and signature that carry it.
+        let turn_on = (purpose == "device-approval").then(|| {
+            let code = "42 zoo";
+            let digest = turn_on_code_digest(request_id.clone(), code.into()).unwrap();
+            json!({
+                "code": code,
+                "codeDigest": digest,
+                "statement": base64url_encode(device_turn_on_statement(step.clone(), digest.clone()).unwrap()),
+                "signature": device_turn_on_sign(approver_seed.clone(), step.clone(), digest).unwrap(),
+            })
+        });
+        let mut case = json!({
             "purpose": purpose,
             "userId": user_id,
             "requestId": request_id,
@@ -72,7 +84,11 @@ fn main() {
                 "signature": device_step_sign(approver_seed, step).unwrap(),
             },
             "qr": approval_qr(request_id, commitment).unwrap(),
-        }));
+        });
+        if let Some(turn_on) = turn_on {
+            case["turnOn"] = turn_on;
+        }
+        cases.push(case);
     }
     let document = json!({
         "generatedBy": "crates/hushos-core/examples/device_approval_fixtures.rs",

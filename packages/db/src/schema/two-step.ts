@@ -376,6 +376,13 @@ export const twoStepDeviceRequests = pgTable(
         deviceKey: bytea('device_key'),
         nonce: bytea(),
         signature: bytea(),
+        /*
+         * Turning the method on: the digest of the code the approving device drew and showed
+         * (`deviceTurnOnCodeDigest`), posted with its approval and signed by it. The code itself
+         * never reaches the server until the person types it on the device that asked. Kept
+         * only while the approval can still be used.
+         */
+        codeHash: bytea('code_hash'),
         state: text().notNull().default('waiting').$type<DeviceRequestState>(),
         endedReason: text('ended_reason').$type<DeviceRequestEnd>(),
         counted: boolean().notNull().default(false),
@@ -424,6 +431,11 @@ export const twoStepDeviceRequests = pgTable(
         check(
             'two_step_device_requests_state_valid',
             sql`${table.state} in (${sql.raw(quoted(DEVICE_REQUEST_STATES))}) and (${table.state} <> 'waiting' or (${table.approverDeviceId} is null and ${table.approverKey} is null)) and (${table.state} not in ('opened', 'revealed', 'approved') or (${table.approverDeviceId} is not null and ${table.approverKey} is not null)) and (${table.state} not in ('waiting', 'opened') or (${table.deviceKey} is null and ${table.nonce} is null and ${table.signature} is null)) and (${table.state} not in ('revealed', 'approved') or (${table.deviceKey} is not null and ${table.nonce} is not null)) and ((${table.deviceKey} is null) = (${table.nonce} is null)) and (${table.state} <> 'revealed' or ${table.signature} is null) and (${table.state} <> 'approved' or ${table.signature} is not null)`,
+        ),
+        // Only an approved request that turns the method on has a code, and it always has one.
+        check(
+            'two_step_device_requests_code_valid',
+            sql`(${table.codeHash} is null or (octet_length(${table.codeHash}) = 32 and ${table.purpose} = 'device-approval' and ${table.state} = 'approved')) and (${table.state} <> 'approved' or ${table.purpose} <> 'device-approval' or ${table.codeHash} is not null)`,
         ),
         // A place is kept only while the request can still be answered.
         check(

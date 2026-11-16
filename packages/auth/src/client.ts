@@ -1721,9 +1721,10 @@ export function createAuthClient(
          * screen. Only an exact match is signed, with this device's own key; anything else
          * ends the request.
          *
-         * A request that turns the method on is the other way round: nothing is typed here,
-         * and what comes back is the code to show, for the person to type on the other device.
-         * Only that request may come without `typed`.
+         * A request that turns the method on is the other way round: nothing is typed here.
+         * This device draws the code, signs it into its approval, and what comes back is the
+         * code to show, for the person to type on the other device. Only that request may
+         * come without `typed`.
          */
         async approveRequest(
             opened: OpenedApproval,
@@ -1768,8 +1769,9 @@ export function createAuthClient(
             ),
         /*
          * Confirms it with the approval another device gave and the code that device shows,
-         * as the person typed it here (`DeviceAsk.matches` checked it first; the server checks
-         * it again). Only the server's own answer says it is on.
+         * as the person typed it here. This browser has nothing to check it against: the
+         * server holds the code's digest, and a wrong one ends the request (`device-code`).
+         * Only the server's own answer says it is on.
          */
         async confirmDeviceMethod(
             started: { id: string; token: string },

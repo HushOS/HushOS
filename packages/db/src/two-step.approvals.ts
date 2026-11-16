@@ -18,9 +18,10 @@ import {
 } from './schema';
 import { lockAccount, sessionIsCurrent, type Executor, type Tx } from './sessions';
 import {
-    deviceStepCodeParts,
     deviceStepCommitment,
     deviceStepStatement,
+    deviceTurnOnCodeDigest,
+    deviceTurnOnStatement,
     verifySignature,
 } from './signatures';
 import {
@@ -307,6 +308,7 @@ async function settleAccount(tx: Tx, userId: string): Promise<CountedRequest[]> 
             .set({
                 state: 'ended',
                 location: null,
+                codeHash: null,
                 endedReason: 'expired',
                 endedAt: now,
                 counted: failed,
@@ -403,6 +405,8 @@ export type CreateRequestResult =
           purpose: TwoStepPurpose;
           class: DeviceRequestClass;
           expiresAt: Date;
+          /* The one device that may answer, where the request chose one: only it is told. */
+          onlyDeviceId: string | null;
           /* What ending the account's older requests counted as failed steps. */
           counted: CountedRequest[];
       }
@@ -507,6 +511,7 @@ export async function createDeviceRequest(input: {
                 .set({
                     state: 'ended',
                     location: null,
+                    codeHash: null,
                     endedReason: 'replaced',
                     endedAt: new Date(),
                 })
@@ -540,6 +545,8 @@ export async function createDeviceRequest(input: {
             purpose: attempt.purpose,
             class: asked.class,
             expiresAt: attempt.expiresAt,
+            // The one device that may answer, where the request chose one: only it is told.
+            onlyDeviceId: chosen,
             counted,
         };
     });
@@ -634,6 +641,7 @@ export async function revealDeviceRequest(input: {
                 .set({
                     state: 'ended',
                     location: null,
+                    codeHash: null,
                     endedReason: 'mismatch',
                     endedAt: new Date(),
                 })
@@ -696,10 +704,16 @@ export type ApprovalPrompt = {
     id: string;
     purpose: TwoStepPurpose;
     class: DeviceRequestClass;
-    device: { kind: DeviceKind | null; name: string | null };
+    /* `addedAt`: when the asking device was added to the account, where it is one of the account's. */
+    device: { kind: DeviceKind | null; name: string | null; addedAt: Date | null };
     /* Roughly where the asking device is ("near Lyon, France"), where the server was told. */
     location: string | null;
-    /* The asking device's own words for itself: the server does not know it as one of the account's. */
+    /*
+     * The name is the asking device's own word, and nothing the server vouches for: a sign-in
+     * the server does not know as one of the account's devices, or a request to turn the
+     * method on for an account with no second step yet, where a device of the account is
+     * whoever signed in with the password and named itself.
+     */
     selfNamed: boolean;
     /* The asking device chose this device to answer. */
     chosen: boolean;
@@ -744,17 +758,32 @@ export async function listApprovalPrompts(sessionTokenHash: Buffer): Promise<App
         )
         .orderBy(asc(twoStepDeviceRequests.createdAt));
     const prompts: ApprovalPrompt[] = [];
+    // No second step yet: every device of the account is one a password alone signed in.
+    const unproven =
+        rows.some(({ request }) => request.purpose === 'device-approval') &&
+        (await confirmedFactors(db, session.userId)).length === 0;
     for (const { request } of rows) {
         // The token must still be able to pass, and this device must be one that may answer it.
         if (!(await readAttempt(db, request.tokenHash))) continue;
         if (!(await mayApprove(db, request, session.deviceId))) continue;
+        const [asking] = request.deviceId
+            ? await db
+                  .select({ addedAt: accountDevices.createdAt })
+                  .from(accountDevices)
+                  .where(eq(accountDevices.id, request.deviceId))
+            : [];
         prompts.push({
             id: request.id,
             purpose: request.purpose,
             class: request.class,
-            device: { kind: request.deviceKind, name: request.deviceName },
+            device: {
+                kind: request.deviceKind,
+                name: request.deviceName,
+                addedAt: asking?.addedAt ?? null,
+            },
             location: request.location,
-            selfNamed: request.deviceId === null,
+            selfNamed:
+                request.deviceId === null || (unproven && request.purpose === 'device-approval'),
             chosen: request.chosenDeviceId === session.deviceId,
             createdAt: request.createdAt,
             expiresAt: request.expiresAt,
@@ -831,30 +860,53 @@ export async function openDeviceRequest(input: {
  * account, the request, the purpose, the token and the asking device's key as it was revealed.
  * Only the device that opened the request approves it, only once it was revealed, and only with
  * a signature that verifies against its stored key: one that does not ends the request.
+ *
+ * The request that turns the method on comes with `codeDigest`: the digest of a code the
+ * approving device drew for it and is about to show (`deviceTurnOnCodeDigest`). The statement
+ * it signed has that digest in it, so the code is the approving device's and nobody else's,
+ * and the digest is kept for the confirmation to be held to. No route hands it back. Such a
+ * request without a digest, or any other request with one, is not an approval (`shape`), and
+ * changes nothing. Sent again by the device that already approved, with the same digest, it
+ * is the same approval (a reply that was lost); with another, it is refused (`state`).
  */
 export async function approveDeviceRequest(input: {
     sessionTokenHash: Buffer;
     requestId: string;
     signature: Buffer;
-}): Promise<{ status: 'ok' | 'gone' | 'state' | 'signature' }> {
+    codeDigest?: Buffer;
+}): Promise<{ status: 'ok' | 'gone' | 'state' | 'signature' | 'shape' }> {
     return db.transaction(async (tx) => {
         const found = await approvable(tx, input);
         if (!found) return { status: 'gone' };
         const { session, request } = found;
         if (request.approverDeviceId !== session.deviceId) return { status: 'gone' };
+        const turningOn = request.purpose === 'device-approval';
+        const codeDigest = input.codeDigest ?? null;
+        if (turningOn !== (codeDigest !== null) || (codeDigest && codeDigest.length !== 32))
+            return { status: 'shape' };
+        if (
+            request.state === 'approved' &&
+            codeDigest &&
+            request.codeHash &&
+            timingSafeEqual(request.codeHash, codeDigest)
+        )
+            return { status: 'ok' };
         if (request.state !== 'revealed' || !request.deviceKey) return { status: 'state' };
         const approver = await askingDevice(tx, session.userId, session.deviceId);
+        const named = {
+            userId: request.userId,
+            requestId: request.id,
+            purpose: request.purpose,
+            tokenDigest: request.tokenHash,
+            deviceSigningKey: request.deviceKey,
+        };
         const signed =
             approver !== null &&
             verifySignature(
                 approver.key,
-                deviceStepStatement({
-                    userId: request.userId,
-                    requestId: request.id,
-                    purpose: request.purpose,
-                    tokenDigest: request.tokenHash,
-                    deviceSigningKey: request.deviceKey,
-                }),
+                codeDigest
+                    ? deviceTurnOnStatement({ ...named, codeDigest })
+                    : deviceStepStatement(named),
                 input.signature,
             );
         if (!signed) {
@@ -863,6 +915,7 @@ export async function approveDeviceRequest(input: {
                 .set({
                     state: 'ended',
                     location: null,
+                    codeHash: null,
                     endedReason: 'mismatch',
                     endedAt: new Date(),
                 })
@@ -871,7 +924,7 @@ export async function approveDeviceRequest(input: {
         }
         await tx
             .update(twoStepDeviceRequests)
-            .set({ state: 'approved', signature: input.signature })
+            .set({ state: 'approved', signature: input.signature, codeHash: codeDigest })
             .where(eq(twoStepDeviceRequests.id, request.id));
         return { status: 'ok' };
     });
@@ -904,6 +957,7 @@ export async function denyDeviceRequest(input: {
             .set({
                 state: 'ended',
                 location: null,
+                codeHash: null,
                 endedReason: input.reason,
                 endedAt: new Date(),
                 counted: failed,
@@ -931,8 +985,11 @@ export async function denyDeviceRequest(input: {
 
 export type StartDeviceFactorResult =
     | { status: 'ok'; id: string }
-    /* `unavailable`: this device has no key, or no other device could approve. `exists`: already on. */
-    | { status: 'session' | 'unavailable' | 'exists' }
+    /*
+     * `unavailable`: this device has no key, or no other device could approve. `exists`: already
+     * on. `busy`: another session of the account is turning it on right now.
+     */
+    | { status: 'session' | 'unavailable' | 'exists' | 'busy' }
     | TwoStepRefusal;
 
 /*
@@ -940,7 +997,15 @@ export type StartDeviceFactorResult =
  * step token that the one approval confirming it runs from (purpose `device-approval`, bound to
  * the session asking). While the account has the step on, adding a method needs the step
  * (`step`). Nothing is stored unless this session's device holds a key and another device could
- * approve it. Starting again replaces the earlier pending method and its token.
+ * approve it. Starting again from the same session replaces its earlier pending method and
+ * token.
+ *
+ * From another session it is refused (`busy`) while that session's token lives, five minutes
+ * at most. Replacing it would end the other session's setup without a word and put this one's
+ * request on the approving device in its place, where a person in the middle of turning the
+ * method on would take a prompt for their own: with the step off, "another session" may be
+ * someone who has only the password. Whoever is refused is told another device is at it,
+ * which is the notice.
  */
 export async function startDeviceFactor(input: {
     userId: string;
@@ -966,6 +1031,21 @@ export async function startDeviceFactor(input: {
                 bootstrap: confirmed.length === 0,
             });
             if (approvers.length === 0) return { status: 'unavailable' };
+            const [others] = await tx
+                .select({ count: count() })
+                .from(twoStepAttempts)
+                .where(
+                    and(
+                        eq(twoStepAttempts.userId, input.userId),
+                        eq(twoStepAttempts.purpose, 'device-approval'),
+                        gt(twoStepAttempts.expiresAt, new Date()),
+                        or(
+                            isNull(twoStepAttempts.sessionTokenHash),
+                            ne(twoStepAttempts.sessionTokenHash, input.sessionTokenHash),
+                        ),
+                    ),
+                );
+            if ((others?.count ?? 0) > 0) return { status: 'busy' };
             await passStepIfOn(tx, {
                 userId: input.userId,
                 purpose: 'two-step',
@@ -1021,11 +1101,12 @@ export type ConfirmDeviceFactorResult =
  * - the method must be this account's, pending and younger than ten minutes, and the token the
  *   one made with it, for this session;
  * - the request must be that token's, and approved by a device that may still approve;
- * - `code` must be the request's code, which only the approving device shows: the person read
- *   it off that device and typed it on this one, so the device that approved is one they are
- *   holding, whatever it calls itself. The server works the code out from what both devices
- *   posted and compares; a wrong one ends the request and is a failed step, so each request is
- *   one guess at one code in 204,800;
+ * - `code` must be the code the approving device drew and showed, which is in nothing this
+ *   session's device holds and nothing the server ever told it: the person read it off that
+ *   device and typed it on this one, so the device that approved is one they are holding,
+ *   whatever it calls itself, and whoever is asking is someone who can see it. The server has
+ *   only the code's digest, from the approval, and compares in constant time; a wrong one ends
+ *   the request and is a failed step, so each request is one guess at one code in 204,800;
  * - the account's first method turns the step on, as an app's does: it needs `backupCodes`,
  *   becomes the default, and both sessions are stamped as having passed the step, the one that
  *   turned it on and the one that approved, so each counts as another device from then on.
@@ -1038,8 +1119,8 @@ export async function confirmDeviceFactor(input: {
     credentialVersion: number;
     tokenHash: Buffer;
     requestId: string;
-    /* What the person typed, as its two numbers (`deviceStepCodeParts`). */
-    code: { number: number; word: number };
+    /* What the person typed, as a code is written ("47 river"): the caller normalised it. */
+    code: string;
     backupCodes?: { keyId: Buffer; hashes: Buffer[] };
 }): Promise<ConfirmDeviceFactorResult> {
     return db.transaction(async (tx): Promise<ConfirmDeviceFactorResult> => {
@@ -1075,23 +1156,14 @@ export async function confirmDeviceFactor(input: {
         const approverDeviceId = request.approverDeviceId;
         if (!approverDeviceId || !(await mayApprove(tx, request, approverDeviceId)))
             return { status: 'missing' };
-        if (!request.deviceKey || !request.approverKey || !request.nonce)
-            return { status: 'missing' };
-        const expected = deviceStepCodeParts({
-            userId: request.userId,
-            requestId: request.id,
-            purpose: request.purpose,
-            tokenDigest: request.tokenHash,
-            deviceSigningKey: request.deviceKey,
-            approverKey: request.approverKey,
-            nonce: request.nonce,
-        });
-        if (input.code.number !== expected.number || input.code.word !== expected.word) {
+        if (!request.codeHash) return { status: 'missing' };
+        if (!timingSafeEqual(request.codeHash, deviceTurnOnCodeDigest(request.id, input.code))) {
             await tx
                 .update(twoStepDeviceRequests)
                 .set({
                     state: 'ended',
                     location: null,
+                    codeHash: null,
                     endedReason: 'wrong-code',
                     endedAt: new Date(),
                     counted: true,
@@ -1169,8 +1241,25 @@ export async function confirmDeviceFactor(input: {
         await tx.delete(twoStepAttempts).where(eq(twoStepAttempts.tokenHash, input.tokenHash));
         await tx
             .update(twoStepDeviceRequests)
-            .set({ state: 'ended', location: null, endedReason: 'used', endedAt: now })
+            .set({
+                state: 'ended',
+                location: null,
+                codeHash: null,
+                endedReason: 'used',
+                endedAt: now,
+            })
             .where(eq(twoStepDeviceRequests.id, request.id));
+        // The right code, on this device: its run of failed steps is over, as after any step it passes.
+        if (request.deviceId)
+            await tx
+                .update(accountDevices)
+                .set({ twoStepFailures: 0 })
+                .where(
+                    and(
+                        eq(accountDevices.id, request.deviceId),
+                        eq(accountDevices.userId, input.userId),
+                    ),
+                );
         return { status: 'ok', turnedOn, approverDeviceId };
     });
 }

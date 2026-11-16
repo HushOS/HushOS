@@ -7,13 +7,16 @@ import {
     approvalPromptsAllowed,
     approvalQr,
     approvalWords,
-    approvalCodeParts,
     deviceStepCode,
     deviceStepCommitment,
     deviceStepStatement,
+    deviceTurnOnStatement,
+    drawApprovalCode,
     normalizeApprovalCode,
     readApprovalQr,
     signDeviceStep,
+    signDeviceTurnOn,
+    turnOnCodeDigest,
     type PromptRecord,
 } from './device-approval';
 import { decode, encode } from './keys';
@@ -130,15 +133,112 @@ describe('the code', () => {
         expect(normalizeApprovalCode('7 river')).toBeNull();
         expect(normalizeApprovalCode('07 rivr')).toBeNull();
         expect(normalizeApprovalCode('07 river 3')).toBeNull();
-        // The server compares a typed code by its two numbers: the digits, and the word's place.
-        expect(approvalCodeParts(' 07-River ')).toEqual({ number: 7, word: 1494 });
-        expect(approvalCodeParts('99 zoo')).toEqual({ number: 99, word: 2047 });
-        expect(approvalCodeParts('00 abandon')).toEqual({ number: 0, word: 0 });
-        for (const none of ['07 rivr', '7 river', 'river 07', '', '07'])
-            expect(approvalCodeParts(none)).toBeNull();
         expect(approvalWords('riv')).toEqual(['rival', 'river']);
         expect(approvalWords('')).toEqual([]);
         expect(approvalWords('a', 3)).toHaveLength(3);
+    });
+});
+
+/*
+ * The request that turns the method on. Its code is drawn on the approving device and bound
+ * into what that device signs; if the web's digest or statement drifted from the core's, a
+ * phone's approval would be refused by the server a browser's confirmation is checked on.
+ */
+describe('turning the method on', () => {
+    const turning = core.cases.filter((item) => 'turnOn' in item);
+    const withCode = (item: (typeof core.cases)[number]) =>
+        (
+            item as typeof item & {
+                turnOn: Record<'code' | 'codeDigest' | 'statement' | 'signature', string>;
+            }
+        ).turnOn;
+
+    test('the web builds the core’s digest and statement, and the core’s signature verifies only for them', async () => {
+        expect(turning).toHaveLength(1);
+        for (const item of turning) {
+            const made = withCode(item);
+            expect(item.purpose).toBe('device-approval');
+            const codeDigest = await turnOnCodeDigest({
+                requestId: item.requestId,
+                code: made.code,
+            });
+            expect(codeDigest).toBe(made.codeDigest);
+            // Typed loosely, and with the id in capitals: the same digest.
+            expect(
+                await turnOnCodeDigest({
+                    requestId: item.requestId.toUpperCase(),
+                    code: ` ${made.code.toUpperCase().replace(' ', '-')} `,
+                }),
+            ).toBe(codeDigest);
+            const statement = deviceTurnOnStatement({ ...stepOf(item), codeDigest });
+            expect(encode(statement)).toBe(made.statement);
+            const key = decode(item.approver.publicKey, 32);
+            const signature = decode(made.signature, 64);
+            const holds = (message: Uint8Array) =>
+                sodium.crypto_sign_verify_detached(signature, message, key);
+            expect(holds(statement)).toBe(true);
+            // Not for another code, not for another request, and not as an ordinary approval.
+            const other = await turnOnCodeDigest({ requestId: item.requestId, code: '08 river' });
+            expect(other).not.toBe(codeDigest);
+            expect(holds(deviceTurnOnStatement({ ...stepOf(item), codeDigest: other }))).toBe(
+                false,
+            );
+            expect(
+                await turnOnCodeDigest({ requestId: core.cases[0]!.requestId, code: made.code }),
+            ).not.toBe(codeDigest);
+            expect(holds(deviceStepStatement(stepOf(item)))).toBe(false);
+            // And the ordinary approval of the same request is no approval with a code.
+            expect(
+                sodium.crypto_sign_verify_detached(
+                    decode(item.approver.signature, 64),
+                    statement,
+                    key,
+                ),
+            ).toBe(false);
+        }
+    });
+
+    test('only that request has such a statement, and only a code has a digest', async () => {
+        const item = turning[0]!;
+        const codeDigest = withCode(item).codeDigest;
+        expect(() =>
+            deviceTurnOnStatement({ ...stepOf(item), purpose: 'login', codeDigest }),
+        ).toThrow();
+        expect(() => deviceTurnOnStatement({ ...stepOf(item), codeDigest: 'short' })).toThrow();
+        await expect(
+            turnOnCodeDigest({ requestId: item.requestId, code: '07 rivr' }),
+        ).rejects.toThrow();
+        await expect(
+            turnOnCodeDigest({ requestId: 'not-an-id', code: '07 river' }),
+        ).rejects.toThrow();
+    });
+
+    test('a drawn code is a code, and not the same one every time', () => {
+        const drawn = Array.from({ length: 400 }, drawApprovalCode);
+        for (const code of drawn) expect(normalizeApprovalCode(code)).toBe(code);
+        // 204,800 codes: four hundred draws that agree more than a few times are not random,
+        // and both parts must move.
+        expect(new Set(drawn).size).toBeGreaterThan(390);
+        expect(new Set(drawn.map((code) => code.slice(0, 2))).size).toBeGreaterThan(90);
+        expect(new Set(drawn.map((code) => code.slice(3))).size).toBeGreaterThan(300);
+    });
+
+    test('a browser’s own key signs the statement the server checks', async () => {
+        const item = turning[0]!;
+        const pair = (await crypto.subtle.generateKey({ name: 'Ed25519' }, false, [
+            'sign',
+            'verify',
+        ])) as CryptoKeyPair;
+        const input = { ...stepOf(item), codeDigest: withCode(item).codeDigest };
+        const signature = await signDeviceTurnOn(pair.privateKey, input);
+        expect(
+            await crypto.subtle.verify(
+                { name: 'Ed25519' },
+                pair.publicKey,
+                decode(signature, 64).slice(),
+                deviceTurnOnStatement(input).slice(),
+            ),
+        ).toBe(true);
     });
 });
 
