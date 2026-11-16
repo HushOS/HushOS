@@ -1,0 +1,39 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_f7ef483863ce9f 274,287-292,295-297,299,302-303
+apps/android/app/src/main/kotlin/com/hushos/app/data/DeviceApproval.kt
+  s_566b8e0c4467a4::t_3c2aeedd3f27a7 19,31,40,43,45-49,68-75,183,191,198-199,204-206,220,224-225,389-392,394-407,449-458,460-464,468,474-476,478-481,504,511-515,522-529,624,657-658,662-667,669,672-690
+apps/android/app/src/main/kotlin/com/hushos/app/data/TwoStep.kt
+  s_566b8e0c4467a4::t_63b62e08ed071d 284-291,534-535,704,1111-1118,1126-1135
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DeviceApprovalUi.kt
+  s_566b8e0c4467a4::t_caa4a30892bcba 101-103,213,252-254,272,307-316,360-362,364-368,376,386-387,409,414-425,671-673,707
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_2c3add80cb1526 839
+apps/android/app/src/main/kotlin/com/hushos/app/ui/TwoStepScreen.kt
+  s_566b8e0c4467a4::t_86315245de217b 1007-1010,1043,1050
+apps/android/app/src/test/kotlin/com/hushos/app/data/ApprovalServer.kt
+  s_566b8e0c4467a4::t_fe94b636454f57 7,20-21,32-35,41-42,55-57,65-66,101,121-127,172-180,182,184-187,192,196,201-227
+apps/android/app/src/test/kotlin/com/hushos/app/data/DeviceApprovalTest.kt
+  s_566b8e0c4467a4::t_f67b6e30c6929f 10-11,22-23,26,30-31,58-59,62-68,390,552,556-559,736-775,803,806,817,822-824,830,832,840-857,859-860,1083-1084,1086-1095,1132-1137,1199,1205,1215,1220,1230-1232,1235-1285,1294-1363
+apps/android/app/src/test/kotlin/com/hushos/app/ui/ApprovalInboxTest.kt
+  s_566b8e0c4467a4::t_11829cb771b5ab 6,13,41-43,135-150,174-176,189,193,203
+apps/android/app/src/test/kotlin/com/hushos/app/ui/DeviceApprovalUiTest.kt
+  s_566b8e0c4467a4::t_95bf42ef7d2148 18,36-39,327,334-336,364-394
+apps/android/app/src/test/kotlin/com/hushos/app/ui/DeviceSetupTest.kt
+  s_566b8e0c4467a4::t_2072d4a2ef1d2d 3,6,9-10,12,20-21,29,43-46,53-56,72-80,84-85,88,90,101,103,106-107,117-119,123-140,142,156,222,224-247,250-266,268,271,273,276-277,279-283,286-289,291,293-300,302,305-306,309-310,312,314-316,318-333,344,348,350
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "af13ac301becddf944681c95742955d66c82c33d",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
