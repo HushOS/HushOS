@@ -73,6 +73,12 @@ describe('another device as the answer', () => {
         for (const reason of ['wrong', 'over', 'unavailable'])
             expect(afterRefusal(approved, reason).device).toBe('');
         expect(afterRefusal(approved, 'pending')).toBe(approved);
+        // No answer came back, or the address was asked to wait: the step never judged the
+        // approval, so it is kept and sent again, not spent.
+        for (const reason of ['offline', 'busy'])
+            expect(afterRefusal(approved, reason)).toBe(approved);
+        // A lost reply may have passed the step there: that approval is not sent twice.
+        expect(afterRefusal(approved, 'lost').device).toBe('');
         // Another method's refusal leaves an approval alone.
         const typing = { ...approved, method: 'backup' as const };
         expect(afterRefusal(typing, 'wrong')).toBe(typing);

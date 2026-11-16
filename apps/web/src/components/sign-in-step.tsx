@@ -158,21 +158,28 @@ export function SignInStep({
                             Start again
                         </Button>
                     )}
-                    {/* Another device has no button of this form's: its approval signs in. */}
-                    {methods.length > 0 && (draft.method !== 'device' || pending) && (
-                        <Button
-                            type="submit"
-                            size={size}
-                            disabled={pending}
-                            className={wide ? 'h-11 w-full text-[15px]' : undefined}
-                        >
-                            {pending
-                                ? 'Checking'
-                                : draft.method === 'webauthn'
-                                  ? 'Use your passkey'
-                                  : 'Continue'}
-                        </Button>
-                    )}
+                    {/*
+                     * Another device has no button of this form's: its approval signs in. Only
+                     * when that sign-in got no answer (the approval is still held) is there
+                     * one, to send the same approval again.
+                     */}
+                    {methods.length > 0 &&
+                        (draft.method !== 'device' || pending || draft.device !== '') && (
+                            <Button
+                                type="submit"
+                                size={size}
+                                disabled={pending}
+                                className={wide ? 'h-11 w-full text-[15px]' : undefined}
+                            >
+                                {pending
+                                    ? 'Checking'
+                                    : draft.method === 'webauthn'
+                                      ? 'Use your passkey'
+                                      : draft.method === 'device'
+                                        ? 'Try again'
+                                        : 'Continue'}
+                            </Button>
+                        )}
                     {wide && (
                         <Button
                             type="button"

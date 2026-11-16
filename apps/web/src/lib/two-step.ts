@@ -123,11 +123,19 @@ export function methodsAfter(
 
 /*
  * After a refusal: an approval that did not pass the step is not offered to it again. The
- * other device is asked afresh, or another way is used. `pending` is the one refusal that
- * leaves it: the other device has simply not answered yet.
+ * other device is asked afresh, or another way is used. Three failures leave it, because the
+ * step never judged the approval:
+ * - `pending`: the other device has simply not answered yet;
+ * - `offline`: no answer came back (the network, or a fault on our side);
+ * - `busy`: too many requests from this address just now.
+ * The same answer goes again for those. Dropping the approval there would send the person back
+ * to their other device for a new one, and spend one of the day's five requests on a hiccup.
  */
+const APPROVAL_KEPT = new Set(['pending', 'offline', 'busy']);
 export function afterRefusal(draft: StepDraft, reason: string): StepDraft {
-    return draft.method === 'device' && reason !== 'pending' ? { ...draft, device: '' } : draft;
+    return draft.method === 'device' && !APPROVAL_KEPT.has(reason)
+        ? { ...draft, device: '' }
+        : draft;
 }
 
 /*
