@@ -836,7 +836,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     /* Ask again: the same device, for the same pending method. From a press only. */
     fun askDeviceSetup() = deviceSetup.askAgain()
 
-    /* Turn on, or Add: the code the chosen device shows, typed here, and with it the confirmation. From a press only. */
+    /* Turn on, or Add: the code the chosen device shows, typed here, goes with the confirmation as typed. From a press only. */
     fun confirmDeviceSetup() = deviceSetup.turnOn()
 
     /* Starts adding a passkey or security key: the password and, once the step is on, the step. What the phone's sheet is asked waits in the flow. */

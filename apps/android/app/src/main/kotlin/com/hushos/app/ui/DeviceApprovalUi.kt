@@ -98,8 +98,9 @@ import kotlinx.coroutines.withContext
  * asking side shows (a QR code, then the code to type on the other device), and the answering
  * side's list, banner and sheet. The order of every request, and every check, is `data/DeviceApproval.kt`'s
  * (`DeviceAsk`, `ApprovalAnswering`); nothing here decides what is revealed, approved or signed.
- * Turning the method on runs the code the other way: the asking page shows no code and no QR code
- * and takes the code typed, and the answering sheet approves on a press and then shows it.
+ * Turning the method on is answered the other way round: the answering sheet approves on a press,
+ * draws a code and shows it; the asking page shows no code and no QR code, takes that code typed and
+ * sends it as typed, with nothing here to check it against.
  * The twin of the iPhone app's `App/DeviceApproval.swift`.
  */
 
@@ -199,12 +200,6 @@ internal class DeviceAskModel(private val scope: CoroutineScope, private val nam
         }
     }
 
-    /*
-     * Turning the method on: what was typed here from the approving device's screen, as it is written, when it is
-     * exactly the code this phone worked out for the request that is out; else null (`DeviceAsk.matches`).
-     */
-    fun matches(typed: String): String? = current?.ask?.matches(typed)
-
     /* Lets the request go: nothing is looked at again, and nothing of it is shown. The server ends it with its token. */
     fun stop() {
         run++
@@ -215,7 +210,7 @@ internal class DeviceAskModel(private val scope: CoroutineScope, private val nam
         phase = AskPhase.Idle
     }
 
-    /* Gives the request up from here, saying why: let go as by `stop`, with nothing sent, and the panel offers Ask again. */
+    /* The request is over, and the panel says why (the server's words for a code it refused), with Ask again: let go as by `stop`, with nothing sent. */
     fun drop(line: String) {
         stop()
         phase = AskPhase.Ended(line)
@@ -254,8 +249,9 @@ internal class CodeEntry {
  * the backup codes the removal of the other devices but that one.
  *
  * The approval alone confirms nothing. The list the device was chosen from is made of the devices' own words, so
- * the device that approved has to be one the person is holding: it shows the code, and only a person who can read
- * its screen can type it here. This phone shows neither a code nor a QR code for this request.
+ * the device that approved has to be one the person is holding: it draws a code and shows it, and only a person
+ * who can read its screen can type it here. This phone shows neither a code nor a QR code for this request, and
+ * cannot check what is typed: the code is in nothing it holds and nothing the server tells it. The server compares.
  *
  * It runs in the view model's scope, and what it made is the view model's flow (`TwoStepFlow`), so a screen
  * rebuilt meanwhile finds it. Everything that reaches the server is handed in, so the order of things is tested
@@ -273,7 +269,7 @@ internal class DeviceSetupModel(
     private val start: suspend (password: String, twoStep: StepAnswer?) -> Result<DeviceEnrolment>,
     /* What the chosen device is asked with: this session and this phone's device key. Null with neither. */
     private val request: (token: String, approverDeviceId: String) -> DeviceAskModel.Request?,
-    /* `two-step/device/:id/confirm`, with the request that device approved and the code it shows, as typed here and written by the core. */
+    /* `two-step/device/:id/confirm`, with the request that device approved and the code it shows, as typed here and written by the core (`approvalCodeNormalize`). */
     private val confirm: suspend (started: DeviceEnrolment, requestId: String, code: String) -> Result<TwoStep.DeviceConfirmed>,
     /* `DELETE devices/others`, keeping the device that approved (`keep`). */
     private val removeOthers: (password: String, keep: String, done: (Boolean) -> Unit) -> Unit,
@@ -308,7 +304,16 @@ internal class DeviceSetupModel(
         val mine = era()
         scope.launch {
             val answer = start(password, twoStep)
-            val words = answer.exceptionOrNull()?.let { if (it is NotAuthenticated) null else failed(it) }
+            val words = answer.exceptionOrNull()?.let { failure ->
+                when {
+                    failure is NotAuthenticated -> null
+                    // Another session of the account is turning the method on (409 `device-busy`). From this route it is
+                    // the setup that was refused, not the step's answer: said on the page in the server's words, with
+                    // the step's own fields and ways left as they are. The page stays on its first step.
+                    failure is StepRefused && failure.refusal == StepRefusal.DEVICE_BUSY -> Problems.say(failure, Problems.SERVER)
+                    else -> failed(failure)
+                }
+            }
             if (mine != era()) return@launch
             answer.fold(
                 { started ->
@@ -352,11 +357,15 @@ internal class DeviceSetupModel(
     }
 
     /*
-     * Turn on, or Add: the press under the code. What was typed is checked here first, against the code this phone
-     * worked out itself for the approved request (`DeviceAsk.matches`), and the server checks it again.
+     * Turn on, or Add: the press under the code. What was typed goes with the confirmation as the core writes it
+     * ("47 river"). Nothing is checked here, and nothing could be: the approving device drew the code, this phone
+     * never held it, and only the server has its digest.
      *
-     * - One try. A code that is not the request's sends nothing: the request is dropped here, the page says so, and
-     *   Ask again makes a new one to the same device. Something that is no code at all changes nothing.
+     * - Something that is no code at all sends nothing and changes nothing.
+     * - One try, and the server's. A code it refuses (409 `device-code`) ended that request and turned nothing on:
+     *   only the request is dropped here, the field is emptied, and the page says the server's words with Ask
+     *   again, which asks the same device, with the same token, for a new code (`refusedCode`). The pending method
+     *   and the chosen device stand; it is no lost confirmation, and nobody is sent back to the password.
      * - The confirmation is the request that may turn the step on and make the backup codes, which the server shows
      *   once. The flow is pending from before it goes out, so Back and leaving the page are held (`left`) until it
      *   has answered, and what it answered is put in the flow in the view model's scope: a page or a request let go
@@ -364,7 +373,7 @@ internal class DeviceSetupModel(
      * - The codes first; only then, when this turned the step on with the box ticked, are the other devices removed,
      *   all but the one that approved. A removal that fails never costs the codes.
      * - A lost reply says HushOS can't tell whether it was turned on, and the settings are read again (`deviceFailed`).
-     *   So does a refusal, the server's own of the code included (`device-code`), in its words.
+     *   So does any other refusal, in the server's words.
      * - `step-pending` (the approval had not landed where the confirmation went) changed and counted nothing: the
      *   same confirmation goes again, a few times, before it is said as a failure.
      */
@@ -374,14 +383,8 @@ internal class DeviceSetupModel(
         val approver = now.approver ?: return
         val sent = setup ?: return
         val requestId = approvedId ?: return
-        if (now.pending || !code.isCode) return
-        val written = ask.matches(code.typed)
-        if (written == null) {
-            approvedId = null
-            code.clear()
-            ask.drop(StepWords.DEVICE_CODE_WRONG)
-            return
-        }
+        if (now.pending) return
+        val written = approvalCodeNormalize(code.typed) ?: return
         val mine = era()
         set(flow().started())
         scope.launch {
@@ -403,9 +406,21 @@ internal class DeviceSetupModel(
                         }
                     }
                 },
-                { failure -> back(failure) },
+                { failure -> if (failure is StepRefused && failure.refusal == StepRefusal.DEVICE_CODE) refusedCode(failure) else back(failure) },
             )
         }
+    }
+
+    /*
+     * The server refused the code (409 `device-code`): the request it was typed for is over, and only that goes.
+     * The setup, its token and the chosen device are as they were; the field is emptied; and the panel says the
+     * server's words with Ask again (`askAgain`: a new request to the same device).
+     */
+    private fun refusedCode(refusal: StepRefused) {
+        approvedId = null
+        code.clear()
+        ask.drop(Problems.say(refusal, Problems.SERVER))
+        set(flow().deviceCodeRefused())
     }
 
     /* Back to the password with why; any failure may hide a method that was turned on, so the settings are read again. */
@@ -653,8 +668,9 @@ internal class ApprovalInbox(
  * it and says so. In the view model's scope: the sheet is only its view.
  *
  * The request that turns the method on is the other way round (`turnsOn`): nothing is scanned and
- * nothing typed here. It is opened as the sheet opens, Approve signs once the other device revealed,
- * and then the sheet shows the code for the person to type on the device that asked, until Done.
+ * nothing typed here. It is opened as the sheet opens; once the other device revealed, Approve draws
+ * a code, signs it into the approval, and the sheet shows it for the person to type on the device
+ * that asked, until Done. An approval whose reply was lost leaves Approve there, and sends the same code.
  *
  * `busy` is a request of this sheet's own on its way (the open after a scan, the approval, the denial).
  * Waiting for the other device to reveal is not: it can take minutes, and Deny, This wasn’t me and
@@ -688,7 +704,7 @@ internal class ApprovalAnswer(
     var error by mutableStateOf("")
         private set
 
-    /* Turning the method on, once approved: the code for the person to type on the device that asked. Up until Done. */
+    /* Turning the method on, once approved: the code this phone drew, for the person to type on the device that asked. Up until Done. */
     var code by mutableStateOf<String?>(null)
         private set
 

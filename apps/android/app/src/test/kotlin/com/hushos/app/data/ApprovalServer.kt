@@ -4,6 +4,7 @@ import com.hushos.core.base64urlEncode
 import com.hushos.core.deviceStepCommitment
 import com.hushos.core.randomBytes
 import com.hushos.core.stepTokenDigest
+import com.hushos.core.turnOnCodeDigest
 import java.util.Collections
 import org.json.JSONArray
 import org.json.JSONObject
@@ -16,6 +17,8 @@ import org.json.JSONObject
 internal class ApprovalServer {
     companion object {
         val TOKEN = "t".repeat(43)
+        /* The purpose of the request that turns the method on. */
+        const val TURNS_ON = "device-approval"
         const val ACCOUNT = "0f8fad5b-d9cb-469f-a165-70867728950e"
         fun random32(): String = base64urlEncode(randomBytes(32u))
     }
@@ -26,12 +29,17 @@ internal class ApprovalServer {
     inner class Call(val method: String, val path: String, val body: JSONObject, val stepToken: String?)
 
     val calls: MutableList<Call> = Collections.synchronizedList(mutableListOf())
-    val requestId = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+    /* The request that is out. Each one made here after the first has an id of its own, as on the real server. */
+    var requestId = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+        private set
+    private var made = 0
     /* The account the server says the request is for. */
     var userId = account
     var purpose = "login"
     var klass = "unknown"
     var deviceName: String? = "Chrome on Windows"
+    /* When the asking device was added to the account, where it is one of its devices; null leaves the field out. */
+    var addedAt: String? = null
     /* What the list says of the name and of who was asked; null leaves the field out, as a server from before it does. */
     var selfNamed: Boolean? = null
     var chosen: Boolean? = null
@@ -44,6 +52,9 @@ internal class ApprovalServer {
     var state = "none"
     var ended = "refused"
     var signature: String? = null
+    /* The digest of the code the approving device drew, kept while the request that turns the method on is approved. Handed back by no route. */
+    var codeDigest: String? = null
+        private set
     var deniedFor: String? = null
     /* A server that lies to the answering phone: what it lists in place of what was posted. */
     var listedCommitment: String? = null
@@ -51,6 +62,8 @@ internal class ApprovalServer {
     /* Takes the next reveal and answers it with a gateway's page. */
     var loseRevealReply = false
     var loseOpenReply = false
+    /* Takes the next approval and answers it with a gateway's page. */
+    var loseApproveReply = false
     /* Says `opened` however often it is asked, even after the reveal. */
     var staysOpened = false
     /* Refuses to make a request, with this status and body. */
@@ -85,7 +98,7 @@ internal class ApprovalServer {
 
     private fun entry(id: String, klass: String): JSONObject {
         val entry = JSONObject().put("id", id).put("purpose", purpose).put("class", klass)
-            .put("device", JSONObject().put("kind", "web").put("name", deviceName ?: JSONObject.NULL))
+            .put("device", JSONObject().put("kind", "web").put("name", deviceName ?: JSONObject.NULL).apply { if (id == requestId) addedAt?.let { put("addedAt", it) } })
             .put("createdAt", "2026-11-14T10:00:00.000Z").put("expiresAt", "2026-11-14T10:05:00.000Z")
             .put("tokenDigest", tokenDigest ?: random32())
             .put("commitment", (if (id == requestId) listedCommitment ?: commitment else null) ?: random32())
@@ -105,6 +118,13 @@ internal class ApprovalServer {
         return when {
             method == "POST" && path == "/api/auth/approvals" -> {
                 refusesStart?.let { return it }
+                // A new request: its own id, and nothing of the one before it.
+                if (made++ > 0) requestId = java.util.UUID.randomUUID().toString()
+                approverKey = null
+                reveal = null
+                signature = null
+                codeDigest = null
+                deniedFor = null
                 stepToken = body.optString("stepToken")
                 tokenDigest = stepTokenDigest(stepToken!!)
                 commitment = body.optString("commitment")
@@ -149,18 +169,61 @@ internal class ApprovalServer {
                 200 to JSONObject().put("approverKey", echoes ?: approverKey).toString()
             }
             method == "POST" && path == "$own/approve" -> {
+                // The request that turns the method on is approved with the digest of the code its approving device
+                // drew, and no other request is: anything else is no approval, and changes nothing.
+                val digest = body.optString("codeDigest").ifEmpty { null }
+                if ((purpose == TURNS_ON) != (digest != null) || (digest != null && digest.length != 43)) return 400 to """{"message":"Update HushOS on this device to approve that."}"""
+                // Sent again with the same digest (its reply was lost) it is the same approval; with another it is refused.
+                if (state == "approved" && digest != null) {
+                    return if (digest == codeDigest) 200 to """{"approved":true}""" else 409 to """{"message":"The other device hasn’t shown its code yet."}"""
+                }
+                if (state !in listOf("waiting", "opened", "revealed")) return 404 to refusal("This request is over.", "approval-over")
                 signature = body.optString("signature")
+                codeDigest = digest
                 state = "approved"
+                if (loseApproveReply) {
+                    loseApproveReply = false
+                    return 502 to "<html>Bad gateway</html>"
+                }
                 200 to """{"approved":true}"""
             }
             method == "POST" && path == "$own/deny" -> {
                 deniedFor = body.optString("reason")
+                codeDigest = null
                 state = "ended"
                 200 to """{"ended":true}"""
             }
+            method == "POST" && path.startsWith("/api/auth/two-step/device/") && path.endsWith("/confirm") -> confirm(body)
             else -> 404 to """{"message":"Not found."}"""
         }
     }
+
+    /*
+     * `POST two-step/device/:id/confirm`: the method is turned on only by the code the approving device drew, which
+     * this server never saw. It holds the typed code's digest to the one the approval carried, once: a code that is
+     * not it ends the request (409 `device-code`), and the pending method stands.
+     */
+    private fun confirm(body: JSONObject): Pair<Int, String> {
+        if (body.optString("token") != stepToken || body.optString("requestId") != requestId || state == "ended") return 404 to """{"message":"Start again."}"""
+        if (state != "approved") return 409 to refusal("Waiting for your other device.", "step-pending")
+        val kept = codeDigest ?: return 404 to """{"message":"Start again."}"""
+        // What is no code at all is refused before anything is looked at, and changes nothing.
+        val typed = runCatching { turnOnCodeDigest(requestId, body.optString("code")) }.getOrNull() ?: return 400 to """{"message":"That is not a code."}"""
+        if (typed != kept) {
+            codeDigest = null
+            state = "ended"
+            return 409 to refusal("That code didn’t match, so nothing was turned on.", "device-code")
+        }
+        confirmed = true
+        return 200 to """{"backupCodes":["7KQ2M-9XD4P","AAAAA-BBBBB"]}"""
+    }
+
+    /* A confirmation carried the approving device's code: the method is on. */
+    var confirmed = false
+        private set
+
+    /* The path a pending method is confirmed at, whichever its id. */
+    val confirmPath = "/api/auth/two-step/device/5b2c0f0e-6f0a-4d0c-9a57-2f1a3a8f6f10/confirm"
 
     /* The other device opens the request, as the server records it. */
     fun open(key: String = random32()) = synchronized(this) { approverKey = key; state = "opened" }

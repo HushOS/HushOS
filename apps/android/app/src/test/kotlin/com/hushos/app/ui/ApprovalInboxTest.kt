@@ -3,14 +3,14 @@ package com.hushos.app.ui
 import com.hushos.app.data.ApprovalAnswering
 import com.hushos.app.data.ApprovalServer
 import com.hushos.app.data.ApprovalWire
+import com.hushos.app.data.DeviceApprovals
 import com.hushos.app.data.OpenedValues
 import com.hushos.app.data.PromptLimit
 import com.hushos.app.data.Shared
 import com.hushos.app.data.TwoStep
 import com.hushos.app.data.uptime
-import com.hushos.core.DeviceStep
 import com.hushos.core.deviceSigningCreate
-import com.hushos.core.deviceStepCode
+import com.hushos.core.turnOnCodeDigest
 import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
 import java.util.Collections
@@ -38,8 +38,9 @@ import org.junit.Test
  *   the request being answered and the values this phone opened requests with all go, even while
  *   a look for the earlier session is still out, and its reply then shows nothing and is counted
  *   nowhere: the phone's own limit keeps its record in an account file, which is the next account's;
- * - a request that turns the method on is opened by Answer, leaves the list once approved, and its
- *   code stays up through later looks until Done.
+ * - a request that turns the method on is opened by Answer, leaves the list once approved, and the
+ *   code this phone drew for it stays up through later looks until Done, and is forgotten then;
+ * - the sheet's title says a self-named device of the account with the day it was added.
  */
 class ApprovalInboxTest {
     private val account = ApprovalServer.ACCOUNT
@@ -131,6 +132,22 @@ class ApprovalInboxTest {
         assertEquals("Turn on Approve on another device on Maya’s Laptop", sheet.asks)
         assertEquals("The other device asked for this device to approve.", sheet.note)
         phone.inbox.dismiss()
+
+        // The request that first turns the method on: the name is the asking device's own word, and the sheet's
+        // title says so, with the day it was added as this phone words a day.
+        val first = ApprovalServer()
+        first.asked(purpose = "device-approval")
+        first.deviceName = "Maya’s Laptop"
+        first.selfNamed = true
+        first.chosen = true
+        first.addedAt = "2025-09-03T12:00:00.000Z"
+        val other = Phone(this, session, key(account)) { first.wire(it) }
+        other.inbox.loadNow()
+        other.inbox.answer(other.inbox.prompts.single())
+        val day = DeviceApprovals.addedDay("2025-09-03T12:00:00.000Z")
+        assertTrue("$day", day!!.endsWith(" Sept 2025"))
+        assertEquals("Turn on Approve on another device on a device calling itself “Maya’s Laptop”, added $day", other.inbox.answering!!.asks)
+        other.inbox.dismiss()
     }
 
     @Test
@@ -154,7 +171,9 @@ class ApprovalInboxTest {
             waitFor("Approve") { sheet.phase == ApprovalAnswer.Phase.CONFIRM }
             sheet.approve()
             waitFor("the code") { sheet.phase == ApprovalAnswer.Phase.SHOWING }
-            assertEquals(deviceStepCode(DeviceStep(account, server.requestId, "device-approval", server.tokenDigest!!, made.first), server.approverKey!!, made.second), sheet.code)
+            // The code that is up is the one this phone drew, whose digest the server was given; it is remembered while it is up.
+            assertEquals(server.codeDigest, turnOnCodeDigest(server.requestId, sheet.code!!))
+            assertTrue(!phone.opened.isEmpty)
             return sheet
         }
         val (server, phone, made) = asked()
@@ -167,10 +186,11 @@ class ApprovalInboxTest {
         assertTrue(phone.inbox.answering === sheet)
         assertEquals(ApprovalAnswer.Phase.SHOWING, sheet.phase)
         assertTrue(phone.said.isEmpty())
-        // Done: closed, with the brief confirmation.
+        // Done: closed, with the brief confirmation, and the code is forgotten.
         sheet.done()
         assertNull(phone.inbox.answering)
         assertEquals(listOf("Approved" to false), phone.said.toList())
+        assertTrue(phone.opened.isEmpty)
 
         // Closed without Done, the code up: the request was approved, so nothing of it is left to answer or to say.
         val (again, other, second) = asked()
@@ -180,6 +200,7 @@ class ApprovalInboxTest {
         assertTrue(other.inbox.prompts.isEmpty())
         assertTrue(other.said.isEmpty())
         assertTrue(again.calls("/deny").isEmpty())
+        assertTrue(other.opened.isEmpty)
     }
 
     /* Two accounts on one phone, each with its own server; a look for the first can be held on its way back. */

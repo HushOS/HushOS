@@ -1004,9 +1004,10 @@ private fun KeyScreen(model: DriveViewModel, first: Boolean, onBack: () -> Unit)
  * with the password among them. None is ever chosen for them, even when there is only one (a
  * device's name and kind are its own words), and until one is Continue only says to choose one.
  *
- * The approval is not enough either. Once that device approved it shows a code, and this page takes
- * it typed: only someone holding the device they chose can read it. This page shows no code and no
- * QR code of its own; a code that does not match drops the request, with Ask again.
+ * The approval is not enough either. Once that device approved it draws a code and shows it, and
+ * this page takes it typed: only someone holding the device they chose can read it. This page shows
+ * no code and no QR code of its own and checks nothing: the code goes as typed, the server compares,
+ * and one it refuses drops that request, with its words and Ask again (the same device).
  *
  * Turning the step on offers to remove the other devices, ticked, as the authenticator app does:
  * all but this phone and the one that approves, which is the method. The requests run in the view
@@ -1039,14 +1040,14 @@ private fun DeviceMethodScreen(model: DriveViewModel, first: Boolean, status: Tw
         FormBody {
             val setup = model.deviceSetup
             if (asked != null && setup.ready) {
-                // That device approved and shows the code now: typed here, checked here, and again by the server.
+                // That device approved and shows the code now: typed here, sent as typed, and checked by the server alone.
                 CodeField(StepWords.codeOn(asked.shownName), setup.code.typed, setup.code.completions, enabled = !pending, onType = setup.code::type, onComplete = setup.code::complete) { model.confirmDeviceSetup() }
                 flow.error?.let { Text(it, color = alpine.danger, style = MaterialTheme.typography.bodyMedium) }
                 Button(enabled = !pending && setup.code.isCode, onClick = { model.confirmDeviceSetup() }, modifier = Modifier.fillMaxWidth().height(48.dp)) {
                     Text(if (flow.pending) "Checking" else if (first) "Turn on" else "Add")
                 }
             } else if (asked != null) {
-                // Which device to pick up, and nothing else: no QR code and no code here. How it ended, with Ask again (the same device).
+                // Which device to pick up, and nothing else: no QR code and no code here. How it ended (a code the server refused too), with Ask again (the same device).
                 DeviceAskPanel(model.setupAsk.phase, inlineAgain = true, enabled = !pending, open = StepWords.askOpen(asked.shownName)) { model.askDeviceSetup() }
                 flow.error?.let { Text(it, color = alpine.danger, style = MaterialTheme.typography.bodyMedium) }
             } else {

@@ -282,6 +282,14 @@ data class TwoStepFlow(
     }
 
     /*
+     * The code typed was not the one the approving device drew (409 `device-code`): the server ended that request,
+     * one try, and turned nothing on. The setup stands as it was (the pending method, its token and the chosen
+     * device), for the same device to be asked again for a new code. It is the server's answer, so nothing is
+     * read again; what it said is shown where Ask again is (`DeviceSetupModel`).
+     */
+    fun deviceCodeRefused() = copy(pending = false)
+
+    /*
      * The server would not ask another device, or the confirmation failed: back to the password with why. Any
      * failure may hide a method that was turned on, so the settings are read again.
      */
@@ -426,8 +434,6 @@ object StepWords {
     fun askOpen(device: String) = "Open HushOS on $device and choose Answer."
     /* Once that device approved it shows the code, and the person types it here. */
     fun codeOn(device: String) = "Code on $device"
-    /* What was typed is not the code this phone worked out: one try, and the request is dropped here. */
-    const val DEVICE_CODE_WRONG = "That code didn’t match, so nothing was turned on."
     fun approveOn(device: String) = "Approve on $device"
     const val APPROVER_HEADING = "Device that will approve"
     const val APPROVER_UNKNOWN = "Unknown device"
@@ -525,7 +531,8 @@ sealed class StepOutcome {
                     StepRefusal.PENDING -> Again("", false, methods)
                     // A request to another device ended. The step's token is as it was, and every way is still there.
                     // So is a request that named no device to approve (only turning the method on asks for one): the server's words.
-                    StepRefusal.DEVICE_MISMATCH, StepRefusal.DEVICE_CHOICE, StepRefusal.APPROVAL_OVER, StepRefusal.APPROVAL_TAKEN, StepRefusal.APPROVAL_REFUSED -> Again(message, false, methods)
+                    // `device-code` is the confirmation's alone (`DeviceSetupModel`); met here it is a request that ended, as these are.
+                    StepRefusal.DEVICE_MISMATCH, StepRefusal.DEVICE_CHOICE, StepRefusal.DEVICE_CODE, StepRefusal.APPROVAL_OVER, StepRefusal.APPROVAL_TAKEN, StepRefusal.APPROVAL_REFUSED -> Again(message, false, methods)
                     StepRefusal.EXPIRED, StepRefusal.REQUIRED, StepRefusal.SETUP_REQUIRED, StepRefusal.UPDATE_REQUIRED, StepRefusal.OTHER ->
                         Over(message.ifBlank { StepWords.OVER })
                 }
@@ -694,7 +701,7 @@ data class StepUp(
             // The approval had not landed where the change went: nothing was counted and nothing is said. The wait goes on.
             StepRefusal.PENDING -> Next.AGAIN to copy(error = "", tried = false, draft = draft.copy(approved = null))
             // The request to the other device ended; the step itself still stands, and can be asked again.
-            StepRefusal.DEVICE_MISMATCH, StepRefusal.DEVICE_CHOICE, StepRefusal.APPROVAL_OVER, StepRefusal.APPROVAL_TAKEN, StepRefusal.APPROVAL_REFUSED ->
+            StepRefusal.DEVICE_MISMATCH, StepRefusal.DEVICE_CHOICE, StepRefusal.DEVICE_CODE, StepRefusal.APPROVAL_OVER, StepRefusal.APPROVAL_TAKEN, StepRefusal.APPROVAL_REFUSED ->
                 Next.AGAIN to copy(error = message, tried = false, draft = draft.copy(approved = null))
             StepRefusal.SETUP_REQUIRED, StepRefusal.UPDATE_REQUIRED, StepRefusal.BUSY, StepRefusal.OTHER -> Next.NOT_STEP to this
         }
@@ -1101,12 +1108,14 @@ object TwoStep {
     }
 
     /*
-     * Confirms it with the request another device approved and the code that device shows, as the
-     * person typed it on this phone and `DeviceAsk.matches` wrote it ("47 river"): the server works the
-     * code out again, and one that is not the request's ends it (409 `device-code`, in the server's
-     * words). `StepRefused(PENDING)` until a device approved: nothing changed. Only the server's own two
-     * answers say it is on (the core's `deviceConfirmedReplyRead`); anything else with a 200, and a
-     * request that never came back, is lost.
+     * Confirms it with the request another device approved and the code that device drew and shows, as
+     * the person typed it on this phone and the core wrote it ("47 river", `approvalCodeNormalize`).
+     * Nothing on this phone can check it: only the approving device knows the code, and only the server
+     * holds its digest. One that is not the request's ends that request, with nothing turned on
+     * (`StepRefused(DEVICE_CODE)`, 409, in the server's words); the pending method stands.
+     * `StepRefused(PENDING)` until a device approved: nothing changed. Only the server's own two answers
+     * say it is on (the core's `deviceConfirmedReplyRead`); anything else with a 200, and a request that
+     * never came back, is lost.
      */
     fun confirmDevice(at: Shared.Session, started: DeviceEnrolment, requestId: String, code: String): DeviceConfirmed {
         val reply = try {
@@ -1114,13 +1123,16 @@ object TwoStep {
         } catch (unreachable: AuthUnreachable) {
             throw LostReply(StepWords.LOST_DEVICE_ON)
         }
-        return when (val read = com.hushos.core.deviceConfirmedReplyRead(status(reply.status), reply.text)) {
-            is com.hushos.core.DeviceConfirmedReply.TurnedOn -> DeviceConfirmed.TurnedOn(read.backupCodes)
-            com.hushos.core.DeviceConfirmedReply.Added -> DeviceConfirmed.Added
-            is com.hushos.core.DeviceConfirmedReply.Refused ->
-                if (reply.status == 401 && read.refusal == StepRefusal.OTHER) throw NotAuthenticated() else throw StepRefused(read.refusal, read.message, reply.status)
-            com.hushos.core.DeviceConfirmedReply.Lost -> throw LostReply(StepWords.LOST_DEVICE_ON)
-        }
+        return deviceConfirmed(reply.status, reply.text)
+    }
+
+    /* What the confirmation answered, as the core reads it: one of the server's two answers, its refusal by its own code and in its own words, or a lost reply. */
+    internal fun deviceConfirmed(answered: Int, text: String): DeviceConfirmed = when (val read = com.hushos.core.deviceConfirmedReplyRead(status(answered), text)) {
+        is com.hushos.core.DeviceConfirmedReply.TurnedOn -> DeviceConfirmed.TurnedOn(read.backupCodes)
+        com.hushos.core.DeviceConfirmedReply.Added -> DeviceConfirmed.Added
+        is com.hushos.core.DeviceConfirmedReply.Refused ->
+            if (answered == 401 && read.refusal == StepRefusal.OTHER) throw NotAuthenticated() else throw StepRefused(read.refusal, read.message, answered)
+        com.hushos.core.DeviceConfirmedReply.Lost -> throw LostReply(StepWords.LOST_DEVICE_ON)
     }
 
     /* A key's name in the list: any session may change it, and the server checks it (1 to 40 characters), in its own words. */

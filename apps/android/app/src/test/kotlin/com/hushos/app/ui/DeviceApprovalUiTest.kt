@@ -15,6 +15,7 @@ import com.hushos.core.StepRefusal
 import com.hushos.core.approvalQr
 import com.hushos.core.deviceSigningCreate
 import com.hushos.core.deviceStepCode
+import com.hushos.core.turnOnCodeDigest
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -32,9 +33,10 @@ import org.junit.Test
  * looked at again or answered with, a pending answer waits on the same request, a second press
  * sends nothing twice, and the sheet closes saying what happened. Waiting for the other device
  * holds nothing up: only a request of the sheet's own on its way does. The request that turns the
- * method on is opened by Answer, approved on a press with nothing scanned or typed, and its code
- * then stays up until Done. The requests themselves are `DeviceApprovalTest`'s; the server is the
- * same one, in memory.
+ * method on is opened by Answer, approved on a press with nothing scanned or typed, and the code
+ * this phone drew for it then stays up until Done; an approval whose reply was lost leaves Approve
+ * there, and the next press sends the same code. The requests themselves are `DeviceApprovalTest`'s;
+ * the server is the same one, in memory.
  */
 class DeviceApprovalUiTest {
     @org.junit.Before
@@ -322,14 +324,16 @@ class DeviceApprovalUiTest {
         assertTrue(server.calls("/approve").isEmpty())
         // Waiting holds nothing up here either.
         assertFalse(sheet.answer.busy)
-        val code = reveal(server, asked)
+        reveal(server, asked)
         waitFor("Approve") { sheet.answer.phase == ApprovalAnswer.Phase.CONFIRM }
         assertNull(sheet.answer.code)
         // The press: signed once with nothing typed, and the code is up. Nothing is said, and nothing closes.
         sheet.answer.approve()
         sheet.answer.approve()
         waitFor("the code") { sheet.answer.phase == ApprovalAnswer.Phase.SHOWING }
-        assertEquals(code, sheet.answer.code)
+        // The code on the sheet is the one this phone drew: its digest is what the server was given, and nothing else of it.
+        val code = sheet.answer.code!!
+        assertEquals(server.codeDigest, turnOnCodeDigest(server.requestId, code))
         assertEquals(1, server.calls("/approve").size)
         assertNotNull(server.signature)
         assertEquals(listOf(server.requestId), sheet.shown)
@@ -356,5 +360,36 @@ class DeviceApprovalUiTest {
         assertEquals(ApprovalAnswer.Phase.CHOOSE, other.answer.phase)
         assertTrue(signIn.calls("/open").isEmpty())
         assertTrue(other.closes.isEmpty())
+    }
+
+    @Test
+    fun anApprovalWhoseReplyWasLostLeavesApproveThereAndTheNextPressShowsTheCodeThatWasSent(): Unit = runBlocking {
+        val server = ApprovalServer()
+        val asked = server.asked(purpose = DeviceEnrolment.PURPOSE)
+        val sheet = answering(server, this)
+        sheet.answer.open()
+        waitFor("the open") { server.state == "opened" }
+        reveal(server, asked)
+        waitFor("Approve") { sheet.answer.phase == ApprovalAnswer.Phase.CONFIRM }
+        // The server took the approval and its answer never arrived: no code is shown for an approval nothing confirmed,
+        // the sheet says so and stays, and Approve is still there.
+        server.loseApproveReply = true
+        sheet.answer.approve()
+        waitFor("the lost reply") { sheet.answer.error.isNotEmpty() }
+        assertEquals(StepWords.LOST_CHANGE, sheet.answer.error)
+        assertEquals(ApprovalAnswer.Phase.CONFIRM, sheet.answer.phase)
+        assertNull(sheet.answer.code)
+        assertFalse(sheet.answer.busy)
+        assertTrue(sheet.closes.isEmpty() && sheet.shown.isEmpty())
+        val kept = server.codeDigest
+        assertNotNull(kept)
+        // Pressed again: the same approval, and the code now up is the one whose digest the server has had all along.
+        sheet.answer.approve()
+        waitFor("the code") { sheet.answer.phase == ApprovalAnswer.Phase.SHOWING }
+        assertEquals(listOf(kept, kept), server.calls("/approve").map { it.body.getString("codeDigest") })
+        assertEquals(kept, turnOnCodeDigest(server.requestId, sheet.answer.code!!))
+        assertEquals("", sheet.answer.error)
+        sheet.answer.done()
+        assertEquals(listOf("Approved" to false), sheet.closes)
     }
 }
