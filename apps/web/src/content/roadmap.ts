@@ -50,7 +50,7 @@ export type RoadmapSection = {
 };
 
 /* The day this file last changed what the page says (YYYY-MM-DD). */
-export const updated = '2026-11-14';
+export const updated = '2026-11-16';
 
 export const sections: RoadmapSection[] = [
     {
@@ -64,12 +64,12 @@ export const sections: RoadmapSection[] = [
                 month: 'November 2026',
                 area: 'Platform',
                 title: 'Two-step sign-in',
-                body: 'After your password, a passkey or security key, a code from an authenticator app, one of ten backup codes, or your recovery phrase. You choose which is asked for first. It’s asked for at sign-in and before you change your password, your keys or the step, or delete your account. Turn it on in Account → Two-step sign-in; phones need version 1.6 to sign in once it’s on, and the next version to use a passkey.',
+                body: 'After your password, a passkey or security key, a code from an authenticator app, one of ten backup codes, or your recovery phrase. You choose which is asked for first. It’s asked for at sign-in and before you change your password or your keys, turn the step off, add or remove a way to pass it, or delete your account. Turn it on in Account → Two-step sign-in; phones need version 1.6 to sign in once it’s on, and version 1.7 to use a passkey, in the apps on hushos.com.',
                 links: [
                     {
                         kind: 'blog',
                         slug: 'two-step-sign-in',
-                        label: 'What it protects, and what it doesn’t',
+                        label: 'How it works',
                     },
                 ],
             },
@@ -84,7 +84,7 @@ export const sections: RoadmapSection[] = [
                     {
                         kind: 'blog',
                         slug: 'two-step-sign-in',
-                        label: 'What it protects, and what it doesn’t',
+                        label: 'How it works',
                     },
                     {
                         kind: 'docs',

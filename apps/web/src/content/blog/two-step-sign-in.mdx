@@ -1,93 +1,109 @@
 ---
-title: Two-step sign-in, and what it can't do
-description: You can now ask for a second step after your password, with an authenticator app, a backup code or your recovery phrase. What it stops, what it doesn't, and why we left out text messages.
-date: 2026-11-13
+title: 'Two-step sign-in (2FA) with a passkey, an authenticator app or another device'
+description: Add a second step after your password, so a stolen password is not enough to sign in. Use a passkey or security key, a code from an authenticator app, or approve the sign-in on a device you already use. You choose which is asked first.
+date: 2026-11-16
 author: HushOS
 cover: CODE
 tone: sage
 ---
 
-import { Cta, Ledger } from '../../components/mdx';
+import { Cta } from '../../components/mdx';
+import { Shot } from '../../components/screenshot';
 
-**Update:** passkeys and security keys now work as the second step too, on the web today and in the iPhone and Android apps from the next version. Add one under **Account → Two-step sign-in**, and choose which way you're asked for first.
+Turn on two-step sign-in and your password alone no longer signs anyone in to your HushOS account. After the password, HushOS asks for one more thing that only you have: a passkey, a code from an authenticator app, or a yes from a device you already use.
 
-You can now turn on two-step sign-in. After your password, HushOS asks for one more thing before it lets anyone in: a code from an authenticator app, a backup code, or your recovery phrase. Turn it on under **Account → Two-step sign-in**, on the web or in the iPhone and Android apps.
+Turn it on under **Account → Two-step sign-in**. All three ways work on the web today. In the iPhone and Android apps, authenticator codes work from version 1.6 and, on hushos.com, passkeys from 1.7. Approving on another device arrives in the apps with version 1.8.
 
-The phone apps need version 1.6 or later to sign in to an account that has it on. An older app says to update instead of signing in.
-
-## What you can use
-
-- **An authenticator app.** Any app that makes six-digit codes, such as the one built into your password manager or phone. On the web you scan a QR code; on a phone, HushOS opens your authenticator app or gives you the key to paste into it. From then on the app shows a new code every 30 seconds. A code works once.
-- **Ten backup codes.** You get them when you turn the step on. Each one works once; keep them somewhere apart from your phone. You can make a new set at any time, and the old set stops working.
-- **Your recovery phrase.** The 24 words you saved when you made your account also pass the step.
-
-The phrase counts because it is a second secret kept somewhere else. It isn't part of your everyday sign-in, and it isn't saved where your password is, so someone who has stolen your password doesn't have it. That only holds if you keep it apart: a phrase in the same password manager as your password is one secret, not two.
-
-There are no text-message or email codes, and there won't be. A text code adds a phone number to an account that has none and can be taken over with a SIM swap. An email code is only as safe as your inbox, which is the weakest thing most people have.
-
-## When you're asked
-
-Whenever a browser or phone gets a new session: signing in on a new device, or on one that was signed out. A device that stays signed in is asked at most once every 30 days, so unlocking HushOS on your own laptop doesn't ask every time.
-
-It's also asked before the changes someone with your password would want most:
-
-- changing your password, making a new recovery phrase or replacing your account key;
-- turning the step off, or changing how you pass it;
-- deleting your account.
-
-Removing a device doesn't ask for it. If someone gets in, you shouldn't have to wait for a code to throw them out.
-
-## What it protects, and what it doesn't
-
-This is the part most services leave out.
-
-Your files are encrypted with keys only your devices hold, and the second step doesn't change that encryption at all. What it changes is what our server is willing to hand over. Your account key travels from our server to your device wrapped under your password. With the step on, the server won't send it, or open a session, until the step is passed.
-
-<Ledger
-    rows={[
-        [
-            'It stops',
-            'Someone who has your password, from a leak, a guess or a password you reused, signing in to HushOS',
-        ],
-        [
-            'It slows down',
-            'A fake sign-in page. It can ask for your code too and use it within seconds, so an authenticator app makes a phisher work fast but doesn’t stop them',
-        ],
-        [
-            'It can’t stop',
-            'Someone who breaks into our servers, or a HushOS that turned against you. The step is a rule our server keeps, and whoever controls the server can skip it',
-        ],
-        [
-            'It can’t stop',
-            'Someone using a device you left signed in and unlocked. That device is already in',
-        ],
-    ]}
+<Shot
+    name="two-step-settings"
+    width={2024}
+    height={1216}
+    alt="Two-step sign-in in Account, switched on: a passkey named MacBook Air marked Default, an authenticator app, Approve on another device, and ten backup codes."
+    className="mt-6 block"
 />
 
-So the step guards the front door of an honest server. Against a breached server, what protects your files is the encryption, and the strength of your password.
+## Three ways to confirm it's you
 
-Under the hood, the authenticator secret has to be readable by our server, because it checks your code by working the same code out itself. It is stored encrypted under a key that hushos.com keeps outside the database, so a stolen copy of the database can't make codes. Backup codes are stored only as a slow, keyed hash. The [security page](/security#password) and the [design document](https://github.com/HushOS/HushOS/blob/main/docs/two-step-design.md) have the details.
+- **A passkey or security key.** Your fingerprint, your face, your device's PIN or a hardware key. Passkeys saved in a password manager and synced between your devices count, and you can add up to ten. A passkey answers only to the real HushOS, so a fake sign-in page gets nothing from it.
+- **An authenticator app.** Any app that makes six-digit codes, such as the one in your password manager or on your phone. Scan a QR code once, or on a phone open your authenticator app from HushOS, and from then on the app shows a new code every 30 seconds. Each code works once.
+- **Another device.** A phone or computer of yours that's already signed in with two-step sign-in confirms the new sign-in. Nothing to install and nothing to carry.
 
-## If you lose your phone
+The first one you turn on switches the step on and gives you ten backup codes.
 
-Use a backup code, or your recovery phrase, then set up the authenticator app again. If you've lost the app, the codes and the phrase together, and you aren't still signed in on another device (which can show your phrase again), nobody can get you back in, including us. That's already true of your files today: without your password or your phrase, nobody can open them.
+## You choose which is asked first
 
-No support tool, admin page or email link turns your second step off. A step that support or your inbox could remove would only be as strong as they are.
+One way is your default, and a sign-in opens on it whenever it can be used there. It starts as the first way you turned on, and **Make default** in Account moves it. The others are one press away under **Use another way**, which changes the way for that sign-in only.
+
+<Shot
+    name="two-step-step"
+    width={972}
+    height={856}
+    alt="The second step at sign-in, opened on the passkey, with the other ways listed: your authenticator app, another device, a backup code and your recovery phrase."
+    sizes="(min-width: 30rem) 28rem, 100vw"
+    className="mx-auto mt-6 block max-w-md"
+/>
+
+## Approve a sign-in on a device you already use
+
+When you choose another device, the new screen shows a short code: two digits and a word.
+
+<Shot
+    name="two-step-code"
+    width={972}
+    height={1292}
+    alt="The new browser showing the code for the other device, two digits and a word, with a QR code a phone can scan."
+    sizes="(min-width: 30rem) 28rem, 100vw"
+    className="mx-auto mt-6 block max-w-md"
+/>
+
+A device of yours that's already signed in with two-step sign-in shows the request, with what is being asked, the device asking and roughly where it is. Type the code from the new screen, press **Approve**, and the new device is signed in. The phone apps, from version 1.8, can scan the new screen instead.
+
+<Shot
+    name="two-step-approve"
+    width={992}
+    height={608}
+    alt="The request on a device already signed in: a sign-in on a new device calling itself Chrome on Windows, near Lyon, Auvergne-Rhône-Alpes, France, with the code typed in and the buttons This wasn’t me, Deny and Approve."
+    sizes="(min-width: 30rem) 28rem, 100vw"
+    className="mx-auto mt-6 block max-w-md"
+/>
+
+The code ties the approval to the screen in front of you: a request goes through only when the code matches the one that screen is showing. If you didn't ask, **This wasn't me** ends the request and sends you a notice at once.
+
+## If you lose a device
+
+Two things get you back in, whichever ways you use:
+
+- **Ten backup codes.** Each works once. You can make a new set at any time, and the old set stops working.
+- **Your recovery phrase.** The 24 words you saved when you made your account pass the step too.
+
+Keep both apart from your password. No support tool, admin page or email link turns your second step off.
+
+## Asked when it matters
+
+HushOS asks for the step whenever a browser or phone gets a new session: signing in on a new device, or on one that was signed out. A device that stays signed in is asked at most once every 30 days, so unlocking HushOS on your own laptop doesn't ask every time.
+
+It is also asked before the changes someone with your password would want most:
+
+- changing your password, making a new recovery phrase or replacing your account key;
+- turning the step off, or adding or removing a way to pass it;
+- deleting your account.
 
 ## You'll hear about it
 
-Every change to the step sends you an email you can't turn off: turned on or off, a method added or removed, new backup codes made, a backup code used (with how many are left), or your phrase used to sign in. The one exception: in the minutes after you're given a new phrase, signing in with it sends no second email, since the change itself already sent one.
+Changes to the step send you an email, and a notification if you have [notifications](/blog/notifications) on: the step turned on or off, a way added or removed, new backup codes made.
 
-The most important one is this: if someone types your correct password and then fails the second step five times in a row, we tell you, at most once an hour. Nobody got in, but your password is known, and you should change it. After 100 wrong answers in a row from devices HushOS doesn't recognise, the authenticator app is paused for new devices. Your phrase always works there and lifts the pause; a backup code does too, unless the limit on wrong codes is spent at that moment. Your own devices keep working throughout.
+If someone types your correct password and then fails the second step five times in a row, HushOS tells you, at most once an hour. Nobody got in, but your password is known, and that is your cue to change it.
 
-Account → Two-step sign-in also lists recent activity: sign-ins that passed the step and how, wrong answers (up to ten an hour), backup codes and the phrase used, and changes to the step.
+**Account → Two-step sign-in** also lists recent activity: sign-ins that passed the step and how, wrong answers, and changes to the step.
 
-## What's next
+## No phone number needed
 
-**Approving a sign-in from another device**: a new device asks one you already use, as one more way to pass the step. It's on the [roadmap](/roadmap). Passkeys and security keys, which this section used to promise, are here: a key is the one kind of step a fake sign-in page can't get past, because your browser only gives its answer to the real site.
+HushOS never asks for a phone number, and the step never depends on your inbox. There are no text-message or email codes: every way to pass the step is something you hold.
+
+Your authenticator secret is stored encrypted under a key that hushos.com keeps outside the database, and backup codes are stored only as slow, keyed hashes. The step is a rule our server keeps on top of your password, and your files stay encrypted with keys only your devices hold: [how HushOS protects your files](/security#password) has the details.
 
 ## Running your own server?
 
-Two-step sign-in is off on a self-hosted server until you set `TWO_STEP_ENABLED=true`. Keep the OPAQUE server setup, or an optional `TWO_STEP_KEY`, in the environment rather than the database: otherwise a copy of the database holds what it needs to make codes. The [self-hosting guide](https://github.com/HushOS/HushOS/blob/main/docs/self-hosting.md) has the details.
+Two-step sign-in is off on a self-hosted server until you set `TWO_STEP_ENABLED=true`. The rough location in an approval request comes from headers your proxy sets (`TRUSTED_COUNTRY_HEADER`, `TRUSTED_REGION_HEADER`, `TRUSTED_CITY_HEADER`); without them the request names the device and what is asked. The [self-hosting guide](https://github.com/HushOS/HushOS/blob/main/docs/self-hosting.md) has the details.
 
 <Cta title="Make your account">At hushos.com, in about a minute.</Cta>
