@@ -500,15 +500,16 @@ sealed class StepOutcome {
         /*
          * What is still offered after a refusal that takes something away (shared with `StepUp`):
          * - a paused app: everything but the app;
-         * - a spent budget: the budget is one for the app's codes and the backup codes, so both go together, and
-         *   only what it does not cover stays (a passkey or security key, and the phrase), as the web's `methodsAfter`;
+         * - a spent budget (`step-limited`): the budget is one for the app's codes and the backup codes, so both go
+         *   together, and what it does not count stays: a passkey or security key, another device (which has budgets
+         *   of its own, `device-limited`), and the phrase, in the order they were offered. The web's `methodsAfter`;
          * - a method the server cannot check: only that one, the one that was `tried`. The app's secret and
          *   the backup codes can sit under different server keys, so one failing says nothing of the other;
          * - no other device to ask, one that is busy, or one asked too often today: only the other device.
          */
         fun left(methods: List<StepMethod>, refusal: StepRefusal, tried: StepMethod?): List<StepMethod> = when (refusal) {
             StepRefusal.FROZEN -> methods.filter { it != StepMethod.TOTP }
-            StepRefusal.LIMITED -> methods.filter { it == StepMethod.WEBAUTHN || it == StepMethod.PHRASE }
+            StepRefusal.LIMITED -> methods.filter { it == StepMethod.WEBAUTHN || it == StepMethod.DEVICE || it == StepMethod.PHRASE }
             StepRefusal.UNAVAILABLE -> methods.filter { it != tried }
             StepRefusal.DEVICE_UNAVAILABLE, StepRefusal.DEVICE_BUSY, StepRefusal.DEVICE_LIMITED -> methods.filter { it != StepMethod.DEVICE }
             else -> methods

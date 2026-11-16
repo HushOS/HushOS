@@ -40,6 +40,9 @@ import org.junit.Test
  *   nowhere: the phone's own limit keeps its record in an account file, which is the next account's;
  * - a request that turns the method on is opened by Answer, leaves the list once approved, and the
  *   code this phone drew for it stays up through later looks until Done, and is forgotten then;
+ * - an approval of such a request whose answer went missing keeps its sheet, its checked reveal and
+ *   its code while the list no longer has the request, and the press again sends the same approval;
+ *   the server's refusal ends it, and only then is the code forgotten;
  * - the sheet's title says a self-named device of the account with the day it was added.
  */
 class ApprovalInboxTest {
@@ -200,6 +203,92 @@ class ApprovalInboxTest {
         assertTrue(other.inbox.prompts.isEmpty())
         assertTrue(other.said.isEmpty())
         assertTrue(again.calls("/deny").isEmpty())
+        assertTrue(other.opened.isEmpty)
+    }
+
+    @Test
+    fun anApprovalWhoseAnswerWentMissingKeepsItsSheetAndItsCodeOnceTheListNoLongerHasTheRequest(): Unit = runBlocking {
+        val session = Shared.Session("http://step.test", "session-token", account)
+        /* Answer and the other device's reveal: Approve is next. `cut` drops the first approval's answer after the server took it. */
+        suspend fun ready(server: ApprovalServer, cut: Boolean = false): Pair<Phone, ApprovalAnswer> {
+            val made = server.asked(purpose = "device-approval")
+            server.chosen = true
+            val once = AtomicBoolean(cut)
+            val phone = Phone(this, session, key(account)) { held ->
+                val real = server.wire(held)
+                ApprovalWire(held) { method, path, body, stepToken ->
+                    val reply = real.send(method, path, body, stepToken)
+                    if (path.endsWith("/approve") && once.compareAndSet(true, false)) throw java.io.IOException("Connection reset")
+                    reply
+                }
+            }
+            phone.inbox.loadNow()
+            phone.inbox.answer(phone.inbox.prompts.single())
+            val sheet = phone.inbox.answering!!
+            waitFor("the open") { server.state == "opened" }
+            server.reveal = made
+            server.state = "revealed"
+            waitFor("Approve") { sheet.phase == ApprovalAnswer.Phase.CONFIRM }
+            return phone to sheet
+        }
+        fun digests(server: ApprovalServer) = server.calls("/approve").map { it.body.getString("codeDigest") }
+
+        // The approval reached the server, which answered with a gateway's page: approved there, unknown here.
+        val server = ApprovalServer()
+        val (phone, sheet) = ready(server)
+        server.loseApproveReply = true
+        sheet.approve()
+        waitFor("the lost reply") { sheet.error.isNotEmpty() }
+        assertEquals("approved", server.state)
+        val kept = server.codeDigest!!
+        // The looks go on, and the list no longer has the request: nobody else is asked to answer it.
+        repeat(3) { phone.inbox.loadNow() }
+        delay(40)
+        assertTrue(phone.inbox.prompts.isEmpty())
+        // The sheet is still that request's, unsettled: not closed, not called over, its code not shown and not thrown away.
+        assertTrue(phone.inbox.answering === sheet)
+        assertEquals(server.requestId, sheet.id)
+        assertEquals(ApprovalAnswer.Phase.CONFIRM, sheet.phase)
+        assertTrue(sheet.unsure)
+        assertEquals(com.hushos.app.data.StepWords.LOST_CHANGE, sheet.error)
+        assertNull(sheet.code)
+        assertTrue(phone.said.isEmpty())
+        assertTrue(!phone.opened.isEmpty)
+        // The press again: the same approval, and the code that comes up is the one whose digest the server took the first time.
+        sheet.approve()
+        waitFor("the code") { sheet.phase == ApprovalAnswer.Phase.SHOWING }
+        assertEquals(listOf(kept, kept), digests(server))
+        assertEquals(kept, turnOnCodeDigest(server.requestId, sheet.code!!))
+        assertTrue(!sheet.unsure)
+        assertTrue(phone.said.isEmpty())
+        // Up through later looks, until Done.
+        repeat(2) { phone.inbox.loadNow() }
+        assertTrue(phone.inbox.answering === sheet)
+        sheet.done()
+        assertEquals(listOf("Approved" to false), phone.said.toList())
+        assertTrue(phone.opened.isEmpty)
+
+        // Nothing came back at all, and the request is over by the time of the next press (it ran out): it left the list
+        // just the same, and the sheet cannot tell the two apart, so it stays. The server's refusal is what ends it.
+        val over = ApprovalServer()
+        val (other, unsettled) = ready(over, cut = true)
+        unsettled.approve()
+        waitFor("the missing answer") { unsettled.error.isNotEmpty() }
+        assertEquals(com.hushos.app.data.Problems.OFFLINE, unsettled.error)
+        over.set("ended", "expired")
+        repeat(3) { other.inbox.loadNow() }
+        assertTrue(other.inbox.prompts.isEmpty())
+        assertTrue(other.inbox.answering === unsettled)
+        assertTrue(unsettled.unsure)
+        assertTrue(other.said.isEmpty())
+        val drawn = digests(over).single()
+        unsettled.approve()
+        waitFor("the refusal") { other.said.isNotEmpty() }
+        // The same approval was what the server refused: closed with its words, until read, and nothing of the request is kept.
+        assertEquals(listOf(drawn, drawn), digests(over))
+        assertEquals(listOf("This request is over." to true), other.said.toList())
+        assertNull(other.inbox.answering)
+        assertNull(unsettled.code)
         assertTrue(other.opened.isEmpty)
     }
 

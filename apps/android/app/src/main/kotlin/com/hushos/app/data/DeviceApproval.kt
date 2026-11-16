@@ -455,7 +455,9 @@ sealed class ApprovalProblem(message: String) : AuthFailure(message) {
  * - The code it drew for a request that turns the method on, at the press of Approve. One for a
  *   request, ever: an approval whose reply was lost is sent again as the same one (the server takes
  *   the same approval twice, and refuses another). It goes with the value: when the sheet is done
- *   with, when the request leaves the list, and with the account.
+ *   with, when the request leaves the list with no sheet on it, and with the account. Never while
+ *   the sheet is up: an approved request is not listed, and that is when its code is shown, or is
+ *   still owed after an approval whose answer went missing.
  */
 class OpenedValues(
     private val fresh: () -> String = { base64urlEncode(randomBytes(32u)) },

@@ -603,6 +603,10 @@ internal class ApprovalInbox(
             // Kept as it was when the server can't be asked: the next look asks again.
             val list = counted.getOrElse { failure -> if (failure is NotAuthenticated) sessionEnded(session); return }
             for (asked in list) first.getOrPut(asked.id) { asked }
+            // The request on the sheet is kept whatever the list says. An approved request is no longer listed, and
+            // that is where a request is while its code is up, and where it may be while an approval's answer is
+            // missing (`ApprovalAnswer.unsure`): the code drawn for it, and the reveal checked for it, must still be
+            // there for the press that sends the same approval again.
             val live = list.map { it.id }.toSet() + listOfNotNull(answering?.id)
             first.keys.retainAll(live)
             flows.keys.retainAll(live)
@@ -670,7 +674,8 @@ internal class ApprovalInbox(
  * The request that turns the method on is the other way round (`turnsOn`): nothing is scanned and
  * nothing typed here. It is opened as the sheet opens; once the other device revealed, Approve draws
  * a code, signs it into the approval, and the sheet shows it for the person to type on the device
- * that asked, until Done. An approval whose reply was lost leaves Approve there, and sends the same code.
+ * that asked, until Done. An approval whose answer is missing keeps the sheet on the request (`unsure`),
+ * whatever the list says by then, and the next press sends the same approval, with the same code.
  *
  * `busy` is a request of this sheet's own on its way (the open after a scan, the approval, the denial).
  * Waiting for the other device to reveal is not: it can take minutes, and Deny, This wasn’t me and
@@ -706,6 +711,18 @@ internal class ApprovalAnswer(
 
     /* Turning the method on, once approved: the code this phone drew, for the person to type on the device that asked. Up until Done. */
     var code by mutableStateOf<String?>(null)
+        private set
+
+    /*
+     * Turning the method on: an approval went out and nothing settled it (no reply, a reply that is not the
+     * server's answer, a server error). The server may have taken it. If it did, the request has left the list
+     * though nothing is over, and the code this phone drew for it has not been shown, with someone waiting for
+     * it on the other device. So the sheet stays on the request, says the answer is missing, and offers the
+     * press again (Try again): the same approval, with the same code and digest, which the server takes twice.
+     * Nothing is read from the list for it: the reveal checked before the first press is the flow's own. Only
+     * the server's answer ends this, either way: the code is shown, or its refusal closes the sheet with its words.
+     */
+    var unsure by mutableStateOf(false)
         private set
 
     private val entry = CodeEntry()
@@ -792,7 +809,17 @@ internal class ApprovalAnswer(
         busy = true
         error = ""
         run {
-            val shown = withContext(Dispatchers.IO) { flow.approve(written) }
+            val shown = try {
+                withContext(Dispatchers.IO) { flow.approve(written) }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                // The server's own refusal settles it, and so does a session that ended. Anything else leaves it
+                // open whether the approval was taken: for the request that turns the method on, a code may be owed.
+                unsure = turnsOn && failure !is ApprovalProblem && failure !is NotAuthenticated
+                throw failure
+            }
+            unsure = false
             if (shown == null) closed(StepWords.APPROVED, false)
             else {
                 code = shown
@@ -904,7 +931,8 @@ internal fun ApprovalSheet(inbox: ApprovalInbox, answer: ApprovalAnswer) {
                     CodeField(StepWords.APPROVAL_CODE_FIELD, answer.typed, answer.completions, enabled = !busy, onType = answer::type, onComplete = answer::complete) { answer.approve() }
                     ApproveButton(busy) { answer.approve() }
                 }
-                ApprovalAnswer.Phase.CONFIRM -> Box(Modifier.padding(horizontal = AlpineSpace.S6)) { ApproveButton(busy) { answer.approve() } }
+                // After an approval whose answer is missing, the same press sends the same approval again.
+                ApprovalAnswer.Phase.CONFIRM -> Box(Modifier.padding(horizontal = AlpineSpace.S6)) { ApproveButton(busy, again = answer.unsure) { answer.approve() } }
                 // Approved: the code for the device that asked, until Done. Nothing here ends it or closes it by itself.
                 ApprovalAnswer.Phase.SHOWING -> Column(Modifier.padding(horizontal = AlpineSpace.S6), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S4)) {
                     ShownCode(answer.code.orEmpty())
@@ -925,6 +953,6 @@ internal fun ApprovalSheet(inbox: ApprovalInbox, answer: ApprovalAnswer) {
 }
 
 @Composable
-private fun ApproveButton(busy: Boolean, onClick: () -> Unit) {
-    Button(onClick = onClick, enabled = !busy, modifier = Modifier.fillMaxWidth().padding(top = AlpineSpace.S2).height(48.dp)) { Text("Approve") }
+private fun ApproveButton(busy: Boolean, again: Boolean = false, onClick: () -> Unit) {
+    Button(onClick = onClick, enabled = !busy, modifier = Modifier.fillMaxWidth().padding(top = AlpineSpace.S2).height(48.dp)) { Text(if (again) "Try again" else "Approve") }
 }

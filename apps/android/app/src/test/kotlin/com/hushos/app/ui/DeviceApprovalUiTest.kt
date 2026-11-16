@@ -2,10 +2,12 @@ package com.hushos.app.ui
 
 import com.hushos.app.data.ApprovalAnswering
 import com.hushos.app.data.ApprovalServer
+import com.hushos.app.data.ApprovalWire
 import com.hushos.app.data.AskPhase
 import com.hushos.app.data.DeviceApprovals
 import com.hushos.app.data.DeviceEnrolment
 import com.hushos.app.data.LostReply
+import com.hushos.app.data.Problems
 import com.hushos.app.data.StepAnswer
 import com.hushos.app.data.StepRefused
 import com.hushos.app.data.StepWords
@@ -34,9 +36,10 @@ import org.junit.Test
  * sends nothing twice, and the sheet closes saying what happened. Waiting for the other device
  * holds nothing up: only a request of the sheet's own on its way does. The request that turns the
  * method on is opened by Answer, approved on a press with nothing scanned or typed, and the code
- * this phone drew for it then stays up until Done; an approval whose reply was lost leaves Approve
- * there, and the next press sends the same code. The requests themselves are `DeviceApprovalTest`'s;
- * the server is the same one, in memory.
+ * this phone drew for it then stays up until Done; an approval whose answer went missing (no reply,
+ * a page that is not the server's, a server error) keeps the sheet on the request as unsettled, and
+ * the next press sends the same code with no list read again; the server's own refusal ends it. The
+ * requests themselves are `DeviceApprovalTest`'s; the server is the same one, in memory.
  */
 class DeviceApprovalUiTest {
     @org.junit.Before
@@ -147,8 +150,7 @@ class DeviceApprovalUiTest {
 
     private class Sheet(val answer: ApprovalAnswer, val closes: MutableList<Pair<String, Boolean>>, val shown: MutableList<String>)
 
-    private fun answering(server: ApprovalServer, scope: CoroutineScope): Sheet {
-        val wire = server.wire()
+    private fun answering(server: ApprovalServer, scope: CoroutineScope, wire: ApprovalWire = server.wire()): Sheet {
         val prompt = DeviceApprovals.listed(wire).single()
         val closes = mutableListOf<Pair<String, Boolean>>()
         val shown = mutableListOf<String>()
@@ -378,18 +380,111 @@ class DeviceApprovalUiTest {
         waitFor("the lost reply") { sheet.answer.error.isNotEmpty() }
         assertEquals(StepWords.LOST_CHANGE, sheet.answer.error)
         assertEquals(ApprovalAnswer.Phase.CONFIRM, sheet.answer.phase)
+        // Unsettled: the button reads Try again, and the request is not called over.
+        assertTrue(sheet.answer.unsure)
         assertNull(sheet.answer.code)
         assertFalse(sheet.answer.busy)
         assertTrue(sheet.closes.isEmpty() && sheet.shown.isEmpty())
         val kept = server.codeDigest
         assertNotNull(kept)
+        // The server approved it, so it lists it no longer. The press needs no list: the reveal it checked is its own.
+        assertEquals("approved", server.state)
+        assertTrue(DeviceApprovals.listed(server.wire()).isEmpty())
+        val looks = lists(server)
         // Pressed again: the same approval, and the code now up is the one whose digest the server has had all along.
         sheet.answer.approve()
         waitFor("the code") { sheet.answer.phase == ApprovalAnswer.Phase.SHOWING }
         assertEquals(listOf(kept, kept), server.calls("/approve").map { it.body.getString("codeDigest") })
         assertEquals(kept, turnOnCodeDigest(server.requestId, sheet.answer.code!!))
         assertEquals("", sheet.answer.error)
+        assertFalse(sheet.answer.unsure)
+        assertEquals(looks, lists(server))
         sheet.answer.done()
         assertEquals(listOf("Approved" to false), sheet.closes)
+    }
+
+    /* How often the answering phone's list was read. */
+    private fun lists(server: ApprovalServer) = server.calls("/api/auth/approvals").count { it.method == "GET" }
+
+    /* The server as it is, but its answer to the next approval is `lost`'s: what came back in its place, or a throw for nothing at all. */
+    private fun losing(server: ApprovalServer, lost: (ApprovalWire.Reply) -> ApprovalWire.Reply): ApprovalWire {
+        val real = server.wire()
+        val once = java.util.concurrent.atomic.AtomicBoolean(true)
+        return ApprovalWire(real.session) { method, path, body, stepToken ->
+            val reply = real.send(method, path, body, stepToken)
+            if (path.endsWith("/approve") && once.compareAndSet(true, false)) lost(reply) else reply
+        }
+    }
+
+    @Test
+    fun anApprovalTheServerTookIsUnsettledWhateverCameBackInItsAnswersPlaceAndOnlyTheServersRefusalEndsIt(): Unit = runBlocking {
+        // The server took each of these approvals. What came back: nothing at all; a server error in the server's own
+        // format, which says nothing of what happened to the request; a gateway's page with a 200.
+        val losses = listOf<Pair<String, (ApprovalWire.Reply) -> ApprovalWire.Reply>>(
+            Problems.OFFLINE to { _ -> throw java.io.IOException("Connection reset") },
+            StepWords.LOST_CHANGE to { _ -> ApprovalWire.Reply(500, """{"message":"Something went wrong on HushOS."}""") },
+            StepWords.LOST_CHANGE to { _ -> ApprovalWire.Reply(200, "<html>Sign in to the network</html>") },
+        )
+        for ((said, lost) in losses) {
+            val server = ApprovalServer()
+            val asked = server.asked(purpose = DeviceEnrolment.PURPOSE)
+            val sheet = answering(server, this, losing(server, lost))
+            sheet.answer.open()
+            waitFor("the open") { server.state == "opened" }
+            reveal(server, asked)
+            waitFor("Approve") { sheet.answer.phase == ApprovalAnswer.Phase.CONFIRM }
+            assertFalse(sheet.answer.unsure)
+            sheet.answer.approve()
+            waitFor("the missing answer: $said") { sheet.answer.error.isNotEmpty() }
+            assertEquals(said, sheet.answer.error)
+            assertEquals("approved", server.state)
+            // Still this request's sheet, with the press offered again: not closed, nothing said, no code shown unconfirmed.
+            assertTrue(said, sheet.answer.unsure)
+            assertEquals(ApprovalAnswer.Phase.CONFIRM, sheet.answer.phase)
+            assertNull(sheet.answer.code)
+            assertTrue(said, sheet.closes.isEmpty() && sheet.shown.isEmpty())
+            val kept = server.codeDigest!!
+            sheet.answer.approve()
+            waitFor("the code: $said") { sheet.answer.phase == ApprovalAnswer.Phase.SHOWING }
+            assertEquals(listOf(kept, kept), server.calls("/approve").map { it.body.getString("codeDigest") })
+            assertEquals(kept, turnOnCodeDigest(server.requestId, sheet.answer.code!!))
+            assertFalse(sheet.answer.unsure)
+            assertTrue(sheet.closes.isEmpty())
+        }
+
+        // Nothing came back, and the request was over by the next press: the server's refusal is an answer. The
+        // sheet closes with its words, and no code is ever shown for it.
+        val over = ApprovalServer()
+        val asked = over.asked(purpose = DeviceEnrolment.PURPOSE)
+        val sheet = answering(over, this, losing(over) { _ -> throw java.io.IOException("Connection reset") })
+        sheet.answer.open()
+        waitFor("the open") { over.state == "opened" }
+        reveal(over, asked)
+        waitFor("Approve") { sheet.answer.phase == ApprovalAnswer.Phase.CONFIRM }
+        sheet.answer.approve()
+        waitFor("the missing answer") { sheet.answer.error.isNotEmpty() }
+        assertTrue(sheet.answer.unsure)
+        over.set("ended", "expired")
+        sheet.answer.approve()
+        waitFor("the refusal") { sheet.closes.isNotEmpty() }
+        assertEquals(listOf("This request is over." to true), sheet.closes)
+        assertFalse(sheet.answer.unsure)
+        assertNull(sheet.answer.code)
+        assertTrue(sheet.shown.isEmpty())
+
+        // A sign-in's request has no code to owe: a lost approval there is said, and Approve stays Approve.
+        val signIn = ApprovalServer()
+        val made = signIn.asked()
+        val other = answering(signIn, this)
+        other.answer.typing()
+        waitFor("the open") { signIn.state == "opened" }
+        val code = reveal(signIn, made)
+        waitFor("the field") { other.answer.phase == ApprovalAnswer.Phase.TYPING }
+        other.answer.type(code)
+        signIn.loseApproveReply = true
+        other.answer.approve()
+        waitFor("the lost reply") { other.answer.error.isNotEmpty() }
+        assertEquals(StepWords.LOST_CHANGE, other.answer.error)
+        assertFalse(other.answer.unsure)
     }
 }
