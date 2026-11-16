@@ -1,0 +1,25 @@
+e2e/screenshots-two-step.spec.ts
+  s_566b8e0c4467a4::t_fed19b1cfc4206 1-273
+  s_566b8e0c4467a4::t_cfcd8b4fb30225 274-289
+apps/web/src/content/blog/two-step-sign-in.mdx
+  s_566b8e0c4467a4::t_c85c511500cb5a 2-3,10-11,13,15,17-23,25,27-29,31,33,35,37-44,46,48-59,61-66,69,71,73,75-76,78-88,92-93
+  s_566b8e0c4467a4::t_a9da6beafaf5be 94,96,98,100,102,106
+apps/web/src/content/roadmap.ts
+  s_566b8e0c4467a4::t_45f50b903e83b8 53,67,72,87
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "76a251822bc827cb3fc6d245d4758d05c61ce416",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
