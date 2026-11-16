@@ -861,6 +861,11 @@ final class StepServerProtocol: URLProtocol {
             body = data
         }
         let (status, data) = StepServer.current?.asked(request, body) ?? (500, Data())
+        // Status 0 is no reply at all, as with no network: the request went, and nothing came back.
+        if status == 0 {
+            client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet))
+            return
+        }
         let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: nil)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: data)

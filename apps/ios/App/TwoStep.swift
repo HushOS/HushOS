@@ -327,9 +327,14 @@ struct SignInStepView: View {
                         VStack(alignment: .leading, spacing: Alpine.Space.s2) {
                             FieldLabel(method.label).padding(.horizontal, Alpine.Space.s4)
                             if method == .device {
-                                // Nothing is typed here: the other device's QR code, then the code to type there.
-                                DeviceAskView(model: asking, inlineAgain: false) { askDevice() }
-                                    .padding(.horizontal, Alpine.Space.s4).padding(.vertical, Alpine.Space.s2)
+                                if step.deviceApproved, asking.idle {
+                                    // Approved, and the answer that carried it got no verdict: the button sends the same one again.
+                                    ApprovedLine().padding(.horizontal, Alpine.Space.s4).padding(.vertical, Alpine.Space.s4)
+                                } else {
+                                    // Nothing is typed here: the other device's QR code, then the code to type there.
+                                    DeviceAskView(model: asking, inlineAgain: false) { askDevice() }
+                                        .padding(.horizontal, Alpine.Space.s4).padding(.vertical, Alpine.Space.s2)
+                                }
                                 if !step.fieldError.isEmpty {
                                     Text(step.fieldError).font(Theme.Text.footnote).foregroundStyle(Alpine.danger).padding(.horizontal, Alpine.Space.s4)
                                 }
@@ -366,7 +371,8 @@ struct SignInStepView: View {
                         Text(action).font(.body.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 52)
                     }
                     .buttonStyle(PrimaryCapsuleStyle())
-                    .disabled(busy || (step.shown == .device && step.lost == nil && asking.out))
+                    // While a request is out, or its approval's answer is, there is nothing to press.
+                    .disabled(busy || (step.shown == .device && step.lost == nil && (asking.out || asking.phase == .approved)))
                 }
                 Button("Start again") { model.cancelStep() }
                     .font(.body.weight(.semibold)).foregroundStyle(Alpine.primary).frame(minHeight: Theme.control)
@@ -385,20 +391,25 @@ struct SignInStepView: View {
     /* The one button: it sends what was typed, or asks the key or the other device. */
     private var action: String {
         if busy { return "Checking" }
-        if step.lost != nil { return "Try again" }
+        if step.lost != nil { return StepWords.tryAgain }
         switch step.shown {
         case .webauthn: return "Use your passkey"
         case .device:
             if case .ended = asking.phase { return StepWords.askAgain }
-            return asking.idle ? StepMethod.device.other : StepWords.askWaiting
+            if !asking.idle { return StepWords.askWaiting }
+            // An approval is held: the same answer goes again, and the other device is not asked for another.
+            return step.sendsAgain ? StepWords.tryAgain : StepMethod.device.other
         default: return "Continue"
         }
     }
 
-    /* Use another way. Choosing another device is the press that asks it; choosing anything else lets a request go. */
+    /*
+     * Use another way. Choosing another device is the press that asks it, unless an approval is
+     * still held for this step: the button sends that again. Choosing anything else lets a request go.
+     */
     private func choose(_ method: StepMethod) {
         step.choose(method)
-        if method == .device { askDevice() } else { asking.stop() }
+        if method != .device { asking.stop() } else if !step.sendsAgain { askDevice() }
     }
 
     /*
@@ -412,12 +423,15 @@ struct SignInStepView: View {
         asking.begin(
             .init(wire: .signIn(origin: pending.origin), token: pending.challenge.token, purpose: "login", key: key.publicKey),
             approved: { answer, _ in
+                // The approval is the step's from here: an answer that gets no verdict is offered again, not asked for again.
+                step.approved(answer)
                 busy = true
                 defer { busy = false }
                 try await model.answerStep(.ready(answer))
             },
             failed: { error in
-                // Could not be asked (the server's words, and the other ways), or the answer's reply was lost (the same one goes again).
+                // Could not be asked (the server's words, and the other ways), or the approval's answer failed: the step keeps
+                // the approval unless it refused it (`SignInStep.failed`), and a lost reply's answer goes again as it went.
                 if let over = step.failed(error, tried: .device, answer: asking.answer) {
                     model.cancelStep(over, token: pending.challenge.token)
                 }
@@ -426,8 +440,8 @@ struct SignInStepView: View {
     }
 
     private func submit() {
-        // Another device is asked, or asked again, from here; a lost reply to its answer goes the usual road below.
-        if step.shown == .device, step.lost == nil {
+        // Another device is asked, or asked again, from here; an approval it already gave goes the usual road below, as it went.
+        if step.shown == .device, !step.sendsAgain {
             askDevice()
             return
         }

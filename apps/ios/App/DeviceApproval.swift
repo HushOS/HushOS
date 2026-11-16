@@ -171,15 +171,9 @@ struct DeviceAskView: View {
                 // The approval is half of it: the sheet asks for the code that device now shows.
                 EmptyView()
             case .code(let code):
-                VStack(spacing: Alpine.Space.s2) {
-                    Text(StepWords.askCode).font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.ink)
-                    Text(code).font(.system(.largeTitle, design: .monospaced).weight(.bold)).foregroundStyle(Alpine.ink)
-                        .lineLimit(1).minimumScaleFactor(0.6)
-                }
-                .frame(maxWidth: .infinity)
-                .accessibilityElement(children: .combine)
+                ShownCode(code: code)
             case .approved:
-                Label(StepWords.approved, systemImage: "checkmark.circle.fill").foregroundStyle(Alpine.success).frame(maxWidth: .infinity, minHeight: 44)
+                ApprovedLine()
             case .ended(let line):
                 VStack(spacing: Alpine.Space.s2) {
                     Text(line).font(Theme.Text.callout).foregroundStyle(Alpine.ink).multilineTextAlignment(.center)
@@ -191,6 +185,40 @@ struct DeviceAskView: View {
             }
         }
         .padding(.vertical, Alpine.Space.s2)
+    }
+}
+
+/* The other device approved: said in the asking panel, and on the sign-in screen while that approval's answer is still to be sent again. */
+struct ApprovedLine: View {
+    var body: some View {
+        Label(StepWords.approved, systemImage: "checkmark.circle.fill").foregroundStyle(Alpine.success).frame(maxWidth: .infinity, minHeight: 44)
+    }
+}
+
+/*
+ * A code for the other device, as a screen shows it: the one a sign-in or a change shows to be
+ * typed there, and the one this iPhone drew when it approved turning the method on. Not drawn
+ * while the screen is recorded, mirrored or AirPlayed (`ScreenCapture`), as the authenticator
+ * key and the backup codes are not: a recording outlives the moment, and a mirrored screen is
+ * someone else's. VoiceOver is not given it then either.
+ */
+struct ShownCode: View {
+    let code: String
+    @State private var capture = ScreenCapture.shared
+
+    var body: some View {
+        VStack(spacing: Alpine.Space.s2) {
+            Text(StepWords.askCode).font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.ink)
+            if capture.active {
+                Label("Hidden while your screen is recorded or shared.", systemImage: "eye.slash")
+                    .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).multilineTextAlignment(.center)
+            } else {
+                Text(code).font(.system(.largeTitle, design: .monospaced).weight(.bold)).foregroundStyle(Alpine.ink)
+                    .lineLimit(1).minimumScaleFactor(0.6)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -252,6 +280,9 @@ struct ApprovalCodeField: View {
     @Binding var typed: String
     let disabled: Bool
     var edited: () -> Void = {}
+    // While the screen is recorded, mirrored or AirPlayed, what is typed and the words offered for it are blurred, as
+    // the step's other fields are (`StepField`, `ScreenCapture`). The field and the words still work.
+    @State private var capture = ScreenCapture.shared
 
     /* The digits as typed, and the word begun after them. */
     private var digits: String { String(typed.prefix(while: StepDraft.digit)) }
@@ -264,7 +295,9 @@ struct ApprovalCodeField: View {
 
     var body: some View {
         Section {
-            CodeEntry(label: label, typed: $typed, edited: edited).disabled(disabled).alpineRow()
+            CodeEntry(label: label, typed: $typed, edited: edited).disabled(disabled)
+                .blur(radius: capture.active ? 10 : 0)
+                .alpineRow()
             if !completions.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: Alpine.Space.s2) {
@@ -274,6 +307,8 @@ struct ApprovalCodeField: View {
                         }
                     }
                 }
+                // The words the typed beginning could become give the code's word away as surely as the field does.
+                .blur(radius: capture.active ? 10 : 0)
                 .alpineRow()
             }
         } header: {
@@ -433,15 +468,7 @@ struct ApprovalSheet: View {
                 case .shown(let code):
                     // Approved: the code this iPhone drew is its to show, and stays until Done.
                     Section {
-                        VStack(spacing: Alpine.Space.s2) {
-                            Text(StepWords.askCode).font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.ink)
-                            Text(code).font(.system(.largeTitle, design: .monospaced).weight(.bold)).foregroundStyle(Alpine.ink)
-                                .lineLimit(1).minimumScaleFactor(0.6)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, Alpine.Space.s2)
-                        .accessibilityElement(children: .combine)
-                        .alpineRow()
+                        ShownCode(code: code).padding(.vertical, Alpine.Space.s2).alpineRow()
                     }
                     Section {
                         Button { answer.done() } label: { Text(StepWords.done).frame(maxWidth: .infinity) }

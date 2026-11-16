@@ -9,6 +9,10 @@ import Testing
  * - the asking phone posts only its commitment, reveals nothing before another device opened the
  *   request, reveals once, and answers the step only with an approved request (`step-pending`
  *   keeps it waiting and is never an error);
+ * - once approved, an answer the step never judged (no reply, a gateway's 5xx, the address's own
+ *   429, `step-pending`) keeps the approval: the same request id goes again from one press, at a
+ *   sign-in and in a form, and the other device is asked for nothing more; a refusal the step
+ *   gave drops it;
  * - a phone with no device key commits to the very key it then registers with;
  * - the answering phone refuses a reveal that is not the commitment it saw before opening, and a
  *   scanned code for another request or commitment, signs only on the exact code, and ends the
@@ -405,6 +409,107 @@ private final class Seen<Value: Sendable>: @unchecked Sendable {
         #expect(!change.deviceApproved)
         #expect(change.problem == "")
         #expect(change.methods == [.device, .totp])
+    }
+
+    @Test func atSignInAnApprovalTheStepNeverJudgedIsKeptAndTheSameAnswerGoesAgain() {
+        let answer = StepAnswer(token: token, proof: .device(requestId: "7c9e6679-7425-40de-944b-e07fc1f90ae7"))
+        let tooMany = "Too many requests. Try again in a moment."
+        // No reply; a 5xx from something in the way (read as lost); the address's own 429; an approval that had not landed.
+        let failures: [(Error, String)] = [
+            (AuthError.message(AuthError.unreachable), AuthError.unreachable),
+            (StepError.lost(StepWords.lostStep), StepWords.lostStep),
+            (StepError.refused(.busy, tooMany), tooMany),
+            (StepError.refused(.pending, "Waiting for your other device."), ""),
+        ]
+        for (failure, words) in failures {
+            var screen = SignInStep(challenge: step([.device, .totp, .backup]), passkeys: false)
+            // Nothing approved yet: the button asks the other device.
+            #expect(!screen.sendsAgain, "\(failure)")
+            screen.approved(answer)
+            // Twice over: a second hiccup costs the approval no more than the first.
+            for _ in 1 ... 2 {
+                #expect(screen.failed(failure, tried: .device, answer: answer) == nil, "\(failure)")
+                #expect(screen.notice == words, "\(failure)")
+                #expect(screen.fieldError == "", "\(failure)")
+                #expect(screen.methods == [.device, .totp, .backup], "\(failure)")
+                // Still this request, and the button sends it: the other device is not asked for another.
+                #expect(screen.deviceApproved && screen.sendsAgain, "\(failure)")
+                #expect(screen.press() == .ready(answer), "\(failure)")
+            }
+            // Another way looked at and left again: the approval is still there to send.
+            screen.choose(.totp)
+            #expect(!screen.sendsAgain, "\(failure)")
+            screen.choose(.device)
+            #expect(screen.sendsAgain, "\(failure)")
+            #expect(screen.press() == .ready(answer), "\(failure)")
+        }
+    }
+
+    @Test func atSignInAnApprovalTheStepRefusedIsGoneAndOnlyAnApprovalIsEverKept() {
+        let answer = StepAnswer(token: token, proof: .device(requestId: "7c9e6679-7425-40de-944b-e07fc1f90ae7"))
+        let all: [StepMethod] = [.device, .totp, .backup]
+        let refusals: [(StepRefusal, [StepMethod])] = [
+            (.wrong, all), (.approvalOver, all), (.approvalRefused, all), (.approvalTaken, all), (.deviceMismatch, all),
+            (.unavailable, [.totp, .backup]), (.deviceUnavailable, [.totp, .backup]),
+        ]
+        for (refusal, left) in refusals {
+            var screen = SignInStep(challenge: step(all), passkeys: false)
+            screen.approved(answer)
+            #expect(screen.failed(StepError.refused(refusal, "Said by the server."), tried: .device, answer: answer) == nil, "\(refusal)")
+            #expect(screen.notice + screen.fieldError == "Said by the server.", "\(refusal)")
+            #expect(screen.methods == left, "\(refusal)")
+            // That approval is not offered to the step again: the other device is asked afresh, or another way used.
+            #expect(!screen.deviceApproved && !screen.sendsAgain, "\(refusal)")
+            if screen.shown == .device { #expect(screen.press() == nil, "\(refusal)") }
+        }
+        // A step that is over takes the approval with it.
+        var over = SignInStep(challenge: step(all), passkeys: false)
+        over.approved(answer)
+        #expect(over.failed(StepError.refused(.expired, "This sign-in timed out."), tried: .device, answer: answer) == "This sign-in timed out.")
+        #expect(!over.deviceApproved)
+        // Nothing was approved: a request that failed while it was still waited on leaves nothing to send, whatever failed.
+        let unasked: [Error] = [StepError.refused(.busy, "Too many requests."), AuthError.message(AuthError.unreachable)]
+        for failure in unasked {
+            var waiting = SignInStep(challenge: step(all), passkeys: false)
+            #expect(waiting.failed(failure, tried: .device, answer: nil) == nil)
+            #expect(!waiting.sendsAgain && waiting.press() == nil)
+        }
+        // An approval for another step's token is not this step's answer.
+        var other = SignInStep(challenge: step(all), passkeys: false)
+        other.approved(StepAnswer(token: String(repeating: "x", count: 43), proof: .device(requestId: "7c9e6679-7425-40de-944b-e07fc1f90ae7")))
+        #expect(!other.deviceApproved && !other.sendsAgain)
+        // Asking the other device again lets a held approval go: the new request is the step's answer, or nothing is.
+        var again = SignInStep(challenge: step(all), passkeys: false)
+        again.approved(answer)
+        _ = again.failed(AuthError.message(AuthError.unreachable), tried: .device, answer: answer)
+        again.asking()
+        #expect(!again.deviceApproved && !again.sendsAgain && again.notice == "")
+    }
+
+    @Test func inAFormAnApprovalOutlivesAChangeThatGotNoVerdictAndGoesWithARefusalTheStepGave() throws {
+        let requestId = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+        func approved() -> StepUp {
+            var change = StepUp(purpose: .password)
+            change.take(step([.device, .totp, .backup]))
+            change.approved(ApprovedRequest(token: token, requestId: requestId))
+            return change
+        }
+        // No reply, a lost one (a 5xx), the address's own 429 as the route says it: none is the step's, and the form's button sends the same request.
+        let notTheSteps: [Error] = [AuthError.message(AuthError.unreachable), StepError.lost(StepWords.lostChange), AuthError.message("Too many requests. Try again in a moment.")]
+        for failure in notTheSteps {
+            var change = approved()
+            #expect(change.failed(failure) == .notStep, "\(failure)")
+            #expect(change.deviceApproved, "\(failure)")
+            #expect(try change.prove() == .ready(StepAnswer(token: token, proof: .device(requestId: requestId))), "\(failure)")
+        }
+        // The step's own refusal of what the change carried: that approval is gone, and there is nothing to send until another is given.
+        for refusal in [StepRefusal.wrong, .approvalOver, .approvalRefused, .unavailable, .deviceUnavailable] {
+            var change = approved()
+            #expect(change.failed(StepError.refused(refusal, "Said by the server.")) == .again, "\(refusal)")
+            #expect(!change.deviceApproved, "\(refusal)")
+            #expect(change.problem == "Said by the server.", "\(refusal)")
+            if change.shown == .device { #expect(throws: StepUp.Unready.self, "\(refusal)") { _ = try change.prove() } }
+        }
     }
 
     @Test func aChangeCarriesOnlyARequestApprovedForItsOwnStep() throws {
@@ -2081,6 +2186,99 @@ extension OnFakeDrive {
             #expect(sent.body["token"] as? String == token)
             #expect((sent.body["proof"] as? [String: String]) == ["kind": "device", "requestId": "7c9e6679-7425-40de-944b-e07fc1f90ae7"])
             #expect(sent.headers["Cookie"] == nil)
+        }
+
+        /* What a route answers when the step never gets to judge the answer: nothing at all, a gateway's page, the address's own 429. */
+        static let noVerdict: [(status: Int, body: String)] = [(0, ""), (502, "<html>Bad gateway</html>"), (429, json(["message": "Too many requests. Try again in a moment."]))]
+        static let stepRefused = "Your other device didn’t approve this. Try again, or use another way."
+
+        @Test func aSignInThatGotNoVerdictAfterTheApprovalSendsTheSameRequestAgainAndAsksTheOtherDeviceForNothing() async throws {
+            let requestId = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+            let said = [AuthError.unreachable, StepWords.lostStep, "Too many requests. Try again in a moment."]
+            for (first, words) in zip(Self.noVerdict, said) {
+                // The approvals routes say the request is approved; the step route fails once, then gives the step's own refusal.
+                let answered = Seen<Bool>()
+                let server = StepServer(200, json: ["state": "approved", "approverKey": random32()])
+                server.script = { body in
+                    if body["commitment"] != nil { return (200, json(["requestId": requestId, "userId": account, "expiresAt": "2026-11-14T10:05:00.000Z"])) }
+                    guard body["proof"] != nil else { return nil }
+                    answered.add(true)
+                    return answered.values.count == 1 ? (first.status, first.body) : (401, json(["message": Self.stepRefused, "code": "step-wrong"]))
+                }
+                serve(server)
+                defer { done() }
+                let pending = PendingSignIn(origin: origin, email: "maya@example.org", challenge: step([.device, .totp]), exportKey: Data(repeating: 1, count: 64))
+                var screen = SignInStep(challenge: pending.challenge, passkeys: false)
+                let ask = try await DeviceAsk.start(wire: .signIn(origin: origin), stepToken: token, purpose: "login", deviceSigningKey: random32(), name: "iPhone")
+                // As the screen does it: the approval is the step's as its answer goes out, and what the answer throws is the step's to judge.
+                let sent = Seen<StepAnswer>()
+                var thrown: Error?
+                do {
+                    _ = try await ask.answered(every: .milliseconds(5)) { answer -> Bool in
+                        sent.add(answer)
+                        _ = try await Auth.answerStep(pending, proof: answer.proof)
+                        return true
+                    }
+                } catch { thrown = error }
+                let answer = try #require(sent.values.first)
+                screen.approved(answer)
+                #expect(screen.failed(try #require(thrown), tried: .device, answer: answer) == nil, "\(first.status)")
+                #expect(screen.notice == words, "\(first.status)")
+                // The button now sends, and does not ask (SignInStepView asks the other device only while this is false).
+                #expect(screen.sendsAgain, "\(first.status)")
+                guard case .ready(let again)? = screen.press() else {
+                    Issue.record("nothing to send again after \(first.status)")
+                    continue
+                }
+                var refused: Error?
+                do { _ = try await Auth.answerStep(pending, proof: again.proof) } catch { refused = error }
+                // One request to the other device, ever; the same request id answered the step both times.
+                #expect(server.requests.filter { $0.method == "POST" && $0.path == "/api/auth/approvals" }.count == 1, "\(first.status)")
+                let answers = server.requests.filter { $0.path == "/api/auth/login/two-step" }
+                #expect(answers.count == 2, "\(first.status)")
+                #expect(answers.allSatisfy { $0.body["token"] as? String == token && ($0.body["proof"] as? [String: String]) == ["kind": "device", "requestId": requestId] }, "\(first.status)")
+                // The step judged it this time: the approval is gone, and the button asks the other device again.
+                #expect(screen.failed(try #require(refused), tried: .device, answer: again) == nil, "\(first.status)")
+                #expect(screen.fieldError == Self.stepRefused, "\(first.status)")
+                #expect(!screen.deviceApproved && !screen.sendsAgain, "\(first.status)")
+            }
+        }
+
+        @Test func aChangeThatGotNoVerdictKeepsItsApprovalAndCarriesTheSameRequestAgain() async throws {
+            let requestId = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+            for first in Self.noVerdict {
+                let server = StepServer(first.status, first.body)
+                serve(server)
+                defer { done() }
+                var change = StepUp(purpose: .twoStep)
+                change.take(step([.device, .totp]))
+                change.approved(ApprovedRequest(token: token, requestId: requestId))
+                // The form's own button, pressed twice: each press sends what the step holds, as a change sends it.
+                func press() async throws -> Error? {
+                    guard case .ready(let answer)? = try change.prove() else { return nil }
+                    do {
+                        _ = try await Auth.call("/api/auth/two-step/backup-codes", method: "POST", body: ["twoStep": try answer.json()], whole: true, lost: StepWords.lostNewCodes)
+                        return nil
+                    } catch {
+                        return error
+                    }
+                }
+                for _ in 1 ... 2 {
+                    let failure = try #require(try await press(), "\(first.status)")
+                    // Not the step's: the form says it as its own error, and the step keeps its approval.
+                    #expect(change.failed(failure) == .notStep, "\(first.status)")
+                    #expect(change.deviceApproved, "\(first.status)")
+                }
+                // The step's own refusal ends that approval.
+                server.status = 401
+                server.body = Data(json(["message": Self.stepRefused, "code": "step-wrong"]).utf8)
+                #expect(change.failed(try #require(try await press())) == .again, "\(first.status)")
+                #expect(!change.deviceApproved, "\(first.status)")
+                #expect(change.problem == Self.stepRefused, "\(first.status)")
+                // Every one of the three carried the one approved request.
+                #expect(server.requests.count == 3, "\(first.status)")
+                #expect(server.requests.allSatisfy { (($0.body["twoStep"] as? [String: Any])?["proof"] as? [String: String]) == ["kind": "device", "requestId": requestId] }, "\(first.status)")
+            }
         }
 
         @Test func aSignInsRequestsCarryNoSessionAndAChangesCarryItsOwn() async throws {

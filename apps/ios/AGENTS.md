@@ -172,6 +172,7 @@ bun run ios:run         # install and launch on the iPhone 18 Pro simulator (SIM
 - In the Files sign-in sheet (an extension that can't refuse them) it stays a secure field with the characters drawn over it (`revealed`).
 - The recovery phrase goes into `PhraseEntry` (no autocorrection, predictions or Writing Tools).
 - An approval's code goes into `CodeEntry` (`ApprovalCodeField`, App/DeviceApproval.swift), a UIKit field for the same reason: no autocorrection, spell checking, capitals, predictions (bar or inline), smart punctuation or Writing Tools. SwiftUI's `TextField` can only say the first three.
+    - While the screen is recorded, mirrored or AirPlayed (`ScreenCapture`), the field and the words offered under it are blurred, as `StepField` is. A code a screen shows (`ShownCode`: the asking panel's, and the one drawn on Approve) is not drawn then, as the authenticator key and the backup codes are not. No unit test: `ScreenCapture` is the app target's, which has none.
 
 ## Screens
 
@@ -390,6 +391,9 @@ Markdown files (`text/markdown`, or `.md`, `.markdown`, `.mdx`) up to 2 MB open 
     - Nothing is asked without a press: the step's button (Use another device) or choosing it under Use another way. Opening a form never sends a prompt. The form's own button then sends the change with the approved request (`StepDraft.approved`, good for its own token only).
     - The key: `StepDeviceKey`. A sign-in that sent its device proof asks with that key; one that sent none makes a key before it has a session and registers with it (`Auth.registerDevice(made:)`). A change asks with the stored key (`DeviceApprovals.ownKey`), and names `device` only when there is one.
     - `twoStepMethods` always names `device` at sign-in (`Auth.namedAtSignIn`).
+    - Once approved, the approval is the step's until the step refuses it (the web's `afterRefusal`; `StepOutcome.keepsApproval`). An answer the step never judged keeps it: no reply, a lost one (a 5xx without the step's code), the address's own 429, `step-pending`. A refusal the step gave drops it.
+        - At sign-in: `SignInStep.approved` as the answer goes out, `deviceApproved`, and `sendsAgain`. The button reads Try again and sends the same request id; the panel says Approved. `SignInStepView` asks the other device only while `sendsAgain` is false: each request is one of the day's five.
+        - In a form: those failures are not the step's (`StepUp.failed` is `.notStep`), `draft.approved` stays and the form's own button sends the same change. A refusal of what the change carried (`step-wrong` included) clears it, and `StepUpModel.failed` lets the request go.
 - Answering (`ApprovalAnswering`): holds the request as first listed, before this phone opened it. A reveal that is not that commitment, or a scanned code for another request or commitment, ends it (`mismatch`) with nothing signed. Only the exact typed code is signed; anything else ends it (`wrong-code`). The account id signed over is the phone's own, never the list reply's.
     - Nothing typed is enough in two cases only, decided in `ApprovalAnswering.check`: after a scan of this very request, and for a request that turns the method on (below). Keep it there, with `noOtherRequestIsApprovedWithNothingTypedAndNothingScanned`.
     - The sheet's own order is `ApprovalAnswer` (HushOSKit): its phases, and what holds it. Waiting for the other device's reveal is not `sending` and holds nothing: Cancel, a swipe, Deny and This wasn’t me work through it. Only an approval or an ending that is out holds the sheet.

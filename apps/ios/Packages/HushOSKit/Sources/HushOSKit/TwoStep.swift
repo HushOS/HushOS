@@ -324,6 +324,25 @@ public enum StepOutcome: Sendable, Equatable {
         }
     }
 
+    /*
+     * Whether another device's approval outlives the failure of the answer that carried it (the
+     * web's `afterRefusal`). It does when the step never judged it:
+     * - `step-pending`: the approval had not landed where the answer went;
+     * - no reply came back, or one that was not the server's (a 5xx from something in the way is
+     *   read as lost);
+     * - the address's own 429: too many requests from here just now.
+     * The same answer goes again for those. Dropping the approval there would send the person back
+     * to their other device for a new one, and spend one of the day's five requests on a hiccup.
+     * A refusal the step itself gave ends it: that approval is not offered to the step again.
+     */
+    public static func keepsApproval(after error: Error) -> Bool {
+        switch error {
+        case StepError.refused(.pending, _), StepError.refused(.busy, _), StepError.lost(_): true
+        case AuthError.message(let words): words == AuthError.unreachable
+        default: ErrorWords.isCancellation(error)
+        }
+    }
+
     /* Nil for a cancellation: nothing failed, and nothing is said. `tried` is the method the refused answer used. */
     public static func after(_ error: Error, methods: [StepMethod], tried: StepMethod? = nil) -> StepOutcome? {
         guard let words = ErrorWords.say(error) else { return nil }
@@ -542,7 +561,7 @@ public struct SignInStep: Sendable, Equatable {
     public private(set) var fieldError = ""
     /* What the server, or a lost reply, said: above the field. */
     public private(set) var notice = ""
-    /* The last reply was lost: the same answer goes again. */
+    /* The last reply was lost: the same answer goes again. Another device's approval that got no verdict is kept in the draft (`deviceApproved`). */
     public private(set) var lost: StepAnswer?
 
     public init(challenge: StepChallenge, passkeys: Bool, device: Bool = true) {
@@ -559,6 +578,14 @@ public struct SignInStep: Sendable, Equatable {
     /* Behind Use another way, in the server's order. */
     public var others: [StepMethod] { methods.filter { $0 != shown } }
     public var note: String { StepOffer.note(challenge, passkeys: passkeys, device: device, flow: .signIn) }
+    /* Whether another device approved a request for this step that the step has not refused since. */
+    public var deviceApproved: Bool { draft.approved?.token == challenge.token }
+    /*
+     * An answer is held, and one press sends it again: a lost reply's, or another device's
+     * approval whose answer the step never judged (`StepOutcome.keepsApproval`). The button reads
+     * Try again, and the other device is not asked for another approval.
+     */
+    public var sendsAgain: Bool { lost != nil || (shown == .device && deviceApproved) }
     /* Why nothing can answer: nothing this build knows was offered (update), or the ways ran out after refusals (updating would not help). */
     public var nothingLeft: String { offered.isEmpty ? StepWords.cannotAnswer : StepWords.noWayLeft }
 
@@ -567,11 +594,25 @@ public struct SignInStep: Sendable, Equatable {
         draft.method = method
     }
 
-    /* The press that asks another device: what the last answer came to is no longer said, as after any other press. */
+    /*
+     * The press that asks another device: what the last answer came to is no longer said, as after
+     * any other press, and an approval of the request before it is no longer this step's answer.
+     */
     public mutating func asking() {
+        draft.approved = nil
         fieldError = ""
         notice = ""
         lost = nil
+    }
+
+    /*
+     * Another device approved the request `answer` names: taken only for this step's own token,
+     * as the answer goes out. It stays the step's answer until the step refuses it (`failed`), so
+     * an answer that got no verdict is sent again and the other device is not asked twice.
+     */
+    public mutating func approved(_ answer: StepAnswer) {
+        guard answer.token == challenge.token, case .device(let requestId) = answer.proof else { return }
+        draft.approved = ApprovedRequest(token: answer.token, requestId: requestId)
     }
 
     /*
@@ -600,9 +641,11 @@ public struct SignInStep: Sendable, Equatable {
     /*
      * What a failed press means. Returns the reason when the step is over (back to the password),
      * nil while it can still be answered. `answer` is what went out, if anything did: a lost reply
-     * offers it again.
+     * offers it again. Another device's approval is kept through a failure the step never judged,
+     * and dropped by any refusal the step gave (`StepOutcome.keepsApproval`).
      */
     public mutating func failed(_ error: Error, tried: StepMethod, answer: StepAnswer?) -> String? {
+        if tried == .device, !StepOutcome.keepsApproval(after: error) { draft.approved = nil }
         lost = nil
         switch StepOutcome.after(error, methods: methods, tried: tried) {
         case .again(let message, let field, let left)?:
@@ -1366,7 +1409,11 @@ public struct StepUp: Sendable, Equatable {
             tried = false
             return .again
         }
+        // Anything that is not the step's own refusal (no reply, a lost one, the address's own 429) leaves the step
+        // as it was, another device's approval included: the form's button sends the same change again.
         guard case StepError.refused(let refusal, let message) = failure else { return .notStep }
+        // The method on screen is the one the refused change carried.
+        let carried = shown
         switch refusal {
         case .required:
             // Asked for the first time: the fields appear, and say nothing yet.
@@ -1378,12 +1425,14 @@ public struct StepUp: Sendable, Equatable {
         case .wrong:
             error = message
             tried = false
+            // An approval the step refused is not offered to it again: the other device is asked afresh, or another way used.
+            if carried == .device { draft.approved = nil }
             return .again
         case .frozen, .limited, .unavailable, .deviceUnavailable, .deviceBusy, .deviceLimited:
             error = message
             tried = false
-            // The method on screen is the one the refused change carried.
-            methods = StepOutcome.left(methods, after: refusal, tried: shown)
+            methods = StepOutcome.left(methods, after: refusal, tried: carried)
+            if carried == .device { draft.approved = nil }
             return .again
         case .pending:
             // The approval had not landed where the change went: nothing was counted and nothing is said. The wait goes on.
