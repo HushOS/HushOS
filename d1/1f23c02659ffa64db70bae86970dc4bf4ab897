@@ -1,0 +1,32 @@
+apps/android/app/src/test/kotlin/com/hushos/app/data/TwoStepTest.kt
+  s_566b8e0c4467a4::t_7a718968340eab 117-140
+  s_566b8e0c4467a4::t_20aef81f19d738 116
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_430e1d5b265f89 231,254,298-299
+apps/android/app/src/main/kotlin/com/hushos/app/data/DeviceApproval.kt
+  s_566b8e0c4467a4::t_14ac2f3d540e25 458-460
+apps/android/app/src/main/kotlin/com/hushos/app/data/TwoStep.kt
+  s_566b8e0c4467a4::t_b136f20ff575c1 503-505,512
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DeviceApprovalUi.kt
+  s_566b8e0c4467a4::t_c834eb890d01aa 606-609,677-678,716-727,812-822,934-935,956-957
+apps/android/app/src/test/kotlin/com/hushos/app/ui/ApprovalInboxTest.kt
+  s_566b8e0c4467a4::t_3060fc6b24623f 43-45,209-294
+apps/android/app/src/test/kotlin/com/hushos/app/ui/DeviceApprovalUiTest.kt
+  s_566b8e0c4467a4::t_e208803e114b48 5,10,39-42,153,383-384,390-393,400-401,405-489
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d11f23c02659ffa64db70bae86970dc4bf4ab897",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
