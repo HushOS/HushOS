@@ -171,6 +171,7 @@ bun run ios:run         # install and launch on the iPhone 18 Pro simulator (SIM
 - The eye shows a password in place by switching the field's secure entry (`ShowablePasswordField`: no autocorrection, predictions or Writing Tools). This is safe only because the app refuses third-party keyboards.
 - In the Files sign-in sheet (an extension that can't refuse them) it stays a secure field with the characters drawn over it (`revealed`).
 - The recovery phrase goes into `PhraseEntry` (no autocorrection, predictions or Writing Tools).
+- An approval's code goes into `CodeEntry` (`ApprovalCodeField`, App/DeviceApproval.swift), a UIKit field for the same reason: no autocorrection, spell checking, capitals, predictions (bar or inline), smart punctuation or Writing Tools. SwiftUI's `TextField` can only say the first three.
 
 ## Screens
 
@@ -398,7 +399,9 @@ Markdown files (`text/markdown`, or `.md`, `.markdown`, `.mdx`) up to 2 MB open 
         - A request listed as already opened (`approverKey`) that this run holds no value for (the app was restarted) is ended without an `open` (`ApprovalProblem.restarted`).
         - Opening again in the same run sends the same value and keeps the commitment seen before the first open.
         - Once ended for any of these, the same `ApprovalAnswering` opens, looks for and signs nothing more.
-    - What is asked is the core's `approvalAsks` with the prompt's `selfNamed`: a device the account does not know reads "a new device calling itself “…”". `chosenLine` is shown under the sheet's title when the asking device named this phone.
+    - What is asked is `ApprovalPrompt.asks()` (HushOSKit), for the sheet's title and Devices' rows: the core's `approvalAsks` with the prompt's `selfNamed` and the day from `deviceAddedAt`, worded by `DayWords.day` ("14 Nov", the year when it is another one), nil when there is none or it is no instant. The core decides whether the day is said.
+        - A device the account does not know reads "a new device calling itself “…”"; a device of an account with no step yet reads "a device calling itself “…”, added 14 Nov".
+        - `chosenLine` is shown under the sheet's title when the asking device named this phone.
     - `ApprovalInbox` (HushOSKit) reads the list when the app comes to the front, every five seconds while Account is on screen, and when a push is shown in the foreground. Home's first row and Devices' rows open `ApprovalSheet` (MainView's sheet).
         - It asks only the approvals routes, on any server. It never follows `TwoStep.status()`'s nil (501): an account that has the step is still asked for it where setup is off.
         - Everything it holds is one session's (prompts, the request being answered, each request as first listed, `ApprovalMemory`). `load()` and `answer()` drop it all the moment the keychain's session is another one, before the in-flight guard, and a reply is used only for the session it was asked under.
@@ -406,17 +409,20 @@ Markdown files (`text/markdown`, or `.md`, `.markdown`, `.mdx`) up to 2 MB open 
 - Settings: `TwoStepStatus.showsDevice`, `deviceValue`, `canTurnOnDevice` (needs a device in `approvers`); Turn off is `RemoveMethodSheet`.
 - Turning it on is `DeviceMethodSheet` over HushOSKit's `DeviceSetup`, which decides what is sent and when the sheet may close.
     - The person chooses the approving device from `TwoStepStatus.approvers`. None is ever chosen for them, even when there is one: a device's name and kind are its own words. Nothing is sent with none chosen: not the pending method, not a request. Every request, Ask again included, carries it (`DeviceAsk.Request.approver`, `approverDeviceId`).
-    - For this one request (`approvalTurnsOn`, never the string compared here) the code runs the other way.
-        - The phone that asks shows no code and no QR code at any state (`DeviceAsk.qr` is nil, `poll` says `opened`, never `code`; the panel says which device to pick up).
-        - The approval alone sends nothing (`DeviceSetup.approved(by:)`). The sheet then asks for "Code on <device>"; `DeviceSetup.confirm(typed:)` checks it against this phone's own code (`DeviceAsk.typed`, the core's `approvalCodeTyped`) and sends it with the confirmation (`deviceConfirmJson`'s `code`), where the server checks again (409 `device-code`, its words).
-        - One try: a code that is not it drops the request here (`DeviceSetup.WrongCode`), nothing is sent, and Ask again asks the same device.
-        - The phone that answers offers no scan and no field: the sheet opens the request as it comes up, Approve signs on the press once the reveal is in, and `approve` hands back the code, shown under "Code for your other device" until Done. `open(scanned:)` refuses such a request without opening it.
+    - 409 `device-busy` from the start (`POST two-step/device`: another session is turning it on) is `DeviceSetup.Busy`, the form's own error in the server's words, on the first step. Never the step's refusal: an account with no step yet has no step fields to show it under (`TwoStep.deviceStarted`).
+    - For this one request (`approvalTurnsOn`, never the string compared here) the code runs the other way, and it is another code: one the approving phone draws. Never the code both devices derive: the asking device holds everything that one is made of, and someone with only the password may be who asked.
+        - The phone that asks shows no code and no QR code at any state, and works none out (`DeviceAsk.qr` and `derived` are nil, `poll` says `opened`, never `code`; the panel says which device to pick up).
+        - The approval alone sends nothing (`DeviceSetup.approved(by:)`). The sheet then asks for "Code on <device>"; `DeviceSetup.confirm(typed:)` sends whatever reads as a code (`approvalCodeNormalize`) with the confirmation (`deviceConfirmJson`'s `code`).
+        - Nothing typed is checked on the asking phone: it has nothing to check a code by, and must never be given something. The server compares with the digest the approval carried, once.
+        - 409 `device-code` (`StepRefusal.deviceCode`, the server's words) drops that request and nothing else: the pending method, its token and the chosen device stand, and Ask again asks the same device for a new code. Not a lost confirmation, and not a reason to go back to the password. Any other refusal ends the setup.
+        - The phone that answers offers no scan and no field: the sheet opens the request as it comes up, and the reveal is checked against the commitment as for any request. On the press of Approve it draws the code (`approvalCodeDraw`), signs the code's digest into the approval (`turnOnCodeDigest`, `deviceTurnOnSign`) and posts the signature and the digest (`approvalTurnOnJson`). The code itself is never sent; it is shown under "Code for your other device" until Done. `open(scanned:)` refuses such a request without opening it.
+        - One code for a request, ever: kept in `ApprovalMemory` beside the value the request was opened with, so Approve pressed again after a lost reply sends the same approval. It goes with the request (`finished`, a mismatch), when the request leaves the list with nobody answering it, and with the session.
     - The confirmation: `confirming` is set before it is sent, the request is not cancelled with the screen's task, and the backup codes are kept in `DeviceSetup.codes` until Done. Cancel and swipe are off while `mayClose` is false. A setup that was closed confirms nothing.
     - A lost confirmation is `StepWords.lostDeviceOn`, and the settings behind are read again. `step-pending` changes nothing and is confirmed again.
     - "Remove my other devices" is offered, ticked, when this turns the step on. It runs behind the codes as the authenticator app's does, with `keep` naming the chosen device (`Devices.removeOthers(password:keep:)`).
 - The Files sign-in sheet still has no step screen.
-- Tests: `DeviceApprovalTests` (an in-memory server that can be made to lie; the web's fixture `web-device-approval.json`).
-- Not checked against a live server or on a device: the sign-in step screen, the settings row and the turn-on sheet's device list and code field in place, the answer sheet's code and Done, the camera scan (the simulator has no camera), and the push.
+- Tests: `DeviceApprovalTests` (an in-memory server that can be made to lie; the web's fixture `web-device-approval.json`, its `turnOn` digest and statement included).
+- Not checked against a live server or on a device: the sign-in step screen, the settings row and the turn-on sheet's device list and code field in place (`CodeEntry`'s keyboard included), the answer sheet's code and Done, the camera scan (the simulator has no camera), and the push.
 
 ### Sign-up
 

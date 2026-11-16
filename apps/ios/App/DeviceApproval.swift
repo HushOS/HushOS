@@ -11,8 +11,8 @@ import VisionKit
  * (`DeviceAsk`, `ApprovalAnswering`, `ApprovalAnswer`); nothing here decides what is revealed,
  * approved or signed, nor what holds the sheet.
  *
- * Turning the method on runs the code the other way: the asking panel shows no code and no QR
- * code, and the answering sheet shows the code once it approved.
+ * Turning the method on is answered the other way round: the asking panel shows no code and no
+ * QR code, and the answering sheet shows the code this iPhone drew when Approve was pressed.
  */
 
 /* MARK: Asking */
@@ -40,7 +40,7 @@ final class DeviceAskModel {
     /* What a request is made from; turning the method on, it names the device the person chose (HushOSKit). */
     typealias Request = DeviceAsk.Request
 
-    /* The answer, and the request itself: turning the method on, the approval answers nothing, and the request checks the code typed afterwards. */
+    /* The answer, and the request itself: turning the method on, the approval answers nothing, and the code typed afterwards is sent with the request's id. */
     typealias Approved = @MainActor @Sendable (StepAnswer, DeviceAsk) async throws -> Void
     typealias Failed = @MainActor @Sendable (Error) -> Void
 
@@ -244,7 +244,8 @@ struct ApprovalRow: View {
 /*
  * Where a code from another device's screen is typed: two digits and a word, with the words the
  * typed beginning could become offered beneath. The answer sheet's field, and the one the code is
- * typed into where the method is turned on.
+ * typed into where the method is turned on. The field itself is `CodeEntry`, which teaches the
+ * keyboard nothing; the words offered beneath are the app's own, from the core's list.
  */
 struct ApprovalCodeField: View {
     let label: String
@@ -263,9 +264,7 @@ struct ApprovalCodeField: View {
 
     var body: some View {
         Section {
-            TextField("47 river", text: Binding(get: { typed }, set: { typed = String($0.prefix(24)); edited() }))
-                .font(.title3.monospaced()).foregroundStyle(Alpine.ink).keyboardType(.asciiCapable).textInputAutocapitalization(.never).autocorrectionDisabled()
-                .submitLabel(.done).disabled(disabled).accessibilityLabel(label).alpineRow()
+            CodeEntry(label: label, typed: $typed, edited: edited).disabled(disabled).alpineRow()
             if !completions.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: Alpine.Space.s2) {
@@ -284,13 +283,88 @@ struct ApprovalCodeField: View {
 }
 
 /*
+ * The field a code is typed in. A UIKit field, because SwiftUI's has no way to say all of it: no
+ * autocorrection, spell checking, capitals, predictions (the bar or inline), smart punctuation or
+ * Writing Tools, as `PhraseEntry` and a shown password. So the keyboard neither learns the code's
+ * word nor offers what it learned elsewhere, and nothing typed here goes to a model. The app
+ * refuses third-party keyboards (AppDelegate).
+ */
+private struct CodeEntry: UIViewRepresentable {
+    let label: String
+    @Binding var typed: String
+    let edited: () -> Void
+
+    /* Longer than any code as people type one, spaces and a hyphen included. */
+    private static let longest = 24
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> UITextField {
+        let field = UITextField()
+        field.delegate = context.coordinator
+        field.font = UIFontMetrics(forTextStyle: .title3).scaledFont(for: .monospacedSystemFont(ofSize: 20, weight: .regular))
+        field.adjustsFontForContentSizeCategory = true
+        field.textColor = UIColor(Alpine.ink)
+        field.placeholder = "47 river"
+        field.keyboardType = .asciiCapable
+        field.returnKeyType = .done
+        field.textContentType = nil
+        field.autocorrectionType = .no
+        field.spellCheckingType = .no
+        field.autocapitalizationType = .none
+        field.inlinePredictionType = .no
+        field.smartQuotesType = .no
+        field.smartDashesType = .no
+        field.smartInsertDeleteType = .no
+        field.writingToolsBehavior = .none
+        field.allowedWritingToolsResultOptions = []
+        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        field.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .editingChanged)
+        return field
+    }
+
+    func updateUIView(_ field: UITextField, context: Context) {
+        context.coordinator.parent = self
+        // A word chosen beneath, or the field cleared for another try.
+        if field.text != typed { field.text = typed }
+        field.accessibilityLabel = label
+        field.isEnabled = context.environment.isEnabled
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView field: UITextField, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? field.intrinsicContentSize.width, height: field.intrinsicContentSize.height)
+    }
+
+    final class Coordinator: NSObject, UITextFieldDelegate {
+        var parent: CodeEntry
+        init(_ parent: CodeEntry) { self.parent = parent }
+
+        @objc func changed(_ field: UITextField) {
+            let kept = String((field.text ?? "").prefix(CodeEntry.longest))
+            if field.text != kept { field.text = kept }
+            guard parent.typed != kept else { return }
+            parent.typed = kept
+            parent.edited()
+        }
+
+        func textFieldShouldReturn(_ field: UITextField) -> Bool {
+            field.resignFirstResponder()
+            return true
+        }
+    }
+}
+
+/*
  * Answering a request. Scan the other screen's QR code, and this iPhone checks that it is this
  * very request before anything is asked; or type the code that screen shows. Only then Approve.
  * Deny and This wasn’t me end it at any point. Anything that does not match ends it and says so.
  *
  * A request that turns the method on is the other way round: nothing is scanned or typed, this
- * iPhone approves on a press once the other device revealed, and then shows the code for the
- * person to type there, until Done.
+ * iPhone approves on a press once the other device revealed, drawing a code of its own as it
+ * does, and then shows that code for the person to type there, until Done. Nothing the other
+ * device holds gives the code, so whoever turns the method on has read this screen. The title
+ * says the asking device's name is its own word, and the day it was added.
  *
  * What is on screen, and what holds the sheet, is HushOSKit's `ApprovalAnswer`: waiting for the
  * other device never does, only an approval or an ending that is out.
@@ -355,7 +429,7 @@ struct ApprovalSheet: View {
                 case .confirm:
                     approveRow(disabled: answer.sending) { answer.approve() }
                 case .shown(let code):
-                    // Approved: the code is this iPhone's to show, and stays until Done.
+                    // Approved: the code this iPhone drew is its to show, and stays until Done.
                     Section {
                         VStack(spacing: Alpine.Space.s2) {
                             Text(StepWords.askCode).font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.ink)

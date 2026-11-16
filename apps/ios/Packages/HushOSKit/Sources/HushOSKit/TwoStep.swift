@@ -250,11 +250,10 @@ public enum StepWords {
     /* Turning it on: the person says which of their devices is to approve. */
     public static let approverHeading = "Device that will approve"
     public static let chooseApprover = "Choose the device that will approve."
-    /* Once that device approved: its code is typed on the phone turning the method on. One try. */
+    /* Once that device approved: the code it drew and shows is typed on the phone turning the method on. One try for a request; whether it matched is the server's to say, in its words. */
     public static func codeOn(_ device: String) -> String { "Code on \(device)" }
     public static let turnOn = "Turn on"
     public static let add = "Add"
-    public static let turnOnWrongCode = "That code didn’t match, so nothing was turned on."
     /* On the device that approved such a request, under the code it then shows. */
     public static let done = "Done"
     public static func approveOn(_ device: String) -> String { "Approve on \(device)" }
@@ -281,7 +280,7 @@ public enum StepError: Error, LocalizedError, Sendable, Equatable {
         switch refusal {
         case .wrong, .expired, .frozen, .limited, .unavailable, .required, .setupRequired, .updateRequired: true
         // Approving on another device: each is the step's own, whichever route said it.
-        case .pending, .deviceUnavailable, .deviceBusy, .deviceLimited, .deviceChoice, .deviceMismatch, .approvalOver, .approvalTaken, .approvalRefused: true
+        case .pending, .deviceUnavailable, .deviceBusy, .deviceLimited, .deviceChoice, .deviceMismatch, .deviceCode, .approvalOver, .approvalTaken, .approvalRefused: true
         case .busy, .other: false
         }
     }
@@ -344,9 +343,9 @@ public enum StepOutcome: Sendable, Equatable {
             case .pending:
                 // The other device has not approved yet: nothing was counted, nothing failed, and nothing is said.
                 return .again(message: "", field: false, methods: methods)
-            case .deviceChoice, .deviceMismatch, .approvalOver, .approvalTaken, .approvalRefused:
-                // A request to another device ended, or (turning the method on) named no device to ask. The step's
-                // token is as it was, and every way is still there.
+            case .deviceChoice, .deviceMismatch, .deviceCode, .approvalOver, .approvalTaken, .approvalRefused:
+                // A request to another device ended, or (turning the method on) named no device to ask, or was confirmed
+                // with a code that was not that device's. The step's token is as it was, and every way is still there.
                 return .again(message: message, field: false, methods: methods)
             case .expired, .required, .setupRequired, .updateRequired, .other:
                 return .over(message: message.isEmpty ? StepWords.over : message)
@@ -1389,7 +1388,7 @@ public struct StepUp: Sendable, Equatable {
             tried = false
             draft.approved = nil
             return .again
-        case .deviceChoice, .deviceMismatch, .approvalOver, .approvalTaken, .approvalRefused:
+        case .deviceChoice, .deviceMismatch, .deviceCode, .approvalOver, .approvalTaken, .approvalRefused:
             // The request to the other device ended, or was not made; the step itself still stands, and can be asked again.
             error = message
             tried = false

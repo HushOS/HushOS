@@ -675,7 +675,7 @@ struct TwoStepView: View {
     }
 
     /* "13 Nov", and the minute as the emails carry it: "13 Nov, 14:08". */
-    fileprivate static func day(_ date: Date) -> String { date.formatted(Date.FormatStyle().day().month(.abbreviated).locale(.dayMonth)) }
+    fileprivate static func day(_ date: Date) -> String { DayWords.day(date) }
     private static func when(_ date: Date) -> String { "\(day(date)), \(date.formatted(date: .omitted, time: .shortened))" }
 
     private func finish(_ said: String) {
@@ -1326,11 +1326,14 @@ struct KeySheet: View {
  * The list alone proves nothing: a device's name and kind are its own words, and someone with the
  * password can sign in as "Maya’s iPhone". So none is ever chosen for the person, this iPhone
  * shows no code and no QR code for the request, and the approval is not enough: the device that
- * approved shows a code, and it is typed here. A device they are not holding shows nothing to type.
+ * approved draws a code and shows it, and it is typed here. A device they are not holding shows
+ * nothing to type. This iPhone has nothing to check the code against (it is in nothing the
+ * server sends here), so it goes as typed and the server compares, once: a wrong one ends that
+ * request, and the same device is asked again for a new code.
  *
  * What may be sent when, and when the sheet may close, is HushOSKit's `DeviceSetup`: nothing goes
- * out with no device chosen, nothing on the approval alone, nothing with a code that is not the
- * request's, and nothing closes the sheet over a confirmation that is out.
+ * out with no device chosen, nothing on the approval alone, and nothing closes the sheet over a
+ * confirmation that is out.
  */
 struct DeviceMethodSheet: View {
     let email: String
@@ -1345,7 +1348,7 @@ struct DeviceMethodSheet: View {
     @State private var asking = DeviceAskModel()
     /* The code the approving device shows, as it is typed here. */
     @State private var code = ""
-    /* The typed code is being checked, here and then by the server. */
+    /* The typed code is with the server, which alone can check it. */
     @State private var checking = false
 
     /* `first`: the account has no method yet, so this turns the step on. `approvers`: the devices that could approve, as the settings listed them. */
@@ -1374,12 +1377,12 @@ struct DeviceMethodSheet: View {
                         dismiss()
                     }
                 } else if asked, setup.awaitsCode || setup.confirming {
-                    // That device approved: it now shows the code, and it is typed here. Nothing was sent on the approval.
+                    // That device approved: it now shows the code it drew, and it is typed here. Nothing was sent on the approval.
                     ApprovalCodeField(label: StepWords.codeOn(setup.chosen?.shownName ?? ""), typed: $code, disabled: checking) { error = "" }
                     FormProblem(text: error)
                     primaryRow(checking ? "Checking" : setup.first ? StepWords.turnOn : StepWords.add, disabled: checking || approvalCodeNormalize(typed: code) == nil) { confirm() }
                 } else if asked, asking.idle {
-                    // The code typed was not that device's: its request was dropped here, and nothing was sent.
+                    // The server said the code typed was not that device's: that request is over, and the setup stands.
                     FormProblem(text: error)
                     primaryRow(StepWords.askAgain, disabled: false) { ask() }
                 } else if asked {
@@ -1496,10 +1499,10 @@ struct DeviceMethodSheet: View {
     }
 
     /*
-     * Turn on, or Add: the code is checked against the one this iPhone worked out, and only then
-     * sent with the confirmation. The confirmation is marked as out before it goes, and its answer
-     * is the setup's to keep: neither this task nor the sheet holds the backup codes. The other
-     * devices go behind them, and a failure there is a notice.
+     * Turn on, or Add: the code goes with the confirmation as it was typed, and the server says
+     * whether it is the approving device's. The confirmation is marked as out before it goes, and
+     * its answer is the setup's to keep: neither this task nor the sheet holds the backup codes.
+     * The other devices go behind them, and a failure there is a notice.
      */
     private func confirm() {
         guard !checking else { return }
@@ -1527,16 +1530,17 @@ struct DeviceMethodSheet: View {
                 } catch StepError.refused(.pending, _) {
                     // The approval had not landed where the confirmation went: nothing changed, and the same one goes again.
                     try? await Task.sleep(for: .seconds(2))
-                } catch let wrong as DeviceSetup.WrongCode {
-                    // One try. The request is dropped here; Ask again makes another to the same device.
+                } catch StepError.refused(.deviceCode, let message) {
+                    // One try for a request, and the server's words for it. The setup dropped that request and nothing
+                    // else: Ask again makes another to the same device, under the same token, for a new code.
                     asking.stop()
                     code = ""
-                    error = wrong.errorDescription ?? ErrorWords.generic
+                    error = message.isEmpty ? ErrorWords.generic : message
                     return
                 } catch {
                     // Let go meanwhile: nothing was confirmed, and there is nothing to say.
                     if ErrorWords.isCancellation(error) { return }
-                    // The server's refusal (a code it did not agree with, in its words) or a lost reply, which says so.
+                    // Any other refusal, in the server's words, or a lost reply, which says so.
                     back(ErrorWords.say(error))
                     return
                 }
