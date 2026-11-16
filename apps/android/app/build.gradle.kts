@@ -108,7 +108,7 @@ android {
         targetSdk = 36
         versionCode = buildNumber
         // The product version (the root package.json): the release pull request sets it.
-        versionName = "1.7.0" // x-release-please-version
+        versionName = "1.8.0" // x-release-please-version
         for ((field, value) in firebaseOptions) buildConfigField("String", field, "\"${value.replace("\"", "")}\"")
         // Read by check-bundle.sh: a bundle for Play must carry notifications.
         manifestPlaceholders["pushConfigured"] = (firebaseMissing.isEmpty()).toString()
