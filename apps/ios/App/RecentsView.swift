@@ -45,6 +45,12 @@ struct HomeView: View {
     var body: some View {
         NavigationStack {
             List {
+                // Another device is asking this one to confirm it's you: said first, with the way to answer.
+                if let asked = ApprovalInbox.shared.prompts.first {
+                    Section {
+                        ApprovalRow(text: StepWords.approvalWaiting) { ApprovalInbox.shared.answer(asked) }
+                    }
+                }
                 if firstRun {
                     Section {
                         EmptyStateView(title: "Nothing here yet", message: "Files you add or change show up here.") {

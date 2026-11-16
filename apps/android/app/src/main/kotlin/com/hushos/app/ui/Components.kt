@@ -283,7 +283,7 @@ val LocalFootBars = androidx.compose.runtime.compositionLocalOf { 0.dp }
  */
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-fun Sheet(onDismissRequest: () -> Unit, full: Boolean = false, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
+fun Sheet(onDismissRequest: () -> Unit, full: Boolean = false, secure: Boolean = false, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
     val alpine = Alpine.colors
     // Whether the keyboard is up in the sheet's own window, where its fields are: read inside, kept here.
     val keyboard = remember { androidx.compose.runtime.mutableStateOf(false) }
@@ -306,6 +306,10 @@ fun Sheet(onDismissRequest: () -> Unit, full: Boolean = false, content: @Composa
         // Dark: a deeper backdrop, so a field behind the sheet's top never reads as a second sheet (owner, 2026-11-01).
         scrimColor = if (alpine.dark) androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.6f) else androidx.compose.material3.BottomSheetDefaults.ScrimColor,
         modifier = Modifier.onSizeChanged { sheetPx = it.height },
+        // `secure`: a sheet is a window of its own, which `SecureWindow` on the page behind does not reach. One that
+        // shows or takes a secret keeps itself out of screenshots, recordings and the recents preview.
+        properties = if (secure) androidx.compose.material3.ModalBottomSheetProperties(securePolicy = androidx.compose.ui.window.SecureFlagPolicy.SecureOn)
+            else androidx.compose.material3.ModalBottomSheetDefaults.properties,
     ) {
         val open = WindowInsets.isImeVisible
         androidx.compose.runtime.SideEffect { keyboard.value = open }
@@ -464,7 +468,11 @@ internal fun sensitiveClip(label: String, text: String): android.content.ClipDat
         }
     }
 
-/* Keeps the window out of screenshots, screen recordings and the recents preview while it shows a recovery phrase. */
+/*
+ * Keeps the window out of screenshots, screen recordings and the recents preview while it shows a secret: a recovery
+ * phrase, an authenticator key, backup codes, or a code that passes a second step. The activity's window: a dialog or
+ * a sheet is a window of its own and sets its own `securePolicy`.
+ */
 @Composable
 internal fun SecureWindow() {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -472,8 +480,10 @@ internal fun SecureWindow() {
         generateSequence(context) { (it as? android.content.ContextWrapper)?.baseContext }.filterIsInstance<android.app.Activity>().firstOrNull()?.window
     }
     androidx.compose.runtime.DisposableEffect(window) {
+        // A window that was secure already (the file picker's sign-in is, for its whole life) is left that way afterwards.
+        val was = window != null && (window.attributes.flags and android.view.WindowManager.LayoutParams.FLAG_SECURE) != 0
         window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
-        onDispose { window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE) }
+        onDispose { if (!was) window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE) }
     }
 }
 

@@ -76,9 +76,16 @@ describe('a sign-in’s reply', () => {
     });
 
     test('a step offers only what this client can answer', () => {
-        // Another device, which this client cannot use yet, is not offered; and since the
-        // server put it first, the account's usual way is not on offer here.
+        // Another device needs nothing the reply carries, and keeps the server's place for it.
         expect(readLoginReply({ twoStep: { ...step(), methods: ['device', 'totp'] } })).toEqual({
+            kind: 'step',
+            challenge: { ...step(), methods: ['device', 'totp'] },
+        });
+        // A way this client does not know is not offered; and since the server put it first,
+        // the account's usual way is not on offer here.
+        expect(
+            readLoginReply({ twoStep: { ...step(), methods: ['a-way-from-later', 'totp'] } }),
+        ).toEqual({
             kind: 'step',
             challenge: { ...step(), methods: ['totp'], defaultUnavailable: true },
         });
@@ -111,7 +118,9 @@ describe('a sign-in’s reply', () => {
             });
         // Nothing it can answer is still a step: the page says to update, it does not sign in.
         expect(
-            readLoginReply({ twoStep: { ...step(), methods: ['device'], phrase: undefined } }),
+            readLoginReply({
+                twoStep: { ...step(), methods: ['a-way-from-later'], phrase: undefined },
+            }),
         ).toEqual({
             kind: 'step',
             challenge: {

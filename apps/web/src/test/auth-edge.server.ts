@@ -165,11 +165,14 @@ export async function loadEdge(
             origin?: string;
             enrollment?: string;
             api?: string;
+            /* Anything else a client sends, such as a step token where it only reads. */
+            headers?: Record<string, string>;
         } = {},
     ): Promise<Reply> {
         const init: RequestInit = {
             method,
             headers: {
+                ...options.headers,
                 origin: options.origin ?? ORIGIN,
                 ...(body === undefined ? {} : { 'content-type': 'application/json' }),
                 ...(options.cookie ? { cookie: `hushos-session=${options.cookie}` } : {}),

@@ -43,6 +43,11 @@ export const NOTIFICATION_KINDS = {
     'two-step-key-added': 'security',
     'two-step-key-removed': 'security',
     'key-counter': 'security',
+    // Approving on another device (docs/two-step-design.md 12): the method's own notices, and the
+    // prompt an approving device is pinged for.
+    'two-step-device-added': 'security',
+    'two-step-device-removed': 'security',
+    'approval-request': 'security',
     shared: 'other',
     'family-invitation': 'other',
     'family-waiting': 'other',
@@ -73,6 +78,10 @@ export type NotificationData = {
     'two-step-key-added': Record<string, never>;
     'two-step-key-removed': Record<string, never>;
     'key-counter': Record<string, never>;
+    'two-step-device-added': Record<string, never>;
+    'two-step-device-removed': Record<string, never>;
+    /* Nothing: the device asks for the requests it may answer over its own session. */
+    'approval-request': Record<string, never>;
     shared: { granterUserId: string; shareId: string; role: 'viewer' | 'editor' };
     'family-invitation': { groupId: string; invitationId: string };
     'family-waiting': { groupId: string };
@@ -185,10 +194,20 @@ export const notificationEvents = pgTable(
             .references(() => users.id, { onDelete: 'cascade' }),
         kind: text().$type<NotificationKind>().notNull(),
         data: jsonb().$type<Record<string, unknown>>().notNull().default({}),
+        /*
+         * The one device this event is for, or null for every device of the account. A request
+         * that turns Approve on another device on is the chosen device's alone: no other is
+         * pinged for it, listed it or shown it.
+         */
+        deviceId: uuid('device_id').references(() => accountDevices.id, { onDelete: 'cascade' }),
         createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     },
     (table) => [
         index('notification_events_user_seq_idx').on(table.userId, table.seq),
+        // Behind the device's on-delete-cascade.
+        index('notification_events_device_idx')
+            .on(table.deviceId)
+            .where(sql`${table.deviceId} is not null`),
         index('notification_events_created_idx').on(table.createdAt),
         check('notification_events_kind_valid', sql.raw(`kind in (${kinds})`)),
     ],

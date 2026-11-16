@@ -793,7 +793,10 @@ describe('the default', () => {
         );
         // A kind the server does not offer as a default is refused by the route itself.
         expect((await set('backup')).status).toBe(400);
-        expect((await set('device')).status).toBe(400);
+        // Another device can be the default, but only for an account that has the method:
+        // this one does not, so nothing moves.
+        expect((await set('device')).status).toBe(404);
+        expect((await settings(cookie)).defaultKind).toBe('webauthn');
     });
 
     test('only a session that passed the step changes it, and only to a kind the account has', async () => {

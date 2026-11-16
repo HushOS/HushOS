@@ -29,7 +29,16 @@ export type TokenKind = 'session' | 'enrollment';
  *   finish account setup first;
  * - `limit`: the account has as many passkeys and security keys as it may;
  * - `exists`: that passkey or security key is already on the account;
- * - `key-refused`: a key's registration did not verify, and its one answer is used up.
+ * - `key-refused`: a key's registration did not verify, and its one answer is used up;
+ * - `step-pending`: another device has not approved yet; nothing was looked at or counted;
+ * - `device-limited`, `device-busy`, `device-unavailable`: another device cannot be asked
+ *   now (the day's requests are spent; another sign-in's request is being answered; no device
+ *   could approve);
+ * - `device-choice`: turning the method on did not say which device is to approve;
+ * - `device-mismatch`: what the asking device revealed is not what it committed to;
+ * - `device-code`: the code typed to turn the method on is not the one the approving device shows;
+ * - `approval-over`, `approval-taken`, `approval-refused`: a request an approving device
+ *   can no longer answer, one another device is answering, and a signature that did not verify.
  */
 export type AuthErrorCode =
     | 'current'
@@ -45,7 +54,17 @@ export type AuthErrorCode =
     | 'setup-required'
     | 'limit'
     | 'exists'
-    | 'key-refused';
+    | 'key-refused'
+    | 'step-pending'
+    | 'device-limited'
+    | 'device-busy'
+    | 'device-unavailable'
+    | 'device-choice'
+    | 'device-mismatch'
+    | 'device-code'
+    | 'approval-over'
+    | 'approval-taken'
+    | 'approval-refused';
 
 export class AuthError extends Error {
     readonly code?: AuthErrorCode;

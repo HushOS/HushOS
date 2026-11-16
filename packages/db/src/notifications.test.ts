@@ -74,6 +74,46 @@ describe('pings', () => {
         expect(await notifications.dropRevokedRegistrations()).toBe(1);
     });
 
+    test('an event for one device pings that device only, and no other is handed it', async () => {
+        const owner = await registered('A');
+        // Two more of the account's devices, each registered: the one the event is for, and another.
+        const [chosen, other] = [await device(owner.userId), await device(owner.userId)];
+        for (const [deviceId, letter] of [
+            [chosen, 'B'],
+            [other, 'C'],
+        ] as const)
+            await notifications.putRegistration({
+                userId: owner.userId,
+                deviceId,
+                target: { handle: handle(letter) },
+            });
+        const sent = await notifications.recordEvent({
+            userId: owner.userId,
+            kind: 'approval-request',
+            onlyDeviceId: chosen,
+        });
+        // A security notice goes to every device; this one names its device, and goes there alone.
+        expect(sent!.handles).toEqual([handle('B')]);
+        const listed = async (deviceId: string) =>
+            (await notifications.listPending(owner.userId, deviceId)).events.map(({ id }) => id);
+        expect(await listed(chosen)).toEqual([sent!.id]);
+        for (const deviceId of [owner.deviceId, other]) {
+            expect(await listed(deviceId)).toEqual([]);
+            // Not by its id either, should the id reach it another way.
+            expect(await notifications.getEvent(owner.userId, sent!.id, deviceId)).toBeNull();
+        }
+        expect((await notifications.getEvent(owner.userId, sent!.id, chosen))?.id).toBe(sent!.id);
+        // An event for the account still reaches all three.
+        const all = await notifications.recordEvent({ userId: owner.userId, kind: 'new-device' });
+        expect([...all!.handles].sort()).toEqual([handle('A'), handle('B'), handle('C')].sort());
+        expect(await listed(other)).toEqual([all!.id]);
+        // The device goes, and its event with it.
+        await db.delete(accountDevices).where(eq(accountDevices.id, chosen));
+        expect(
+            await db.select().from(notificationEvents).where(eq(notificationEvents.id, sent!.id)),
+        ).toEqual([]);
+    });
+
     test('signing a device out ends its registration', async () => {
         const owner = await registered('A');
         const tokenHash = Buffer.alloc(32, 7);
@@ -105,7 +145,7 @@ describe('pings', () => {
         expect((await record(30))!.handles).toEqual([]);
         // A fetch by id alone does not answer the ping: the device has not seen the rest.
         const waiting = await record(40);
-        await notifications.getEvent(owner.userId, waiting!.id);
+        await notifications.getEvent(owner.userId, waiting!.id, owner.deviceId);
         expect((await record(50))!.handles).toEqual([]);
         // A minute after the ping, the next goes anyway.
         expect((await record(61))!.handles).toEqual([handle('A')]);
@@ -171,11 +211,15 @@ describe('fetching', () => {
         const owner = await registered('A');
         const stranger = await registered('B');
         const event = await notifications.recordEvent({ userId: owner.userId, kind: 'new-device' });
-        expect(await notifications.getEvent(stranger.userId, event!.id)).toBeNull();
+        expect(
+            await notifications.getEvent(stranger.userId, event!.id, stranger.deviceId),
+        ).toBeNull();
         expect(
             (await notifications.listPending(stranger.userId, stranger.deviceId)).events,
         ).toEqual([]);
-        expect((await notifications.getEvent(owner.userId, event!.id))?.kind).toBe('new-device');
+        expect((await notifications.getEvent(owner.userId, event!.id, owner.deviceId))?.kind).toBe(
+            'new-device',
+        );
     });
 
     test('a device’s list starts at its registration and hands each event once, oldest first', async () => {
@@ -215,7 +259,7 @@ describe('fetching', () => {
             .select({ id: notificationEvents.id })
             .from(notificationEvents)
             .limit(1);
-        expect(await notifications.getEvent(owner.userId, one!.id)).toBeNull();
+        expect(await notifications.getEvent(owner.userId, one!.id, owner.deviceId)).toBeNull();
         expect(await notifications.purgeExpiredEvents(2)).toBe(5);
         expect(await db.select().from(notificationEvents)).toEqual([]);
     });

@@ -67,9 +67,16 @@ export async function notify<K extends NotificationKind>(
     userId: string,
     kind: K,
     data: NotificationData[K],
+    /* The one device the event is for: no other is pinged for it or handed it. */
+    onlyDeviceId?: string | null,
 ) {
     if (!notificationsEnabled()) return null;
-    const recorded = await notificationsRepository.recordEvent({ userId, kind, data });
+    const recorded = await notificationsRepository.recordEvent({
+        userId,
+        kind,
+        data,
+        onlyDeviceId,
+    });
     if (!recorded) return null;
     const [pinged, pushed] = await Promise.all([
         pingRelay(recorded.handles, recorded.id, recorded.class),
@@ -243,8 +250,8 @@ function eventView(event: notificationsRepository.NotificationEvent): Notificati
 
 /* GET /api/notifications/:id: the event a push named. Any other id, or one past 30 days, is 404. */
 export async function getNotification(sessionToken: string | null, id: string) {
-    const { userId } = await requireDevice(sessionToken);
-    const event = await notificationsRepository.getEvent(userId, id);
+    const { userId, deviceId } = await requireDevice(sessionToken);
+    const event = await notificationsRepository.getEvent(userId, id, deviceId);
     if (!event) throw new AuthError('This notification is gone.', 404);
     return { notification: eventView(event) };
 }

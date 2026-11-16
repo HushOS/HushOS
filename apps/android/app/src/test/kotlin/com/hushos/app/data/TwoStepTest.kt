@@ -114,6 +114,31 @@ class TwoStepTest {
     }
 
     @Test
+    fun aSpentCodeBudgetStillOffersAnotherDeviceWithTheKeyAndThePhraseInTheOrderOffered() {
+        // `step-limited` counts the app's codes and the backup codes. Approving on another device has budgets of its own
+        // (`device-limited`) and is not counted in it, like a key: someone locked out of codes can still be let in by their phone.
+        val limited = StepRefused(StepRefusal.LIMITED, "Too many wrong codes. Try again in 15 minutes, or use your recovery phrase.")
+        val offered = listOf(StepMethod.TOTP, StepMethod.BACKUP, StepMethod.WEBAUTHN, StepMethod.DEVICE, StepMethod.PHRASE)
+        val left = listOf(StepMethod.WEBAUTHN, StepMethod.DEVICE, StepMethod.PHRASE)
+        for (tried in listOf(StepMethod.TOTP, StepMethod.BACKUP))
+            assertEquals(StepOutcome.Again(limited.message!!, false, left), StepOutcome.after(limited, offered, tried))
+        // The server's order is the order kept, whichever it was.
+        assertEquals(
+            listOf(StepMethod.DEVICE, StepMethod.PHRASE, StepMethod.WEBAUTHN),
+            StepOutcome.left(listOf(StepMethod.DEVICE, StepMethod.TOTP, StepMethod.PHRASE, StepMethod.BACKUP, StepMethod.WEBAUTHN), StepRefusal.LIMITED, StepMethod.BACKUP),
+        )
+        // The same inside a form, where the other device is then the way shown when it was offered first of what is left.
+        val (next, narrowed) = StepUp(StepPurpose.PASSWORD).take(challenge(listOf(StepMethod.TOTP, StepMethod.DEVICE, StepMethod.BACKUP, StepMethod.PHRASE))).failed(limited)
+        assertEquals(StepUp.Next.AGAIN, next)
+        assertEquals(listOf(StepMethod.DEVICE, StepMethod.PHRASE), narrowed.methods)
+        assertEquals(StepMethod.DEVICE, narrowed.shown)
+        // With only codes and another device, the device is what is left: the form is not out of ways.
+        assertEquals(listOf(StepMethod.DEVICE), StepOutcome.left(listOf(StepMethod.TOTP, StepMethod.BACKUP, StepMethod.DEVICE), StepRefusal.LIMITED, StepMethod.TOTP))
+        // And the other device's own budget takes only the other device: the codes stay.
+        assertEquals(offered - StepMethod.DEVICE, StepOutcome.left(offered, StepRefusal.DEVICE_LIMITED, StepMethod.DEVICE))
+    }
+
+    @Test
     fun aMethodTheServerCannotCheckIsWithdrawnAloneAndTheOthersStayOffered() {
         // `step-unavailable` is per method: the app's secret and the backup codes can sit under different server keys.
         // Withdrawing both for one would send someone to their recovery phrase while a backup code still works.
@@ -836,7 +861,7 @@ class TwoStepTest {
         // The default's line names the kind it moved to, which is the event's method.
         assertEquals("Default changed to passkey or security key", words("default-changed", "webauthn"))
         assertEquals("Default changed to authenticator app", words("default-changed", "totp"))
-        assertEquals("Default changed", words("default-changed", "device"))
+        assertEquals("Default changed", words("default-changed", "something-later"))
         assertEquals("Default changed", words("default-changed"))
         assertEquals("A security key was refused: it may have been copied", words("key-counter", "webauthn"))
         assertEquals("Second-step method removed", words("method-removed"))

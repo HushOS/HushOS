@@ -18,6 +18,9 @@ const login =
     >();
 const answerStep = vi.fn<(answer: unknown) => Promise<void>>();
 const cancelStep = vi.fn<(owner?: object) => void>();
+/* Asking another device: the request it makes, and where it stands each time it is looked at. */
+const askAnotherDevice =
+    vi.fn<(challenge: { token: string }, purpose: string) => Promise<unknown>>();
 /* The auth client's store, as far as a lock shows in it: a lock or a sign-out, here or in another tab. */
 const locks = (() => {
     let state = { lockRevision: 1, locks: 0 };
@@ -42,6 +45,8 @@ vi.mock('@/lib/auth-client', () => ({
         answerStep: (answer: unknown) => answerStep(answer),
         // Leaving the form lets go of a sign-in waiting at its second step.
         cancelStep: (owner?: object) => cancelStep(owner),
+        askAnotherDevice: (challenge: { token: string }, purpose: string) =>
+            askAnotherDevice(challenge, purpose),
         canUsePasskeys: () => passkeysHere,
     },
 }));
@@ -347,6 +352,59 @@ describe('the step opens on the account’s usual way', () => {
         await vi.waitFor(() => expect(screen.queryByLabelText('Password')).toBeNull());
         return { user, onUnlocked };
     }
+
+    test('an approval whose sign-in got no answer is kept and sent again, not asked for anew', async () => {
+        const REQUEST = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
+        askAnotherDevice.mockReset();
+        askAnotherDevice.mockResolvedValue({
+            requestId: REQUEST,
+            qr: 'hushos-approve:x',
+            expiresAt: new Date(Date.now() + 300_000).toISOString(),
+            // The other device has already approved by the first look.
+            poll: async () => ({ state: 'approved', code: '47 river' }),
+        });
+        const { user, onUnlocked } = await stepWith({ methods: ['device', 'backup', 'phrase'] });
+        // The sign-in that follows the approval by itself reaches nobody: the network is down.
+        answerStep.mockRejectedValueOnce(
+            new StepFailure('offline', 'HushOS couldn’t reach the server. Send your answer again.'),
+        );
+        await user.click(await screen.findByRole('button', { name: 'Use another device' }));
+        await screen.findByText(/couldn’t reach the server/);
+        expect(answerStep).toHaveBeenCalledTimes(1);
+        expect(answerStep).toHaveBeenLastCalledWith({ kind: 'device', requestId: REQUEST });
+        // The approval is still this step's answer: nothing asks the other device again (each
+        // request is one of the day's five), and the same answer is one press away.
+        expect(screen.getByText('Approved on your other device')).toBeTruthy();
+        expect(screen.queryByRole('button', { name: 'Use another device' })).toBeNull();
+        expect(screen.queryByRole('button', { name: 'Ask again' })).toBeNull();
+        answerStep.mockResolvedValueOnce(undefined);
+        await user.click(screen.getByRole('button', { name: 'Try again' }));
+        await vi.waitFor(() => expect(onUnlocked).toHaveBeenCalled());
+        expect(answerStep).toHaveBeenCalledTimes(2);
+        expect(answerStep).toHaveBeenLastCalledWith({ kind: 'device', requestId: REQUEST });
+        expect(askAnotherDevice).toHaveBeenCalledTimes(1);
+    });
+
+    test('an approval the step refused is let go: the other device is asked afresh', async () => {
+        const REQUEST = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
+        askAnotherDevice.mockReset();
+        askAnotherDevice.mockResolvedValue({
+            requestId: REQUEST,
+            qr: 'hushos-approve:x',
+            expiresAt: new Date(Date.now() + 300_000).toISOString(),
+            poll: async () => ({ state: 'approved', code: '47 river' }),
+        });
+        const { user } = await stepWith({ methods: ['device', 'backup', 'phrase'] });
+        answerStep.mockRejectedValueOnce(
+            new StepFailure('unavailable', 'Your other devices can’t confirm this right now.'),
+        );
+        await user.click(await screen.findByRole('button', { name: 'Use another device' }));
+        await screen.findByText(/can’t confirm this right now/);
+        // Nothing to send again: the approval is not shown as one, and no Try again offers it.
+        expect(screen.queryByText('Approved on your other device')).toBeNull();
+        expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+        expect(answerStep).toHaveBeenCalledTimes(1);
+    });
 
     test('a passkey first is a button: nothing asks the key until it is pressed, and the others wait behind Use another way', async () => {
         const { user, onUnlocked } = await stepWith({

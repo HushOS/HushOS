@@ -298,7 +298,15 @@ private fun KitChoice(icon: androidx.compose.ui.graphics.vector.ImageVector, tit
 
 /* The camera, reading frames for a kit's QR code on the phone; the first code that holds a phrase ends it. */
 @Composable
-private fun KitScanner(onPhrase: (List<String>) -> Unit) {
+private fun KitScanner(onPhrase: (List<String>) -> Unit) = QrCamera(KitScan::phrase, onPhrase)
+
+/*
+ * The camera, reading frames on the phone for a QR code `read` makes something of (a frame's brightness plane, its
+ * width, height and row stride); the first one that does ends it. Nothing about a frame leaves the device. Also the
+ * camera an approval's code is scanned with (DeviceApprovalUi.kt).
+ */
+@Composable
+internal fun <T : Any> QrCamera(read: (ByteArray, Int, Int, Int) -> T?, onFound: (T) -> Unit) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current
     val executor = remember { Executors.newSingleThreadExecutor() }
@@ -318,9 +326,9 @@ private fun KitScanner(onPhrase: (List<String>) -> Unit) {
                         val plane = it.planes[0]
                         val buffer = plane.buffer
                         val bytes = ByteArray(buffer.remaining()).also(buffer::get)
-                        KitScan.phrase(bytes, it.width, it.height, plane.rowStride)?.let { found ->
+                        read(bytes, it.width, it.height, plane.rowStride)?.let { found ->
                             done = true
-                            ContextCompat.getMainExecutor(context).execute { provider.unbindAll(); onPhrase(found) }
+                            ContextCompat.getMainExecutor(context).execute { provider.unbindAll(); onFound(found) }
                         }
                     }
                 }

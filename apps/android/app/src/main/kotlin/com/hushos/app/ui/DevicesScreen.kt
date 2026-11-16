@@ -49,12 +49,16 @@ fun DevicesScreen(model: DriveViewModel, onBack: () -> Unit) {
     var removingOthers by retain { mutableStateOf(false) }
     var loads by remember { mutableIntStateOf(0) }
     LaunchedEffect(loads) { model.loadDevices { list, failure -> devices = list ?: devices; problem = failure } }
+    // Opened from a notice, or by hand: what is waiting is read at once (Account goes on looking while it is up).
+    LaunchedEffect(Unit) { model.approvals.load() }
     val reload: () -> Unit = { loads++ }
     val current = devices?.firstOrNull { it.current }
     val others = devices?.filterNot { it.current }.orEmpty()
 
     Scaffold(contentWindowInsets = WindowInsets(0), containerColor = alpine.ground, topBar = { DestinationBar("Devices", onBack = onBack) }) { padding ->
         Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = AlpineSpace.S8)) {
+            // Another device asking this one to confirm a sign-in or a change: each with what is asked, and Answer.
+            ApprovalRows(model.approvals)
             when {
                 problem != null && devices == null -> Column(Modifier.padding(AlpineSpace.S4), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
                     Text(problem!!, color = alpine.danger)

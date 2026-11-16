@@ -71,6 +71,7 @@ import {
     accountSecurityEvents,
     sessions,
     twoStepAttempts,
+    twoStepDeviceRequests,
     twoStepFactors,
     twoStepKeyRegistrations,
     userSettings,
@@ -727,6 +728,8 @@ export async function revokeDevice(input: {
 export async function revokeOtherDevices(input: {
     userId: string;
     sessionTokenHash: Buffer;
+    /* One other device to leave signed in: the one that approves for this one (two-step design 12). */
+    keepDeviceId?: string | null;
 }): Promise<RevokeResult> {
     return db.transaction(async (tx) => {
         const acting = await actingDevice(tx, input.userId, input.sessionTokenHash);
@@ -738,6 +741,7 @@ export async function revokeOtherDevices(input: {
                 and(
                     eq(accountDevices.userId, input.userId),
                     ne(accountDevices.id, acting),
+                    input.keepDeviceId ? ne(accountDevices.id, input.keepDeviceId) : undefined,
                     isNull(accountDevices.revokedAt),
                 ),
             )
@@ -858,6 +862,7 @@ export async function cleanupExpired(options: { batchSize?: number; signal?: Abo
     const noSession = sql`not exists (select 1 from ${sessions} where ${sessions.deviceId} = ${accountDevices.id})`;
     const pendingCutoff = new Date(now.getTime() - PENDING_FACTOR_SECONDS * 1000);
     const logCutoff = new Date(now.getTime() - SECURITY_EVENT_DAYS * 24 * 60 * 60 * 1000);
+    const requestCutoff = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000);
     return {
         enrollments: await sweep(
             accountEnrollments,
@@ -890,6 +895,14 @@ export async function cleanupExpired(options: { batchSize?: number; signal?: Abo
             twoStepKeyRegistrations,
             twoStepKeyRegistrations.tokenHash,
             twoStepKeyRegistrations.expiresAt,
+        ),
+        // Requests to approve on another device, two days after they were made: by then no
+        // budget counts them. What was left unanswered was counted long before, by the web
+        // service at its readiness checks (two-step.approvals.ts, `settleDeviceRequests`).
+        deviceRequests: await repeat(() =>
+            db.execute(
+                sql`delete from ${twoStepDeviceRequests} where ${twoStepDeviceRequests.id} in (select ${twoStepDeviceRequests.id} from ${twoStepDeviceRequests} where ${twoStepDeviceRequests.createdAt} < ${requestCutoff} limit ${batch})`,
+            ),
         ),
         // A second-step method nobody confirmed in its ten minutes: its sealed secret goes. The
         // conditions are on the delete itself too: a row confirmed while this waited on it is

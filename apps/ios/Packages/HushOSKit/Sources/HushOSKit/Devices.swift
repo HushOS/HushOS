@@ -39,11 +39,16 @@ public struct AccountDevice: Codable, Sendable, Equatable, Identifiable {
     /* What the list calls it: its name, else what it is, else an unknown device. */
     public var label: String {
         if let name, !name.isEmpty { return name }
+        return Self.kindWords(kind) ?? "Unknown device"
+    }
+
+    /* What a device is, in the list's words; nil for one that never said. */
+    public static func kindWords(_ kind: String?) -> String? {
         switch kind {
-        case "ios": return "iPhone"
-        case "android": return "Android phone"
-        case "web": return "A web browser"
-        default: return "Unknown device"
+        case "ios": "iPhone"
+        case "android": "Android phone"
+        case "web": "A web browser"
+        default: nil
         }
     }
 
@@ -123,12 +128,24 @@ public enum Devices {
         _ = try await Auth.call("/api/auth/devices/\(id)", method: "DELETE", body: try await passwordProof(password))
     }
 
-    /* Every device but this one. Returns how many were removed. */
+    /*
+     * Every device but this one. Returns how many were removed. `keep`: one other device left
+     * signed in, the one that approves for this one when Approve on another device was just turned
+     * on (it is the method).
+     */
     @discardableResult
-    public static func removeOthers(password: String) async throws -> Int {
+    public static func removeOthers(password: String, keep: String? = nil) async throws -> Int {
+        try await removeOthers(password: password, keep: keep, proof: { try await passwordProof($0) })
+    }
+
+    /* `proof`: the password proof the request carries; tests put their own here, since a real one needs a real server's reply. */
+    @discardableResult
+    static func removeOthers(password: String, keep: String?, proof: @Sendable (String) async throws -> [String: Any]) async throws -> Int {
         try await PasswordTurn.take()
         defer { PasswordTurn.shared.leaveSoon() }
-        return try await Auth.call("/api/auth/devices/others", method: "DELETE", body: try await passwordProof(password))["removed"] as? Int ?? 0
+        var body = try await proof(password)
+        if let keep { body["keep"] = keep }
+        return try await Auth.call("/api/auth/devices/others", method: "DELETE", body: body)["removed"] as? Int ?? 0
     }
 
     /*

@@ -25,6 +25,7 @@ fn the_step_is_read_in_the_servers_order_and_the_key_is_asked_what_the_web_asks_
         .iter()
         .map(|method| match method {
             StepMethod::Webauthn => "webauthn",
+            StepMethod::Device => "device",
             StepMethod::Totp => "totp",
             StepMethod::Backup => "backup",
             StepMethod::Phrase => "phrase",
