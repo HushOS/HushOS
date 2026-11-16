@@ -1000,12 +1000,18 @@ export type StartDeviceFactorResult =
  * approve it. Starting again from the same session replaces its earlier pending method and
  * token.
  *
- * From another session it is refused (`busy`) while that session's token lives, five minutes
- * at most. Replacing it would end the other session's setup without a word and put this one's
- * request on the approving device in its place, where a person in the middle of turning the
- * method on would take a prompt for their own: with the step off, "another session" may be
- * someone who has only the password. Whoever is refused is told another device is at it,
- * which is the notice.
+ * From another device it is refused (`busy`) while that device's setup lives: its token, five
+ * minutes at most, under a session that is still signed in. Replacing it would end the other
+ * device's setup without a word and put this one's request on the approving device in its
+ * place, where a person in the middle of turning the method on would take a prompt for their
+ * own: with the step off, "another device" may be someone who has only the password. Whoever
+ * is refused is told another device is at it, which is the notice. The same device under a new
+ * session (the page was reloaded, the app unlocked) is the same person trying again, and a
+ * session that has ended holds nothing.
+ *
+ * Residual: a device that starts again every five minutes holds the turn for as long as it is
+ * signed in (docs/two-step-design.md 9). Removing it under Your devices ends that, and the
+ * account's other methods are not held by it.
  */
 export async function startDeviceFactor(input: {
     userId: string;
@@ -1031,18 +1037,22 @@ export async function startDeviceFactor(input: {
                 bootstrap: confirmed.length === 0,
             });
             if (approvers.length === 0) return { status: 'unavailable' };
+            // Another DEVICE at it, through a session that is still live. Not this device under
+            // an earlier session (a reload or an unlock makes a new one, and the person is only
+            // trying again), and not a session that has ended since it started.
+            const now = new Date();
             const [others] = await tx
                 .select({ count: count() })
                 .from(twoStepAttempts)
+                .innerJoin(sessions, eq(sessions.tokenHash, twoStepAttempts.sessionTokenHash))
                 .where(
                     and(
                         eq(twoStepAttempts.userId, input.userId),
                         eq(twoStepAttempts.purpose, 'device-approval'),
-                        gt(twoStepAttempts.expiresAt, new Date()),
-                        or(
-                            isNull(twoStepAttempts.sessionTokenHash),
-                            ne(twoStepAttempts.sessionTokenHash, input.sessionTokenHash),
-                        ),
+                        gt(twoStepAttempts.expiresAt, now),
+                        eq(sessions.userId, input.userId),
+                        gt(sessions.expiresAt, now),
+                        ne(sessions.deviceId, session.deviceId),
                     ),
                 );
             if ((others?.count ?? 0) > 0) return { status: 'busy' };

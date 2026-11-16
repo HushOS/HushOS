@@ -72,22 +72,33 @@ export function approvalAsks(asked: {
  * room for the owner's own. Kept per browser; storage that cannot be read counts as empty.
  */
 const PROMPTS_KEY = 'hushos-approval-prompts';
+/*
+ * The count where the browser's storage would not take it (a private window, a full or blocked
+ * store): kept here for as long as the page lives, and for the account it was counted for. A
+ * list for another account starts from nothing, as sign-out clears the stored one.
+ */
+let unstored: { userId: string; record: PromptRecord } | null = null;
 function withinBudget(listed: ApprovalPrompt[]) {
     // Nothing listed is nothing to count: the record is the signed-in account's, and a list
     // that came back for an account since signed out of is empty by now (`authClient.approvals`),
     // so it writes nothing into what sign-out just cleared.
     if (listed.length === 0) return [];
-    let record: PromptRecord | null = null;
-    try {
-        record = JSON.parse(localStorage.getItem(PROMPTS_KEY) ?? 'null') as PromptRecord | null;
-    } catch {
-        // Unreadable: start the day again rather than show nothing.
-    }
+    const userId = listed[0]!.userId;
+    if (unstored?.userId !== userId) unstored = null;
+    let record: PromptRecord | null = unstored?.record ?? null;
+    if (!record)
+        try {
+            record = JSON.parse(localStorage.getItem(PROMPTS_KEY) ?? 'null') as PromptRecord | null;
+        } catch {
+            // Unreadable: start the day again rather than show nothing.
+        }
     const allowed = approvalPromptsAllowed(record, listed);
     try {
         localStorage.setItem(PROMPTS_KEY, JSON.stringify(allowed.record));
+        unstored = null;
     } catch {
-        // A private window: the count lasts as long as the page.
+        // Not stored: without this the sixth prompt of a day would be the first again.
+        unstored = { userId, record: allowed.record };
     }
     const shown = new Set(allowed.shown);
     return listed.filter((prompt) => shown.has(prompt.id));

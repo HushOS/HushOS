@@ -13,6 +13,7 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 const asked = (over: Partial<ApprovalPrompt> = {}): ApprovalPrompt => ({
     id: '7c9e6679-7425-40de-944b-e07fc1f90ae7',
+    userId: '0f8fad5b-d9cb-469f-a165-70867728950e',
     purpose: 'login',
     class: 'unknown',
     device: { kind: 'web', name: 'Maya’s Laptop', addedAt: null },
@@ -147,6 +148,86 @@ describe('another device waiting for an answer', () => {
         await person.click(screen.getByRole('button', { name: 'Done' }));
         await waitFor(() => expect(screen.queryByText('47 river')).toBeNull());
     });
+
+    test('an approval that got no answer keeps the request and its reveal, and is sent again as the same one', async () => {
+        const person = userEvent.setup();
+        const reveal = { deviceSigningKey: 'C'.repeat(43), nonce: 'D'.repeat(43) };
+        const turningOn = asked({
+            purpose: 'device-approval',
+            class: 'change',
+            chosen: true,
+            approverKey: 'E'.repeat(43),
+            reveal,
+        });
+        const opened: OpenedApproval = {
+            id: turningOn.id,
+            purpose: turningOn.purpose,
+            tokenDigest: turningOn.tokenDigest,
+            commitment: turningOn.commitment,
+            approverKey: 'E'.repeat(43),
+        };
+        api.approvals.mockResolvedValue([turningOn]);
+        api.openApproval.mockResolvedValue(opened);
+        // The server took the approval, and its answer never arrived.
+        api.approveRequest.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+        view();
+        await person.click(await screen.findByRole('button', { name: 'Answer' }));
+        const approve = await screen.findByRole('button', { name: 'Approve' });
+        await waitFor(() => expect(approve).toHaveProperty('disabled', false));
+        await person.click(approve);
+        // Approved on the server, the request leaves the list. It is not over: the code this
+        // browser drew has not been shown, and only the same approval sent again shows it.
+        const looks = api.approvals.mock.calls.length;
+        api.approvals.mockResolvedValue([]);
+        await waitFor(() => expect(api.approvals.mock.calls.length).toBeGreaterThan(looks + 1), {
+            timeout: 8_000,
+        });
+        expect(screen.queryByText('This request is over.')).toBeNull();
+        const again = screen.getByRole('button', { name: 'Try again' });
+        expect(again).toHaveProperty('disabled', false);
+        api.approveRequest.mockResolvedValueOnce('47 river');
+        await person.click(again);
+        expect(await screen.findByText('47 river')).toBeTruthy();
+        // The same request and the same reveal both times: the code and digest are the library's
+        // to keep (device-step.test.ts), and it is asked for the same approval.
+        expect(api.approveRequest.mock.calls).toEqual([
+            [opened, reveal, undefined],
+            [opened, reveal, undefined],
+        ]);
+    }, 15_000);
+
+    test('the server’s own refusal of an approval settles it: a request that then leaves the list is over', async () => {
+        const person = userEvent.setup();
+        const reveal = { deviceSigningKey: 'C'.repeat(43), nonce: 'D'.repeat(43) };
+        const turningOn = asked({
+            purpose: 'device-approval',
+            class: 'change',
+            approverKey: 'E'.repeat(43),
+            reveal,
+        });
+        api.approvals.mockResolvedValue([turningOn]);
+        api.openApproval.mockResolvedValue({
+            id: turningOn.id,
+            purpose: turningOn.purpose,
+            tokenDigest: turningOn.tokenDigest,
+            commitment: turningOn.commitment,
+            approverKey: 'E'.repeat(43),
+        });
+        api.approveRequest.mockRejectedValueOnce(
+            Object.assign(new Error('This request is over.'), { status: 404 }),
+        );
+        view();
+        await person.click(await screen.findByRole('button', { name: 'Answer' }));
+        const approve = await screen.findByRole('button', { name: 'Approve' });
+        await waitFor(() => expect(approve).toHaveProperty('disabled', false));
+        await person.click(approve);
+        api.approvals.mockResolvedValue([]);
+        expect(await screen.findByRole('alert', {}, { timeout: 8_000 })).toBeTruthy();
+        await waitFor(() => expect(screen.getByRole('button', { name: 'Close' })).toBeTruthy(), {
+            timeout: 8_000,
+        });
+        expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+    }, 15_000);
 
     test('a sign-in is approved only with the code typed here, never on a bare press', async () => {
         const person = userEvent.setup();

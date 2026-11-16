@@ -15,8 +15,11 @@ vi.mock('@/lib/auth-client', () => ({ authClient: { approvals: listed } }));
 const { approvalAsks, approvalsQueryOptions } = await import('./approvals');
 const look = () => approvalsQueryOptions.queryFn!({} as never) as Promise<ApprovalPrompt[]>;
 
-const asked = (id: string): ApprovalPrompt => ({
+const MAYA = '0f8fad5b-d9cb-469f-a165-70867728950e';
+const SAM = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
+const asked = (id: string, userId = MAYA): ApprovalPrompt => ({
     id,
+    userId,
     purpose: 'login',
     class: 'unknown',
     device: { kind: 'web', name: 'Chrome on Windows', addedAt: null },
@@ -105,11 +108,38 @@ describe('the count of prompts shown today', () => {
             { length: 6 },
             (_, index) => `7c9e6679-7425-40de-944b-e07fc1f90a0${index}`,
         );
-        listed.mockResolvedValue(ids.map(asked));
+        listed.mockResolvedValue(ids.map((id) => asked(id)));
         expect((await look()).map((prompt) => prompt.id)).toEqual(ids.slice(0, 5));
         expect(JSON.parse(localStorage.getItem(KEY)!).seen.unknown).toEqual(ids.slice(0, 5));
         // The sixth alone, later the same day: still not shown.
         listed.mockResolvedValue([asked(ids[5]!)]);
         expect(await look()).toEqual([]);
+    });
+
+    test('where the browser will not store the count, it is still kept for the page, and for that account only', async () => {
+        // A private window, or a store that is full or blocked: nothing can be written.
+        const refused = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+            throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
+        });
+        try {
+            const ids = Array.from(
+                { length: 7 },
+                (_, index) => `11111111-7425-40de-944b-e07fc1f90a0${index}`,
+            );
+            listed.mockResolvedValue(ids.slice(0, 6).map((id) => asked(id)));
+            expect((await look()).map((prompt) => prompt.id)).toEqual(ids.slice(0, 5));
+            expect(localStorage.getItem(KEY)).toBeNull();
+            // The sixth and a seventh, alone, on later looks: the five are still counted.
+            listed.mockResolvedValue([asked(ids[5]!), asked(ids[6]!)]);
+            expect(await look()).toEqual([]);
+            // Someone else signs in on this page: they start from nothing, not from Maya's five.
+            listed.mockResolvedValue([asked(ids[6]!, SAM)]);
+            expect((await look()).map((prompt) => prompt.id)).toEqual([ids[6]]);
+            // And Maya's count went when the account changed, as the stored one does at sign-out.
+            listed.mockResolvedValue([asked(ids[5]!)]);
+            expect((await look()).map((prompt) => prompt.id)).toEqual([ids[5]]);
+        } finally {
+            refused.mockRestore();
+        }
     });
 });

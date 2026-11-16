@@ -104,6 +104,7 @@ function relay() {
     } as unknown as AuthApi;
     const prompt = (purpose = 'login'): ApprovalPrompt => ({
         id,
+        userId: USER,
         purpose,
         class: 'unknown',
         device: { kind: 'web', name: 'Chrome on Windows', addedAt: null },
@@ -601,6 +602,8 @@ describe('replies', () => {
     test('a list that came back for another account than the one signed in now is nobody’s', () => {
         const reply = { userId: USER, approvals: [whole] };
         expect(readApprovals(reply, USER.toUpperCase())).toHaveLength(1);
+        // Each request says whose it is: what a device counts of them is kept by account.
+        expect(readApprovals(reply, USER)[0]!.userId).toBe(USER);
         // Signed out since, or signed in as someone else: nothing to show, and nothing to count.
         expect(readApprovals(reply, null)).toEqual([]);
         expect(readApprovals(reply, '7c9e6679-7425-40de-944b-e07fc1f90ae7')).toEqual([]);

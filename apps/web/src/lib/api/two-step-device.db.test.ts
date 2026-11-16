@@ -566,7 +566,7 @@ describe('turning it on', () => {
         expect((await edge.signIn(who)).status).toBe(200);
     });
 
-    test('a second session cannot start turning it on while another is at it, and is told so', async () => {
+    test('a second device cannot start turning it on while another is at it, and is told so', async () => {
         const who = await edge.account();
         const laptop = await device(who, 'Maya’s Laptop');
         const phone = await device(who, 'Maya’s Phone');

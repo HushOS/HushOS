@@ -190,6 +190,8 @@ export async function askAnotherDevice(
 /* A request this device may answer, as its prompt shows it. */
 export type ApprovalPrompt = {
     id: string;
+    /* The account the request is for, as the list that carried it said. */
+    userId: string;
     /* `login` for a sign-in, else what the other device is about to change. */
     purpose: string;
     class: 'unknown' | 'known' | 'change';
@@ -218,7 +220,7 @@ export type ApprovalPrompt = {
 const time = (value: unknown) =>
     value instanceof Date ? value.toISOString() : text(value) ? value : null;
 
-function prompt(value: unknown): ApprovalPrompt | null {
+function prompt(value: unknown, userId: string): ApprovalPrompt | null {
     if (!record(value) || !uuid(value.id) || !text(value.purpose)) return null;
     if (value.class !== 'unknown' && value.class !== 'known' && value.class !== 'change')
         return null;
@@ -231,6 +233,7 @@ function prompt(value: unknown): ApprovalPrompt | null {
     const reveal = value.reveal;
     return {
         id: value.id,
+        userId,
         purpose: value.purpose,
         class: value.class,
         device: {
@@ -275,8 +278,9 @@ export function readApprovals(reply: unknown, forUserId?: string | null): Approv
             reply.userId.toLowerCase() !== forUserId.toLowerCase())
     )
         return [];
+    const userId = text(reply.userId) ? reply.userId.toLowerCase() : '';
     return reply.approvals.flatMap((entry: unknown) => {
-        const read = prompt(entry);
+        const read = prompt(entry, userId);
         return read ? [read] : [];
     });
 }

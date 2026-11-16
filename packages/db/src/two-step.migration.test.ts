@@ -628,16 +628,14 @@ describe('the two-step migrations and their undo scripts', () => {
                 )
             ).rows,
         ).toEqual([{ kind: 'sign-in', method: null }]);
-        expect(
-            (await client.query(`select 1 from notification_events where user_id = $1`, [only]))
-                .rowCount,
-        ).toBe(0);
 
         // Undone, the same release migrates again to the same schema; run twice, the undo fails whole.
         await migrate(upTo(DEVICE), scratch, { migrationsFolder });
         expect(unnumbered(await schemaOf(client))).toEqual(unnumbered(after));
         await run(undo(DEVICE));
-        await expect(run(undo(DEVICE))).rejects.toMatchObject({ code: '42704' });
+        // (The first thing it reaches for that is no longer there is the events' device column.)
+        await expect(run(undo(DEVICE))).rejects.toMatchObject({ code: '42703' });
+        expect(unnumbered(await schemaOf(client))).toEqual(unnumbered(before));
         expect(await schemaOf(client)).toEqual(before);
     }, 180_000);
 });

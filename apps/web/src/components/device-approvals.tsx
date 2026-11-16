@@ -183,10 +183,28 @@ function AnswerDialog({ asked, onClose }: { asked: ApprovalPrompt | null; onClos
     }, [requestId]);
 
     const now = listed.data?.find((prompt) => prompt.id === requestId) ?? null;
-    const reveal = now?.reveal ?? null;
+    // What the other device revealed is kept once seen: an approved request leaves the list,
+    // and an approval that must be sent again is sent with the same reveal.
+    const [revealed, setRevealed] = useState<ApprovalPrompt['reveal']>(null);
+    if (now?.reveal && now.reveal.nonce !== revealed?.nonce) setRevealed(now.reveal);
+    const reveal = now?.reveal ?? revealed;
+    /*
+     * An approval went out and no answer came back: the server may have taken it. If it did,
+     * the request is gone from the list although nothing is over, and the code this browser
+     * drew for it has not been shown yet. So the dialog keeps the request and offers the same
+     * approval again (the same code and digest, which the server takes twice) until the server
+     * itself answers, either way.
+     */
+    const [unsure, setUnsure] = useState(false);
     // Gone from the list: it timed out, was answered another way, or another device has it.
     const over =
-        open && listed.isSuccess && !listed.isFetching && now === null && !pending && !shown;
+        open &&
+        listed.isSuccess &&
+        !listed.isFetching &&
+        now === null &&
+        !pending &&
+        !shown &&
+        !unsure;
     const done = () => {
         // An approval can turn the step on for this browser too, or add a device to the list:
         // everything Account shows of the account is read again.
@@ -205,6 +223,7 @@ function AnswerDialog({ asked, onClose }: { asked: ApprovalPrompt | null; onClos
                 turningOn ? undefined : typed,
             );
             cue('success');
+            setUnsure(false);
             toast.add({ type: 'success', title: 'Approved' });
             // Turning the method on: the code stays up until the person has typed it over there.
             if (code) setShown(code);
@@ -215,7 +234,13 @@ function AnswerDialog({ asked, onClose }: { asked: ApprovalPrompt | null; onClos
             if (cause instanceof DeviceStepError && cause.reason !== 'unsupported') {
                 toast.add({ type: 'error', title: cause.message });
                 done();
-            } else setError(authError(cause));
+                return;
+            }
+            // The server's own refusal settles it. Anything else (no reply, a proxy's page, a
+            // fault on our side) leaves it open whether the approval was taken.
+            const status = (cause as { status?: unknown } | null)?.status;
+            setUnsure(turningOn && !(typeof status === 'number' && status >= 400 && status < 500));
+            setError(authError(cause));
         } finally {
             setPending(false);
         }
@@ -339,7 +364,7 @@ function AnswerDialog({ asked, onClose }: { asked: ApprovalPrompt | null; onClos
                                     type="submit"
                                     disabled={pending || !reveal || !opened || !wellFormed}
                                 >
-                                    {pending ? 'Checking' : 'Approve'}
+                                    {pending ? 'Checking' : unsure ? 'Try again' : 'Approve'}
                                 </Button>
                             </>
                         )}

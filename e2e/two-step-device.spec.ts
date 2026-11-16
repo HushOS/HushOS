@@ -32,6 +32,18 @@ const answer = (p: Page) => p.locator('[data-approval-answer]');
 const toast = (p: Page, words: string) =>
     p.locator('[data-slot=toast]').getByText(words, { exact: true });
 const WRONG = 'Wrong answer to the second step, with another device';
+/*
+ * The lines of Recent activity that say a step failed with another device. The list shows its
+ * five newest lines until it is asked for all of them, so it is asked first: a failure is
+ * logged for good, not for as long as it is among the last five.
+ */
+async function failedSteps(page: Page) {
+    await openAccount(page);
+    await expect(activity(page)).toBeVisible();
+    const all = section(page).getByRole('button', { name: /^Show all \d+$/ });
+    if (await all.isVisible()) await all.click();
+    return activity(page).getByText(WRONG, { exact: true });
+}
 const REFUSED = 'Your other device didn’t approve this.';
 
 async function openAccount(page: Page) {
@@ -240,7 +252,7 @@ test('another browser turns the step on, then answers a sign-in: a wrong code an
     // It is counted as a failed step, by the kind of method and never the device's name: one
     // for the wrong code typed while turning the method on, and one for this.
     await openAccount(a);
-    await expect(activity(a).getByText(WRONG, { exact: true })).toHaveCount(2);
+    await expect(await failedSteps(a)).toHaveCount(2);
 
     // Asked again, and denied: over again, nobody signed in, counted again.
     await ask(b, 'ended').getByRole('button', { name: 'Ask again' }).click();
@@ -251,7 +263,7 @@ test('another browser turns the step on, then answers a sign-in: a wrong code an
     await expect(ask(b, 'ended')).toContainText(REFUSED, { timeout: 30_000 });
     await expect(b).toHaveURL(/\/login/);
     await openAccount(a);
-    await expect(activity(a).getByText(WRONG, { exact: true })).toHaveCount(3);
+    await expect(await failedSteps(a)).toHaveCount(3);
 
     // Asked a third time: a new request has a new code, and the right one signs B in by itself.
     await ask(b, 'ended').getByRole('button', { name: 'Ask again' }).click();
@@ -263,7 +275,7 @@ test('another browser turns the step on, then answers a sign-in: a wrong code an
     await expect(b).toHaveURL(/\/app/, { timeout: 60_000 });
     await openAccount(a);
     await expect(activity(a)).toContainText('Signed in with your password and another device');
-    await expect(activity(a).getByText(WRONG, { exact: true })).toHaveCount(3);
+    await expect(await failedSteps(a)).toHaveCount(3);
     await expect(waiting(a)).toHaveCount(0);
 
     // A change, on devices newer than seven days: another device is not a way to confirm it.
@@ -287,7 +299,7 @@ test('another browser turns the step on, then answers a sign-in: a wrong code an
     await step.getByLabel('Backup code').fill(codes[0]!);
     await off.getByRole('button', { name: 'Turn off' }).click();
     await expect(section(a).locator('[data-two-step=off]')).toBeVisible({ timeout: 60_000 });
-    await expect(activity(a).getByText(WRONG, { exact: true })).toHaveCount(3);
+    await expect(await failedSteps(a)).toHaveCount(3);
 
     await a.context().close();
     await b.context().close();

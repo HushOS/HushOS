@@ -775,7 +775,11 @@ describe('a sign-in approved on another device', () => {
         const prompts = await twoStep.listApprovalPrompts(phone.token);
         expect(prompts.map((prompt) => prompt.id)).toEqual([made.id]);
         // What the phone is shown is the server's own record of the laptop, not what was sent.
-        expect(prompts[0]!.device).toEqual({ kind: 'web', name: 'Laptop' });
+        expect(prompts[0]!.device).toMatchObject({ kind: 'web', name: 'Laptop' });
+        // With when it was added, and not marked as its own word: the step is on, and the
+        // laptop is a device that passed it.
+        expect(prompts[0]!.device.addedAt).toBeInstanceOf(Date);
+        expect(prompts[0]!.selfNamed).toBe(false);
 
         // A known device that commits to a key that is not its own is refused at the reveal.
         const second = await loginToken(userId, laptop);
@@ -1592,6 +1596,31 @@ describe('the approval that turns the method on is the chosen device’s alone',
                 backupCodes: codeSet('first'),
             }),
         ).toMatchObject({ status: 'ok', turnedOn: true });
+    });
+
+    test('the same device under a new session is not another device, and a session that ended holds nothing', async () => {
+        const { userId, laptop, phone } = await starting();
+        const start = (sessionTokenHash: Buffer) =>
+            twoStep.startDeviceFactor({
+                userId,
+                sessionTokenHash,
+                credentialVersion: 1,
+                tokenHash: sha256(randomUUID()),
+                expiresAt: new Date(Date.now() + 5 * MINUTE),
+            });
+        // The laptop's page is reloaded: the same device, a new session token. Trying again
+        // within the five minutes is the person's own retry, not someone else's setup.
+        const reloaded = sha256(randomUUID());
+        await db
+            .update(sessions)
+            .set({ tokenHash: reloaded })
+            .where(eq(sessions.tokenHash, laptop.token));
+        expect((await start(reloaded)).status).toBe('ok');
+        // The phone is still another device: refused while the laptop's setup lives.
+        expect(await start(phone.token)).toEqual({ status: 'busy' });
+        // The laptop signs out mid-setup. Its token has minutes left, and holds nothing.
+        await db.delete(sessions).where(eq(sessions.tokenHash, reloaded));
+        expect((await start(phone.token)).status).toBe('ok');
     });
 
     test('the session that started may start again, and another may once the first one’s token has run out', async () => {
