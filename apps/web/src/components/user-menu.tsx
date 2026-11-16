@@ -83,11 +83,14 @@ export function UserMenu({
     user,
     side = 'top',
     align = 'start',
+    folded = false,
     className,
 }: {
     user: { id: string; name: string; email: string };
     side?: 'top' | 'right';
     align?: 'start' | 'end';
+    /* The sidebar folded to icons: the avatar alone, so its tooltip carries the name. */
+    folded?: boolean;
     className?: string;
 }) {
     const soundsEnabled = useSoundsEnabled();
@@ -113,7 +116,8 @@ export function UserMenu({
                 <DropdownMenuTrigger
                     // The name it shows is in the name it answers to (WCAG 2.5.3), folded or not.
                     aria-label={`${user.name}, account menu`}
-                    title={user.name}
+                    // Folded to the avatar, the name is nowhere else to be seen; open, it is beside it.
+                    title={folded ? user.name : undefined}
                     className={cn(
                         'flex h-11 w-full min-w-0 shrink-0 cursor-pointer items-center gap-3 rounded-md px-3 text-left transition-colors outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring aria-expanded:bg-highlight rail:size-10 rail:justify-center rail:gap-0 rail:px-0',
                         className,

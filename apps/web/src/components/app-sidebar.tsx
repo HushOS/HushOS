@@ -518,12 +518,12 @@ export function AppSidebar({
             <SidebarFooter className="gap-4 px-4 pt-2 pb-4 rail:px-2">
                 <CatalogueStatus />
                 <StorageMeter userId={user.id} />
-                {/* Its tint hangs 12px outside the column, as the places' rows do, so the avatar starts on their icons' edge. */}
+                {/* The same column as the places' rows: its tint on their edges, the avatar on their icons. */}
                 <UserMenu
                     user={user}
                     side={rail ? 'right' : 'top'}
                     align={rail ? 'end' : 'start'}
-                    className="-mx-3 w-auto rail:mx-0"
+                    folded={rail}
                 />
             </SidebarFooter>
             <SidebarRail />
