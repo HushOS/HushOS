@@ -358,6 +358,7 @@ describe('turning it on', () => {
         // laptop could work out from its own values and the phone's is something else.
         expect(codes.approving).toMatch(/^\d{2} [a-z]+$/);
         // The ping for it went to the phone alone: its event is the phone's, not the account's.
+        await edge.quiet();
         const [pinged] = (await edge.db.select().from(edge.schema.notificationEvents)).filter(
             (event) => event.kind === 'approval-request',
         );
