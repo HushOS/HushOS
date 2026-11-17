@@ -498,7 +498,7 @@ internal fun DeviceAskPanel(phase: AskPhase, inlineAgain: Boolean, enabled: Bool
         AskPhase.Idle -> {}
         AskPhase.Starting -> Box(Modifier.fillMaxWidth().heightIn(min = 48.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp) }
         is AskPhase.Waiting -> Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(AlpineSpace.S4)) {
-            val bitmap = remember(phase.qr) { runCatching { qrBitmap(phase.qr, 624) }.getOrNull() }
+            val bitmap = remember(phase.qr) { runCatching { BrandQr.bitmap(phase.qr, dots = false, side = 624) }.getOrNull() }
             // Dark on white in every theme, with its quiet zone: scanners expect it.
             if (bitmap != null) Box(Modifier.background(Color.White, RoundedCornerShape(12.dp)).padding(AlpineSpace.S3)) {
                 Image(bitmap.asImageBitmap(), contentDescription = "QR code for your other device", modifier = Modifier.size(208.dp))

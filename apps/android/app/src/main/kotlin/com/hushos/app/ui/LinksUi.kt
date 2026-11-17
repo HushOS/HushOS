@@ -3,7 +3,6 @@ package com.hushos.app.ui
 import androidx.compose.runtime.retain.retain
 import android.content.Context
 import android.content.Intent
-import android.graphics.Bitmap
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -756,7 +755,8 @@ private fun LinkOptionsSheet(model: DriveViewModel, item: Opened, link: LinkView
  */
 @Composable
 private fun QrDialog(url: String, name: String, password: Boolean, dismiss: () -> Unit) {
-    val bitmap = remember(url) { qrBitmap(url, 720) }
+    // A link too long for a code (over 1,273 bytes at level H) draws none rather than failing the dialog.
+    val bitmap = remember(url) { runCatching { BrandQr.bitmap(url, dots = true, side = 720) }.getOrNull() }
     AlertDialog(
         onDismissRequest = dismiss,
         properties = androidx.compose.ui.window.DialogProperties(securePolicy = androidx.compose.ui.window.SecureFlagPolicy.SecureOn),
@@ -764,7 +764,7 @@ private fun QrDialog(url: String, name: String, password: Boolean, dismiss: () -
         text = {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 // Dark on white in every theme: scanners expect it.
-                Box(Modifier.background(Color.White, RoundedCornerShape(12.dp)).padding(12.dp)) {
+                if (bitmap != null) Box(Modifier.background(Color.White, RoundedCornerShape(12.dp)).padding(12.dp)) {
                     Image(bitmap.asImageBitmap(), contentDescription = "QR code for the link to $name", modifier = Modifier.size(240.dp))
                 }
                 Text("Whoever scans it can open “$name”${if (password) " with the password" else ""}.", textAlign = TextAlign.Center, modifier = Modifier.padding(top = AlpineSpace.S3))
@@ -772,14 +772,6 @@ private fun QrDialog(url: String, name: String, password: Boolean, dismiss: () -
         },
         confirmButton = { TextButton(onClick = dismiss) { Text("Done") } },
     )
-}
-
-/* Also the code an approval's request is shown as (DeviceApprovalUi.kt). */
-internal fun qrBitmap(text: String, size: Int): Bitmap {
-    val matrix = com.google.zxing.qrcode.QRCodeWriter().encode(text, com.google.zxing.BarcodeFormat.QR_CODE, size, size,
-        mapOf(com.google.zxing.EncodeHintType.MARGIN to 1, com.google.zxing.EncodeHintType.ERROR_CORRECTION to com.google.zxing.qrcode.decoder.ErrorCorrectionLevel.M))
-    val pixels = IntArray(size * size) { i -> if (matrix.get(i % size, i / size)) android.graphics.Color.BLACK else android.graphics.Color.WHITE }
-    return Bitmap.createBitmap(pixels, size, size, Bitmap.Config.ARGB_8888)
 }
 
 /*
