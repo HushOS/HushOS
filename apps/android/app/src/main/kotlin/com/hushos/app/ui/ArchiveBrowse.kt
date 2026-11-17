@@ -96,9 +96,11 @@ class ArchiveBrowse(
             try {
                 opened = open { now -> if (!closed) subject = now }
                 if (closed) return@launch
-                tree = build(opened.entries)
+                val built = build(opened.entries)
+                // The archive before its tree: whoever sees the tree may already use the archive.
                 hidden = opened.hidden
                 archive = opened
+                tree = built
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {

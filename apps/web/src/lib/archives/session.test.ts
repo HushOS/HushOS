@@ -46,8 +46,8 @@ describe('reading the worker’s listing', () => {
         expect(
             readListing({ entries: [entry({ parts: deep.slice(0, 256) })], hidden: 0 }, 100),
         ).not.toBeNull();
-        // 4,000 entries of 256 parts: a million and twenty-four thousand parts.
-        const many = Array.from({ length: 4_000 }, (_, i) =>
+        // 1,000 entries of 256 parts: 256,000 parts, past the 250,000 a listing may spend.
+        const many = Array.from({ length: 1_000 }, (_, i) =>
             entry({ index: i, parts: deep.slice(0, 256) }),
         );
         expect(readListing({ entries: many, hidden: 0 }, 100)).toBeNull();

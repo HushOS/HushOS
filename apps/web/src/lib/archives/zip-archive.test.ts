@@ -7,7 +7,7 @@ import table from '../../../../../e2e/fixtures/archives/expected.json';
 import { FIXTURE_DIR, FIXTURES } from '../../../../../e2e/fixtures/archives/make';
 import { ZipArchive } from './zip-archive';
 import { readListing } from './session';
-import { asksFirst, ZipError } from './zip-format';
+import { asksFirst, LIST_PARTS_MAX, ZipError } from './zip-format';
 
 /*
  * Every fixture of e2e/fixtures/archives against the outcomes in its expected.json, the table
@@ -93,7 +93,7 @@ describe('every fixture, as expected.json says', () => {
                 // Every listing stays within the parts the page accepts, the last entries listed flat.
                 expect(
                     archive.listed.reduce((sum, item) => sum + item.parts.length, 0),
-                ).toBeLessThanOrEqual(1_000_000);
+                ).toBeLessThanOrEqual(LIST_PARTS_MAX);
                 if (expected.count !== undefined) {
                     expect(archive.listed).toHaveLength(expected.count);
                     const flat = archive.listed.findIndex((item) => item.parts.length === 1);

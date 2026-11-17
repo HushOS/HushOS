@@ -535,12 +535,16 @@ export type Listed = {
 };
 
 /*
- * How deep the list goes: past 256 parts, or once the archive's entries have used a million parts
+ * How deep the list goes: past 256 parts, or once the archive's entries have used 250,000 parts
  * between them, an entry is listed flat, under its whole path, at the top. Without it one 64 KiB
  * name of `a/a/a/…` costs gigabytes in prefixes.
  */
 export const LIST_DEPTH_MAX = 256;
-export const LIST_PARTS_MAX = 1_000_000;
+/*
+ * 250,000 parts, on every client: the widest listing a phone takes (a 16 MiB directory of paths 255
+ * parts deep) then peaks at about 148 MB in the core, measured 2026-11-17; at a million it was 250 MB.
+ */
+export const LIST_PARTS_MAX = 250_000;
 
 /* Names as a tree, each node a number and each child found by its parent and name: memory grows with the parts, never with their prefixes. */
 export class NameTree {

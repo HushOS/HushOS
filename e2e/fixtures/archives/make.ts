@@ -1321,10 +1321,10 @@ function sizesFixture() {
     ]);
 }
 
-/* 4,000 entries of 256 parts: more than the listing's million parts, so the last ones are listed flat, every one of them. */
+/* 1,000 entries of 256 parts: more than the listing's 250,000 parts, so the last ones are listed flat, every one of them. */
 function flatBudgetFixture() {
     const specs: Spec[] = [];
-    for (let i = 0; i < 4_000; i++)
+    for (let i = 0; i < 1_000; i++)
         specs.push({
             name: `${Array.from({ length: 255 }, (_, d) => `p${d}`).join('/')}/f${i}`,
             data: utf8('x'),

@@ -682,12 +682,12 @@ fn support_of(entry: &Entry) -> &'static str {
     }
 }
 
-/// How deep the list goes: past 256 parts, or once the archive's entries have used a million
+/// How deep the list goes: past 256 parts, or once the archive's entries have used 250,000
 /// parts between them, an entry is listed flat, under its whole path, at the top (the web's
 /// LIST_DEPTH_MAX and LIST_PARTS_MAX). Without it one 64 KiB name of `a/a/a/…` costs gigabytes in
 /// prefixes.
 pub const LIST_DEPTH_MAX: usize = 256;
-pub const LIST_PARTS_MAX: usize = 1_000_000;
+pub const LIST_PARTS_MAX: usize = 250_000;
 
 /// Names as a tree, each node a number and each child found by its parent and name: memory grows
 /// with the parts, never with their prefixes.
@@ -840,11 +840,13 @@ pub fn save_name(name: &str) -> String {
     }
 }
 
-pub(crate) fn list_entries(entries: &[Entry]) -> Vec<ArchiveEntry> {
+/// The list, from the entries; each entry's decoded name moves into it (an entry keeps its raw
+/// name to check against), so the two are never held twice.
+pub(crate) fn list_entries(entries: &mut [Entry]) -> Vec<ArchiveEntry> {
     let mut budget = LIST_PARTS_MAX;
     let count = entries.len();
     let mut listed: Vec<ArchiveEntry> = entries
-        .iter()
+        .iter_mut()
         .enumerate()
         .map(|(at, entry)| {
             let remaining = count - at - 1;
@@ -862,7 +864,7 @@ pub(crate) fn list_entries(entries: &[Entry]) -> Vec<ArchiveEntry> {
             let link = entry.link && !entry.directory;
             ArchiveEntry {
                 index: entry.index,
-                path: entry.path.clone(),
+                path: std::mem::take(&mut entry.path),
                 directory: entry.directory,
                 size: entry.size,
                 packed: entry.packed,
@@ -1436,8 +1438,10 @@ impl Zip {
     pub fn open(source: &dyn RangeRead) -> Result<Zip> {
         let directory = find_directory(source)?;
         let bytes = source.read_at(directory.offset, directory.size)?;
-        let entries = read_directory(&bytes, &directory)?;
-        let listed = list_entries(&entries);
+        let mut entries = read_directory(&bytes, &directory)?;
+        // The directory's bytes go before the list is made: on a phone they are up to 16 MiB.
+        drop(bytes);
+        let listed = list_entries(&mut entries);
         Ok(Zip {
             listing: Mutex::new(Some(Arc::new(Listing { entries, listed }))),
             life: Mutex::new(Lifecycle::default()),

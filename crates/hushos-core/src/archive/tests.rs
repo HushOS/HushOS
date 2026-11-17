@@ -255,11 +255,11 @@ fn large(name: &str) -> Vec<u8> {
             )
         }
         "flat-budget.zip" => {
-            // make.ts's flatBudgetFixture: 4,000 entries of 256 parts.
+            // make.ts's flatBudgetFixture: 1,000 entries of 256 parts.
             let folders: Vec<String> = (0..255).map(|d| format!("p{d}")).collect();
             let folders = folders.join("/");
             write_zip(
-                &(0..4_000)
+                &(0..1_000)
                     .map(|i| Spec {
                         packed: b"x".to_vec(),
                         size: 1,
@@ -341,14 +341,18 @@ fn every_fixture_as_expected_json_says() {
             continue;
         }
         let wanted = expected["entries"].as_array().unwrap();
-        let paths: Vec<&str> = list.entries.iter().map(|entry| entry.path.as_str()).collect();
+        // The decoded names are the list's (an entry keeps only its raw name once listed).
+        let path_of = |index: u32| {
+            list.listed.iter().find(|item| item.index == index).map_or("", |item| item.path.as_str())
+        };
+        let paths: Vec<&str> = list.entries.iter().map(|entry| path_of(entry.index)).collect();
         let want_paths: Vec<&str> = wanted.iter().map(|entry| entry["path"].as_str().unwrap()).collect();
         assert_eq!(paths, want_paths, "{name}: paths");
         assert_eq!(zip.hidden() as u64, expected["hidden"].as_u64().unwrap(), "{name}: hidden");
         for (index, want) in wanted.iter().enumerate() {
             let entry = &list.entries[index];
             let listed = list.listed.iter().find(|item| item.index == index as u32).unwrap();
-            let label = format!("{name}: {}", entry.path.chars().take(40).collect::<String>());
+            let label = format!("{name}: {}", path_of(entry.index).chars().take(40).collect::<String>());
             let flag = |key: &str| want[key].as_bool().unwrap_or(false);
             assert_eq!(entry.directory, flag("directory"), "{label}: directory");
             assert_eq!(listed.hidden, flag("hidden"), "{label}: hidden");
@@ -434,8 +438,7 @@ fn a_preview_is_held_to_its_limit_and_a_password_is_kept_only_once_it_opens() {
     let source = source.as_ref();
     let zip = Zip::open(source).unwrap();
     let readme =
-        zip.listing().unwrap().entries.iter().position(|entry| entry.path == "docs/readme.txt").unwrap()
-            as u32;
+        zip.listing().unwrap().listed.iter().find(|item| item.path == "docs/readme.txt").unwrap().index;
     let text = zip.preview(source, readme, 1024, None).unwrap();
     assert!(String::from_utf8(text).unwrap().contains("Read me. This entry is deflated."));
     assert_eq!(outcome(zip.preview(source, readme, 10, None).map(|_| ())), "too-large");
@@ -505,8 +508,9 @@ fn opening_checks_the_whole_span_and_the_local_header_s_sizes_and_crc() {
     // The same archive with the local header's size, then its CRC, made to differ from the directory's.
     let bytes = std::fs::read(fixture_dir().join("basic.zip")).unwrap();
     let zip = Zip::open(&bytes).unwrap();
-    let readme =
-        zip.listing().unwrap().entries.iter().find(|entry| entry.path == "docs/readme.txt").unwrap().clone();
+    let listing = zip.listing().unwrap();
+    let index = listing.listed.iter().find(|item| item.path == "docs/readme.txt").unwrap().index;
+    let readme = listing.entries[index as usize].clone();
     let at = readme.offset as usize;
     for field in [22usize, 14] {
         let mut changed = bytes.clone();
@@ -544,7 +548,7 @@ fn a_deep_path_costs_its_parts_not_their_prefixes() {
     let zip = Zip::open(&bytes).unwrap();
     assert!(started.elapsed() < std::time::Duration::from_secs(2));
     let list = zip.listing().unwrap();
-    assert_eq!(list.listed[0].parts, vec![list.entries[0].path.clone()]);
+    assert_eq!(list.listed[0].parts, vec![list.listed[0].path.clone()]);
     assert_eq!(list.listed[1].parts.len(), LIST_DEPTH_MAX);
 }
 
