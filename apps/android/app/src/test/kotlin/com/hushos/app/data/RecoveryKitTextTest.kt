@@ -2,6 +2,7 @@ package com.hushos.app.data
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
 
@@ -147,5 +148,55 @@ class ApprovalScanTest {
         assertEquals(text, KitScan.decode(pixels, width, height, accept = ::approval))
         // Asked for something no code in the frame holds: nothing.
         assertNull(KitScan.decode(pixels, width, height) { it == "something else" })
+    }
+}
+
+/*
+ * The second read's caps (`KitScan.MOST_FINDERS`, `KitScan.MOST_SETS`): without them a sheet of
+ * labels, or a screen tiled with finder squares, holds the camera thread for seconds or runs it out
+ * of memory. Measured on clean frames, so the counts are exact: lifting either cap fails these.
+ */
+class KitScanCapTest {
+    /* Small codes ("label-0", "label-1", …) tiled on a 640 × 480 frame, `unit` pixels a module, as many as fit. */
+    private fun labels(count: Int, unit: Int): Pair<ByteArray, Int> {
+        val pixels = ByteArray(640 * 480) { 255.toByte() }
+        var left = 4
+        var top = 4
+        var placed = 0
+        for (index in 0 until count) {
+            val code = com.google.zxing.qrcode.encoder.Encoder.encode("label-$index", com.google.zxing.qrcode.decoder.ErrorCorrectionLevel.L).matrix
+            val side = (code.width + 4) * unit
+            if (left + side > 640) {
+                left = 4
+                top += side
+            }
+            if (top + side > 480) break
+            for (y in 0 until code.height) for (x in 0 until code.width) if (code.get(x, y).toInt() == 1) {
+                for (dy in 0 until unit) for (dx in 0 until unit) pixels[(top + (y + 2) * unit + dy) * 640 + left + (x + 2) * unit + dx] = 0
+            }
+            left += side
+            placed++
+        }
+        return pixels to placed
+    }
+
+    @Test
+    fun aFrameOfManyCodesIsNotReadCodeByCode() {
+        val (pixels, placed) = labels(15, 3)
+        assertTrue("under the finder cap", placed * 3 < KitScan.MOST_FINDERS)
+        var asks = 0
+        assertNull(KitScan.decode(pixels, 640, 480) { asks++; false })
+        // Every set tried would decode and offer each of the 15 codes; the first sets hold only a few.
+        assertTrue("asked $asks times for $placed codes", asks < placed)
+    }
+
+    @Test
+    fun aFrameWithMoreFindersThanTheCapGetsNoSecondRead() {
+        val (pixels, placed) = labels(63, 2)
+        assertTrue("over the finder cap", placed * 3 > KitScan.MOST_FINDERS)
+        var asks = 0
+        assertNull(KitScan.decode(pixels, 640, 480) { asks++; false })
+        // Only the usual reader's code is offered: the finder search stops before any set is made.
+        assertEquals(1, asks)
     }
 }
