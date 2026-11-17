@@ -351,7 +351,7 @@ private fun EntryPane(
     doubted: Boolean,
     onUnlocked: () -> Unit,
     onWrongPassword: () -> Unit,
-    onPasswordLost: () -> Unit,
+    onPasswordLost: (Boolean) -> Unit,
     onDownload: () -> Unit,
     onDownloadArchive: () -> Unit,
 ) {
@@ -405,7 +405,7 @@ private fun EntryPane(
 }
 
 @Composable
-private fun EntryPreview(archive: OpenArchive, entry: ArchiveEntry, kind: String, limit: Long, attempt: Int, onWrongPassword: () -> Unit, onPasswordLost: () -> Unit, onDownload: () -> Unit) {
+private fun EntryPreview(archive: OpenArchive, entry: ArchiveEntry, kind: String, limit: Long, attempt: Int, onWrongPassword: () -> Unit, onPasswordLost: (Boolean) -> Unit, onDownload: () -> Unit) {
     val alpine = Alpine.colors
     var shown by remember(entry.index, attempt) { mutableStateOf<Shown>(Shown.Loading) }
     LaunchedEffect(entry.index, attempt) {
@@ -418,8 +418,10 @@ private fun EntryPreview(archive: OpenArchive, entry: ArchiveEntry, kind: String
         } catch (error: Throwable) {
             // The item has a password of its own: asked for again, for this item.
             if (error is ArchiveException.Refused && error.code == "wrong-password") onWrongPassword()
-            // The password held may be wrong (only its quick check passed): let go of, so this item asks again.
-            if (error is ArchiveException.Refused && error.code == "password-unproven") onPasswordLost()
+            // No password held any more (the held one, maybe wrong, let go of): this item asks again.
+            if (error is ArchiveException.Refused && (error.code == "password-unproven" || error.code == "password")) {
+                onPasswordLost(error.code == "password-unproven")
+            }
             Shown.Failed(archiveFailure(error, entry = true))
         }
     }

@@ -124,6 +124,43 @@ class ArchiveSessionsTest {
         sessions.closeAll()
     }
 
+    @Test fun aStoppedDownloadKeepsAPasswordOnlyItsCheckBytePassed() = runBlocking {
+        // unproven.zip under the right password, which only its check byte proves: a stop is no damage.
+        val (content, stored) = sealed(File(fixtures, "unproven.zip").readBytes())
+        val sessions = ArchiveSessions()
+        val archive = sessions.open(store(stored), content)
+        assertTrue(archive.unlock("correct horse battery", 0u))
+        val wrote = CountDownLatch(1)
+        val stopped = async(kotlinx.coroutines.Dispatchers.IO) {
+            archive.sibling().download(0u, object : EntrySink {
+                override fun write(chunk: ByteArray) {
+                    wrote.countDown()
+                    Thread.sleep(300)
+                }
+            })
+        }
+        assertTrue(wrote.await(30, TimeUnit.SECONDS))
+        stopped.cancel()
+        try {
+            stopped.await()
+            fail("a stopped download finished")
+        } catch (_: CancellationException) {
+        }
+        assertTrue(archive.unlocked)
+        // A sink that fails is the download's own end too.
+        try {
+            archive.sibling().download(0u, object : EntrySink { override fun write(chunk: ByteArray) = throw com.hushos.core.FetchException.Failed("No space left.") })
+            fail("wrote into a failing sink")
+        } catch (error: Exception) {
+            assertFalse(error is ArchiveException.Refused && error.code == "password-unproven")
+        }
+        assertTrue(archive.unlocked)
+        var size = 0L
+        archive.sibling().download(0u, object : EntrySink { override fun write(chunk: ByteArray) { size += chunk.size } })
+        assertEquals(2L shl 20, size)
+        sessions.closeAll()
+    }
+
     @Test fun aFamilyLetGoOfClosesItsArchiveAndWritesNothingMore() = runBlocking {
         // A family's file: its folder let go of (a removal, a fork) while a download streams it.
         val words = java.util.concurrent.atomic.AtomicReference<String?>(null)

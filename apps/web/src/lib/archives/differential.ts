@@ -12,7 +12,7 @@ import { ZipError } from './zip-format';
  * The web's archive reader against the core's, on the same bytes: what each lists (every field
  * the apps read, each entry's recorded method and CRC, the folders), what previewing and
  * downloading each entry meets and the SHA-256 of what it hands back, and what the shared password
- * unlocks and the content of each locked entry under it. The core's side is the `archive` verdict
+ * unlocks and the content of each locked entry under it, previewed and downloaded. The core's side is the `archive` verdict
  * of crates/hushos-core/fuzz (targets.rs), served by its `verdicts` example; the cargo-fuzz target
  * `archive` fuzzes that verdict alone, with every invariant asserted.
  *
@@ -143,10 +143,17 @@ async function web(bytes: Uint8Array) {
     } catch (error) {
         unlock = code(error);
     }
+    // Each locked entry previewed, then downloaded (to 4 MiB), under the password: where a
+    // password only its verifier passed is let go of, and asked for again.
     const unlocked = [];
     if (unlock === true)
         for (const item of archive.listed.slice(0, PREVIEWS))
-            if (item.lock !== 'none' && !item.directory) unlocked.push(await preview(item.index));
+            if (item.lock !== 'none' && !item.directory) {
+                const after: Record<string, unknown> = { preview: await preview(item.index) };
+                if (item.size <= DOWNLOAD_MAX)
+                    after.download = await download(item.index, item.size);
+                unlocked.push(after);
+            }
     return {
         ok: true,
         out: { listing: 'ok', hidden: archive.hidden, entries, unlock, unlocked },

@@ -243,6 +243,59 @@ import Testing
         archive.close()
     }
 
+    @Test func aTakenNameIsNumberedWithinAFileNamesBytes() {
+        #expect(ArchiveSaveName.numbered("report.pdf", 2) == "report (2).pdf")
+        #expect(ArchiveSaveName.numbered("README", 3) == "README (3)")
+        #expect(ArchiveSaveName.numbered(".profile", 2) == ".profile (2)")
+        // Save names at the limit: ASCII, three-byte characters, four-byte emoji, no extension, an extension past 32 bytes.
+        let long = [
+            String(repeating: "a", count: 251) + ".txt",
+            String(repeating: "日", count: 83) + ".txt",
+            String(repeating: "😀", count: 62) + ".md",
+            String(repeating: "b", count: 255),
+            String(repeating: "c", count: 200) + "." + String(repeating: "x", count: 54),
+        ]
+        for name in long {
+            #expect(name.utf8.count <= 255)
+            for n in [2, 10, 1_000] {
+                let numbered = ArchiveSaveName.numbered(name, n)
+                #expect(numbered.utf8.count <= 255, "\(n): \(numbered.utf8.count) bytes")
+                #expect(numbered.contains(" (\(n))"))
+                // The base is the name's start, cut between whole scalars.
+                let base = numbered.components(separatedBy: " (\(n))")[0]
+                #expect(name.hasPrefix(base) && !base.isEmpty)
+            }
+        }
+        #expect(ArchiveSaveName.numbered(long[0], 2).hasSuffix(" (2).txt"))
+        #expect(ArchiveSaveName.numbered(long[2], 10).hasSuffix(" (10).md"))
+    }
+
+    @Test func aStoppedDownloadKeepsAPasswordOnlyItsCheckBytePassed() async throws {
+        // unproven.zip under the right password, which only its check byte proves: a stop is no damage.
+        let archive = try await Self.open("unproven.zip")
+        let zeros = try #require(archive.entries.first)
+        #expect(try await archive.unlock("correct horse battery", entry: zeros))
+        let wrote = Counter()
+        let download = Task {
+            try await archive.download(zeros, into: ArchiveSink { _ in
+                _ = wrote.next()
+                Thread.sleep(forTimeInterval: 0.3)
+            })
+        }
+        for _ in 0 ..< 200 where wrote.value == 0 { try await Task.sleep(for: .milliseconds(10)) }
+        download.cancel()
+        let stopped = await download.result
+        #expect(throws: (any Error).self) { try stopped.get() }
+        #expect(archive.unlocked)
+        // A sink that fails is the download's own end too.
+        #expect(await code { try await archive.download(zeros, into: ArchiveSink { _ in throw CocoaError(.fileWriteOutOfSpace) }) } != "password-unproven")
+        #expect(archive.unlocked)
+        let written = Total()
+        try await archive.download(zeros, into: ArchiveSink { chunk in written.add(chunk.count) })
+        #expect(written.value == zeros.size)
+        archive.close()
+    }
+
     @Test func anIdleFamilyZipClosesTheMomentItsFamilyIsLetGoOf() async throws {
         let workspace = UUID().uuidString.lowercased()
         let archive = try await Self.open("aes.zip", registered: true)
@@ -285,6 +338,13 @@ import Testing
         TemporaryCopies.forgetFamily([family], in: temporary)
         ArchiveSessions.closeQueue.sync {}
         #expect(!archive.unlocked)
+    }
+
+    final class Total: @unchecked Sendable {
+        private let lock = NSLock()
+        private var total: UInt64 = 0
+        var value: UInt64 { lock.withLock { total } }
+        func add(_ count: Int) { lock.withLock { total += UInt64(count) } }
     }
 
     final class Counter: @unchecked Sendable {

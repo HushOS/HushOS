@@ -298,11 +298,11 @@ struct ArchiveScreen: View {
                         downloads.removeAll { $0 === progress }
                         opened = entry
                         passwordFor = entry.index
-                    } else if (error as? ArchiveFailure)?.code == "password-unproven" {
-                        // The password held may be wrong (only its quick check passed): let go of, asked for again.
+                    } else if let code = (error as? ArchiveFailure)?.code, code == "password-unproven" || code == "password" {
+                        // No password held for it any more (the held one, maybe wrong, let go of): asked for again.
                         downloads.removeAll { $0 === progress }
                         unlocked = false
-                        doubted = true
+                        doubted = code == "password-unproven"
                         opened = entry
                         passwordFor = entry.index
                     } else {
@@ -347,13 +347,12 @@ final class ArchiveDownload: Identifiable {
 }
 
 enum ArchiveFiles {
-    /* `name` in `folder`, or "name (2).ext" and on when taken. */
+    /* `name` in `folder`, or "name (2).ext" and on when taken, each within a file name's 255 bytes. */
     static func freeURL(in folder: URL, name: String) -> URL {
-        let base = (name as NSString).deletingPathExtension, ext = (name as NSString).pathExtension
         var candidate = folder.appendingPathComponent(name)
         var n = 2
         while FileManager.default.fileExists(atPath: candidate.path) {
-            candidate = folder.appendingPathComponent(ext.isEmpty ? "\(base) (\(n))" : "\(base) (\(n)).\(ext)")
+            candidate = folder.appendingPathComponent(ArchiveSaveName.numbered(name, n))
             n += 1
         }
         return candidate
@@ -509,10 +508,11 @@ private struct ArchiveEntryPane: View {
                 .task(id: attempt) {
                     do { bytes = try await archive.preview(entry, limit: limits.ceiling) } catch {
                         guard !Task.isCancelled else { return }
-                        if (error as? ArchiveFailure)?.code == "wrong-password" { reprompt = true } else if (error as? ArchiveFailure)?.code == "password-unproven" {
-                            // The password held may be wrong (only its quick check passed): let go of, so this entry asks again.
+                        let code = (error as? ArchiveFailure)?.code
+                        if code == "wrong-password" { reprompt = true } else if code == "password-unproven" || code == "password" {
+                            // No password held any more (the held one, maybe wrong, let go of): this entry asks again.
                             unlocked = false
-                            doubted = true
+                            doubted = code == "password-unproven"
                         } else {
                             failure = (error as? ArchiveFailure)?.message ?? (ErrorWords.say(error) ?? ErrorWords.generic)
                         }

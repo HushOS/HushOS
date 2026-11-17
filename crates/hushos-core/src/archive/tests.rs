@@ -461,6 +461,27 @@ fn every_fixture_as_expected_json_says() {
             assert!(zip.password().is_none(), "{name}: let go of on the archive too");
             assert_eq!(outcome(zip.download(source, index, None, &mut |_| Ok(()))), "password", "{name}");
         }
+        if let Some(entry) = expected["damagedTwice"].as_str() {
+            let index = list.listed.iter().find(|item| item.path == entry).unwrap().index;
+            let damage =
+                expected["entries"].as_array().unwrap().iter().find(|item| item["path"] == entry).unwrap()
+                    ["download"]
+                    .as_str()
+                    .unwrap()
+                    .to_string();
+            let zip = Zip::open(source).unwrap();
+            let password = PASSWORD.as_bytes();
+            let read = |zip: &Zip| {
+                let result = zip.download(source, index, Some(password), &mut |_| Ok(()));
+                outcome(zip.unproven(index, Some(password), result))
+            };
+            assert!(zip.unlock(source, password, Some(index)).unwrap(), "{name}: unlock");
+            assert_eq!(read(&zip), "password-unproven", "{name}: the first damage lets it go");
+            // Typed again, the same password is kept and the damage said, not asked for again.
+            assert!(zip.unlock(source, password, Some(index)).unwrap(), "{name}: unlock again");
+            assert_eq!(read(&zip), damage, "{name}: the second damage is said");
+            assert!(zip.password().is_some(), "{name}: and the password kept");
+        }
         if let Some(skips) = expected["unlockSkips"].as_str() {
             let counted = Counting(source, Mutex::new(Vec::new()));
             let zip = Zip::open(&counted).unwrap();
@@ -916,4 +937,58 @@ fn a_zip_entry_is_held_to_its_declared_ratio_not_a_running_one() {
     assert!(!declares_too_much(MIB, 1));
     assert!(!declares_too_much(200 * MIB, MIB));
     assert!(declares_too_much(200 * MIB + 1, MIB));
+}
+
+/* unproven.zip under the right password, which only its check byte proves: a stopped download is no damage. */
+#[test]
+fn a_cancelled_download_keeps_a_password_only_its_check_byte_proved() {
+    struct Cancelling(Arc<RunControl>);
+    impl EntrySink for Cancelling {
+        fn write(&self, _: Vec<u8>) -> std::result::Result<(), FetchError> {
+            self.0.cancel();
+            Ok(())
+        }
+    }
+    #[derive(Default)]
+    struct Counted(Mutex<u64>);
+    impl EntrySink for Counted {
+        fn write(&self, chunk: Vec<u8>) -> std::result::Result<(), FetchError> {
+            *self.0.lock().unwrap() += chunk.len() as u64;
+            Ok(())
+        }
+    }
+    let (store, content) = sealed("unproven.zip");
+    let session = ZipArchiveSession::open(store, content, RunControl::new(30_000, None)).unwrap();
+    assert!(session.unlock(PASSWORD.into(), Some(0), RunControl::new(30_000, None)).unwrap());
+    let size = session.entries()[0].size;
+    for session in [session.clone(), session.sibling().unwrap()] {
+        let call = RunControl::new(30_000, None);
+        let stopped = session.download(0, Arc::new(Cancelling(call.clone())), call);
+        assert!(
+            matches!(stopped, Err(ArchiveError::Failed { .. })),
+            "a cancel is said as itself: {stopped:?}"
+        );
+        assert!(session.unlocked(), "and the password stays held");
+        let whole = Arc::new(Counted::default());
+        session.download(0, whole.clone(), RunControl::new(30_000, None)).unwrap();
+        assert_eq!(*whole.0.lock().unwrap(), size);
+    }
+}
+
+/* A password accepted again by an entry that can only check it stays proven: the damage there is said. */
+#[test]
+fn a_re_accepted_password_stays_as_proven_as_it_was() {
+    let source = bytes_of("zipcrypto-empty.zip", false);
+    let source = source.as_ref();
+    let zip = Zip::open(source).unwrap();
+    let listing = zip.listing().unwrap();
+    let at = |path: &str| listing.listed.iter().find(|item| item.path == path).unwrap().index;
+    let (empty, secret) = (at("empty.txt"), at("secret.txt"));
+    let password = PASSWORD.as_bytes();
+    assert!(zip.unlock(source, password, Some(secret)).unwrap());
+    assert!(zip.unlock(source, password, Some(empty)).unwrap());
+    // Damage read on the empty entry: the password was proven, so it is kept.
+    let damaged: Result<()> = refused(Refusal::Crc);
+    assert_eq!(outcome(zip.unproven(empty, Some(password), damaged)), "crc");
+    assert!(zip.password().is_some());
 }

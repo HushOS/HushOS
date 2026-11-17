@@ -1250,6 +1250,38 @@ function unprovenFixture() {
     ]);
 }
 
+/*
+ * The right password on a locked entry that can't prove it: 2 MiB of zeros past the declared
+ * ratio (an unlock reads its check byte alone), with a CRC that doesn't match. Its first download
+ * lets the password go (`password-unproven`); typed again, the same password is kept and the next
+ * download says the damage (`crc`), rather than asking again without end.
+ */
+function unprovableDamagedFixture() {
+    const data = UNPROVEN_DATA();
+    return writeZip([
+        {
+            name: 'zeros.bin',
+            data,
+            method: 8,
+            // The top byte kept: it is the check byte, which the right password passes.
+            crc: (crc32(data) ^ 0x00a5a5a5) >>> 0,
+            encrypt: { kind: 'zipcrypto' },
+        },
+    ]);
+}
+
+/*
+ * Locked entries that are all empty ZipCrypto ones, beside a plain one: their one check byte is
+ * all an unlock can try, so it does, and the password is held unproven.
+ */
+function zipCryptoEmptyOnlyFixture() {
+    return writeZip([
+        { name: 'readme.txt', data: text('Plain, beside empty locked entries.') },
+        { name: 'empty.txt', data: new Uint8Array(0), method: 0, encrypt: { kind: 'zipcrypto' } },
+        { name: 'empty-2.txt', data: new Uint8Array(0), encrypt: { kind: 'zipcrypto' } },
+    ]);
+}
+
 /* The first of "wrong 0", "wrong 1", … whose decrypted check byte is `unprovenFixture`'s. */
 export const UNPROVEN_PASSWORD = (() => {
     const check = (crc32(UNPROVEN_DATA()) >>> 24) & 0xff;
@@ -1578,6 +1610,8 @@ export const FIXTURES: Fixture[] = [
     { name: 'locked-ratio.zip', large: false, build: lockedRatioFixture },
     { name: 'aes-empty.zip', large: false, build: aesEmptyFixture },
     { name: 'unproven.zip', large: false, build: unprovenFixture },
+    { name: 'unprovable-damaged.zip', large: false, build: unprovableDamagedFixture },
+    { name: 'zipcrypto-empty-only.zip', large: false, build: zipCryptoEmptyOnlyFixture },
     { name: 'front-loaded.zip', large: true, build: frontLoadedFixture },
     { name: 'wide.zip', large: true, build: wideFixture },
     { name: 'folders-2m.zip', large: true, build: folders2MFixture },

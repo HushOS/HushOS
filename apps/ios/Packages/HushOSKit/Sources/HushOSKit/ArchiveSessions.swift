@@ -760,6 +760,35 @@ public enum ArchiveEntries {
 }
 
 /* Text cut where a line ends, at most 200 lines or 16 KB a piece; a line longer than that is cut between characters. */
+/*
+ * The name a download takes when its own is taken in the folder: "name (n).ext". A save name is
+ * already at most 255 bytes of UTF-8 (a file name's limit), so the base is cut, between Unicode
+ * scalars, to leave room for the suffix and the extension (of at most 32 bytes, as the core keeps
+ * one) on every attempt.
+ */
+public enum ArchiveSaveName {
+    public static let maxBytes = 255
+
+    public static func numbered(_ name: String, _ n: Int) -> String {
+        let dot = name.lastIndex(of: ".")
+        var base = name, ext = ""
+        if let dot, dot != name.startIndex, name.utf8.distance(from: dot, to: name.utf8.endIndex) <= 32 {
+            base = String(name[..<dot])
+            ext = String(name[dot...])
+        }
+        let tail = " (\(n))" + ext
+        let room = max(0, maxBytes - tail.utf8.count)
+        var kept = String.UnicodeScalarView(), used = 0
+        for scalar in base.unicodeScalars {
+            let width = UTF8.width(scalar)
+            if used + width > room { break }
+            used += width
+            kept.append(scalar)
+        }
+        return String(kept) + tail
+    }
+}
+
 public enum ArchiveText {
     public static let lines = 200
     public static let bytes = 16 * 1024

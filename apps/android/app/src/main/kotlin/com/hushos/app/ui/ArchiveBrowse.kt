@@ -74,10 +74,13 @@ class ArchiveBrowse(
     /* The password held, which only its quick check had passed, was let go of: the cards say it may be wrong. */
     var doubted by mutableStateOf(false)
 
-    /* The core let go of the password held (`password-unproven`): every locked item asks again. */
-    fun passwordLost() {
+    /*
+     * The archive holds no password: every locked item asks again, saying it may have been wrong
+     * when the core let go of it (`password-unproven`).
+     */
+    fun passwordLost(doubt: Boolean) {
         unlocked = false
-        doubted = true
+        doubted = doubt
     }
     var asking by mutableStateOf<ArchiveEntry?>(null)
     /* The download whose place the Save dialog is choosing: kept across a rotation. */
@@ -179,10 +182,10 @@ class ArchiveBrowse(
             opened = record.entry
             return
         }
-        // The password held may be wrong (only its quick check passed): let go of, asked for again.
-        if (error is ArchiveException.Refused && error.code == "password-unproven") {
+        // No password held for it any more (the held one, maybe wrong, let go of): asked for again.
+        if (error is ArchiveException.Refused && (error.code == "password-unproven" || error.code == "password")) {
             downloads.remove(record)
-            passwordLost()
+            passwordLost(doubt = error.code == "password-unproven")
             opened = record.entry
             return
         }

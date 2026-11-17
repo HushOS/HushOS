@@ -199,10 +199,13 @@ export function ArchiveView({ node, onDownload }: { node: DriveNode; onDownload:
                     setOpened(entry);
                     return;
                 }
-                // The password held may be wrong (only its quick check passed): let go of, asked for again.
-                if (cause instanceof ArchiveRefusal && cause.code === 'password-unproven') {
+                // No password held for it any more (the held one, maybe wrong, let go of): asked for again.
+                if (
+                    cause instanceof ArchiveRefusal &&
+                    (cause.code === 'password-unproven' || cause.code === 'password')
+                ) {
                     drop();
-                    passwordLost();
+                    passwordLost(cause.code === 'password-unproven');
                     setAskFor(entry);
                     setOpened(entry);
                     return;
@@ -211,9 +214,10 @@ export function ArchiveView({ node, onDownload }: { node: DriveNode; onDownload:
             });
     }
 
-    function passwordLost() {
+    /* The archive holds no password: every locked entry asks again, saying why when it may have been wrong. */
+    function passwordLost(doubt: boolean) {
         setUnlocked(false);
-        setDoubted(true);
+        setDoubted(doubt);
     }
 
     /* After a password has opened it, or when none is needed. */
@@ -583,7 +587,7 @@ function EntryPane({
     onDownloadNow: () => void;
     /* The password held was let go of, maybe wrong: the card says so. */
     doubted: boolean;
-    onPasswordLost: () => void;
+    onPasswordLost: (doubt: boolean) => void;
 }) {
     const name = entry.name;
     const node = useMemo(() => entryNode(archive, entry), [archive, entry]);
@@ -612,9 +616,12 @@ function EntryPane({
                 } catch (cause) {
                     if (cause instanceof ArchiveRefusal && cause.code === 'wrong-password')
                         setReprompt(true);
-                    // The held password may be wrong: let go of, so this entry's card asks again.
-                    if (cause instanceof ArchiveRefusal && cause.code === 'password-unproven')
-                        onPasswordLost();
+                    // No password held any more (the held one, maybe wrong, let go of): the card asks again.
+                    if (
+                        cause instanceof ArchiveRefusal &&
+                        (cause.code === 'password-unproven' || cause.code === 'password')
+                    )
+                        onPasswordLost(cause.code === 'password-unproven');
                     throw cause;
                 }
             },

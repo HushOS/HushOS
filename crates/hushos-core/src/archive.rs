@@ -48,6 +48,11 @@ const UNLOCK_CHECK_BYTES: u64 = 16 * MIB;
 fn probes(entry: &Entry) -> bool {
     entry.size <= UNLOCK_CHECK_BYTES && !declares_too_much(entry.size, entry.packed)
 }
+/// Whether `entry` read whole proves a password: an empty ZipCrypto entry has only its one check
+/// byte (it passes 1 wrong password in 256); an empty AES entry still carries its keyed code.
+fn proves(entry: &Entry) -> bool {
+    entry.size > 0 || entry.lock == Lock::Aes
+}
 /// How far one try of a password goes: at most three entries and 32 MiB read, however many are locked.
 const UNLOCK_ENTRIES_MAX: usize = 3;
 const UNLOCK_READ_MAX: u64 = 32 * MIB;
@@ -1540,12 +1545,15 @@ struct Lifecycle {
  * The password held, shared by an archive and its siblings (a download's), and whether an entry
  * decoded whole proved it. One proven only by its verifier (ZipCrypto's one byte passes 1 wrong
  * password in 256) is let go of by the first locked entry that then reads as damaged, on any of
- * them, and that entry asks for it again (`password-unproven`).
+ * them, and that entry asks for it again (`password-unproven`). `failed` is the password let go
+ * of on each entry: typed again and damaged again there, it is kept and the damage said, rather
+ * than asked for without end.
  */
 #[derive(Default)]
 struct Held {
     password: Option<Zeroizing<Vec<u8>>>,
     proven: bool,
+    failed: HashMap<u32, Zeroizing<Vec<u8>>>,
 }
 
 /// An open archive: its listing, and the password while one is held. Each entry is decoded from
@@ -1819,28 +1827,24 @@ impl Zip {
     /// authentication code then proves the password; then the rest, to their password check
     /// alone. So when no entry qualifies, the password verifier alone decides (AES's two bytes;
     /// ZipCrypto's one check byte, which passes 1 wrong password in 256: a download then fails its
-    /// CRC). An empty ZipCrypto entry proves nothing, so it is never the probe; an empty AES
-    /// entry's authentication code does. A wrong password ends it; an
+    /// CRC). An empty ZipCrypto entry proves nothing (its one check byte is all there is), so it
+    /// comes last, to that check alone, unless it is the entry asked for; an empty AES entry's
+    /// authentication code does prove it. A wrong password ends it; an
     /// entry that fails for another reason (damage, a bad authentication code or CRC, which may be
     /// tampering) says nothing certain of the password, and the next is tried: at most three
     /// entries and 32 MiB read in all, past which a try reads only an entry's password check.
-    /// Kept only if it opens one, and never once the archive is closed.
+    /// Kept only if it opens one, and never once the archive is closed; the password already held,
+    /// accepted again, stays as proven as it was.
     pub fn unlock(&self, source: &dyn RangeRead, password: &[u8], index: Option<u32>) -> Result<bool> {
         let listing = self.listing()?;
         let mut candidates: Vec<&Entry> = listing
             .entries
             .iter()
             .filter(|entry| {
-                entry.lock != Lock::None
-                    // An empty entry proves nothing under ZipCrypto (one check byte), but an empty
-                    // AES entry still carries its keyed authentication code.
-                    && (entry.size > 0 || entry.lock == Lock::Aes)
-                    && !entry.directory
-                    && !entry.link
-                    && support_of(entry) == "ok"
+                entry.lock != Lock::None && !entry.directory && !entry.link && support_of(entry) == "ok"
             })
             .collect();
-        candidates.sort_by_key(|entry| (!probes(entry), entry.packed, entry.index));
+        candidates.sort_by_key(|entry| (!proves(entry), !probes(entry), entry.packed, entry.index));
         if let Some(first) = index.and_then(|index| candidates.iter().position(|entry| entry.index == index))
         {
             let entry = candidates.remove(first);
@@ -1851,7 +1855,7 @@ impl Zip {
             if self.is_closed() {
                 return Err(closed_error());
             }
-            let check_only = !probes(entry) || read + entry.packed > UNLOCK_READ_MAX;
+            let check_only = !proves(entry) || !probes(entry) || read + entry.packed > UNLOCK_READ_MAX;
             if !check_only {
                 read += entry.packed;
             }
@@ -1862,8 +1866,10 @@ impl Zip {
                     if life.closed {
                         return Err(closed_error());
                     }
-                    *lock(&self.held) =
-                        Held { password: Some(Zeroizing::new(password.to_vec())), proven: !check_only };
+                    let mut held = lock(&self.held);
+                    let again = held.password.as_deref().map(Vec::as_slice) == Some(password);
+                    held.proven = (again && held.proven) || !check_only;
+                    held.password = Some(Zeroizing::new(password.to_vec()));
                     return Ok(true);
                 }
                 // Only the password check says the password is wrong; a bad code or CRC may be tampering.
@@ -1897,7 +1903,9 @@ impl Zip {
      * After a call on entry `index` read with `used`: a locked entry that read as damaged (its
      * stream, size, CRC or AES code) under a password only its verifier passed lets that password
      * go, on this archive and its siblings, and says so (`password-unproven`), so it is asked for
-     * again rather than every locked entry reading as damaged.
+     * again rather than every locked entry reading as damaged. The same password damaged again on
+     * the same entry is kept, and the damage said: that entry can't prove it. The caller keeps a
+     * stop (a cancel, the watchdog, a close) away from here: it is no damage.
      */
     pub fn unproven<T>(&self, index: u32, used: Option<&[u8]>, result: Result<T>) -> Result<T> {
         let Err(ArchiveError::Refused { code }) = &result else { return result };
@@ -1909,10 +1917,14 @@ impl Zip {
             .unwrap_or(false);
         let (Some(used), true, true) = (used, damaged, locked) else { return result };
         let mut held = lock(&self.held);
-        if held.proven || held.password.as_deref().map(Vec::as_slice) != Some(used) {
+        if held.proven
+            || held.password.as_deref().map(Vec::as_slice) != Some(used)
+            || held.failed.get(&index).map(|failed| failed.as_slice()) == Some(used)
+        {
             return result;
         }
-        *held = Held::default();
+        held.password = None;
+        held.failed.insert(index, Zeroizing::new(used.to_vec()));
         refused(Refusal::PasswordUnproven)
     }
 
@@ -2019,6 +2031,27 @@ impl ZipArchiveSession {
         }
     }
 
+    /*
+     * A preview's or download's result: a stop (the app's cancel, the watchdog, a close) said as
+     * itself, never as damage that lets the password go; anything else judged by `Zip::unproven`.
+     * A failed write (the sink's) is `Failed`, never a refusal, so it never reaches that either.
+     */
+    fn judged<T>(
+        &self,
+        index: u32,
+        used: Option<&[u8]>,
+        control: &RunControl,
+        result: Result<T>,
+    ) -> Result<T> {
+        if result.is_err() {
+            if self.zip.is_closed() {
+                return Err(closed_error());
+            }
+            control.check()?;
+        }
+        self.after(self.zip.unproven(index, used, result))
+    }
+
     /* A call's failure, said as the close when the archive closed under it. */
     fn after<T>(&self, result: Result<T>) -> Result<T> {
         match result {
@@ -2113,7 +2146,7 @@ impl ZipArchiveSession {
         let used = password.as_deref().map(Vec::as_slice);
         let result =
             self.reader(&control).and_then(|source| self.zip.preview(source.as_ref(), index, limit, used));
-        let bytes = self.after(self.zip.unproven(index, used, result))?;
+        let bytes = self.judged(index, used, &control, result)?;
         control.check()?;
         Ok(bytes)
     }
@@ -2141,7 +2174,7 @@ impl ZipArchiveSession {
                 Ok(())
             })
         });
-        self.after(self.zip.unproven(index, used, result))?;
+        self.judged(index, used, &control, result)?;
         flush(&mut pending)?;
         control.check()?;
         Ok(())

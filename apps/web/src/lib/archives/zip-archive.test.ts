@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import table from '../../../../../e2e/fixtures/archives/expected.json';
-import { FIXTURE_DIR, FIXTURES } from '../../../../../e2e/fixtures/archives/make';
+import { crc32, FIXTURE_DIR, FIXTURES, writeZip } from '../../../../../e2e/fixtures/archives/make';
 import { ZipArchive } from './zip-archive';
 import { readListing } from './session';
 import {
@@ -30,6 +30,7 @@ type Expected = {
     unlockWith?: { password: string; anywhere: boolean; at: Record<string, boolean> };
     unlockSkips?: string;
     unproven?: { password: string; entry: string };
+    damagedTwice?: string;
     parts?: Record<string, string[]>;
     partsLength?: Record<string, number>;
     count?: number;
@@ -278,6 +279,23 @@ describe('every fixture, as expected.json says', () => {
                     expect(held.unlocked).toBe(false);
                     expect(await outcome(() => held.download(index, () => {}))).toBe('password');
                 }
+                if (expected.damagedTwice) {
+                    const held = await open(name);
+                    const index = held.entries.findIndex(
+                        (entry) => entry.path === expected.damagedTwice,
+                    );
+                    expect(await held.unlock(table.password, index)).toBe(true);
+                    expect(await outcome(() => held.download(index, () => {}))).toBe(
+                        'password-unproven',
+                    );
+                    // Typed again, the same password is kept and the damage said, not asked for again.
+                    expect(await held.unlock(table.password, index)).toBe(true);
+                    const damage = expected.entries!.find(
+                        (entry) => entry.path === expected.damagedTwice,
+                    )!.download;
+                    expect(await outcome(() => held.download(index, () => {}))).toBe(damage);
+                    expect(held.unlocked).toBe(true);
+                }
                 if (expected.unlockSkips) {
                     const bytes = bytesOf(name);
                     let read = 0;
@@ -336,5 +354,69 @@ describe('reading', () => {
         // Closed, nothing reads any more: not the entry it opened, not one it didn't need.
         expect(await outcome(() => archive.preview(0, 1024))).toBe('damaged');
         expect(await outcome(() => archive.preview(2, 1024))).toBe('damaged');
+    });
+
+    /*
+     * unproven.zip under the right password, which only its check byte proves: a download stopped
+     * part way (as the worker stops one, and as a failing sink ends one) is no damage, and the
+     * password stays held for the next, which comes out whole.
+     */
+    it('lets a stopped download keep a password only its check byte proved', async () => {
+        const archive = await open('unproven.zip');
+        expect(await archive.unlock(table.password, 0)).toBe(true);
+        const stop = new AbortController();
+        const stopped = await outcome(() =>
+            archive.download(
+                0,
+                () => {
+                    // The worker's send, once the page has stopped it.
+                    stop.abort();
+                    throw new ZipError('damaged');
+                },
+                stop.signal,
+            ),
+        );
+        expect(stopped).not.toBe('password-unproven');
+        expect(archive.unlocked).toBe(true);
+        const failed = await outcome(() =>
+            archive.download(0, () => {
+                throw new Error('The disk is full.');
+            }),
+        );
+        expect(failed).not.toBe('password-unproven');
+        expect(archive.unlocked).toBe(true);
+        let size = 0;
+        await archive.download(0, (chunk) => {
+            size += chunk.length;
+        });
+        expect(size).toBe(archive.entries[0]!.size);
+    });
+
+    it('keeps a re-accepted password as proven as it was', async () => {
+        // A small entry that proves the password, and a damaged one past the ratio that can only check it.
+        const zeros = new Uint8Array(2 << 20);
+        const bytes = writeZip([
+            {
+                name: 'small.txt',
+                data: new TextEncoder().encode('Proves it.'),
+                encrypt: { kind: 'zipcrypto' },
+            },
+            {
+                name: 'zeros.bin',
+                data: zeros,
+                method: 8,
+                crc: (crc32(zeros) ^ 0x00a5a5a5) >>> 0,
+                encrypt: { kind: 'zipcrypto' },
+            },
+        ]);
+        const archive = await ZipArchive.open({
+            size: bytes.length,
+            read: async (offset, length) => bytes.slice(offset, offset + length),
+        });
+        expect(await archive.unlock(table.password, 0)).toBe(true);
+        // Accepted again by the entry that can only check it: still proven, so its damage is said.
+        expect(await archive.unlock(table.password, 1)).toBe(true);
+        expect(await outcome(() => archive.download(1, () => {}))).toBe('crc');
+        expect(archive.unlocked).toBe(true);
     });
 });

@@ -221,6 +221,11 @@ function refusalOf(error: unknown): ZipError {
  */
 const UNLOCK_CHECK_BYTES = 16 * 1024 * 1024;
 const probes = (entry: ZipEntry) => entry.size <= UNLOCK_CHECK_BYTES && !declaresTooMuch(entry);
+/*
+ * Whether an entry read whole proves a password: an empty ZipCrypto entry has only its one check
+ * byte (it passes 1 wrong password in 256); an empty AES entry still carries its keyed code.
+ */
+const proves = (entry: ZipEntry) => entry.size > 0 || entry.lock === 'aes';
 /* How far one try of a password goes: at most three entries and 32 MiB read, however many are locked. */
 export const UNLOCK_ENTRIES_MAX = 3;
 export const UNLOCK_READ_MAX = 32 * 1024 * 1024;
@@ -230,6 +235,11 @@ export class ZipArchive {
     #password: string | null = null;
     /* Whether an entry decoded whole proved the password, or only its verifier passed it (the core's Held). */
     #proven = false;
+    /*
+     * The password let go of on each entry it read as damaged: typed again and damaged again
+     * there, it is kept and the damage is said, rather than asked for without end.
+     */
+    #failed = new Map<number, string>();
     #closed = false;
     #nested: Set<number>;
     /* The list's folders until the worker sends them on: nothing here reads them after. */
@@ -275,6 +285,7 @@ export class ZipArchive {
     close() {
         this.#closed = true;
         this.#password = null;
+        this.#failed.clear();
     }
 
     #entry(index: number) {
@@ -402,6 +413,7 @@ export class ZipArchive {
         await this.#unproven(
             entry,
             used,
+            () => signal?.aborted === true,
             this.#inflate(entry, {
                 ratio: false,
                 password: used,
@@ -419,12 +431,20 @@ export class ZipArchive {
      * A locked entry that read as damaged (its stream, size, CRC or AES code) under the held
      * password, which only its verifier passed (ZipCrypto's one byte passes 1 wrong password in
      * 256): the password is let go of and asked for again (`password-unproven`), rather than every
-     * locked entry reading as damaged. As the core does (Zip::unproven).
+     * locked entry reading as damaged. The same password damaged again on the same entry is kept,
+     * and the damage said: that entry can't prove it. A stop (the page's, a close, the sink's
+     * failure) is no damage, and never touches the password. As the core does (Zip::unproven).
      */
-    async #unproven(entry: ZipEntry, used: string | null, reading: Promise<void>) {
+    async #unproven(
+        entry: ZipEntry,
+        used: string | null,
+        stopped: () => boolean,
+        reading: Promise<void>,
+    ) {
         try {
             await reading;
         } catch (error) {
+            if (stopped() || this.#closed) throw error;
             const damaged =
                 error instanceof ZipError &&
                 ['damaged', 'size', 'short', 'crc', 'auth'].includes(error.code);
@@ -433,9 +453,11 @@ export class ZipArchive {
                 used !== null &&
                 entry.lock !== 'none' &&
                 !this.#proven &&
-                used === this.#password
+                used === this.#password &&
+                this.#failed.get(entry.index) !== used
             ) {
                 this.#password = null;
+                this.#failed.set(entry.index, used);
                 throw new ZipError('password-unproven');
             }
             throw error;
@@ -470,10 +492,25 @@ export class ZipArchive {
         password: string | null = this.#password,
     ) {
         const entry = this.#entry(index);
+        // A write that failed is the download's own end (its sink), not the entry's damage. Only
+        // a locked entry's password can be let go of, so only its writes are watched.
+        let sinkFailed = false;
+        const writing =
+            entry.lock === 'none'
+                ? write
+                : async (chunk: Uint8Array) => {
+                      try {
+                          await write(chunk);
+                      } catch (error) {
+                          sinkFailed = true;
+                          throw error;
+                      }
+                  };
         await this.#unproven(
             entry,
             password,
-            this.#inflate(entry, { ratio: false, password, signal, write }),
+            () => sinkFailed || signal?.aborted === true,
+            this.#inflate(entry, { ratio: false, password, signal, write: writing }),
         );
     }
 
@@ -484,26 +521,26 @@ export class ZipArchive {
      * then proves the password; then the rest, to their password check alone. So when no entry
      * qualifies, the password verifier alone decides (AES's two bytes; ZipCrypto's one check
      * byte, which passes 1 wrong password in 256: a download then fails its CRC). An empty
-     * ZipCrypto entry proves nothing, so it is never the probe; an empty AES entry's
-     * authentication code does. A wrong password ends it; an entry that fails for
+     * ZipCrypto entry proves nothing (its one check byte is all there is), so it comes last, to
+     * that check alone, unless it is the entry asked for; an empty AES entry's
+     * authentication code does prove it. A wrong password ends it; an entry that fails for
      * another reason (damage, tampering: a bad authentication code or CRC) says nothing certain
      * of the password, and the next is tried, at most three entries and 32 MiB read in all; past
-     * that a try reads only an entry's password check. Kept only if an entry opens with it.
+     * that a try reads only an entry's password check. Kept only if an entry opens with it;
+     * the password already held, accepted again, stays as proven as it was.
      */
     async unlock(password: string, index?: number, signal?: AbortSignal) {
         const candidates = this.entries
             .filter(
                 (entry) =>
                     entry.lock !== 'none' &&
-                    // An empty entry proves nothing under ZipCrypto (one check byte), but an empty
-                    // AES entry still carries its keyed authentication code.
-                    (entry.size > 0 || entry.lock === 'aes') &&
                     !entry.directory &&
                     !entry.link &&
                     supportOf(entry) === 'ok',
             )
             .sort(
                 (a, b) =>
+                    Number(proves(b)) - Number(proves(a)) ||
                     Number(probes(b)) - Number(probes(a)) ||
                     a.packed - b.packed ||
                     a.index - b.index,
@@ -513,7 +550,8 @@ export class ZipArchive {
         let read = 0;
         for (const entry of candidates.slice(0, UNLOCK_ENTRIES_MAX)) {
             if (this.#closed) return false;
-            const checkOnly = !probes(entry) || read + entry.packed > UNLOCK_READ_MAX;
+            const checkOnly =
+                !proves(entry) || !probes(entry) || read + entry.packed > UNLOCK_READ_MAX;
             read += checkOnly ? 0 : entry.packed;
             try {
                 await this.#inflate(entry, {
@@ -529,8 +567,8 @@ export class ZipArchive {
                 continue;
             }
             if (this.#closed) return false;
+            this.#proven = (password === this.#password && this.#proven) || !checkOnly;
             this.#password = password;
-            this.#proven = !checkOnly;
             return true;
         }
         return false;

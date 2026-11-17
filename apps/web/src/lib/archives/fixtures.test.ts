@@ -114,7 +114,8 @@ describe('the archive fixtures, through independent readers', () => {
         } finally {
             rmSync(fresh, { recursive: true, force: true });
         }
-    });
+        // Every small fixture written afresh and read twice by Python: about 90 processes, in turn.
+    }, 60_000);
 
     it('basic.zip: folders, deflated and stored entries, a data descriptor, the canary inside', () => {
         const { entries } = python('basic.zip');

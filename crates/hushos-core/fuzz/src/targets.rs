@@ -2227,7 +2227,8 @@ fn sha256_hex(bytes: &[u8]) -> String {
 /// Any bytes as a zip, the way a phone opens one: listed (every field the apps read, and each
 /// entry's method and CRC as recorded), each entry previewed (at most 32, each within 1 MiB) and
 /// downloaded into a sink that keeps nothing (up to 4 MiB), the content of each named by its
-/// SHA-256; then the shared password tried, and the locked entries previewed again under it.
+/// SHA-256; then the shared password tried, and the locked entries previewed and downloaded
+/// again under it.
 /// The web's verdict is the same JSON (apps/web/src/lib/archives/differential.ts), so wrong bytes
 /// show as well as wrong refusals. Invariants: no panic; every folder after its parent with a name
 /// a path could hold; every entry in a folder that exists; a preview or a download never other
@@ -2316,10 +2317,16 @@ pub fn archive(data: &[u8]) -> Value {
         .collect();
     let (unlocked, code) = archive_code(session.unlock(ARCHIVE_PASSWORD.into(), None, control()));
     let mut after = Vec::new();
+    // Each locked entry previewed, then downloaded (to 4 MiB), under the password: where a
+    // password only its verifier passed is let go of, and asked for again.
     if unlocked == Some(true) {
         for entry in entries.iter().take(ARCHIVE_PREVIEWS) {
             if entry.lock != "none" && !entry.directory {
-                after.push(preview(entry.index, entry.size));
+                let mut out = json!({ "preview": preview(entry.index, entry.size) });
+                if entry.size <= ARCHIVE_DOWNLOAD_MAX {
+                    out["download"] = download(entry.index, entry.size);
+                }
+                after.push(out);
             }
         }
     }
