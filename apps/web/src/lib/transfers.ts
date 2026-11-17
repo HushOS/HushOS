@@ -23,6 +23,7 @@ import {
 import { driveApi } from '@/lib/drive-api';
 import { stashAvailable, uploadStash } from '@/lib/stash';
 import { backoffDelay } from '@/lib/groups/walks';
+import { holdPageWhile } from '@/lib/leave-guard';
 
 /*
  * One transfer manager for the whole app, created once and never tied to a route,
@@ -212,13 +213,8 @@ export function useTransfers() {
  */
 let guarding = false;
 export function guardUnloadWhileUploading() {
-    if (guarding || typeof window === 'undefined') return;
+    if (guarding) return;
     guarding = true;
-    window.addEventListener('beforeunload', (event) => {
-        if (transfers.getState().active > 0 || resultsWaiting()) {
-            event.preventDefault();
-            // Chrome still requires returnValue to be set for the prompt to show.
-            event.returnValue = '';
-        }
-    });
+    // The one prompt a tool's unreleased results ask through too (lib/leave-guard.ts).
+    holdPageWhile(() => transfers.getState().active > 0 || resultsWaiting());
 }

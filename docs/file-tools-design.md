@@ -563,7 +563,7 @@ Open in editing-design.md that bear on milestone 1 (that document's decisions ar
 
 The open questions above are answered as recommended, with two changes:
 
-- **Results and reload (4):** accepted that a tool's results don't survive a reload, but while any result is still waiting to upload, the page asks before it unloads (`beforeunload`), so a reload or close isn't silent.
+- **Results and reload (4):** accepted that a tool's results don't survive a reload, but while any result is still waiting to upload, the page asks before it unloads (`beforeunload`), so a reload or close isn't silent. One listener asks for everything that would be lost (uploads, results waiting to upload, results not yet handed over: `apps/web/src/lib/leave-guard.ts`), so the browser never asks twice.
 - **Text over 8 MiB (12):** opens read only, with the large-file card offering editing behind a warning about memory and speed, up to the text ceiling.
 - **PDF writing:** `@cantoo/pdf-lib` (MIT; 2.7.1, actively released, though its maintainers promise support only for their own roadmap), pinned to an exact version and run in a worker; vendored if it goes quiet. pdf.js stays the reader (rendering, PDF to images, page thumbnails).
 - **HEIC (1):** convert only where the browser decodes HEIC; a software decoder waits for a licence and patent check. **wasm-vips and HEIC (2):** verified in that PR.

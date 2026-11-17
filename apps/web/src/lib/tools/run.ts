@@ -17,6 +17,7 @@ import {
 } from './protocol';
 import { readAllowance, serveRanges, type RangeReader } from './ranges';
 import { createWatchdog } from './watchdog';
+import { holdPageWhile } from '@/lib/leave-guard';
 
 /*
  * A tool run, from the page: one worker, its sources served by range, its results handed
@@ -115,17 +116,14 @@ type Queued = {
 let current: Queued | null = null;
 const queue: Queued[] = [];
 
-/* Results not yet released, across runs: while any wait, leaving the page asks first. */
+/* Results not yet released, across runs: while any wait, leaving the page asks first (lib/leave-guard.ts). */
 let unreleased = 0;
-function guardUnload(event: BeforeUnloadEvent) {
-    event.preventDefault();
-}
+let holding = false;
 function countUnreleased(delta: number) {
-    const before = unreleased;
     unreleased += delta;
-    if (typeof window === 'undefined') return;
-    if (before === 0 && unreleased > 0) window.addEventListener('beforeunload', guardUnload);
-    if (before > 0 && unreleased === 0) window.removeEventListener('beforeunload', guardUnload);
+    if (holding || unreleased <= 0) return;
+    holding = true;
+    holdPageWhile(() => unreleased > 0);
 }
 
 function advance() {
