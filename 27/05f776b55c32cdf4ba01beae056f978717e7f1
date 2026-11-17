@@ -1,0 +1,37 @@
+apps/android/AGENTS.md
+  s_c60e24772e04af::t_bcc2f84493f0d2 1651
+apps/android/app/src/main/kotlin/com/hushos/app/data/AccountStore.kt
+  s_c60e24772e04af::t_17618929b09a32 56
+apps/android/app/src/main/kotlin/com/hushos/app/data/SaveRuns.kt
+  s_c60e24772e04af::t_c4771ea6a7b338 176-187,421-423,425-428,430,433,730,735-752,904,912,917,921,930-954,956-983,985-993,995-999
+apps/android/app/src/test/kotlin/com/hushos/app/data/SaveRunTest.kt
+  s_c60e24772e04af::t_3b908daeb9f61c 506,510-535,907-955
+apps/ios/AGENTS.md
+  s_c60e24772e04af::t_61a9635a19c958 1267
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/SaveRuns.swift
+  s_c60e24772e04af::t_9893a578b1b677 190-191,193,534-538,560-563,574-582,594-597,602,604-605,616,620,627,1072-1074,1207-1210,1225-1227,1241,1316-1322,1389-1390,1466,1468-1475
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SaveRunTests.swift
+  s_c60e24772e04af::t_c6158c3e7fb1a0 997-1042
+docs/file-tools-design.md
+  s_c60e24772e04af::t_8ba192896a2c88 312
+packages/drive/src/save-runs.test.ts
+  s_c60e24772e04af::t_bc09b13bb185c3 32,1524-1530,1556-1644
+packages/drive/src/save-runs.ts
+  s_c60e24772e04af::t_e2461c9cdd45c5 136-143,634-646,1085-1086,1088-1104,1106-1123,1127,1161,1378-1379,1396,1421,1425,1431-1462,1497-1500,1502,1504-1506,1508
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2705f776b55c32cdf4ba01beae056f978717e7f1",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
