@@ -202,14 +202,14 @@ export async function startSaveRun(queryClient: QueryClient, plan: RunPlan) {
 
 /*
  * Runs a closed tab left behind (ids only), for the next open to offer to delete or keep what they
- * made. A row with nothing made, only reservations to let go, is settled here and never offered.
+ * made. Settled here and never offered: a row with nothing made, only reservations to let go, and
+ * one the person already answered "delete" for that waits for a folder that may still land.
  */
-export function interruptedSaveRuns() {
+export function interruptedSaveRuns(queryClient: QueryClient) {
     return interruptedRuns({
+        ...deps(queryClient),
         runs: runs(),
         isLive: locks() ? isLive : undefined,
-        abortUpload: (workspaceId, uploadId) =>
-            askAbort(() => driveApi.abortUpload(workspaceId, uploadId)),
     });
 }
 

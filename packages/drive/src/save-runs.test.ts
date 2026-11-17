@@ -32,7 +32,7 @@ import {
     RunStopped,
     SaveRefused,
     abandonRuns,
-    CREATION_WINDOW_MS,
+    CREATION_SETTLE_MS,
     askAbort,
     cleanUpInterrupted,
     interruptedRuns,
@@ -1479,19 +1479,24 @@ describe('a save run', () => {
         await tick();
         expect(w.runs.rows.get(run.id)!.uncertain).toEqual([{ id: 'slow', at: 1_000 }]);
         abandonRuns();
-        // The next open, before the server made it: not found, and the row stays.
-        const [row] = await interruptedRuns({ runs: w.runs, isLive: async () => false });
+        // The next open, before the server made it: the person says delete; not found, the row stays
+        // with that answer.
+        const reopen = () => interruptedRuns({ ...w.deps, isLive: async () => false });
+        const [row] = await reopen();
         expect(await cleanUpInterrupted(w.deps, row!)).toBe('left');
+        expect(w.runs.rows.get(row!.id)?.chosen).toBe('delete');
+        // Later opens never ask again: the answer is applied quietly while the folder isn't there.
+        expect(await reopen()).toEqual([]);
         expect(w.runs.rows.size).toBe(1);
         // It lands; the open after that removes it and the row goes.
         w.server.live.add('slow');
-        expect(await cleanUpInterrupted(w.deps, row!)).toBe('deleted');
+        expect(await reopen()).toEqual([]);
         expect(w.server.purged.has('slow')).toBe(true);
         expect(w.runs.rows.size).toBe(0);
 
-        // Past the creation window a folder still not there was never made: the row goes.
+        // Past CREATION_SETTLE_MS a folder still not there was never made: the row goes.
         await w.runs.put(row!);
-        clock += CREATION_WINDOW_MS;
+        clock += CREATION_SETTLE_MS;
         w.server.purged.clear();
         expect(await cleanUpInterrupted(w.deps, row!)).toBe('nothing');
         expect(w.runs.rows.size).toBe(0);

@@ -32,20 +32,21 @@ import java.util.concurrent.atomic.AtomicInteger
  * A run's row: ids only, never a name or a byte. `launch` is the process that ran it. `done`: the run finished (or its
  * results were kept, or cleaned up) but its row couldn't be removed: never offered, dropped next. `uncertain`: folders
  * whose creation was sent (written with the id, before it went) and not known answered, with when (epoch millis): one a
- * clean-up doesn't find may still be made, so the row stays until a later look finds it or CREATION_WINDOW_MS has passed.
+ * clean-up doesn't find may still be made, so the row stays until a later look finds it or CREATION_SETTLE_MS has passed.
  */
 data class SaveRunRow(val id: String, val workspaceId: String, val nodeIds: List<String>, val uploadIds: List<String>, val at: Long, val launch: String,
-                      val done: Boolean = false, val uncertain: Map<String, Long> = emptyMap()) {
+                      val done: Boolean = false, val uncertain: Map<String, Long> = emptyMap(), val chosenDelete: Boolean = false) {
     fun json(): JSONObject = JSONObject().put("id", id).put("workspaceId", workspaceId).put("nodeIds", JSONArray(nodeIds))
         .put("uploadIds", JSONArray(uploadIds)).put("at", at).put("launch", launch).also { if (done) it.put("done", true) }
         .also { if (uncertain.isNotEmpty()) it.put("uncertain", JSONObject(uncertain)) }
+        .also { if (chosenDelete) it.put("chosen", "delete") }
 
     companion object {
         fun from(json: JSONObject): SaveRunRow {
             fun list(name: String) = json.getJSONArray(name).let { array -> (0 until array.length()).map(array::getString) }
             val uncertain = json.optJSONObject("uncertain")?.let { held -> held.keys().asSequence().associateWith { held.getLong(it) } }.orEmpty()
             return SaveRunRow(json.getString("id"), json.getString("workspaceId"), list("nodeIds"), list("uploadIds"), json.getLong("at"), json.getString("launch"),
-                json.optBoolean("done", false), uncertain)
+                json.optBoolean("done", false), uncertain, json.optString("chosen") == "delete")
         }
     }
 }
@@ -360,26 +361,44 @@ object SaveRuns {
         return Prior(weakestCopyPrior(metadata), weakestCopyPrior(version))
     }
 
-    /* Runs another launch left behind, for the next open to offer to delete or keep what they made. */
-    fun interrupted(journal: SaveRunJournal): List<SaveRunRow> {
+    /*
+     * Runs another launch left behind, for the next open to offer to delete or keep what they made. Settled here and never
+     * offered: a row with nothing made (its uploads are the reservations ledger's, which lets them go: Reservations), and one
+     * the person already answered "delete" for that waits for a folder that may still land (applied again quietly).
+     */
+    fun interrupted(journal: SaveRunJournal, writer: SaveRunWriter, now: Long = System.currentTimeMillis()): List<SaveRunRow> {
         // A finished run whose row couldn't be removed is never offered, and goes now.
         journal.dropDone()
-        return journal.list().filter { it.launch != launch && !it.done }
+        val offered = ArrayList<SaveRunRow>()
+        for (row in journal.list().filter { it.launch != launch && !it.done }) {
+            when {
+                row.nodeIds.isEmpty() -> journal.retire(row)
+                row.chosenDelete -> cleanUp(row, writer, journal, now)
+                else -> offered += row
+            }
+        }
+        return offered
     }
 
     /*
-     * How long a folder creation that got no answer may still be made: the server's own upload window (packages/drive
-     * UPLOAD_TTL_HOURS). Within it, a clean-up that doesn't find the folder keeps the row; past it, one still not there was
-     * never made.
+     * How long a folder creation that got no answer may still be made: an hour. Its request is given up on long before (the
+     * client's timeout), and the network's retransmissions of it end well within the hour, so the server can no longer
+     * receive it after. Within it, a clean-up that doesn't find the folder keeps the row; past it, one still not there was
+     * never made. The web's and iOS's CREATION_SETTLE_MS.
      */
-    const val CREATION_WINDOW_MS = Reservations.TTL_MS
+    const val CREATION_SETTLE_MS = 60 * 60 * 1000L
 
     /*
      * Removes what an interrupted run made, as a cancel would have, then its row. A folder the row still holds uncertain,
-     * not found, may still be made: the row stays until a later launch finds it or CREATION_WINDOW_MS has passed.
+     * not found, may still be made: the row stays until a later launch finds it or CREATION_SETTLE_MS has passed.
      */
-    fun cleanUp(row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal, now: Long = System.currentTimeMillis()): SaveCleanup =
-        clean(row, writer, journal, emptySet(), null, null, mayExist = row.uncertain.filterValues { now - it < CREATION_WINDOW_MS }.keys).cleanup
+    fun cleanUp(row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal, now: Long = System.currentTimeMillis()): SaveCleanup {
+        val cleaned = clean(row, writer, journal, emptySet(), null, null, mayExist = row.uncertain.filterValues { now - it < CREATION_SETTLE_MS }.keys)
+        // Kept only to wait for a folder that may still land: the person's answer stays with the row, and later launches
+        // apply it quietly (interrupted) rather than ask again.
+        if (cleaned.cleanup == SaveCleanup.LEFT && cleaned.waiting && !row.chosenDelete) runCatching { journal.put(row.copy(chosenDelete = true)) }
+        return cleaned.cleanup
+    }
 
     /*
      * Keeps what an interrupted run made: its row always goes. Its open uploads are still asked to abort; one with no answer
@@ -400,7 +419,7 @@ object SaveRuns {
      * What a clean-up did, how many new versions it found landed, how many may have, and whether new files or folders may
      * still be there (`remains`: LEFT with the row kept, NO_ACCESS out of reach).
      */
-    internal data class Cleaned(val cleanup: SaveCleanup, val kept: Int, val uncertain: Int, val remains: SaveCleanup? = null)
+    internal data class Cleaned(val cleanup: SaveCleanup, val kept: Int, val uncertain: Int, val remains: SaveCleanup? = null, val waiting: Boolean = false)
 
     /*
      * Aborts every upload the row names, removes its nodes; the row goes unless something is left. `completing`: the uploads
@@ -437,7 +456,8 @@ object SaveRuns {
         val notFound = HashSet<String>()
         val discarded = discard(row.nodeIds, row.workspaceId, writer, notFound)
         // A folder whose creation got no answer, not found now: the server may still be making it. The row stays.
-        if (mayExist.any { it in notFound }) { unsettled = true; othersMayLand = true }
+        val waiting = mayExist.any { it in notFound }
+        if (waiting) { unsettled = true; othersMayLand = true }
         var cleanup = discarded
         if (unsettled) cleanup = SaveCleanup.LEFT
         else if (denied && (cleanup == SaveCleanup.NOTHING || cleanup == SaveCleanup.NO_ACCESS)) cleanup = SaveCleanup.NO_ACCESS
@@ -446,7 +466,7 @@ object SaveRuns {
         val someRemain = othersMayLand || unremoved
         // A row the disk won't retire stays as it was: the clean-up is left for the next open.
         if (cleanup != SaveCleanup.LEFT && !journal.retire(row)) cleanup = SaveCleanup.LEFT
-        return Cleaned(cleanup, kept, uncertain, if (!someRemain) null else if (cleanup == SaveCleanup.LEFT) SaveCleanup.LEFT else SaveCleanup.NO_ACCESS)
+        return Cleaned(cleanup, kept, uncertain, if (!someRemain) null else if (cleanup == SaveCleanup.LEFT) SaveCleanup.LEFT else SaveCleanup.NO_ACCESS, waiting)
     }
 
     internal fun discard(ids: List<String>, workspaceId: String, writer: SaveRunWriter, notFound: MutableSet<String>? = null): SaveCleanup {

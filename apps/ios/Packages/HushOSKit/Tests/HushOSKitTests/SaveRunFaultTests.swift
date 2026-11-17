@@ -416,7 +416,7 @@ final class RunBox: @unchecked Sendable {
                 found.append("a row survived the next launch's clean-up")
             }
             for row in disk.list() where row.done != true {
-                _ = await SaveRuns.cleanUp(row, writer: healthy, journal: disk, now: Date().addingTimeInterval(SaveRuns.creationWindow))
+                _ = await SaveRuns.cleanUp(row, writer: healthy, journal: disk, now: Date().addingTimeInterval(SaveRuns.creationSettle))
             }
             if disk.list().contains(where: { $0.done != true }) { found.append("a row survived past the creation window") }
             // A reservation no row ever named is the server's expiry's: nothing is completed before its row is on disk.

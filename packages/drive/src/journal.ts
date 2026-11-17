@@ -158,9 +158,14 @@ export type RunRow = {
     /*
      * Folders whose creation was sent (written with the id, before it went) and not yet known
      * answered, with when: one a clean-up doesn't find may still be made, so the row stays until
-     * a later look finds it, or until the creation window (UPLOAD_TTL_HOURS) has passed.
+     * a later look finds it, or until CREATION_SETTLE_MS has passed since it was sent.
      */
     uncertain?: { id: string; at: number }[];
+    /*
+     * The person's answer to "Delete what was made?" when it couldn't be carried out yet because a
+     * folder may still be made: later opens apply it quietly, never asking again.
+     */
+    chosen?: 'delete';
 };
 
 export interface RunJournal {

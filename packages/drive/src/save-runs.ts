@@ -8,7 +8,6 @@ import type { SignatureForm } from '@hushos/crypto/signatures';
 import { DriveApiError, type NodeView, type TrashBatchItem } from './api';
 import type { DriveNode } from './client';
 import type { RunJournal, RunRow, UploadSignatures } from './journal';
-import { UPLOAD_TTL_HOURS } from './protocol';
 import type { MemoryFile, TransferManager, TransferManagerOptions, UploadItem } from './transfers';
 import { sourcesSignatureForms, type ResultSource } from './trust';
 
@@ -413,11 +412,12 @@ export type SaveRunDeps = {
 export const BEAT_MS = 30_000;
 export const STALE_BEAT_MS = 4 * BEAT_MS;
 /*
- * How long a folder creation that got no answer may still be made: the server's own upload window
- * (UPLOAD_TTL_HOURS). Within it, a clean-up that doesn't find the folder keeps the row; past it, a
- * folder still not there is taken as never made.
+ * How long a folder creation that got no answer may still be made: an hour. Its request is given up
+ * on long before (the client's timeout), and the network's retransmissions of it end well within the
+ * hour, so the server can no longer receive it after. Within it, a clean-up that doesn't find the
+ * folder keeps the row; past it, a folder still not there was never made.
  */
-export const CREATION_WINDOW_MS = UPLOAD_TTL_HOURS * 3_600_000;
+export const CREATION_SETTLE_MS = 60 * 60_000;
 
 export type RunPlan = {
     /* Where the run writes: folders new files go into, files new versions go onto; one workspace. */
@@ -1183,6 +1183,8 @@ async function cleanUp(
     uncertainVersions: number;
     /* New files or folders that may still be there: `left` with the row kept, `no-access` without. */
     remains: 'left' | 'no-access' | null;
+    /* Kept for a folder whose creation may still land (mayExist), not found yet. */
+    waiting: boolean;
 }> {
     await Promise.allSettled(live.map((id) => deps.transfers.cancel(id)));
     let unsettled = false;
@@ -1221,7 +1223,8 @@ async function cleanUp(
         (): Cleanup => 'left',
     );
     // A folder whose creation went unanswered, not found now: the server may still make it.
-    if ([...(options.mayExist ?? [])].some((id) => notFound.has(id))) {
+    const waiting = [...(options.mayExist ?? [])].some((id) => notFound.has(id));
+    if (waiting) {
         unsettled = true;
         othersMayLand = true;
     }
@@ -1241,7 +1244,7 @@ async function cleanUp(
         if ((options.current?.() ?? true) && !(await retire(deps.runs, row))) cleanup = 'left';
     }
     const remains = !someRemain ? null : cleanup === 'left' ? 'left' : 'no-access';
-    return { cleanup, keptVersions, uncertainVersions, remains };
+    return { cleanup, keptVersions, uncertainVersions, remains, waiting };
 }
 
 /*
@@ -1299,7 +1302,7 @@ async function discard(
  * stopped). Ids only; the app names the folder from its own metadata.
  */
 export async function interruptedRuns(
-    deps: Pick<SaveRunDeps, 'runs' | 'isLive' | 'now'> & Partial<Pick<SaveRunDeps, 'abortUpload'>>,
+    deps: Pick<SaveRunDeps, 'runs' | 'isLive' | 'now'> & Partial<SaveRunDeps>,
 ) {
     const now = deps.now ?? (() => Date.now());
     const live = new Set([...liveRuns].map((run) => run.id));
@@ -1323,6 +1326,13 @@ export async function interruptedRuns(
                 await settleUploads(deps as Pick<SaveRunDeps, 'runs' | 'abortUpload'>, row);
             continue;
         }
+        // Already answered "delete" and waiting for a folder that may still land: applied again,
+        // quietly, until the folder is found or CREATION_SETTLE_MS has passed.
+        if (row.chosen === 'delete') {
+            if (deps.trash && deps.purge && deps.mayPurge && deps.abortUpload && deps.transfers)
+                await cleanUpInterrupted(deps as SaveRunDeps, row);
+            continue;
+        }
         left.push(row);
     }
     return left;
@@ -1331,16 +1341,21 @@ export async function interruptedRuns(
 /*
  * Deletes what an interrupted run made, as a cancel would have (cleanUp). A folder whose creation
  * the row still holds uncertain, and that isn't found, may still be made: the row stays, until a
- * later open finds it or CREATION_WINDOW_MS has passed since it was sent.
+ * later open finds it or CREATION_SETTLE_MS has passed since it was sent.
  */
 export async function cleanUpInterrupted(deps: SaveRunDeps, row: RunRow) {
     const now = deps.now?.() ?? Date.now();
     const mayExist = new Set(
         (row.uncertain ?? [])
-            .filter((held) => now - held.at < CREATION_WINDOW_MS)
+            .filter((held) => now - held.at < CREATION_SETTLE_MS)
             .map((held) => held.id),
     );
-    return (await cleanUp(deps, row, [], { mayExist })).cleanup;
+    const result = await cleanUp(deps, row, [], { mayExist });
+    // Kept only to wait for a folder that may still land: the person's answer stays with the row,
+    // and later opens apply it quietly (interruptedRuns) rather than ask again.
+    if (result.cleanup === 'left' && result.waiting && !row.chosen)
+        await deps.runs.put({ ...row, chosen: 'delete' }).catch(() => {});
+    return result.cleanup;
 }
 
 /* A nodeless row's uploads aborted; it goes once none is left without an answer. */

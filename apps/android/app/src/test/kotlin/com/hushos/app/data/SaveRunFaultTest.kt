@@ -330,7 +330,7 @@ class SaveRunFaultTest {
             // passed, the launch after settles it.
             for (row in disk.list().filter { !it.done }) if (row.uploadIds.isNotEmpty() || !row.nodeIds.all { it in row.uncertain })
                 found += "a row survived the next launch's clean-up"
-            val later = System.currentTimeMillis() + SaveRuns.CREATION_WINDOW_MS
+            val later = System.currentTimeMillis() + SaveRuns.CREATION_SETTLE_MS
             for (row in disk.list().filter { !it.done }) SaveRuns.cleanUp(row, healthy, disk, now = later)
             if (disk.list().any { !it.done }) found += "a row survived past the creation window"
             // A reservation no row ever named is the server's expiry's: nothing is completed before its row is on disk.

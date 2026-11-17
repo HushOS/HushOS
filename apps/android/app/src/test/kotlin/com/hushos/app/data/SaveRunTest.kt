@@ -435,15 +435,30 @@ class SaveRunTest {
         }
     }
 
+    /*
+     * A row another launch left with nothing made is never offered: it goes quietly, its uploads left to the reservations
+     * ledger, which lets them go.
+     */
+    @Test
+    fun aRowWithNothingMadeIsNeverOfferedAndGoes() {
+        val writer = FakeWriter()
+        val rows = journal()
+        rows.put(SaveRunRow("versions", "ws", emptyList(), listOf("up-x"), 1L, "an-earlier-launch"))
+        rows.put(SaveRunRow("empty", "ws", emptyList(), emptyList(), 1L, "an-earlier-launch"))
+        rows.put(SaveRunRow("made", "ws", listOf("node-x"), emptyList(), 1L, "an-earlier-launch"))
+        assertEquals(listOf("made"), SaveRuns.interrupted(rows, writer).map { it.id })
+        assertEquals(listOf("made"), rows.list().map { it.id })
+    }
+
     @Test
     fun theNextLaunchFindsAnInterruptedRunDeletesOrKeepsWhatItMadeAndDropsOneItCanNoLongerReach() {
         val writer = FakeWriter()
         val rows = journal()
         val run = SaveRun.start(writer, listOf(opened("f")), emptyList(), rows)
-        assertTrue(SaveRuns.interrupted(rows).isEmpty())
+        assertTrue(SaveRuns.interrupted(rows, writer).isEmpty())
         val other = SaveRunRow("other", "ws", listOf("node-x"), listOf("up-x"), 1L, "an-earlier-launch")
         rows.put(other)
-        assertEquals(listOf("other"), SaveRuns.interrupted(rows).map { it.id })
+        assertEquals(listOf("other"), SaveRuns.interrupted(rows, writer).map { it.id })
         writer.offline = true
         assertEquals(SaveCleanup.LEFT, SaveRuns.cleanUp(other, writer, rows))
         assertTrue(rows.list().any { it.id == "other" })
@@ -654,7 +669,7 @@ class SaveRunTest {
         rows.fault = null
         rows.put(SaveRunRow(run.id, "ws", listOf("node-1"), emptyList(), 1L, "an-earlier-launch", done = true))
         rows.put(SaveRunRow("other", "ws", listOf("node-x"), emptyList(), 1L, "an-earlier-launch"))
-        assertEquals(listOf("other"), SaveRuns.interrupted(rows).map { it.id })
+        assertEquals(listOf("other"), SaveRuns.interrupted(rows, writer).map { it.id })
         assertEquals(listOf("other"), rows.list().map { it.id })
         assertTrue("node-1" in writer.live)
     }
@@ -807,13 +822,22 @@ class SaveRunTest {
         // The process ends with the creation on its way: the row on disk is all the next launch has.
         var row: SaveRunRow? = null
         repeat(200) { if (row == null) { row = rows.list().firstOrNull { it.nodeIds.isNotEmpty() }; Thread.sleep(5) } }
-        val left = row!!
+        val left = row!!.copy(launch = "an-earlier-launch")
         assertEquals(mapOf("made-Out" to 1_000L), left.uncertain)
-        assertEquals(SaveCleanup.LEFT, SaveRuns.cleanUp(left, writer, journal(), now = 2_000L))
+        // The next launch: the person says delete; not found, the row stays with that answer.
+        val later = journal()
+        later.put(left)
+        assertEquals(listOf(left.id), SaveRuns.interrupted(later, writer, now = 2_000L).map { it.id })
+        assertEquals(SaveCleanup.LEFT, SaveRuns.cleanUp(left, writer, later, now = 2_000L))
+        assertTrue(later.list().single().chosenDelete)
+        // Later launches never ask again: the answer is applied quietly while the folder isn't there, then once it is.
+        assertTrue(SaveRuns.interrupted(later, writer, now = 2_500L).isEmpty())
+        assertEquals(1, later.list().size)
         writer.live += "made-Out"
-        assertEquals(SaveCleanup.DELETED, SaveRuns.cleanUp(left, writer, journal(), now = 3_000L))
+        assertTrue(SaveRuns.interrupted(later, writer, now = 3_000L).isEmpty())
         assertEquals(setOf("made-Out"), writer.purged)
-        assertEquals(SaveCleanup.NOTHING, SaveRuns.cleanUp(left.copy(id = "again"), writer, journal(), now = 1_000L + SaveRuns.CREATION_WINDOW_MS))
+        assertTrue(later.list().isEmpty())
+        assertEquals(SaveCleanup.NOTHING, SaveRuns.cleanUp(left.copy(id = "again"), writer, journal(), now = 1_000L + SaveRuns.CREATION_SETTLE_MS))
         hold.countDown()
         pool.shutdown()
     }
@@ -1115,6 +1139,44 @@ class SaveResultTest {
         assertThrows(Unreachable::class.java) { vault.api.trashBatch(vault.workspaceId, listOf(server.root)) }
         assertEquals(2, server.requests.count { it.endsWith("/trash-batch") })
         server.dropReply = null
+    }
+
+    /*
+     * A folder creation whose answer is lost, sent once more and refused for anything but its own id (here a 429): the
+     * first send may still be made, so it stays unanswered, and a run keeps the folder uncertain in its row.
+     */
+    @Test
+    fun aFolderCreationWhoseRetryIsRefusedStaysUnanswered() {
+        var dropped = false
+        server.dropReply = { method, path -> (method == "POST" && path == "drive/folders" && !dropped).also { if (it) dropped = true } }
+        var sends = 0
+        // The first send is cut while the server is still at it (not made yet); the second is refused 429.
+        server.extraRoutes = { method, segments, _, body ->
+            when {
+                method == "POST" && segments == listOf("drive", "folders") ->
+                    if (++sends == 1) 200 to JSONObject() else 429 to JSONObject().put("message", "Slow down.")
+                // The clean-up's look: not there (yet).
+                method == "POST" && segments.lastOrNull() == "trash-batch" -> {
+                    val ids = body.getJSONArray("nodeIds")
+                    200 to JSONObject().put("results", org.json.JSONArray((0 until ids.length()).map { i ->
+                        JSONObject().put("id", ids.getString(i)).put("status", "refused").put("reason", "not-found")
+                    }))
+                }
+                else -> null
+            }
+        }
+        val file = Files.createTempDirectory("save-runs").resolve(SaveRunJournal.FILE).toFile()
+        val rows = SaveRunJournal(file, SaveRunJournal.Epoch())
+        val root = vault.resolve(server.root)
+        val run = SaveRun.start(VaultSaveWriter(vault) { StorageAllowance(1L shl 40, 0L, 1L shl 40) }, listOf(root), emptyList(), rows, pause = {})
+        val stopped = assertThrows(SaveRunStopped::class.java) { run.folder("Out", SaveSources.OwnWriting) }
+        assertEquals(2, sends)
+        assertEquals(SaveCleanup.LEFT, stopped.cleanup)
+        val row = rows.list().single()
+        assertEquals(1, row.nodeIds.size)
+        assertEquals(row.nodeIds.toSet(), row.uncertain.keys)
+        server.dropReply = null
+        server.extraRoutes = null
     }
 
     /* A folder creation whose answer is lost is sent once more; the 409 for its own id (the first send made it) is the folder. */

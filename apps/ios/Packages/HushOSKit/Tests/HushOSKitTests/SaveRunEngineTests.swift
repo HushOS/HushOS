@@ -347,7 +347,7 @@ extension OnFakeDrive {
                     found.append("a row survived the next launch's clean-up")
                 }
                 for row in disk.list() where row.done != true {
-                    _ = await SaveRuns.cleanUp(row, writer: s.vault, journal: disk, now: Date().addingTimeInterval(SaveRuns.creationWindow))
+                    _ = await SaveRuns.cleanUp(row, writer: s.vault, journal: disk, now: Date().addingTimeInterval(SaveRuns.creationSettle))
                 }
                 if disk.list().contains(where: { $0.done != true }) { found.append("a row survived past the creation window") }
             }

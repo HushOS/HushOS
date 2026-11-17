@@ -436,15 +436,27 @@ let own = SaveSources.ownWriting
         }
     }
 
+    /* A row another launch left with nothing made is never offered: its uploads are aborted and it goes. */
+    @Test func aRowWithNothingMadeIsNeverOfferedAndGoes() async throws {
+        let writer = FakeWriter()
+        let rows = journal()
+        try rows.put(SaveRunRow(id: "versions", workspaceId: "ws", nodeIds: [], uploadIds: ["up-x"], at: Date(), launch: "an-earlier-launch"))
+        try rows.put(SaveRunRow(id: "empty", workspaceId: "ws", nodeIds: [], uploadIds: [], at: Date(), launch: "an-earlier-launch"))
+        try rows.put(SaveRunRow(id: "made", workspaceId: "ws", nodeIds: ["node-x"], uploadIds: [], at: Date(), launch: "an-earlier-launch"))
+        #expect(await SaveRuns.interrupted(writer: writer, journal: rows).map(\.id) == ["made"])
+        #expect(await writer.aborted == ["up-x"])
+        #expect(rows.list().map(\.id) == ["made"])
+    }
+
     @Test func theNextLaunchFindsAnInterruptedRunDeletesOrKeepsWhatItMadeAndDropsOneItCanNoLongerReach() async throws {
         let rows = journal()
         let writer = FakeWriter()
         let run = try await SaveRun.start(writer: writer, targets: [opened("f")], results: [], journal: rows)
         // This launch's own row is not interrupted; another launch's is.
-        #expect(SaveRuns.interrupted(rows).isEmpty)
+        #expect(await SaveRuns.interrupted(writer: writer, journal: rows).isEmpty)
         let other = SaveRunRow(id: "other", workspaceId: "ws", nodeIds: ["node-x"], uploadIds: ["up-x"], at: Date(), launch: "an-earlier-launch")
         try rows.put(other)
-        #expect(SaveRuns.interrupted(rows).map(\.id) == ["other"])
+        #expect(await SaveRuns.interrupted(writer: writer, journal: rows).map(\.id) == ["other"])
         await writer.set(offline: true)
         #expect(await SaveRuns.cleanUp(other, writer: writer, journal: rows) == .left)
         #expect(rows.list().contains { $0.id == "other" })
@@ -893,11 +905,20 @@ let own = SaveSources.ownWriting
         // The app ends here: the row on disk is all the next open has.
         let row = try #require(rows.list().first)
         #expect(row.uncertain == ["made-Out": start])
-        #expect(await SaveRuns.cleanUp(row, writer: writer, journal: journal(), now: start.addingTimeInterval(60)) == .left)
+        // The next open: the person says delete; not found, the row stays with that answer.
+        let later = journal()
+        try later.put(row)
+        #expect(await SaveRuns.interrupted(writer: writer, journal: later, now: start.addingTimeInterval(60), launch: "a-later-launch").map(\.id) == [row.id])
+        #expect(await SaveRuns.cleanUp(row, writer: writer, journal: later, now: start.addingTimeInterval(60)) == .left)
+        #expect(later.list().first?.chosen == "delete")
+        // Later opens never ask again: the answer is applied quietly while the folder isn't there, then once it is.
+        #expect(await SaveRuns.interrupted(writer: writer, journal: later, now: start.addingTimeInterval(90), launch: "a-later-launch").isEmpty)
+        #expect(later.list().count == 1)
         await writer.makeLive("made-Out")
-        #expect(await SaveRuns.cleanUp(row, writer: writer, journal: journal(), now: start.addingTimeInterval(120)) == .deleted)
+        #expect(await SaveRuns.interrupted(writer: writer, journal: later, now: start.addingTimeInterval(120), launch: "a-later-launch").isEmpty)
         #expect(await writer.purged == ["made-Out"])
-        #expect(await SaveRuns.cleanUp(row, writer: writer, journal: journal(), now: start.addingTimeInterval(SaveRuns.creationWindow)) == .nothing)
+        #expect(later.list().isEmpty)
+        #expect(await SaveRuns.cleanUp(row, writer: writer, journal: journal(), now: start.addingTimeInterval(SaveRuns.creationSettle)) == .nothing)
         await gate.open()
         _ = try? await making.value
     }
@@ -920,7 +941,7 @@ let own = SaveSources.ownWriting
         let left = try #require(rows.list().first)
         #expect(left.nodeIds.isEmpty && left.uploadIds == ["up-1"])
         await writer.set(offline: false)
-        await SaveRuns.settleUploads(writer: writer, journal: rows, launch: "a-later-launch")
+        #expect(await SaveRuns.interrupted(writer: writer, journal: rows, launch: "a-later-launch").isEmpty)
         #expect(await writer.aborted.contains("up-1"))
         #expect(rows.list().isEmpty)
     }
@@ -985,14 +1006,15 @@ let own = SaveSources.ownWriting
      * Account A's rows, then B signs in (through the Files sheet while the app was stopped): B's journal on the same file
      * hands B nothing to clean up, and A's rows are dropped unread. Fails if a journal reads another account's rows.
      */
-    @Test func anotherAccountsRowsAreNeverHandedToTheNextOnesCleanUp() throws {
+    @Test func anotherAccountsRowsAreNeverHandedToTheNextOnesCleanUp() async throws {
+        let writer = FakeWriter()
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("save-runs-\(UUID().uuidString).json")
         let session = SaveRunJournal.Epoch()
         let a = SaveRunJournal(url: url, epoch: session, owner: AccountOwner(userId: "a", origin: "https://drive.test"))
         try a.put(SaveRunRow(id: "run-a", workspaceId: "ws-a", nodeIds: ["node-a"], uploadIds: [], at: Date(), launch: "an-earlier-launch"))
-        #expect(SaveRuns.interrupted(a).map(\.id) == ["run-a"])
+        #expect(await SaveRuns.interrupted(writer: writer, journal: a).map(\.id) == ["run-a"])
         let b = SaveRunJournal(url: url, epoch: session, owner: AccountOwner(userId: "b", origin: "https://drive.test"))
-        #expect(SaveRuns.interrupted(b).isEmpty)
+        #expect(await SaveRuns.interrupted(writer: writer, journal: b).isEmpty)
         #expect(!FileManager.default.fileExists(atPath: url.path))
         // The same user id on another server is another account too.
         try a.put(SaveRunRow(id: "run-a", workspaceId: "ws-a", nodeIds: ["node-a"], uploadIds: [], at: Date(), launch: "an-earlier-launch"))
@@ -1092,7 +1114,7 @@ let own = SaveSources.ownWriting
         rows.fault = nil
         try rows.put(SaveRunRow(id: id, workspaceId: "ws", nodeIds: ["node-1"], uploadIds: [], at: Date(), launch: "an-earlier-launch", done: true))
         try rows.put(other)
-        #expect(SaveRuns.interrupted(rows).map(\.id) == ["other"])
+        #expect(await SaveRuns.interrupted(writer: writer, journal: rows).map(\.id) == ["other"])
         #expect(rows.list().map(\.id) == ["other"])
         #expect(await writer.live.contains("node-1"))
     }

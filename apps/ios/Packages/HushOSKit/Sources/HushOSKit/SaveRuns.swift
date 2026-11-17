@@ -99,9 +99,14 @@ public struct SaveRunRow: Codable, Equatable, Sendable {
     /*
      * Folders whose creation was sent (written with the id, before it went) and not known answered, with when: one a
      * clean-up doesn't find may still be made, so the row stays until a later look finds it or the creation window
-     * (SaveRuns.creationWindow) has passed.
+     * (SaveRuns.creationSettle) has passed.
      */
     public var uncertain: [String: Date]?
+    /*
+     * The person's answer to "Delete what was made?" ("delete") when it couldn't be carried out yet because a folder may
+     * still be made: later opens apply it quietly, never asking again.
+     */
+    public var chosen: String?
 }
 
 /*
@@ -516,60 +521,64 @@ public enum SaveRuns {
         return (.copy(try weakestCopyPrior(priors: metadata)), .copy(try weakestCopyPrior(priors: version)))
     }
 
-    /* Runs another launch left behind, for the next open to offer to delete or keep what they made. */
-    public static func interrupted(_ journal: SaveRunJournal = SaveRunJournal()) -> [SaveRunRow] {
+    /*
+     * Runs another launch left behind, for the next open to offer to delete or keep what they made. Settled here and
+     * never offered: a row with nothing made, only reservations to let go (a finished run's stale version, or a version
+     * run that ended mid-upload: each aborted, the row gone once none is left without an answer), and one the person
+     * already answered "delete" for that waits for a folder that may still land (applied again quietly).
+     */
+    public static func interrupted(writer: SaveRunWriter, journal: SaveRunJournal = SaveRunJournal(), now: Date = Date()) async -> [SaveRunRow] {
+        await interrupted(writer: writer, journal: journal, now: now, launch: launch)
+    }
+
+    static func interrupted(writer: SaveRunWriter, journal: SaveRunJournal, now: Date = Date(), launch: String) async -> [SaveRunRow] {
         // A finished run whose row couldn't be removed is never offered, and goes now.
         journal.dropDone()
         var offered: [SaveRunRow] = []
         for row in journal.list() where row.launch != launch && row.done != true {
-            // Nothing made to ask about: one with no uploads either goes; one with reservations to let go is settled
-            // quietly (settleUploads), never offered.
             if row.nodeIds.isEmpty {
-                if row.uploadIds.isEmpty { journal.retire(row) }
-                continue
+                var left: [String] = []
+                for uploadId in row.uploadIds {
+                    if await writer.abortUpload(uploadId, in: row.workspaceId) == .unknown { left.append(uploadId) }
+                }
+                if left.isEmpty { journal.retire(row) } else if left.count < row.uploadIds.count {
+                    var next = row
+                    next.uploadIds = left
+                    try? journal.put(next)
+                }
+            } else if row.chosen == "delete" {
+                _ = await cleanUp(row, writer: writer, journal: journal, now: now)
+            } else {
+                offered.append(row)
             }
-            offered.append(row)
         }
         return offered
     }
 
     /*
-     * Rows another launch left with nothing made, only reservations to let go (a finished run's stale version, or a
-     * version run that ended mid-upload): each aborted, and the row goes once none is left without an answer.
+     * How long a folder creation that got no answer may still be made: an hour. Its request is given up on long before
+     * (the client's timeout), and the network's retransmissions of it end well within the hour, so the server can no
+     * longer receive it after. Within it, a clean-up that doesn't find the folder keeps the row; past it, one still not
+     * there was never made. The web's and Android's CREATION_SETTLE_MS.
      */
-    public static func settleUploads(writer: SaveRunWriter, journal: SaveRunJournal = SaveRunJournal()) async {
-        await settleUploads(writer: writer, journal: journal, launch: launch)
-    }
-
-    static func settleUploads(writer: SaveRunWriter, journal: SaveRunJournal, launch: String) async {
-        for row in journal.list() where row.launch != launch && row.done != true && row.nodeIds.isEmpty && !row.uploadIds.isEmpty {
-            var left: [String] = []
-            for uploadId in row.uploadIds {
-                if await writer.abortUpload(uploadId, in: row.workspaceId) == .unknown { left.append(uploadId) }
-            }
-            if left.isEmpty { journal.retire(row) } else if left.count < row.uploadIds.count {
-                var next = row
-                next.uploadIds = left
-                try? journal.put(next)
-            }
-        }
-    }
-
-    /*
-     * How long a folder creation that got no answer may still be made: the server's own upload window (packages/drive
-     * UPLOAD_TTL_HOURS). Within it, a clean-up that doesn't find the folder keeps the row; past it, one still not there
-     * was never made.
-     */
-    public static let creationWindow: TimeInterval = 24 * 60 * 60
+    public static let creationSettle: TimeInterval = 60 * 60
 
     /*
      * Removes what an interrupted run made, as a cancel would have, then its row. A folder the row still holds
-     * uncertain, not found, may still be made: the row stays until a later open finds it or creationWindow has passed.
+     * uncertain, not found, may still be made: the row stays until a later open finds it or creationSettle has passed.
      */
     public static func cleanUp(_ row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal = SaveRunJournal(),
                                now: Date = Date()) async -> SaveCleanup {
-        let mayExist = Set((row.uncertain ?? [:]).filter { now.timeIntervalSince($0.value) < creationWindow }.keys)
-        return await clean(row, writer: writer, journal: journal, versions: [], completing: nil, published: nil, mayExist: mayExist).cleanup
+        let mayExist = Set((row.uncertain ?? [:]).filter { now.timeIntervalSince($0.value) < creationSettle }.keys)
+        let cleaned = await clean(row, writer: writer, journal: journal, versions: [], completing: nil, published: nil, mayExist: mayExist)
+        // Kept only to wait for a folder that may still land: the person's answer stays with the row, and later opens
+        // apply it quietly (interrupted) rather than ask again.
+        if cleaned.cleanup == .left, cleaned.waiting, row.chosen == nil {
+            var answered = row
+            answered.chosen = "delete"
+            try? journal.put(answered)
+        }
+        return cleaned.cleanup
     }
 
     /*
@@ -590,7 +599,7 @@ public enum SaveRuns {
      */
     static func clean(_ row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal, versions: Set<String>,
                       completing: Set<String>?, published: Set<String>?, asked: [String: DriveAPI.AbortFate] = [:],
-                      mayExist: Set<String> = []) async -> (cleanup: SaveCleanup, kept: Int, uncertain: Int, remains: SaveCleanup?) {
+                      mayExist: Set<String> = []) async -> (cleanup: SaveCleanup, kept: Int, uncertain: Int, remains: SaveCleanup?, waiting: Bool) {
         var unsettled = false
         var denied = false
         var kept = 0
@@ -623,7 +632,8 @@ public enum SaveRuns {
         let notFound = SentIds()
         let discarded = await discard(row.nodeIds, in: row.workspaceId, writer: writer, notFound: notFound)
         // A folder whose creation got no answer, not found now: the server may still be making it. The row stays.
-        if !mayExist.isDisjoint(with: notFound.ids) {
+        let waiting = !mayExist.isDisjoint(with: notFound.ids)
+        if waiting {
             unsettled = true
             othersMayLand = true
         }
@@ -634,7 +644,7 @@ public enum SaveRuns {
         let someRemain = othersMayLand || unremoved
         // A row the disk won't retire stays as it was: the clean-up is left for the next open.
         if cleanup != .left, !journal.retire(row) { cleanup = .left }
-        return (cleanup, kept, uncertain, someRemain ? (cleanup == .left ? .left : .noAccess) : nil)
+        return (cleanup, kept, uncertain, someRemain ? (cleanup == .left ? .left : .noAccess) : nil, waiting)
     }
 
     static func discard(_ ids: [String], in workspaceId: String, writer: SaveRunWriter, notFound: SentIds? = nil) async -> SaveCleanup {
@@ -1230,7 +1240,7 @@ public actor SaveRun {
             // Folder creations already sent settle next (a lost answer included): one the server creates after the
             // clean-up looked would otherwise be left with its row gone.
             await state.creationsSettled()
-            let (cleanup, kept, uncertain, remains) = await SaveRuns.clean(row, writer: writer, journal: state.journal, versions: state.versionUploads,
+            let (cleanup, kept, uncertain, remains, _) = await SaveRuns.clean(row, writer: writer, journal: state.journal, versions: state.versionUploads,
                                                                            completing: state.completingUploads, published: state.published,
                                                                            asked: asked, mayExist: state.mayExist)
             let total = keptBefore + kept
@@ -1256,7 +1266,7 @@ public actor SaveRun {
         let row = state.seal()
         // Only uploads whose reservation wasn't confirmed released are left in the row: asked again now. One still
         // unanswered stays in a row of its own with no nodes (what was saved stays, never offered), which the next
-        // open settles (settleUploads).
+        // open settles (interrupted).
         var loose: [String] = []
         if state.journal.live {
             for uploadId in row.uploadIds {

@@ -493,8 +493,12 @@ class DriveApi(val session: Shared.Session) : RootApi {
             try {
                 made()
             } catch (taken: ApiError) {
-                if (taken.status != 409 || taken.code != "conflict") throw taken
+                // Anything but its own id taken (a 429, a key change starting, a 5xx) says nothing of the first send, which
+                // may still be made: unanswered, as it was.
+                if (taken.status != 409 || taken.code != "conflict") throw Unreachable()
                 listed(folder.getString("parentId"), workspaceId, folder.getString("id")) ?: throw taken
+            } catch (_: NotFound) {
+                throw Unreachable()
             }
         }
     }

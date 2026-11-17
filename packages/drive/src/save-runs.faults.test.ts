@@ -7,7 +7,7 @@ import {
     RecordNotUpdated,
     RunStopped,
     abandonRuns,
-    CREATION_WINDOW_MS,
+    CREATION_SETTLE_MS,
     cleanUpInterrupted,
     interruptedRuns,
     startRun,
@@ -593,9 +593,8 @@ async function violations(scenario: string, plan: Plan) {
             const reopened = processOf(srv, disk, null);
             reopened.deps.now = () => clock;
             for (const row of await interruptedRuns({
-                runs: reopened.deps.runs,
+                ...reopened.deps,
                 isLive: async () => false,
-                abortUpload: reopened.deps.abortUpload,
             }))
                 await cleanUpInterrupted(reopened.deps, row);
             await settle();
@@ -611,7 +610,7 @@ async function violations(scenario: string, plan: Plan) {
                 !row.nodeIds.every((id) => row.uncertain?.some((held) => held.id === id))
             )
                 found.push('a row survived the next open’s clean-up');
-        clock += CREATION_WINDOW_MS;
+        clock += CREATION_SETTLE_MS;
         await reopen();
         if ((await disk.list()).length) found.push('a row survived past the creation window');
     }

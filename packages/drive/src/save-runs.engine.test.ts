@@ -10,7 +10,7 @@ import {
     abandonRuns,
     askAbort,
     lockRuns,
-    CREATION_WINDOW_MS,
+    CREATION_SETTLE_MS,
     cleanUpInterrupted,
     interruptedRuns,
     startRun,
@@ -1023,11 +1023,7 @@ async function violations(name: string, plan: Plan) {
         abandonRuns();
         const reopen = async () => {
             const reopened = processOf(srv, disk, null);
-            const listing = interruptedRuns({
-                runs: reopened.deps.runs,
-                isLive: async () => false,
-                abortUpload: reopened.deps.abortUpload,
-            });
+            const listing = interruptedRuns({ ...reopened.deps, isLive: async () => false });
             await vi.advanceTimersByTimeAsync(SETTLE_MS);
             for (const row of await listing) {
                 const cleaning = cleanUpInterrupted(reopened.deps, row);
@@ -1046,7 +1042,7 @@ async function violations(name: string, plan: Plan) {
                 !row.nodeIds.every((id) => row.uncertain?.some((held) => held.id === id))
             )
                 found.push('a row survived the next open’s clean-up');
-        vi.setSystemTime(Date.now() + CREATION_WINDOW_MS);
+        vi.setSystemTime(Date.now() + CREATION_SETTLE_MS);
         await reopen();
         if ((await disk.list()).length) found.push('a row survived past the creation window');
         // Access lost (the share ended): nothing more is this person's to abort; the expiry's.
