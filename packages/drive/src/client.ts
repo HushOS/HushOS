@@ -557,11 +557,15 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                     changeSeq: view.changeSeq,
                 };
             }
+            // The identity opens while the workspace is fetched: neither needs the other, and the
+            // worker still holds the identity before it opens the workspace key below.
+            const identity = options.openIdentity?.(userId);
+            identity?.catch(() => {});
             const view = await api.workspace();
             if (!view.grant)
                 throw new Error('This account has no workspace key yet. Finish account setup.');
             workspace = view;
-            await options.openIdentity?.(userId);
+            await identity;
             await rpc('driveOpenWorkspace', { userId, grant: view.grant });
             let root = view.root;
             if (!root) {
@@ -1436,7 +1440,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         // (owed again later), never as refused, which would mark its grantee done.
         const ownWorkspace = workspace?.workspaceId;
         if (!ownWorkspace) return { resealed: 0, refused: 0 };
-        const [mine, ledger] = await Promise.all([api.sharedByMe(), options.ledger.read()]);
+        const [mine, ledger] = await Promise.all([sharedByMe(true), options.ledger.read()]);
         // Each grantee the owner shared with, checked against their pin once: a pin that
         // follows a succession here asks for what was shared to be sealed to the new keys.
         const trusted = new Map<string, Promise<TrustedGrantee>>();
@@ -2013,9 +2017,27 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         );
     }
 
+    /*
+     * What this account shares out. Shared by me always asks afresh, since it is fetched again
+     * right after a change and must show it. The upgrade pass, which runs as Drive opens beside
+     * Shared by me and re-seals only what was there already (a share it misses is found next
+     * time), `join`s a request already on its way instead of sending its own.
+     */
+    let sharedByMeRequest: ReturnType<DriveApi['sharedByMe']> | undefined;
+    function sharedByMe(join = false) {
+        if (join && sharedByMeRequest) return sharedByMeRequest;
+        const request = api.sharedByMe();
+        sharedByMeRequest = request;
+        const done = () => {
+            if (sharedByMeRequest === request) sharedByMeRequest = undefined;
+        };
+        request.then(done, done);
+        return request;
+    }
+
     /* What this person shares out, nodes named, for managing in one place. */
     async function mySharing() {
-        const mine = await api.sharedByMe();
+        const mine = await sharedByMe();
         const nodes = new Map<string, NodeView>();
         for (const entry of [...mine.shares, ...mine.links]) nodes.set(entry.node.id, entry.node);
         // Names need the folder chain: open each node's parents by listing them once.

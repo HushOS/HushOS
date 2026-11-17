@@ -1132,12 +1132,16 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         if (state.value.rootId != null) return@launch
         // The identity first: a version 1 identity is upgraded here, before anything is signed (the root may be made).
         io { it.identityKeys() }
+        // Who may have written what (the trust set) loads beside the workspace: neither needs the other, and the
+        // catalogue's first draw is judged against it, so it is in hand before the rows are.
+        val trust = launch { refreshTrust() }
         io { it.rootId }?.let { id -> _state.update { it.copy(rootId = id) } }
-        refreshTrust()
+        trust.join()
         // The catalogue: the whole tree from the mirror on disk, then only the feed's changes.
         buildCatalogue()
         // The account's families (none on a server without them): Account's section and any family folder on screen.
-        families.refreshFamilies()
+        // On their own, not as part of this job: Home's rows and its loading state never wait for every family's pass.
+        viewModelScope.launch { families.refreshFamilies() }
     }
 
     /* Builds the catalogue once, then redraws every list from it. */

@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import type { DriveApi, NodeView, ServedIdentity } from './api';
 import { createDriveClient, type Rpc, type SharingLedger } from './client';
 import type { TreeMirror } from './mirror';
@@ -1146,5 +1146,101 @@ describe('trash and restore', () => {
         }[];
         expect(opened).toMatchObject({ parentKeyEpoch: 5, keyEnvelope: 'rewrapped' });
         expect(restored).toMatchObject({ keyEnvelope: 'rewrapped', parentKeyEpoch: 5 });
+    });
+});
+
+describe('opening', () => {
+    /* A promise settled from outside, to hold one step of the open while the rest goes on. */
+    function deferred<T = void>() {
+        let resolve!: (value: T) => void;
+        let reject!: (error: unknown) => void;
+        const promise = new Promise<T>((done, fail) => {
+            resolve = done;
+            reject = fail;
+        });
+        return { promise, resolve, reject };
+    }
+
+    test('the workspace key opens only after the identity has, though both are asked for at once', async () => {
+        const h = harness();
+        const steps: string[] = [];
+        const identityOpened = deferred();
+        const api = {
+            ...h.api,
+            workspace: async () => {
+                steps.push('workspace');
+                return h.api.workspace();
+            },
+        };
+        const rpc = ((operation: string, input: unknown) => {
+            steps.push(operation);
+            return (h.rpc as (operation: string, input: unknown) => Promise<unknown>)(
+                operation,
+                input,
+            );
+        }) as unknown as Rpc;
+        const client = createDriveClient(rpc, api as DriveApi, {
+            openIdentity: async () => {
+                steps.push('identity');
+                await identityOpened.promise;
+            },
+        });
+        const opening = client.open('owner');
+        await vi.waitFor(() => expect(steps).toContain('workspace'));
+        // Asked for together, and nothing opened under a workspace key while the identity is out.
+        expect(steps).toEqual(['identity', 'workspace']);
+        await new Promise((done) => setTimeout(done, 10));
+        expect(steps).not.toContain('driveOpenWorkspace');
+        identityOpened.resolve();
+        await opening;
+        expect(steps.indexOf('driveOpenWorkspace')).toBeGreaterThan(steps.indexOf('identity'));
+    });
+
+    test('an identity that does not open stops the open before the workspace key', async () => {
+        const h = harness();
+        const steps: string[] = [];
+        const rpc = ((operation: string, input: unknown) => {
+            steps.push(operation);
+            return (h.rpc as (operation: string, input: unknown) => Promise<unknown>)(
+                operation,
+                input,
+            );
+        }) as unknown as Rpc;
+        const client = createDriveClient(rpc, h.api, {
+            openIdentity: async () => {
+                throw new Error('The identity didn’t open.');
+            },
+        });
+        await expect(client.open('owner')).rejects.toThrow('The identity didn’t open.');
+        expect(steps).not.toContain('driveOpenWorkspace');
+    });
+
+    test('Shared by me asks afresh even while the upgrade pass’s request is on its way', async () => {
+        const h = harness();
+        let asked = 0;
+        const answer = deferred();
+        const api = {
+            ...h.api,
+            sharedByMe: async () => {
+                asked++;
+                await answer.promise;
+                return h.api.sharedByMe();
+            },
+        };
+        const client = createDriveClient(h.rpc, api as DriveApi, {
+            trustGrantee: h.trustGrantee,
+            ledger: ledgerOf({ shares: {}, links: {} }),
+        });
+        await client.open('owner');
+        // Shared by me first, as Drive opens: the upgrade pass joins its request.
+        const listed = client.mySharing();
+        const upgraded = client.upgradeShares();
+        await vi.waitFor(() => expect(asked).toBe(1));
+        // Shared by me again (after a share changed): its own request, never the one on its way.
+        const again = client.mySharing();
+        await vi.waitFor(() => expect(asked).toBe(2));
+        answer.resolve();
+        await Promise.all([listed, upgraded, again]);
+        expect(asked).toBe(2);
     });
 });

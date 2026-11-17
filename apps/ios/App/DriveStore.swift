@@ -432,11 +432,14 @@ final class DriveStore {
     func loadRoot() async -> String? {
         if let rootId { return rootId }
         do {
-            // The identity first: a version 1 identity is upgraded here, before anything is signed
-            // (docs/identity-pq-design.md 2). Off the network the tree still opens from the phone;
-            // every signed write opens (and upgrades) it again before it signs.
-            do { try await vault.prepareIdentity() } catch { if !(error is URLError) { report(error) } }
+            // The identity beside the workspace, one round trip instead of two: a version 1 identity is
+            // upgraded here (docs/identity-pq-design.md 2), and the one signature the workspace read can
+            // make (a top folder made on first open) opens the identity itself before it signs. Off the
+            // network the tree still opens from the phone; every signed write opens (and upgrades) the
+            // identity again before it signs.
+            let identity = Task { [vault] in try await vault.prepareIdentity() }
             let id = try await vault.rootId()
+            do { try await identity.value } catch { if !(error is URLError) { report(error) } }
             rootId = id
             names[id] = "HushOS"
             myWorkspace = try? await vault.workspaceId()

@@ -379,12 +379,16 @@ export async function openAreas(
     groupId: string,
     view: GroupView,
 ): Promise<AreaState[]> {
+    // Asked for together: the members' identities are needed only when the family has folders,
+    // but waiting for the folders first costs a round trip on every sync.
+    const members = fetchIdentities(ctx, groupId);
+    members.catch(() => {});
     const { spaces } = await ctx.api.spaces();
     const space = spaces.find(
         (entry) => entry.space.kind === 'group' && entry.space.groupId === groupId,
     );
     if (!space) return [];
-    const identities = await fetchIdentities(ctx, groupId);
+    const identities = await members;
     const out: AreaState[] = [];
     for (const area of space.areas) {
         if (!('idSeed' in area)) continue;

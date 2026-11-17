@@ -18,7 +18,7 @@ import { UnlockDevice } from '@/components/unlock-device';
 import { authClient } from '@/lib/auth-client';
 import { useAuthView } from '@/lib/auth-view';
 import { ContactFlowHost } from '@/components/drive/contact-flow';
-import { backfillOwnConsent, bindContactsToQueries } from '@/lib/contacts';
+import { backfillOwnConsent, bindContactsToQueries, trustedSigners } from '@/lib/contacts';
 import {
     closeSpaces,
     driveClient,
@@ -91,6 +91,13 @@ export function DriveRuntime({ user }: { user: SessionUser }) {
         void queryClient.resetQueries({ queryKey: ['families'] });
     }, [unlocked, queryClient]);
     const opened = useQuery({ ...driveOpenQueryOptions(user.id), enabled: unlocked });
+    // Who may have written what Drive lists (the pins, judged with this device's guard), worked
+    // out as soon as the account unlocks, beside the workspace and the first listing: that
+    // listing checks every row against it, and would otherwise only start reading the settings
+    // once it has the rows. The settings read here serves the other readers of the open too.
+    useEffect(() => {
+        if (unlocked) void trustedSigners(user.id).catch(() => {});
+    }, [unlocked, user.id]);
     const workspaceId = opened.data?.workspaceId;
     useChangeFeed(workspaceId ?? null, opened.data?.changeSeq ?? 0);
     useEffect(() => {
