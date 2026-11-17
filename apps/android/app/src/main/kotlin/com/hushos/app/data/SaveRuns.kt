@@ -89,14 +89,15 @@ class SaveRunJournal(val file: File, internal val epoch: Epoch = account) {
 
     /*
      * A run's row goes: removed, asked again once; if the disk still refuses, marked `done` so no open offers what a
-     * finished run made for deletion (and the next open drops it). Never fails what it retires.
+     * finished run made for deletion (and the next open drops it). False when neither was written: the row stays as it
+     * was, and the caller says so rather than call it retired.
      */
-    fun retire(row: SaveRunRow): Unit = synchronized(lock) {
-        if (!live) return
+    fun retire(row: SaveRunRow): Boolean = synchronized(lock) {
+        if (!live) return true
         val others = read().filter { it.id != row.id }
-        if (runCatching { write(others) }.isSuccess || runCatching { write(others) }.isSuccess) return
+        if (runCatching { write(others) }.isSuccess || runCatching { write(others) }.isSuccess) return true
         val done = others + row.copy(done = true)
-        if (runCatching { write(done) }.isFailure) runCatching { write(done) }
+        runCatching { write(done) }.isSuccess || runCatching { write(done) }.isSuccess
     }
 
     /* Rows of finished runs that couldn't be removed then, removed now. */
@@ -111,16 +112,35 @@ class SaveRunJournal(val file: File, internal val epoch: Epoch = account) {
         (0 until array.length()).map { SaveRunRow.from(array.getJSONObject(it)) }
     }.getOrDefault(emptyList())
 
+    /*
+     * On disk before it returns, through a power loss too: the rows go to a file beside the journal, flushed (fsync),
+     * renamed over it, and the folder flushed so the rename holds (the web's strict durability).
+     */
     private fun write(rows: List<SaveRunRow>) {
         fault?.invoke(rows)
-        if (rows.isEmpty()) { if (file.exists() && !file.delete()) throw java.io.IOException("The save record couldn’t be removed."); return }
-        file.parentFile?.mkdirs()
-        val next = File(file.parentFile, file.name + ".tmp")
-        next.writeText(JSONArray(rows.map { it.json() }).toString())
+        val folder = file.absoluteFile.parentFile
+        if (rows.isEmpty()) {
+            if (file.exists() && !file.delete()) throw java.io.IOException("The save record couldn’t be removed.")
+            flush(folder)
+            return
+        }
+        folder?.mkdirs()
+        val next = File(folder, file.name + ".tmp")
+        java.io.FileOutputStream(next).use { out ->
+            out.write(JSONArray(rows.map { it.json() }).toString().toByteArray())
+            out.fd.sync()
+        }
         if (!next.renameTo(file)) {
             file.delete()
             if (!next.renameTo(file)) throw java.io.IOException("The save record couldn’t be written.")
         }
+        flush(folder)
+    }
+
+    /* The folder's entry for the file on disk (a rename holds through a power loss); where a folder can't be opened, as it is. */
+    private fun flush(folder: File?) {
+        folder ?: return
+        runCatching { java.nio.channels.FileChannel.open(folder.toPath(), java.nio.file.StandardOpenOption.READ).use { it.force(true) } }
     }
 
     companion object {
@@ -133,6 +153,12 @@ class SaveRunJournal(val file: File, internal val epoch: Epoch = account) {
         fun endAccount() = account.end()
     }
 }
+
+/* A finished run (or kept results) whose record this device would not update: not retired, and asking again may. */
+class SaveRecordNotUpdated : Exception("This was saved, but this device couldn’t update its record of it. Try again.")
+
+/* Work a run can't take (it finished, or a result it wasn't planned for): nothing was sent and nothing cleaned up. */
+class SaveRunRefusal(message: String) : Exception(message)
 
 /* This device would not keep a run's record (its storage full): the run stops rather than publish what no row names. */
 class SaveUnrecorded(cause: Throwable) : Exception(SaveRuns.UNRECORDED, cause)
@@ -251,13 +277,15 @@ object SaveRuns {
         val left = when (remains) {
             SaveCleanup.LEFT -> " Some of what was made may still be there. You’ll be asked about it next time."
             SaveCleanup.NO_ACCESS -> " Some of what was made may still be there, and you can no longer remove it."
+            // After a sign-out: what may stay with nothing more to ask.
+            SaveCleanup.NOTHING -> " Some of what was made may still be there."
             else -> ""
         }
         val opening = when (reason) {
             SaveRunStopped.Reason.CANCELLED -> "Cancelled."
             SaveRunStopped.Reason.NO_ROOM -> if (shared) "There isn’t enough room in this shared folder for this." else "There isn’t enough room for this."
             SaveRunStopped.Reason.SIGNED_OUT -> "You signed out before this was saved."
-            SaveRunStopped.Reason.FAILED -> (failure ?: "This couldn’t be saved.").trim()
+            SaveRunStopped.Reason.FAILED -> sentence(failure ?: "This couldn’t be saved.")
         }
         if (kept == 0 && uncertain == 0 && left.isEmpty()) return if (reason == SaveRunStopped.Reason.FAILED && failure == null) FAILED else "$opening Nothing was saved."
         val versions = when (kept) {
@@ -272,6 +300,14 @@ object SaveRuns {
         }
         return "$opening$versions$maybe${left.ifEmpty { " Nothing else was saved." }}"
     }
+
+    /* A reason as a sentence: trimmed, and ended with a full stop when it has none. */
+    internal fun sentence(text: String): String {
+        val trimmed = text.trim()
+        return if (trimmed.isEmpty() || trimmed.last() in ".!?…") trimmed else "$trimmed."
+    }
+
+    const val ALREADY_SAVED = "This was already saved, so it was kept."
 
     internal fun signedOut() = SaveRunStopped(SaveRunStopped.Reason.SIGNED_OUT, words(SaveRunStopped.Reason.SIGNED_OUT, false, null, 0), SaveCleanup.NOTHING)
 
@@ -312,7 +348,7 @@ object SaveRuns {
     }
 
     /* Removes what an interrupted run made, as a cancel would have, then its row. */
-    fun cleanUp(row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal): SaveCleanup = clean(row, writer, journal, emptySet(), null).cleanup
+    fun cleanUp(row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal): SaveCleanup = clean(row, writer, journal, emptySet(), null, null).cleanup
 
     /*
      * Keeps what an interrupted run made: its row always goes. Its open uploads are still asked to abort; one with no answer
@@ -321,7 +357,8 @@ object SaveRuns {
      */
     fun keep(row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal) {
         for (uploadId in row.uploadIds) abort(writer, uploadId, row.workspaceId)
-        journal.retire(row)
+        // The disk refusing to let it go: still offered, and Keep may be asked again.
+        if (!journal.retire(row)) throw SaveRecordNotUpdated()
     }
 
     private fun abort(writer: SaveRunWriter, uploadId: String, workspaceId: String) =
@@ -338,7 +375,8 @@ object SaveRuns {
      * whose completion was sent (null for an interrupted run: any may have been); only those can land after an abort that
      * got no answer.
      */
-    internal fun clean(row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal, versions: Set<String>, completing: Set<String>?): Cleaned {
+    internal fun clean(row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal, versions: Set<String>, completing: Set<String>?,
+                       published: Set<String>?): Cleaned {
         var unsettled = false
         var denied = false
         var kept = 0
@@ -350,7 +388,11 @@ object SaveRuns {
                 unsettled = true
                 if (completing?.contains(uploadId) != false) { if (uploadId in versions) uncertain++ else othersMayLand = true }
             }
-            SaveAbortFate.DENIED -> denied = true
+            SaveAbortFate.DENIED -> {
+                // No longer this person's to ask: once its completion was sent it may have landed.
+                denied = true
+                if (completing?.contains(uploadId) != false) { if (uploadId in versions) uncertain++ else othersMayLand = true }
+            }
             SaveAbortFate.FINISHED -> if (uploadId in versions) kept++
             else -> {}
         }
@@ -358,8 +400,11 @@ object SaveRuns {
         var cleanup = discarded
         if (unsettled) cleanup = SaveCleanup.LEFT
         else if (denied && (cleanup == SaveCleanup.NOTHING || cleanup == SaveCleanup.NO_ACCESS)) cleanup = SaveCleanup.NO_ACCESS
-        val someRemain = othersMayLand || discarded == SaveCleanup.LEFT || discarded == SaveCleanup.NO_ACCESS
-        if (cleanup != SaveCleanup.LEFT) journal.retire(row)
+        // Not removed: only what was sent to be published may still be there.
+        val unremoved = (discarded == SaveCleanup.LEFT || discarded == SaveCleanup.NO_ACCESS) && row.nodeIds.any { published?.contains(it) != false }
+        val someRemain = othersMayLand || unremoved
+        // A row the disk won't retire stays as it was: the clean-up is left for the next open.
+        if (cleanup != SaveCleanup.LEFT && !journal.retire(row)) cleanup = SaveCleanup.LEFT
         return Cleaned(cleanup, kept, uncertain, if (!someRemain) null else if (cleanup == SaveCleanup.LEFT) SaveCleanup.LEFT else SaveCleanup.NO_ACCESS)
     }
 
@@ -407,6 +452,10 @@ class SaveRun private constructor(
     private val versionUploads = HashSet<String>()
     /* Uploads whose completion was sent: only these can land after a stop that got no answer. */
     private val completing = HashSet<String>()
+    /* Nodes whose publication was sent (a folder's creation, a file's completion) or that landed. */
+    private val published = HashSet<String>()
+    /* New files' nodes, by their upload: what a completion publishes. */
+    private val nodeOfUpload = HashMap<String, String>()
     private var stopping: CompletableFuture<SaveRunStopped>? = null
     private var sealed = false
     /* A sign-out: nothing is written, cleaned up or deleted for this run again. */
@@ -469,7 +518,7 @@ class SaveRun private constructor(
     private fun open() {
         if (!journal.live) abandon()
         val waiting = synchronized(lock) {
-            if (finished && stopping == null) throw SaveRunStopped(SaveRunStopped.Reason.FAILED, "This save has finished.", SaveCleanup.NOTHING)
+            if (finished && stopping == null) throw SaveRunRefusal("This save has finished.")
             stopping
         }
         if (waiting != null) throw waiting.get()
@@ -489,7 +538,10 @@ class SaveRun private constructor(
     }
 
     private fun noteBegun(ids: Vault.BegunIds, tracked: Boolean, version: Boolean) = synchronized(lock) {
-        if (sealed || ids.uploadId in settledUploads) return@synchronized
+        if (ids.uploadId in settledUploads) return@synchronized
+        // Begun after the run stopped (or its account signed out): nothing is sent, the vault aborts it.
+        if (sealed) throw IllegalStateException("This save run is stopping.")
+        nodeOfUpload[ids.uploadId] = ids.nodeId
         if (version) versionUploads += ids.uploadId
         row = row.copy(uploadIds = if (ids.uploadId in row.uploadIds) row.uploadIds else row.uploadIds + ids.uploadId,
             nodeIds = if (tracked && ids.nodeId !in row.nodeIds) row.nodeIds + ids.nodeId else row.nodeIds)
@@ -497,11 +549,17 @@ class SaveRun private constructor(
     }
 
     /* An upload is over: its id leaves the row; a new file that landed under another node is kept by that one. */
-    private fun settled(ids: Vault.BegunIds?, landed: String?, tracked: Boolean) {
+    /*
+     * `kept`: a new version that landed, counted in the same turn its id leaves the row, so a stop never misses it: before
+     * the stop it is counted here, after it the row still names it and the clean-up counts it (its abort: finished).
+     */
+    private fun settled(ids: Vault.BegunIds?, landed: String?, tracked: Boolean, kept: Boolean = false) {
         ids ?: return
         synchronized(lock) {
             settledUploads += ids.uploadId
+            landed?.let { published += it }
             if (sealed) return
+            if (kept) keptVersions++
             var nodes = row.nodeIds
             if (tracked && landed != null && landed != ids.nodeId) nodes = nodes - ids.nodeId + landed
             row = row.copy(uploadIds = row.uploadIds - ids.uploadId, nodeIds = nodes)
@@ -511,7 +569,7 @@ class SaveRun private constructor(
 
     private fun takeThumbnail(thumbnail: ByteArray?): ByteArray? = synchronized(lock) {
         if (thumbnail == null || thumbnail.isEmpty()) return null
-        if (thumbnails <= 0) throw SaveRunStopped(SaveRunStopped.Reason.FAILED, "This result was planned without a thumbnail.", SaveCleanup.NOTHING)
+        if (thumbnails <= 0) throw SaveRunRefusal("This result was planned without a thumbnail.")
         thumbnails--
         thumbnail
     }
@@ -545,7 +603,7 @@ class SaveRun private constructor(
     private fun failed(error: Exception): Exception {
         if (error is SaveRunStopped || error is SaveStale) return error
         synchronized(lock) { stopping }?.let { return it.get() }
-        return stop(SaveRunStopped.Reason.FAILED, if (error is SaveUnrecorded) SaveRuns.UNRECORDED else null)
+        return stop(SaveRunStopped.Reason.FAILED, if (error is SaveUnrecorded) SaveRuns.UNRECORDED else error.message)
     }
 
     /* A new folder's id, minted and on disk before its creation is sent; a run stopping, or a refused write, throws. */
@@ -553,6 +611,20 @@ class SaveRun private constructor(
         if (sealed) throw IllegalStateException("This save run is stopping.")
         row = row.copy(nodeIds = row.nodeIds + id)
         journal.put(row)
+        published += id
+    }
+
+    /* A folder inside one the run made: no row of its own, but its creation is about to be sent. */
+    private fun sending(id: String) = synchronized(lock) {
+        if (sealed) throw IllegalStateException("This save run is stopping.")
+        published += id
+    }
+
+    /* A completion is about to be sent; once the run stopped it is not sent (the vault aborts the upload). */
+    private fun completingNow(uploadId: String) = synchronized(lock) {
+        if (sealed) throw IllegalStateException("This save run is stopping.")
+        completing += uploadId
+        nodeOfUpload[uploadId]?.let { published += it }
     }
 
     private fun makeFolder(name: String, into: Opened, copy: Prior?): Opened {
@@ -570,7 +642,7 @@ class SaveRun private constructor(
             try {
                 // Its id on disk before its creation is sent, or the creation is not sent.
                 madeHere = writer.makeFolder(parentNow, given, copy) { id ->
-                    if (recordIt) recordFolder(id) else if (!journal.live) throw IllegalStateException("Signed out.")
+                    if (recordIt) recordFolder(id) else if (!journal.live) throw IllegalStateException("Signed out.") else sending(id)
                 }
             } catch (error: Exception) {
                 if (!FamilyUploads.waits(error, since != null)) throw error
@@ -674,12 +746,9 @@ class SaveRun private constructor(
                             started = ids
                             noteBegun(ids, tracked, version)
                         },
-                        onCompleting = { uploadId -> synchronized(lock) { completing += uploadId } })
-                    val recorded = runCatching { settled(started, landed.id, tracked) }.isSuccess
-                    val waiting = synchronized(lock) {
-                        if (version) keptVersions++
-                        stopping
-                    }
+                        onCompleting = { uploadId -> completingNow(uploadId) })
+                    val recorded = runCatching { settled(started, landed.id, tracked, kept = version) }.isSuccess
+                    val waiting = synchronized(lock) { stopping }
                     if (waiting != null) {
                         // Landed while the run stopped or after: a new file goes the way the rest went, and if it can't, a row
                         // names it for the next open (keepLate). Never after a sign-out.
@@ -749,8 +818,8 @@ class SaveRun private constructor(
         }
         if (!owner) return future.get()
         val (held, versions, keptBefore) = synchronized(lock) { Triple(row, versionUploads.toSet(), keptVersions) }
-        val sent = synchronized(lock) { completing.toSet() }
-        val cleaned = SaveRuns.clean(held, writer, journal, versions, sent)
+        val (sent, out) = synchronized(lock) { completing.toSet() to published.toSet() }
+        val cleaned = SaveRuns.clean(held, writer, journal, versions, sent, out)
         val total = keptBefore + cleaned.kept
         val done = SaveRunStopped(reason, SaveRuns.words(reason, shared, failure, total, cleaned.uncertain, cleaned.remains), cleaned.cleanup, total,
             cleaned.uncertain)
@@ -762,10 +831,11 @@ class SaveRun private constructor(
     fun finish() {
         val waiting = synchronized(lock) {
             stopping ?: run {
-                if (inFlight > 0) throw SaveRunStopped(SaveRunStopped.Reason.FAILED, "Some results are still being saved.", SaveCleanup.NOTHING)
+                if (inFlight > 0) throw SaveRunRefusal("Some results are still being saved.")
                 finished = true
                 sealed = true
-                journal.retire(row)
+                // Not retired: nothing more is taken in (`finished`), and finish may be asked again.
+                if (!journal.retire(row)) throw SaveRecordNotUpdated()
                 null
             }
         }
@@ -778,7 +848,10 @@ class SaveRun private constructor(
      */
     fun cancel(): SaveRunStopped {
         synchronized(lock) {
-            if (finished && stopping == null) return SaveRunStopped(SaveRunStopped.Reason.CANCELLED, SaveRuns.CANCELLED, SaveCleanup.NOTHING, keptVersions)
+            // What it made was saved and stays: said so when there was any.
+            if (finished && stopping == null)
+                return SaveRunStopped(SaveRunStopped.Reason.CANCELLED, if (keptVersions > 0 || row.nodeIds.isNotEmpty()) SaveRuns.ALREADY_SAVED else SaveRuns.CANCELLED,
+                    SaveCleanup.NOTHING, keptVersions)
         }
         return stop(SaveRunStopped.Reason.CANCELLED)
     }
@@ -788,8 +861,13 @@ class SaveRun private constructor(
         if (stopping != null) return@synchronized
         sealed = true
         abandoned = true
+        // Nothing is removed after a sign-out: what was sent to be published may stay.
+        val uncertain = completing.count { it in versionUploads && it in row.uploadIds }
+        val stays = row.nodeIds.any { it in published }
         stopping = CompletableFuture.completedFuture(
-            SaveRunStopped(SaveRunStopped.Reason.SIGNED_OUT, SaveRuns.words(SaveRunStopped.Reason.SIGNED_OUT, shared, null, keptVersions), SaveCleanup.LEFT, keptVersions))
+            SaveRunStopped(SaveRunStopped.Reason.SIGNED_OUT,
+                SaveRuns.words(SaveRunStopped.Reason.SIGNED_OUT, shared, null, keptVersions, uncertain, if (stays) SaveCleanup.NOTHING else null),
+                SaveCleanup.LEFT, keptVersions, uncertain))
     }
 
     /* Results on their way: the app asks before it lets a run's screen go. */

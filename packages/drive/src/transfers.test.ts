@@ -2542,6 +2542,56 @@ describe('produced results', () => {
         expect(h.calls).not.toContain('driveUploadPrepare');
     });
 
+    test('a begin refused only for the file’s key, its version the same, is sealed afresh, never taken for a race', async () => {
+        let keyEpoch = 1;
+        const h = harness({
+            openNodes: async () => ({
+                parent: node('root', null),
+                replaces: { ...fileAt('v1'), keyEpoch },
+            }),
+        });
+        const begin = h.api.beginUpload;
+        const asked: number[] = [];
+        // A key change re-keyed the file (its version still v1): the first begin is refused `stale`.
+        h.api.beginUpload = async (ws, input) => {
+            asked.push((input.node as { keyEpoch: number }).keyEpoch);
+            if (input.node.existing && input.node.keyEpoch !== keyEpoch)
+                throw new DriveApiError('This item changed since you last saw it.', 'stale', 409);
+            return begin(ws, input);
+        };
+        keyEpoch = 2;
+        const [id] = h.manager.enqueue([
+            {
+                file: memory('doc.txt'),
+                parent: node('root', null),
+                replaces: fileAt('v1'),
+                produced: { startedFrom: 'v1' },
+            },
+        ]);
+        await settle(5_000);
+        expect(h.item(id!).status).toBe('done');
+        expect(asked).toEqual([1, 2]);
+        // Refused for its key again after looking it up afresh: a failure, never `stale`.
+        const again = harness({
+            openNodes: async () => ({ parent: node('root', null), replaces: fileAt('v1') }),
+        });
+        again.api.beginUpload = async () => {
+            throw new DriveApiError('This item changed since you last saw it.', 'stale', 409);
+        };
+        const [other] = again.manager.enqueue([
+            {
+                file: memory('doc.txt'),
+                parent: node('root', null),
+                replaces: fileAt('v1'),
+                produced: { startedFrom: 'v1' },
+            },
+        ]);
+        await settle(5_000);
+        expect(again.item(other!).status).toBe('failed');
+        expect(again.item(other!).errorCode).toBeNull();
+        expect(again.item(other!).stale).toBeUndefined();
+    });
+
     test('begin names the version the work started from, and the server refusing it is stale with the version listed now', async () => {
         // The device's listing is behind: it still shows v1, the version the work started from.
         const h = harness({ serverVersion: () => 'v3', ...listedAt(() => 'v3') });

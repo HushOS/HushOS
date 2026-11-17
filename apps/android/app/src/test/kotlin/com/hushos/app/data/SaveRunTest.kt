@@ -88,6 +88,8 @@ class SaveRunTest {
         var loseAnswer = false
         var namesFail = false
         var uploading: (() -> Unit)? = null
+        /* Uploads whose parts went out after their begin was taken. */
+        var partsSent = 0
         private var count = 0
 
         override fun refusal(target: Opened) = refusal
@@ -125,9 +127,17 @@ class SaveRunTest {
                 throw error
             }
             // Its parts on their way, the completion not yet sent.
+            partsSent++
             uploading?.invoke()
             answers.removeFirstOrNull()?.invoke(n)
-            onCompleting("up-$n")
+            try {
+                onCompleting("up-$n")
+            } catch (error: Exception) {
+                // As the vault does: a run that stopped refuses the completion, and the reservation goes.
+                open -= "up-$n"
+                aborted += "up-$n"
+                throw error
+            }
             landing?.invoke()
             open -= "up-$n"
             finished += "up-$n"
@@ -145,6 +155,7 @@ class SaveRunTest {
         }
         override fun abortUpload(uploadId: String, workspaceId: String): SaveAbortFate {
             if (offline) return SaveAbortFate.UNKNOWN
+            if (denied) return SaveAbortFate.DENIED
             if (uploadId in completing) return SaveAbortFate.UNKNOWN
             aborted += uploadId
             if (uploadId in finished) return SaveAbortFate.FINISHED
@@ -198,7 +209,9 @@ class SaveRunTest {
     @Test
     fun aResultPlannedWithoutAThumbnailMayNotCarryOne() {
         val run = SaveRun.start(FakeWriter(), listOf(opened("f")), listOf(PlannedResult.Known(1uL, false)), journal())
-        assertThrows(SaveRunStopped::class.java) { run.file(byteArrayOf(1), "a.png", "image/png", own, thumbnail = byteArrayOf(9)) }
+        // Refused before anything is sent: not a stop, nothing cleaned up, and the run goes on.
+        assertThrows(SaveRunRefusal::class.java) { run.file(byteArrayOf(1), "a.png", "image/png", own, thumbnail = byteArrayOf(9)) }
+        run.file(byteArrayOf(1), "b.png", "image/png", own)
     }
 
     @Test
@@ -688,9 +701,12 @@ class SaveRunTest {
         pool.shutdown()
     }
 
-    /* A begin still on its way at the cancel: the empty row went, the file lands, can't be removed, and a row names it. */
+    /*
+     * A begin still on its way at the cancel: when it answers, the stopped run refuses it, so nothing is sent and the
+     * reservation is aborted (never a file completed that no row names). Fails if a sealed run lets a late begin go on.
+     */
     @Test
-    fun aLateFileThatCannotBeRemovedAfterTheRowWentGetsARowOfItsOwn() {
+    fun aBeginAnsweredAfterTheRunStoppedIsAbortedNeverCompleted() {
         val beginning = CountDownLatch(1)
         val go = CountDownLatch(1)
         val writer = FakeWriter().apply { this.beginning = { beginning.countDown(); go.await(5, TimeUnit.SECONDS) } }
@@ -700,12 +716,110 @@ class SaveRunTest {
         val saving = pool.submit<Opened> { run.file(byteArrayOf(1), "a", null, own) }
         assertTrue(beginning.await(5, TimeUnit.SECONDS))
         assertEquals(SaveCleanup.NOTHING, run.cancel().cleanup)
-        assertTrue(rows.list().isEmpty())
-        writer.refuse += "node-1"
         go.countDown()
         runCatching { saving.get(5, TimeUnit.SECONDS) }
-        assertEquals(listOf(listOf("node-1")), rows.list().map { it.nodeIds })
-        assertEquals(run.id, rows.list().single().id)
+        assertTrue(writer.live.isEmpty())
+        assertEquals(0, writer.partsSent)
+        assertEquals(listOf("up-1"), writer.aborted)
+        assertTrue(rows.list().isEmpty())
+        pool.shutdown()
+    }
+
+    /* A completion about to go out after the run stopped is refused: the upload is aborted, nothing lands. */
+    @Test
+    fun aCompletionAfterTheRunStoppedIsNeverSent() {
+        val doc = opened("doc", parent = "f", version = "v1")
+        val uploading = CountDownLatch(1)
+        val go = CountDownLatch(1)
+        val writer = FakeWriter().apply { this.uploading = { uploading.countDown(); go.await(5, TimeUnit.SECONDS) } }
+        val run = SaveRun.start(writer, listOf(doc), emptyList(), journal())
+        val pool = Executors.newSingleThreadExecutor()
+        val saving = pool.submit<VersionSaved> { run.version(byteArrayOf(1), doc, opened("f"), "v1", own) }
+        assertTrue(uploading.await(5, TimeUnit.SECONDS))
+        assertEquals(SaveRuns.CANCELLED, run.cancel().message)
+        go.countDown()
+        runCatching { saving.get(5, TimeUnit.SECONDS) }
+        assertTrue(writer.finished.isEmpty())
+        pool.shutdown()
+    }
+
+    /* A finish whose record the disk won't update says so, takes nothing more, and can be asked again; Keep the same. */
+    @Test
+    fun aFinishWhoseRecordWontUpdateSaysSoAndCanBeAskedAgain() {
+        val writer = FakeWriter()
+        val rows = journal()
+        val run = SaveRun.start(writer, listOf(opened("f")), emptyList(), rows)
+        run.file(byteArrayOf(1), "a", null, own)
+        rows.fault = { throw java.io.IOException("full") }
+        assertThrows(SaveRecordNotUpdated::class.java) { run.finish() }
+        assertThrows(SaveRunRefusal::class.java) { run.file(byteArrayOf(1), "b", null, own) }
+        rows.fault = null
+        run.finish()
+        assertTrue(rows.list().isEmpty())
+        val other = SaveRunRow("other", "ws", emptyList(), emptyList(), 1L, "an-earlier-launch")
+        rows.put(other)
+        rows.fault = { throw java.io.IOException("full") }
+        assertThrows(SaveRecordNotUpdated::class.java) { SaveRuns.keep(other, writer, rows) }
+        rows.fault = null
+        assertEquals(listOf("other"), rows.list().map { it.id })
+    }
+
+    /* What a stop says comes from what was sent: a sign-out after a completion, a cancel after finish, a denied abort, a reason. */
+    @Test
+    fun whatAStopSaysComesFromWhatWasSent() {
+        val landing = CountDownLatch(1)
+        val go = CountDownLatch(1)
+        val writer = FakeWriter().apply { this.landing = { landing.countDown(); go.await(5, TimeUnit.SECONDS) } }
+        val session = SaveRunJournal.Epoch()
+        val run = SaveRun.start(writer, listOf(opened("f")), emptyList(), journal(session))
+        val pool = Executors.newSingleThreadExecutor()
+        val saving = pool.submit<Opened> { run.file(byteArrayOf(1), "a", null, own) }
+        assertTrue(landing.await(5, TimeUnit.SECONDS))
+        SaveRuns.abandonAll(session)
+        go.countDown()
+        val thrown = runCatching { saving.get(5, TimeUnit.SECONDS) }.exceptionOrNull()?.cause as SaveRunStopped
+        assertEquals("You signed out before this was saved. Some of what was made may still be there.", thrown.message)
+
+        val done = SaveRun.start(FakeWriter(), listOf(opened("f")), emptyList(), journal())
+        done.file(byteArrayOf(1), "a", null, own)
+        done.finish()
+        assertEquals(SaveRuns.ALREADY_SAVED, done.cancel().message)
+
+        val doc = opened("doc", parent = "f", version = "v1")
+        val held = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val denied = FakeWriter().apply { this.landing = { held.countDown(); release.await(5, TimeUnit.SECONDS) } }
+        val versions = SaveRun.start(denied, listOf(doc), emptyList(), journal())
+        val saved = pool.submit<VersionSaved> { versions.version(byteArrayOf(1), doc, opened("f"), "v1", own) }
+        assertTrue(held.await(5, TimeUnit.SECONDS))
+        denied.denied = true
+        assertEquals(1, versions.cancel().uncertainVersions)
+        release.countDown()
+        runCatching { saved.get(5, TimeUnit.SECONDS) }
+
+        val listing = FakeWriter().apply { namesFail = true }
+        val failing = SaveRun.start(listing, listOf(opened("f")), emptyList(), journal())
+        val stopped = assertThrows(SaveRunStopped::class.java) { failing.file(byteArrayOf(1), "a", null, own) }
+        assertEquals("${SaveRuns.sentence(Unreachable().message ?: "")} Nothing was saved.", stopped.message)
+        pool.shutdown()
+    }
+
+    /* An offline clean-up of a file whose completion was never sent doesn't say it may still be there. */
+    @Test
+    fun anOfflineCleanUpOfAFileNeverCompletedSaysNothingRemains() {
+        val uploading = CountDownLatch(1)
+        val go = CountDownLatch(1)
+        val writer = FakeWriter().apply { this.uploading = { uploading.countDown(); go.await(5, TimeUnit.SECONDS) } }
+        val run = SaveRun.start(writer, listOf(opened("f")), emptyList(), journal())
+        val pool = Executors.newSingleThreadExecutor()
+        val saving = pool.submit<Opened> { run.file(byteArrayOf(1), "a", null, own) }
+        assertTrue(uploading.await(5, TimeUnit.SECONDS))
+        writer.offline = true
+        val stopped = run.cancel()
+        assertEquals(SaveCleanup.LEFT, stopped.cleanup)
+        assertEquals(SaveRuns.CANCELLED, stopped.message)
+        go.countDown()
+        runCatching { saving.get(5, TimeUnit.SECONDS) }
         pool.shutdown()
     }
 

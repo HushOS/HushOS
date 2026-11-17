@@ -895,7 +895,7 @@ extension Vault {
         source: PlainSource, name: String, mime: String?, in parentId: String, replacing: Opened?,
         thumbnail: Data?, signing: (metadata: Signing, version: Signing), attributes: [String: String],
         moveOf: MoveSource?, expected: String?? = nil, keepName: Bool = false, onBegun: @Sendable (BegunIds) throws -> Void = { _ in },
-        onCompleting: @Sendable (String) -> Void = { _ in }, progress: @Sendable (Double) -> Void
+        onCompleting: @Sendable (String) throws -> Void = { _ in }, progress: @Sendable (Double) -> Void
     ) async throws -> Opened {
         return try await writing {
             let begun = try await begin(source: source, name: name, mime: mime, parentId: parentId, replacing: replacing,
@@ -940,8 +940,14 @@ extension Vault {
                 await api.abortUpload(uploadId: begun.uploadId, workspaceId: begun.workspaceId)
                 throw error
             }
-            // Its completion goes out from here: what a save run's clean-up may then find landed.
-            onCompleting(begun.uploadId)
+            // Its completion goes out from here: what a save run's clean-up may then find landed. A run that stopped
+            // meanwhile refuses it: nothing is completed, and the reservation goes.
+            do {
+                try onCompleting(begun.uploadId)
+            } catch {
+                await api.abortUpload(uploadId: begun.uploadId, workspaceId: begun.workspaceId)
+                throw error
+            }
             do {
                 // A move's completion is asked again when no answer came: the server may have deleted the source already, and a
                 // repeated completion is answered with the node as it landed. Taken for a failure, the move would say it failed.
@@ -981,7 +987,7 @@ extension Vault {
     public func uploadResult(
         _ bytes: Data, name: String, mime: String?, in parentId: String, replacing: Opened?, startedFrom: String?,
         thumbnail: Data? = nil, signing: (metadata: Signing, version: Signing), modified: Date = Date(),
-        onBegun: @escaping @Sendable (BegunIds) throws -> Void = { _ in }, onCompleting: @escaping @Sendable (String) -> Void = { _ in },
+        onBegun: @escaping @Sendable (BegunIds) throws -> Void = { _ in }, onCompleting: @escaping @Sendable (String) throws -> Void = { _ in },
         progress: @Sendable (Double) -> Void = { _ in }
     ) async throws -> Opened {
         if let replacing, replacing.node.currentVersion?.id != startedFrom {

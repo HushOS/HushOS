@@ -301,7 +301,10 @@ A cancel, a refusal, a 402, a watchdog or a closed tab:
     - One writer per journal file, removals included, so two runs starting at once never lose each other's row.
     - Every failure after a run starts, a folder's listing or creation included, stops it and cleans up.
     - What a stopped run says comes from what its clean-up found: "may still be there" for new files or folders it couldn't remove, "may have been saved" only for a new version whose completion was sent.
-    - A finished run's row that the device won't remove is marked done: never offered for deletion, dropped by the next open.
+    - A finished run's row that the device won't remove is marked done: never offered for deletion, dropped by the next open. If neither the removal nor the mark is written, finish (or Keep) says the record couldn't be updated and can be asked again; it is never called done. The phones flush the journal file and its folder before relying on a row, as the web's strict IndexedDB writes do.
+    - A begin answered after the run stopped is aborted, and a completion is never sent once it has: nothing lands that no row names.
+    - A begin refused `stale` only because the file's key moved (its version the same) is looked up again and sealed afresh, never taken for someone else's save.
+    - A fault-injection test on each client (`save-runs.faults.test.ts`, `SaveRunFaultTests`, `SaveRunFaultTest`) fails every wait in turn (network, a lost answer, a refusal, a full disk, the process dying) and checks this rule after each.
 5. removes the run's journal row.
 
 After a closed tab, steps 3 and 4 happen on the next open from the run's journal row, and the 24-hour upload expiry covers what is left.

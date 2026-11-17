@@ -2274,8 +2274,15 @@ class Vault(internal val context: Context, val api: DriveApi) {
         // Refused: aborted, so its reserved room is released now. Unknown: asked again, never aborted blind (UploadFinish).
         // A completion the final gate refuses here (a guard owed, the folder no longer writable, the session ended) was never
         // sent: a definite answer, so the upload is aborted and its room released, and a new node's ledger key goes.
-        // Its completion goes out from here: what a save run's clean-up may then find landed.
-        onCompleting(begun.uploadId)
+        // Its completion goes out from here: what a save run's clean-up may then find landed. A run that stopped meanwhile
+        // refuses it: nothing is completed, and the reservation goes.
+        try {
+            onCompleting(begun.uploadId)
+        } catch (error: Exception) {
+            runCatching { abortReserved(begun.uploadId, ws) }
+            madeKey?.let { areaLedger.forgetNodeKey(ws, it) }
+            throw error
+        }
         var node = try {
             UploadFinish.complete({ refusedHere { api.completeUpload(begun.uploadId, ws, etags) } }, { abortReserved(begun.uploadId, ws) })
         } catch (refused: UploadFinish.RefusedHere) {

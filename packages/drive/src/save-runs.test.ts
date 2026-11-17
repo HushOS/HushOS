@@ -23,8 +23,10 @@ import { DriveApiError, type NodeView } from './api';
 import type { DriveNode } from './client';
 import { createMemoryRunJournal, type RunRow } from './journal';
 import {
+    ALREADY_SAVED,
     NO_ROOM,
     NO_ROOM_SHARED,
+    RecordNotUpdated,
     OWN_WRITING,
     RUN_CANCELLED,
     RunStopped,
@@ -1381,6 +1383,125 @@ describe('a save run', () => {
         await expect(
             other.file({ name: 'c', bytes: bytes(), mime: null, ...own }),
         ).rejects.toBeInstanceOf(RunStopped);
+    });
+
+    test('a `stale` that is only a key having moved is a failure, never someone else’s version', async () => {
+        const w = world();
+        const doc = { ...folder('doc'), kind: 'file', parentId: 'f' } as DriveNode;
+        const run = await startRun(w.deps, { targets: [doc], results: [] });
+        const saved = run.version({
+            file: doc,
+            folder: folder('f'),
+            startedFrom: 'v1',
+            bytes: bytes(),
+            ...own,
+        });
+        await tick();
+        // The engine gave up on a key-only refusal: `stale` as the server's code, no race confirmed.
+        w.failWith(w.ids()[0]!, 'stale');
+        await expect(saved).rejects.toMatchObject({ reason: 'failed' });
+    });
+
+    test('a finish whose record the journal won’t update says so, stays live, and can be asked again', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const saved = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        w.land(w.ids()[0]!, 'node-a', 'up-a');
+        await saved;
+        const put = w.runs.put.bind(w.runs);
+        const remove = w.runs.remove.bind(w.runs);
+        w.runs.put = () => Promise.reject(new DOMException('full', 'QuotaExceededError'));
+        w.runs.remove = () => Promise.reject(new DOMException('full', 'QuotaExceededError'));
+        await expect(run.finish()).rejects.toBeInstanceOf(RecordNotUpdated);
+        // Still this page's: never taken for interrupted here, and nothing more taken in.
+        expect(await interruptedRuns({ runs: w.runs, isLive: async () => false })).toEqual([]);
+        await expect(run.file({ name: 'b', bytes: bytes(), mime: null, ...own })).rejects.toThrow();
+        w.runs.put = put;
+        w.runs.remove = remove;
+        await run.finish();
+        expect(w.runs.rows.size).toBe(0);
+        // Keep, the same: not recorded is said, never "kept".
+        const left: RunRow = {
+            id: 'r',
+            workspaceId: 'ws-own',
+            nodeIds: [],
+            uploadIds: [],
+            at: 1,
+            beat: 1,
+        };
+        await w.runs.put(left);
+        w.runs.put = () => Promise.reject(new DOMException('full', 'QuotaExceededError'));
+        w.runs.remove = () => Promise.reject(new DOMException('full', 'QuotaExceededError'));
+        expect(await keepInterrupted(w.deps, left)).toBe('not-recorded');
+        expect(w.runs.rows.has('r')).toBe(true);
+    });
+
+    test('a failure on the run’s own way says why', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        w.deps.namesIn = () => Promise.reject(new Error('This folder couldn’t be listed'));
+        await expect(
+            run.file({ name: 'a', bytes: bytes(), mime: null, ...own }),
+        ).rejects.toMatchObject({
+            message: 'This folder couldn’t be listed. Nothing was saved.',
+        });
+    });
+
+    test('a sign-out after a result was sent to be published says it may still be there; a cancel after finish says it was saved', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const saved = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        await w.queued.get(w.ids()[0]!)!.input.produced!.beforeComplete!();
+        w.signOut();
+        abandonRuns();
+        await expect(saved).rejects.toMatchObject({
+            reason: 'signed-out',
+            message:
+                'You signed out before this was saved. Some of what was made may still be there.',
+        });
+
+        const v = world();
+        const done = await startRun(v.deps, { targets: [folder('f')], results: [] });
+        const result = done.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        v.begin(v.ids()[0]!, 'up-a', 'node-a');
+        v.land(v.ids()[0]!, 'node-a', 'up-a');
+        await result;
+        await done.finish();
+        expect((await done.cancel()).message).toBe(ALREADY_SAVED);
+    });
+
+    test('an abort refused as no longer theirs, once its completion was sent, may have landed', async () => {
+        const w = world();
+        const doc = { ...folder('doc'), kind: 'file', parentId: 'f' } as DriveNode;
+        const run = await startRun(w.deps, { targets: [doc], results: [] });
+        void run
+            .version({ file: doc, folder: folder('f'), startedFrom: 'v1', bytes: bytes(), ...own })
+            .catch(() => {});
+        await tick();
+        w.begin(w.ids()[0]!, 'up-v', 'doc');
+        await w.queued.get(w.ids()[0]!)!.input.produced!.beforeComplete!();
+        w.server.denied = true;
+        const stopped = await run.cancel();
+        expect(stopped.uncertainVersions).toBe(1);
+        expect(stopped.message).toMatch(/may have been saved/);
+    });
+
+    test('an offline clean-up of a file whose completion was never sent doesn’t say it may still be there', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        void run.file({ name: 'a', bytes: bytes(), mime: null, ...own }).catch(() => {});
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        await tick();
+        w.server.offline = true;
+        const stopped = await run.cancel();
+        expect(stopped.cleanup).toBe('left');
+        expect(stopped.message).toBe(RUN_CANCELLED);
     });
 
     test('a row the journal refuses to write stops the run: nothing is attached or completed that it does not name', async () => {

@@ -194,6 +194,9 @@ export type Produced = {
 };
 
 /* A produced new version whose file moved on to `currentVersionId` (UploadItem.stale). */
+/* A produced version whose begin was refused for its key alone, again after looking it up afresh. */
+const KEY_MOVED = 'This file’s keys changed while it was saving. Try again.';
+
 export class StaleVersionError extends Error {
     constructor(readonly currentVersionId: string | null) {
         super('Someone else saved a newer version of this file, so this one wasn’t saved.');
@@ -1149,6 +1152,8 @@ export function createTransferManager(options: TransferManagerOptions) {
                   begun: Awaited<ReturnType<DriveApi['beginUpload']>>;
               }
             | undefined;
+        /* A produced version's begin refused only for its key (its version the same): looked up again once. */
+        let keyOnlyLooked = false;
         while (!sealed) {
             // Asked again here, right before a node or a content key is made: into the folder, or
             // as a new version under the file's own key, either may be waiting for a key change.
@@ -1303,8 +1308,19 @@ export function createTransferManager(options: TransferManagerOptions) {
                 begun = await request;
             } catch (error) {
                 // A produced version the server found stale: named by the version current now.
-                if (u.produced && u.replaces && isStale(error) && u.keyChangePauses === 0)
-                    throw await staleOrSame(u, error);
+                if (u.produced && u.replaces && isStale(error) && u.keyChangePauses === 0) {
+                    const stale = await staleOrSame(u, error);
+                    if (stale instanceof StaleVersionError) throw stale;
+                    if (u.generation !== generation) return;
+                    // Only its key moved, its version the same: never a version race. The file is
+                    // looked up again and sealed afresh under the keys found, once; a second such
+                    // refusal (or no way to look) is a failure, never `stale`.
+                    if (keyOnlyLooked || !options.openNodes || !u.queued)
+                        throw new Error(KEY_MOVED);
+                    keyOnlyLooked = true;
+                    u.lookAgain = true;
+                    continue;
+                }
                 // Without a way to look the folder up again there is nothing to seal afresh from.
                 if (!options.openNodes || !u.queued) throw error;
                 if (u.generation !== generation) return;

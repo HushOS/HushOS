@@ -133,6 +133,19 @@ export const RUN_CANCELLED = 'Cancelled. Nothing was saved.';
 export const RUN_FAILED = 'This couldn’t be saved, so nothing was kept.';
 /* What a run says when this device would not keep its record (the browser's storage full): it stops. */
 export const UNRECORDED = 'This device couldn’t keep a record of this save.';
+/* A cancel after the run finished: what it made was saved, and stays. */
+export const ALREADY_SAVED = 'This was already saved, so it was kept.';
+
+/*
+ * A finished run (or kept results) whose record this device would not update:
+ * it is not retired, and asking again may (finish or Keep once more).
+ */
+export class RecordNotUpdated extends Error {
+    constructor() {
+        super('This was saved, but this device couldn’t update its record of it. Try again.');
+        this.name = 'RecordNotUpdated';
+    }
+}
 
 const OPENINGS: Record<Exclude<StopReason, 'failed'>, string> = {
     cancelled: 'Cancelled.',
@@ -155,7 +168,7 @@ export function stoppedWords(
         failure?: string | null;
         keptVersions?: number;
         uncertainVersions?: number;
-        remains?: 'left' | 'no-access' | null;
+        remains?: 'left' | 'no-access' | 'stays' | null;
     } = {},
 ) {
     const kept = options.keptVersions ?? 0;
@@ -165,10 +178,12 @@ export function stoppedWords(
             ? ' Some of what was made may still be there. You’ll be asked about it next time.'
             : options.remains === 'no-access'
               ? ' Some of what was made may still be there, and you can no longer remove it.'
-              : '';
+              : options.remains === 'stays'
+                ? ' Some of what was made may still be there.'
+                : '';
     const opening =
         reason === 'failed'
-            ? (options.failure ?? 'This couldn’t be saved.').replace(/\s*$/, '')
+            ? sentence(options.failure ?? 'This couldn’t be saved.')
             : reason === 'no-room' && options.shared
               ? 'There isn’t enough room in this shared folder for this.'
               : OPENINGS[reason];
@@ -187,6 +202,12 @@ export function stoppedWords(
           ? ` ${kept ? 'Another' : 'A'} new version may have been saved.`
           : ` ${uncertain} ${kept ? 'other ' : ''}new versions may have been saved.`;
     return `${opening}${versions}${maybe}${remains || ' Nothing else was saved.'}`;
+}
+
+/* A reason as a sentence: trimmed, and ended with a full stop when it has none. */
+function sentence(text: string) {
+    const trimmed = text.trim();
+    return /[.!?…]$/.test(trimmed) ? trimmed : `${trimmed}.`;
 }
 
 type TransferEvent = Parameters<NonNullable<TransferManagerOptions['onEvent']>>[0];
@@ -532,6 +553,11 @@ function createRun(
     /* Uploads whose completion was sent: only these can land after a stop that got no answer. */
     const completing = new Set<string>();
     /*
+     * Nodes whose publication was sent (a folder's creation, a file's completion or attach) or
+     * that landed: only these may still be there after a clean-up that couldn't remove them.
+     */
+    const mayBePublished = new Set<string>();
+    /*
      * After a stop: folders made too late to go with it that then couldn't be removed, in one
      * row (the stop's, when it kept one), each write after the last.
      */
@@ -632,7 +658,13 @@ function createRun(
             case 'done':
                 return settled(event.item, output);
             case 'failed':
-                if (output.kind === 'version' && event.item.errorCode === 'stale') {
+                // Only a race the engine confirmed (`stale` naming the version current now): a
+                // `stale` that is only a key having moved is a failure, not someone else's save.
+                if (
+                    output.kind === 'version' &&
+                    event.item.errorCode === 'stale' &&
+                    event.item.stale
+                ) {
                     pending.delete(event.item.id);
                     forgetUpload(output);
                     output.resolve({
@@ -668,6 +700,7 @@ function createRun(
         if (output.kind === 'version') keptVersions += 1;
         // A new file a key change moved under is attached as a node of its own: that one is kept.
         const landed = item.node?.id ?? null;
+        if (landed) mayBePublished.add(landed);
         if (output.tracked && landed && landed !== output.nodeId) {
             row.nodeIds = row.nodeIds.filter((id) => id !== output.nodeId);
             if (!row.nodeIds.includes(landed)) row.nodeIds.push(landed);
@@ -739,6 +772,8 @@ function createRun(
                             void persist();
                             // On disk before the attach is sent, or not sent at all.
                             await recorded();
+                            if (stopping) throw new Error('This save run is stopping.');
+                            mayBePublished.add(nodeId);
                         },
                         // On disk before the completion is sent: nothing is published that the row
                         // the next open cleans up from does not name.
@@ -746,6 +781,7 @@ function createRun(
                             await recorded();
                             if (stopping) throw new Error('This save run is stopping.');
                             if (output.uploadId) completing.add(output.uploadId);
+                            if (output.nodeId) mayBePublished.add(output.nodeId);
                         },
                     },
                 },
@@ -797,6 +833,7 @@ function createRun(
                 written: () => writing,
                 versionUploads,
                 completing,
+                published: mayBePublished,
                 current,
             });
             keptVersions += result.keptVersions;
@@ -828,7 +865,7 @@ function createRun(
     async function failed(error: unknown): Promise<never> {
         if (error instanceof RunStopped) throw error;
         if (stopping) throw await stopping;
-        throw await stop('failed');
+        throw await stop('failed', undefined, error instanceof Error ? error.message : undefined);
     }
     /* A late folder that couldn't be removed joins the late row (keepLate on the phones). */
     function keepLate(nodeId: string, stopKeptRow: boolean) {
@@ -864,11 +901,13 @@ function createRun(
                 made = await deps.makeFolder(into, given, signAs, async (id) => {
                     // Its id on disk before its creation is sent, or the creation is not sent.
                     if (stopping || !current()) throw new Error('This save run is stopping.');
-                    if (!recordIt) return;
-                    row.nodeIds.push(id);
-                    void persist();
-                    await recorded();
+                    if (recordIt) {
+                        row.nodeIds.push(id);
+                        void persist();
+                        await recorded();
+                    }
                     if (stopping) throw new Error('This save run is stopping.');
+                    mayBePublished.add(id);
                 });
             } catch (error) {
                 return failed(error);
@@ -929,12 +968,20 @@ function createRun(
             finished = true;
             sealed = true;
             await writing;
-            if (current()) await retire(deps.runs, row);
+            // Not retired: the run stays live (its row is never taken for interrupted here) and
+            // finish may be asked again; nothing more is taken in (`finished`).
+            if (current() && !(await retire(deps.runs, row))) throw new RecordNotUpdated();
             end();
         },
         async cancel() {
+            // Finished: what it made was saved and stays (the message says so when there was any).
             if (finished)
-                return new RunStopped('cancelled', RUN_CANCELLED, 'nothing', keptVersions);
+                return new RunStopped(
+                    'cancelled',
+                    keptVersions || row.nodeIds.length ? ALREADY_SAVED : RUN_CANCELLED,
+                    'nothing',
+                    keptVersions,
+                );
             return stop('cancelled');
         },
         waiting() {
@@ -943,11 +990,21 @@ function createRun(
         abandon() {
             if (stopped) return;
             abandoned = true;
+            // Nothing is removed after a sign-out: what was sent to be published may stay.
+            const uncertain = [...completing].filter(
+                (id) => versionUploads.has(id) && row.uploadIds.includes(id),
+            ).length;
+            const stays = row.nodeIds.some((id) => mayBePublished.has(id));
             const done = new RunStopped(
                 'signed-out',
-                stoppedWords('signed-out', { keptVersions }),
+                stoppedWords('signed-out', {
+                    keptVersions,
+                    uncertainVersions: uncertain,
+                    remains: stays ? 'stays' : null,
+                }),
                 'left',
                 keptVersions,
+                uncertain,
             );
             stopped = done;
             stopping ??= Promise.resolve(done);
@@ -979,6 +1036,8 @@ async function cleanUp(
         versionUploads?: Set<string>;
         /* Uploads whose completion was sent; without it (an interrupted run), any may have been. */
         completing?: Set<string>;
+        /* Nodes whose publication was sent; without it (an interrupted run), any may have been. */
+        published?: Set<string>;
         current?: () => boolean;
     } = {},
 ): Promise<{
@@ -1003,8 +1062,13 @@ async function cleanUp(
             if (!(options.completing?.has(uploadId) ?? true)) continue;
             if (options.versionUploads?.has(uploadId)) uncertainVersions += 1;
             else othersMayLand = true;
-        } else if (fate === 'denied') denied = true;
-        else if (fate === 'finished' && options.versionUploads?.has(uploadId)) keptVersions += 1;
+        } else if (fate === 'denied') {
+            denied = true;
+            // No longer this person's to ask: once its completion was sent it may have landed.
+            if (!(options.completing?.has(uploadId) ?? true)) continue;
+            if (options.versionUploads?.has(uploadId)) uncertainVersions += 1;
+            else othersMayLand = true;
+        } else if (fate === 'finished' && options.versionUploads?.has(uploadId)) keptVersions += 1;
     }
     const discarded = await discard(deps, row.workspaceId, row.nodeIds).catch(
         (): Cleanup => 'left',
@@ -1012,27 +1076,33 @@ async function cleanUp(
     let cleanup = discarded;
     if (unsettled) cleanup = 'left';
     else if (denied && (cleanup === 'nothing' || cleanup === 'no-access')) cleanup = 'no-access';
-    const someRemain = othersMayLand || discarded === 'left' || discarded === 'no-access';
-    const remains = !someRemain ? null : cleanup === 'left' ? 'left' : 'no-access';
+    // Not removed: only what was sent to be published may still be there.
+    const unremoved =
+        (discarded === 'left' || discarded === 'no-access') &&
+        row.nodeIds.some((id) => options.published?.has(id) ?? true);
+    const someRemain = othersMayLand || unremoved;
     if (cleanup !== 'left') {
         // After the last row the run wrote, so none lands after this one goes.
         options.seal?.();
         await options.written?.();
-        if (options.current?.() ?? true) await retire(deps.runs, row);
+        // A row the journal won't retire stays as it was: the clean-up is left for the next open.
+        if ((options.current?.() ?? true) && !(await retire(deps.runs, row))) cleanup = 'left';
     }
+    const remains = !someRemain ? null : cleanup === 'left' ? 'left' : 'no-access';
     return { cleanup, keptVersions, uncertainVersions, remains };
 }
 
 /*
  * A run's row goes: removed, asked again once; if the journal still refuses,
  * marked `done` so no open offers what a finished run made for deletion (and
- * the next open drops it). Never fails what it retires.
+ * the next open drops it). False when neither was written: the row stays as
+ * it was, and the caller says so rather than call it retired.
  */
 async function retire(runs: RunJournal, row: RunRow) {
     for (let tries = 0; tries < 2; tries++)
         try {
             await runs.remove(row.id);
-            return;
+            return true;
         } catch {
             // Asked again, then marked done.
         }
@@ -1040,10 +1110,11 @@ async function retire(runs: RunJournal, row: RunRow) {
     for (let tries = 0; tries < 2; tries++)
         try {
             await runs.put(done);
-            return;
+            return true;
         } catch {
             // Asked again; past that the row stays as it was.
         }
+    return false;
 }
 
 /* Published results to the Trash, then deleted forever where the person may; anything refused is `left`. */
@@ -1107,8 +1178,8 @@ export async function cleanUpInterrupted(deps: SaveRunDeps, row: RunRow) {
 export async function keepInterrupted(
     deps: Pick<SaveRunDeps, 'abortUpload' | 'runs'>,
     row: RunRow,
-): Promise<'kept'> {
+): Promise<'kept' | 'not-recorded'> {
     for (const uploadId of row.uploadIds) await deps.abortUpload(row.workspaceId, uploadId);
-    await retire(deps.runs, row);
-    return 'kept';
+    // The journal refusing to let it go: still offered, and Keep may be asked again.
+    return (await retire(deps.runs, row)) ? 'kept' : 'not-recorded';
 }

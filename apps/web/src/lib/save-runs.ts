@@ -46,6 +46,7 @@ import { untilWritable } from '@/lib/uploads';
 
 export {
     OWN_WRITING,
+    RecordNotUpdated,
     RunStopped,
     SaveRefused,
     type SaveRun,

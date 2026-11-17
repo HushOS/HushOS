@@ -50,6 +50,8 @@ actor FakeWriter: SaveRunWriter {
     var loseAnswer = false
     var namesFail = false
     var uploading: (@Sendable () async -> Void)?
+    /* Uploads whose parts went out after their begin was taken. */
+    var partsSent = 0
     private var count = 0
 
     init(room: SaveRoom = .own(1 << 40)) { roomIs = room }
@@ -95,7 +97,7 @@ actor FakeWriter: SaveRunWriter {
     func set(uploading: @escaping @Sendable () async -> Void) { self.uploading = uploading }
     func uploadResult(_ bytes: Data, name: String, mime: String?, in folder: Opened, replacing: Opened?, startedFrom: String?, thumbnail: Data?,
                       signing: (metadata: Signing, version: Signing), onBegun: @escaping @Sendable (Vault.BegunIds) throws -> Void,
-                      onCompleting: @escaping @Sendable (String) -> Void) async throws -> Opened {
+                      onCompleting: @escaping @Sendable (String) throws -> Void) async throws -> Opened {
         count += 1
         let n = count
         uploads.append((name, folder.id, replacing?.id, replacing?.node.keyEpoch, startedFrom, signing))
@@ -112,9 +114,17 @@ actor FakeWriter: SaveRunWriter {
             throw error
         }
         // Its parts on their way, the completion not yet sent.
+        partsSent += 1
         await uploading?()
         if !answers.isEmpty { try answers.removeFirst()(n) }
-        onCompleting("up-\(n)")
+        do {
+            try onCompleting("up-\(n)")
+        } catch {
+            // As the vault does: a run that stopped refuses the completion, and the reservation goes.
+            open.remove("up-\(n)")
+            aborted.append("up-\(n)")
+            throw error
+        }
         await landing?()
         finish("up-\(n)")
         if replacing == nil { live.insert(nodeId) }
@@ -213,9 +223,11 @@ let own = SaveSources.ownWriting
 
     @Test func aResultPlannedWithoutAThumbnailMayNotCarryOne() async throws {
         let run = try await SaveRun.start(writer: FakeWriter(), targets: [opened("f")], results: [.known(size: 1, thumbnail: false)], journal: journal())
-        await #expect(throws: SaveRunStopped.self) {
+        // Refused before anything is sent: not a stop, nothing cleaned up, and the run goes on.
+        await #expect(throws: SaveRunRefusal.self) {
             _ = try await run.file(Data([1]), name: "a.png", mime: "image/png", sources: own, thumbnail: Data([9]))
         }
+        _ = try await run.file(Data([1]), name: "b.png", mime: "image/png", sources: own)
     }
 
     @Test func eachResultTakesTheNextFreeNameAndNeverReplaces() async throws {
@@ -410,7 +422,7 @@ let own = SaveSources.ownWriting
         #expect(await SaveRuns.cleanUp(other, writer: writer, journal: rows) == .left)
         #expect(rows.list().contains { $0.id == "other" })
         // Keep with no answer (offline, an older server): the row goes all the same; the server lets an open upload expire.
-        await SaveRuns.keep(other, writer: writer, journal: rows)
+        try await SaveRuns.keep(other, writer: writer, journal: rows)
         #expect(!rows.list().contains { $0.id == "other" })
         await writer.set(offline: false)
         try rows.put(other)
@@ -419,7 +431,7 @@ let own = SaveSources.ownWriting
         #expect(!rows.list().contains { $0.id == "other" })
         await writer.set(denied: false)
         try rows.put(other)
-        await SaveRuns.keep(other, writer: writer, journal: rows)
+        try await SaveRuns.keep(other, writer: writer, journal: rows)
         #expect(await writer.aborted == ["up-x"])
         #expect(!rows.list().contains { $0.id == "other" })
         _ = await run.cancel()
@@ -573,8 +585,11 @@ let own = SaveSources.ownWriting
         try await flaky.finish()
     }
 
-    /* A begin still on its way at the cancel: the empty row went, the file lands, can't be removed, and a row names it. */
-    @Test func aLateFileThatCannotBeRemovedAfterTheRowWentGetsARowOfItsOwn() async throws {
+    /*
+     * A begin still on its way at the cancel: when it answers, the stopped run refuses it, so nothing is sent and the
+     * reservation is aborted (never a file completed that no row names). Fails if a sealed run lets a late begin go on.
+     */
+    @Test func aBeginAnsweredAfterTheRunStoppedIsAbortedNeverCompleted() async throws {
         let writer = FakeWriter()
         let gate = AsyncGate()
         await writer.set(beginning: { await gate.wait() })
@@ -584,12 +599,114 @@ let own = SaveSources.ownWriting
         try await Task.sleep(for: .milliseconds(50))
         let stopped = await run.cancel()
         #expect(stopped.cleanup == .nothing)
-        #expect(rows.list().isEmpty)
-        await writer.refuse("node-1")
         await gate.open()
         _ = try? await saving.value
-        #expect(rows.list().map(\.nodeIds) == [["node-1"]])
-        #expect(rows.list().first?.id == run.id)
+        #expect(await writer.live.isEmpty)
+        #expect(await writer.partsSent == 0)
+        #expect(await writer.aborted == ["up-1"])
+        #expect(rows.list().isEmpty)
+    }
+
+    /* A completion about to go out after the run stopped is refused: the upload is aborted, nothing lands. */
+    @Test func aCompletionAfterTheRunStoppedIsNeverSent() async throws {
+        let writer = FakeWriter()
+        let gate = AsyncGate()
+        await writer.set(uploading: { await gate.wait() })
+        let rows = journal()
+        let doc = opened("doc", parent: "f", version: "v1")
+        let run = try await SaveRun.start(writer: writer, targets: [doc], results: [], journal: rows)
+        let saving = Task { try await run.version(Data([1]), of: doc, in: opened("f"), startedFrom: "v1", sources: own) }
+        try await Task.sleep(for: .milliseconds(50))
+        let stopped = await run.cancel()
+        #expect(stopped.message == SaveRuns.cancelled)
+        await gate.open()
+        _ = try? await saving.value
+        // Aborted by the stop and again by the refused completion: never finished.
+        #expect(await writer.finished.isEmpty)
+    }
+
+    /* A finish whose record the disk won't update says so, takes nothing more, and can be asked again; Keep the same. */
+    @Test func aFinishWhoseRecordWontUpdateSaysSoAndCanBeAskedAgain() async throws {
+        struct Full: Error {}
+        let writer = FakeWriter()
+        let rows = journal()
+        let run = try await SaveRun.start(writer: writer, targets: [opened("f")], results: [], journal: rows)
+        _ = try await run.file(Data([1]), name: "a", mime: nil, sources: own)
+        rows.fault = { _ in throw Full() }
+        await #expect(throws: SaveRecordNotUpdated.self) { try await run.finish() }
+        await #expect(throws: SaveRunRefusal.self) { _ = try await run.file(Data([1]), name: "b", mime: nil, sources: own) }
+        rows.fault = nil
+        try await run.finish()
+        #expect(rows.list().isEmpty)
+        let other = SaveRunRow(id: "other", workspaceId: "ws", nodeIds: [], uploadIds: [], at: Date(), launch: "an-earlier-launch")
+        try rows.put(other)
+        rows.fault = { _ in throw Full() }
+        await #expect(throws: SaveRecordNotUpdated.self) { try await SaveRuns.keep(other, writer: writer, journal: rows) }
+        rows.fault = nil
+        #expect(rows.list().map(\.id) == ["other"])
+    }
+
+    /* What a stop says comes from what was sent: a sign-out after a completion, a cancel after finish, a denied abort. */
+    @Test func whatAStopSaysComesFromWhatWasSent() async throws {
+        // Signed out with a file's completion on its way: it may still be there.
+        let writer = FakeWriter()
+        let gate = AsyncGate()
+        await writer.set(landing: { await gate.wait() })
+        let session = SaveRunJournal.Epoch()
+        let run = try await SaveRun.start(writer: writer, targets: [opened("f")], results: [], journal: journal(session))
+        let saving = Task { try await run.file(Data([1]), name: "a", mime: nil, sources: own) }
+        try await Task.sleep(for: .milliseconds(50))
+        SaveRuns.abandonAll(session)
+        await gate.open()
+        do {
+            _ = try await saving.value
+            Issue.record("went on after a sign-out")
+        } catch let stopped as SaveRunStopped {
+            #expect(stopped.message == "You signed out before this was saved. Some of what was made may still be there.")
+        }
+        // A cancel after finish: it was saved.
+        let done = try await SaveRun.start(writer: FakeWriter(), targets: [opened("f")], results: [], journal: journal())
+        _ = try await done.file(Data([1]), name: "a", mime: nil, sources: own)
+        try await done.finish()
+        #expect(await done.cancel().message == SaveRuns.alreadySaved)
+        // A version's abort refused as no longer theirs, once its completion was sent: it may have landed.
+        let denied = FakeWriter()
+        let held = AsyncGate()
+        await denied.set(landing: { await held.wait() })
+        let doc = opened("doc", parent: "f", version: "v1")
+        let versions = try await SaveRun.start(writer: denied, targets: [doc], results: [], journal: journal())
+        let saved = Task { try await versions.version(Data([1]), of: doc, in: opened("f"), startedFrom: "v1", sources: own) }
+        try await Task.sleep(for: .milliseconds(50))
+        await denied.set(denied: true)
+        let stopped = await versions.cancel()
+        #expect(stopped.uncertainVersions == 1)
+        await held.open()
+        _ = try? await saved.value
+        // A listing that fails says why.
+        let listing = FakeWriter()
+        await listing.set(namesFail: true)
+        let failing = try await SaveRun.start(writer: listing, targets: [opened("f")], results: [], journal: journal())
+        do {
+            _ = try await failing.file(Data([1]), name: "a", mime: nil, sources: own)
+        } catch let stopped as SaveRunStopped {
+            #expect(stopped.message.hasPrefix(DriveAPIError.transport("The network connection was lost.").localizedDescription.trimmingCharacters(in: .whitespaces)))
+        }
+    }
+
+    /* An offline clean-up of a file whose completion was never sent doesn't say it may still be there. */
+    @Test func anOfflineCleanUpOfAFileNeverCompletedSaysNothingRemains() async throws {
+        let writer = FakeWriter()
+        let gate = AsyncGate()
+        await writer.set(uploading: { await gate.wait() })
+        let run = try await SaveRun.start(writer: writer, targets: [opened("f")], results: [], journal: journal())
+        let saving = Task { try await run.file(Data([1]), name: "a", mime: nil, sources: own) }
+        try await Task.sleep(for: .milliseconds(50))
+        await writer.set(offline: true)
+        let stopped = await run.cancel()
+        #expect(stopped.cleanup == .left)
+        #expect(stopped.message == SaveRuns.cancelled)
+        await gate.open()
+        _ = try? await saving.value
     }
 
     /* A sign-out while a run starts: abandonAll can't reach it yet, so it never starts and writes no row. */
