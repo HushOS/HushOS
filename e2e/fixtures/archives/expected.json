@@ -1152,6 +1152,40 @@
                     "downloadSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
                 }
             ]
+        },
+        "non-ascii-password.zip": {
+            "listing": "ok",
+            "hidden": 0,
+            "unlock": {
+                "right": false,
+                "wrong": false
+            },
+            "unlockWith": {
+                "password": "café 🔑",
+                "anywhere": true,
+                "at": {
+                    "zipcrypto.txt": true,
+                    "aes.txt": true
+                }
+            },
+            "entries": [
+                {
+                    "path": "zipcrypto.txt",
+                    "lock": "zipcrypto",
+                    "check": "wrong-password",
+                    "download": "wrong-password",
+                    "withoutPassword": "password",
+                    "wrongPassword": "wrong-password"
+                },
+                {
+                    "path": "aes.txt",
+                    "lock": "aes",
+                    "check": "wrong-password",
+                    "download": "wrong-password",
+                    "withoutPassword": "password",
+                    "wrongPassword": "wrong-password"
+                }
+            ]
         }
     }
 }

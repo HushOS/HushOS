@@ -2177,6 +2177,8 @@ fn joins_record_kind(value: &Value) -> Option<Value> {
 
 /// The shared fixtures' password, tried on every archive.
 pub const ARCHIVE_PASSWORD: &str = "correct horse battery";
+/// A password past ASCII (a 4-byte character in it), tried after: its UTF-8 bytes key both ciphers.
+pub const ARCHIVE_OTHER_PASSWORD: &str = "café 🔑";
 /// The most entries an archive verdict previews and downloads, the most a preview may hold, and
 /// the largest entry it downloads.
 const ARCHIVE_PREVIEWS: usize = 32;
@@ -2330,12 +2332,24 @@ pub fn archive(data: &[u8]) -> Value {
             }
         }
     }
+    // Then the password past ASCII, and each locked entry previewed under it.
+    let (other, other_code) = archive_code(session.unlock(ARCHIVE_OTHER_PASSWORD.into(), None, control()));
+    let mut under_other = Vec::new();
+    if other == Some(true) {
+        for entry in entries.iter().take(ARCHIVE_PREVIEWS) {
+            if entry.lock != "none" && !entry.directory {
+                under_other.push(preview(entry.index, entry.size));
+            }
+        }
+    }
     ok(json!({
         "listing": "ok",
         "hidden": session.hidden(),
         "entries": listed,
         "unlock": if code == "ok" { json!(unlocked) } else { json!(code) },
         "unlocked": after,
+        "unlockOther": if other_code == "ok" { json!(other) } else { json!(other_code) },
+        "unlockedOther": under_other,
     }))
 }
 

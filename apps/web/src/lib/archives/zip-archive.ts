@@ -195,6 +195,8 @@ function directoryFor(entry: ZipEntry, span: number) {
     return Uint8Array.from(parts);
 }
 
+const utf8 = (text: string) => new TextEncoder().encode(text);
+
 /* zip.js's errors, by message, as refusal codes; anything else is damage. */
 function refusalOf(error: unknown): ZipError {
     if (error instanceof ZipError) return error;
@@ -369,7 +371,9 @@ export class ZipArchive {
         };
         try {
             await found.getData(writable, {
-                password: options.password ?? undefined,
+                // As UTF-8 bytes, as the core and Info-ZIP take a password: zip.js would key
+                // ZipCrypto with a string's UTF-16 code units, so "café" opened only as "cafÃ©".
+                rawPassword: options.password === null ? undefined : utf8(options.password),
                 checkSignature: false,
                 checkCrc32: false,
                 checkAuthenticationCode: true,

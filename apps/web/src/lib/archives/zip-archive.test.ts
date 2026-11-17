@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -374,6 +374,54 @@ describe('reading', () => {
             rmSync(dir, { recursive: true, force: true });
         }
     }, 60_000);
+
+    it('opens what Info-ZIP and libarchive lock under a password past ASCII, by its UTF-8 bytes', async () => {
+        const password = 'café 🔑';
+        const dir = mkdtempSync(join(tmpdir(), 'hushos-password-'));
+        try {
+            const note = 'Locked with a password past ASCII.\n';
+            writeFileSync(join(dir, 'note.txt'), note);
+            // ZipCrypto from Info-ZIP's zip, AES-256 from libarchive's bsdtar.
+            const made = [
+                ['zipcrypto.zip', 'zip', ['-q', '-P', password, 'zipcrypto.zip', 'note.txt']],
+                [
+                    'aes.zip',
+                    'bsdtar',
+                    [
+                        '--format',
+                        'zip',
+                        '--options',
+                        'zip:encryption=aes256',
+                        '--passphrase',
+                        password,
+                        '-cf',
+                        'aes.zip',
+                        'note.txt',
+                    ],
+                ],
+            ] as const;
+            for (const [name, tool, args] of made) {
+                expect(spawnSync(tool, args, { cwd: dir }).status, tool).toBe(0);
+                const bytes = new Uint8Array(readFileSync(join(dir, name)));
+                const open = () =>
+                    ZipArchive.open({
+                        size: bytes.length,
+                        read: async (offset, length) => bytes.slice(offset, offset + length),
+                    });
+                const archive = await open();
+                expect(archive.entries[0]!.lock, name).toBe(
+                    name === 'aes.zip' ? 'aes' : 'zipcrypto',
+                );
+                expect(await archive.unlock(password), name).toBe(true);
+                expect(new TextDecoder().decode(await archive.preview(0, 1024)), name).toBe(note);
+                // Its UTF-16 code units as bytes (what zip.js keyed ZipCrypto with) open nothing.
+                const units = String.fromCharCode(...new TextEncoder().encode(password));
+                expect(await (await open()).unlock(units), name).toBe(false);
+            }
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    });
 
     it('keeps a password only once it opens something, and drops it on close', async () => {
         const archive = await open('aes.zip');

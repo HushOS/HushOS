@@ -216,7 +216,10 @@ export type Spec = {
     zip64?: boolean;
     /* A data descriptor (with its signature) after the data, the local header's CRC and sizes zero. */
     descriptor?: boolean;
-    encrypt?: { kind: 'aes'; version: 1 | 2 } | { kind: 'zipcrypto' };
+    /* Under `password` when given, else PASSWORD; as UTF-8 bytes, as Info-ZIP and 7-Zip take one. */
+    encrypt?:
+        | { kind: 'aes'; version: 1 | 2; password?: string }
+        | { kind: 'zipcrypto'; password?: string };
     /* No local header or data of its own: the central record points at another entry's (by index). */
     sharesWith?: number;
 };
@@ -345,7 +348,7 @@ export function writeZip(specs: Spec[], options: ArchiveOptions = {}) {
         let crc = spec.crc ?? realCrc;
         if (spec.encrypt?.kind === 'aes') {
             const { version } = spec.encrypt;
-            packed = aesEncrypt(packed, PASSWORD, fixed(index + 7, 16));
+            packed = aesEncrypt(packed, spec.encrypt.password ?? PASSWORD, fixed(index + 7, 16));
             const aes = aesField(version, method);
             extra = concat([extra, aes]);
             localExtra = concat([localExtra, aes]);
@@ -354,7 +357,12 @@ export function writeZip(specs: Spec[], options: ArchiveOptions = {}) {
             if (version === 2) crc = 0;
         } else if (spec.encrypt?.kind === 'zipcrypto') {
             flags |= 1;
-            packed = zipCryptoEncrypt(packed, PASSWORD, (crc >>> 24) & 0xff, fixed(index + 11, 12));
+            packed = zipCryptoEncrypt(
+                packed,
+                spec.encrypt.password ?? PASSWORD,
+                (crc >>> 24) & 0xff,
+                fixed(index + 11, 12),
+            );
         }
         if (spec.descriptor) flags |= 8;
         const size = spec.size ?? data.length;
@@ -1293,6 +1301,27 @@ function zipCryptoEmptyOnlyFixture() {
     ]);
 }
 
+/*
+ * A password past ASCII, a 4-byte character in it: its UTF-8 bytes key both ciphers, as Info-ZIP's
+ * `zip -P` and 7-Zip write them (never a string's UTF-16 code units, under which "café" opened
+ * only as "cafÃ©").
+ */
+export const NON_ASCII_PASSWORD = 'café 🔑';
+function nonAsciiPasswordFixture() {
+    return writeZip([
+        {
+            name: 'zipcrypto.txt',
+            data: text('ZipCrypto, under a password past ASCII.'),
+            encrypt: { kind: 'zipcrypto', password: NON_ASCII_PASSWORD },
+        },
+        {
+            name: 'aes.txt',
+            data: text('AES-256, under a password past ASCII.'),
+            encrypt: { kind: 'aes', version: 1, password: NON_ASCII_PASSWORD },
+        },
+    ]);
+}
+
 /* The first of "wrong 0", "wrong 1", … whose decrypted check byte is `unprovenFixture`'s. */
 export const UNPROVEN_PASSWORD = (() => {
     const check = (crc32(UNPROVEN_DATA()) >>> 24) & 0xff;
@@ -1623,6 +1652,7 @@ export const FIXTURES: Fixture[] = [
     { name: 'unproven.zip', large: false, build: unprovenFixture },
     { name: 'unprovable-damaged.zip', large: false, build: unprovableDamagedFixture },
     { name: 'zipcrypto-empty-only.zip', large: false, build: zipCryptoEmptyOnlyFixture },
+    { name: 'non-ascii-password.zip', large: false, build: nonAsciiPasswordFixture },
     { name: 'front-loaded.zip', large: true, build: frontLoadedFixture },
     { name: 'wide.zip', large: true, build: wideFixture },
     { name: 'folders-2m.zip', large: true, build: folders2MFixture },

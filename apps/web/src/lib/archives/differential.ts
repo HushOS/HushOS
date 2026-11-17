@@ -44,6 +44,8 @@ const corpus = join(root, 'crates/hushos-core/fuzz/corpus/archive');
 const artifacts = join(root, 'crates/hushos-core/fuzz/artifacts/archive-diff');
 const binary = join(root, 'crates/hushos-core/fuzz/target/release/examples/verdicts');
 const PASSWORD = 'correct horse battery';
+/* A password past ASCII (a 4-byte character in it), tried after: its UTF-8 bytes key both ciphers. */
+const OTHER_PASSWORD = 'café 🔑';
 // The core's archive verdict: at most 32 entries previewed, each within 1 MiB, and downloaded up to 4 MiB.
 const PREVIEWS = 32;
 const PREVIEW_LIMIT = 1 << 20;
@@ -154,9 +156,29 @@ async function web(bytes: Uint8Array) {
                     after.download = await download(item.index, item.size);
                 unlocked.push(after);
             }
+    // Then the password past ASCII, and each locked entry previewed under it.
+    let unlockOther: unknown;
+    try {
+        unlockOther = await archive.unlock(OTHER_PASSWORD);
+    } catch (error) {
+        unlockOther = code(error);
+    }
+    const unlockedOther = [];
+    if (unlockOther === true)
+        for (const item of archive.listed.slice(0, PREVIEWS))
+            if (item.lock !== 'none' && !item.directory)
+                unlockedOther.push(await preview(item.index));
     return {
         ok: true,
-        out: { listing: 'ok', hidden: archive.hidden, entries, unlock, unlocked },
+        out: {
+            listing: 'ok',
+            hidden: archive.hidden,
+            entries,
+            unlock,
+            unlocked,
+            unlockOther,
+            unlockedOther,
+        },
     };
 }
 
