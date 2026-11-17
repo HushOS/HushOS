@@ -58,6 +58,7 @@ export function StepFields({
     note = '',
     ask,
     start = false,
+    page = false,
     actions,
     aside,
 }: {
@@ -83,6 +84,11 @@ export function StepFields({
     ask?: { token: string; purpose: string };
     /* The usual way starts as the form opens: another device is asked without a press. */
     start?: boolean;
+    /*
+     * The step is the whole page (the sign-in): choosing another way puts the field and its button
+     * away. In a dialog the dialog's own button stays pressable, so the field stays in sight.
+     */
+    page?: boolean;
     /* The form's own button, under the field: put away with it while another way is chosen. */
     actions?: ReactNode;
     /* Beside Use another way, at the end of its row: the sign-in's Start again. */
@@ -146,7 +152,7 @@ export function StepFields({
     // a dialog's Continue: on the sign-in page its button says Use your passkey. Another
     // device's panel says what it is.
     const typed = method === 'totp' || method === 'backup' || method === 'phrase';
-    const bare = method === 'device' || (method === 'webauthn' && Boolean(actions));
+    const bare = method === 'device' || (method === 'webauthn' && page);
     // The phrase, monospaced at the same size at every width.
     const mono = 'font-mono text-[15px] sm:text-[15px]';
     const count = phraseWords(draft.phrase).length;
@@ -157,12 +163,8 @@ export function StepFields({
                     {note}
                 </p>
             )}
-            {/*
-             * Put away while the other ways are chosen from only where the form's button goes with
-             * it (`actions`, the sign-in page). A dialog's own button stays pressable, and what it
-             * checks (an empty code, say) must stay in sight.
-             */}
-            <div className="flex flex-col gap-1.5" hidden={open && Boolean(actions)}>
+            {/* Put away while another way is chosen only on the sign-in page (`page`): see `page`. */}
+            <div className="flex flex-col gap-1.5" hidden={open && page}>
                 {!bare && (
                     <div className="flex items-baseline justify-between gap-3">
                         {typed ? (

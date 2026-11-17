@@ -130,8 +130,8 @@ describe('unlocking an account that asks for a second step', () => {
         if ((challenge as { methods?: string[] }).methods?.[0] === 'webauthn')
             answerStep.mockRejectedValueOnce(
                 new StepFailure('wrong', 'Your passkey or security key wasn’t used.', {
-                    // Closed on this device: nothing was sent (the auth client's `kept`).
-                    cause: { kept: true },
+                    // Closed on this device: nothing was sent.
+                    unsent: true,
                 }),
             );
         const user = userEvent.setup();
@@ -361,8 +361,8 @@ describe('the step opens on the account’s usual way', () => {
         if ((challenge as { methods?: string[] }).methods?.[0] === 'webauthn')
             answerStep.mockRejectedValueOnce(
                 new StepFailure('wrong', 'Your passkey or security key wasn’t used.', {
-                    // Closed on this device: nothing was sent (the auth client's `kept`).
-                    cause: { kept: true },
+                    // Closed on this device: nothing was sent.
+                    unsent: true,
                 }),
             );
         const user = userEvent.setup();

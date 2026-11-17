@@ -57,8 +57,9 @@ export function SignInStep({
     // and takes what was typed off the screen: a recovery phrase never stays on a locked page.
     useEffect(
         () => {
+            // Not a reason to treat an answer still out as left: this also fires when the answer
+            // itself opens the session (the lock state changes then too).
             const locked = whenBrowserLocks(() => {
-                left.current = true;
                 setDraft(emptyDraft(challenge.methods));
                 onOver('This browser was locked. Sign in again.');
             });
@@ -142,8 +143,18 @@ export function SignInStep({
             // The sheet that opened by itself was answered meanwhile: signed in already.
             if (signedIn.current) return;
         }
+        // Busy from the moment the answer goes, whoever sent it: an automatic passkey answered on
+        // its sheet leaves nothing on the page to press while the server judges it (Start again
+        // could no longer stop a sign-in that has passed).
+        let busy = !quiet;
         try {
-            await authClient.answerStep(draftAnswer(draft));
+            await authClient.answerStep(draftAnswer(draft), () => {
+                busy = true;
+                setPending(true);
+            });
+            // No `left` check here: an unlock dialog unmounts this step while the session opens,
+            // and still needs to hear that it did. Start again cannot reach this far: the step is
+            // busy from the moment the answer goes.
             signedIn.current = true;
             cue('success');
             // Kept busy while what signing in opens takes over.
@@ -153,17 +164,14 @@ export function SignInStep({
             if (left.current) return;
             // The sheet the page opened by itself, closed before anything was sent: nothing went
             // wrong yet. A key the server refused is a wrong answer like any other, and is said.
-            const unsent =
-                (cause instanceof StepFailure &&
-                    (cause.cause as { kept?: unknown } | undefined)?.kept) === true;
-            if (quiet && unsent) return;
+            if (quiet && cause instanceof StepFailure && cause.unsent) return;
             cue('error');
             if (cause instanceof StepFailure && cause.again) {
                 // What is offered and what the draft is for change together: an answer is
                 // never sent for a method that is no longer shown.
-                const left = methodsAfter(methods, cause.reason, draft.method);
-                setMethods(left);
-                setDraft((typed) => draftFor(afterRefusal(typed, cause.reason), left));
+                const remaining = methodsAfter(methods, cause.reason, draft.method);
+                setMethods(remaining);
+                setDraft((typed) => draftFor(afterRefusal(typed, cause.reason), remaining));
                 setRefocus((count) => count + 1);
                 // A wrong answer is the field's own error; anything else is said above it.
                 if (cause.reason === 'wrong') setError(cause.message);
@@ -175,7 +183,7 @@ export function SignInStep({
                 onOver(authError(cause));
             }
         } finally {
-            if (!quiet) setPending(false);
+            if (busy) setPending(false);
         }
     }
     const wide = size === 'lg';
@@ -247,6 +255,7 @@ export function SignInStep({
                     note={stepNote(challenge, 'sign-in')}
                     ask={{ token: challenge.token, purpose: 'login' }}
                     start
+                    page={wide}
                     // On the sign-in page the button spans the card under the field, with Use
                     // another way and Start again in one row beneath it.
                     actions={

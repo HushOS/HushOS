@@ -241,11 +241,18 @@ export type StepFailureReason =
 export class StepFailure extends Error {
     readonly reason: StepFailureReason;
     readonly again: boolean;
-    constructor(reason: StepFailureReason, message: string, options?: { cause?: unknown }) {
+    /* Refused on this device before anything was sent (a closed sheet, a mistyped phrase): no try spent. */
+    readonly unsent: boolean;
+    constructor(
+        reason: StepFailureReason,
+        message: string,
+        options?: { cause?: unknown; unsent?: boolean },
+    ) {
         super(message, options);
         this.name = 'StepFailure';
         this.reason = reason;
         this.again = reason !== 'over' && reason !== 'lost';
+        this.unsent = options?.unsent ?? false;
     }
 }
 /* How long a step is held here: the five minutes the server gives its token, and one more. */
@@ -284,7 +291,7 @@ export function stepFailure(error: unknown): StepFailure {
     const reason = typeof code === 'string' ? STEP_CODES[code] : undefined;
     if (reason) return new StepFailure(reason, message, { cause: error });
     // The worker refused a mistyped phrase before anything was sent.
-    if (kept === true) return new StepFailure('wrong', message, { cause: error });
+    if (kept === true) return new StepFailure('wrong', message, { cause: error, unsent: true });
     // The address's own limit, not the step's (that one has a code): nothing about the step
     // was looked at, and it is still there when the limit lets the next request through.
     if (status === 429) return new StepFailure('busy', message, { cause: error });
@@ -970,7 +977,11 @@ export function createAuthClient(
      * worker holds for it, in place: only a step that is over (or a reply that was lost)
      * drops them, and then the person enters their password again.
      */
-    async function answerStep(answer: StepAnswer) {
+    /*
+     * `sent` hears the moment the proof is in hand and about to go: from there the answer is the
+     * server's to judge and the page shows it as busy (a passkey's sheet may have been up till then).
+     */
+    async function answerStep(answer: StepAnswer, sent?: () => void) {
         if (busy) throw new Error('Please wait for the current sign-in attempt.');
         const pending = waitingStep();
         if (!pending || pending.epoch !== epoch) throw new StepFailure('over', STEP_OVER);
@@ -981,6 +992,7 @@ export function createAuthClient(
             // A lock while the key's sheet was open let go of this sign-in: its answer is not
             // sent, so no session is opened for a page that has stopped waiting for one.
             if (epoch !== pending.epoch) throw new StepFailure('over', STEP_OVER);
+            sent?.();
             const reply = readLoginReply(await api.loginTwoStep(proof));
             if (reply.kind !== 'session') throw new StepFailure('lost', LOST_REPLY);
             if (epoch !== pending.epoch) throw new StepFailure('over', STEP_OVER);
