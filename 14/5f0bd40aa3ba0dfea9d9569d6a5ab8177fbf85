@@ -1,0 +1,45 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/TwoStep.kt
+  s_566b8e0c4467a4::t_5f8bf94e40da43 609-611
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_448a4b3c7b0490 576
+apps/android/app/src/main/kotlin/com/hushos/app/ui/TwoStepScreen.kt
+  s_566b8e0c4467a4::t_95c816084d1e0e 113-114
+apps/web/src/components/device-approvals.tsx
+  s_566b8e0c4467a4::t_13d82e351f42f7 15,296-299,308
+apps/web/src/components/device-ask.tsx
+  s_566b8e0c4467a4::t_e737cb33bdbbc7 12-14
+apps/web/src/components/sign-in-step.tsx
+  s_85d082c6cea2af::t_fae51a71294a6f 28-30,61,108-118,120,154-159
+apps/web/src/components/two-step-answer.tsx
+  s_566b8e0c4467a4::t_f168d854024c38 94-99,111-119,165,277-278,280,314-318,321
+apps/web/src/components/unlock-device.test.tsx
+  s_566b8e0c4467a4::t_d12715d11a6c1e 132-135,363-366
+apps/web/src/lib/approvals.ts
+  s_566b8e0c4467a4::t_151be55308c3be 53-64,70
+e2e/two-step-device.spec.ts
+  s_566b8e0c4467a4::t_932d5706912bf8 235-236
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "145f0bd40aa3ba0dfea9d9569d6a5ab8177fbf85",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_85d082c6cea2af": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1eba4-e90b-7631-a8b7-8a324f74ec73",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
