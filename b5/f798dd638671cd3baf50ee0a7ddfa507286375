@@ -1,0 +1,77 @@
+apps/android/AGENTS.md
+  s_c60e24772e04af::t_a5c5722725d469 643-644
+apps/android/app/src/main/kotlin/com/hushos/app/data/AccountStore.kt
+  s_c60e24772e04af::t_23a16c545d73e9 45-46,48
+apps/android/app/src/main/kotlin/com/hushos/app/data/ToolRuns.kt
+  s_c60e24772e04af::t_60a9b8a56f3bcd 91-100,104-106,113,118-122,124,154-161,202-209,213
+apps/android/app/src/test/kotlin/com/hushos/app/data/ToolRunsTest.kt
+  s_c60e24772e04af::t_9c4ef167474cf8 206-208,221-255
+apps/ios/AGENTS.md
+  s_c60e24772e04af::t_fe41561b38c0b3 683
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/AccountStore.swift
+  s_c60e24772e04af::t_cbfa8443a6341b 112-113,115
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/ToolRuns.swift
+  s_c60e24772e04af::t_4b4a489df008f7 133-134,138,140-147,149-150
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/ToolRunsTests.swift
+  s_c60e24772e04af::t_a3da83273ff5a7 180-208
+apps/web/scripts/check-worker-code.ts
+  s_c60e24772e04af::t_083667b9dd6b8e 10,73-86
+apps/web/scripts/worker-code.test.ts
+  s_c60e24772e04af::t_69d02d2d0169eb 2,122-134
+apps/web/scripts/worker-code.ts
+  s_c60e24772e04af::t_483b11a7e2811e 23-32,228-236
+apps/web/server/csp.test.ts
+  s_c60e24772e04af::t_ba70aa9e3f487d 76-81,83
+apps/web/server/csp.ts
+  s_c60e24772e04af::t_1cae8bf3b2624e 70-76,84,87
+apps/web/server/plugins/security-headers.ts
+  s_c60e24772e04af::t_78d9c7f1a5780e 48
+apps/web/src/components/drive/drive-shell.tsx
+  s_c60e24772e04af::t_b5ea98839738a5 86-87
+apps/web/src/lib/sign-out.ts
+  s_c60e24772e04af::t_b3d1aa9aa368a7 241-242
+apps/web/src/lib/tools/active.ts
+  s_c60e24772e04af::t_ed76d53e705cba 2-7
+apps/web/src/lib/tools/protocol.ts
+  s_c60e24772e04af::t_6cbcef2b3cfc9a 10-11,36-38
+apps/web/src/lib/tools/ranges.test.ts
+  s_c60e24772e04af::t_894c7aec1702df 136
+apps/web/src/lib/tools/run.test.ts
+  s_c60e24772e04af::t_816419c4756d12 399-400,402,404-406,408,413-424
+apps/web/src/lib/tools/run.ts
+  s_c60e24772e04af::t_99beced33bb7a7 25-26,57-63,165-178,193,196-197,199-200,303,353-359,378-380
+apps/web/src/lib/tools/wasm.ts
+  s_c60e24772e04af::t_2e5ca6ec533b12 1-16
+apps/web/src/lib/tools/worker.ts
+  s_c60e24772e04af::t_5dd7ffa1c1b84f 12-20,37-39,139-140
+crates/hushos-core/src/tools.rs
+  s_c60e24772e04af::t_2ec7e088cbae6d 280,284-290,296-300,307-309,313,315-316,323,325-328,334-342,348-355,726-736,989,992,994,1011,1027,1035-1050,1107
+docs/file-tools-design.md
+  s_c60e24772e04af::t_ccca7469486bdd 149,151-152,273,297,480,528-531
+e2e/fixtures/tools/page.ts
+  s_c60e24772e04af::t_36e47dad355d0f 3,131-132,134,136,141-152
+e2e/fixtures/tools/probe.tool-worker.ts
+  s_c60e24772e04af::t_6d06c24f8e66a3 14-15,23-68,71,83-87
+e2e/tools-harness.spec.ts
+  s_c60e24772e04af::t_c2758ddb3bfb30 18-19,51-59,63,65,70-77,86,95-96,212-222,226-229
+packages/drive/src/downloads.test.ts
+  s_c60e24772e04af::t_9e763287c6abc6 624,627,630-639,648-649,651-663
+packages/drive/src/downloads.ts
+  s_c60e24772e04af::t_148026ebfdec44 498-502,504-505,517-532,556,579-580,590
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b5f798dd638671cd3baf50ee0a7ddfa507286375",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
