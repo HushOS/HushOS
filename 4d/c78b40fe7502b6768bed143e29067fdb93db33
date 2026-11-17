@@ -1,0 +1,58 @@
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SettingsReuseTests.swift
+  s_c60e24772e04af::t_36fb3985d574f3 1-125
+  s_c60e24772e04af::t_012c30d99060e2 126-131
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyCheck.kt
+  s_c60e24772e04af::t_a701678fb9b0bd 117
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilySync.kt
+  s_c60e24772e04af::t_7545e5e1ba02b3 186-210,476,580,662,760
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_c60e24772e04af::t_02aa3510d56bdc 314-316,573-574,581-613,647
+apps/android/app/src/main/kotlin/com/hushos/app/data/VaultFamilies.kt
+  s_c60e24772e04af::t_bbf9af9f478cc2 66-73
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_c60e24772e04af::t_0e89b4f0d1d0bc 1874-1887
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamiliesModel.kt
+  s_c60e24772e04af::t_7191fd89c03894 44,46,893-897,899-915,928-933
+apps/android/app/src/test/kotlin/com/hushos/app/data/FakeDrive.kt
+  s_c60e24772e04af::t_2ee94ccc646c37 461-464,643,654
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilySyncTest.kt
+  s_c60e24772e04af::t_e108bc43c42c7e 74-104,892-893,900-901
+apps/android/app/src/test/kotlin/com/hushos/app/data/SettingsReuseTest.kt
+  s_c60e24772e04af::t_4f7a5b691716c0 1-130
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamiliesModelRacesTest.kt
+  s_c60e24772e04af::t_353b918c8bf2ee 184-187
+apps/ios/App/Families.swift
+  s_c60e24772e04af::t_807b964de83762 241-243
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Contacts.swift
+  s_c60e24772e04af::t_dc8c32ad847857 242,398-409,412
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyCheck.swift
+  s_c60e24772e04af::t_6c0f29fe68e81b 187-188,191
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilySync.swift
+  s_c60e24772e04af::t_4e9cbe4205c5fb 230-255,878,977,1147
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Settings.swift
+  s_c60e24772e04af::t_611682ad380e5f 478-521,565-566,604-615
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Families.swift
+  s_c60e24772e04af::t_ec23e15bc385ee 142-144,146-147
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Identity.swift
+  s_c60e24772e04af::t_bba6911b0d19f4 235-237,239
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault.swift
+  s_c60e24772e04af::t_69d64ff91d180e 207-216,357-367
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilySyncTests.swift
+  s_c60e24772e04af::t_ddfd937004410a 78-81,84
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4dc78b40fe7502b6768bed143e29067fdb93db33",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
