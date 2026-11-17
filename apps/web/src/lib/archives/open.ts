@@ -84,22 +84,49 @@ export async function archiveReader(node: DriveNode, signal?: AbortSignal): Prom
     // the store where the file ends. Each chunk it fetches is charged to the session's actions
     // (`meter`); until the session meters it, nothing is fetched.
     let charge: ((bytes: number) => void) | null = null;
-    const reader = downloads.openReader(node, 4, {
+    const main = toolReader(node, 4, (bytes) => {
+        if (!charge) throw new Error('The archive’s reads aren’t counted yet.');
+        charge(bytes);
+    });
+    return {
+        ...main,
+        meter: (counting) => {
+            charge = counting;
+        },
+        /*
+         * A download's own reader (two chunks of its own, so downloads side by side don't evict
+         * each other's), charged to that download; or, uncharged, the viewer's reader for a stored
+         * entry played by range, which the page reads, not the worker.
+         */
+        fork: (counting) => {
+            if (counting) return toolReader(node, 2, counting);
+            const viewer = downloads.openReader(node);
+            return {
+                size: viewer.size,
+                fresh: true,
+                read: (offset, length) => viewer.read(offset, length),
+                close: () => viewer.close(),
+            };
+        },
+    };
+}
+
+/* The download engine's reader for a tool: `charge` hears each chunk it fetches. */
+function toolReader(
+    node: DriveNode,
+    cacheChunks: number,
+    charge: (bytes: number) => void,
+): RangeReader {
+    const reader = downloads.openReader(node, cacheChunks, {
         tool: true,
         uncapped: true,
-        onFetch: (bytes) => {
-            if (!charge) throw new Error('The archive’s reads aren’t counted yet.');
-            charge(bytes);
-        },
+        onFetch: charge,
     });
     return {
         size: reader.size,
         fresh: true,
         read: (offset, length) => reader.read(offset, length),
         close: () => reader.close(),
-        meter: (counting) => {
-            charge = counting;
-        },
     };
 }
 

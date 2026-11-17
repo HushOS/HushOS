@@ -156,7 +156,8 @@ export function bytesReader(bytes: Uint8Array): FileReader {
 }
 
 /* A reader over part of the archive: a stored entry, read by range at any size. */
-function spanReader(archive: RangeReader, offset: number, size: number): FileReader {
+/* `archive`'s bytes from `offset`, `size` of them; closing it closes `archive` when `owned`. */
+function spanReader(archive: RangeReader, offset: number, size: number, owned = false): FileReader {
     let open = true;
     return {
         size,
@@ -170,6 +171,7 @@ function spanReader(archive: RangeReader, offset: number, size: number): FileRea
         },
         async close() {
             open = false;
+            if (owned) await archive.close?.();
         },
     };
 }
@@ -217,9 +219,15 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
         allowed -= bytes;
     });
 
+    /* Each download's own reader and its port: let go of with the download, or with the session. */
+    const forks = new Set<() => void>();
+
     function end(error: Error) {
         if (ended) return;
         ended = error;
+        // Each close takes itself out of the set: deleting what was visited is safe while iterating.
+        for (const close of forks) close();
+        forks.clear();
         watchdog?.stop();
         watchdog = null;
         instance?.terminate();
@@ -377,15 +385,52 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
     begin();
     post({ type: 'open', size: reader.size, port: channel.port2 }, [channel.port2]);
 
-    function ask(message: (id: number) => ToArchive, chunk?: (bytes: ArrayBuffer) => void) {
+    function ask(
+        message: (id: number) => ToArchive,
+        chunk?: (bytes: ArrayBuffer) => void,
+        transfer: Transferable[] = [],
+    ) {
         if (ended) throw ended;
         const id = nextId++;
         begin();
         const answer = new Promise<FromArchive>((resolve, reject) =>
             pending.set(id, { resolve, reject, chunk }),
         );
-        post(message(id));
+        post(message(id), transfer);
         return { id, answer };
+    }
+
+    /*
+     * A download's own reads, when the reader can fork: a reader with a cache of its own (so
+     * downloads side by side never evict each other's chunks) served over a port of its own, each
+     * chunk it fetches charged to that download's allowance (its bytes four times, and three
+     * chunks), never the archive's. Past it, the worker read more than any download needs.
+     */
+    function lend(entry: ArchiveEntry) {
+        if (!reader.fork) return null;
+        let own = 4 * (entry.packed + 65_536 + 512) + 3 * CHUNK_SIZE;
+        const forked = reader.fork((bytes) => {
+            if (bytes > own) {
+                broken();
+                throw new Error('The worker read more than it was allowed.');
+            }
+            own -= bytes;
+        });
+        const channel = new MessageChannel();
+        const stopServing = serveRanges(channel.port1, forked, {
+            hold: () => watchdog?.hold() ?? (() => {}),
+            allowance: readAllowance(),
+            onAbuse: broken,
+        });
+        const close = () => {
+            if (!forks.delete(close)) return;
+            stopServing();
+            void Promise.resolve()
+                .then(() => forked.close?.())
+                .catch(() => {});
+        };
+        forks.add(close);
+        return { port: channel.port2, close };
     }
 
     /* A lock or sign-out ends the session as a close does. */
@@ -448,8 +493,15 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
                 entry.stored &&
                 entry.size > limit &&
                 answer.size === entry.size
-            )
-                return { reader: spanReader(reader, answer.offset, answer.size), checked: false };
+            ) {
+                // Read by the page's viewer, not the worker: a reader of its own, never charged to
+                // the worker's allowance, so playing and seeking a large entry again and again works.
+                const viewer = reader.fork?.();
+                return {
+                    reader: spanReader(viewer ?? reader, answer.offset, answer.size, !!viewer),
+                    checked: false,
+                };
+            }
             throw new Error(TOOL_FAILED);
         },
 
@@ -477,11 +529,19 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
                 idle();
                 waiter.reject(failure ?? new Error('Stopped.'));
             }
+            let lent: ReturnType<typeof lend> = null;
             const finished = (async () => {
                 await listing;
-                grant(entry.packed + 65_536 + 512);
+                lent = lend(entry);
+                if (!lent) grant(entry.packed + 65_536 + 512);
+                const port = lent?.port;
                 const asked = ask(
-                    (asked) => ({ type: 'download', id: asked, index: entry.index }),
+                    (asked) => ({
+                        type: 'download',
+                        id: asked,
+                        index: entry.index,
+                        ...(port ? { port } : {}),
+                    }),
                     (bytes) => {
                         written += bytes.byteLength;
                         if (written > entry.size) {
@@ -507,6 +567,7 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
                                 },
                             );
                     },
+                    port ? [port] : [],
                 );
                 id = asked.id;
                 await asked.answer;
@@ -515,6 +576,11 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
                 if (written !== entry.size) throw new ArchiveRefusal('size');
                 await sink.close();
             })();
+            // The download's own reader goes with it, however it ends.
+            void finished.then(
+                () => lent?.close(),
+                () => lent?.close(),
+            );
             finished.catch(async () => {
                 await sink.abort().catch(() => {});
             });

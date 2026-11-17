@@ -300,8 +300,8 @@ export class ZipArchive {
     }
 
     /* The local header read and checked against the directory: where the entry's data starts. */
-    async dataStart(entry: ZipEntry) {
-        const header = await this.#source.read(entry.offset, LOCAL_HEADER_READ(entry));
+    async dataStart(entry: ZipEntry, source: Source = this.#source) {
+        const header = await source.read(entry.offset, LOCAL_HEADER_READ(entry));
         return checkLocalHeader(entry, header);
     }
 
@@ -319,9 +319,13 @@ export class ZipArchive {
             signal?: AbortSignal;
             write: (chunk: Uint8Array) => void | Promise<void>;
             checkOnly?: boolean;
+            /* Another reader of the same archive (a download's own). */
+            source?: Source;
         },
     ) {
-        const start = await this.dataStart(entry);
+        const source = options.source ?? this.#source;
+        if (source.size !== this.#source.size) throw new ZipError('damaged');
+        const start = await this.dataStart(entry, source);
         if (entry.lock !== 'none' && options.password === null) throw new ZipError('password');
         // Stored and plain, the bytes are the entry: more or fewer than declared is known at once.
         if (entry.method === 0 && entry.lock === 'none' && entry.packed !== entry.size)
@@ -329,16 +333,13 @@ export class ZipArchive {
         const counter = new InflateCounter(entry.size, options.ratio);
         let found: FileEntry;
         try {
-            const entries = await new ZipReader(
-                new EntryReader(this.#source, entry, start, counter),
-                {
-                    // The one-entry archive is ours, written from a record our parser checked: zip.js
-                    // judges none of it. Balanced refuses an end record it finds twice, and a name
-                    // may carry one (e2e/fixtures/archives, name-eocd.zip).
-                    strictness: 'tolerant',
-                    filenameValidation: 'tolerant',
-                } as ConstructorParameters<typeof ZipReader>[1],
-            ).getEntries();
+            const entries = await new ZipReader(new EntryReader(source, entry, start, counter), {
+                // The one-entry archive is ours, written from a record our parser checked: zip.js
+                // judges none of it. Balanced refuses an end record it finds twice, and a name
+                // may carry one (e2e/fixtures/archives, name-eocd.zip).
+                strictness: 'tolerant',
+                filenameValidation: 'tolerant',
+            } as ConstructorParameters<typeof ZipReader>[1]).getEntries();
             if (entries.length !== 1 || !('getData' in entries[0]!)) throw new ZipError('damaged');
             found = entries[0] as FileEntry;
         } catch (error) {
@@ -484,12 +485,17 @@ export class ZipArchive {
         return { offset: await this.dataStart(entry), size: entry.size };
     }
 
-    /* For a download: every piece as it comes, held to the declared size (no ratio: a large one asked first). */
+    /*
+     * For a download: every piece as it comes, held to the declared size (no ratio: a large one
+     * asked first). `source`, when given, is the download's own reader of the archive (the page
+     * serves each download over a port of its own, counted on its own).
+     */
     async download(
         index: number,
         write: (chunk: Uint8Array) => void | Promise<void>,
         signal?: AbortSignal,
         password: string | null = this.#password,
+        source?: Source,
     ) {
         const entry = this.#entry(index);
         // A write that failed is the download's own end (its sink), not the entry's damage. Only
@@ -510,7 +516,7 @@ export class ZipArchive {
             entry,
             password,
             () => sinkFailed || signal?.aborted === true,
-            this.#inflate(entry, { ratio: false, password, signal, write: writing }),
+            this.#inflate(entry, { ratio: false, password, signal, write: writing, source }),
         );
     }
 

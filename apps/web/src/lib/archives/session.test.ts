@@ -214,3 +214,195 @@ describe('a worker cycling one-byte reads across chunks', () => {
         expect(answers.length).toBeLessThan(60);
     });
 });
+
+/*
+ * The download engine's reader as the session sees it, for a 7-chunk archive: a cache of its
+ * own, each other chunk fetched (and charged, when metered); forks with caches of their own.
+ */
+function engine(chunks = 13) {
+    const CHUNK = 8 * 1024 * 1024;
+    const fetched = { main: 0, forks: 0, viewer: 0 };
+    function reader(
+        cacheChunks: number,
+        kind: keyof typeof fetched,
+        charge?: () => ((bytes: number) => void) | null,
+    ) {
+        const cache: number[] = [];
+        return {
+            size: chunks * CHUNK,
+            async read(offset: number, length: number) {
+                const first = Math.floor(offset / CHUNK);
+                const last = Math.floor((offset + Math.max(1, length) - 1) / CHUNK);
+                for (let index = first; index <= last; index++) {
+                    if (cache.includes(index)) {
+                        cache.splice(cache.indexOf(index), 1);
+                        cache.push(index);
+                        continue;
+                    }
+                    charge?.()?.(CHUNK);
+                    fetched[kind]++;
+                    cache.push(index);
+                    if (cache.length > cacheChunks) cache.shift();
+                }
+                return new Uint8Array(length);
+            },
+            async close() {},
+        };
+    }
+    let counting: ((bytes: number) => void) | null = null;
+    const main = {
+        ...reader(4, 'main', () => counting),
+        meter: (charge: (bytes: number) => void) => void (counting = charge),
+        fork: (charge?: (bytes: number) => void) =>
+            charge ? reader(2, 'forks', () => charge) : reader(4, 'viewer'),
+    };
+    return { main, fetched, CHUNK };
+}
+
+/* A worker the test drives: it hands back its main port and each download's own. */
+function driven() {
+    const asked: { type: string; id: number; port?: MessagePort; index?: number }[] = [];
+    let main: MessagePort | null = null;
+    let terminated = false;
+    const fake = {
+        onmessage: null as ((event: MessageEvent) => void) | null,
+        onerror: null,
+        onmessageerror: null,
+        postMessage: (message: { type: string; id: number; port?: MessagePort }) => {
+            if (message.type === 'open') main = message.port!;
+            else asked.push(message);
+        },
+        terminate: () => void (terminated = true),
+    };
+    return {
+        fake,
+        asked,
+        main: () => main!,
+        terminated: () => terminated,
+        send: (data: unknown) => fake.onmessage!({ data } as MessageEvent),
+    };
+}
+
+/* Reads `length` bytes from `offset` over `port`, as the worker's range source does. */
+function reading(port: MessagePort) {
+    let next = 0;
+    const waiting = new Map<number, (ok: boolean) => void>();
+    port.onmessage = (event) => {
+        const answer = event.data as { type: string; id: number };
+        waiting.get(answer.id)?.(answer.type === 'data');
+        waiting.delete(answer.id);
+    };
+    // A port the page let go of answers nothing: given up on after a moment.
+    return (offset: number, length: number) =>
+        new Promise<boolean>((resolve) => {
+            const id = next++;
+            waiting.set(id, resolve);
+            port.postMessage({ type: 'read', id, offset, length });
+            setTimeout(() => resolve(false), 1_000);
+        });
+}
+
+const big = (index: number, size: number) =>
+    entry({
+        index,
+        path: `docs/e${index}.bin`,
+        name: `e${index}.bin`,
+        saveName: `e${index}.bin`,
+        size,
+        packed: size,
+        stored: true,
+    });
+
+describe('downloads side by side', () => {
+    it('six 8 MiB stored entries all finish, each read through a cache of its own; one-byte cycling is still stopped', async () => {
+        const { openArchive } = await import('./session');
+        const { main, fetched, CHUNK } = engine();
+        const worker = driven();
+        const session = openArchive(main, () => worker.fake as unknown as Worker);
+        const entries = Array.from({ length: 6 }, (_, i) => big(i, CHUNK));
+        worker.send({ type: 'listing', ...message(entries) });
+        await session.listing;
+        const closed: number[] = [];
+        const downloads = entries.map((item) =>
+            session.download(item as ArchiveEntry, {
+                write: async () => {},
+                close: async () => void closed.push(item.index),
+                abort: async () => {},
+            }),
+        );
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const started = worker.asked.filter((message) => message.type === 'download');
+        expect(started).toHaveLength(6);
+        // Each download read in 64 KiB pieces, all six at once, from its entry's place across two chunks.
+        await Promise.all(
+            started.map(async (message) => {
+                expect(message.port).toBeDefined();
+                const read = reading(message.port!);
+                const at = message.index! * CHUNK + 4096;
+                for (let done = 0; done < CHUNK; done += 65_536)
+                    expect(await read(at + done, 65_536)).toBe(true);
+                // Handed over a MiB at a time, as the worker's chunks are.
+                for (let sent = 0; sent < CHUNK; sent += 1024 * 1024)
+                    worker.send({
+                        type: 'chunk',
+                        id: message.id,
+                        bytes: new ArrayBuffer(1024 * 1024),
+                    });
+                worker.send({ type: 'end', id: message.id });
+            }),
+        );
+        await Promise.all(downloads.map((download) => download.done));
+        expect(closed.sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5]);
+        expect(worker.terminated()).toBe(false);
+        // Two chunks each: never a chunk fetched twice because another download evicted it.
+        expect(fetched.forks).toBe(12);
+        expect(fetched.main).toBe(0);
+
+        // A download's own port is still bounded: one-byte reads cycling over five chunks stop the worker.
+        const last = session.download(big(0, CHUNK) as ArchiveEntry, {
+            write: async () => {},
+            close: async () => {},
+            abort: async () => {},
+        });
+        last.done.catch(() => {});
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const hostile = reading(worker.asked.at(-1)!.port!);
+        for (let n = 0; n < 60 && !worker.terminated(); n++) await hostile((n % 5) * CHUNK, 1);
+        expect(worker.terminated()).toBe(true);
+        // Its allowance (8 MiB four times, and three chunks) in whole chunks, and not one fetch past it.
+        const allowed = Math.floor((4 * (CHUNK + 65_536 + 512) + 3 * CHUNK) / CHUNK);
+        expect(fetched.forks - 12).toBe(allowed);
+    });
+});
+
+describe('a large stored entry played by range', () => {
+    it('plays through six times with seeks, never charged to the worker, whose own cycling is still stopped', async () => {
+        const { openArchive } = await import('./session');
+        const { main, fetched, CHUNK } = engine();
+        const worker = driven();
+        const session = openArchive(main, () => worker.fake as unknown as Worker);
+        const video = big(0, 12 * CHUNK);
+        worker.send({ type: 'listing', ...message([video]) });
+        await session.listing;
+        const previewing = session.preview(video as ArchiveEntry, 64 * 1024 * 1024);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const asked = worker.asked.find((message) => message.type === 'preview')!;
+        worker.send({ type: 'span', id: asked.id, offset: 4096, size: video.size });
+        const { reader, checked } = await previewing;
+        expect(checked).toBe(false);
+        for (let play = 0; play < 7; play++) {
+            // A seek to the end and back, then the whole entry, 1 MiB at a time.
+            await reader.read(video.size - 1024, 1024);
+            for (let at = 0; at < video.size; at += 1024 * 1024) await reader.read(at, 1024 * 1024);
+        }
+        expect(worker.terminated()).toBe(false);
+        expect(fetched.main).toBe(0);
+        expect(fetched.viewer).toBeGreaterThan(7 * 12);
+        await reader.close();
+
+        // The worker's own reads are still charged: one-byte cycling over five chunks stops it.
+        const hostile = reading(worker.main());
+        for (let n = 0; n < 200 && !worker.terminated(); n++) await hostile((n % 5) * CHUNK, 1);
+        expect(worker.terminated()).toBe(true);
+    });
+});

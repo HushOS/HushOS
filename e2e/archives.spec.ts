@@ -1,10 +1,10 @@
-import { readFileSync, mkdtempSync } from 'node:fs';
+import { readFileSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { inflateRawSync } from 'node:zlib';
 import { join } from 'node:path';
 import { S3Client } from 'bun';
 import { expect, test, type Page, type Request } from '@playwright/test';
-import { CANARY, FIXTURE_DIR, PASSWORD, writeFixture } from './fixtures/archives/make';
+import { CANARY, FIXTURE_DIR, PASSWORD, writeFixture, writeZip } from './fixtures/archives/make';
 import { grip, newPage, registerAccount, sha256 } from './helpers';
 
 /*
@@ -13,7 +13,9 @@ import { grip, newPage, registerAccount, sha256 } from './helpers';
  * bytes; the 5 GiB ZIP64 fixture lists while the page fetches less than 32 MiB; the AES zip asks
  * for its password, refuses a wrong one and opens with the right one; a central directory of
  * 65 MiB is refused with its message; a 20 MiB compressible entry downloads whole (WebKit's
- * DecompressionStream hands back a write's whole output at once, which once broke the session).
+ * DecompressionStream hands back a write's whole output at once, which once broke the session);
+ * three 8 MiB stored entries of a 24 MiB archive (read by range, not whole) download side by
+ * side, each through a reader of its own, byte for byte.
  * After all of it, the fixtures' canary is in no stored object, and not in IndexedDB, Cache
  * Storage or the origin private file system. It sits in deflated entries, where only inflating
  * makes it, and in a stored one, whose archive bytes hold it as they are.
@@ -29,6 +31,19 @@ const row = (p: Page, name: string) =>
     p.locator('[data-node-id]').filter({ has: p.getByText(name, { exact: true }) });
 const items = (p: Page) => dialog(p).getByRole('list', { name: 'Items' });
 const crumbs = (p: Page) => dialog(p).getByRole('navigation', { name: 'Folders in the archive' });
+
+/* Three 8 MiB stored entries, each its own pattern: past 16 MiB, so the archive is read by range. */
+const SIDE = [0, 1, 2].map((n) =>
+    new Uint8Array(8 * 1024 * 1024).map((_, i) => (i * (31 + 2 * n) + n * 7) & 0xff),
+);
+function sideBySide(dir: string) {
+    const path = join(dir, 'side-by-side.zip');
+    writeFileSync(
+        path,
+        writeZip(SIDE.map((data, n) => ({ name: `part-${n}.bin`, data, method: 0 }))),
+    );
+    return path;
+}
 
 async function open(p: Page, name: string) {
     await row(p, name).locator('button').first().dblclick(grip);
@@ -51,9 +66,10 @@ test.beforeAll(async ({ browser }) => {
         writeFixture('zip64-5g.zip', large),
         writeFixture('directory-65m.zip', large),
         writeFixture('compressible.zip', large),
+        sideBySide(large),
     ];
     await page.locator('input[type=file]').first().setInputFiles(files);
-    await expect(page.locator('[data-node-id]')).toHaveCount(6, { timeout: 180_000 });
+    await expect(page.locator('[data-node-id]')).toHaveCount(7, { timeout: 180_000 });
     for (const name of [
         'basic.zip',
         'aes.zip',
@@ -161,6 +177,32 @@ test('a 20 MiB compressible entry downloads whole, byte for byte', async () => {
     const path = await download.path();
     expect(sha256(readFileSync(path!))).toBe(sha256(new Uint8Array(expected)));
     expect(readFileSync(path!).length).toBe(20 * 1024 * 1024);
+    await close(page);
+});
+
+test('three 8 MiB stored entries of a 24 MiB archive download side by side, byte for byte', async () => {
+    await open(page, 'side-by-side.zip');
+    await expect(items(page).getByRole('button', { name: 'Download part-2.bin' })).toBeVisible({
+        timeout: 60_000,
+    });
+    const downloads = Promise.all(
+        [0, 1, 2].map((n) =>
+            page.waitForEvent('download', {
+                predicate: (download) => download.suggestedFilename() === `part-${n}.bin`,
+                timeout: 180_000,
+            }),
+        ),
+    );
+    for (const n of [0, 1, 2])
+        await items(page)
+            .getByRole('button', { name: `Download part-${n}.bin` })
+            .click();
+    for (const [n, download] of (await downloads).entries()) {
+        const path = await download.path();
+        expect(sha256(readFileSync(path!)), `part-${n}.bin`).toBe(sha256(SIDE[n]!));
+    }
+    // The archive stayed open: nothing counted the three side by side as the worker reading too much.
+    await expect(dialog(page)).not.toContainText("couldn't be processed");
     await close(page);
 });
 

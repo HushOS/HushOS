@@ -16,7 +16,8 @@ export type ToArchive =
     | { type: 'unlock'; id: number; password: string; index: number | null }
     /* The entry inflated whole, at most `limit` bytes; or, for a stored one, where it is. */
     | { type: 'preview'; id: number; index: number; limit: number }
-    | { type: 'download'; id: number; index: number }
+    /* `port`: the download's own reads, served and counted apart from the archive's. */
+    | { type: 'download'; id: number; index: number; port?: MessagePort }
     /* The page has taken the last chunk of download `id`: the next may come. */
     | { type: 'more'; id: number }
     | { type: 'stop'; id: number };

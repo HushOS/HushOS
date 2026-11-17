@@ -19,6 +19,8 @@ type Scope = {
 const scope = self as unknown as Scope;
 
 let archive: ZipArchive | null = null;
+/* The archive's size, as the page said when it opened it: a download's own reader reads the same bytes. */
+let archiveSize: number | null = null;
 let opening: Promise<ZipArchive> | null = null;
 /* Each download in flight: what stops it, and what lets its next chunk go. */
 const running = new Map<number, { stop: AbortController; more: (() => void) | null }>();
@@ -57,8 +59,12 @@ async function ready() {
     return opening;
 }
 
-async function download(id: number, index: number) {
+async function download(id: number, index: number, port?: MessagePort) {
     const stop = new AbortController();
+    // The download's own reads, when the page gave it a port: they take turns of their own.
+    const own = port && archiveSize !== null ? rangeSource(archiveSize, port, turns()) : null;
+    // Stopped: whatever it still waits on fails now, so nothing hangs on a port the page let go of.
+    stop.signal.addEventListener('abort', () => own?.close?.(), { once: true });
     const state = { stop, more: null as (() => void) | null };
     running.set(id, state);
     const gathered = new Uint8Array(CHUNK_BYTES);
@@ -92,6 +98,16 @@ async function download(id: number, index: number) {
                 await gather(chunk);
             },
             stop.signal,
+            undefined,
+            own
+                ? {
+                      size: own.size,
+                      read: (offset, length) => {
+                          moved = true;
+                          return own.read(offset, length);
+                      },
+                  }
+                : undefined,
         );
         await send();
         scope.postMessage({ type: 'end', id });
@@ -101,6 +117,7 @@ async function download(id: number, index: number) {
         else fail(id, error);
     } finally {
         running.delete(id);
+        own?.close?.();
     }
 }
 
@@ -109,6 +126,7 @@ scope.onmessage = (event) => {
     switch (msg.type) {
         case 'open': {
             if (opening) return;
+            archiveSize = msg.size;
             const ranges = rangeSource(msg.size, msg.port, turns());
             opening = ZipArchive.open({
                 size: ranges.size,
@@ -178,7 +196,7 @@ scope.onmessage = (event) => {
             })();
             return;
         case 'download':
-            void download(msg.id, msg.index);
+            void download(msg.id, msg.index, msg.port);
             return;
         case 'more': {
             const state = running.get(msg.id);

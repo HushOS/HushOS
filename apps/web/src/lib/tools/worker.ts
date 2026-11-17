@@ -35,6 +35,8 @@ export class ToolError extends Error {
 export type RangeSource = {
     size: number;
     read: (offset: number, length: number) => Promise<Uint8Array>;
+    /* Stops reading (rangeSource): reads waiting fail, and later ones. */
+    close?: () => void;
 };
 
 export type ToolContext = {
@@ -101,9 +103,21 @@ export function rangeSource(
         if (answer.type === 'data') waiter.resolve(new Uint8Array(answer.bytes));
         else waiter.reject(new Error(answer.message));
     };
+    let closed = false;
     return {
         size,
+        /* Stops reading: every read waiting fails, and any later one; the port is let go of. */
+        close() {
+            if (closed) return;
+            closed = true;
+            port.onmessage = null;
+            port.close();
+            for (const waiter of pending.values())
+                waiter.reject(new Error('The read was stopped.'));
+            pending.clear();
+        },
         read(offset, length) {
+            if (closed) return Promise.reject(new Error('The read was stopped.'));
             const end = Math.min(size, offset + length);
             if (offset < 0 || end <= offset) return Promise.resolve(new Uint8Array(0));
             if (end - offset > RANGE_READ_MAX)
@@ -112,6 +126,7 @@ export function rangeSource(
                 end - offset,
                 () =>
                     new Promise<Uint8Array>((resolve, reject) => {
+                        if (closed) return reject(new Error('The read was stopped.'));
                         const id = next++;
                         pending.set(id, { resolve, reject });
                         const request: RangeRequest = {

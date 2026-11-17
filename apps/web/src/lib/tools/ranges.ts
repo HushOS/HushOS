@@ -20,6 +20,12 @@ export type RangeReader = Pick<FileReader, 'size' | 'read'> & {
      * the bytes a read asked for: one byte read can fetch a whole chunk.
      */
     meter?: (charge: (bytes: number) => void) => void;
+    /*
+     * Another reader of the same bytes with a cache of its own: with `charge`, metered as above
+     * (a download's own reads); without, the viewer's plain reader (the page's own range reads,
+     * never the worker's). Its owner closes it.
+     */
+    fork?: (charge?: (bytes: number) => void) => RangeReader;
 };
 
 /*
