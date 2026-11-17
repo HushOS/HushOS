@@ -180,6 +180,22 @@ extension OnFakeDrive {
             return Setup(server: server, vault: vault, world: world, into: into, doc: doc, original: original, docVersion: doc.node.currentVersion!.id)
         }
 
+        /* A family manager's pause answers 403 `held`: the save path reads it as held, never as lost access (denied). */
+        @Test func aHeldAnswerIsHeldNeverLostAccess() async throws {
+            let s = try await Self.setUp(nil)
+            s.server.intercept = { method, parts, _ in
+                let held: (Int, Any) = (403, ["code": "held", "message": "A group manager has paused changes to this folder."])
+                if method == "POST", parts.last == "trash-batch" { return held }
+                if method == "DELETE", parts.count == 4, parts[2] == "nodes" { return held }
+                if method == "POST", parts.last == "abort" { return held }
+                return nil
+            }
+            let workspace = s.into.node.workspaceId
+            #expect(try await s.vault.trash(["node-x"], in: workspace) == ["node-x": .held])
+            #expect(try await s.vault.purge(["node-x"], in: workspace) == ["node-x": .held])
+            #expect(await s.vault.abortUpload("up-x", in: workspace, pause: .zero) == .held)
+        }
+
         static func versionOf(_ run: SaveRun, _ s: Setup) async throws -> Made {
             switch try await run.version(Data("new".utf8), of: s.doc, in: s.into, startedFrom: s.docVersion, sources: own) {
             case .saved: return Made(saved: 1)

@@ -20,6 +20,9 @@ actor FakeWriter: SaveRunWriter {
     var member = true
     var offline = false
     var denied = false
+    /* A family manager paused this person's changes: every write refused `held`. */
+    var held = false
+    func set(held: Bool) { self.held = held }
     var refuse = Set<String>()
     var busy = Set<String>()
     var live = Set<String>()
@@ -183,6 +186,7 @@ actor FakeWriter: SaveRunWriter {
     func keyChangePause(_ workspaceId: String, attempt: Int) async throws {}
     func abortUpload(_ uploadId: String, in workspaceId: String) async -> DriveAPI.AbortFate {
         if offline { return .unknown }
+        if held { return .held }
         if denied { return .denied }
         if completing.contains(uploadId) { return .unknown }
         aborted.append(uploadId)
@@ -198,7 +202,7 @@ actor FakeWriter: SaveRunWriter {
         if offline { throw DriveAPIError.transport("offline") }
         var fates: [String: SaveItemFate] = [:]
         for id in ids {
-            if denied { fates[id] = .denied } else if refuse.contains(id) { fates[id] = .refused } else if live.remove(id) != nil {
+            if held { fates[id] = .held } else if denied { fates[id] = .denied } else if refuse.contains(id) { fates[id] = .refused } else if live.remove(id) != nil {
                 trashed.insert(id)
                 fates[id] = .done
             } else { fates[id] = trashed.contains(id) ? .done : .gone }
@@ -1050,6 +1054,26 @@ let own = SaveSources.ownWriting
         await SaveRuns.quietlySettled()
         #expect(looks.value == 1)
         #expect(rows.list().first?.chosen == nil && rows.list().first?.holds == 0)
+    }
+
+    /* A family manager's pause (403 held) is not lost access: the row stays and says so; the open after the hold cleans up. */
+    @Test func aHeldCleanUpKeepsTheRowAndALaterOpenCleansUp() async throws {
+        let writer = FakeWriter()
+        let rows = journal()
+        let run = try await SaveRun.start(writer: writer, targets: [opened("f")], results: [], journal: rows)
+        _ = try await run.file(Data([1]), name: "a", mime: nil, sources: own)
+        await writer.set(held: true)
+        let stopped = await run.cancel()
+        #expect(stopped.cleanup == .left)
+        #expect(stopped.message == "Cancelled. Changes are paused in this family, so what was made is still there. You’ll be asked about it next time.")
+        #expect(await writer.live.contains("node-1"))
+        let row = try #require(rows.list().first)
+        #expect(await SaveRuns.cleanUp(row, writer: writer, journal: rows) == .left)
+        #expect(rows.list().count == 1)
+        await writer.set(held: false)
+        #expect(await SaveRuns.cleanUp(row, writer: writer, journal: rows) == .deleted)
+        #expect(await writer.purged == ["node-1"])
+        #expect(rows.list().isEmpty)
     }
 
     /* A sign-out while an interrupted run's clean-up trashes: nothing more is sent, no delete forever. */

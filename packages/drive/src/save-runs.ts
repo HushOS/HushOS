@@ -176,7 +176,7 @@ export function stoppedWords(
         failure?: string | null;
         keptVersions?: number;
         uncertainVersions?: number;
-        remains?: 'left' | 'no-access' | 'stays' | null;
+        remains?: 'left' | 'no-access' | 'stays' | 'held' | null;
     } = {},
 ) {
     const kept = options.keptVersions ?? 0;
@@ -188,7 +188,9 @@ export function stoppedWords(
               ? ' Some of what was made may still be there, and you can no longer remove it.'
               : options.remains === 'stays'
                 ? ' Some of what was made may still be there.'
-                : '';
+                : options.remains === 'held'
+                  ? ' Changes are paused in this family, so what was made is still there. You’ll be asked about it next time.'
+                  : '';
     const opening =
         reason === 'failed'
             ? sentence(options.failure ?? 'This couldn’t be saved.')
@@ -263,14 +265,14 @@ export function roomOf(
 }
 
 /* The server's answer to aborting an upload; `unknown` when there was none (offline, a 5xx). */
-export type AbortFate = 'aborted' | 'gone' | 'finished' | 'denied' | 'unknown';
+export type AbortFate = 'aborted' | 'gone' | 'finished' | 'denied' | 'held' | 'unknown';
 /*
  * The server's answer for one item of a batch: `done` (in the Trash, or deleted
  * forever), `gone` (not found: nothing to remove), `refused` (anything else, a
  * purge left `busy` after its retries included), `denied` (the whole request
  * refused because the workspace is no longer this person's: 403 or 404).
  */
-export type ItemFate = 'done' | 'gone' | 'refused' | 'denied';
+export type ItemFate = 'done' | 'gone' | 'refused' | 'denied' | 'held';
 
 /*
  * What an abort's answer means for a clean-up (the server's abortUpload names a
@@ -304,6 +306,7 @@ export async function askAbort(
 export function abortFateOf(error: unknown): AbortFate | 'finishing' {
     if (!(error instanceof DriveApiError)) return 'unknown';
     if (error.status === 404) return 'gone';
+    if (heldNow(error)) return 'held';
     if (error.status === 401 || error.status === 403) return 'denied';
     if (error.status === 409) {
         const upload = (error.data as { upload?: string } | undefined)?.upload;
@@ -337,7 +340,16 @@ export function refusedOutright(error: unknown) {
 
 /* The whole request refused because the workspace is no longer this person's to write. */
 export function deniedWhole(error: unknown) {
-    return error instanceof DriveApiError && (error.status === 403 || error.status === 404);
+    return (
+        error instanceof DriveApiError &&
+        (error.status === 403 || error.status === 404) &&
+        !heldNow(error)
+    );
+}
+
+/* A family manager paused this person's changes for now: refused until the hold lifts, nothing ended. */
+export function heldNow(error: unknown) {
+    return error instanceof DriveApiError && error.status === 403 && error.code === 'held';
 }
 
 /*
@@ -1224,8 +1236,11 @@ async function cleanUp(
     cleanup: Cleanup;
     keptVersions: number;
     uncertainVersions: number;
-    /* New files or folders that may still be there: `left` with the row kept, `no-access` without. */
-    remains: 'left' | 'no-access' | null;
+    /*
+     * New files or folders that may still be there: `left` with the row kept, `no-access` without,
+     * `held` when a family manager's pause kept the clean-up from them (the row kept for later).
+     */
+    remains: 'left' | 'no-access' | 'held' | null;
     /* Kept for a folder whose creation may still land (mayExist), not found yet. */
     waiting: boolean;
     /* Those folders, when they are all that kept the row: everything else was settled. */
@@ -1237,6 +1252,7 @@ async function cleanUp(
     let keptVersions = 0;
     let uncertainVersions = 0;
     let othersMayLand = false;
+    let held = false;
     // An interrupted run's clean-up asks the server nothing once signed out: checked before every
     // request (a live run's stop goes on, and says what may remain).
     const stillOn = () => !options.quitOnSignOut || (options.current?.() ?? true);
@@ -1267,6 +1283,14 @@ async function cleanUp(
             // ended (a 404 for lost access), not the upload gone. It may have landed.
             unsettled = true;
             uncertainVersions += 1;
+        } else if (fate === 'held') {
+            // A family manager paused changes: nothing ended, so the row stays and the clean-up runs
+            // again once the hold lifts. Its completion, if sent, may still land.
+            unsettled = true;
+            held = true;
+            if (!(options.completing?.has(uploadId) ?? true)) continue;
+            if (options.versionUploads?.has(uploadId)) uncertainVersions += 1;
+            else othersMayLand = true;
         } else if (fate === 'denied') {
             denied = true;
             // No longer this person's to ask: once its completion was sent it may have landed.
@@ -1277,9 +1301,9 @@ async function cleanUp(
     }
     if (!stillOn()) return signedOutNow();
     const notFound = new Set<string>();
-    const discarded = await discard(deps, row.workspaceId, row.nodeIds, notFound, stillOn).catch(
-        (): Cleanup => 'left',
-    );
+    const discarded = await discard(deps, row.workspaceId, row.nodeIds, notFound, stillOn, () => {
+        held = true;
+    }).catch((): Cleanup => 'left');
     // A folder whose creation went unanswered, not found now: the server may still make it.
     if (!stillOn()) return signedOutNow();
     const waitingOn = [...(options.mayExist ?? [])].filter((id) => notFound.has(id));
@@ -1307,7 +1331,14 @@ async function cleanUp(
         // A row the journal won't retire stays as it was: the clean-up is left for the next open.
         if ((options.current?.() ?? true) && !(await retire(deps.runs, row))) cleanup = 'left';
     }
-    const remains = !someRemain ? null : cleanup === 'left' ? 'left' : 'no-access';
+    const remains =
+        held && cleanup === 'left'
+            ? 'held'
+            : !someRemain
+              ? null
+              : cleanup === 'left'
+                ? 'left'
+                : 'no-access';
     return { cleanup, keptVersions, uncertainVersions, remains, waiting, onlyWaitingOn };
 }
 
@@ -1380,11 +1411,17 @@ async function discard(
     notFound?: Set<string>,
     /* Asked before every request: false (a sign-out) stops here, leaving the rest. */
     stillOn: () => boolean = () => true,
+    /* Told when a family manager's pause refused it: the rest is left for after the hold. */
+    onHeld: () => void = () => {},
 ): Promise<Cleanup> {
     if (!nodeIds.length) return 'nothing';
     if (!stillOn()) return 'left';
     const trashed = await deps.trash(workspaceId, nodeIds);
     const fates = nodeIds.map((id) => trashed.get(id) ?? 'refused');
+    if (fates.some((fate) => fate === 'held')) {
+        onHeld();
+        return 'left';
+    }
     for (const id of nodeIds) if (trashed.get(id) === 'gone') notFound?.add(id);
     if (fates.every((fate) => fate === 'denied')) return 'no-access';
     if (fates.some((fate) => fate === 'refused' || fate === 'denied')) return 'left';
@@ -1394,6 +1431,10 @@ async function discard(
     if (!(await deps.mayPurge(workspaceId))) return 'trashed';
     if (!stillOn()) return 'left';
     const purged = await deps.purge(workspaceId, inTrash);
+    if (inTrash.some((id) => purged.get(id) === 'held')) {
+        onHeld();
+        return 'left';
+    }
     if (inTrash.some((id) => !['done', 'gone'].includes(purged.get(id) ?? 'refused')))
         return 'left';
     return 'deleted';

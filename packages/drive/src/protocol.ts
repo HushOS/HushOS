@@ -127,6 +127,11 @@ export type DriveErrorCode =
     | 'expired'
     | 'rotating'
     | 'forbidden'
+    /*
+     * A family manager paused this person's changes for now (a hold): writes are refused until it
+     * lifts, membership and access unchanged. Not `forbidden`: nothing has ended.
+     */
+    | 'held'
     /* A workspace document write would pass WORKSPACE_DOCUMENT_KINDS or WORKSPACE_DOCUMENT_BYTES. */
     | 'document-limit'
     /* A write's signature did not verify against the writer's current signing key. */

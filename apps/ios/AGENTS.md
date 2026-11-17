@@ -863,7 +863,7 @@ Plan: `docs/groups-mobile-plan.md` (groups 1d). The web's counterparts are named
 - Once `completeUpload` returns, no error after it may fail, abort or re-seal the upload.
 - A replacement's name is re-signed only while `SealedUpload.landing` (its version id and the metadata version it replaced) still holds. A repeated completion is answered with the node as it is now, which may carry another member's rename or newer version.
 - Callers of the foreground `Vault.upload` treat `UploadLanded` as done.
-- An API 403 with a `code` is `DriveAPIError.forbidden` (a group manager's pause): final, never retried. Only the store's 403 (an expired part address) is retried.
+- An API 403 with `code: held` is `DriveAPIError.held` (a group manager's pause: nothing ended); any other 403 with a `code` is `DriveAPIError.forbidden`. Both final, never retried. The save path's clean-up keeps its row on held (`SaveItemFate.held`, `AbortFate.held`), never taken for lost access. Only the store's 403 (an expired part address) is retried.
 - Part tasks are described `<record>|<piece>|<server upload id>`. A callback naming another upload than the record's is dropped.
 - A sync that wipes a family calls `BackgroundTransfers.endFamily`, which fails its queued uploads and removes their plaintext.
 

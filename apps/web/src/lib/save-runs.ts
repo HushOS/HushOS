@@ -13,6 +13,7 @@ import {
     askAbort,
     cleanUpInterrupted,
     deniedWhole,
+    heldNow,
     interruptedRuns,
     keepInterrupted,
     roomOf,
@@ -165,8 +166,10 @@ function deps(queryClient: QueryClient): SaveRunDeps {
                     const answer = await clientFor(workspaceId).trashMany(workspaceId, batch);
                     for (const [id, fate] of trashFatesOf(answer.results)) fates.set(id, fate);
                 } catch (error) {
-                    if (!deniedWhole(error)) throw error;
-                    for (const id of batch) fates.set(id, 'denied');
+                    // A family manager's pause is not lost access: kept for after the hold.
+                    if (heldNow(error)) for (const id of batch) fates.set(id, 'held');
+                    else if (deniedWhole(error)) for (const id of batch) fates.set(id, 'denied');
+                    else throw error;
                 }
             }
             return fates;
@@ -175,6 +178,7 @@ function deps(queryClient: QueryClient): SaveRunDeps {
         // workspace was too busy for is sent again, and items left `busy` too, while that helps.
         purge: async (workspaceId, ids) => {
             const refusedWhole = new Set<string>();
+            const heldWhole = new Set<string>();
             const { gone } = await purgeBatch(
                 ids.map((id) => ({ id, workspaceId }) as DriveNode),
                 {
@@ -184,7 +188,9 @@ function deps(queryClient: QueryClient): SaveRunDeps {
                         try {
                             return await clientFor(ws).purgeMany(ws, nodeIds);
                         } catch (error) {
-                            if (deniedWhole(error)) for (const id of nodeIds) refusedWhole.add(id);
+                            if (heldNow(error)) for (const id of nodeIds) heldWhole.add(id);
+                            else if (deniedWhole(error))
+                                for (const id of nodeIds) refusedWhole.add(id);
                             throw error;
                         }
                     },
@@ -195,7 +201,13 @@ function deps(queryClient: QueryClient): SaveRunDeps {
             return new Map(
                 ids.map((id): [string, ItemFate] => [
                     id,
-                    out.has(id) ? 'done' : refusedWhole.has(id) ? 'denied' : 'refused',
+                    out.has(id)
+                        ? 'done'
+                        : heldWhole.has(id)
+                          ? 'held'
+                          : refusedWhole.has(id)
+                            ? 'denied'
+                            : 'refused',
                 ]),
             );
         },

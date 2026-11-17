@@ -58,6 +58,8 @@ class SaveRunTest {
         var member = true
         var offline = false
         var denied = false
+        /* A family manager paused this person's changes: every write refused `held`. */
+        var held = false
         val refuse = HashSet<String>()
         val busy = HashSet<String>()
         val live = HashSet<String>()
@@ -179,6 +181,7 @@ class SaveRunTest {
         }
         override fun abortUpload(uploadId: String, workspaceId: String): SaveAbortFate {
             if (offline) return SaveAbortFate.UNKNOWN
+            if (held) return SaveAbortFate.HELD
             if (denied) return SaveAbortFate.DENIED
             if (uploadId in completing) return SaveAbortFate.UNKNOWN
             aborted += uploadId
@@ -193,6 +196,7 @@ class SaveRunTest {
             if (offline) throw Unreachable()
             val fates = ids.associateWith { id ->
                 when {
+                    held -> SaveItemFate.HELD
                     denied -> SaveItemFate.DENIED
                     id in refuse -> SaveItemFate.REFUSED
                     live.remove(id) -> { trashed += id; SaveItemFate.DONE }
@@ -959,6 +963,27 @@ class SaveRunTest {
         assertEquals(0, row.holds)
     }
 
+    /* A family manager's pause (403 held) is not lost access: the row stays and says so; the launch after the hold cleans up. */
+    @Test
+    fun aHeldCleanUpKeepsTheRowAndALaterLaunchCleansUp() {
+        val writer = FakeWriter()
+        val rows = journal()
+        val run = SaveRun.start(writer, listOf(opened("f")), emptyList(), rows)
+        run.file(byteArrayOf(1), "a", null, own)
+        writer.held = true
+        val stopped = run.cancel()
+        assertEquals(SaveCleanup.LEFT, stopped.cleanup)
+        assertEquals("Cancelled. Changes are paused in this family, so what was made is still there. You’ll be asked about it next time.", stopped.message)
+        assertTrue("node-1" in writer.live)
+        val row = rows.list().single()
+        assertEquals(SaveCleanup.LEFT, SaveRuns.cleanUp(row, writer, rows))
+        assertEquals(1, rows.list().size)
+        writer.held = false
+        assertEquals(SaveCleanup.DELETED, SaveRuns.cleanUp(row, writer, rows))
+        assertEquals(setOf("node-1"), writer.purged)
+        assertTrue(rows.list().isEmpty())
+    }
+
     /* A sign-out while an interrupted run's clean-up trashes: nothing more is sent, no delete forever. */
     @Test
     fun aSignOutDuringAnInterruptedCleanUpSendsNoDeleteForever() {
@@ -1356,6 +1381,25 @@ class SaveResultTest {
         assertEquals(1, row.nodeIds.size)
         assertEquals(row.nodeIds.toSet(), row.uncertain.keys)
         server.dropReply = null
+        server.extraRoutes = null
+    }
+
+    /* A family manager's pause answers 403 `held`: the save path reads it as held, never as lost access (DENIED). */
+    @Test
+    fun aHeldAnswerIsHeldNeverLostAccess() {
+        val held = 403 to JSONObject().put("code", "held").put("message", "A group manager has paused changes to this folder.")
+        server.extraRoutes = { method, segments, _, _ ->
+            when {
+                method == "POST" && segments.lastOrNull() == "trash-batch" -> held
+                method == "DELETE" && segments.size == 3 && segments[1] == "nodes" -> held
+                method == "POST" && segments.lastOrNull() == "abort" -> held
+                else -> null
+            }
+        }
+        val writer = VaultSaveWriter(vault) { StorageAllowance(1L shl 40, 0L, 1L shl 40) }
+        assertEquals(mapOf("node-x" to SaveItemFate.HELD), writer.trash(listOf("node-x"), vault.workspaceId))
+        assertEquals(mapOf("node-x" to SaveItemFate.HELD), writer.purge(listOf("node-x"), vault.workspaceId))
+        assertEquals(SaveAbortFate.HELD, vault.api.abortUploadFate("up-x", vault.workspaceId))
         server.extraRoutes = null
     }
 

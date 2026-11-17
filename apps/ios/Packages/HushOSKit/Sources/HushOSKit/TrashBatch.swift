@@ -308,6 +308,8 @@ public enum TrashBatch {
             let code = body?["code"] as? String
             if status == 501 || (status == 404 && code != "not-found") { throw Unsupported() }
             if status == 404 { throw DriveAPIError.notFound(message ?? "This item no longer exists.") }
+            // A family manager paused changes: nothing ended (DriveAPI's `held`, as the single routes say it).
+            if status == 403, code == "held" { throw DriveAPIError.held(message ?? "A group manager has paused changes to this folder.") }
             if status == 409, code == "conflict" { throw RequestRefusal.busy }
             if status == 429 { throw RequestRefusal.tooMany }
             if status == 413 { throw RequestRefusal.tooLarge }

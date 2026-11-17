@@ -52,6 +52,14 @@ final class SentFlag: @unchecked Sendable {
     }
 }
 
+/* Whether a family manager's pause (403 `held`) kept a clean-up from anything, told across awaits. */
+final class HeldFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var held = false
+    var isHeld: Bool { lock.withLock { held } }
+    func hold() { lock.withLock { held = true } }
+}
+
 /* Ids collected across an await (the clean-up's not-found ones). */
 final class SentIds: @unchecked Sendable {
     private let lock = NSLock()
@@ -401,7 +409,8 @@ public enum SaveRoom: Sendable, Equatable {
 }
 
 /* The server's answer for one item: in the Trash or deleted (`done`), not found, refused, or the space no longer this person's. */
-public enum SaveItemFate: Sendable, Equatable { case done, gone, refused, denied }
+/* `held`: a family manager paused this person's changes (403 `held`): refused until the hold lifts, nothing ended. */
+public enum SaveItemFate: Sendable, Equatable { case done, gone, refused, denied, held }
 
 /* What a run asks of the drive. The vault is one; tests stand one in. */
 public protocol SaveRunWriter: Sendable {
@@ -504,10 +513,12 @@ public enum SaveRuns {
 
     /* What a stopped run says: never "nothing was saved" once a new version landed, or while one may (the web's stoppedWords). */
     static func words(_ reason: SaveRunStopped.Reason, shared: Bool, failure: String?, kept: Int, uncertain: Int = 0,
-                      remains: SaveCleanup? = nil) -> String {
+                      remains: SaveCleanup? = nil, held: Bool = false) -> String {
         // New files or folders that may still be there: the row kept for the next launch (`left`), or out of reach.
-        // `.nothing` here: after a sign-out, what may stay with nothing more to ask.
-        let left = remains == .left ? " Some of what was made may still be there. You’ll be asked about it next time."
+        // `.nothing` here: after a sign-out, what may stay with nothing more to ask. A family manager's pause kept the
+        // clean-up from them: said as such, the row kept.
+        let left = held && remains == .left ? " Changes are paused in this family, so what was made is still there. You’ll be asked about it next time."
+            : remains == .left ? " Some of what was made may still be there. You’ll be asked about it next time."
             : remains == .noAccess ? " Some of what was made may still be there, and you can no longer remove it."
             : remains == .nothing ? " Some of what was made may still be there." : ""
         let opening: String
@@ -712,15 +723,16 @@ public enum SaveRuns {
     static func clean(_ row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal, versions: Set<String>,
                       completing: Set<String>?, published: Set<String>?, asked: [String: DriveAPI.AbortFate] = [:],
                       mayExist: Set<String> = [], stillOn: @Sendable () -> Bool = { true }) async
-        -> (cleanup: SaveCleanup, kept: Int, uncertain: Int, remains: SaveCleanup?, waiting: Bool, onlyWaitingOn: [String]?) {
+        -> (cleanup: SaveCleanup, kept: Int, uncertain: Int, remains: SaveCleanup?, waiting: Bool, onlyWaitingOn: [String]?, held: Bool) {
         var unsettled = false
         var denied = false
         var kept = 0
         var uncertain = 0
         var othersMayLand = false
+        let held = HeldFlag()
         for uploadId in row.uploadIds {
             // Signed out meanwhile (an interrupted run's clean-up): nothing more asked of the server, nothing written.
-            guard stillOn() else { return (.left, kept, uncertain, nil, false, nil) }
+            guard stillOn() else { return (.left, kept, uncertain, nil, false, nil, false) }
             let answered = asked[uploadId].flatMap { $0 == .unknown || $0 == .finishing ? nil : $0 }
             let fate: DriveAPI.AbortFate
             if let answered { fate = answered } else { fate = await writer.abortUpload(uploadId, in: row.workspaceId) }
@@ -728,6 +740,12 @@ public enum SaveRuns {
             case .unknown, .finishing:
                 // No answer: once its completion was sent it may land yet, and a new version is never said not to have.
                 unsettled = true
+                guard completing?.contains(uploadId) ?? true else { break }
+                if versions.contains(uploadId) { uncertain += 1 } else { othersMayLand = true }
+            case .held:
+                // A family manager paused changes: nothing ended. The row stays, asked again after the hold.
+                unsettled = true
+                held.hold()
                 guard completing?.contains(uploadId) ?? true else { break }
                 if versions.contains(uploadId) { uncertain += 1 } else { othersMayLand = true }
             case .denied:
@@ -745,9 +763,9 @@ public enum SaveRuns {
             }
         }
         let notFound = SentIds()
-        guard stillOn() else { return (.left, kept, uncertain, nil, false, nil) }
-        let discarded = await discard(row.nodeIds, in: row.workspaceId, writer: writer, notFound: notFound, stillOn: stillOn)
-        guard stillOn() else { return (.left, kept, uncertain, nil, false, nil) }
+        guard stillOn() else { return (.left, kept, uncertain, nil, false, nil, false) }
+        let discarded = await discard(row.nodeIds, in: row.workspaceId, writer: writer, notFound: notFound, stillOn: stillOn, held: held)
+        guard stillOn() else { return (.left, kept, uncertain, nil, false, nil, false) }
         // A folder whose creation got no answer, not found now: the server may still be making it. The row stays.
         let waitingOn = mayExist.intersection(notFound.ids).sorted()
         let waiting = !waitingOn.isEmpty
@@ -764,17 +782,23 @@ public enum SaveRuns {
         let someRemain = othersMayLand || unremoved
         // A row the disk won't retire stays as it was: the clean-up is left for the next open.
         if cleanup != .left, !journal.retire(row) { cleanup = .left }
-        return (cleanup, kept, uncertain, someRemain ? (cleanup == .left ? .left : .noAccess) : nil, waiting, onlyWaitingOn)
+        let pausedHere = held.isHeld && cleanup == .left
+        return (cleanup, kept, uncertain, pausedHere ? .left : someRemain ? (cleanup == .left ? .left : .noAccess) : nil, waiting, onlyWaitingOn, pausedHere)
     }
 
     static func discard(_ ids: [String], in workspaceId: String, writer: SaveRunWriter, notFound: SentIds? = nil,
-                        stillOn: @Sendable () -> Bool = { true }) async -> SaveCleanup {
+                        stillOn: @Sendable () -> Bool = { true }, held: HeldFlag? = nil) async -> SaveCleanup {
         guard !ids.isEmpty else { return .nothing }
         do {
             guard stillOn() else { return .left }
             let trashed = try await writer.trash(ids, in: workspaceId)
             notFound?.add(ids.filter { trashed[$0] == .gone })
             let fates = ids.map { trashed[$0] ?? .refused }
+            // A family manager's pause: nothing ended, the rest is left for after the hold.
+            if fates.contains(.held) {
+                held?.hold()
+                return .left
+            }
             if fates.allSatisfy({ $0 == .denied }) { return .noAccess }
             if fates.contains(where: { $0 == .refused || $0 == .denied }) { return .left }
             let inTrash = ids.filter { trashed[$0] == .done }
@@ -783,6 +807,10 @@ public enum SaveRuns {
             guard await writer.mayPurge(workspaceId) else { return .trashed }
             guard stillOn() else { return .left }
             let purged = try await writer.purge(inTrash, in: workspaceId)
+            if inTrash.contains(where: { purged[$0] == .held }) {
+                held?.hold()
+                return .left
+            }
             return inTrash.allSatisfy { purged[$0] == .done || purged[$0] == .gone } ? .deleted : .left
         } catch {
             return .left
@@ -805,7 +833,7 @@ public enum SaveRuns {
         switch error {
         case DriveAPIError.server(let status, _): return status == 0 || status >= 500 || status == 409
         case DriveAPIError.notAuthenticated, DriveAPIError.notFound, DriveAPIError.trashed, DriveAPIError.rotating, DriveAPIError.stale,
-             DriveAPIError.conflicted, DriveAPIError.forbidden: return false
+             DriveAPIError.conflicted, DriveAPIError.forbidden, DriveAPIError.held: return false
         default: return true
         }
     }
@@ -1380,12 +1408,12 @@ public actor SaveRun {
             // Folder creations already sent settle next (a lost answer included): one the server creates after the
             // clean-up looked would otherwise be left with its row gone.
             await state.creationsSettled()
-            let (cleanup, kept, uncertain, remains, _, _) = await SaveRuns.clean(row, writer: writer, journal: state.journal, versions: state.versionUploads,
+            let (cleanup, kept, uncertain, remains, _, _, held) = await SaveRuns.clean(row, writer: writer, journal: state.journal, versions: state.versionUploads,
                                                                            completing: state.completingUploads, published: state.published,
                                                                            asked: asked, mayExist: state.mayExist)
             let total = keptBefore + kept
             var done = SaveRunStopped(reason: reason, message: SaveRuns.words(reason, shared: shared, failure: failure, kept: total, uncertain: uncertain,
-                                                                              remains: remains),
+                                                                              remains: remains, held: held),
                                       cleanup: cleanup)
             done.keptVersions = total
             done.uncertainVersions = uncertain
@@ -1587,6 +1615,10 @@ extension Vault: SaveRunWriter {
             let answers: [TrashBatch.Answer]
             do {
                 answers = try await api.trashBatch(workspaceId: workspaceId, ids: batch)
+            } catch DriveAPIError.held {
+                // A family manager's pause is not lost access: kept for after the hold.
+                for id in batch { fates[id] = .held }
+                continue
             } catch DriveAPIError.notFound, DriveAPIError.forbidden {
                 for id in batch { fates[id] = .denied }
                 continue
@@ -1619,6 +1651,8 @@ extension Vault: SaveRunWriter {
                 fates[id] = .done
             } catch DriveAPIError.notFound {
                 fates[id] = .gone
+            } catch DriveAPIError.held {
+                fates[id] = .held
             } catch DriveAPIError.forbidden {
                 fates[id] = .denied
             } catch DriveAPIError.transport(let why) {

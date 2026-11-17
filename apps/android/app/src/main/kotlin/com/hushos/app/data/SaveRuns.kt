@@ -257,13 +257,14 @@ sealed class SaveRoom {
 }
 
 /* The server's answer for one item: in the Trash or deleted, not found, refused, or the space no longer this person's. */
-enum class SaveItemFate { DONE, GONE, REFUSED, DENIED }
+/* HELD: a family manager paused this person's changes (403 `held`): refused until the hold lifts, nothing ended. */
+enum class SaveItemFate { DONE, GONE, REFUSED, DENIED, HELD }
 
 /*
  * The server's answer to an abort (`data.upload` naming a finishing and a finished upload, packages/drive/src/server.ts):
  * FINISHING is asked about again; UNKNOWN is no answer.
  */
-enum class SaveAbortFate { ABORTED, GONE, FINISHED, FINISHING, DENIED, UNKNOWN }
+enum class SaveAbortFate { ABORTED, GONE, FINISHED, FINISHING, DENIED, HELD, UNKNOWN }
 
 /* What a run asks of the drive. The vault is one (VaultSaveWriter); tests stand one in. */
 interface SaveRunWriter {
@@ -340,9 +341,12 @@ object SaveRuns {
     }
 
     /* What a stopped run says: never "nothing was saved" once a new version landed, or while one may (the web's stoppedWords). */
-    fun words(reason: SaveRunStopped.Reason, shared: Boolean, failure: String?, kept: Int, uncertain: Int = 0, remains: SaveCleanup? = null): String {
-        // New files or folders that may still be there: the row kept for the next launch (LEFT), or out of reach.
-        val left = when (remains) {
+    fun words(reason: SaveRunStopped.Reason, shared: Boolean, failure: String?, kept: Int, uncertain: Int = 0, remains: SaveCleanup? = null,
+              held: Boolean = false): String {
+        // New files or folders that may still be there: the row kept for the next launch (LEFT), or out of reach. A family
+        // manager's pause kept the clean-up from them: said as such, the row kept.
+        val left = if (held && remains == SaveCleanup.LEFT) " Changes are paused in this family, so what was made is still there. You’ll be asked about it next time."
+        else when (remains) {
             SaveCleanup.LEFT -> " Some of what was made may still be there. You’ll be asked about it next time."
             SaveCleanup.NO_ACCESS -> " Some of what was made may still be there, and you can no longer remove it."
             // After a sign-out: what may stay with nothing more to ask.
@@ -510,7 +514,7 @@ object SaveRuns {
      * still be there (`remains`: LEFT with the row kept, NO_ACCESS out of reach).
      */
     internal data class Cleaned(val cleanup: SaveCleanup, val kept: Int, val uncertain: Int, val remains: SaveCleanup? = null, val waiting: Boolean = false,
-                                val onlyWaitingOn: List<String>? = null)
+                                val onlyWaitingOn: List<String>? = null, val held: Boolean = false)
 
     /*
      * Aborts every upload the row names, removes its nodes; the row goes unless something is left. `completing`: the uploads
@@ -525,6 +529,7 @@ object SaveRuns {
         var kept = 0
         var uncertain = 0
         var othersMayLand = false
+        var held = false
         // An upload the stop already aborted with an answer isn't asked again; one that got none is.
         fun fateOf(uploadId: String) = asked[uploadId]?.takeIf { it != SaveAbortFate.UNKNOWN && it != SaveAbortFate.FINISHING }
             ?: abort(writer, uploadId, row.workspaceId)
@@ -533,6 +538,12 @@ object SaveRuns {
             SaveAbortFate.UNKNOWN, SaveAbortFate.FINISHING -> {
                 // No answer: once its completion was sent it may land yet, and a new version is never said not to have.
                 unsettled = true
+                if (completing?.contains(uploadId) != false) { if (uploadId in versions) uncertain++ else othersMayLand = true }
+            }
+            SaveAbortFate.HELD -> {
+                // A family manager paused changes: nothing ended. The row stays, asked again after the hold.
+                unsettled = true
+                held = true
                 if (completing?.contains(uploadId) != false) { if (uploadId in versions) uncertain++ else othersMayLand = true }
             }
             SaveAbortFate.DENIED -> {
@@ -548,7 +559,7 @@ object SaveRuns {
         }
         val notFound = HashSet<String>()
         if (!stillOn()) return Cleaned(SaveCleanup.LEFT, kept, uncertain)
-        val discarded = discard(row.nodeIds, row.workspaceId, writer, notFound, stillOn)
+        val discarded = discard(row.nodeIds, row.workspaceId, writer, notFound, stillOn) { held = true }
         if (!stillOn()) return Cleaned(SaveCleanup.LEFT, kept, uncertain)
         // A folder whose creation got no answer, not found now: the server may still be making it. The row stays.
         val waitingOn = mayExist.filter { it in notFound }
@@ -564,16 +575,19 @@ object SaveRuns {
         val someRemain = othersMayLand || unremoved
         // A row the disk won't retire stays as it was: the clean-up is left for the next open.
         if (cleanup != SaveCleanup.LEFT && !journal.retire(row)) cleanup = SaveCleanup.LEFT
-        return Cleaned(cleanup, kept, uncertain, if (!someRemain) null else if (cleanup == SaveCleanup.LEFT) SaveCleanup.LEFT else SaveCleanup.NO_ACCESS, waiting,
-            onlyWaitingOn)
+        val remains = if (held && cleanup == SaveCleanup.LEFT) SaveCleanup.LEFT
+        else if (!someRemain) null else if (cleanup == SaveCleanup.LEFT) SaveCleanup.LEFT else SaveCleanup.NO_ACCESS
+        return Cleaned(cleanup, kept, uncertain, remains, waiting, onlyWaitingOn, held && cleanup == SaveCleanup.LEFT)
     }
 
     internal fun discard(ids: List<String>, workspaceId: String, writer: SaveRunWriter, notFound: MutableSet<String>? = null,
-                         stillOn: () -> Boolean = { true }): SaveCleanup {
+                         stillOn: () -> Boolean = { true }, onHeld: () -> Unit = {}): SaveCleanup {
         if (ids.isEmpty()) return SaveCleanup.NOTHING
         return try {
             if (!stillOn()) return SaveCleanup.LEFT
             val trashed = writer.trash(ids, workspaceId)
+            // A family manager's pause: nothing ended, the rest is left for after the hold.
+            if (ids.any { trashed[it] == SaveItemFate.HELD }) { onHeld(); return SaveCleanup.LEFT }
             notFound?.addAll(ids.filter { trashed[it] == SaveItemFate.GONE })
             val fates = ids.map { trashed[it] ?: SaveItemFate.REFUSED }
             if (fates.all { it == SaveItemFate.DENIED }) return SaveCleanup.NO_ACCESS
@@ -584,6 +598,7 @@ object SaveRuns {
             if (!writer.mayPurge(workspaceId)) return SaveCleanup.TRASHED
             if (!stillOn()) return SaveCleanup.LEFT
             val purged = writer.purge(inTrash, workspaceId)
+            if (inTrash.any { purged[it] == SaveItemFate.HELD }) { onHeld(); return SaveCleanup.LEFT }
             if (inTrash.all { purged[it] == SaveItemFate.DONE || purged[it] == SaveItemFate.GONE }) SaveCleanup.DELETED else SaveCleanup.LEFT
         } catch (error: Exception) {
             SaveCleanup.LEFT
@@ -1068,7 +1083,7 @@ class SaveRun private constructor(
         val maybe = synchronized(lock) { mayExist.toSet() }
         val cleaned = SaveRuns.clean(held, writer, journal, versions, sent, out, asked, maybe)
         val total = keptBefore + cleaned.kept
-        val done = SaveRunStopped(reason, SaveRuns.words(reason, shared, failure, total, cleaned.uncertain, cleaned.remains), cleaned.cleanup, total,
+        val done = SaveRunStopped(reason, SaveRuns.words(reason, shared, failure, total, cleaned.uncertain, cleaned.remains, cleaned.held), cleaned.cleanup, total,
             cleaned.uncertain)
         future.complete(done)
         return done
@@ -1253,6 +1268,8 @@ class VaultSaveWriter(private val vault: Vault, private val storage: () -> Stora
             val answers = try {
                 vault.api.trashBatch(workspaceId, batch)
             } catch (error: Exception) {
+                // A family manager's pause is not lost access: kept for after the hold.
+                if (error is ApiError && error.status == 403 && error.code == "held") { batch.forEach { fates[it] = SaveItemFate.HELD }; continue }
                 if (error is NotFound || (error is ApiError && error.status == 403)) { batch.forEach { fates[it] = SaveItemFate.DENIED }; continue }
                 throw error
             }
@@ -1282,7 +1299,8 @@ class VaultSaveWriter(private val vault: Vault, private val storage: () -> Stora
         } catch (error: NotFound) {
             SaveItemFate.GONE
         } catch (error: ApiError) {
-            if (error.status == 403) SaveItemFate.DENIED else if (error.status == 0 || error.status >= 500) throw error else SaveItemFate.REFUSED
+            if (error.status == 403 && error.code == "held") SaveItemFate.HELD
+            else if (error.status == 403) SaveItemFate.DENIED else if (error.status == 0 || error.status >= 500) throw error else SaveItemFate.REFUSED
         }
     }
 

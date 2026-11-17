@@ -22,6 +22,11 @@ public enum DriveAPIError: Error, LocalizedError, Sendable {
      * which is signed again and retried.
      */
     case forbidden(String)
+    /*
+     * A family manager paused this person's changes for now (403 `held`): refused until the hold lifts, never retried
+     * meanwhile, and nothing about access ended (never taken for `forbidden`'s lost access).
+     */
+    case held(String)
 
     public var errorDescription: String? {
         switch self {
@@ -30,7 +35,7 @@ public enum DriveAPIError: Error, LocalizedError, Sendable {
         // Out of room, in the app's own words: the server's mention plans, which the app never points to
         // (App Review 3.1.3(f)). Android says the same.
         case .server(402, _), .server(413, _), .server(507, _): return Self.noRoom
-        case .server(_, let message), .notFound(let message), .trashed(let message), .rotating(let message), .stale(let message), .conflicted(let message), .forbidden(let message): return message
+        case .server(_, let message), .notFound(let message), .trashed(let message), .rotating(let message), .stale(let message), .conflicted(let message), .forbidden(let message), .held(let message): return message
         case .transport: return "We couldn’t reach HushOS. Check your connection, then try again."
         }
     }
@@ -146,6 +151,7 @@ public final class DriveAPI: Sendable {
             if status == 409, body?["code"] as? String == "conflict", (body?["data"] as? [String: Any])?["conflicted"] as? Bool == true {
                 throw DriveAPIError.conflicted(message ?? "This file changed while it was uploading.")
             }
+            if status == 403, body?["code"] as? String == "held" { throw DriveAPIError.held(message ?? "A group manager has paused changes to this folder.") }
             if status == 403, body?["code"] is String { throw DriveAPIError.forbidden(message ?? "You can’t change this.") }
             if status == 409, body?["code"] as? String == "stale" { throw DriveAPIError.stale(message ?? "This item changed since you last saw it. Refresh and try again.") }
             throw DriveAPIError.server(status, message ?? DriveAPIError.noReply)
@@ -360,7 +366,8 @@ public final class DriveAPI: Sendable {
      * such upload), finished (it landed), finishing (still completing: ask again), denied (not this
      * person's any more), or unknown (no answer).
      */
-    public enum AbortFate: Sendable, Equatable { case aborted, gone, finished, finishing, denied, unknown }
+    /* `held`: a family manager paused changes (403 `held`): nothing ended, asked again after the hold. */
+    public enum AbortFate: Sendable, Equatable { case aborted, gone, finished, finishing, denied, held, unknown }
 
     /* An older server's abort refusals (packages/drive/src/server.ts abortUpload), before it named them in `data.upload`. */
     static let abortFinishing = "This upload is finishing and cannot be cancelled."
@@ -372,7 +379,10 @@ public final class DriveAPI: Sendable {
         switch status {
         case 200 ..< 300: return .aborted
         case 404: return .gone
-        case 401, 403: return .denied
+        case 401: return .denied
+        case 403:
+            let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            return body?["code"] as? String == "held" ? .held : .denied
         case 409:
             let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             if let upload = (body?["data"] as? [String: Any])?["upload"] as? String {

@@ -34,8 +34,11 @@ import {
     SaveRefused,
     abandonRuns,
     CREATION_SETTLE_MS,
+    abortFateOf,
     askAbort,
     cleanUpInterrupted,
+    deniedWhole,
+    heldNow,
     interruptedRuns,
     quietlySettled,
     keepInterrupted,
@@ -446,6 +449,8 @@ function world(
         busy: new Set<string>(),
         offline: false,
         denied: false,
+        /* A family manager paused this person's changes: every write refused `held` (403). */
+        held: false,
         /* Items in a folder, for lookFolder. */
         items: new Map<string, number>(),
     };
@@ -501,6 +506,7 @@ function world(
         },
         abortUpload: async (_ws, uploadId) => {
             if (server.offline) return 'unknown';
+            if (server.held) return 'held';
             if (server.denied) return 'denied';
             server.aborted.push(uploadId);
             if (server.finished.has(uploadId)) return 'finished';
@@ -510,7 +516,8 @@ function world(
             if (server.offline) throw new Error('offline');
             const fates = new Map<string, ItemFate>();
             for (const id of ids) {
-                if (server.denied) fates.set(id, 'denied');
+                if (server.held) fates.set(id, 'held');
+                else if (server.denied) fates.set(id, 'denied');
                 else if (server.refuse.has(id)) fates.set(id, 'refused');
                 else if (server.live.delete(id)) {
                     server.trash.add(id);
@@ -1680,6 +1687,45 @@ describe('a save run', () => {
         answer();
         await finishing;
         expect(w.server.live.has('node-a')).toBe(true);
+    });
+
+    test('a family manager’s pause (403 held) keeps the row and says so; the open after the hold lifts cleans up', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const saved = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        w.land(w.ids()[0]!, 'node-a', 'up-a');
+        await saved;
+        w.server.held = true;
+        const stopped = await run.cancel();
+        expect(stopped.cleanup).toBe('left');
+        expect(stopped.message).toBe(
+            'Cancelled. Changes are paused in this family, so what was made is still there. You’ll be asked about it next time.',
+        );
+        expect(w.server.live.has('node-a')).toBe(true);
+        // Never taken for lost access: the row stays for the next open.
+        const [row] = await interruptedRuns({ ...w.deps, isLive: async () => false });
+        expect(row?.nodeIds).toEqual(['node-a']);
+        expect(await cleanUpInterrupted(w.deps, row!)).toBe('left');
+        expect(w.runs.rows.size).toBe(1);
+        // The hold lifts: the next open removes it and the row goes.
+        w.server.held = false;
+        expect(await cleanUpInterrupted(w.deps, row!)).toBe('deleted');
+        expect(w.server.purged.has('node-a')).toBe(true);
+        expect(w.runs.rows.size).toBe(0);
+    });
+
+    test('a held answer is not lost access: its own fate, never denied', () => {
+        const held = new DriveApiError(
+            'A group manager has paused changes to this folder.',
+            'held',
+            403,
+        );
+        expect(heldNow(held)).toBe(true);
+        expect(deniedWhole(held)).toBe(false);
+        expect(abortFateOf(held)).toBe('held');
+        expect(deniedWhole(new DriveApiError('No.', 'forbidden', 403))).toBe(true);
     });
 
     test('Keep after a sign-out asks nothing more and changes nothing in that account’s journal', async () => {
