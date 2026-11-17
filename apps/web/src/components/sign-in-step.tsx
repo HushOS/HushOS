@@ -57,8 +57,7 @@ export function SignInStep({
     // and takes what was typed off the screen: a recovery phrase never stays on a locked page.
     useEffect(
         () => {
-            // Not a reason to treat an answer still out as left: this also fires when the answer
-            // itself opens the session (the lock state changes then too).
+            // No `left` here: `onOver` unmounts the step, and its cleanup marks it left.
             const locked = whenBrowserLocks(() => {
                 setDraft(emptyDraft(challenge.methods));
                 onOver('This browser was locked. Sign in again.');
@@ -142,6 +141,8 @@ export function SignInStep({
             await settle();
             // The sheet that opened by itself was answered meanwhile: signed in already.
             if (signedIn.current) return;
+            // Its own end cleared the busy state it had set once sent: this press is still going.
+            setPending(true);
         }
         // Busy from the moment the answer goes, whoever sent it: an automatic passkey answered on
         // its sheet leaves nothing on the page to press while the server judges it (Start again
