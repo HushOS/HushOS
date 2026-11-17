@@ -142,7 +142,12 @@ export function StepFields({
                     {note}
                 </p>
             )}
-            <div className="flex flex-col gap-1.5" hidden={choosing}>
+            {/*
+             * Put away while the other ways are chosen from only where the form's button goes with
+             * it (`actions`, the sign-in page). A dialog's own button stays pressable, and what it
+             * checks (an empty code, say) must stay in sight.
+             */}
+            <div className="flex flex-col gap-1.5" hidden={choosing && Boolean(actions)}>
                 {!bare && (
                     <div className="flex items-baseline justify-between gap-3">
                         {typed ? (

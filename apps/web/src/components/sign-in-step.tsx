@@ -95,6 +95,8 @@ export function SignInStep({
     // until it has (the sign-in takes one answer at a time).
     const auto = useRef<Promise<void> | null>(null);
     const signedIn = useRef(false);
+    // The step was left (Start again, or the page moved on): whatever answer is still out says nothing.
+    const left = useRef(false);
     async function settle() {
         while (auto.current) {
             // Asked again until it ends: the sheet may not have opened yet when first asked.
@@ -103,6 +105,7 @@ export function SignInStep({
         }
     }
     useEffect(() => {
+        left.current = false;
         if (started !== challenge.token && methods[0] === 'webauthn') {
             started = challenge.token;
             const running = submit(true).finally(() => {
@@ -111,6 +114,7 @@ export function SignInStep({
             auto.current = running;
         }
         return () => {
+            left.current = true;
             void settle();
         };
         // Once, as the step opens.
@@ -141,6 +145,8 @@ export function SignInStep({
             // Kept busy while what signing in opens takes over.
             await onSignedIn();
         } catch (cause) {
+            // Left meanwhile: the sign-in this answered is gone, and the page shows the password now.
+            if (left.current) return;
             // The sheet the page opened by itself, closed or refused: nothing went wrong yet.
             if (quiet && cause instanceof StepFailure && cause.reason === 'wrong') return;
             cue('error');
@@ -166,6 +172,7 @@ export function SignInStep({
     }
     const wide = size === 'lg';
     const startOver = () => {
+        left.current = true;
         authClient.cancelStep(owner);
         onOver('');
     };
