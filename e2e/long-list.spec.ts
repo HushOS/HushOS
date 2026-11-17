@@ -89,6 +89,45 @@ async function trashBySync(p: Page, names: string[]) {
     }, names);
 }
 
+/*
+ * Makes `make` as folders and moves `trash` to the Trash in the folder on screen, in one sync:
+ * the tab's change polling waits while it happens (it pauses while the page is hidden), so the
+ * next poll brings both at once, as one refresh of the listing.
+ */
+async function syncTogether(p: Page, { make, trash }: { make: string[]; trash: string[] }) {
+    await p.evaluate(
+        async ({ make, trash }) => {
+            type Drive = {
+                clientFor(): {
+                    listFolder(
+                        id: string,
+                    ): Promise<{ folder: unknown; children: { name: string }[] }>;
+                    createFolderPath(parent: unknown, path: string[]): Promise<unknown>;
+                };
+                trashNodes(nodes: unknown[]): Promise<unknown>;
+            };
+            const module = '/src/lib/drive.ts';
+            const drive = (await import(/* @vite-ignore */ module)) as Drive;
+            const id = /\/app\/drive\/f\/([^/?#]+)/.exec(location.pathname)![1]!;
+            Object.defineProperty(document, 'visibilityState', {
+                configurable: true,
+                get: () => 'hidden',
+            });
+            try {
+                // A poll already on its way lands before anything changes.
+                await new Promise((resolve) => setTimeout(resolve, 1_500));
+                const client = drive.clientFor();
+                const { folder, children } = await client.listFolder(id);
+                for (const name of make) await client.createFolderPath(folder, [name]);
+                await drive.trashNodes(children.filter((node) => trash.includes(node.name)));
+            } finally {
+                delete (document as { visibilityState?: unknown }).visibilityState;
+            }
+        },
+        { make, trash },
+    );
+}
+
 /* Rows the table draws past each edge of the screen (virtual-list.tsx's overscan). */
 const OVERSCAN = 8;
 /* The index of the first row whose middle is on screen, from its aria-rowindex. */
@@ -488,6 +527,36 @@ test('rows that leave above the screen at the foot of the list leave the last ro
     });
     await settledScroll(page);
     await expect(row(page, Number(name.slice(4)))).toBeInViewport();
+    const after = await under(page);
+    expect(after?.name).toBe(still!.name);
+    expect(Math.abs(after!.top - still!.top)).toBeLessThanOrEqual(1);
+    expect(await duplicates(page)).toBe(0);
+});
+
+test('as many rows arriving above the screen as leave below it, in one sync, leave the rows on it in place', async () => {
+    await reset(page);
+    const before = await rowCount(page);
+    // Three rows at the foot of the list, to leave below the screen.
+    await seedFolders(page, ['zz-0', 'zz-1', 'zz-2'], { reload: false });
+    await expect(page.locator('table')).toHaveAttribute('aria-rowcount', String(before + 3), {
+        timeout: 90_000,
+    });
+    // The middle of the list: the top, where three arrive, and the foot, where three leave,
+    // both well off screen.
+    await scrollToRow(page, Math.floor((before + 3 - 1) / 2) - 5);
+    await settledScroll(page);
+    expect(await firstOnScreen(page)).toBeGreaterThan(2 * OVERSCAN);
+    const still = await under(page);
+    expect(still).not.toBeNull();
+    const held = page.locator('tbody [data-node-id]').filter({
+        has: page.locator('[data-row-name]').getByText(still!.name!, { exact: true }),
+    });
+    const index = Number(await held.getAttribute('aria-rowindex'));
+    await syncTogether(page, { make: ['aa-3', 'aa-4', 'aa-5'], trash: ['zz-0', 'zz-1', 'zz-2'] });
+    // The count is the same; the row that was under the point is three further down the list.
+    await expect(held).toHaveAttribute('aria-rowindex', String(index + 3), { timeout: 90_000 });
+    await expect(page.locator('table')).toHaveAttribute('aria-rowcount', String(before + 3));
+    await settledScroll(page);
     const after = await under(page);
     expect(after?.name).toBe(still!.name);
     expect(Math.abs(after!.top - still!.top)).toBeLessThanOrEqual(1);

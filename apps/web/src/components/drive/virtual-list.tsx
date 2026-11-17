@@ -235,8 +235,9 @@ export function useVirtualRows({
  * first after it that is still listed if it left too, is put back at the top, as far into its
  * line as it was. The target is absolute, from the offset before the change, so a browser that
  * has already pulled the scroll in (rows removed at the bottom of the list) is not moved twice.
- * A new order (sorted again, or a rename; the count stays) keeps the scroll as it is, and so
- * does a scroll in progress: writing it then would stop a fling dead under the finger.
+ * A pure reorder (sorted again, or a rename: the same items, the first one's neighbours
+ * changed) keeps the scroll as it is, and so does a scroll in progress: writing it then would
+ * stop a fling dead under the finger.
  */
 function useKeepInPlace(
     virtualizer: ListVirtualizer,
@@ -251,33 +252,44 @@ function useKeepInPlace(
         const list = virtualizer.scrollElement;
         if (!before || !list) return;
         const reshaped = before.perLine !== perLine || before.size !== size;
-        const relisted = before.ids !== ids && before.ids.length !== ids.length;
+        const relisted = before.ids !== ids;
         if (!reshaped && !relisted) return;
         // The offset as it was before this change: scroll events have not reported since.
         const was = virtualizer.scrollOffset ?? 0;
         if (was <= 0 || virtualizer.isScrolling || before.size <= 0) return;
         const line = Math.floor(was / before.size);
         const into = (was - line * before.size) / before.size;
-        let item = line * before.perLine;
-        let index = item;
+        const top = line * before.perLine;
+        let index = top;
         if (relisted) {
             // The first item from the top of the screen down that is still listed.
             const where = new Map(ids.map((id, at) => [id, at]));
-            index = -1;
-            for (; item < before.ids.length && index < 0; item++)
-                index = where.get(before.ids[item]!) ?? -1;
-            if (index < 0) return;
+            let from = top;
+            while (from < before.ids.length && !where.has(before.ids[from]!)) from++;
+            if (from >= before.ids.length) return;
+            index = where.get(before.ids[from]!)!;
+            // A pure reorder (sorted again, a rename): the same items, and the first one's
+            // neighbours changed with it. It keeps the scroll, whatever moved; anything else
+            // (items in and out, even as many in as out) keeps the first item where it was.
+            const same =
+                before.ids.length === ids.length && before.ids.every((id) => where.has(id));
+            const neighbours =
+                before.ids[from - 1] === ids[index - 1] && before.ids[from + 1] === ids[index + 1];
+            if (same && !neighbours) {
+                if (!reshaped) return;
+                index = top;
+            }
         }
         const target = (Math.floor(index / perLine) + into) * size;
         const scroller = scrollerOf(list);
         const now = offsetOf(list, scroller);
-        const top = scroller instanceof Window ? scroller.scrollY : scroller.scrollTop;
+        const scrolled = scroller instanceof Window ? scroller.scrollY : scroller.scrollTop;
         const room =
             scroller instanceof Window
                 ? document.documentElement.scrollHeight - scroller.innerHeight
                 : scroller.scrollHeight - scroller.clientHeight;
-        const next = Math.max(0, Math.min(room, top + target - now));
-        if (Math.abs(next - top) >= 1) scroller.scrollTo({ top: next });
+        const next = Math.max(0, Math.min(room, scrolled + target - now));
+        if (Math.abs(next - scrolled) >= 1) scroller.scrollTo({ top: next });
     });
 }
 
