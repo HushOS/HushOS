@@ -634,6 +634,14 @@ Design: `docs/optional-verification.md` sections 2 and 6. Twin of iOS's `Vault+T
     - `TestListenableWorkerBuilder` takes the request `uploadRequest` builds.
     - The test WorkManager needs a synchronous task executor too, or the worker's foreground notice blocks on its own query.
 
+### File tools harness
+
+- `data/ToolRuns.kt`: what file tools will run on (docs/file-tools-design.md, section 6). No screen uses it yet.
+- `ToolRuns.run` takes one run at a time (a fair `Mutex`; a second waits, told `Waiting(behind)`), runs the work on a thread of its own with an 8 MiB stack under the core's `RunControl`, polls the watchdog each second and cancels the control when the calling coroutine is cancelled.
+- A thread can't be killed: cancel and the watchdog end the run for the caller at once, and the work stops at its next core call (read, produce, progress, check). The thread frees the slot when it returns.
+- `Vault.toolReader` gives the core's `VersionReader` over a version, each chunk's range fetched through `StoreSource` with the downloads' retries and address renewal.
+- Tests: `ToolRunsTest`.
+
 ## Saves from other apps (write-backs)
 
 Another app's saves of one file through the provider are coalesced in `data/WriteBacks.kt`. Test: `FilesSaveOrderTest`.

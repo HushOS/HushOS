@@ -14,6 +14,9 @@
         "vite.config.ts",
         "vitest.config.ts",
         "nitro.config.ts",
-        "server/**/*.ts"
+        "server/**/*.ts",
+        "scripts/worker-code.ts",
+        "scripts/worker-code.test.ts",
+        "scripts/check-worker-code.ts"
     ]
 }

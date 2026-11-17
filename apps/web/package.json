@@ -6,7 +6,7 @@
     "type": "module",
     "scripts": {
         "dev": "bun --bun vite --strictPort",
-        "build": "bun --bun vite build && bun scripts/check-dev-only.ts && bun scripts/check-server-deps.ts",
+        "build": "bun --bun vite build && bun scripts/check-dev-only.ts && bun scripts/check-server-deps.ts && bun scripts/check-worker-code.ts",
         "start": "NODE_ENV=production PORT=${PORT:-5173} bun .output/server/index.mjs",
         "typecheck": "tsc --noEmit",
         "test": "vitest run",

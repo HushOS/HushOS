@@ -145,8 +145,9 @@ Editing's image editor (milestone 3: crop, annotate, redaction, removing locatio
     - The image worker: `wasm-vips` and the HEIC decoder, shared with editing.
 - **They hold no keys.** The crypto worker keeps decrypting; a tools worker asks the page for byte ranges over a `MessagePort`, which the page answers from a `FileReader`, the pattern `serveMedia` uses for the player page.
 - **One run at a time per tab.** A second run waits in the transfers panel ("Waiting for the extraction to finish").
-- **Cancel terminates the worker**, which frees its memory and its WebAssembly heap at once.
-- **A watchdog.** A worker that reports no progress for 30 seconds is terminated and the run fails with "This file couldn't be processed." A malicious PDF or archive that loops a parser costs half a minute, not a hung tab.
+- **Cancel terminates the worker**, which frees its memory and its WebAssembly heap. An idle worker stops at once; Chromium lets one busy in a loop run for up to two seconds after `terminate()` before it forcibly stops it (measured in `e2e/tools-harness.spec.ts`). Results the page still holds are detached on cancel, so a reference kept anywhere holds nothing.
+- **A watchdog.** A worker that reports no progress for 30 seconds is terminated and the run fails with "This file couldn't be processed." A malicious PDF or archive that loops a parser costs half a minute, not a hung tab. Time the worker spends waiting on the page (a range being fetched, a full upload budget) is not counted, and a range read does not start the clock over.
+- **The harness** is `apps/web/src/lib/tools/` (`run.ts` on the page, `worker.ts` in each tools worker); `apps/web/scripts/check-worker-code.ts` fails the build if a shipped worker, or a chunk it imports, calls `eval` or `Function`.
 - **Same-origin module workers**, bundled by Vite: no `blob:` or `data:` workers in new code (see CSP below).
 
 ### The large-file card
@@ -355,6 +356,7 @@ iOS and Android come later, on the same rules, limits and save contract.
 - **Images.** The phones' own decoders (ImageIO on iOS, ImageDecoder on Android 9 and later) read HEIC, so neither app ships libheif.
 - **PDF.** iOS has PDFKit for merge, split and rotate. Android renders with `PdfRenderer` but needs a writer, such as the Rust `lopdf` crate (MIT) in the core.
 - **Limits** are lower on phones where memory is: the large-file card's thresholds take the device's memory into account.
+- **The run harness** (built with step 3): the core's `VersionReader` (`crates/hushos-core/src/tools.rs`) reads a version by range through the app's `ObjectSource`, keeping two chunks in memory, and `RunControl` holds cancel, the watchdog's clock and the 512 MiB budget. `ToolRuns` in each app (`HushOSKit/ToolRuns.swift`, `data/ToolRuns.kt`) runs one run at a time on a thread of its own. A thread cannot be terminated: a cancel or a timeout ends the run for the caller at once and stops the work at its next read, produce or progress call, and the next run starts only once that thread has returned.
 
 ## 7. Tests and verification
 

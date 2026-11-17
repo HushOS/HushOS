@@ -674,6 +674,14 @@ See `docs/identity-pq-design.md`.
 - A queue folder with no note and no transfer goes when its claimant is gone, or after a day (`sweepOrphans`, run by the app's queue).
 - Adopting a note writes the queue's records first, and only then removes the note and the part files it read (`ShareHandoff.adopt`).
 
+### File tools harness
+
+- `HushOSKit/ToolRuns.swift`: what file tools will run on (docs/file-tools-design.md, section 6). No screen uses it yet.
+- `ToolRuns.run` takes one run at a time (a second waits, told `waiting(behind:)`), runs the work on a `Thread` of its own with an 8 MiB stack under the core's `RunControl`, polls the watchdog each second and cancels the control when the calling task is cancelled.
+- A thread can't be killed: cancel and the watchdog end the run for the caller at once, and the work stops at its next core call (read, produce, progress, check). The next run starts only when that thread has returned.
+- `Vault.toolReader` gives the core's `VersionReader` over a version, fetching each chunk's range through `StoreSource` (blocking the run's thread, never a cooperative one) with the downloads' retries and address renewal.
+- Tests: `ToolRunsTests`.
+
 ## Files app (File Provider)
 
 - `FileProviderExtension` is replicated (`NSFileProviderReplicatedExtension`).
