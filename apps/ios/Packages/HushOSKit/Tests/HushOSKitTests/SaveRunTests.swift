@@ -113,6 +113,7 @@ actor FakeWriter: SaveRunWriter {
     func startStop() { stopStarted = true }
     /* The folders whose creation lost its answer, made now. */
     func makeLater() { live.formUnion(later) }
+    func makeLive(_ id: String) { live.insert(id) }
     func set(namesFail: Bool) { self.namesFail = namesFail }
     func set(uploading: @escaping @Sendable () async -> Void) { self.uploading = uploading }
     func uploadResult(_ bytes: Data, name: String, mime: String?, in folder: Opened, replacing: Opened?, startedFrom: String?, thumbnail: Data?,
@@ -167,6 +168,7 @@ actor FakeWriter: SaveRunWriter {
         if let freshFile { return freshFile }
         return file
     }
+    func listed(_ id: String, in folder: Opened) async throws -> Opened? { live.contains(id) ? opened(id, parent: folder.id) : nil }
     func keyChangePause(_ workspaceId: String, attempt: Int) async throws {}
     func abortUpload(_ uploadId: String, in workspaceId: String) async -> DriveAPI.AbortFate {
         if offline { return .unknown }
@@ -838,12 +840,12 @@ let own = SaveSources.ownWriting
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("save-runs-\(UUID().uuidString).json")
         let a = AccountOwner(userId: "a", origin: "https://drive.test")
         let now = SignedInBox(a)
-        let journal = SaveRunJournal(url: url, epoch: SaveRunJournal.Epoch(), owner: a, signedIn: { now.value })
+        let journal = SaveRunJournal(url: url, epoch: SaveRunJournal.Epoch(), owner: a, signedIn: { .account(now.value) })
         try journal.put(SaveRunRow(id: "run-a", workspaceId: "ws-a", nodeIds: ["node-a"], uploadIds: [], at: Date(), launch: "an-earlier-launch"))
         now.value = nil
         #expect(journal.list().isEmpty)
         #expect(FileManager.default.fileExists(atPath: url.path))
-        let nobody = SaveRunJournal(url: url, epoch: SaveRunJournal.Epoch(), owner: nil, signedIn: { nil })
+        let nobody = SaveRunJournal(url: url, epoch: SaveRunJournal.Epoch(), owner: nil, signedIn: { .account(nil) })
         #expect(nobody.list().isEmpty)
         #expect(FileManager.default.fileExists(atPath: url.path))
         now.value = a
@@ -859,11 +861,11 @@ let own = SaveSources.ownWriting
         let a = AccountOwner(userId: "a", origin: "https://drive.test")
         let b = AccountOwner(userId: "b", origin: "https://drive.test")
         let now = SignedInBox(a)
-        let journalA = SaveRunJournal(url: url, epoch: SaveRunJournal.Epoch(), owner: a, signedIn: { now.value })
+        let journalA = SaveRunJournal(url: url, epoch: SaveRunJournal.Epoch(), owner: a, signedIn: { .account(now.value) })
         let rowA = SaveRunRow(id: "run-a", workspaceId: "ws-a", nodeIds: ["node-a"], uploadIds: [], at: Date(), launch: "an-earlier-launch")
         try journalA.put(rowA)
         now.value = b
-        let journalB = SaveRunJournal(url: url, epoch: SaveRunJournal.Epoch(), owner: b, signedIn: { now.value })
+        let journalB = SaveRunJournal(url: url, epoch: SaveRunJournal.Epoch(), owner: b, signedIn: { .account(now.value) })
         let rowB = SaveRunRow(id: "run-b", workspaceId: "ws-b", nodeIds: ["node-b"], uploadIds: [], at: Date(), launch: "an-earlier-launch")
         try journalB.put(rowB)
         #expect(throws: SaveUnrecorded.self) { try journalA.put(rowA) }
@@ -871,6 +873,96 @@ let own = SaveSources.ownWriting
         journalA.dropDone()
         #expect(journalA.list().isEmpty)
         #expect(journalB.list().map(\.id) == ["run-b"])
+    }
+
+    /*
+     * A folder whose creation was on its way when the app ended: the row says so, the next open doesn't find it and
+     * keeps the row, the folder then appears and the open after removes it. Past the creation window, one still not
+     * there was never made.
+     */
+    @Test func aFolderOnItsWayWhenTheAppEndedKeepsItsRowUntilItAppearsThenGoes() async throws {
+        let writer = FakeWriter()
+        let gate = AsyncGate()
+        await writer.set(making: { await gate.wait() })
+        await writer.set(createLater: true)
+        let rows = journal()
+        let start = Date(timeIntervalSince1970: 1_000)
+        let run = try await SaveRun.start(writer: writer, targets: [opened("f")], results: [], journal: rows, now: { start })
+        let making = Task { try await run.folder("Out", sources: own) }
+        try await Task.sleep(for: .milliseconds(50))
+        // The app ends here: the row on disk is all the next open has.
+        let row = try #require(rows.list().first)
+        #expect(row.uncertain == ["made-Out": start])
+        #expect(await SaveRuns.cleanUp(row, writer: writer, journal: journal(), now: start.addingTimeInterval(60)) == .left)
+        await writer.makeLive("made-Out")
+        #expect(await SaveRuns.cleanUp(row, writer: writer, journal: journal(), now: start.addingTimeInterval(120)) == .deleted)
+        #expect(await writer.purged == ["made-Out"])
+        #expect(await SaveRuns.cleanUp(row, writer: writer, journal: journal(), now: start.addingTimeInterval(SaveRuns.creationWindow)) == .nothing)
+        await gate.open()
+        _ = try? await making.value
+    }
+
+    /*
+     * A new version someone else beat whose reservation the abort didn't release: its id stays in the row, finish
+     * asks again and keeps a row of its own with no nodes, never offered, that the next open settles.
+     */
+    @Test func aStaleVersionWhoseReservationWasNotReleasedIsSettledLater() async throws {
+        let writer = FakeWriter()
+        await writer.answer { n in throw SaveStale(currentVersionId: "v-theirs", unreleased: "up-\(n)") }
+        let rows = journal()
+        let doc = opened("doc", parent: "f", version: "v1")
+        let run = try await SaveRun.start(writer: writer, targets: [doc], results: [], journal: rows)
+        let saved = try await run.version(Data([1]), of: doc, in: opened("f"), startedFrom: "v1", sources: own)
+        #expect(saved == .stale(currentVersionId: "v-theirs"))
+        #expect(rows.list().first?.uploadIds == ["up-1"])
+        await writer.set(offline: true)
+        try await run.finish()
+        let left = try #require(rows.list().first)
+        #expect(left.nodeIds.isEmpty && left.uploadIds == ["up-1"])
+        await writer.set(offline: false)
+        await SaveRuns.settleUploads(writer: writer, journal: rows, launch: "a-later-launch")
+        #expect(await writer.aborted.contains("up-1"))
+        #expect(rows.list().isEmpty)
+    }
+
+    /* A key change's pause cut short (the task cancelled) stops the run and removes what it made, as any failure does. */
+    @Test func aPauseCutShortStopsTheRunAndCleansUp() async throws {
+        let writer = FakeWriter()
+        await writer.answer { _ in throw DriveAPIError.rotating("Finishing a key change…") }
+        let rows = journal()
+        let run = try await SaveRun.start(writer: writer, targets: [opened("fam")], results: [], journal: rows, pause: { _ in throw CancellationError() })
+        _ = try await run.folder("Out", sources: own)
+        do {
+            _ = try await run.file(Data([1]), name: "a", mime: nil, sources: own)
+            Issue.record("the run went on after its pause was cut short")
+        } catch let stopped as SaveRunStopped {
+            #expect(stopped.reason == .failed)
+        }
+        #expect(await writer.purged == ["made-Out"])
+        #expect(rows.list().isEmpty)
+    }
+
+    /* A folder creation answered 409 for its own id that is there is the folder: the run goes on. */
+    @Test func aCreationAnswered409ForItsOwnIdThatIsThereIsTheFolder() async throws {
+        let writer = FakeWriter()
+        await writer.set(refuseCreation: .server(409, "An item with this id already exists."))
+        await writer.set(making: { await writer.makeLive("made-Out") })
+        let rows = journal()
+        let run = try await SaveRun.start(writer: writer, targets: [opened("f")], results: [], journal: rows)
+        let out = try await run.folder("Out", sources: own)
+        #expect(out.id == "made-Out")
+        try await run.finish()
+        #expect(await writer.live.contains("made-Out"))
+        #expect(rows.list().isEmpty)
+    }
+
+    /* A keychain read that failed is no sign-out: the journal of the account opened signed in still reads and writes. */
+    @Test func aKeychainReadThatFailedIsNotASignOut() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("save-runs-\(UUID().uuidString).json")
+        let a = AccountOwner(userId: "a", origin: "https://drive.test")
+        let journal = SaveRunJournal(url: url, epoch: SaveRunJournal.Epoch(), owner: a, signedIn: { .unreadable })
+        try journal.put(SaveRunRow(id: "run-a", workspaceId: "ws-a", nodeIds: ["node-a"], uploadIds: [], at: Date(), launch: "an-earlier-launch"))
+        #expect(journal.list().map(\.id) == ["run-a"])
     }
 
     /* An offline clean-up of a file whose completion was never sent doesn't say it may still be there. */

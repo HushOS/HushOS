@@ -32,6 +32,7 @@ import {
     RunStopped,
     SaveRefused,
     abandonRuns,
+    CREATION_WINDOW_MS,
     askAbort,
     cleanUpInterrupted,
     interruptedRuns,
@@ -527,6 +528,7 @@ function world(
             return fates;
         },
         mayPurge: async () => options.member ?? true,
+        findChild: async (_parent, id) => (server.live.has(id) ? folder(id) : null),
         current: () => session,
     };
     /* The queue began an upload: the server holds it open, and the run's row learns of it. */
@@ -817,6 +819,39 @@ describe('a save run', () => {
         expect(w.runs.rows.get(run.id)!.uploadIds).toEqual([]);
         await run.finish();
         expect(w.server.trash.size).toBe(0);
+        expect(w.runs.rows.size).toBe(0);
+    });
+
+    test('a stale version whose reservation the abort didn’t release keeps its id: finish asks again, then a row of its own the next open settles quietly', async () => {
+        const w = world();
+        const doc = { ...folder('doc'), kind: 'file', parentId: 'f' } as DriveNode;
+        const run = await startRun(w.deps, { targets: [doc], results: [{ size: 3 }] });
+        const saved = run.version({
+            file: doc,
+            folder: folder('f'),
+            startedFrom: 'v1',
+            bytes: bytes(3),
+            ...own,
+        });
+        await tick();
+        const [id] = w.ids();
+        w.begin(id!, 'up-1', 'doc');
+        w.failWith(id!, 'stale', { stale: { currentVersionId: 'v-theirs', released: false } });
+        await expect(saved).resolves.toEqual({ status: 'stale', currentVersionId: 'v-theirs' });
+        expect(w.runs.rows.get(run.id)!.uploadIds).toEqual(['up-1']);
+        // Still no answer at finish: the saved results stay, and a row with no nodes keeps the id.
+        w.server.offline = true;
+        await run.finish();
+        expect(w.runs.rows.get(run.id)).toMatchObject({ nodeIds: [], uploadIds: ['up-1'] });
+        w.server.offline = false;
+        abandonRuns();
+        const offered = await interruptedRuns({
+            runs: w.runs,
+            isLive: async () => false,
+            abortUpload: w.deps.abortUpload,
+        });
+        expect(offered).toEqual([]);
+        expect(w.server.aborted).toContain('up-1');
         expect(w.runs.rows.size).toBe(0);
     });
 
@@ -1429,6 +1464,55 @@ describe('a save run', () => {
         expect(w.server.purged.has('twice')).toBe(true);
     });
 
+    test('a folder whose answer was lost when the app ended keeps its row at the next open until the folder appears, then goes', async () => {
+        const w = world();
+        let clock = 1_000;
+        w.deps.now = () => clock;
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        w.deps.makeFolder = async (_parent, _name, _signAs, minted) => {
+            await minted('slow');
+            // The app ends with the creation on its way: no answer ever comes back here.
+            return new Promise<DriveNode>(() => {});
+        };
+        void run.folder('Out', own);
+        await tick();
+        await tick();
+        expect(w.runs.rows.get(run.id)!.uncertain).toEqual([{ id: 'slow', at: 1_000 }]);
+        abandonRuns();
+        // The next open, before the server made it: not found, and the row stays.
+        const [row] = await interruptedRuns({ runs: w.runs, isLive: async () => false });
+        expect(await cleanUpInterrupted(w.deps, row!)).toBe('left');
+        expect(w.runs.rows.size).toBe(1);
+        // It lands; the open after that removes it and the row goes.
+        w.server.live.add('slow');
+        expect(await cleanUpInterrupted(w.deps, row!)).toBe('deleted');
+        expect(w.server.purged.has('slow')).toBe(true);
+        expect(w.runs.rows.size).toBe(0);
+
+        // Past the creation window a folder still not there was never made: the row goes.
+        await w.runs.put(row!);
+        clock += CREATION_WINDOW_MS;
+        w.server.purged.clear();
+        expect(await cleanUpInterrupted(w.deps, row!)).toBe('nothing');
+        expect(w.runs.rows.size).toBe(0);
+    });
+
+    test('a folder creation answered 409 for its own id that is there is the folder: the run goes on', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        w.deps.makeFolder = async (_parent, _name, _signAs, minted) => {
+            await minted('resent');
+            // The first send made it; the browser's resend found the id taken.
+            w.server.live.add('resent');
+            throw new DriveApiError('An item with this id already exists.', 'conflict', 409);
+        };
+        const out = await run.folder('Out', own);
+        expect(out.id).toBe('resent');
+        await run.finish();
+        expect(w.server.live.has('resent')).toBe(true);
+        expect(w.runs.rows.size).toBe(0);
+    });
+
     test('two late folders that both can’t be removed are both named by the row', async () => {
         const w = world();
         const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
@@ -1781,7 +1865,7 @@ describe('a save run', () => {
         await runs.put({
             id: 'fresh',
             workspaceId: 'w',
-            nodeIds: [],
+            nodeIds: ['n'],
             uploadIds: [],
             at: 1,
             beat: at - 1_000,
@@ -1789,7 +1873,7 @@ describe('a save run', () => {
         await runs.put({
             id: 'stale',
             workspaceId: 'w',
-            nodeIds: [],
+            nodeIds: ['n'],
             uploadIds: [],
             at: 1,
             beat: at - 10 * 60_000,

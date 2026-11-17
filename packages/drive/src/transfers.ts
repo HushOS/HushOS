@@ -102,7 +102,11 @@ export type UploadItem = {
      * nothing was published, and this is the version that is current now, for the save's
      * choices (Save on top, Save as a copy, Open theirs).
      */
-    stale?: { currentVersionId: string | null } | null;
+    /*
+     * `released`: whether the server confirmed the reservation let go (the abort answered); when
+     * it didn't, a save run keeps the upload's id until it does.
+     */
+    stale?: { currentVersionId: string | null; released?: boolean } | null;
 };
 
 export type TransfersState = {
@@ -461,6 +465,15 @@ function isKeyChangePending(error: unknown) {
     return error instanceof Error && error.message === KEY_CHANGE_PENDING;
 }
 const pendingKeyChange = () => new DriveApiError(KEY_CHANGE_PENDING, 'rotating', 409);
+/* An abort refused with an answer that settles it: gone, no longer this person's, or finished. */
+function abortSettled(failure: unknown) {
+    if (!(failure instanceof DriveApiError)) return false;
+    if ([401, 403, 404].includes(failure.status)) return true;
+    return (
+        failure.status === 409 &&
+        (failure.data as { upload?: string } | undefined)?.upload === 'completed'
+    );
+}
 /* The server refused envelopes under a key epoch that is no longer the node's (or its parent's). */
 function isStale(error: unknown) {
     return error instanceof DriveApiError && error.code === 'stale';
@@ -1097,7 +1110,13 @@ export function createTransferManager(options: TransferManagerOptions) {
         u.generation++;
         clearBackoff(u);
         u.inFlight.clear();
-        if (u.uploadId) await api.abortUpload(workspaceOf(u), u.uploadId).catch(() => {});
+        // Released when the abort answered: aborted, or nothing there to let go.
+        const released = !u.uploadId
+            ? true
+            : await api.abortUpload(workspaceOf(u), u.uploadId).then(
+                  () => true,
+                  (failure: unknown) => abortSettled(failure),
+              );
         await rpc('driveUploadForget', { objectId: u.objectId }).catch(() => {});
         await journalForget(u);
         u.uploadId = null;
@@ -1106,7 +1125,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             status: 'failed',
             error: error.message,
             errorCode: 'stale',
-            stale: { currentVersionId: error.currentVersionId },
+            stale: { currentVersionId: error.currentVersionId, released },
             needsFile: true,
             hasHandle: false,
             finishedAt: now(),

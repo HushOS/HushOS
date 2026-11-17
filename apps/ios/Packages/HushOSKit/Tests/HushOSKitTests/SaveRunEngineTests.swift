@@ -341,7 +341,15 @@ extension OnFakeDrive {
                 // The next launch, from the journal alone, on a working network.
                 for row in offered { _ = await SaveRuns.cleanUp(row, writer: s.vault, journal: disk) }
                 if !excused { for id in published(s) { found.append("\(id) is still there after the next launch's clean-up") } }
-                if disk.list().contains(where: { $0.done != true }) { found.append("a row survived the next launch's clean-up") }
+                // Only a folder whose creation may still land keeps its row past that launch; once the creation window
+                // has passed, the launch after settles it.
+                for row in disk.list() where row.done != true && (!row.uploadIds.isEmpty || !row.nodeIds.allSatisfy({ row.uncertain?[$0] != nil })) {
+                    found.append("a row survived the next launch's clean-up")
+                }
+                for row in disk.list() where row.done != true {
+                    _ = await SaveRuns.cleanUp(row, writer: s.vault, journal: disk, now: Date().addingTimeInterval(SaveRuns.creationWindow))
+                }
+                if disk.list().contains(where: { $0.done != true }) { found.append("a row survived past the creation window") }
             }
             return found
         }

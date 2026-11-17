@@ -26,13 +26,20 @@ import HushOSCore
 /* A new version found someone else's version current (or its file gone): nothing was published (Save on top, Save as a copy, Open theirs). */
 public struct SaveStale: Error, Equatable, LocalizedError {
     public let currentVersionId: String?
-    public init(currentVersionId: String?) { self.currentVersionId = currentVersionId }
+    /* The upload whose reservation the abort didn't confirm released: the run keeps its id until one does. */
+    public var unreleased: String?
+    public init(currentVersionId: String?, unreleased: String? = nil) {
+        self.currentVersionId = currentVersionId
+        self.unreleased = unreleased
+    }
     public var errorDescription: String? { "Someone else saved a newer version of this file, so this one wasn’t saved." }
 }
 
 /* An upload refused only because a key change reached its file or folder while it went up: looked up again and sealed afresh. */
 public struct SaveRekeyed: Error, Equatable {
-    public init() {}
+    /* As SaveStale's. */
+    public var unreleased: String?
+    public init(unreleased: String? = nil) { self.unreleased = unreleased }
 }
 
 /* The id of a folder whose creation was sent, set from its minted closure. */
@@ -89,6 +96,12 @@ public struct SaveRunRow: Codable, Equatable, Sendable {
     public let launch: String
     /* The run finished (or its results were kept, or cleaned up) but its row couldn't be removed: never offered, dropped next. */
     public var done: Bool?
+    /*
+     * Folders whose creation was sent (written with the id, before it went) and not known answered, with when: one a
+     * clean-up doesn't find may still be made, so the row stays until a later look finds it or the creation window
+     * (SaveRuns.creationWindow) has passed.
+     */
+    public var uncertain: [String: Date]?
 }
 
 /*
@@ -117,7 +130,7 @@ public final class SaveRunJournal: @unchecked Sendable {
      */
     let owner: AccountOwner?
     /* Who is signed in now, asked before every read and write. */
-    private let signedIn: @Sendable () -> AccountOwner?
+    private let signedIn: @Sendable () -> SignedInAnswer
     private let born: Int
     /* One lock per file, shared by every journal on it: two runs starting at once never lose each other's row. */
     private let lock: NSLock
@@ -138,7 +151,7 @@ public final class SaveRunJournal: @unchecked Sendable {
         return support.appendingPathComponent("HushOS", isDirectory: true).appendingPathComponent("save-runs.json")
     }
 
-    public init(owner: AccountOwner? = AccountOwner.signedIn, signedIn: @escaping @Sendable () -> AccountOwner? = { AccountOwner.signedIn }) {
+    public init(owner: AccountOwner? = AccountOwner.signedIn, signedIn: @escaping @Sendable () -> SignedInAnswer = { AccountOwner.signedInAnswer }) {
         url = Self.defaultURL
         epoch = Self.account
         self.owner = owner
@@ -150,11 +163,11 @@ public final class SaveRunJournal: @unchecked Sendable {
 
     /* Tests: its own file, and by default an account of its own that stays signed in. */
     init(url: URL, epoch: Epoch = SaveRunJournal.account, owner: AccountOwner? = AccountOwner(userId: "tests", origin: "https://drive.test"),
-         signedIn: (@Sendable () -> AccountOwner?)? = nil) {
+         signedIn: (@Sendable () -> SignedInAnswer)? = nil) {
         self.url = url
         self.epoch = epoch
         self.owner = owner
-        self.signedIn = signedIn ?? { owner }
+        self.signedIn = signedIn ?? { .account(owner) }
         born = epoch.current
         lock = Self.lock(for: url)
         lock.withLock { Self.dropStaging(url) }
@@ -241,7 +254,11 @@ public final class SaveRunJournal: @unchecked Sendable {
      */
     private var signedInHere: Bool {
         guard let owner else { return false }
-        return signedIn() == owner
+        switch signedIn() {
+        case .account(let now): return now == owner
+        // A keychain read that failed is no sign-out: a journal opened signed in stays its account's.
+        case .unreadable: return true
+        }
     }
 
     /* Not this account's journal now: a write is refused (a run stops rather than publish what no row names). */
@@ -355,6 +372,8 @@ public protocol SaveRunWriter: Sendable {
                       onCompleting: @escaping @Sendable (String) throws -> Void) async throws -> Opened
     /* `file` as the server lists its folder now (its keys after a key change), or nil when it is no longer there. */
     func fresh(_ file: Opened, in folder: Opened) async throws -> Opened?
+    /* `id` as the server lists it in `folder` now, or nil: a creation answered 409 for its own id. */
+    func listed(_ id: String, in folder: Opened) async throws -> Opened?
     /* `folder` and the chain above it as the server holds them now (a family's checked again first), to seal afresh under. */
     func refreshFolder(_ folder: Opened) async throws -> Opened
     /* One pause while an upload waits out a family folder's key change (KeyChangeWait). */
@@ -501,12 +520,56 @@ public enum SaveRuns {
     public static func interrupted(_ journal: SaveRunJournal = SaveRunJournal()) -> [SaveRunRow] {
         // A finished run whose row couldn't be removed is never offered, and goes now.
         journal.dropDone()
-        return journal.list().filter { $0.launch != launch && $0.done != true }
+        var offered: [SaveRunRow] = []
+        for row in journal.list() where row.launch != launch && row.done != true {
+            // Nothing made to ask about: one with no uploads either goes; one with reservations to let go is settled
+            // quietly (settleUploads), never offered.
+            if row.nodeIds.isEmpty {
+                if row.uploadIds.isEmpty { journal.retire(row) }
+                continue
+            }
+            offered.append(row)
+        }
+        return offered
     }
 
-    /* Removes what an interrupted run made, as a cancel would have, then its row. */
-    public static func cleanUp(_ row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal = SaveRunJournal()) async -> SaveCleanup {
-        await clean(row, writer: writer, journal: journal, versions: [], completing: nil, published: nil).cleanup
+    /*
+     * Rows another launch left with nothing made, only reservations to let go (a finished run's stale version, or a
+     * version run that ended mid-upload): each aborted, and the row goes once none is left without an answer.
+     */
+    public static func settleUploads(writer: SaveRunWriter, journal: SaveRunJournal = SaveRunJournal()) async {
+        await settleUploads(writer: writer, journal: journal, launch: launch)
+    }
+
+    static func settleUploads(writer: SaveRunWriter, journal: SaveRunJournal, launch: String) async {
+        for row in journal.list() where row.launch != launch && row.done != true && row.nodeIds.isEmpty && !row.uploadIds.isEmpty {
+            var left: [String] = []
+            for uploadId in row.uploadIds {
+                if await writer.abortUpload(uploadId, in: row.workspaceId) == .unknown { left.append(uploadId) }
+            }
+            if left.isEmpty { journal.retire(row) } else if left.count < row.uploadIds.count {
+                var next = row
+                next.uploadIds = left
+                try? journal.put(next)
+            }
+        }
+    }
+
+    /*
+     * How long a folder creation that got no answer may still be made: the server's own upload window (packages/drive
+     * UPLOAD_TTL_HOURS). Within it, a clean-up that doesn't find the folder keeps the row; past it, one still not there
+     * was never made.
+     */
+    public static let creationWindow: TimeInterval = 24 * 60 * 60
+
+    /*
+     * Removes what an interrupted run made, as a cancel would have, then its row. A folder the row still holds
+     * uncertain, not found, may still be made: the row stays until a later open finds it or creationWindow has passed.
+     */
+    public static func cleanUp(_ row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal = SaveRunJournal(),
+                               now: Date = Date()) async -> SaveCleanup {
+        let mayExist = Set((row.uncertain ?? [:]).filter { now.timeIntervalSince($0.value) < creationWindow }.keys)
+        return await clean(row, writer: writer, journal: journal, versions: [], completing: nil, published: nil, mayExist: mayExist).cleanup
     }
 
     /*
@@ -598,6 +661,12 @@ public enum SaveRuns {
      * one URLSession may send again by itself when a reused connection drops). Any other refusal the server explained
      * (a 4xx) settles that it wasn't.
      */
+    /* A creation refused with a plain 409: its id (minted here) already there, as the server's `conflict` says. */
+    static func ownIdTaken(_ error: Error) -> Bool {
+        if case DriveAPIError.server(409, _) = error { return true }
+        return false
+    }
+
     static func noAnswer(_ error: Error) -> Bool {
         switch error {
         case DriveAPIError.server(let status, _): return status == 0 || status >= 500 || status == 409
@@ -671,6 +740,26 @@ final class RunState: @unchecked Sendable {
         }
     }
     var mayExist: Set<String> { lock.withLock { mayExistHere } }
+    /*
+     * A creation answered (made, or refused with a reason): no longer uncertain in the row, written while the run may
+     * still write (after a stop sealed it the mark stays, which only keeps a row a little longer than it needs).
+     */
+    func answered(_ id: String) {
+        lock.withLock {
+            guard row.uncertain?.removeValue(forKey: id) != nil, !sealed else { return }
+            try? journal.put(row)
+        }
+    }
+    /*
+     * An upload whose completion was refused and whose abort didn't confirm the reservation released: its id stays in
+     * the row (asked again by a stop, by finish, or by the next open), and it can no longer land.
+     */
+    func keepUnreleased(_ uploadId: String) {
+        lock.withLock {
+            settledUploads.insert(uploadId)
+            completingHere.remove(uploadId)
+        }
+    }
     func creationsSettled() async {
         while lock.withLock({ creatingHere }) > 0 { try? await Task.sleep(for: .milliseconds(5)) }
     }
@@ -699,10 +788,12 @@ final class RunState: @unchecked Sendable {
      * A new folder's id, minted and on disk before its creation is sent; a run stopping (sealed) or a refused write
      * throws, and the creation is not sent.
      */
-    func recordFolder(_ id: String) throws {
+    func recordFolder(_ id: String, at: Date = Date()) throws {
         try lock.withLock {
             guard !sealed else { throw CancellationError() }
             row.nodeIds.append(id)
+            // Uncertain until answered: an open after a crash finds it so.
+            row.uncertain = (row.uncertain ?? [:]).merging([id: at]) { _, new in new }
             try journal.put(row)
             publishedHere.insert(id)
             creatingHere += 1
@@ -925,17 +1016,33 @@ public actor SaveRun {
             do {
                 // Its id on disk before its creation is sent, or the creation is not sent.
                 let sent = SentFlag()
+                let at = now()
                 do {
                     made = try await writer.makeFolder(in: parentNow, name: given, signing: signing) { id in
-                        if recordIt { try state.recordFolder(id) } else if !state.journal.live { throw CancellationError() } else { try state.sending(id) }
+                        if recordIt { try state.recordFolder(id, at: at) } else if !state.journal.live { throw CancellationError() } else { try state.sending(id) }
                         sent.id = id
                     }
                 } catch {
+                    // Answered 409 for its own id: an earlier send of the same request made it (URLSession sent it again
+                    // by itself). There, it is the folder asked for.
+                    if let id = sent.id, SaveRuns.ownIdTaken(error), let found = try? await writer.listed(id, in: parentNow) {
+                        state.answered(id)
+                        state.creationEnded(id, mayExist: false)
+                        made = found
+                        break
+                    }
                     // No answer: the server may still be making it (noted before the count drops, so a waiting stop sees it).
-                    if let id = sent.id { state.creationEnded(id, mayExist: recordIt && SaveRuns.noAnswer(error)) }
+                    if let id = sent.id {
+                        let unanswered = recordIt && SaveRuns.noAnswer(error)
+                        if !unanswered { state.answered(id) }
+                        state.creationEnded(id, mayExist: unanswered)
+                    }
                     throw error
                 }
-                if let id = sent.id { state.creationEnded(id, mayExist: false) }
+                if let id = sent.id {
+                    state.answered(id)
+                    state.creationEnded(id, mayExist: false)
+                }
                 break
             } catch where KeyChangeWait.meets(error, waited: since != nil) {
                 if let stopping { throw await stopping.value }
@@ -943,7 +1050,7 @@ public actor SaveRun {
                 since = start
                 if now().timeIntervalSince(start) >= KeyChangeWait.giveUp { throw await stop(.failed, KeyChangeWait.gaveUp) }
                 attempt += 1
-                if let pause { try await pause(attempt) } else { try await writer.keyChangePause(into.node.workspaceId, attempt: attempt) }
+                try await waitOut(into.node.workspaceId, attempt)
                 parentNow = try await refreshed(parentNow, replacing: nil, since: &since, attempt: &attempt).folder
             }
         }
@@ -961,6 +1068,15 @@ public actor SaveRun {
         madeFolders.insert(made.id)
         claimed[made.id] = []
         return made
+    }
+
+    /* A key change's pause; one cut short (the task cancelled) stops the run as any other failure does. */
+    private func waitOut(_ workspaceId: String, _ attempt: Int) async throws {
+        do {
+            if let pause { try await pause(attempt) } else { try await writer.keyChangePause(workspaceId, attempt: attempt) }
+        } catch {
+            throw await failed(error)
+        }
     }
 
     /*
@@ -985,7 +1101,7 @@ public actor SaveRun {
                 since = start
                 if now().timeIntervalSince(start) >= KeyChangeWait.giveUp { throw await stop(.failed, KeyChangeWait.gaveUp) }
                 attempt += 1
-                if let pause { try await pause(attempt) } else { try await writer.keyChangePause(folder.node.workspaceId, attempt: attempt) }
+                try await waitOut(folder.node.workspaceId, attempt)
             } catch {
                 if let stopping { throw await stopping.value }
                 throw await stop(.failed, error.localizedDescription)
@@ -1057,7 +1173,7 @@ public actor SaveRun {
                 if !recorded { throw await stop(.failed, SaveRuns.unrecorded) }
                 return landed
             } catch let stale as SaveStale {
-                try? state.settled(begun.ids, landed: nil, tracked: false)
+                if let id = stale.unreleased { state.keepUnreleased(id) } else { try? state.settled(begun.ids, landed: nil, tracked: false) }
                 throw stale
             } catch let stopped as SaveRunStopped {
                 throw stopped
@@ -1068,7 +1184,7 @@ public actor SaveRun {
                     // A key change reached the file or its folder: what this upload began is over, the file is looked
                     // up again (its keys as the server holds them now; startedFrom kept for the version check), and
                     // it is sealed afresh, after a pause when the change is still walking.
-                    try? state.settled(begun.ids, landed: nil, tracked: false)
+                    if let id = (error as? SaveRekeyed)?.unreleased { state.keepUnreleased(id) } else { try? state.settled(begun.ids, landed: nil, tracked: false) }
                     if rekeyed {
                         rekeys += 1
                         if rekeys > 3 { throw await stop(.failed, error.localizedDescription) }
@@ -1077,7 +1193,7 @@ public actor SaveRun {
                         since = start
                         if now().timeIntervalSince(start) >= KeyChangeWait.giveUp { throw await stop(.failed, KeyChangeWait.gaveUp) }
                         attempt += 1
-                        if let pause { try await pause(attempt) } else { try await writer.keyChangePause(folderNow.node.workspaceId, attempt: attempt) }
+                        try await waitOut(folderNow.node.workspaceId, attempt)
                     }
                     // The destination and the chain above it as the server holds them now (a family's checked again
                     // first), and the file replaced, so nothing is sealed again under keys the change replaced.
@@ -1138,6 +1254,23 @@ public actor SaveRun {
         guard inFlight == 0 else { throw SaveRunRefusal(message: "Some results are still being saved.") }
         finished = true
         let row = state.seal()
+        // Only uploads whose reservation wasn't confirmed released are left in the row: asked again now. One still
+        // unanswered stays in a row of its own with no nodes (what was saved stays, never offered), which the next
+        // open settles (settleUploads).
+        var loose: [String] = []
+        if state.journal.live {
+            for uploadId in row.uploadIds {
+                if await writer.abortUpload(uploadId, in: row.workspaceId) == .unknown { loose.append(uploadId) }
+            }
+        }
+        if !loose.isEmpty {
+            var left = row
+            left.nodeIds = []
+            left.uploadIds = loose
+            left.uncertain = nil
+            do { try state.journal.put(left) } catch { throw SaveRecordNotUpdated() }
+            return
+        }
         // Not retired: nothing more is taken in (`finished`), and finish may be asked again.
         guard state.journal.retire(row) else { throw SaveRecordNotUpdated() }
     }
@@ -1229,6 +1362,12 @@ extension Vault: SaveRunWriter {
     }
 
     /* From the server itself, never the catalogue (which may not have heard of a key change or another device's save yet). */
+    public func listed(_ id: String, in folder: Opened) async throws -> Opened? {
+        let listing = try await listChildren(of: folder.id, in: folder.node.workspaceId)
+        guard let row = listing.children.first(where: { $0.id == id }) else { return nil }
+        return try open(row, replacing: true)
+    }
+
     public func fresh(_ file: Opened, in folder: Opened) async throws -> Opened? {
         let listing = try await listChildren(of: folder.id, in: folder.node.workspaceId)
         guard let row = listing.children.first(where: { $0.id == file.id }) else { return nil }

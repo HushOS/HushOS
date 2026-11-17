@@ -2008,7 +2008,7 @@ describe('produced results', () => {
         const item = h.item(id!);
         expect(item.status).toBe('failed');
         expect(item.errorCode).toBe('stale');
-        expect(item.stale).toEqual({ currentVersionId: 'v-theirs' });
+        expect(item.stale).toEqual({ currentVersionId: 'v-theirs', released: true });
         expect(h.server.attached).toEqual([]);
         expect(h.createdMetadata).toEqual([]);
         expect(h.published).toEqual([]);
@@ -2019,6 +2019,30 @@ describe('produced results', () => {
         await settle(5_000);
         expect(h.server.begins).toHaveLength(1);
         expect(h.server.attached).toEqual([]);
+    });
+
+    test('a version race whose abort gets no answer says its reservation wasn’t released', async () => {
+        let current = 'v1';
+        const h = harness({
+            serverVersion: () => current,
+            ...listedAt(() => current),
+            encryptHold: () => void (current = 'v-theirs'),
+        });
+        Object.assign(h.api, {
+            abortUpload: async () => {
+                throw new TypeError('Failed to fetch');
+            },
+        });
+        const [id] = h.manager.enqueue([
+            {
+                file: memory('doc.txt'),
+                parent: node('root', null),
+                replaces: fileAt('v1'),
+                produced: { startedFrom: 'v1' },
+            },
+        ]);
+        await settle(5_000);
+        expect(h.item(id!).stale).toEqual({ currentVersionId: 'v-theirs', released: false });
     });
 
     test('the same race, uploaded as a dropped file is, still becomes a conflict copy', async () => {
@@ -2051,7 +2075,7 @@ describe('produced results', () => {
             },
         ]);
         await settle(2_000);
-        expect(h.item(id!).stale).toEqual({ currentVersionId: 'v2' });
+        expect(h.item(id!).stale).toEqual({ currentVersionId: 'v2', released: true });
         expect(h.server.begins).toEqual([]);
         expect(h.calls).not.toContain('driveUploadPrepare');
     });
@@ -2129,7 +2153,7 @@ describe('produced results', () => {
         ]);
         await settle(5_000);
         expect(h.item(id!).errorCode).toBe('stale');
-        expect(h.item(id!).stale).toEqual({ currentVersionId: 'v2' });
+        expect(h.item(id!).stale).toEqual({ currentVersionId: 'v2', released: true });
         expect(asked[0]).toBe(true);
         // The file gone from its folder by the fresh look: stale with no version, never "keys changed".
         const gone = harness({
@@ -2146,7 +2170,7 @@ describe('produced results', () => {
         ]);
         await settle(5_000);
         expect(gone.item(other!).errorCode).toBe('stale');
-        expect(gone.item(other!).stale).toEqual({ currentVersionId: null });
+        expect(gone.item(other!).stale).toEqual({ currentVersionId: null, released: true });
     });
 
     test('begin names the version the work started from, and the server refusing it is stale with the version listed now', async () => {
@@ -2163,7 +2187,7 @@ describe('produced results', () => {
         await settle(2_000);
         expect(h.server.begins[0]!.node).toMatchObject({ existing: true, expectedVersionId: 'v1' });
         expect(h.item(id!).errorCode).toBe('stale');
-        expect(h.item(id!).stale).toEqual({ currentVersionId: 'v3' });
+        expect(h.item(id!).stale).toEqual({ currentVersionId: 'v3', released: true });
         expect(h.server.uploads.size).toBe(0);
     });
 
@@ -2287,7 +2311,7 @@ describe('produced results', () => {
         ]);
         await settle(5_000);
         expect(h.item(id!).errorCode).toBe('stale');
-        expect(h.item(id!).stale).toEqual({ currentVersionId: null });
+        expect(h.item(id!).stale).toEqual({ currentVersionId: null, released: true });
         expect(h.server.attached).toEqual([]);
         expect(h.createdMetadata).toEqual([]);
     });

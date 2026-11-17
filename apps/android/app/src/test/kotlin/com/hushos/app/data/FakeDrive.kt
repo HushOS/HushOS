@@ -750,7 +750,13 @@ class FakeDrive : AutoCloseable {
             get && at("drive", "versions", "*", "url") -> versionById(segments[2])?.let { ok(JSONObject().put("url", objectUrl(it.second.objectId))) }
             get && at("drive", "thumbnails") -> ok(JSONObject().put("urls", JSONArray()))
             post && at("drive", "workspaces", "*", "epochs") -> ok(JSONObject().put("from", nextEpoch++))
-            post && at("drive", "folders") -> ok(JSONObject().put("nodes", JSONArray(makeFolders(body).map { it.json() })))
+            post && at("drive", "folders") -> {
+                // As packages/db's createFolders: an id already there (an earlier send of the same request made it).
+                val taken = (0 until body.getJSONArray("folders").length()).map { body.getJSONArray("folders").getJSONObject(it).getString("id") }
+                    .firstOrNull { nodes.containsKey(it) }
+                if (taken != null) 409 to JSONObject().put("code", "conflict").put("message", "An item with this id already exists.").put("data", JSONObject().put("id", taken))
+                else ok(JSONObject().put("nodes", JSONArray(makeFolders(body).map { it.json() })))
+            }
             post && at("drive", "nodes", "*", "metadata") -> {
                 val node = node(segments[2])
                 if (body.getLong("metadataVersion") != node.metadataVersion) return conflict("Changed since you read it")

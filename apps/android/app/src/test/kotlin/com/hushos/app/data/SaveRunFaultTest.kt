@@ -326,7 +326,13 @@ class SaveRunFaultTest {
             val healthy = FaultyDrive(world, healthy = true)
             for (row in offered) SaveRuns.cleanUp(row, healthy, disk)
             if (!excused) for (id in world.published) found += "$id is still there after the next launch's clean-up"
-            if (disk.list().any { !it.done }) found += "a row survived the next launch's clean-up"
+            // Only a folder whose creation may still land keeps its row past that launch; once the creation window has
+            // passed, the launch after settles it.
+            for (row in disk.list().filter { !it.done }) if (row.uploadIds.isNotEmpty() || !row.nodeIds.all { it in row.uncertain })
+                found += "a row survived the next launch's clean-up"
+            val later = System.currentTimeMillis() + SaveRuns.CREATION_WINDOW_MS
+            for (row in disk.list().filter { !it.done }) SaveRuns.cleanUp(row, healthy, disk, now = later)
+            if (disk.list().any { !it.done }) found += "a row survived past the creation window"
             // A reservation no row ever named is the server's expiry's: nothing is completed before its row is on disk.
             val known = world.openReservations.filter { it in world.recorded && it !in world.lostBegins }
             if (known.isNotEmpty()) found += "reservations left open: ${known.sorted()}"

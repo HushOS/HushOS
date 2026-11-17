@@ -127,6 +127,14 @@ function deps(queryClient: QueryClient): SaveRunDeps {
             );
             return made!;
         },
+        // Answered 409 for its own id: the folder as the server lists it now, if it is there.
+        findChild: async (parent, id) =>
+            (
+                await queryClient.fetchQuery({
+                    ...folderQueryOptions(parent.id, parent.workspaceId),
+                    staleTime: 0,
+                })
+            ).children.find((child) => child.id === id) ?? null,
         // An upload still finishing is asked about again for about ten seconds (askAbort).
         abortUpload: (workspaceId, uploadId) =>
             askAbort(() => driveApi.abortUpload(workspaceId, uploadId)),
@@ -192,9 +200,17 @@ export async function startSaveRun(queryClient: QueryClient, plan: RunPlan) {
     return startRun(deps(queryClient), plan);
 }
 
-/* Runs a closed tab left behind (ids only), for the next open to offer to delete or keep what they made. */
+/*
+ * Runs a closed tab left behind (ids only), for the next open to offer to delete or keep what they
+ * made. A row with nothing made, only reservations to let go, is settled here and never offered.
+ */
 export function interruptedSaveRuns() {
-    return interruptedRuns({ runs: runs(), isLive: locks() ? isLive : undefined });
+    return interruptedRuns({
+        runs: runs(),
+        isLive: locks() ? isLive : undefined,
+        abortUpload: (workspaceId, uploadId) =>
+            askAbort(() => driveApi.abortUpload(workspaceId, uploadId)),
+    });
 }
 
 /* Deletes what an interrupted run made (to the Trash where the person may not delete forever). */

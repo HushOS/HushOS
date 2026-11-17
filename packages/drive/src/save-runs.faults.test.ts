@@ -7,6 +7,7 @@ import {
     RecordNotUpdated,
     RunStopped,
     abandonRuns,
+    CREATION_WINDOW_MS,
     cleanUpInterrupted,
     interruptedRuns,
     startRun,
@@ -572,6 +573,7 @@ async function violations(scenario: string, plan: Plan) {
         const offered = await interruptedRuns({
             runs: reopened.deps.runs,
             isLive: async () => false,
+            abortUpload: reopened.deps.abortUpload,
         });
         if (offered.length) found.push('a finished save is offered for deletion');
     } else if (signedOut) {
@@ -586,16 +588,32 @@ async function violations(scenario: string, plan: Plan) {
                     `${id} is published, named by no row${message ? ` (said: ${message})` : ''}`,
                 );
         // The next open, from the journal alone, on a working network.
-        const reopened = processOf(srv, disk, null);
-        for (const row of await interruptedRuns({
-            runs: reopened.deps.runs,
-            isLive: async () => false,
-        }))
-            await cleanUpInterrupted(reopened.deps, row);
-        await settle();
+        let clock = Date.now();
+        const reopen = async () => {
+            const reopened = processOf(srv, disk, null);
+            reopened.deps.now = () => clock;
+            for (const row of await interruptedRuns({
+                runs: reopened.deps.runs,
+                isLive: async () => false,
+                abortUpload: reopened.deps.abortUpload,
+            }))
+                await cleanUpInterrupted(reopened.deps, row);
+            await settle();
+        };
+        await reopen();
         for (const id of srv.published())
             if (!excused) found.push(`${id} is still there after the next open's clean-up`);
-        if ((await disk.list()).length) found.push('a row survived the next open’s clean-up');
+        // Only a folder whose creation may still land keeps its row past that open; once the
+        // creation window has passed, the open after settles it.
+        for (const row of await disk.list())
+            if (
+                row.uploadIds.length ||
+                !row.nodeIds.every((id) => row.uncertain?.some((held) => held.id === id))
+            )
+                found.push('a row survived the next open’s clean-up');
+        clock += CREATION_WINDOW_MS;
+        await reopen();
+        if ((await disk.list()).length) found.push('a row survived past the creation window');
     }
     // A reservation no row ever named (its begin's answer lost, or the process gone before its
     // row was written) is the server's expiry's: nothing is published from it, since no

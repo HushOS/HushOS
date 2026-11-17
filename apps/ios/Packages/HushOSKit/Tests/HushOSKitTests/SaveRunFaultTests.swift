@@ -240,6 +240,7 @@ struct FaultyDrive: SaveRunWriter {
         return opened(landed, parent: folder.id, version: version ? "v2" : "v1")
     }
     func fresh(_ file: Opened, in folder: Opened) async throws -> Opened? { file }
+    func listed(_ id: String, in folder: Opened) async throws -> Opened? { nil }
     func refreshFolder(_ folder: Opened) async throws -> Opened { folder }
     func keyChangePause(_ workspaceId: String, attempt: Int) async throws {}
     func abortUpload(_ uploadId: String, in workspaceId: String) async -> DriveAPI.AbortFate {
@@ -409,7 +410,15 @@ final class RunBox: @unchecked Sendable {
             let healthy = FaultyDrive(world: world, healthy: true)
             for row in offered { _ = await SaveRuns.cleanUp(row, writer: healthy, journal: disk) }
             if !excused { for id in world.published { found.append("\(id) is still there after the next launch's clean-up") } }
-            if disk.list().contains(where: { $0.done != true }) { found.append("a row survived the next launch's clean-up") }
+            // Only a folder whose creation may still land keeps its row past that launch; once the creation window
+            // has passed, the launch after settles it.
+            for row in disk.list() where row.done != true && (!row.uploadIds.isEmpty || !row.nodeIds.allSatisfy({ row.uncertain?[$0] != nil })) {
+                found.append("a row survived the next launch's clean-up")
+            }
+            for row in disk.list() where row.done != true {
+                _ = await SaveRuns.cleanUp(row, writer: healthy, journal: disk, now: Date().addingTimeInterval(SaveRuns.creationWindow))
+            }
+            if disk.list().contains(where: { $0.done != true }) { found.append("a row survived past the creation window") }
             // A reservation no row ever named is the server's expiry's: nothing is completed before its row is on disk.
             let known = world.openReservations.filter { world.recorded.contains($0) && !world.lostBegins.contains($0) }
             if !known.isEmpty { found.append("reservations left open: \(known.sorted())") }

@@ -147,6 +147,8 @@ class SaveRunEngineTest {
             if (path.trimStart('/').startsWith("store/")) return@hook
             val point = pointOf(method, path)
             if (point == Point.ABORT) abortAsked += path.trim('/').split("/")[2]
+            // A folder creation sent while one the server is still making waits for it, as the database's insert does.
+            if (point == Point.FOLDER) for (late in world.late.toList()) runCatching { late.get(10, java.util.concurrent.TimeUnit.SECONDS) }
             val fault = if (world.live && (world.dead || world.outage)) null else point?.let(world::fault)
             if (fault == Fault.NETWORK || (world.live && (world.dead || world.outage))) unreached += Thread.currentThread() else unreached -= Thread.currentThread()
             synchronized(pending) { if (fault != null) pending[Thread.currentThread()] = fault else pending.remove(Thread.currentThread()) }
@@ -340,7 +342,13 @@ class SaveRunEngineTest {
             val healthy = VaultSaveWriter(s.vault) { StorageAllowance(1L shl 40, 0L, 1L shl 40) }
             for (row in offered) SaveRuns.cleanUp(row, healthy, disk)
             if (!excused) for (id in published(s)) found += "$id is still there after the next launch's clean-up"
-            if (disk.list().any { !it.done }) found += "a row survived the next launch's clean-up"
+            // Only a folder whose creation may still land keeps its row past that launch; once the creation window has
+            // passed, the launch after settles it.
+            for (row in disk.list().filter { !it.done }) if (row.uploadIds.isNotEmpty() || !row.nodeIds.all { it in row.uncertain })
+                found += "a row survived the next launch's clean-up"
+            val later = System.currentTimeMillis() + SaveRuns.CREATION_WINDOW_MS
+            for (row in disk.list().filter { !it.done }) SaveRuns.cleanUp(row, healthy, disk, now = later)
+            if (disk.list().any { !it.done }) found += "a row survived past the creation window"
         }
         return found
     }

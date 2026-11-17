@@ -10,6 +10,7 @@ import {
     abandonRuns,
     askAbort,
     lockRuns,
+    CREATION_WINDOW_MS,
     cleanUpInterrupted,
     interruptedRuns,
     startRun,
@@ -997,11 +998,14 @@ async function violations(name: string, plan: Plan) {
         if (srv.othersSaved() && outcome.versions.some((saved) => saved.status !== 'stale'))
             found.push('another device’s version was saved over');
         abandonRuns();
-        const offered = await interruptedRuns({
-            runs: processOf(srv, disk, null).deps.runs,
+        const finishedOpen = processOf(srv, disk, null);
+        const listing = interruptedRuns({
+            runs: finishedOpen.deps.runs,
             isLive: async () => false,
+            abortUpload: finishedOpen.deps.abortUpload,
         });
-        if (offered.length) found.push('a finished save is offered for deletion');
+        await vi.advanceTimersByTimeAsync(SETTLE_MS);
+        if ((await listing).length) found.push('a finished save is offered for deletion');
     } else if (signedOut) {
         // The journal went with the account: what is there must have been said to remain.
         if (!dead && !excused)
@@ -1017,18 +1021,34 @@ async function violations(name: string, plan: Plan) {
                 );
         // The next open, from the journal alone, on a working network.
         abandonRuns();
-        const reopened = processOf(srv, disk, null);
-        for (const row of await interruptedRuns({
-            runs: reopened.deps.runs,
-            isLive: async () => false,
-        })) {
-            const cleaning = cleanUpInterrupted(reopened.deps, row);
+        const reopen = async () => {
+            const reopened = processOf(srv, disk, null);
+            const listing = interruptedRuns({
+                runs: reopened.deps.runs,
+                isLive: async () => false,
+                abortUpload: reopened.deps.abortUpload,
+            });
             await vi.advanceTimersByTimeAsync(SETTLE_MS);
-            await cleaning;
-        }
+            for (const row of await listing) {
+                const cleaning = cleanUpInterrupted(reopened.deps, row);
+                await vi.advanceTimersByTimeAsync(SETTLE_MS);
+                await cleaning;
+            }
+        };
+        await reopen();
         for (const id of srv.published(!srv.editor && !onlyTrashed))
             if (!excused) found.push(`${id} is still there after the next open's clean-up`);
-        if ((await disk.list()).length) found.push('a row survived the next open’s clean-up');
+        // Only a folder whose creation may still land keeps its row past that open; once the
+        // creation window has passed, the open after settles it.
+        for (const row of await disk.list())
+            if (
+                row.uploadIds.length ||
+                !row.nodeIds.every((id) => row.uncertain?.some((held) => held.id === id))
+            )
+                found.push('a row survived the next open’s clean-up');
+        vi.setSystemTime(Date.now() + CREATION_WINDOW_MS);
+        await reopen();
+        if ((await disk.list()).length) found.push('a row survived past the creation window');
         // Access lost (the share ended): nothing more is this person's to abort; the expiry's.
         const known = app.state.revoked
             ? []

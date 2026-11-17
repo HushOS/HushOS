@@ -8,6 +8,7 @@ import type { SignatureForm } from '@hushos/crypto/signatures';
 import { DriveApiError, type NodeView, type TrashBatchItem } from './api';
 import type { DriveNode } from './client';
 import type { RunJournal, RunRow, UploadSignatures } from './journal';
+import { UPLOAD_TTL_HOURS } from './protocol';
 import type { MemoryFile, TransferManager, TransferManagerOptions, UploadItem } from './transfers';
 import { sourcesSignatureForms, type ResultSource } from './trust';
 
@@ -312,6 +313,11 @@ export function abortFateOf(error: unknown): AbortFate | 'finishing' {
  * (its id already there): ids are minted here, so only this run's own earlier send made it, one
  * the browser sent again by itself after its connection dropped.
  */
+/* A creation refused 409 `conflict`: its id (minted here) already there. */
+export function ownIdTaken(error: unknown) {
+    return error instanceof DriveApiError && error.status === 409 && error.code === 'conflict';
+}
+
 export function refusedOutright(error: unknown) {
     return (
         error instanceof DriveApiError &&
@@ -370,6 +376,8 @@ export type SaveRunDeps = {
         signAs: SignatureForm,
         minted: (id: string) => Promise<void>,
     ) => Promise<DriveNode>;
+    /* `id` as listed in `parent` now (asked fresh), or null: a creation answered 409 for its own id. */
+    findChild?: (parent: DriveNode, id: string) => Promise<DriveNode | null>;
     /* Never throws: what the server said, or `unknown`. */
     abortUpload: (workspaceId: string, uploadId: string) => Promise<AbortFate>;
     /*
@@ -404,6 +412,12 @@ export type SaveRunDeps = {
 /* A live run's heartbeat, and how old one may be before another tab takes the run for interrupted. */
 export const BEAT_MS = 30_000;
 export const STALE_BEAT_MS = 4 * BEAT_MS;
+/*
+ * How long a folder creation that got no answer may still be made: the server's own upload window
+ * (UPLOAD_TTL_HOURS). Within it, a clean-up that doesn't find the folder keeps the row; past it, a
+ * folder still not there is taken as never made.
+ */
+export const CREATION_WINDOW_MS = UPLOAD_TTL_HOURS * 3_600_000;
 
 export type RunPlan = {
     /* Where the run writes: folders new files go into, files new versions go onto; one workspace. */
@@ -605,6 +619,16 @@ function createRun(
     /* Folders this run made: what is inside one goes with it and needs no row of its own. */
     const madeFolders = new Set<string>();
     /*
+     * A creation answered (made, or refused with a reason): no longer uncertain in the row, written
+     * while the run may still write (after a stop sealed it the mark stays, which only keeps a row
+     * a little longer than it needs).
+     */
+    function answered(id: string | null) {
+        if (!id || !row.uncertain?.some((held) => held.id === id)) return;
+        row.uncertain = row.uncertain.filter((held) => held.id !== id);
+        void persist();
+    }
+    /*
      * Names given out per folder, so two results never take the same one: one listing per
      * folder, shared by every result asking for it at once.
      */
@@ -631,6 +655,7 @@ function createRun(
         ...row,
         nodeIds: [...row.nodeIds],
         uploadIds: [...row.uploadIds],
+        ...(row.uncertain ? { uncertain: [...row.uncertain] } : {}),
         beat: now(),
     });
     const writable = () => current() && !sealed;
@@ -705,7 +730,12 @@ function createRun(
                     event.item.stale
                 ) {
                     pending.delete(event.item.id);
-                    forgetUpload(output);
+                    // Its reservation released: its id goes. Not confirmed (the abort got no
+                    // answer): its id stays in the row, asked again by a stop, by finish, or by the
+                    // next open; it can no longer land (the server refused its completion).
+                    if (event.item.stale.released === false) {
+                        if (output.uploadId) completing.delete(output.uploadId);
+                    } else forgetUpload(output);
                     output.resolve({
                         status: 'stale',
                         currentVersionId: event.item.stale?.currentVersionId ?? null,
@@ -962,6 +992,8 @@ function createRun(
                     if (stopping || !current()) throw new Error('This save run is stopping.');
                     if (recordIt) {
                         row.nodeIds.push(id);
+                        // Uncertain until answered: a restart before the answer finds it so.
+                        row.uncertain = [...(row.uncertain ?? []), { id, at: now() }];
                         void persist();
                         await recorded();
                     }
@@ -972,11 +1004,27 @@ function createRun(
                     if (sent) creating.add(sent);
                 });
                 // Settled before the stop it causes cleans up: an unanswered creation may exist.
-                sent = making.catch((error: unknown) => {
-                    if (sentId && !refusedOutright(error)) mayExist.add(sentId);
-                });
+                // An answer settles it in the row too (written with the row's next write).
+                sent = making.then(
+                    () => answered(sentId),
+                    (error: unknown) => {
+                        if (sentId && !refusedOutright(error)) mayExist.add(sentId);
+                        else answered(sentId);
+                    },
+                );
                 try {
                     made = await making;
+                } catch (error) {
+                    // Answered 409 for its own id: an earlier send of the same request made it
+                    // (the browser sent it again by itself). There, it is the folder asked for.
+                    const found =
+                        sentId && ownIdTaken(error)
+                            ? await deps.findChild?.(into, sentId).catch(() => null)
+                            : null;
+                    if (!found) throw error;
+                    mayExist.delete(found.id);
+                    answered(found.id);
+                    made = found;
                 } finally {
                     creating.delete(sent);
                 }
@@ -1039,9 +1087,22 @@ function createRun(
             finished = true;
             sealed = true;
             await writing;
+            // Only stale versions whose reservation wasn't confirmed released are left in the row:
+            // asked again now. One still unanswered stays in a row of its own with no nodes (what
+            // was saved stays, never offered), which the next open settles (interruptedRuns).
+            const loose: string[] = [];
+            if (current())
+                for (const uploadId of row.uploadIds)
+                    if ((await deps.abortUpload(row.workspaceId, uploadId)) === 'unknown')
+                        loose.push(uploadId);
             // Not retired: the run stays live (its row is never taken for interrupted here) and
             // finish may be asked again; nothing more is taken in (`finished`).
-            if (current() && !(await retire(deps.runs, row))) throw new RecordNotUpdated();
+            if (current() && loose.length) {
+                const left = { ...row, nodeIds: [], uploadIds: loose, uncertain: [], beat: now() };
+                await deps.runs.put(left).catch(() => {
+                    throw new RecordNotUpdated();
+                });
+            } else if (current() && !(await retire(deps.runs, row))) throw new RecordNotUpdated();
             end();
         },
         async cancel() {
@@ -1237,7 +1298,9 @@ async function discard(
  * this page or held by another tab (or, without Web Locks, whose heartbeat
  * stopped). Ids only; the app names the folder from its own metadata.
  */
-export async function interruptedRuns(deps: Pick<SaveRunDeps, 'runs' | 'isLive' | 'now'>) {
+export async function interruptedRuns(
+    deps: Pick<SaveRunDeps, 'runs' | 'isLive' | 'now'> & Partial<Pick<SaveRunDeps, 'abortUpload'>>,
+) {
     const now = deps.now ?? (() => Date.now());
     const live = new Set([...liveRuns].map((run) => run.id));
     const rows = await deps.runs.list();
@@ -1252,14 +1315,42 @@ export async function interruptedRuns(deps: Pick<SaveRunDeps, 'runs' | 'isLive' 
         if (deps.isLive) {
             if (await deps.isLive(row.id)) continue;
         } else if (now() - (row.beat ?? row.at) < STALE_BEAT_MS) continue;
+        // Nothing made to ask about, only reservations to let go (a finished run's stale version,
+        // or a version run that ended mid-upload): settled quietly, never offered.
+        if (!row.nodeIds.length) {
+            if (!row.uploadIds.length) await retire(deps.runs, row);
+            else if (deps.abortUpload)
+                await settleUploads(deps as Pick<SaveRunDeps, 'runs' | 'abortUpload'>, row);
+            continue;
+        }
         left.push(row);
     }
     return left;
 }
 
-/* Deletes what an interrupted run made, as a cancel would have (cleanUp). */
+/*
+ * Deletes what an interrupted run made, as a cancel would have (cleanUp). A folder whose creation
+ * the row still holds uncertain, and that isn't found, may still be made: the row stays, until a
+ * later open finds it or CREATION_WINDOW_MS has passed since it was sent.
+ */
 export async function cleanUpInterrupted(deps: SaveRunDeps, row: RunRow) {
-    return (await cleanUp(deps, row, [])).cleanup;
+    const now = deps.now?.() ?? Date.now();
+    const mayExist = new Set(
+        (row.uncertain ?? [])
+            .filter((held) => now - held.at < CREATION_WINDOW_MS)
+            .map((held) => held.id),
+    );
+    return (await cleanUp(deps, row, [], { mayExist })).cleanup;
+}
+
+/* A nodeless row's uploads aborted; it goes once none is left without an answer. */
+async function settleUploads(deps: Pick<SaveRunDeps, 'runs' | 'abortUpload'>, row: RunRow) {
+    const left: string[] = [];
+    for (const uploadId of row.uploadIds)
+        if ((await deps.abortUpload(row.workspaceId, uploadId)) === 'unknown') left.push(uploadId);
+    if (!left.length) await retire(deps.runs, row);
+    else if (left.length < row.uploadIds.length)
+        await deps.runs.put({ ...row, uploadIds: left }).catch(() => {});
 }
 
 /*

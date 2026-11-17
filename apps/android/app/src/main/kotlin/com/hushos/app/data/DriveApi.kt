@@ -480,8 +480,42 @@ class DriveApi(val session: Shared.Session) : RootApi {
     override fun createRoot(workspaceId: String, root: RootInput): NodeView =
         NodeView.from(write(workspaceId, "/workspaces/$workspaceId/root", root.body()).getJSONObject("root"))
 
-    fun createFolder(workspaceId: String, folder: JSONObject): NodeView =
-        NodeView.from(write(workspaceId, "/folders", JSONObject().put("workspaceId", workspaceId).put("folders", JSONArray().put(folder))).getJSONArray("nodes").getJSONObject(0))
+    /*
+     * Sent once more on a fresh connection when the first got no answer. A 409 `conflict` for its own id (minted here) then
+     * means the first send made it: the folder as the server lists it now.
+     */
+    fun createFolder(workspaceId: String, folder: JSONObject): NodeView {
+        val body = JSONObject().put("workspaceId", workspaceId).put("folders", JSONArray().put(folder))
+        fun made() = NodeView.from(write(workspaceId, "/folders", body).getJSONArray("nodes").getJSONObject(0))
+        return try {
+            made()
+        } catch (_: Unreachable) {
+            try {
+                made()
+            } catch (taken: ApiError) {
+                if (taken.status != 409 || taken.code != "conflict") throw taken
+                listed(folder.getString("parentId"), workspaceId, folder.getString("id")) ?: throw taken
+            }
+        }
+    }
+
+    /* `id` as the server lists it in `folderId` now, or null. */
+    private fun listed(folderId: String, workspaceId: String, id: String): NodeView? {
+        var after: String? = null
+        do {
+            val page = children(folderId, workspaceId, after)
+            page.children.firstOrNull { it.id == id }?.let { return it }
+            after = page.nextCursor
+        } while (after != null)
+        return null
+    }
+
+    /*
+     * A write that is safe to repeat (an abort, a trash batch), sent once more on a fresh connection when the first got
+     * no answer: what OkHttp's own retry did for a dead pooled connection before writes were streamed (sentOnce). A second
+     * Unreachable is the caller's to judge.
+     */
+    private fun <T> againOnce(write: () -> T): T = try { write() } catch (_: Unreachable) { write() }
 
     /* `metadataSignature` is over `metadataVersion + 1`, the version the server stores. */
     fun rename(nodeId: String, workspaceId: String, metadataVersion: ULong, keyEpoch: ULong, metadataEnvelope: String, metadataSignature: String): NodeView =
@@ -496,7 +530,7 @@ class DriveApi(val session: Shared.Session) : RootApi {
         NodeView.from(write(workspaceId, "/nodes/$sourceNodeId/copy", body.put("workspaceId", workspaceId)).getJSONObject("node"))
 
     /* One request of a selection to the trash, or back in place (Undo): up to MAX_TRASH_BATCH ids of one workspace. */
-    fun trashBatch(workspaceId: String, ids: List<String>): List<BatchAnswer> = batch(workspaceId, "/workspaces/$workspaceId/trash-batch", ids)
+    fun trashBatch(workspaceId: String, ids: List<String>): List<BatchAnswer> = againOnce { batch(workspaceId, "/workspaces/$workspaceId/trash-batch", ids) }
     fun restoreBatch(workspaceId: String, ids: List<String>): List<BatchAnswer> = batch(workspaceId, "/workspaces/$workspaceId/restore-batch", ids)
 
     private fun batch(workspaceId: String, path: String, ids: List<String>): List<BatchAnswer> {
@@ -528,8 +562,14 @@ class DriveApi(val session: Shared.Session) : RootApi {
         return NodeView.from(write(workspaceId, "/nodes/$nodeId/restore", body).getJSONObject("node"))
     }
 
+    /* Sent once more when the first got no answer; that one's 404 means the first deleted it. */
     fun purge(nodeId: String, workspaceId: String) {
-        write(workspaceId, "/nodes/$nodeId", JSONObject().put("workspaceId", workspaceId), "DELETE")
+        fun delete() = write(workspaceId, "/nodes/$nodeId", JSONObject().put("workspaceId", workspaceId), "DELETE")
+        try {
+            delete()
+        } catch (_: Unreachable) {
+            try { delete() } catch (_: NotFound) { /* Gone with the first send. */ }
+        }
     }
 
     /* One batch of the trash, as the server takes it; `remaining` says whether to ask again. */
@@ -569,7 +609,7 @@ class DriveApi(val session: Shared.Session) : RootApi {
      * (`data.upload` "completing"), to be asked about again.
      */
     fun abortUploadFate(uploadId: String, workspaceId: String): SaveAbortFate = try {
-        send("/uploads/$uploadId/abort", JSONObject().put("workspaceId", workspaceId))
+        againOnce { send("/uploads/$uploadId/abort", JSONObject().put("workspaceId", workspaceId)) }
         SaveAbortFate.ABORTED
     } catch (_: NotFound) {
         SaveAbortFate.GONE
@@ -589,7 +629,7 @@ class DriveApi(val session: Shared.Session) : RootApi {
     }
 
     fun abortUpload(uploadId: String, workspaceId: String): Reservations.Abort = try {
-        send("/uploads/$uploadId/abort", JSONObject().put("workspaceId", workspaceId))
+        againOnce { send("/uploads/$uploadId/abort", JSONObject().put("workspaceId", workspaceId)) }
         Reservations.Abort.RELEASED
     } catch (_: NotFound) {
         Reservations.Abort.GONE

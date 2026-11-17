@@ -155,6 +155,12 @@ export type RunRow = {
      * removed: never offered as interrupted, dropped by the next open.
      */
     done?: boolean;
+    /*
+     * Folders whose creation was sent (written with the id, before it went) and not yet known
+     * answered, with when: one a clean-up doesn't find may still be made, so the row stays until
+     * a later look finds it, or until the creation window (UPLOAD_TTL_HOURS) has passed.
+     */
+    uncertain?: { id: string; at: number }[];
 };
 
 export interface RunJournal {

@@ -1007,19 +1007,24 @@ extension Vault {
             default: raced = false
             }
             guard raced else { throw error }
-            // Its reservation goes: a conflicted completion keeps it on the server until it expires.
-            if let ids = begun.ids { await api.abortUpload(uploadId: ids.uploadId, workspaceId: ids.workspaceId) }
+            // Its reservation goes: a conflicted completion keeps it on the server until it expires. One the abort
+            // didn't confirm released is named back (`unreleased`), and the run keeps its id until one does.
+            var unreleased: String?
+            if let ids = begun.ids {
+                let fate = await api.abortUploadFate(uploadId: ids.uploadId, workspaceId: ids.workspaceId)
+                if fate == .unknown || fate == .finishing { unreleased = ids.uploadId }
+            }
             // A new file refused only because a key change reached its folder while it went up: sealed afresh.
-            guard let replacing else { throw SaveRekeyed() }
+            guard let replacing else { throw SaveRekeyed(unreleased: unreleased) }
             // As the server holds the file now: gone from its folder, or someone else's version current, is
             // stale (never a new file where it was); the same version is only its key having moved, sealed
             // afresh under the keys found (SaveRekeyed), as the queue does (FamilyUploads.finish).
             // From the server itself, never the catalogue, which may not have heard of another device's save yet.
             let listed = try await listChildren(of: parentId, in: replacing.node.workspaceId)
-            guard let fresh = listed.children.first(where: { $0.id == replacing.id }) else { throw SaveStale(currentVersionId: nil) }
+            guard let fresh = listed.children.first(where: { $0.id == replacing.id }) else { throw SaveStale(currentVersionId: nil, unreleased: unreleased) }
             let current = fresh.currentVersion?.id
-            if current != startedFrom { throw SaveStale(currentVersionId: current) }
-            throw SaveRekeyed()
+            if current != startedFrom { throw SaveStale(currentVersionId: current, unreleased: unreleased) }
+            throw SaveRekeyed(unreleased: unreleased)
         }
     }
 

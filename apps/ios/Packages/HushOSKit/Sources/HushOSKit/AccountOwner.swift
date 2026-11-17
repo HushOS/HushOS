@@ -31,6 +31,20 @@ public struct AccountOwner: Codable, Sendable, Hashable {
 
     /* The account signed in on this phone (the session in the shared keychain), or nil when nobody is. */
     public static var signedIn: AccountOwner? { SharedKeychain.session.map(AccountOwner.init) }
+
+    /* Who is signed in, telling nobody (`.account(nil)`) from a keychain read that failed (`.unreadable`). */
+    public static var signedInAnswer: SignedInAnswer {
+        switch SharedKeychain.sessionLookup {
+        case .read(let session): .account(session.map(AccountOwner.init))
+        case .failed: .unreadable
+        }
+    }
+}
+
+/* Who is signed in, as the keychain answered: an account, nobody (`.account(nil)`), or a read that failed. */
+public enum SignedInAnswer: Sendable, Equatable {
+    case account(AccountOwner?)
+    case unreadable
 }
 
 /*

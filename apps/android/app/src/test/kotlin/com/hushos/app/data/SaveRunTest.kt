@@ -791,6 +791,48 @@ class SaveRunTest {
         assertFalse(staging.exists())
     }
 
+    /*
+     * A folder whose creation was on its way when the app ended: the row says so, the next launch doesn't find it and keeps
+     * the row, the folder then appears and the launch after removes it. Past the creation window, one still not there was
+     * never made.
+     */
+    @Test
+    fun aFolderOnItsWayWhenTheAppEndedKeepsItsRowUntilItAppearsThenGoes() {
+        val hold = CountDownLatch(1)
+        val writer = FakeWriter().apply { createLater = true; making = { hold.await(5, TimeUnit.SECONDS) } }
+        val rows = journal()
+        val run = SaveRun.start(writer, listOf(opened("f")), emptyList(), rows, now = { 1_000L })
+        val pool = Executors.newSingleThreadExecutor()
+        pool.submit { runCatching { run.folder("Out", own) } }
+        // The process ends with the creation on its way: the row on disk is all the next launch has.
+        var row: SaveRunRow? = null
+        repeat(200) { if (row == null) { row = rows.list().firstOrNull { it.nodeIds.isNotEmpty() }; Thread.sleep(5) } }
+        val left = row!!
+        assertEquals(mapOf("made-Out" to 1_000L), left.uncertain)
+        assertEquals(SaveCleanup.LEFT, SaveRuns.cleanUp(left, writer, journal(), now = 2_000L))
+        writer.live += "made-Out"
+        assertEquals(SaveCleanup.DELETED, SaveRuns.cleanUp(left, writer, journal(), now = 3_000L))
+        assertEquals(setOf("made-Out"), writer.purged)
+        assertEquals(SaveCleanup.NOTHING, SaveRuns.cleanUp(left.copy(id = "again"), writer, journal(), now = 1_000L + SaveRuns.CREATION_WINDOW_MS))
+        hold.countDown()
+        pool.shutdown()
+    }
+
+    /* A key change's pause cut short (the thread interrupted) stops the run and removes what it made, as any failure does. */
+    @Test
+    fun aPauseCutShortStopsTheRunAndCleansUp() {
+        val writer = FakeWriter()
+        writer.answers.addLast { throw ApiError(409, "Finishing a key change…", "rotating") }
+        val rows = journal()
+        val run = SaveRun.start(writer, listOf(opened("fam")), emptyList(), rows, pause = { throw InterruptedException() })
+        run.folder("Out", own)
+        val stopped = assertThrows(SaveRunStopped::class.java) { run.file(byteArrayOf(1), "a", null, own) }
+        assertEquals(SaveRunStopped.Reason.FAILED, stopped.reason)
+        assertTrue(Thread.interrupted())
+        assertEquals(setOf("made-Out"), writer.purged)
+        assertTrue(rows.list().isEmpty())
+    }
+
     /* A listing that fails after a result landed stops the run and removes it: all or nothing. */
     @Test
     fun aListingThatFailsStopsTheRunAndRemovesWhatItMade() {
@@ -1061,16 +1103,29 @@ class SaveResultTest {
     }
 
     /*
-     * A write whose answer is lost goes out once (DriveApi.sentOnce): the client never sends it again by itself, so a
-     * lost answer is Unreachable for the save run's own rules, never a 409 for its own id or a second trash.
+     * The client never sends a write again by itself (DriveApi.sentOnce): a write whose answer is lost is Unreachable.
+     * Only writes safe to repeat are sent once more, by the app, on a fresh connection: a folder creation (by its minted
+     * id), an abort, a trash batch.
      */
     @Test
-    fun aWriteWhoseAnswerIsLostIsSentOnce() {
-        server.dropReply = { method, path -> method == "POST" && (path == "drive/folders" || path.endsWith("/trash-batch")) }
-        assertThrows(Unreachable::class.java) { vault.createFolder(server.root, "Out") }
-        assertEquals(1, server.requests.count { it == "POST /api/drive/folders" })
+    fun aWriteWhoseAnswerIsLostIsSentOnceAndOnlyASafeOneOnceMore() {
+        server.dropReply = { method, path -> method == "POST" && (path.endsWith("/epochs") || path == "drive/folders" || path.endsWith("/trash-batch")) }
+        assertThrows(Unreachable::class.java) { vault.api.allocateEpoch(vault.workspaceId) }
+        assertEquals(1, server.requests.count { it.endsWith("/epochs") })
         assertThrows(Unreachable::class.java) { vault.api.trashBatch(vault.workspaceId, listOf(server.root)) }
-        assertEquals(1, server.requests.count { it.endsWith("/trash-batch") })
+        assertEquals(2, server.requests.count { it.endsWith("/trash-batch") })
+        server.dropReply = null
+    }
+
+    /* A folder creation whose answer is lost is sent once more; the 409 for its own id (the first send made it) is the folder. */
+    @Test
+    fun aFolderCreationSentAgainAfterALostAnswerIsTheFolderTheFirstSendMade() {
+        var dropped = false
+        server.dropReply = { method, path -> (method == "POST" && path == "drive/folders" && !dropped).also { if (it) dropped = true } }
+        val made = vault.createFolder(server.root, "Out")
+        assertEquals(2, server.requests.count { it == "POST /api/drive/folders" })
+        assertEquals("Out", made.name)
+        assertEquals(listOf(made.id), server.children(server.root).filter { it.id == made.id }.map { it.id })
         server.dropReply = null
     }
 

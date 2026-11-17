@@ -30,18 +30,22 @@ import java.util.concurrent.atomic.AtomicInteger
 
 /*
  * A run's row: ids only, never a name or a byte. `launch` is the process that ran it. `done`: the run finished (or its
- * results were kept, or cleaned up) but its row couldn't be removed: never offered, dropped next.
+ * results were kept, or cleaned up) but its row couldn't be removed: never offered, dropped next. `uncertain`: folders
+ * whose creation was sent (written with the id, before it went) and not known answered, with when (epoch millis): one a
+ * clean-up doesn't find may still be made, so the row stays until a later look finds it or CREATION_WINDOW_MS has passed.
  */
 data class SaveRunRow(val id: String, val workspaceId: String, val nodeIds: List<String>, val uploadIds: List<String>, val at: Long, val launch: String,
-                      val done: Boolean = false) {
+                      val done: Boolean = false, val uncertain: Map<String, Long> = emptyMap()) {
     fun json(): JSONObject = JSONObject().put("id", id).put("workspaceId", workspaceId).put("nodeIds", JSONArray(nodeIds))
         .put("uploadIds", JSONArray(uploadIds)).put("at", at).put("launch", launch).also { if (done) it.put("done", true) }
+        .also { if (uncertain.isNotEmpty()) it.put("uncertain", JSONObject(uncertain)) }
 
     companion object {
         fun from(json: JSONObject): SaveRunRow {
             fun list(name: String) = json.getJSONArray(name).let { array -> (0 until array.length()).map(array::getString) }
+            val uncertain = json.optJSONObject("uncertain")?.let { held -> held.keys().asSequence().associateWith { held.getLong(it) } }.orEmpty()
             return SaveRunRow(json.getString("id"), json.getString("workspaceId"), list("nodeIds"), list("uploadIds"), json.getLong("at"), json.getString("launch"),
-                json.optBoolean("done", false))
+                json.optBoolean("done", false), uncertain)
         }
     }
 }
@@ -363,8 +367,19 @@ object SaveRuns {
         return journal.list().filter { it.launch != launch && !it.done }
     }
 
-    /* Removes what an interrupted run made, as a cancel would have, then its row. */
-    fun cleanUp(row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal): SaveCleanup = clean(row, writer, journal, emptySet(), null, null).cleanup
+    /*
+     * How long a folder creation that got no answer may still be made: the server's own upload window (packages/drive
+     * UPLOAD_TTL_HOURS). Within it, a clean-up that doesn't find the folder keeps the row; past it, one still not there was
+     * never made.
+     */
+    const val CREATION_WINDOW_MS = Reservations.TTL_MS
+
+    /*
+     * Removes what an interrupted run made, as a cancel would have, then its row. A folder the row still holds uncertain,
+     * not found, may still be made: the row stays until a later launch finds it or CREATION_WINDOW_MS has passed.
+     */
+    fun cleanUp(row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal, now: Long = System.currentTimeMillis()): SaveCleanup =
+        clean(row, writer, journal, emptySet(), null, null, mayExist = row.uncertain.filterValues { now - it < CREATION_WINDOW_MS }.keys).cleanup
 
     /*
      * Keeps what an interrupted run made: its row always goes. Its open uploads are still asked to abort; one with no answer
@@ -655,7 +670,8 @@ class SaveRun private constructor(
     /* A new folder's id, minted and on disk before its creation is sent; a run stopping, or a refused write, throws. */
     private fun recordFolder(id: String) = synchronized(lock) {
         if (sealed) throw IllegalStateException("This save run is stopping.")
-        row = row.copy(nodeIds = row.nodeIds + id)
+        // Uncertain until answered: a launch after a crash finds it so.
+        row = row.copy(nodeIds = row.nodeIds + id, uncertain = row.uncertain + (id to now()))
         journal.put(row)
         // Stopped or signed out while it was written: the creation is not sent.
         if (sealed) throw IllegalStateException("This save run is stopping.")
@@ -698,10 +714,11 @@ class SaveRun private constructor(
                         sent = id
                         registered?.invoke()
                     }
+                    sent?.let(::answered)
                 } catch (error: Exception) {
                     // No answer: the server may still be making it (before the count drops, so a waiting stop sees it).
                     val id = sent
-                    if (id != null && recordIt && SaveRuns.noAnswer(error)) synchronized(lock) { mayExist += id }
+                    if (id != null && recordIt && SaveRuns.noAnswer(error)) synchronized(lock) { mayExist += id } else id?.let(::answered)
                     throw error
                 } finally {
                     if (sent != null) creating.decrementAndGet()
@@ -712,7 +729,7 @@ class SaveRun private constructor(
                 val start = since ?: now()
                 since = start
                 if (now() - start >= FamilyUploads.GIVE_UP_MS) throw stop(SaveRunStopped.Reason.FAILED, FamilyUploads.GAVE_UP)
-                pause(++attempt)
+                waitOut(++attempt)
                 val wait = Wait(since, attempt)
                 parentNow = refreshed(parentNow, null, wait).first
                 since = wait.since
@@ -737,6 +754,27 @@ class SaveRun private constructor(
         return made
     }
 
+    /*
+     * A creation answered (made, or refused with a reason): no longer uncertain in the row, written while the run may still
+     * write (after a stop sealed it the mark stays, which only keeps a row a little longer than it needs).
+     */
+    private fun answered(id: String) = synchronized(lock) {
+        if (id !in row.uncertain) return@synchronized
+        row = row.copy(uncertain = row.uncertain - id)
+        if (!sealed) runCatching { journal.put(row) }
+    }
+
+    /* A key change's pause; one cut short (the thread interrupted) stops the run as any other failure does. */
+    private fun waitOut(attempt: Int) {
+        try {
+            pause(attempt)
+        } catch (error: Exception) {
+            val done = failed(error)
+            if (error is InterruptedException) Thread.currentThread().interrupt()
+            throw done
+        }
+    }
+
     /* A key change's wait: when it began and how many pauses so far. */
     private class Wait(var since: Long?, var attempt: Int)
 
@@ -759,7 +797,7 @@ class SaveRun private constructor(
                 val start = wait.since ?: now()
                 wait.since = start
                 if (now() - start >= FamilyUploads.GIVE_UP_MS) throw stop(SaveRunStopped.Reason.FAILED, FamilyUploads.GAVE_UP)
-                pause(++wait.attempt)
+                waitOut(++wait.attempt)
             }
         }
     }
@@ -845,7 +883,7 @@ class SaveRun private constructor(
                             val start = since ?: now()
                             since = start
                             if (now() - start >= FamilyUploads.GIVE_UP_MS) throw stop(SaveRunStopped.Reason.FAILED, FamilyUploads.GAVE_UP)
-                            pause(++attempt)
+                            waitOut(++attempt)
                         }
                         // The destination and the chain above it as the server holds them now (a family's synced again first),
                         // and the file replaced, so nothing is sealed again under keys the change replaced.
