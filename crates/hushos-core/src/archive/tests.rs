@@ -254,6 +254,20 @@ fn large(name: &str) -> Vec<u8> {
                 false,
             )
         }
+        "folders-2m.zip" => {
+            // make.ts's folders2MFixture: 50,000 entries of 42 parts, a folder of their own each.
+            write_zip(
+                &(0..50_000)
+                    .map(|i| Spec {
+                        packed: b"x".to_vec(),
+                        size: 1,
+                        crc: crc32fast::hash(b"x"),
+                        ..stored(&format!("{i:x}/{}f", "a/".repeat(40)))
+                    })
+                    .collect::<Vec<_>>(),
+                false,
+            )
+        }
         "wide.zip" => {
             // make.ts's wideFixture: 1,000 entries of 256 parts.
             let folders: Vec<String> = (0..255).map(|d| format!("p{d}")).collect();

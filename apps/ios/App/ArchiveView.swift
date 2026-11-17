@@ -138,6 +138,16 @@ struct ArchiveScreen: View {
                 adopted?(row)
             }
         }
+        // Its family let go of (a removal, a fork): the core closed the archive already, and what it showed goes too.
+        .onReceive(NotificationCenter.default.publisher(for: ArchiveSessions.familyClosed)) { note in
+            guard let archive, note.userInfo?["archive"] as? UUID == archive.identity else { return }
+            for download in downloads { download.task?.cancel() }
+            self.archive = nil
+            tree = nil
+            opened = nil
+            path = []
+            failure = FamilyWords.openAgain
+        }
         // Leaving the viewer stops its downloads and closes the archive (its calls cancelled, the password wiped).
         .onDisappear {
             for download in downloads { download.task?.cancel() }

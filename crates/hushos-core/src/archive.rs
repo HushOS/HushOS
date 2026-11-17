@@ -744,6 +744,11 @@ fn support_of(entry: &Entry) -> &'static str {
 /// How deep the list goes: an entry more than 256 parts deep is listed flat, under its whole path,
 /// at the top (the web's LIST_DEPTH_MAX).
 pub const LIST_DEPTH_MAX: usize = 256;
+/// The most folders a list makes: past it the archive is refused as `directory-too-large`, as on
+/// the web (zip-format.ts's ZIP_LIMITS.folders). 2,000,000 folders are about 24 MB in an app's
+/// arrays; a 16 MiB directory of nothing but folders could make 7.6 million, more than a phone's
+/// heap should hold for one list.
+pub const LIST_FOLDERS_MAX: u32 = 2_000_000;
 
 /* Characters no file system takes, or that change how a name reads (controls, bidi marks): the web's save-file.ts set. */
 fn unsafe_char(code: u32) -> bool {
@@ -851,7 +856,7 @@ pub fn save_name(name: &str) -> String {
 /// and a few numbers an entry are held while it runs, and the folders come out as one array and one
 /// string, so memory grows with the directory's bytes and nothing else: no entry keeps its parts,
 /// and no path's prefixes are ever made.
-pub(crate) fn list_entries(entries: &mut [Entry]) -> (Vec<ArchiveEntry>, ArchiveFolders) {
+pub(crate) fn list_entries(entries: &mut [Entry]) -> Result<(Vec<ArchiveEntry>, ArchiveFolders)> {
     let count = entries.len();
     // Where each entry sits: its folder, and its name's span in its path (the whole path when flat).
     let mut folder = vec![0u32; count];
@@ -932,6 +937,9 @@ pub(crate) fn list_entries(entries: &mut [Entry]) -> (Vec<ArchiveEntry>, Archive
             }
             let slot = children.entry((parent, part)).or_insert(0);
             if *slot == 0 {
+                if made > LIST_FOLDERS_MAX {
+                    return refused(Refusal::DirectoryTooLarge);
+                }
                 *slot = made;
                 made += 1;
                 parents.extend_from_slice(&parent.to_le_bytes());
@@ -1012,7 +1020,7 @@ pub(crate) fn list_entries(entries: &mut [Entry]) -> (Vec<ArchiveEntry>, Archive
             }
         })
         .collect();
-    (listed, ArchiveFolders { parents, names })
+    Ok((listed, ArchiveFolders { parents, names }))
 }
 
 /// Whether an entry declares more than 200 times what it packs, once it declares over 1 MiB: a
@@ -1548,7 +1556,7 @@ impl Zip {
         let mut entries = read_directory(&bytes, &directory)?;
         // The directory's bytes go before the list is made: on a phone they are up to 16 MiB.
         drop(bytes);
-        let (listed, folders) = list_entries(&mut entries);
+        let (listed, folders) = list_entries(&mut entries)?;
         Ok(Zip {
             listing: Mutex::new(Some(Arc::new(Listing { entries, listed }))),
             folders: Mutex::new(Some(folders)),
@@ -1792,7 +1800,8 @@ impl Zip {
     /// authentication code then proves the password; then the rest, to their password check
     /// alone. So when no entry qualifies, the password verifier alone decides (AES's two bytes;
     /// ZipCrypto's one check byte, which passes 1 wrong password in 256: a download then fails its
-    /// CRC). An empty entry proves nothing, so it is never the probe. A wrong password ends it; an
+    /// CRC). An empty ZipCrypto entry proves nothing, so it is never the probe; an empty AES
+    /// entry's authentication code does. A wrong password ends it; an
     /// entry that fails for another reason (damage, a bad authentication code or CRC, which may be
     /// tampering) says nothing certain of the password, and the next is tried: at most three
     /// entries and 32 MiB read in all, past which a try reads only an entry's password check.
@@ -1804,7 +1813,9 @@ impl Zip {
             .iter()
             .filter(|entry| {
                 entry.lock != Lock::None
-                    && entry.size > 0
+                    // An empty entry proves nothing under ZipCrypto (one check byte), but an empty
+                    // AES entry still carries its keyed authentication code.
+                    && (entry.size > 0 || entry.lock == Lock::Aes)
                     && !entry.directory
                     && !entry.link
                     && support_of(entry) == "ok"

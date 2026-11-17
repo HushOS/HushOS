@@ -890,6 +890,10 @@
             "hidden": 0,
             "count": 1000
         },
+        "folders-2m.zip": {
+            "generated": true,
+            "listing": "directory-too-large"
+        },
         "zeros-1g.zip": {
             "generated": true,
             "listing": "ok",
@@ -1029,6 +1033,34 @@
                     "download": "ok",
                     "withoutPassword": "ratio",
                     "wrongPassword": "ratio"
+                }
+            ]
+        },
+        "aes-empty.zip": {
+            "listing": "ok",
+            "hidden": 0,
+            "unlock": {
+                "right": true,
+                "wrong": false
+            },
+            "entries": [
+                {
+                    "path": "empty-ae2.txt",
+                    "lock": "aes",
+                    "check": "ok",
+                    "download": "ok",
+                    "withoutPassword": "password",
+                    "wrongPassword": "wrong-password",
+                    "downloadSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                },
+                {
+                    "path": "empty-ae1.txt",
+                    "lock": "aes",
+                    "check": "ok",
+                    "download": "ok",
+                    "withoutPassword": "password",
+                    "wrongPassword": "wrong-password",
+                    "downloadSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
                 }
             ]
         }

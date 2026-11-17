@@ -563,21 +563,30 @@ function EntryPane({
     const icon = <FileMark kind="file" name={name} size="large" />;
     // The entry has a password of its own (the one held didn't open it): asked for again.
     const [reprompt, setReprompt] = useState(false);
-    // A stored entry past the limit, shown by range without its checksum checked.
-    const [unchecked, setUnchecked] = useState(false);
+    /*
+     * A stored entry past the limit, shown by range without its checksum checked: known from the
+     * entry, as the worker decides it, so a preview the viewer remembers still says so.
+     */
+    const unchecked = entry.stored && entry.size > entryLimit(kind);
     const [attempt, setAttempt] = useState(0);
     const opener = useMemo(
-        () => async (): Promise<FileReader> => {
-            try {
-                const { reader, checked } = await session.preview(entry, entryLimit(kind));
-                setUnchecked(!checked);
-                return reader;
-            } catch (cause) {
-                if (cause instanceof ArchiveRefusal && cause.code === 'wrong-password')
-                    setReprompt(true);
-                throw cause;
-            }
-        },
+        () =>
+            async (signal: AbortSignal): Promise<FileReader> => {
+                try {
+                    const { reader, checked } = await session.preview(
+                        entry,
+                        entryLimit(kind),
+                        signal,
+                    );
+                    // The worker and the page agree on what is checked, or the preview isn't shown.
+                    if (checked === unchecked) throw new Error(viewerWords.broken);
+                    return reader;
+                } catch (cause) {
+                    if (cause instanceof ArchiveRefusal && cause.code === 'wrong-password')
+                        setReprompt(true);
+                    throw cause;
+                }
+            },
         // A new attempt (after a password) opens afresh.
         // eslint-disable-next-line react-hooks/exhaustive-deps
         [session, entry, kind, attempt],

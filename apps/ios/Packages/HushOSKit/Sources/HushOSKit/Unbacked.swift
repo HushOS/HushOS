@@ -306,7 +306,7 @@ public enum TemporaryCopies {
     @discardableResult
     public static func forgetFamily(_ workspaces: [String], in temporary: URL = FileManager.default.temporaryDirectory, session: CopySession? = nil) -> Bool {
         let family = temporary.appendingPathComponent("opened", isDirectory: true).appendingPathComponent(familyFolder, isDirectory: true)
-        return forgetLock.withLock {
+        let forgot = forgetLock.withLock { () -> Bool in
             // An ended session's cleanup touches nothing: the copies there now may be the next session's.
             if let session, !session.open { return false }
             for id in workspaces {
@@ -317,6 +317,9 @@ public enum TemporaryCopies {
             }
             return true
         }
+        // A zip of those folders open in the viewer closes too, even one nothing is reading.
+        if forgot { ArchiveSessions.closeFamily(workspaces) }
+        return forgot
     }
 
     /*

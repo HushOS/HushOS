@@ -374,7 +374,7 @@ function useReader(
     node: DriveNode,
     enabled: boolean,
     wholeRead: boolean,
-    open?: () => Promise<FileReader>,
+    open?: (signal: AbortSignal) => Promise<FileReader>,
 ) {
     const [state, setState] = useState(NO_READER);
     /*
@@ -391,6 +391,8 @@ function useReader(
         if (!enabled) return;
         let active = true;
         let opened: FileReader | null = null;
+        // An archive entry left while it opens stops being read: its worker lets the bytes go.
+        const leaving = new AbortController();
         const publish = (reader: FileReader | null, error: string | null) => {
             if (!active) {
                 void reader?.close();
@@ -404,7 +406,7 @@ function useReader(
         const { node: current, open: opener } = latest.current;
         if (opener)
             // An entry of an archive: what the archive's worker hands back, once it is checked.
-            opener().then(
+            opener(leaving.signal).then(
                 (reader) => publish(reader, null),
                 (cause: unknown) => publish(null, failure(cause)),
             );
@@ -421,6 +423,7 @@ function useReader(
         }
         return () => {
             active = false;
+            leaving.abort();
             void opened?.close();
             // A closed reader must never be handed out again: the next one starts from nothing.
             setState(NO_READER);
@@ -466,7 +469,7 @@ export function PreviewBody({
     node: DriveNode;
     onDownload: (node: DriveNode) => void;
     /* Where the bytes come from instead of the node's version: an entry of an archive. */
-    open?: () => Promise<FileReader>;
+    open?: (signal: AbortSignal) => Promise<FileReader>;
 }) {
     // An archive inside an archive is never opened in place (the archive view says so first).
     const kind = open && previewKind(node) === 'archive' ? 'none' : previewKind(node);

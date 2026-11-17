@@ -1220,6 +1220,23 @@ function lockedRatioFixture() {
     ]);
 }
 
+/*
+ * AES entries that are all empty: none has bytes, but each carries its keyed authentication code,
+ * so the right password opens the archive and a wrong one doesn't.
+ */
+function aesEmptyFixture() {
+    const locked = (name: string, version: 1 | 2, seed: number): Raw => ({
+        name,
+        packed: aesAt(new Uint8Array(0), 3, seed).bytes,
+        size: 0,
+        crc: 0,
+        method: 99,
+        flags: 1,
+        centralExtra: aesFieldAt(version, 3, 0),
+    });
+    return writeRaw([locked('empty-ae2.txt', 2, 801), locked('empty-ae1.txt', 1, 802)]);
+}
+
 /* WinZip AES at any strength, the salt fixed by `seed`. */
 function aesAt(data: Uint8Array, strength: 1 | 2 | 3, seed: number, password = PASSWORD) {
     const keyLength = [16, 24, 32][strength - 1]!;
@@ -1458,6 +1475,17 @@ function sizesFixture() {
     ]);
 }
 
+/*
+ * 50,000 entries of 42 parts, each under a folder of its own (`<n>/a/a/…/f`): 2,050,000 folders
+ * in a 6.6 MiB directory, past the 2,000,000 a listing makes, so it is refused on every client.
+ */
+function folders2MFixture() {
+    const specs: Spec[] = [];
+    for (let i = 0; i < 50_000; i++)
+        specs.push({ name: `${i.toString(16)}/${'a/'.repeat(40)}f`, data: utf8('x'), method: 0 });
+    return writeZip(specs);
+}
+
 /* 1,000 entries of 256 parts, 256,000 in all: every one listed in its folder, none flat. */
 function wideFixture() {
     const specs: Spec[] = [];
@@ -1510,8 +1538,10 @@ export const FIXTURES: Fixture[] = [
     { name: 'signatures.zip', large: false, build: signaturesFixture },
     { name: 'two-passwords.zip', large: false, build: twoPasswordsFixture },
     { name: 'locked-ratio.zip', large: false, build: lockedRatioFixture },
+    { name: 'aes-empty.zip', large: false, build: aesEmptyFixture },
     { name: 'front-loaded.zip', large: true, build: frontLoadedFixture },
     { name: 'wide.zip', large: true, build: wideFixture },
+    { name: 'folders-2m.zip', large: true, build: folders2MFixture },
     { name: 'compressible.zip', large: true, build: compressibleFixture },
     { name: 'zeros-1g.zip', large: true, build: zeros1GiB },
     { name: 'zip64-5g.zip', large: true, build: zip64FiveGiB },

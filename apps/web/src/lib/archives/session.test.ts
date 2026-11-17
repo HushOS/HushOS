@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { folderName, readListing } from './session';
+import { folderName, readListing, type ArchiveEntry } from './session';
 
 /*
  * The page's boundary against the archive worker: a worker a hostile file took over can send the
@@ -121,5 +121,49 @@ describe('a lock or sign-out', () => {
         await expect(session.unlock('again')).rejects.toThrow();
         // Nothing more reaches a worker that is gone.
         expect(posted.map((message) => message.type)).toEqual(['open', 'unlock']);
+    });
+});
+
+describe('leaving an entry while it previews', () => {
+    it('stops the worker’s preview, and its late answer neither shows nor breaks the archive', async () => {
+        const { openArchive } = await import('./session');
+        const { memoryReader } = await import('@/lib/tools/ranges');
+        const posted: { type: string; id?: number }[] = [];
+        let terminated = false;
+        const fake = {
+            onmessage: null as ((event: MessageEvent) => void) | null,
+            onerror: null,
+            onmessageerror: null,
+            postMessage: (message: { type: string; id?: number }) => posted.push(message),
+            terminate: () => void (terminated = true),
+        };
+        const session = openArchive(
+            memoryReader(new Uint8Array(100)),
+            () => fake as unknown as Worker,
+        );
+        fake.onmessage!({ data: { type: 'listing', ...message([entry()]) } } as MessageEvent);
+        await session.listing;
+        const leaving = new AbortController();
+        const previewing = session.preview(entry() as ArchiveEntry, 1024, leaving.signal);
+        await Promise.resolve();
+        await Promise.resolve();
+        const asked = posted.find((message) => message.type === 'preview')!;
+        leaving.abort();
+        await expect(previewing).rejects.toThrow('Stopped.');
+        expect(posted.at(-1)).toEqual({ type: 'stop', id: asked.id });
+        // The worker's answer, already on its way, is let go: not a broken worker.
+        fake.onmessage!({
+            data: { type: 'bytes', id: asked.id, bytes: new ArrayBuffer(10) },
+        } as MessageEvent);
+        expect(terminated).toBe(false);
+        // The next entry previews as before.
+        const next = session.preview(entry() as ArchiveEntry, 1024);
+        await Promise.resolve();
+        await Promise.resolve();
+        const again = posted.filter((message) => message.type === 'preview').at(-1)!;
+        fake.onmessage!({
+            data: { type: 'bytes', id: again.id, bytes: new ArrayBuffer(10) },
+        } as MessageEvent);
+        expect((await next).checked).toBe(true);
     });
 });

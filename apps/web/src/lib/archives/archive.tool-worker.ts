@@ -144,6 +144,9 @@ scope.onmessage = (event) => {
             return;
         case 'preview':
             void (async () => {
+                // Stoppable, as a download is: the viewer left the entry, so its inflating ends here.
+                const stop = new AbortController();
+                running.set(msg.id, { stop, more: null });
                 try {
                     const opened = await ready();
                     const listed = opened.listed.find((item) => item.index === msg.index);
@@ -154,13 +157,16 @@ scope.onmessage = (event) => {
                         scope.postMessage({ type: 'span', id: msg.id, offset, size });
                         return;
                     }
-                    const bytes = await opened.preview(msg.index, msg.limit);
+                    const bytes = await opened.preview(msg.index, msg.limit, stop.signal);
+                    if (stop.signal.aborted) return;
                     scope.postMessage(
                         { type: 'bytes', id: msg.id, bytes: bytes.buffer as ArrayBuffer },
                         [bytes.buffer as ArrayBuffer],
                     );
                 } catch (error) {
-                    fail(msg.id, error);
+                    if (!stop.signal.aborted) fail(msg.id, error);
+                } finally {
+                    running.delete(msg.id);
                 }
             })();
             return;

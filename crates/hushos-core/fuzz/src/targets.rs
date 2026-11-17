@@ -57,6 +57,9 @@ pub fn verdict(target: &str, data: &[u8]) -> Option<Value> {
         "record_integrity" => with_json(data, record_integrity),
         "origin_open" => origin_open(data),
         "area_ledger" => with_json(data, area_ledger),
+        // Not in TARGETS: its twin is the web's archive reader, compared by
+        // apps/web/src/lib/archives/differential.ts rather than packages/crypto.
+        "archive" => archive(data),
         _ => return None,
     })
 }
@@ -2172,9 +2175,136 @@ fn joins_record_kind(value: &Value) -> Option<Value> {
     Some(ok(outcome.clone()))
 }
 
+/// The shared fixtures' password, tried on every archive.
+pub const ARCHIVE_PASSWORD: &str = "correct horse battery";
+/// The most entries an archive verdict previews, and the most each preview may hold.
+const ARCHIVE_PREVIEWS: usize = 32;
+const ARCHIVE_PREVIEW_LIMIT: u64 = 1 << 20;
+
+/* Bytes as a kept copy, read by range as a phone reads one. */
+struct ArchiveBytes(Vec<u8>);
+
+impl LocalSource for ArchiveBytes {
+    fn size(&self) -> u64 {
+        self.0.len() as u64
+    }
+    fn read_at(&self, offset: u64, length: u64) -> std::result::Result<Vec<u8>, FetchError> {
+        let start = (offset as usize).min(self.0.len());
+        let end = start.saturating_add(length as usize).min(self.0.len());
+        Ok(self.0[start..end].to_vec())
+    }
+}
+
+fn archive_code<T>(result: std::result::Result<T, ArchiveError>) -> (Option<T>, String) {
+    match result {
+        Ok(value) => (Some(value), "ok".into()),
+        Err(ArchiveError::Refused { code }) => (None, code),
+        Err(ArchiveError::Failed { .. }) => (None, "failed".into()),
+    }
+}
+
+/// Any bytes as a zip, the way a phone opens one: listed, each entry previewed (at most 32, each
+/// within 1 MiB), the shared password tried, and the locked entries previewed again under it.
+/// The web's verdict is the same JSON (apps/web/src/lib/archives/differential.ts). Invariants:
+/// no panic; every folder after its parent with a name a path could hold; every entry in a folder
+/// that exists; a preview never longer than the entry declares.
+pub fn archive(data: &[u8]) -> Value {
+    let control = || RunControl::new(60_000, None);
+    let session =
+        match ZipArchiveSession::open_local(std::sync::Arc::new(ArchiveBytes(data.to_vec())), control()) {
+            Ok(session) => session,
+            Err(error) => return ok(json!({ "listing": archive_code::<()>(Err(error)).1 })),
+        };
+    let entries = session.entries();
+    let folders = session.take_folders();
+    assert_eq!(folders.parents.len() % 4, 0, "parents are u32s");
+    let parents: Vec<u32> =
+        folders.parents.chunks(4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+    assert_eq!(parents.first(), Some(&0), "the top is folder 0");
+    let names: Vec<&str> = folders.names.split_terminator('/').collect();
+    assert_eq!(names.len() + 1, parents.len(), "a name for every folder");
+    assert!(folders.names.is_empty() || folders.names.ends_with('/'));
+    for (k, name) in names.iter().enumerate() {
+        assert!((parents[k + 1] as usize) < k + 1, "folder {} before its parent", k + 1);
+        assert!(!name.is_empty() && *name != "." && !name.contains('\\'), "folder name {name:?}");
+    }
+    // Where each entry is listed, as names from the top.
+    let at = |folder: u32| {
+        let mut parts = Vec::new();
+        let mut node = folder as usize;
+        while node != 0 {
+            parts.push(names[node - 1]);
+            node = parents[node] as usize;
+        }
+        parts.reverse();
+        parts.join("/")
+    };
+    let preview = |index: u32, size: u64| {
+        let (bytes, code) = archive_code(session.preview(index, ARCHIVE_PREVIEW_LIMIT, control()));
+        if let Some(bytes) = bytes {
+            assert_eq!(bytes.len() as u64, size, "a preview is its declared size");
+        }
+        code
+    };
+    let listed: Vec<Value> = entries
+        .iter()
+        .enumerate()
+        .map(|(n, entry)| {
+            assert!((entry.folder as usize) < parents.len(), "entry in a folder that exists");
+            let mut out = json!({
+                "index": entry.index, "path": entry.path, "at": at(entry.folder), "name": entry.name,
+                "directory": entry.directory, "hidden": entry.hidden, "lock": entry.lock, "support": entry.support,
+                "size": entry.size, "saveName": entry.save_name,
+            });
+            if n < ARCHIVE_PREVIEWS && !entry.directory {
+                out["preview"] = json!(preview(entry.index, entry.size));
+            }
+            out
+        })
+        .collect();
+    let (unlocked, code) = archive_code(session.unlock(ARCHIVE_PASSWORD.into(), None, control()));
+    let mut after = Vec::new();
+    if unlocked == Some(true) {
+        for entry in entries.iter().take(ARCHIVE_PREVIEWS) {
+            if entry.lock != "none" && !entry.directory {
+                after.push(json!(preview(entry.index, entry.size)));
+            }
+        }
+    }
+    ok(json!({
+        "listing": "ok",
+        "hidden": session.hidden(),
+        "entries": listed,
+        "unlock": if code == "ok" { json!(unlocked) } else { json!(code) },
+        "unlocked": after,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /* Every archive fixture through the archive verdict: none panics, and what it says matches the table. */
+    #[test]
+    fn the_archive_verdict_holds_to_every_fixture() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/fixtures/archives");
+        let table: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("expected.json")).unwrap()).unwrap();
+        let mut seen = 0;
+        for (name, expected) in table["fixtures"].as_object().unwrap() {
+            if expected["generated"].as_bool().unwrap_or(false) {
+                continue;
+            }
+            let verdict = archive(&std::fs::read(dir.join(name)).unwrap());
+            let out = &verdict["out"];
+            assert_eq!(out["listing"], expected["listing"], "{name}: listing");
+            if let Some(unlock) = expected.get("unlock") {
+                assert_eq!(out["unlock"], unlock["right"], "{name}: unlock");
+            }
+            seen += 1;
+        }
+        assert!(seen > 30, "only {seen} fixtures");
+    }
 
     /* The session oracle over the join histories: statements decide, never their signatures. */
     #[test]

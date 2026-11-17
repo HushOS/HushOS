@@ -40,6 +40,36 @@ public enum ArchiveSessions {
         var calls: [UUID: RunControl] = [:]
         /* Moved by every sign-out: an archive opened across one is never registered (PaddingDrains' rule). */
         var generation: UInt64 = 0
+        /* The family workspace each family file's archive was opened from (lowercase). */
+        var families: [UUID: String] = [:]
+    }
+
+    /* Posted on the main queue when a family's archive is closed because its family was let go of: `archive` is its `identity`. */
+    public static let familyClosed = Notification.Name("HushOSArchiveFamilyClosed")
+
+    /* `archive` is a file of the family folder `workspace`: a forget of that folder closes it at once (`closeFamily`). */
+    static func mark(archive id: UUID, family workspace: String) {
+        live.lock.withLock { if live.archives[id] != nil { live.families[id] = workspace.lowercased() } }
+    }
+
+    /*
+     * Family folders let go of (`TemporaryCopies.forgetFamily`): their archives close now, idle or
+     * not, their listing and password gone, and their screens are told. A call on one would refuse
+     * anyway (its FamilyCopyGate); this is for the one nothing is asking of.
+     */
+    static func closeFamily(_ workspaces: [String]) {
+        let forgotten = Set(workspaces.map { $0.lowercased() })
+        let closes = live.lock.withLock {
+            let ids = live.families.filter { forgotten.contains($0.value) }.map(\.key)
+            return ids.compactMap { id -> (UUID, @Sendable () -> Void)? in
+                live.families[id] = nil
+                return live.archives.removeValue(forKey: id).map { (id, $0) }
+            }
+        }
+        for (id, close) in closes {
+            close()
+            DispatchQueue.main.async { NotificationCenter.default.post(name: familyClosed, object: nil, userInfo: ["archive": id]) }
+        }
     }
     private static let live = Live()
 
@@ -57,7 +87,12 @@ public enum ArchiveSessions {
             return true
         }
     }
-    static func untrack(archive id: UUID) { _ = live.lock.withLock { live.archives.removeValue(forKey: id) } }
+    static func untrack(archive id: UUID) {
+        live.lock.withLock {
+            live.archives[id] = nil
+            live.families[id] = nil
+        }
+    }
     static func track(call id: UUID, _ control: RunControl) { live.lock.withLock { live.calls[id] = control } }
     static func untrack(call id: UUID) { _ = live.lock.withLock { live.calls.removeValue(forKey: id) } }
 
@@ -293,6 +328,8 @@ public final class OpenArchive: @unchecked Sendable {
     private let calls = ArchiveCalls()
     private let siblings = ArchiveSiblings()
     private let id = UUID()
+    /* Who this archive is, in `ArchiveSessions.familyClosed`. */
+    public var identity: UUID { id }
     private let watchdog: Duration
     private let poll: Duration
     /* Reached by a sign-out (`ArchiveSessions.closeAll`). Every archive the app opens is; a test's own may not be, so another suite's sign-out can't close it mid-test. */
@@ -345,6 +382,7 @@ public final class OpenArchive: @unchecked Sendable {
         if let url = Offline.localCopy(of: item), let copy = try? KeptCopy(url: url) {
             let archive = try await open(local: copy, watchdog: watchdog, poll: poll)
             archive.gate = gate
+            if family { ArchiveSessions.mark(archive: archive.id, family: item.node.workspaceId) }
             try archive.stands()
             return archive
         }
@@ -359,6 +397,8 @@ public final class OpenArchive: @unchecked Sendable {
         let archive = try OpenArchive(session: session, born: born, watchdog: watchdog, poll: poll)
         archive.row = current
         archive.gate = gate
+        // Marked, then the gate asked: a forget before the mark is seen there, one after it closes the archive.
+        if family { ArchiveSessions.mark(archive: archive.id, family: item.node.workspaceId) }
         try archive.stands()
         return archive
     }

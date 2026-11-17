@@ -29,8 +29,6 @@ public enum ArchiveWords {
     public static let download = "Download"
     public static let cancel = "Cancel"
     public static let folders = "Folders in the archive"
-    /* A stored entry larger than the viewer checks before showing: read by range, its checksum unchecked. */
-    public static let unverified = "This item is too large to check before it’s shown, so it may be damaged."
     /* The viewer's own words, as the web's viewerWords say them. */
     public static let noPreview = "This kind of file has no preview yet."
     public static let broken = "This file can’t be shown"

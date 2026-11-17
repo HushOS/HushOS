@@ -24,6 +24,12 @@ export const ZIP_LIMITS = {
      */
     directoryBytes: 16 * MiB,
     entries: 100_000,
+    /*
+     * The most folders a list makes, as on the phones (the core's LIST_FOLDERS_MAX): past it the
+     * archive is refused as `directory-too-large`. A 16 MiB directory of nothing but folders could
+     * make 7.6 million.
+     */
+    folders: 2_000_000,
     /* A preview refuses an entry that declares more than this many times what it packs, once it declares over 1 MiB (`declaresTooMuch`). */
     ratio: 200,
     ratioFrom: MiB,
@@ -782,6 +788,7 @@ export function listEntries(entries: ZipEntry[]): { listed: Listed[]; folders: F
                 }
                 let id = twin >= 0 ? made[twin]! : 0;
                 if (!id) {
+                    if (folders > ZIP_LIMITS.folders) throw new ZipError('directory-too-large');
                     id = folders++;
                     parents[id] = parent;
                     named.push(entry.path.slice(nameAt[i], nameEnd[i]));

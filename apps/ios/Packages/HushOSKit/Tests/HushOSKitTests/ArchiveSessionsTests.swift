@@ -231,6 +231,33 @@ import Testing
         await #expect(throws: ArchiveFailure(code: nil, message: FamilyWords.openAgain)) { try await archive.preview(zeros, limit: 1024) }
     }
 
+    @Test func anIdleFamilyZipClosesTheMomentItsFamilyIsLetGoOf() async throws {
+        let workspace = UUID().uuidString.lowercased()
+        let archive = try await Self.open("aes.zip", registered: true)
+        archive.gate = TemporaryCopies.copyGate(familyWorkspace: workspace)
+        ArchiveSessions.mark(archive: archive.identity, family: workspace)
+        #expect(try await archive.unlock("correct horse battery"))
+        // Nothing is asked of it: the forget alone closes it, and its screen hears.
+        let heard = Counter()
+        let listening = NotificationCenter.default.addObserver(forName: ArchiveSessions.familyClosed, object: nil, queue: nil) { note in
+            if note.userInfo?["archive"] as? UUID == archive.identity { _ = heard.next() }
+        }
+        defer { NotificationCenter.default.removeObserver(listening) }
+        TemporaryCopies.forgetFamily([workspace])
+        ArchiveSessions.closeQueue.sync {}
+        #expect(!archive.unlocked)
+        for _ in 0 ..< 50 where heard.value == 0 { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(heard.value == 1)
+        // Another family's forget leaves an archive of this one alone.
+        let other = try await Self.open("aes.zip", registered: true)
+        ArchiveSessions.mark(archive: other.identity, family: UUID().uuidString)
+        #expect(try await other.unlock("correct horse battery"))
+        TemporaryCopies.forgetFamily([UUID().uuidString])
+        ArchiveSessions.closeQueue.sync {}
+        #expect(other.unlocked)
+        other.close()
+    }
+
     final class Counter: @unchecked Sendable {
         private let lock = NSLock()
         private var count = 0

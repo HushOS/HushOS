@@ -1392,6 +1392,7 @@ Twin of the worker's `groupOpenArea` and `grantAreaKey`/`openAreaSelfGrant`.
 - `roster` and `roster_build` read and build both roster formats.
 - `accept` carries the root probe and mutates the anchor.
 - `area_ledger`: see [Area ledger fixtures](#area-ledger-fixtures).
+- `archive` reads any bytes as a zip the way a phone does (`ZipArchiveSession::open_local`): the listing and its folders, a preview of each entry (at most 32, each within 1 MiB), the shared fixtures' password, and the locked entries again under it. It is not in `TARGETS`: its twin is the web's archive reader, not `packages/crypto`, compared by `bun apps/web/src/lib/archives/differential.ts --time <s>` against the `verdicts` example. That runner treats the refusals of damaged data (`damaged`, `size`, `short`, `crc`, `auth`) as one, since each inflater notices damage at its own point, and holds everything else equal. Seed it from `e2e/fixtures/archives/*.zip`; `the_archive_verdict_holds_to_every_fixture` holds it to the table.
 - `succession` has kinds `consent_due` and `consent_sign`.
 - `pins` has kinds `device_record`, `outbox_entry`, `member_join_code`, `roster_call`, `roster_call_session`, `removal_call`, `previous_root`, `settings`, `area_open`, `join_check`, `join_preview` (with `words` and `join`), `join_draws`, `join_session`, `pair_code` and `joins_record`.
 

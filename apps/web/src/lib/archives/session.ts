@@ -46,8 +46,8 @@ export class ArchiveRefusal extends Error {
 }
 
 const MAX_ENTRIES = 100_000;
-/* Every folder is a part of some path, at least a character and its separator in the directory. */
-const MAX_FOLDERS = ZIP_LIMITS.directoryBytes / 2 + 1;
+/* The folders a listing may make, and the top. */
+const MAX_FOLDERS = ZIP_LIMITS.folders + 1;
 const MAX_TEXT = 128 * 1024 * 1024;
 const LOCKS = new Set(['none', 'zipcrypto', 'aes', 'other']);
 const SUPPORTS = new Set(['ok', 'method', 'encryption']);
@@ -277,7 +277,8 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
         if (ended) return;
         const msg = event.data as Record<string, unknown> | null;
         if (typeof msg?.id === 'number' && stopped.has(msg.id)) {
-            if (msg.type === 'end' || msg.type === 'fail') stopped.delete(msg.id);
+            if (['end', 'fail', 'bytes', 'span'].includes(msg.type as string))
+                stopped.delete(msg.id);
             return;
         }
         switch (msg?.type) {
@@ -391,16 +392,31 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
 
         /*
          * A reader over the entry for the viewer: its inflated bytes, checked to the end (never past
-         * `limit`), or, stored, a range of the archive at any size.
+         * `limit`), or, stored, a range of the archive at any size. `signal` (the viewer left the
+         * entry) stops the worker's inflating, and its buffer goes with it.
          */
         async preview(
             entry: ArchiveEntry,
             limit: number,
+            signal?: AbortSignal,
         ): Promise<{ reader: FileReader; checked: boolean }> {
             await listing;
+            signal?.throwIfAborted();
             grant(entry.packed + 65_536 + 512);
             const asked = ask((id) => ({ type: 'preview', id, index: entry.index, limit }));
-            const answer = await asked.answer;
+            const stop = () => {
+                const waiter = pending.get(asked.id);
+                if (!waiter) return;
+                stopped.add(asked.id);
+                post({ type: 'stop', id: asked.id });
+                pending.delete(asked.id);
+                idle();
+                waiter.reject(new Error('Stopped.'));
+            };
+            signal?.addEventListener('abort', stop, { once: true });
+            const answer = await asked.answer.finally(() =>
+                signal?.removeEventListener('abort', stop),
+            );
             if (answer.type === 'bytes') {
                 if (answer.bytes.byteLength !== entry.size || entry.size > limit)
                     throw new Error(TOOL_FAILED);

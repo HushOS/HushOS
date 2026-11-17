@@ -445,8 +445,9 @@ export class ZipArchive {
      * at most 16 MiB, within the declared ratio), smallest first, whose CRC or authentication code
      * then proves the password; then the rest, to their password check alone. So when no entry
      * qualifies, the password verifier alone decides (AES's two bytes; ZipCrypto's one check
-     * byte, which passes 1 wrong password in 256: a download then fails its CRC). An empty entry
-     * proves nothing, so it is never the probe. A wrong password ends it; an entry that fails for
+     * byte, which passes 1 wrong password in 256: a download then fails its CRC). An empty
+     * ZipCrypto entry proves nothing, so it is never the probe; an empty AES entry's
+     * authentication code does. A wrong password ends it; an entry that fails for
      * another reason (damage, tampering: a bad authentication code or CRC) says nothing certain
      * of the password, and the next is tried, at most three entries and 32 MiB read in all; past
      * that a try reads only an entry's password check. Kept only if an entry opens with it.
@@ -456,7 +457,9 @@ export class ZipArchive {
             .filter(
                 (entry) =>
                     entry.lock !== 'none' &&
-                    entry.size > 0 &&
+                    // An empty entry proves nothing under ZipCrypto (one check byte), but an empty
+                    // AES entry still carries its keyed authentication code.
+                    (entry.size > 0 || entry.lock === 'aes') &&
                     !entry.directory &&
                     !entry.link &&
                     supportOf(entry) === 'ok',
