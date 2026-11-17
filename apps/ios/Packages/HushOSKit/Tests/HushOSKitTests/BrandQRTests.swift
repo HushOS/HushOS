@@ -46,12 +46,13 @@ struct BrandQRTests {
             return (x < 7 && y < 7) || (x >= inner - 7 && y < 7) || (x < 7 && y >= inner - 7)
         }
         #expect(!finder.isEmpty && finder.allSatisfy(\.square))
-        // Every alignment square's centre the mark leaves uncovered is drawn, and drawn square.
+        // Every alignment square the mark leaves uncovered is drawn square: its centre, and its outer ring's corner.
         let centres = BrandQR.alignmentCentres(version: (inner - 17) / 4, size: inner)
         #expect(!centres.isEmpty)
         for cy in centres {
             for cx in centres where !((cx == 6 && cy == 6) || (cx == 6 && cy == inner - 7) || (cx == inner - 7 && cy == 6) || layout.under(cx + 1, cy + 1)) {
                 #expect(layout.modules.first { $0.x == cx + 1 && $0.y == cy + 1 }?.square == true)
+                #expect(layout.modules.first { $0.x == cx - 1 && $0.y == cy - 1 }?.square == true)
             }
         }
     }

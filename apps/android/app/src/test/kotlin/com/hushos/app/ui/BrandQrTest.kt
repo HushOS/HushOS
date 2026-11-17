@@ -74,12 +74,13 @@ class BrandQrTest {
                 (x < 7 && y < 7) || (x >= inner - 7 && y < 7) || (x < 7 && y >= inner - 7)
             }
             assertTrue(finder.isNotEmpty() && finder.all { it.square })
-            // Every alignment square's centre the mark leaves uncovered is drawn, and drawn square.
+            // Every alignment square the mark leaves uncovered is drawn square: its centre, and its outer ring's corner.
             val centres = Encoder.encode(text, ErrorCorrectionLevel.H).version.alignmentPatternCenters
             assertTrue(centres.isNotEmpty())
             for (cy in centres) for (cx in centres) {
                 if ((cx == 6 && cy == 6) || (cx == 6 && cy == inner - 7) || (cx == inner - 7 && cy == 6) || layout.under(cx + 1, cy + 1)) continue
                 assertEquals("alignment centre $cx,$cy", true, layout.modules.firstOrNull { it.x == cx + 1 && it.y == cy + 1 }?.square)
+                assertEquals("alignment corner $cx,$cy", true, layout.modules.firstOrNull { it.x == cx - 1 && it.y == cy - 1 }?.square)
             }
         }
     }

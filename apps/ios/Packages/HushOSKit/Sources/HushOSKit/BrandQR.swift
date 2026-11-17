@@ -179,8 +179,8 @@ public enum BrandQR {
         }
     }
 
-    /* One Core Image context for every code: making one costs about as much as drawing the code. Core Image contexts are thread-safe. */
-    nonisolated(unsafe) static let renderer = CIContext(options: [.workingColorSpace: NSNull()])
+    /* One Core Image context for every code: making one costs about as much as drawing the code. */
+    static let renderer = CIContext(options: [.workingColorSpace: NSNull()])
 
     /* The code's modules at error correction H, without a quiet zone: CoreImage's encoder, read back module by module. */
     static func matrix(_ text: String) -> [[Bool]]? {
@@ -199,17 +199,20 @@ public enum BrandQR {
         context.setFillColor(CGColor(gray: 1, alpha: 1))
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
         context.draw(rendered, in: CGRect(x: 0, y: 0, width: width, height: height))
-        guard let data = context.data else { return nil }
-        let stride = context.bytesPerRow
-        let pixels = data.bindMemory(to: UInt8.self, capacity: stride * height)
-        // CoreImage leaves a quiet zone of its own: find the first dark module, the finder's corner.
-        var border = -1
-        for i in 0..<width where pixels[i * stride + i] < 128 { border = i; break }
-        guard border >= 0 else { return nil }
-        let inner = width - 2 * border
-        guard inner >= 21, (inner - 17) % 4 == 0 else { return nil }
-        // CGContext rows run top to bottom in memory here, as the code's do.
-        return (0..<inner).map { y in (0..<inner).map { x in pixels[(y + border) * stride + x + border] < 128 } }
+        // The buffer is the context's: it stays alive until every read of it is done.
+        return withExtendedLifetime(context) { () -> [[Bool]]? in
+            guard let data = context.data else { return nil }
+            let stride = context.bytesPerRow
+            let pixels = data.bindMemory(to: UInt8.self, capacity: stride * height)
+            // CoreImage leaves a quiet zone of its own: find the first dark module, the finder's corner.
+            var border = -1
+            for i in 0..<width where pixels[i * stride + i] < 128 { border = i; break }
+            guard border >= 0 else { return nil }
+            let inner = width - 2 * border
+            guard inner >= 21, (inner - 17) % 4 == 0 else { return nil }
+            // CGContext rows run top to bottom in memory here, as the code's do.
+            return (0..<inner).map { y in (0..<inner).map { x in pixels[(y + border) * stride + x + border] < 128 } }
+        }
     }
 
     /* Where a version's alignment squares are centred, on each axis (ISO/IEC 18004, as qrcodegen works it out). */
