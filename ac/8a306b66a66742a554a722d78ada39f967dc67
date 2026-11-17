@@ -1,0 +1,19 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/KitScan.kt
+  s_566b8e0c4467a4::t_8ba1fac37603f5 8-9,26-30,37,40-53,82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ac8a306b66a66742a554a722d78ada39f967dc67",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
