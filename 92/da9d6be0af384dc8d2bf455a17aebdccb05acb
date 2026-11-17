@@ -1,0 +1,101 @@
+apps/web/src/lib/tools/active.ts
+  s_c60e24772e04af::t_db03a619b55a60 1-16
+  s_c60e24772e04af::t_2b3b508b85d51f 17
+crates/hushos-core/src/tools.rs
+  s_c60e24772e04af::t_a81e1530bc3f75 2-5,18,30-31,39,43-44,46-55,59-61,85-99,116-120,125-127,130,133-136,140-141,143,146-155,158,163-165,170-175,177,181-183,187-195,202-204,206-208,210-213,217,219,222-226,228-229,231-241,245,249,254-257,263-308,311-314,317,319-321,326,334-335,337-343,348-353,359,362-363,388,391-392,394,404-418,420-423,430-433,436,438-439,441-442,446-447,449-454,463,465-467,470,473-474,476,484-485,487,495-496,501,514-515,613,650-667,671-672,678-680,686-690,694-698,744-745,753-754,758-767,776,786-801,817,826,828,832-938,941-944,946-947,951-952,954,956-974,979-981,983-984,990,995-1005,1007-1014,1016,1019-1030,1032-1033,1037-1053,1056,1065
+  s_c60e24772e04af::t_1f48d700b02dce 1054-1055
+apps/web/src/lib/tools/ranges.ts
+  s_c60e24772e04af::t_a42cae972d880a 2,6-9,12-17,30-59,73-75,77,86,89-92,94,97,101-112,121-122
+  s_c60e24772e04af::t_73266b0db35b87 123-124
+apps/web/src/lib/tools/protocol.ts
+  s_c60e24772e04af::t_56bcc10de43f7a 7-10,13,17-19,22,24-26,42,45-46
+apps/web/src/lib/tools/run.ts
+  s_c60e24772e04af::t_dab5bf2515fedf 1-3,5,11,16,20-28,51,54,58-59,61-62,78-82,85-90,112-118,134,148-154,160-179,184-195,199-200,204,211,215,218,224,227-233,237-239,242-246,248-261,264-282,284-292,301-305,307-308,313-319,321,323,329,331,333-341,348,350-351,357-361
+  s_c60e24772e04af::t_e539bea4b71105 366,372-374
+apps/web/src/lib/tools/sources.ts
+  s_c60e24772e04af::t_561d08892b5dc6 1-19
+apps/web/src/lib/tools/worker.ts
+  s_c60e24772e04af::t_bb806276f1d3e4 3-4,13-18,21-26,30,45-75,96-110,131,133,138-139,156
+apps/web/src/lib/tools/budget.ts
+  s_c60e24772e04af::t_78a4deab07d786 4-6,8,12,31-33,36-44,47-49
+apps/android/app/src/main/kotlin/com/hushos/app/data/ToolRuns.kt
+  s_c60e24772e04af::t_16033be10818a3 7-8,13-16,21,23,34-36,40-42,53,59-60,65-74,76-80,86,90-93,95-108,113-138,140-144,146-154,157-161,163-173,180-185,202-227,229-231,233,236-242,247-250
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/ToolRunsTests.swift
+  s_c60e24772e04af::t_368827d5957aa6 10-14,16,19-25,52,54,104,129-143,150-152,161-179,185,189,199-202,209-308
+apps/android/app/src/test/kotlin/com/hushos/app/data/ToolRunsTest.kt
+  s_c60e24772e04af::t_4e6ac2eb17dde3 4-5,13-15,20-21,23,36-41,46-51,57,61,63,67,106,111,126,153-219,225,230,246-249,256-329
+  s_c60e24772e04af::t_e33e3dafb7ebd8 330-333
+apps/web/scripts/worker-code.ts
+  s_c60e24772e04af::t_c2451ebc3b54c3 5-7,9-22,25-26,30-36,45-60,62-70,75-134,143-150,156-166,169-170,173-176,178-182,186-195,197-205
+  s_c60e24772e04af::t_0e0279b8452882 206-208,210-211,214,218,222
+apps/web/scripts/worker-code.test.ts
+  s_c60e24772e04af::t_81f8883a1defb8 7-8,11-14,17-21,23-24,26-28,32-62,64-66,68,75,77,85-86,90,94-99,103,119
+  s_c60e24772e04af::t_c20d54cc491429 100-102,114,117
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/ToolRuns.swift
+  s_c60e24772e04af::t_586a709c1147be 8-10,14-17,67-85,89-95,105,109-113,118-119,125,129-130,132,134-136,138,140-170,180,189,195-196,203,213,231-233,236,239-240,248,252-258,280,282-284,286,295,303-309
+apps/web/src/lib/tools/watchdog.ts
+  s_c60e24772e04af::t_9ecdbae8d9653a 1-2,5-10,14,18-35,41,45-46,51-52,55
+apps/web/src/lib/tools/run.test.ts
+  s_c60e24772e04af::t_c150a0000c4e77 2-11,16-18,27,29-30,66,77,80,98-115,117-121,130,144-155,157-158,165,169,176-177,187,189-190,203,210-231,233,240-299,307,328-387,391-395,409-424,434-442,466,469,476-477,483-496
+  s_c60e24772e04af::t_0422076af12c4c 497-498
+apps/android/AGENTS.md
+  s_c60e24772e04af::t_14c1df2f95a867 641-645
+apps/android/app/src/main/kotlin/com/hushos/app/data/AccountStore.kt
+  s_c60e24772e04af::t_3e521ecaf007af 45-46
+apps/android/app/src/main/kotlin/com/hushos/app/data/DriveApi.kt
+  s_c60e24772e04af::t_6fa1ef7af9a6aa 342-350,355-359
+apps/ios/AGENTS.md
+  s_c60e24772e04af::t_c97413b0f2c8c7 681-685
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/AccountStore.swift
+  s_c60e24772e04af::t_6bd39b7e321fc4 112-113
+apps/web/scripts/check-worker-code.ts
+  s_c60e24772e04af::t_a168ae6cb76cd6 3-6,8-9,19-38,40-47,49,57-67,80-88
+apps/web/server/csp.test.ts
+  s_c60e24772e04af::t_64741f72cffd11 2,75-91
+apps/web/server/csp.ts
+  s_c60e24772e04af::t_cc6d9b34ea17fc 67-93
+apps/web/server/plugins/security-headers.ts
+  s_c60e24772e04af::t_1d65f70c721382 5-11,44,47-58
+apps/web/src/components/drive/drive-shell.tsx
+  s_c60e24772e04af::t_82749bb9f89c9d 36,86-87
+apps/web/src/lib/large-files.ts
+  s_c60e24772e04af::t_12b18f1e027282 3,11
+apps/web/src/lib/preview-limits.ts
+  s_c60e24772e04af::t_c927761e4198c3 1-14
+apps/web/src/lib/sign-out.test.ts
+  s_c60e24772e04af::t_311729ae02662e 29,49,539-540
+apps/web/src/lib/sign-out.ts
+  s_c60e24772e04af::t_1a10f175ab26ce 241-242
+apps/web/src/lib/tools/ranges.test.ts
+  s_c60e24772e04af::t_dce598e23a51ba 7,125-127,130-132,148,234-235,237,239-248,250-251
+docs/file-tools-design.md
+  s_c60e24772e04af::t_f96c5452bbeb77 147-152,272,296,363
+e2e/fixtures/tools/page.ts
+  s_c60e24772e04af::t_6c80c97eabc8d1 1,7-8,16-19,22-24,27-28,61,102,115,130-139
+e2e/fixtures/tools/probe.tool-worker.ts
+  s_c60e24772e04af::t_f2343a7506602c 13-14,17-29,43-48
+e2e/tools-harness.spec.ts
+  s_c60e24772e04af::t_ffd16c50e7e8fc 7,18-19,44,54-58,66-69,77-78,194-203
+packages/drive/src/downloads.test.ts
+  s_c60e24772e04af::t_b0689d5fbe338e 607-667
+packages/drive/src/downloads.ts
+  s_c60e24772e04af::t_b092e42b552945 120-122,454-460,462-466,498-507,509-525,533,565-568,575
+tsconfig.json
+  s_c60e24772e04af::t_61916c067e2b96 12-16
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "92da9d6be0af384dc8d2bf455a17aebdccb05acb",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
