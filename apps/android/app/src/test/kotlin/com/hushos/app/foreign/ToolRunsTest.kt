@@ -422,17 +422,53 @@ class ToolRunsTest {
         }
     }
 
+    @Test fun aRunEndedBySignOutDuringItsTailFetchDrainsNothing() {
+        // Just under a chunk with a 2000-byte thumbnail: the tail, then a chunk of padding alone.
+        val size = chunk - 100
+        val plain = ByteArray(size.toInt()) { it.toByte() }
+        val content = Content("11111111-1111-4111-8111-111111111111", "66666666-6666-4666-8666-666666666666", 3u,
+            randomBytes(32u), randomBytes(16u), size.toULong(), 2000u)
+        val layout = contentLayout(3u, size.toULong(), 2000u)
+        val tail = chunkEncrypt(content, 0uL, plain)
+        val stored = tail + ByteArray((layout.ciphertextSize - tail.size.toULong()).toInt())
+        Server(stored).use { server ->
+            val api = DriveApi(Shared.Session(server.origin, "token", "user"))
+            val drains = PaddingDrains()
+            val control = RunControl(toolWatchdogMillis(), null)
+            val reader = toolReaderOf(api, OpenedVersion(content, "v1"), "ws", control, drains = drains)
+            val stall = CountDownLatch(1)
+            server.stallAt = 0
+            server.stall = stall
+            val reading = Thread { runCatching { reader.readAt((size - 10).toULong(), 10uL) } }
+            reading.start()
+            eventually { server.stalled.get() == 1 }
+            // Sign-out with the tail in flight: the drains move on before the run's thread hands
+            // over the padding it owes, which comes in after, under the account that ended.
+            drains.cancelAll()
+            control.cancel()
+            reading.join(10_000)
+            assertFalse(reading.isAlive)
+            stall.countDown()
+            Thread.sleep(300)
+            assertTrue(drains.idle)
+            assertFalse(
+                "the ended account's padding was drained under the next",
+                server.asked.contains("bytes=${tail.size}-${layout.ciphertextSize - 1uL}"),
+            )
+        }
+    }
+
     @Test fun paddingDrainsRunOneAtATimeAndStopAtTheirCap() {
         val drains = PaddingDrains(maxBytes = 20, maxMillis = 60_000, maxWaiting = 4)
         val log = Collections.synchronizedList(ArrayList<String>())
         val gate = CountDownLatch(1)
         fun range(start: Long) = com.hushos.core.ByteRange(start.toULong(), (start + 9).toULong())
         // The first drain's first fetch is held: the second waits behind it.
-        drains.enqueue(listOf(range(0), range(10), range(20), range(30))) { r, _ ->
+        drains.enqueue(listOf(range(0), range(10), range(20), range(30)), drains.generation) { r, _ ->
             log.add("a${r.start}")
             if (r.start == 0uL) gate.await(5, TimeUnit.SECONDS)
         }
-        drains.enqueue(listOf(range(0))) { r, _ -> log.add("b${r.start}") }
+        drains.enqueue(listOf(range(0)), drains.generation) { r, _ -> log.add("b${r.start}") }
         eventually { log.toList() == listOf("a0") }
         Thread.sleep(100)
         assertEquals("one drain at a time", listOf("a0"), log.toList())
@@ -448,12 +484,12 @@ class ToolRunsTest {
         val drains = PaddingDrains(maxBytes = 1L shl 20, maxMillis = 60_000, maxWaiting = 4)
         val log = Collections.synchronizedList(ArrayList<String>())
         val gate = CountDownLatch(1)
-        drains.enqueue(listOf(range(0), range(10))) { r, _ ->
+        drains.enqueue(listOf(range(0), range(10)), drains.generation) { r, _ ->
             log.add("a${r.start}")
             if (r.start == 0uL) gate.await(5, TimeUnit.SECONDS)
         }
         eventually { log.toList() == listOf("a0") }
-        drains.enqueue(listOf(range(0))) { r, _ -> log.add("b${r.start}") }
+        drains.enqueue(listOf(range(0)), drains.generation) { r, _ -> log.add("b${r.start}") }
         drains.cancelAll()
         gate.countDown()
         eventually { drains.idle }
@@ -493,10 +529,10 @@ class ToolRunsTest {
             val drains = PaddingDrains(maxBytes = 1L shl 20, maxMillis = 300, maxWaiting = 4)
             val log = Collections.synchronizedList(ArrayList<String>())
             val started = System.nanoTime()
-            drains.enqueue(listOf(com.hushos.core.ByteRange(0uL, 99uL))) { r, watch ->
-                api.range(trickle.url, r) { connection, request -> watch(connection); request() }
+            drains.enqueue(listOf(com.hushos.core.ByteRange(0uL, 99uL)), drains.generation) { r, watch ->
+                api.range(trickle.url, r) { call, request -> watch(call); request() }
             }
-            drains.enqueue(listOf(range(0))) { _, _ -> log.add("next") }
+            drains.enqueue(listOf(range(0)), drains.generation) { _, _ -> log.add("next") }
             eventually { log.toList() == listOf("next") }
             assertTrue("the deadline cut the request", (System.nanoTime() - started) / 1_000_000 < 3_000)
         }
@@ -505,7 +541,7 @@ class ToolRunsTest {
     @Test fun aMeteredDrainStaysSmall() {
         val drains = PaddingDrains(maxBytes = 1L shl 20, maxMillis = 60_000, maxWaiting = 4, meteredMaxBytes = 10)
         val log = Collections.synchronizedList(ArrayList<String>())
-        drains.enqueue(listOf(range(0), range(10), range(20)), metered = true) { r, _ -> log.add("m${r.start}") }
+        drains.enqueue(listOf(range(0), range(10), range(20)), drains.generation, metered = true) { r, _ -> log.add("m${r.start}") }
         eventually { drains.idle }
         assertEquals(listOf("m0"), log.toList())
     }

@@ -338,8 +338,16 @@ public actor PaddingDrains {
         self.maxWaiting = maxWaiting
     }
 
-    public nonisolated func enqueue(_ ranges: [ByteRange], metered: Bool = false, fetch: @escaping @Sendable (ByteRange) async throws -> Void) {
-        let job = Job(ranges: ranges, metered: metered, generation: live.now, fetch: fetch)
+    /*
+     * The account's generation: a reader takes it when it is made and hands it back with what it
+     * owes, so a run of the account a sign-out ended can't drain under the next one's.
+     */
+    public nonisolated var generation: UInt64 { live.now }
+
+    /* Dropped if a sign-out came after `born` was taken. */
+    public nonisolated func enqueue(_ ranges: [ByteRange], born: UInt64, metered: Bool = false, fetch: @escaping @Sendable (ByteRange) async throws -> Void) {
+        guard born == live.now else { return }
+        let job = Job(ranges: ranges, metered: metered, generation: born, fetch: fetch)
         Task { await self.add(job) }
     }
 
@@ -352,7 +360,11 @@ public actor PaddingDrains {
     /* Whether nothing is draining or waiting: for tests. */
     public var idle: Bool { !draining && waiting.isEmpty }
 
-    private func dropWaiting() { waiting.removeAll() }
+    /* Only what the sign-out made stale: a job of the next account's may already be waiting. */
+    private func dropWaiting() {
+        let now = live.now
+        waiting.removeAll { $0.generation != now }
+    }
 
     private func add(_ job: Job) {
         guard job.generation == live.now, waiting.count < maxWaiting else { return }
@@ -408,7 +420,12 @@ public enum ToolReaders {
      * retried as downloads are, the address renewed when it expires, and given up as soon as the
      * run ends (a wait between tries, an offline wait, or a request in flight).
      */
-    public static func reader(api: DriveAPI, opened: OpenedVersion, workspaceId: String, control: RunControl) async throws -> VersionReader {
+    public static func reader(
+        api: DriveAPI, opened: OpenedVersion, workspaceId: String, control: RunControl, drains: PaddingDrains = .shared
+    ) async throws -> VersionReader {
+        // The account's drains as the reader is made (before any request): what it owes after a
+        // sign-out is not drained.
+        let born = drains.generation
         let versionId = opened.versionId
         let fresh: @Sendable () async throws -> URL = {
             guard let url = URL(string: try await api.versionURL(versionId, workspaceId: workspaceId).url) else {
@@ -427,7 +444,7 @@ public enum ToolReaders {
             }
         }
         let source = StoreSource(control: control, drainLater: { ranges in
-            PaddingDrains.shared.enqueue(ranges, metered: NetworkWatch.shared.metered, fetch: drainOnce)
+            drains.enqueue(ranges, born: born, metered: NetworkWatch.shared.metered, fetch: drainOnce)
         }) { range in
             try await Resumable.run(onExpired: { try await address.refresh() }) {
                 try await api.range(await address.current, range)

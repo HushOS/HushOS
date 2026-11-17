@@ -10,7 +10,6 @@ import com.hushos.core.VersionReader
 import com.hushos.core.toolBudgetBytes
 import com.hushos.core.toolFailedMessage
 import com.hushos.core.toolWatchdogMillis
-import java.net.HttpURLConnection
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -236,40 +235,51 @@ class PaddingDrains(
 ) {
     private val worker = Executors.newSingleThreadExecutor { task -> Thread(task, "padding-drain").apply { isDaemon = true } }
     private val queued = java.util.concurrent.atomic.AtomicInteger()
-    private val generation = java.util.concurrent.atomic.AtomicLong()
+    private val generations = java.util.concurrent.atomic.AtomicLong()
     /* The request in flight, for the deadline and a sign-out to cut. */
-    private val current = AtomicReference<HttpURLConnection?>(null)
+    private val current = AtomicReference<RangeCall?>(null)
+
+    /*
+     * The account's generation: a reader takes it when it is made and hands it back with what it
+     * owes, so a run of the account a sign-out ended can't drain under the next one's.
+     */
+    val generation: Long get() = generations.get()
 
     /*
      * `fetch` fetches one range, handing its connection to the function it is given as soon as it
-     * has one, so the drain can cut it off.
+     * has one, so the drain can cut it off. Dropped if a sign-out came after `born` was taken.
      */
-    fun enqueue(ranges: List<ByteRange>, metered: Boolean = false, fetch: (ByteRange, (HttpURLConnection) -> Unit) -> Unit) {
+    fun enqueue(
+        ranges: List<ByteRange>,
+        born: Long,
+        metered: Boolean = false,
+        fetch: (ByteRange, (RangeCall) -> Unit) -> Unit,
+    ) {
+        if (generations.get() != born) return
         // The one going isn't counted; the ones waiting behind it are.
         if (queued.incrementAndGet() > maxWaiting + 1) {
             queued.decrementAndGet()
             return
         }
-        val born = generation.get()
         worker.execute {
             try {
-                if (generation.get() != born) return@execute
+                if (generations.get() != born) return@execute
                 val cap = if (metered) meteredMaxBytes else maxBytes
                 val expired = java.util.concurrent.atomic.AtomicBoolean(false)
                 val alarm = Timers.cutoffs.after(maxMillis) {
                     expired.set(true)
-                    current.get()?.disconnect()
+                    current.get()?.cut()
                 }
                 try {
                     var bytes = 0L
                     for (range in ranges) {
-                        if (generation.get() != born || expired.get() || bytes >= cap) break
+                        if (generations.get() != born || expired.get() || bytes >= cap) break
                         bytes += (range.end - range.start + 1uL).toLong()
                         runCatching {
-                            fetch(range) { connection ->
-                                current.set(connection)
+                            fetch(range) { call ->
+                                current.set(call)
                                 // Cut meanwhile: this one goes at once too.
-                                if (generation.get() != born || expired.get()) connection.disconnect()
+                                if (generations.get() != born || expired.get()) call.cut()
                             }
                         }
                         current.set(null)
@@ -285,8 +295,9 @@ class PaddingDrains(
 
     /* Sign-out: nothing of the old account's goes on draining. */
     fun cancelAll() {
-        generation.incrementAndGet()
-        current.get()?.disconnect()
+        generations.incrementAndGet()
+        // Never waits: the sign-out's wipe calls this.
+        current.get()?.cut()
     }
 
     /* Whether nothing is draining or waiting: for tests. */
@@ -318,8 +329,9 @@ private class Timers(name: String) {
 
 /* Cuts off a connection whose run has ended, within a tenth of a second. */
 private object Cutoff {
-    fun <T> whileRunning(control: RunControl, connection: HttpURLConnection, block: () -> T): T {
-        val watch = Timers.cutoffs.every(100) { if (control.isEnded()) connection.disconnect() }
+    fun <T> whileRunning(control: RunControl, call: RangeCall, block: () -> T): T {
+        // cut() never blocks, so one stuck connection never holds up another's cut-off.
+        val watch = Timers.cutoffs.every(100) { if (control.isEnded()) call.cut() }
         try {
             return block()
         } finally {
@@ -356,10 +368,13 @@ fun toolReaderOf(
 ): VersionReader {
     // The id alone: no function below may hold `opened`, whose content carries the version's key.
     val versionId = opened.versionId
+    // The account's drains as the reader is made (before any request): what it owes after a
+    // sign-out is not drained.
+    val born = drains.generation
     val url = AtomicReference(api.versionUrl(versionId, workspaceId))
     // Padding owed when the run ended: once each, an expired address renewed once, in the background.
-    val drainOnce: (ByteRange, (HttpURLConnection) -> Unit) -> Unit = { range, watch ->
-        val fetch = { api.range(url.get(), range) { connection, request -> watch(connection); request() } }
+    val drainOnce: (ByteRange, (RangeCall) -> Unit) -> Unit = { range, watch ->
+        val fetch = { api.range(url.get(), range) { call, request -> watch(call); request() } }
         try {
             fetch()
         } catch (error: ApiError) {
@@ -368,14 +383,14 @@ fun toolReaderOf(
             fetch()
         }
     }
-    val source = StoreSource({ ranges -> drains.enqueue(ranges, metered(), drainOnce) }) { range, _ ->
+    val source = StoreSource({ ranges -> drains.enqueue(ranges, born, metered(), drainOnce) }) { range, _ ->
         Resumable.run(
             online = online,
             sleep = { millis -> sleepWhileRunning(control, millis) },
             onExpired = { url.set(api.versionUrl(versionId, workspaceId)) },
         ) {
             control.check()
-            api.range(url.get(), range) { connection, request -> Cutoff.whileRunning(control, connection, request) }
+            api.range(url.get(), range) { call, request -> Cutoff.whileRunning(control, call, request) }
         }
     }
     return VersionReader(source, opened.content, control)

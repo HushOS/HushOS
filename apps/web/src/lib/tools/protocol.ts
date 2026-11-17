@@ -33,6 +33,13 @@ export const DONE_RESULT_MAX_BYTES = 64 * 1024;
 /* A result's name and type: plain strings no longer than these (the bytes are counted; these are not). */
 export const OUTPUT_NAME_MAX = 1_024;
 export const OUTPUT_MIME_MAX = 255;
+/*
+ * What one result costs the budget at least, so empty ones are not free: a name and the
+ * record around it are memory too. 8,192 results fill the budget, whatever their size.
+ */
+export const OUTPUT_MIN_CHARGE = 64 * 1024;
+/* A run's results the save path has not released, at most (the extraction entry cap). */
+export const OUTPUTS_UNRELEASED_MAX = 10_000;
 
 /* From the page, on the worker itself. */
 export type ToWorker =

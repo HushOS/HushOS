@@ -22,6 +22,30 @@ class NotFound(message: String) : Exception(message)
 class Unreachable : Exception("Could not reach HushOS. Check your connection.")
 
 /*
+ * A range request in flight, which another thread may cut off without waiting on it. The JDK's
+ * disconnect() takes the lock a read in progress holds (and a reader looping on a trickling body
+ * takes it straight back), so it can block for as long as the body lasts: the read loop stops at
+ * its next read instead, and the connection is closed on a thread of its own. A body that stalls
+ * outright still ends only at the read timeout.
+ */
+class RangeCall internal constructor(private val connection: HttpURLConnection) {
+    @Volatile var isCut = false
+        private set
+
+    fun cut() {
+        if (isCut) return
+        isCut = true
+        closers.execute { runCatching { connection.disconnect() } }
+    }
+
+    private companion object {
+        val closers: java.util.concurrent.ExecutorService = java.util.concurrent.Executors.newCachedThreadPool { task ->
+            Thread(task, "range-cut").apply { isDaemon = true }
+        }
+    }
+}
+
+/*
  * What every request says this client is: its HushOS version (versionName, set by the release pull request),
  * which the server compares with its minimum for `android` (packages/drive's checkClient). Builds before 1.0.0
  * sent the Drive protocol number here ("android/3").
@@ -346,14 +370,16 @@ class DriveApi(val session: Shared.Session) : RootApi {
     fun range(
         url: String,
         range: ByteRange,
-        guard: (HttpURLConnection, () -> ByteArray) -> ByteArray = { _, request -> request() },
+        guard: (RangeCall, () -> ByteArray) -> ByteArray = { _, request -> request() },
     ): ByteArray {
         val connection = URL(url).openConnection() as HttpURLConnection
         connection.setRequestProperty("Range", "bytes=${range.start}-${range.end}")
         connection.connectTimeout = 30_000
         connection.readTimeout = 120_000
         val wanted = (range.end - range.start + 1uL).toLong()
-        return guard(connection) {
+        val call = RangeCall(connection)
+        return guard(call) {
+            if (call.isCut) throw Unreachable()
             val status = try { connection.responseCode } catch (error: java.io.IOException) { throw Unreachable() }
             if (status != 206 && status != 200) throw ApiError(status, "Range request failed")
             // Streamed and counted: a store that ignores the Range and sends the whole object is cut off as soon
@@ -369,6 +395,7 @@ class DriveApi(val session: Shared.Session) : RootApi {
                     var total = 0L
                     while (true) {
                         val read = input.read(buffer)
+                        if (call.isCut) throw Unreachable()
                         if (read < 0) break
                         total += read
                         if (total > wanted) {

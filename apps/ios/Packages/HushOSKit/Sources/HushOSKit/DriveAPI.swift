@@ -240,7 +240,7 @@ public final class DriveAPI: Sendable {
             answer = try await withTaskCancellationHandler {
                 try await load.start(task)
             } onCancel: {
-                task.cancel()
+                load.cancel(task)
             }
         } catch {
             throw DriveAPI.noAnswer(error)
@@ -403,14 +403,34 @@ final class RangeLoad: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private var data = Data()
     private var over = false
     private var continuation: CheckedContinuation<Answer, Error>?
+    /*
+     * An end that came before start() was waiting: a caller cancelled before it began, or a task
+     * that completed first. Kept for start() to take, never dropped, or the caller waits forever.
+     */
+    private var early: Result<Answer, Error>?
 
     init(limit: Int) { self.limit = limit }
 
     func start(_ task: URLSessionDataTask) async throws -> Answer {
         try await withCheckedThrowingContinuation { continuation in
-            lock.withLock { self.continuation = continuation }
-            task.resume()
+            let ended = lock.withLock { () -> Result<Answer, Error>? in
+                if let early { return early }
+                self.continuation = continuation
+                return nil
+            }
+            if let ended { continuation.resume(with: ended) } else { task.resume() }
         }
+    }
+
+    /* The caller was cancelled: before start() or after, it gets a CancellationError, once. */
+    func cancel(_ task: URLSessionDataTask) {
+        let waiting = lock.withLock { () -> CheckedContinuation<Answer, Error>? in
+            defer { continuation = nil }
+            if continuation == nil, early == nil { early = .failure(CancellationError()) }
+            return continuation
+        }
+        task.cancel()
+        waiting?.resume(throwing: CancellationError())
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
@@ -438,11 +458,15 @@ final class RangeLoad: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        let (continuation, answer) = lock.withLock { () -> (CheckedContinuation<Answer, Error>?, Answer) in
-            defer { self.continuation = nil }
-            return (self.continuation, Answer(status: status, data: data, over: over))
+        let (continuation, result) = lock.withLock { () -> (CheckedContinuation<Answer, Error>?, Result<Answer, Error>) in
+            let answer = Answer(status: status, data: data, over: over)
+            let result: Result<Answer, Error> = answer.over || error == nil ? .success(answer) : .failure(error!)
+            let waiting = self.continuation
+            self.continuation = nil
+            if waiting == nil, early == nil { early = result }
+            return (waiting, result)
         }
-        if answer.over || error == nil { continuation?.resume(returning: answer) } else { continuation?.resume(throwing: error!) }
+        continuation?.resume(with: result)
     }
 }
 

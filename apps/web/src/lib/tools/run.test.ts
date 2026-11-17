@@ -1,7 +1,11 @@
+import { setFlagsFromString } from 'node:v8';
+import { runInNewContext } from 'node:vm';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { cancelAllToolRuns } from './active';
 import { PlaintextBudget } from './budget';
 import {
+    OUTPUT_MIN_CHARGE,
+    OUTPUTS_UNRELEASED_MAX,
     RESULT_MAX_BYTES,
     TOOL_FAILED,
     type RangeAnswer,
@@ -86,6 +90,22 @@ function run<R = unknown>(
         },
     };
 }
+
+/* Whether every buffer `refs` points at is gone after a few full collections. */
+setFlagsFromString('--expose-gc');
+const gc = runInNewContext('gc') as () => void;
+async function collected(refs: WeakRef<object>[]) {
+    for (let i = 0; i < 10; i++) {
+        // A WeakRef keeps its target to the end of the job that made it: collect on a later one.
+        await tick();
+        gc();
+        if (refs.every((ref) => ref.deref() === undefined)) return true;
+    }
+    return false;
+}
+
+/* One minimum charge: the budget tests count in these, so every result's size is what it costs. */
+const U = OUTPUT_MIN_CHARGE;
 
 const output = (id: number, bytes: number): ToPage => ({
     type: 'output',
@@ -186,12 +206,12 @@ describe('the watchdog', () => {
 describe('the produced-plaintext budget', () => {
     test('holds the next result back until uploads drain below the limit, without the watchdog firing', () => {
         const taken: ToolOutput[] = [];
-        const budget = new PlaintextBudget(10);
+        const budget = new PlaintextBudget(10 * U);
         const { handle, worker } = run({ budget, onOutput: (o) => void taken.push(o) });
-        worker.send(output(0, 6));
+        worker.send(output(0, 6 * U));
         expect(worker.accepted()).toEqual([0]);
         // 12 of 10: the result that crosses the line is taken, the next is not asked for.
-        worker.send(output(1, 6));
+        worker.send(output(1, 6 * U));
         expect(worker.accepted()).toEqual([0]);
         // Uploads paused for a minute: waiting on the page, not a hang.
         vi.advanceTimersByTime(60_000);
@@ -200,32 +220,32 @@ describe('the produced-plaintext budget', () => {
         expect(worker.accepted()).toEqual([0, 1]);
         // Released twice counts once.
         taken[1]!.release();
-        expect(budget.waiting).toBe(6);
-        worker.send(output(2, 5));
+        expect(budget.waiting).toBe(6 * U);
+        worker.send(output(2, 5 * U));
         expect(worker.accepted()).toEqual([0, 1]);
         taken[0]!.release();
         expect(worker.accepted()).toEqual([0, 1, 2]);
     });
 
     test('a finished run’s results still count against the next run until released', async () => {
-        const budget = new PlaintextBudget(10);
+        const budget = new PlaintextBudget(10 * U);
         const taken: ToolOutput[] = [];
         const first = run({ budget, onOutput: (o) => void taken.push(o) }, 'First');
         // Accepted (8 of 10), then done: its result waits for upload after the run.
-        first.worker.send(output(0, 8));
+        first.worker.send(output(0, 8 * U));
         expect(first.worker.accepted()).toEqual([0]);
         first.worker.send({ type: 'done', result: null });
         await first.handle.result;
-        expect(budget.waiting).toBe(8);
+        expect(budget.waiting).toBe(8 * U);
 
         const second = run({ budget, onOutput: (o) => void taken.push(o) }, 'Second');
-        second.worker.send(output(0, 3));
+        second.worker.send(output(0, 3 * U));
         expect(second.worker.accepted()).toEqual([]);
         taken[0]!.release();
         expect(second.worker.accepted()).toEqual([0]);
 
         // The second cancelled: its own result goes back, nothing else.
-        second.worker.send(output(1, 3));
+        second.worker.send(output(1, 3 * U));
         second.handle.cancel();
         expect(budget.waiting).toBe(0);
         expect(taken[1]!.bytes.byteLength).toBe(0);
@@ -300,6 +320,58 @@ describe('a worker that does not pace itself fails its run', () => {
             bytes: new ArrayBuffer(1),
         });
         expect(fine.worker.accepted()).toEqual([0]);
+    });
+
+    test('nothing the page keeps reaches anything else a worker’s message carried', async () => {
+        const taken: ToolOutput[] = [];
+        const { worker } = run({ onOutput: (o) => void taken.push(o) });
+        const refs: WeakRef<ArrayBuffer>[] = [];
+        const extra = () => {
+            const buffer = new ArrayBuffer(16 * 1024 * 1024);
+            refs.push(new WeakRef(buffer));
+            return buffer;
+        };
+        worker.send({ ...output(0, 8), extra: extra() } as unknown as ToPage);
+        worker.send({ type: 'progress', done: 1, total: 2, extra: extra() } as unknown as ToPage);
+        expect(worker.accepted()).toEqual([0]);
+        expect(Object.keys(taken[0]!).sort()).toEqual(['bytes', 'mime', 'name', 'release', 'size']);
+        // Still held by the save path, then a lock: neither keeps the extra buffers.
+        expect(await collected(refs)).toBe(true);
+        cancelAllToolRuns();
+        expect(taken[0]!.bytes.byteLength).toBe(0);
+        taken[0]!.release();
+    });
+
+    test('empty results cost the budget too, and a run holds at most 10,000 unreleased', async () => {
+        const budget = new PlaintextBudget(16 * U);
+        const taken: ToolOutput[] = [];
+        const { worker } = run({ budget, onOutput: (o) => void taken.push(o) });
+        for (let id = 0; id < 20 && worker.accepted().length === id; id++)
+            worker.send(output(id, 0));
+        // Sixteen empty results fill a budget of sixteen charges: the next is not asked for.
+        expect(worker.accepted()).toHaveLength(15);
+        expect(taken).toHaveLength(16);
+        expect(budget.waiting).toBe(16 * U);
+        taken[0]!.release();
+        expect(worker.accepted()).toHaveLength(16);
+        cancelAllToolRuns();
+        expect(budget.waiting).toBe(0);
+
+        // With room to spare, the count still stops the run at the cap, without the watchdog firing.
+        const roomy = new PlaintextBudget(Number.MAX_SAFE_INTEGER);
+        const held: ToolOutput[] = [];
+        const capped = run({ budget: roomy, onOutput: (o) => void held.push(o) }, 'Capped');
+        for (let id = 0; id < OUTPUTS_UNRELEASED_MAX; id++) capped.worker.send(output(id, 0));
+        expect(held).toHaveLength(OUTPUTS_UNRELEASED_MAX);
+        expect(capped.worker.accepted()).toHaveLength(OUTPUTS_UNRELEASED_MAX - 1);
+        vi.advanceTimersByTime(60_000);
+        expect(capped.handle.getState().status).toBe('running');
+        held[5]!.release();
+        expect(capped.worker.accepted()).toHaveLength(OUTPUTS_UNRELEASED_MAX);
+        capped.worker.send(output(OUTPUTS_UNRELEASED_MAX, 0));
+        expect(capped.worker.accepted()).toHaveLength(OUTPUTS_UNRELEASED_MAX);
+        held[6]!.release();
+        expect(capped.worker.accepted()).toHaveLength(OUTPUTS_UNRELEASED_MAX + 1);
     });
 
     test('more reads in flight than the page allows', async () => {
@@ -560,7 +632,8 @@ describe('ending a run', () => {
         expect(handle.getState()).toEqual({ status: 'done' });
         expect(taken[0]!.bytes.byteLength).toBe(100);
         taken[0]!.release();
-        expect(budget.waiting).toBe(50);
+        // Each result costs the budget at least OUTPUT_MIN_CHARGE.
+        expect(budget.waiting).toBe(U);
 
         // Then the tab locks, before the second result was uploaded.
         cancelAllToolRuns();

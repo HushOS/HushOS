@@ -138,6 +138,8 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 const RUNNING: u8 = 0;
 const CANCELLED_STATE: u8 = 1;
 const TIMED_OUT: u8 = 2;
+/* Over, as the app saw it: not a cancel, so a run that succeeded is not reported as one. */
+const FINISHED: u8 = 3;
 
 #[derive(Debug)]
 struct Clock {
@@ -207,10 +209,18 @@ impl RunControl {
         ended
     }
 
-    /* Every reader of the run lets go of its chunks and its key, now, not when it is dropped. */
+    /*
+     * Every reader of the run lets go of its chunks and its key, now, not when it is dropped. The
+     * list is kept (only readers already gone are pruned), so the wipe at finish reaches every
+     * reader again, whatever the end before it missed.
+     */
     fn wipe_readers(&self) {
-        let readers = std::mem::take(&mut *lock(&self.readers));
-        for reader in readers.iter().filter_map(Weak::upgrade) {
+        let readers: Vec<Arc<VersionReader>> = {
+            let mut list = lock(&self.readers);
+            list.retain(|reader| reader.strong_count() > 0);
+            list.iter().filter_map(Weak::upgrade).collect()
+        };
+        for reader in readers {
             reader.wipe();
         }
     }
@@ -218,7 +228,7 @@ impl RunControl {
     fn refusal(&self) -> CoreResult<()> {
         match self.ended.load(Ordering::SeqCst) {
             RUNNING => Ok(()),
-            CANCELLED_STATE => Err(input(CANCELLED)),
+            CANCELLED_STATE | FINISHED => Err(input(CANCELLED)),
             _ => Err(input(TOOL_FAILED)),
         }
     }
@@ -245,10 +255,13 @@ impl RunControl {
     /// The run is over, however it ended: the app calls this when the run's
     /// thread returns. Every reader made under it lets go of its chunks and its
     /// key at once (a Swift or Kotlin wrapper would otherwise keep them until it
-    /// is collected), and any later read fails.
+    /// is collected), and any later read fails. A run that had not ended is
+    /// finished, not cancelled: [`is_cancelled`](Self::is_cancelled) stays false.
     pub fn finish(&self) {
-        self.end(CANCELLED_STATE);
-        self.wipe_readers();
+        // Ended already: the readers are wiped again, for a chunk kept by a read that raced the end.
+        if !self.end(FINISHED) {
+            self.wipe_readers();
+        }
     }
 
     /// Stops the run: every later call from the work fails with "Cancelled.".
@@ -273,7 +286,7 @@ impl RunControl {
         idle >= self.watchdog && self.end(TIMED_OUT)
     }
 
-    /// Whether the run has ended, by a cancel or the watchdog.
+    /// Whether the run has ended, by a cancel, the watchdog or [`finish`](Self::finish).
     pub fn is_ended(&self) -> bool {
         self.ended.load(Ordering::SeqCst) != RUNNING
     }
@@ -604,8 +617,24 @@ impl VersionReader {
             return Err(error);
         }
         let plaintext = self.open_chunk(index, tail?)?;
-        lock(&self.state).tail = Some(Arc::clone(&plaintext));
+        self.keep(|state| state.tail = Some(Arc::clone(&plaintext)))?;
         Ok(plaintext)
+    }
+
+    /*
+     * Caches an opened chunk, unless the run ended meanwhile (between the last check and now):
+     * then it is dropped and the read fails. Checked under the state lock that the end's wipe
+     * takes too, so a chunk is either refused here or cleared by that wipe, never left behind.
+     */
+    fn keep(&self, cache: impl FnOnce(&mut ReaderState)) -> CoreResult<()> {
+        let mut state = lock(&self.state);
+        if let Some(control) = self.control.as_ref().filter(|control| control.is_ended()) {
+            drop(state);
+            self.forget();
+            return control.check();
+        }
+        cache(&mut state);
+        Ok(())
     }
 
     fn ended(&self) -> bool {
@@ -635,11 +664,12 @@ impl VersionReader {
         // A cancel while the fetch was out: nothing it brought is opened.
         self.check()?;
         let plaintext = self.open_chunk(index, ciphertext)?;
-        let mut state = lock(&self.state);
-        state.cache.push_back((index, Arc::clone(&plaintext)));
-        while state.cache.len() > CACHED_CHUNKS {
-            state.cache.pop_front();
-        }
+        self.keep(|state| {
+            state.cache.push_back((index, Arc::clone(&plaintext)));
+            while state.cache.len() > CACHED_CHUNKS {
+                state.cache.pop_front();
+            }
+        })?;
         Ok(plaintext)
     }
 
@@ -1282,6 +1312,49 @@ mod tests {
         control.finish();
         let late = VersionReader::open(store(stored), content, Some(control)).unwrap();
         assert!(late.key.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn finish_marks_a_run_over_without_calling_it_cancelled_or_timed_out() {
+        let control = RunControl::new(TOOL_WATCHDOG_MILLIS, None);
+        control.finish();
+        assert!(control.is_ended() && !control.is_cancelled() && !control.timed_out());
+        assert_eq!(control.check(), Err(input(CANCELLED)));
+        // How a run ended before its finish stays what it was.
+        let cancelled = RunControl::new(TOOL_WATCHDOG_MILLIS, None);
+        cancelled.cancel();
+        cancelled.finish();
+        assert!(cancelled.is_cancelled());
+        let clock = Arc::new(Manual::default());
+        let timed = RunControl::new(1_000, Some(clock.clone()));
+        clock.advance(1_000);
+        assert!(timed.check_watchdog());
+        timed.finish();
+        assert!(timed.timed_out() && !timed.is_cancelled());
+    }
+
+    #[test]
+    fn a_chunk_opened_as_the_run_ends_is_never_left_cached() {
+        let size = 2 * CHUNK;
+        let plain = plaintext(size);
+        let content = content(size, 0);
+        let stored = object(&content, &plain);
+        let control = RunControl::new(TOOL_WATCHDOG_MILLIS, None);
+        let reader = VersionReader::open(store(stored), content, Some(Arc::clone(&control))).unwrap();
+        assert_eq!(reader.read_at(10, 10).unwrap(), &plain[10..20]);
+        control.cancel();
+        // A read that passed its last check before the cancel, caching what it opened after it:
+        // refused, and nothing kept.
+        let opened = Arc::new(Zeroizing::new(vec![1u8; 4]));
+        assert_eq!(
+            reader.keep(|state| state.cache.push_back((0, Arc::clone(&opened)))),
+            Err(input(CANCELLED))
+        );
+        assert!(reader.state.lock().unwrap().cache.is_empty());
+        // And whatever got in past the cancel's wipe, the finish wipes again.
+        reader.state.lock().unwrap().tail = Some(opened);
+        control.finish();
+        assert!(reader.state.lock().unwrap().tail.is_none());
     }
 
     #[test]

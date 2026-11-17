@@ -292,18 +292,75 @@ import Testing
         try await eventually { StoreStub.state.asked.contains("bytes=\(tail.count)-\(layout.ciphertextSize - 1)") }
     }
 
+    @Test func aRunEndedBySignOutDuringItsTailFetchDrainsNothing() async throws {
+        // Just under a chunk with a 2000-byte thumbnail: the tail, then a chunk of padding alone.
+        let size = Self.chunk - 100
+        let content = Content(
+            workspaceId: "11111111-1111-4111-8111-111111111111", objectId: "66666666-6666-4666-8666-666666666666",
+            suite: 3, key: try randomBytes(length: 32), nonce: try randomBytes(length: 16), plaintextSize: size, thumbnailBytes: 2000
+        )
+        let layout = try contentLayout(suite: 3, plaintextSize: size, thumbnailBytes: 2000)
+        let tail = try chunkEncrypt(content: content, index: 0, plaintext: Data(count: Int(size)))
+        let object = tail + Data(count: Int(layout.ciphertextSize) - tail.count)
+        let api = Self.stubbedAPI(object)
+        let drains = PaddingDrains()
+        let control = RunControl(watchdogMillis: toolWatchdogMillis(), clock: nil)
+        let reader = try await ToolReaders.reader(
+            api: api, opened: OpenedVersion(content: content, versionId: "v1"), workspaceId: "ws", control: control, drains: drains
+        )
+        StoreStub.state.stallAt = 0
+        StoreStub.state.stall = true
+        let reading = Task.detached { () -> Bool in
+            do { _ = try reader.readAt(offset: size - 10, length: 10); return true } catch { return false }
+        }
+        try await eventually { StoreStub.state.stalled == 1 }
+        // Sign-out with the tail in flight: the drains move on before the run's thread hands over
+        // the padding it owes, which comes in after, under the account that ended.
+        drains.cancelAll()
+        control.cancel()
+        #expect(await reading.value == false)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(await drains.idle)
+        #expect(!StoreStub.state.asked.contains("bytes=\(tail.count)-\(layout.ciphertextSize - 1)"),
+                "the ended account's padding was drained under the next")
+    }
+
+    @Test func aSignOutKeepsADrainTheNextAccountAlreadyQueued() async throws {
+        let drains = PaddingDrains(maxBytes: 1 << 20, maxDuration: .seconds(60), maxWaiting: 4)
+        let log = Log()
+        let range = ByteRange(start: 0, end: 9)
+        // The sign-out's clean-up and the next account's drain race onto the drains: in a loop, so
+        // either order comes up.
+        for round in 0 ..< 20 {
+            let gate = DispatchSemaphore(value: 0)
+            // The old account's drain is going, so what comes next waits behind it.
+            drains.enqueue([range], born: drains.generation) { _ in
+                log.add("old \(round)")
+                await withCheckedContinuation { c in DispatchQueue.global().async { gate.wait(); c.resume() } }
+            }
+            try await eventually { log.items.contains("old \(round)") }
+            // Sign-out, and the next account's run owes padding at once.
+            drains.cancelAll()
+            drains.enqueue([range], born: drains.generation) { _ in log.add("new \(round)") }
+            try await Task.sleep(for: .milliseconds(20))
+            gate.signal()
+            try await eventually { await drains.idle }
+            #expect(log.items.contains("new \(round)"), "round \(round): the next account's drain was dropped")
+        }
+    }
+
     @Test func paddingDrainsRunOneAtATimeAndStopAtTheirCap() async throws {
         let drains = PaddingDrains(maxBytes: 20, maxDuration: .seconds(60), maxWaiting: 4)
         let log = Log()
         let gate = DispatchSemaphore(value: 0)
         let range = { (start: UInt64) in ByteRange(start: start, end: start + 9) }
         // The first drain's first fetch is held: the second waits behind it.
-        drains.enqueue([range(0), range(10), range(20), range(30)]) { range in
+        drains.enqueue([range(0), range(10), range(20), range(30)], born: drains.generation) { range in
             log.add("a\(range.start)")
             if range.start == 0 { await withCheckedContinuation { c in DispatchQueue.global().async { gate.wait(); c.resume() } } }
         }
         try await eventually { log.items == ["a0"] }
-        drains.enqueue([range(0)]) { range in log.add("b\(range.start)") }
+        drains.enqueue([range(0)], born: drains.generation) { range in log.add("b\(range.start)") }
         try await Task.sleep(for: .milliseconds(100))
         #expect(log.items == ["a0"], "one drain at a time")
         gate.signal()
@@ -317,12 +374,12 @@ import Testing
         let log = Log()
         let range = { (start: UInt64) in ByteRange(start: start, end: start + 9) }
         // The first range of the first drain is in flight (cancellable, as a request is).
-        drains.enqueue([range(0), range(10)]) { range in
+        drains.enqueue([range(0), range(10)], born: drains.generation) { range in
             log.add("a\(range.start)")
             try await Task.sleep(for: .seconds(30))
         }
         try await eventually { log.items == ["a0"] }
-        drains.enqueue([range(0)]) { range in log.add("b\(range.start)") }
+        drains.enqueue([range(0)], born: drains.generation) { range in log.add("b\(range.start)") }
         try await Task.sleep(for: .milliseconds(50))
         drains.cancelAll()
         try await eventually { await drains.idle }
@@ -339,10 +396,10 @@ import Testing
         let log = Log()
         let started = ContinuousClock.now
         // A store that never finishes answering: the request ends only when the client stops it.
-        drains.enqueue([ByteRange(start: 0, end: 9)]) { range in
+        drains.enqueue([ByteRange(start: 0, end: 9)], born: drains.generation) { range in
             _ = try await api.range(URL(string: "https://store.test/o?n=2")!, range)
         }
-        drains.enqueue([ByteRange(start: 0, end: 0)]) { _ in log.add("next") }
+        drains.enqueue([ByteRange(start: 0, end: 0)], born: drains.generation) { _ in log.add("next") }
         try await eventually { log.items == ["next"] }
         #expect(ContinuousClock.now - started < .seconds(3))
         try await eventually { StoreStub.state.stopped >= 1 }
@@ -352,7 +409,7 @@ import Testing
         let drains = PaddingDrains(maxBytes: 1 << 20, meteredMaxBytes: 10, maxDuration: .seconds(60), maxWaiting: 4)
         let log = Log()
         let ranges = [0, 10, 20].map { ByteRange(start: UInt64($0), end: UInt64($0) + 9) }
-        drains.enqueue(ranges, metered: true) { range in log.add("m\(range.start)") }
+        drains.enqueue(ranges, born: drains.generation, metered: true) { range in log.add("m\(range.start)") }
         try await eventually { log.items.count == 1 }
         try await eventually { await drains.idle }
         #expect(log.items == ["m0"])
@@ -364,6 +421,47 @@ import Testing
         await #expect(throws: DriveAPIError.self) {
             _ = try await api.range(URL(string: "https://store.test/o?n=2")!, ByteRange(start: 0, end: 9))
         }
+    }
+
+    @Test func aRangeForACallerAlreadyCancelledEndsEveryTime() async throws {
+        let (_, object, _) = try Self.sealed(1000)
+        let api = Self.stubbedAPI(object)
+        let log = Log()
+        // The request is cancelled before it starts, and can finish before range() waits on it:
+        // many at once, so that order comes up. Each must end, cancelled; a lost ending hangs.
+        let rounds = 200
+        for _ in 0 ..< rounds {
+            Task.detached {
+                withUnsafeCurrentTask { $0?.cancel() }
+                do {
+                    _ = try await api.range(URL(string: "https://store.test/o?n=2")!, ByteRange(start: 0, end: 9))
+                    log.add("answered")
+                } catch is CancellationError {
+                    log.add("cancelled")
+                } catch {
+                    log.add("other")
+                }
+            }
+        }
+        try await eventually { log.items.count == rounds }
+        #expect(log.items.allSatisfy { $0 == "cancelled" })
+
+        // The two orders the loop can only hope to hit, made to happen: the task's ending (or the
+        // caller's cancel) arrives before start() waits. Neither may be lost.
+        let session = URLSession(configuration: .ephemeral)
+        let ended = Log()
+        let early = RangeLoad(limit: 10)
+        let task = session.dataTask(with: URL(string: "https://store.test/o")!)
+        early.urlSession(session, task: task, didCompleteWithError: URLError(.cancelled))
+        let cancelled = RangeLoad(limit: 10)
+        let other = session.dataTask(with: URL(string: "https://store.test/o")!)
+        cancelled.cancel(other)
+        for (load, task, name) in [(early, task, "completed"), (cancelled, other, "cancelled")] {
+            Task.detached {
+                do { _ = try await load.start(task) } catch { ended.add(name) }
+            }
+        }
+        try await eventually { ended.items.count == 2 }
     }
 
     @Test func aReaderMadeInARunReadsNothingOnceTheRunReturns() async throws {

@@ -57,16 +57,22 @@ export type ServeHooks = {
     onAbuse?: () => void;
 };
 
-function validRequest(data: unknown): data is RangeRequest {
-    const msg = data as RangeRequest | null;
-    return (
-        msg?.type === 'read' &&
-        Number.isSafeInteger(msg.id) &&
-        Number.isSafeInteger(msg.offset) &&
-        Number.isSafeInteger(msg.length) &&
-        msg.offset >= 0 &&
-        msg.length >= 0
-    );
+/* A read request's three numbers, copied out, or null if they are not all whole and in range. */
+function requestOf(data: unknown): { id: number; offset: number; length: number } | null {
+    const msg = data as Partial<RangeRequest> | null;
+    if (msg?.type !== 'read') return null;
+    const id: unknown = msg.id;
+    const offset: unknown = msg.offset;
+    const length: unknown = msg.length;
+    if (
+        !Number.isSafeInteger(id) ||
+        !Number.isSafeInteger(offset) ||
+        !Number.isSafeInteger(length) ||
+        (offset as number) < 0 ||
+        (length as number) < 0
+    )
+        return null;
+    return { id: id as number, offset: offset as number, length: length as number };
 }
 
 /*
@@ -77,26 +83,26 @@ function validRequest(data: unknown): data is RangeRequest {
 export function serveRanges(port: MessagePort, reader: RangeReader, hooks: ServeHooks = {}) {
     let stopped = false;
     port.onmessage = (event: MessageEvent) => {
-        const data: unknown = event.data;
         if (stopped) return;
-        if (!validRequest(data)) {
-            const id = (data as { id?: unknown } | null)?.id;
+        // Only the checked numbers are kept: nothing past here holds the worker's message, so
+        // anything else it carried is garbage once this handler returns.
+        const request = requestOf(event.data);
+        if (!request) {
+            const id: unknown = (event.data as { id?: unknown } | null)?.id;
             if (Number.isSafeInteger(id))
                 answer({ type: 'fail', id: id as number, message: 'The read was not valid.' });
             hooks.onAbuse?.();
             return;
         }
-        if (
-            data.length > RANGE_READ_MAX ||
-            (hooks.allowance && !hooks.allowance.take(data.length))
-        ) {
-            answer({ type: 'fail', id: data.id, message: 'The read was too long.' });
+        const { id, offset, length } = request;
+        if (length > RANGE_READ_MAX || (hooks.allowance && !hooks.allowance.take(length))) {
+            answer({ type: 'fail', id, message: 'The read was too long.' });
             hooks.onAbuse?.();
             return;
         }
         const release = hooks.hold?.();
         reader
-            .read(data.offset, data.length)
+            .read(offset, length)
             .then((bytes) => {
                 // Stopped meanwhile: nothing is copied or sent.
                 if (stopped) return;
@@ -109,17 +115,17 @@ export function serveRanges(port: MessagePort, reader: RangeReader, hooks: Serve
                         ? bytes
                         : bytes.slice();
                 const buffer = owned.buffer as ArrayBuffer;
-                answer({ type: 'data', id: data.id, bytes: buffer }, [buffer]);
+                answer({ type: 'data', id, bytes: buffer }, [buffer]);
             })
             .catch((error: unknown) =>
                 answer({
                     type: 'fail',
-                    id: data.id,
+                    id,
                     message: error instanceof Error ? error.message : 'The read failed.',
                 }),
             )
             .finally(() => {
-                hooks.allowance?.give(data.length);
+                hooks.allowance?.give(length);
                 release?.();
             });
     };

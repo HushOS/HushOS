@@ -1,3 +1,5 @@
+import { setFlagsFromString } from 'node:v8';
+import { runInNewContext } from 'node:vm';
 import { describe, expect, test } from 'vitest';
 import type { CryptoRequests, CryptoResults } from '@hushos/crypto';
 import type { DriveApi } from '@hushos/drive/api';
@@ -237,6 +239,45 @@ describe('the range port', () => {
             throw new ToolError('password');
         });
         expect(await refused.finished).toEqual({ type: 'fail', code: 'password' });
+    });
+
+    test('a read in flight keeps nothing else its request carried', async () => {
+        setFlagsFromString('--expose-gc');
+        const gc = runInNewContext('gc') as () => void;
+        const pending: ((bytes: Uint8Array) => void)[] = [];
+        const reader: RangeReader = {
+            size: 100,
+            read: () => new Promise<Uint8Array>((resolve) => pending.push(resolve)),
+        };
+        // The page's end, called directly: a real port would clone the request out of reach.
+        const port = {
+            onmessage: null as ((event: MessageEvent) => void) | null,
+            sent: [] as unknown[],
+            postMessage(message: unknown) {
+                this.sent.push(message);
+            },
+            close() {},
+        };
+        serveRanges(port as unknown as MessagePort, reader);
+        let ref: WeakRef<ArrayBuffer> | null = null;
+        (() => {
+            const extra = new ArrayBuffer(16 * 1024 * 1024);
+            ref = new WeakRef(extra);
+            port.onmessage!({
+                data: { type: 'read', id: 7, offset: 0, length: 4, extra },
+            } as MessageEvent);
+        })();
+        expect(pending).toHaveLength(1);
+        let gone = false;
+        for (let i = 0; i < 10 && !gone; i++) {
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            gc();
+            gone = ref!.deref() === undefined;
+        }
+        expect(gone).toBe(true);
+        pending[0]!(new Uint8Array([1, 2, 3, 4]));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(port.sent).toMatchObject([{ type: 'data', id: 7 }]);
     });
 
     test('a tool asking for many ranges at once is paced within what the page allows', async () => {

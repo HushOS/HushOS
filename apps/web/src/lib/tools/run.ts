@@ -4,7 +4,9 @@ import { toolBudget, type PlaintextBudget } from './budget';
 import {
     DONE_RESULT_MAX_BYTES,
     OUTPUT_MIME_MAX,
+    OUTPUT_MIN_CHARGE,
     OUTPUT_NAME_MAX,
+    OUTPUTS_UNRELEASED_MAX,
     RESULT_MAX_BYTES,
     TOOL_FAILED,
     TOOL_WATCHDOG_MS,
@@ -215,7 +217,8 @@ export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
     const listeners = new Set<(state: ToolRunState) => void>();
     let state: ToolRunState = { status: 'running', done: 0, total: null };
     const urls = new Set<string>();
-    const outputs = new Map<number, { buffer: ArrayBuffer; size: number }>();
+    // Each result's buffer and what it was charged against the budget.
+    const outputs = new Map<number, { buffer: ArrayBuffer; charge: number }>();
     let settle: { resolve: (value: R) => void; reject: (error: Error) => void };
     const result = new Promise<R>((resolve, reject) => (settle = { resolve, reject }));
     // A caller that only watches the state still gets no unhandled rejection.
@@ -241,7 +244,7 @@ export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
     function dropOutputs() {
         for (const output of outputs.values()) {
             drop(output.buffer);
-            budget.release(output.size);
+            budget.release(output.charge);
         }
         countUnreleased(-outputs.size);
         outputs.clear();
@@ -333,7 +336,22 @@ export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
         // The output the worker waits on the page to accept; it may send no other meanwhile.
         let awaiting: number | null = null;
         let nextId = 0;
+        // Set while the run holds OUTPUTS_UNRELEASED_MAX results: a release lets the next in.
+        let belowCap: (() => void) | null = null;
         function accept(id: number) {
+            if (outputs.size >= OUTPUTS_UNRELEASED_MAX) {
+                const release = watchdog.hold();
+                belowCap = () => {
+                    belowCap = null;
+                    release();
+                    accept(id);
+                };
+                stopWaiting = () => {
+                    belowCap = null;
+                    release();
+                };
+                return;
+            }
             const message: ToWorker = { type: 'accepted', id };
             const release = budget.full ? watchdog.hold() : () => {};
             stopWaiting = budget.whenRoom(() => {
@@ -344,31 +362,19 @@ export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
             });
         }
 
-        function take(msg: Extract<ToPage, { type: 'output' }>) {
-            const bytes: unknown = msg.bytes;
-            const name: unknown = msg.name;
-            const mime: unknown = msg.mime;
-            if (
-                awaiting !== null ||
-                // Outside the budget, so held to a size: a name or type is never a way to carry bytes.
-                typeof name !== 'string' ||
-                name.length > OUTPUT_NAME_MAX ||
-                (mime !== null && (typeof mime !== 'string' || mime.length > OUTPUT_MIME_MAX)) ||
-                msg.id !== nextId ||
-                !(bytes instanceof ArrayBuffer) ||
-                bytes.byteLength > RESULT_MAX_BYTES
-            ) {
-                // Not pacing itself, an id seen before, or more than one upload can hold.
-                if (bytes instanceof ArrayBuffer) drop(bytes);
-                failed();
-                return;
-            }
+        /*
+         * A result, already copied out of the worker's message: nothing here, nor the record handed
+         * to the save path, nor its release(), may reach that message, so anything else it carried
+         * (another buffer, say) is garbage once the handler returns.
+         */
+        function take(id: number, name: string, mime: string | null, bytes: ArrayBuffer) {
             nextId++;
-            awaiting = msg.id;
+            awaiting = id;
             watchdog.progress();
             const size = bytes.byteLength;
-            budget.take(size);
-            outputs.set(msg.id, { buffer: bytes, size });
+            const charge = Math.max(size, OUTPUT_MIN_CHARGE);
+            budget.take(charge);
+            outputs.set(id, { buffer: bytes, charge });
             countUnreleased(1);
             let released = false;
             const output: ToolOutput = {
@@ -379,10 +385,11 @@ export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
                 release() {
                     if (released) return;
                     released = true;
-                    if (!outputs.delete(msg.id)) return;
+                    if (!outputs.delete(id)) return;
                     countUnreleased(-1);
-                    budget.release(size);
+                    budget.release(charge);
                     if (ended && outputs.size === 0) untrack();
+                    else if (belowCap && outputs.size < OUTPUTS_UNRELEASED_MAX) belowCap();
                 },
             };
             try {
@@ -392,24 +399,52 @@ export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
                 failed();
                 return;
             }
-            accept(msg.id);
+            accept(id);
         }
 
+        /*
+         * Every message from the worker is read here once, and only checked scalars (and one checked
+         * buffer) go on: the message itself is never kept, nor reached by anything made from it.
+         */
         worker.onmessage = (event: MessageEvent<ToPage>) => {
             if (ended) return;
-            const msg = event.data;
+            const msg = event.data as Record<string, unknown> | null;
             switch (msg?.type) {
-                case 'progress':
+                case 'progress': {
+                    const done: unknown = msg.done;
+                    const total: unknown = msg.total;
                     watchdog.progress();
                     set({
                         status: 'running',
-                        done: Number(msg.done) || 0,
-                        total: typeof msg.total === 'number' ? msg.total : null,
+                        done: typeof done === 'number' && Number.isFinite(done) ? done : 0,
+                        total: typeof total === 'number' && Number.isFinite(total) ? total : null,
                     });
                     return;
-                case 'output':
-                    take(msg);
+                }
+                case 'output': {
+                    const id: unknown = msg.id;
+                    const bytes: unknown = msg.bytes;
+                    const name: unknown = msg.name;
+                    const mime: unknown = msg.mime;
+                    if (
+                        awaiting !== null ||
+                        id !== nextId ||
+                        // Outside the budget, so held to a size: a name or type is never a way to carry bytes.
+                        typeof name !== 'string' ||
+                        name.length > OUTPUT_NAME_MAX ||
+                        (mime !== null &&
+                            (typeof mime !== 'string' || mime.length > OUTPUT_MIME_MAX)) ||
+                        !(bytes instanceof ArrayBuffer) ||
+                        bytes.byteLength > RESULT_MAX_BYTES
+                    ) {
+                        // Not pacing itself, an id seen before, or more than one upload can hold.
+                        if (bytes instanceof ArrayBuffer) drop(bytes);
+                        failed();
+                        return;
+                    }
+                    take(nextId, name, mime, bytes);
                     return;
+                }
                 case 'done': {
                     // Not while a result still waits for room: that would leave the budget for
                     // the next run to pass, and the next, unbounded.
